@@ -26,6 +26,7 @@ from app.api.ending_rooms import (
 from app.api.graphs import router as graphs_router
 from app.api.interventions import router as interventions_router
 from app.api.journal import router as journal_router
+from app.api.model_profiles import router as model_profiles_router
 from app.api.packs import router as packs_router
 from app.api.predictions import router as predictions_router
 from app.api.quota import router as quota_router
@@ -118,6 +119,7 @@ app.include_router(ending_rooms_router)
 app.include_router(ending_rooms_ws_router)
 app.include_router(predictions_router)
 app.include_router(journal_router)
+app.include_router(model_profiles_router)
 app.include_router(packs_router)
 app.include_router(ws_router)
 # Phase 3

@@ -971,6 +971,8 @@ async def _enhance_room_plan_with_llm(
     participants: list[EndingRoomParticipant],
     planned_turns: list[dict[str, Any]],
     result: dict[str, Any],
+    *,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return planned_turns, result
@@ -994,6 +996,11 @@ async def _enhance_room_plan_with_llm(
             continue
         branch_id = participant.source_branch_id or ""
         quotes = transcript_by_branch.get(branch_id, [])
+        rewrite_kwargs = (
+            {"llm_overrides": llm_overrides}
+            if llm_overrides is not None
+            else {}
+        )
         generated_content = await _maybe_rewrite_oracle_copy(
             room=room,
             participant=participant,
@@ -1009,6 +1016,7 @@ async def _enhance_room_plan_with_llm(
             scenario_question=scenario_question,
             transcript_quotes=quotes,
             factual_guardrail=str(turn.get("factual_guardrail") or "").strip() or None,
+            **rewrite_kwargs,
         )
         enhanced_turns.append(
             {
@@ -2195,6 +2203,7 @@ async def run_ending_room_background(
     room_id: str,
     *,
     ws_callback: EndingRoomBroadcast | None = None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> None:
     if not _claim_room(room_id):
         return
@@ -2271,11 +2280,17 @@ async def run_ending_room_background(
                         },
                     },
                 )
+            enhance_kwargs = (
+                {"llm_overrides": llm_overrides}
+                if llm_overrides is not None
+                else {}
+            )
             planned_turns, result = await _enhance_room_plan_with_llm(
                 room,
                 participants,
                 planned_turns,
                 result,
+                **enhance_kwargs,
             )
             existing_auto_turns = _reconcile_auto_recap_progress(
                 session,

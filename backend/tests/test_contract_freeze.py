@@ -558,6 +558,7 @@ _TOP_LEVEL_FROZEN_KEYS = frozenset(
         "social_headlines",
         "document_seed",
         "local_packs",
+        "model_profiles",
     }
 )
 

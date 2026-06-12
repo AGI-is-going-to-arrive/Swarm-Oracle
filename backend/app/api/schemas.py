@@ -273,6 +273,7 @@ class CreateScenarioRequest(BaseModel):
     llm_requests_per_minute: int | None = None  # Optional request-rate cap for this run; 0 disables the cap  # noqa: E501
     llm_tokens_per_minute: int | None = None  # Optional token-rate cap for this run; 0 disables the cap  # noqa: E501
     disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run  # noqa: E501
+    model_profile_id: str | None = None  # Optional local ModelProfile id for provider policy
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
     # Web Search Enhancement: opt-in per-scenario
@@ -367,6 +368,7 @@ class CreateScenarioRequest(BaseModel):
         "llm_api_key",
         "llm_base_url",
         "llm_model",
+        "model_profile_id",
         "web_search_api_key",
         "web_search_base_url",
     )

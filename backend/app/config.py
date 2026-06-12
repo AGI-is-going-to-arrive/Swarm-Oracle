@@ -203,6 +203,7 @@ class Settings(BaseSettings):
     FEATURE_SOCIAL_HEADLINES: bool = Field(default=True)
     FEATURE_DOCUMENT_SEED: bool = Field(default=True)
     FEATURE_LOCAL_PACKS: bool = Field(default=True)
+    FEATURE_MODEL_PROFILES: bool = Field(default=True)
     MULTI_RUN_DEFAULT_COUNT: int = Field(default=5, ge=1)
     MULTI_RUN_MAX_COUNT: int = Field(default=10, ge=1)
     PACKS_DIR: Path = Field(default_factory=lambda: (REPO_ROOT / "packs").resolve())

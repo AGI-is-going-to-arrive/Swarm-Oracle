@@ -1829,11 +1829,22 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
         return snapshot
 
 
+def _debate_overrides_for_side(
+    fallback: dict[str, Any] | None,
+    by_side: dict[str, dict[str, Any]] | None,
+    side: DebateSide,
+) -> dict[str, Any] | None:
+    if not by_side:
+        return fallback
+    return by_side.get(side.value) or fallback
+
+
 async def run_debate_background(
     debate_id: str,
     *,
     ws_callback: DebateBroadcast,
     llm_overrides: dict[str, Any] | None = None,
+    llm_overrides_by_side: dict[str, dict[str, Any]] | None = None,
     quota_key: str | None = None,
 ) -> None:
     if not _try_mark_debate_running(debate_id):
@@ -1881,11 +1892,16 @@ async def run_debate_background(
         # (build_cast_async already handles per-side fallback internally).
         if settings.DEBATE_USE_LLM:
             try:
+                judge_overrides = _debate_overrides_for_side(
+                    llm_overrides,
+                    llm_overrides_by_side,
+                    DebateSide.JUDGE,
+                )
                 cast = await build_cast_async(
                     debate.language,
                     debate.profile_id,
                     question=debate.question,
-                    llm_overrides=llm_overrides,
+                    llm_overrides=judge_overrides,
                 )
                 with Session(engine) as _persona_session:
                     persona_debate = _persona_session.get(Debate, debate_id)
@@ -2004,6 +2020,11 @@ async def run_debate_background(
         for phase in PHASES_WITH_SPEAKERS:
             for side in (DebateSide.PROPOSITION, DebateSide.OPPOSITION):
                 _require_debate_runtime_lock_alive(lock_lease_holder)
+                side_overrides = _debate_overrides_for_side(
+                    llm_overrides,
+                    llm_overrides_by_side,
+                    side,
+                )
                 speaker_name = (
                     debate.proposition_name
                     if side == DebateSide.PROPOSITION
@@ -2016,7 +2037,7 @@ async def run_debate_background(
                     side=side,
                     speaker_name=speaker_name,
                     recent_turns=recent_turns,
-                    llm_overrides=llm_overrides,
+                    llm_overrides=side_overrides,
                     quota_key=quota_key,
                 )
                 _require_debate_runtime_lock_alive(lock_lease_holder)
@@ -2054,7 +2075,7 @@ async def run_debate_background(
                             turn_id=persisted_turn["id"],
                             speaker_side=side.value,
                             language=debate.language,
-                            llm_overrides=llm_overrides,
+                            llm_overrides=side_overrides,
                             quota_key=quota_key,
                         )
                     except Exception:
@@ -2105,11 +2126,16 @@ async def run_debate_background(
                 await asyncio.sleep(0)
 
         _require_debate_runtime_lock_alive(lock_lease_holder)
+        judge_overrides = _debate_overrides_for_side(
+            llm_overrides,
+            llm_overrides_by_side,
+            DebateSide.JUDGE,
+        )
         judge_analysis = await _generate_judge_analysis(
             debate_id=debate_id,
             debate=debate,
             plan=plan,
-            llm_overrides=llm_overrides,
+            llm_overrides=judge_overrides,
             quota_key=quota_key,
         )
         _require_debate_runtime_lock_alive(lock_lease_holder)
@@ -2129,7 +2155,7 @@ async def run_debate_background(
             side=side,
             speaker_name=speaker_name,
             recent_turns=recent_turns,
-            llm_overrides=llm_overrides,
+            llm_overrides=judge_overrides,
             quota_key=quota_key,
         )
         _require_debate_runtime_lock_alive(lock_lease_holder)
@@ -2226,7 +2252,7 @@ async def run_debate_background(
                         _enh_debate,
                         raw_insights,
                         _enh_turns,
-                        llm_overrides=llm_overrides,
+                        llm_overrides=judge_overrides,
                     )
                     finalized["phase_insights"] = enhanced
 
@@ -2236,7 +2262,7 @@ async def run_debate_background(
                             turns=_enh_turns,
                             debate=_enh_debate,
                             plan=final_plan,
-                            llm_overrides=llm_overrides,
+                            llm_overrides=judge_overrides,
                         )
                     except Exception:
                         logger.debug(

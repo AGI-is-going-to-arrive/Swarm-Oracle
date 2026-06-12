@@ -733,6 +733,115 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
     assert result["result"]["judge_rationale"]["supporting_turns"]
     assert result["result"]["winner"] == "opposition"
     assert result["result"]["verdict_tone"] == "rupture"
+
+
+async def test_run_debate_background_uses_per_side_model_profile_overrides(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    monkeypatch.setattr(debate_module.settings, "FEATURE_ARGUMENT_MAP", False)
+
+    turn_keys: list[str | None] = []
+    judge_keys: list[str | None] = []
+    events: list[dict] = []
+
+    async def _fake_cast_async(*_args, **_kwargs):
+        return {
+            "proposition": {
+                "name": "Pro",
+                "role": "Advocate",
+                "persona": "Argues for the motion.",
+            },
+            "opposition": {
+                "name": "Con",
+                "role": "Skeptic",
+                "persona": "Argues against the motion.",
+            },
+            "judge": {
+                "name": "Judge",
+                "role": "Arbiter",
+                "persona": "Weighs the debate.",
+            },
+        }
+
+    async def _fake_turn_llm_call(_prompt, *args, **kwargs):
+        turn_keys.append(kwargs.get("api_key"))
+        return f"turn with {kwargs.get('model')}"
+
+    async def _fake_judge_llm(_prompt, *args, **kwargs):
+        judge_keys.append(kwargs.get("api_key"))
+        return {
+            "summary": "Judge summary",
+            "winner_reason": "Winner reason",
+            "loser_gap": "Loser gap",
+            "swing_factor": "Swing factor",
+            "closing_note": "Closing note",
+            "dimension_rationales": {
+                "coherence": "Coherence",
+                "evidence": "Evidence",
+                "adaptability": "Adaptability",
+                "impact": "Impact",
+            },
+            "counterplay_explanation": "",
+            "adjudication": {
+                "winner": "proposition",
+                "verdict_tone": "balance",
+                "dimensions": {
+                    "coherence": {"proposition": 4, "opposition": 3},
+                    "evidence": {"proposition": 4, "opposition": 3},
+                    "adaptability": {"proposition": 4, "opposition": 3},
+                    "impact": {"proposition": 4, "opposition": 3},
+                },
+            },
+        }
+
+    async def _fake_enhance_insights(_debate, raw_insights, _turns, *, llm_overrides=None):
+        assert llm_overrides["api_key"] == "sk-judge-profile"
+        return raw_insights
+
+    async def _fake_supporting_turns(*_args, **kwargs):
+        assert kwargs["llm_overrides"]["api_key"] == "sk-judge-profile"
+        return []
+
+    monkeypatch.setattr(debate_module, "build_cast_async", _fake_cast_async)
+    monkeypatch.setattr(debate_module, "llm_call", _fake_turn_llm_call)
+    monkeypatch.setattr(debate_module, "llm_call_json_with_stream_fallback", _fake_judge_llm)
+    monkeypatch.setattr(debate_module, "_enhance_insights_with_llm", _fake_enhance_insights)
+    monkeypatch.setattr(debate_module, "_build_supporting_turns", _fake_supporting_turns)
+
+    debate = create_debate_record("Should per-side profile routing be enforced?")
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        events.append(event)
+
+    await run_debate_background(
+        debate.id,
+        ws_callback=_push,
+        quota_key="debate-user",
+        llm_overrides_by_side={
+            "proposition": {
+                "api_key": "sk-proposition-profile",
+                "model": "proposition-model",
+            },
+            "opposition": {
+                "api_key": "sk-opposition-profile",
+                "model": "opposition-model",
+            },
+            "judge": {
+                "api_key": "sk-judge-profile",
+                "model": "judge-model",
+            },
+        },
+    )
+
+    assert turn_keys[0] == "sk-proposition-profile"
+    assert turn_keys[1] == "sk-opposition-profile"
+    assert turn_keys[-1] == "sk-judge-profile"
+    assert judge_keys == ["sk-judge-profile"]
+    event_text = str(events)
+    assert "sk-proposition-profile" not in event_text
+    assert "sk-opposition-profile" not in event_text
+    assert "sk-judge-profile" not in event_text
+    result = load_debate_result_payload(debate.id)
+    assert result is not None
     assert result["result"]["adjudication_mode"] == "llm_hybrid"
 
 

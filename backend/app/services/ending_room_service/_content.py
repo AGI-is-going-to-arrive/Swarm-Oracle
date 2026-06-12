@@ -2425,9 +2425,11 @@ async def _maybe_rewrite_oracle_copy(
     scenario_question: str | None = None,
     transcript_quotes: list[str] | None = None,
     factual_guardrail: str | None = None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> str:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return anchor_copy
+    overrides = llm_overrides or {}
 
     # --- Tier 1: generation-first (no anchor copy in prompt) ---
     gen_prompt = _build_oracle_generation_prompt(
@@ -2445,7 +2447,12 @@ async def _maybe_rewrite_oracle_copy(
         output_json=False,
     )
     try:
-        with llm_request_scope(quota_key=None, purpose=purpose):
+        with llm_request_scope(
+            quota_key=None,
+            purpose=purpose,
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
+        ):
             import app.services.ending_room_service as _pkg
             legacy_call = (
                 _pkg.llm_call_json_with_stream_fallback
@@ -2472,6 +2479,9 @@ async def _maybe_rewrite_oracle_copy(
                         gen_prompt,
                         reasoning_effort="medium",
                         temperature=0.82,
+                        model=overrides.get("model"),
+                        api_key=overrides.get("api_key"),
+                        base_url=overrides.get("base_url"),
                     ),
                     timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
                 )
@@ -2538,7 +2548,12 @@ async def _maybe_rewrite_oracle_copy(
         output_json=False,
     )
     try:
-        with llm_request_scope(quota_key=None, purpose=f"{purpose}:rewrite"):
+        with llm_request_scope(
+            quota_key=None,
+            purpose=f"{purpose}:rewrite",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
+        ):
             import app.services.ending_room_service as _pkg
             result = await asyncio.wait_for(
                 _pkg.llm_call_json(
@@ -2546,6 +2561,9 @@ async def _maybe_rewrite_oracle_copy(
                     reasoning_effort="medium",
                     temperature=0.78,
                     fallback_mode="agent_message",
+                    model=overrides.get("model"),
+                    api_key=overrides.get("api_key"),
+                    base_url=overrides.get("base_url"),
                 ),
                 timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
             )
@@ -2583,15 +2601,21 @@ async def _maybe_rewrite_oracle_copy(
         )
     try:
         with llm_request_scope(
-            quota_key=None, purpose=f"{purpose}:plain_text_retry"
+            quota_key=None,
+            purpose=f"{purpose}:plain_text_retry",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
         ):
             import app.services.ending_room_service as _pkg
             plain_result = await asyncio.wait_for(
                 _pkg.llm_call(
-                    plain_rewrite_prompt,
-                    reasoning_effort="low",
-                    temperature=0.65,
-                ),
+                        plain_rewrite_prompt,
+                        reasoning_effort="low",
+                        temperature=0.65,
+                        model=overrides.get("model"),
+                        api_key=overrides.get("api_key"),
+                        base_url=overrides.get("base_url"),
+                    ),
                 timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
             )
         polished = _strip_oracle_scope_boilerplate(
@@ -2624,7 +2648,10 @@ async def _maybe_rewrite_oracle_copy(
         if _is_effort_unsupported:
             try:
                 with llm_request_scope(
-                    quota_key=None, purpose=f"{purpose}:no_effort_retry"
+                    quota_key=None,
+                    purpose=f"{purpose}:no_effort_retry",
+                    requests_per_minute=overrides.get("requests_per_minute"),
+                    tokens_per_minute=overrides.get("tokens_per_minute"),
                 ):
                     import app.services.ending_room_service as _pkg_r
                     no_effort_result = await asyncio.wait_for(
@@ -2632,6 +2659,9 @@ async def _maybe_rewrite_oracle_copy(
                             plain_rewrite_prompt,
                             reasoning_effort=None,
                             temperature=0.65,
+                            model=overrides.get("model"),
+                            api_key=overrides.get("api_key"),
+                            base_url=overrides.get("base_url"),
                         ),
                         timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
                     )
@@ -2728,7 +2758,9 @@ async def _stream_oracle_copy(
     on_delta: Callable[[str], Awaitable[None]] | None = None,
     scenario_question: str | None = None,
     transcript_quotes: list[str] | None = None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> str:
+    overrides = llm_overrides or {}
     prompt = _build_oracle_generation_prompt(
         room=room,
         participant=participant,
@@ -2747,13 +2779,21 @@ async def _stream_oracle_copy(
     chunks: list[str] = []
     stream_iter = None
     try:
-        with llm_request_scope(quota_key=None, purpose=purpose):
+        with llm_request_scope(
+            quota_key=None,
+            purpose=purpose,
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
+        ):
             import app.services.ending_room_service as _pkg
             stream_iter = _pkg.llm_call_stream(
                 prompt,
                 reasoning_effort="medium",
                 temperature=0.75,
                 timeout=_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
+                model=overrides.get("model"),
+                api_key=overrides.get("api_key"),
+                base_url=overrides.get("base_url"),
             ).__aiter__()
             while True:
                 try:

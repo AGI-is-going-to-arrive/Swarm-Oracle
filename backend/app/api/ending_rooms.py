@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -41,6 +41,7 @@ from app.services.ending_room_service import (
     run_ending_room_background,
 )
 from app.services.llm_client import safe_llm_error_payload, validate_llm_base_url
+from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
 
 router = APIRouter(prefix="/api", tags=["ending-room"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["ending-room"])
@@ -77,8 +78,9 @@ class CreateEndingRoomRequest(BaseModel):
     discussion_format: RoundtableDiscussionFormat | None = None
     cast_mode: RoundtableCastMode | None = None
     language: str | None = None
+    room_model_profile_id: str | None = None
 
-    @field_validator("anchor_branch_id", "language", "selection_recipe")
+    @field_validator("anchor_branch_id", "language", "selection_recipe", "room_model_profile_id")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -178,6 +180,7 @@ class EndingRoomUserTurnRequest(BaseModel):
     interaction_mode: EndingRoomInteractionMode | None = None
     cited_branch_id: str | None = None
     cited_refs_json: dict | None = None
+    followup_model_profile_id: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -192,7 +195,7 @@ class EndingRoomUserTurnRequest(BaseModel):
     def normalize_id_list(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item and item.strip()]
 
-    @field_validator("cited_branch_id")
+    @field_validator("cited_branch_id", "followup_model_profile_id")
     @classmethod
     def normalize_cited_branch(cls, value: str | None) -> str | None:
         if value is None:
@@ -257,6 +260,75 @@ def _ensure_owned_room_creation_sync(
 ) -> None:
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
+
+
+def _scenario_owner_user_id_sync(
+    scenario_id: str,
+    principal: SessionPrincipal | None,
+) -> str | None:
+    with Session(get_engine()) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        return scenario.user_id or (principal.subject if principal else None)
+
+
+def _room_owner_user_id_sync(
+    room_id: str,
+    principal: SessionPrincipal | None,
+) -> str | None:
+    with Session(get_engine()) as session:
+        room = _load_owned_room(session, room_id, principal)
+        scenario = session.get(Scenario, room.scenario_id)
+        return (
+            scenario.user_id
+            if scenario is not None and scenario.user_id
+            else (principal.subject if principal else None)
+        )
+
+
+def _thread_owner_user_id_sync(
+    thread_id: str,
+    principal: SessionPrincipal | None,
+) -> str | None:
+    with Session(get_engine()) as session:
+        thread = _load_owned_thread(session, thread_id, principal)
+        room = session.get(EndingRoom, thread.room_id)
+        scenario = session.get(Scenario, room.scenario_id) if room is not None else None
+        return (
+            scenario.user_id
+            if scenario is not None and scenario.user_id
+            else (principal.subject if principal else None)
+        )
+
+
+def _role_policy_to_overrides(policy: ResolvedProviderPolicy) -> dict[str, Any]:
+    return {
+        "api_key": policy.api_key,
+        "base_url": policy.base_url,
+        "model": policy.model,
+        "requests_per_minute": policy.requests_per_minute,
+        "tokens_per_minute": policy.tokens_per_minute,
+    }
+
+
+def _resolve_role_policy_sync(
+    *,
+    user_id: str | None,
+    model_profile_id: str | None,
+    explicit_api_key: str | None = None,
+    explicit_base_url: str | None = None,
+    explicit_model: str | None = None,
+) -> ResolvedProviderPolicy | None:
+    if not model_profile_id:
+        return None
+    with Session(get_engine()) as session:
+        return resolve_model_profile_policy(
+            session,
+            user_id=user_id,
+            model_profile_id=model_profile_id,
+            explicit_api_key=explicit_api_key,
+            explicit_base_url=explicit_base_url,
+            explicit_model=explicit_model,
+        )
 
 
 def _ensure_owned_room_sync(
@@ -338,6 +410,20 @@ async def create_ending_room_endpoint(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    room_llm_overrides: dict[str, Any] | None = None
+    if req.room_model_profile_id:
+        owner_user_id = await asyncio.to_thread(
+            _scenario_owner_user_id_sync,
+            scenario_id,
+            principal,
+        )
+        policy = await asyncio.to_thread(
+            _resolve_role_policy_sync,
+            user_id=owner_user_id,
+            model_profile_id=req.room_model_profile_id,
+        )
+        if policy is not None:
+            room_llm_overrides = _role_policy_to_overrides(policy)
     try:
         snapshot, created = await asyncio.to_thread(
             create_ending_room,
@@ -373,6 +459,7 @@ async def create_ending_room_endpoint(
                 await run_ending_room_background(
                     snapshot["id"],
                     ws_callback=ending_room_ws_manager.broadcast,
+                    llm_overrides=room_llm_overrides,
                 )
             except Exception as exc:
                 payload = safe_llm_error_payload(exc)
@@ -478,6 +565,20 @@ async def create_room_user_turn_endpoint(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     await asyncio.to_thread(_ensure_owned_room_sync, room_id, principal)
+    llm_overrides: dict[str, Any] | None = None
+    if req.followup_model_profile_id:
+        owner_user_id = await asyncio.to_thread(
+            _room_owner_user_id_sync,
+            room_id,
+            principal,
+        )
+        policy = await asyncio.to_thread(
+            _resolve_role_policy_sync,
+            user_id=owner_user_id,
+            model_profile_id=req.followup_model_profile_id,
+        )
+        if policy is not None:
+            llm_overrides = _role_policy_to_overrides(policy)
     try:
         payload = await append_room_user_turn_async(
             room_id,
@@ -488,6 +589,7 @@ async def create_room_user_turn_endpoint(
             cited_branch_id=req.cited_branch_id,
             cited_refs_json=req.cited_refs_json,
             ws_callback=ending_room_ws_manager.broadcast,
+            llm_overrides=llm_overrides,
         )
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
@@ -501,6 +603,20 @@ async def create_thread_user_turn_endpoint(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     await asyncio.to_thread(_ensure_owned_thread_sync, thread_id, principal)
+    llm_overrides: dict[str, Any] | None = None
+    if req.followup_model_profile_id:
+        owner_user_id = await asyncio.to_thread(
+            _thread_owner_user_id_sync,
+            thread_id,
+            principal,
+        )
+        policy = await asyncio.to_thread(
+            _resolve_role_policy_sync,
+            user_id=owner_user_id,
+            model_profile_id=req.followup_model_profile_id,
+        )
+        if policy is not None:
+            llm_overrides = _role_policy_to_overrides(policy)
     try:
         payload = await append_thread_user_turn_async(
             thread_id,
@@ -511,6 +627,7 @@ async def create_thread_user_turn_endpoint(
             cited_branch_id=req.cited_branch_id,
             cited_refs_json=req.cited_refs_json,
             ws_callback=ending_room_ws_manager.broadcast,
+            llm_overrides=llm_overrides,
         )
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
@@ -556,6 +673,7 @@ class SurveyRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    survey_model_profile_id: str | None = None
 
     @field_validator("question")
     @classmethod
@@ -575,7 +693,13 @@ class SurveyRequest(BaseModel):
             raise ValueError("participant_ids must be unique")
         return normalized
 
-    @field_validator("room_id", "llm_api_key", "llm_base_url", "llm_model")
+    @field_validator(
+        "room_id",
+        "llm_api_key",
+        "llm_base_url",
+        "llm_model",
+        "survey_model_profile_id",
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -610,6 +734,7 @@ class AnalystRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    analyst_model_profile_id: str | None = None
 
     @field_validator("question")
     @classmethod
@@ -619,7 +744,13 @@ class AnalystRequest(BaseModel):
             raise ValueError("question must not be empty")
         return cleaned
 
-    @field_validator("room_id", "llm_api_key", "llm_base_url", "llm_model")
+    @field_validator(
+        "room_id",
+        "llm_api_key",
+        "llm_base_url",
+        "llm_model",
+        "analyst_model_profile_id",
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -722,10 +853,29 @@ async def create_roundtable_survey_endpoint(
     )
 
     _require_roundtable_feature("FEATURE_ROUNDTABLE_SURVEY", "roundtable_survey")
-    validated_key, validated_url = _validate_roundtable_llm_overrides(
-        req.llm_api_key, req.llm_base_url,
-    )
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    if req.survey_model_profile_id:
+        owner_user_id = await asyncio.to_thread(
+            _scenario_owner_user_id_sync,
+            scenario_id,
+            principal,
+        )
+        policy = await asyncio.to_thread(
+            _resolve_role_policy_sync,
+            user_id=owner_user_id,
+            model_profile_id=req.survey_model_profile_id,
+            explicit_api_key=req.llm_api_key,
+            explicit_base_url=req.llm_base_url,
+            explicit_model=req.llm_model,
+        )
+        validated_key = policy.api_key if policy is not None else None
+        validated_url = policy.base_url if policy is not None else None
+        model = policy.model if policy is not None else req.llm_model
+    else:
+        validated_key, validated_url = _validate_roundtable_llm_overrides(
+            req.llm_api_key, req.llm_base_url,
+        )
+        model = req.llm_model
     try:
         stream = await build_roundtable_survey_stream(
             scenario_id,
@@ -734,7 +884,7 @@ async def create_roundtable_survey_endpoint(
             room_id=req.room_id,
             api_key=validated_key,
             base_url=validated_url,
-            model=req.llm_model,
+            model=model,
         )
     except RoundtableSurveyServiceError as exc:
         _raise_roundtable_service_error(exc)
@@ -772,10 +922,29 @@ async def create_roundtable_analyst_endpoint(
     )
 
     _require_roundtable_feature("FEATURE_ROUNDTABLE_ANALYST", "roundtable_analyst")
-    validated_key, validated_url = _validate_roundtable_llm_overrides(
-        req.llm_api_key, req.llm_base_url,
-    )
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    if req.analyst_model_profile_id:
+        owner_user_id = await asyncio.to_thread(
+            _scenario_owner_user_id_sync,
+            scenario_id,
+            principal,
+        )
+        policy = await asyncio.to_thread(
+            _resolve_role_policy_sync,
+            user_id=owner_user_id,
+            model_profile_id=req.analyst_model_profile_id,
+            explicit_api_key=req.llm_api_key,
+            explicit_base_url=req.llm_base_url,
+            explicit_model=req.llm_model,
+        )
+        validated_key = policy.api_key if policy is not None else None
+        validated_url = policy.base_url if policy is not None else None
+        model = policy.model if policy is not None else req.llm_model
+    else:
+        validated_key, validated_url = _validate_roundtable_llm_overrides(
+            req.llm_api_key, req.llm_base_url,
+        )
+        model = req.llm_model
     try:
         stream = await build_roundtable_analyst_stream(
             scenario_id,
@@ -783,7 +952,7 @@ async def create_roundtable_analyst_endpoint(
             room_id=req.room_id,
             api_key=validated_key,
             base_url=validated_url,
-            model=req.llm_model,
+            model=model,
         )
     except RoundtableAnalystServiceError as exc:
         _raise_roundtable_service_error(exc)

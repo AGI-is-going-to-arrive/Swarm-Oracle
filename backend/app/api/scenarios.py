@@ -77,6 +77,10 @@ from app.services.llm_client import (
     safe_llm_error_payload,
     validate_llm_base_url,
 )
+from app.services.model_profiles import (
+    ResolvedProviderPolicy,
+    resolve_model_profile_policy,
+)
 from app.services.result_report import builder as result_report_builder
 from app.services.result_report import full_report_for_story
 from app.services.scoring import recompute_leaderboard_entry
@@ -859,6 +863,10 @@ async def api_capabilities():
             enabled=settings.FEATURE_LOCAL_PACKS,
             version="1.0" if settings.FEATURE_LOCAL_PACKS else "0.0",
         ),
+        "model_profiles": _capability_entry(
+            enabled=settings.FEATURE_MODEL_PROFILES,
+            version="1.0" if settings.FEATURE_MODEL_PROFILES else "0.0",
+        ),
     }
     return capabilities
 
@@ -1244,8 +1252,10 @@ async def create_scenario(
     if not req.question.strip():
         raise api_error(400, "QUESTION_EMPTY", "Question cannot be empty")
 
-    # SSRF protection: validate BYOK base_url against allowlist
-    if req.llm_base_url:
+    # SSRF protection: validate BYOK base_url against allowlist. Profile-backed
+    # requests are resolved after ownership lookup because the stored key may
+    # satisfy the BYOK base_url requirement.
+    if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
@@ -1275,6 +1285,31 @@ async def create_scenario(
         req.web_search_base_url = validated_search_url
 
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
+    engine = get_engine()
+    model_profile_policy: ResolvedProviderPolicy | None = None
+    resolved_llm_api_key = req.llm_api_key
+    resolved_llm_base_url = req.llm_base_url
+    resolved_llm_model = req.llm_model
+    resolved_llm_requests_per_minute = req.llm_requests_per_minute
+    resolved_llm_tokens_per_minute = req.llm_tokens_per_minute
+    if req.model_profile_id:
+        with Session(engine) as session:
+            model_profile_policy = resolve_model_profile_policy(
+                session,
+                user_id=effective_user_id,
+                model_profile_id=req.model_profile_id,
+                explicit_api_key=req.llm_api_key,
+                explicit_base_url=req.llm_base_url,
+                explicit_model=req.llm_model,
+                explicit_requests_per_minute=req.llm_requests_per_minute,
+                explicit_tokens_per_minute=req.llm_tokens_per_minute,
+            )
+        resolved_llm_api_key = model_profile_policy.api_key
+        resolved_llm_base_url = model_profile_policy.base_url
+        resolved_llm_model = model_profile_policy.model
+        resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
+        resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
+
     if req.continuity_overrides and not effective_user_id:
         raise api_error(
             400,
@@ -1296,7 +1331,6 @@ async def create_scenario(
                         "continuity override identity does not belong to the requesting user",
                     )
 
-    engine = get_engine()
     question = req.question.strip()
 
     # Determine agent count and mode with defaults up front so the initial response
@@ -1510,11 +1544,11 @@ async def create_scenario(
         fork_prompt_variant=req.fork_prompt_variant,
         fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
         user_id=effective_user_id,
-        llm_api_key=req.llm_api_key,
-        llm_base_url=req.llm_base_url,
-        llm_model=req.llm_model,
-        llm_requests_per_minute=req.llm_requests_per_minute,
-        llm_tokens_per_minute=req.llm_tokens_per_minute,
+        llm_api_key=resolved_llm_api_key,
+        llm_base_url=resolved_llm_base_url,
+        llm_model=resolved_llm_model,
+        llm_requests_per_minute=resolved_llm_requests_per_minute,
+        llm_tokens_per_minute=resolved_llm_tokens_per_minute,
         disable_user_quota=req.disable_user_quota,
         custom_agent_identity_ids=req.custom_agent_identity_ids,
         continuity_overrides=[

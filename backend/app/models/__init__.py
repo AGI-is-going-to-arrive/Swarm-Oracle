@@ -56,6 +56,7 @@ from .ending_room import (
     EndingRoomType,
 )
 from .graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
+from .model_profile import ModelProfile
 from .prediction_journal import PredictionJournalEntry
 from .predictions import Leaderboard, Prediction
 
@@ -75,5 +76,7 @@ __all__ = [
     "DebateArgumentUnit",
     # Phase 4 / F7
     "AgentConversationThread", "AgentConversationTurn", "AgentConversationQuotaLedger",
+    # Batch F / F9
+    "ModelProfile",
     "init_db",
 ]

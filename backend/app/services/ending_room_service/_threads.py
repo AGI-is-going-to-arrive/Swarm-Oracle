@@ -760,6 +760,7 @@ async def _append_followup_turns_with_retry(
     cited_branch_id: str | None = None,
     cited_refs_json: dict[str, Any] | None = None,
     ws_callback: EndingRoomBroadcast | None = None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_content = str(content or "").strip()
     if not normalized_content:
@@ -892,6 +893,11 @@ async def _append_followup_turns_with_retry(
     })
     import app.services.ending_room_service as _pkg
     stream_supported = await _pkg._oracle_followup_streaming_supported()
+    oracle_kwargs = (
+        {"llm_overrides": llm_overrides}
+        if llm_overrides is not None
+        else {}
+    )
     committed_turns = [prepared_user_turn]
     recent_lines = [*thread_recent_lines, prepared_user_turn["content"]]
     for plan in prepared_plans:
@@ -960,6 +966,7 @@ async def _append_followup_turns_with_retry(
                         transcript_quotes=followup_transcripts.get(
                             plan.participant.source_branch_id or "", []
                         ),
+                        **oracle_kwargs,
                     )
                     if chunk_index > 0:
                         await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
@@ -997,6 +1004,7 @@ async def _append_followup_turns_with_retry(
                     transcript_quotes=followup_transcripts.get(
                         plan.participant.source_branch_id or "", []
                     ),
+                    **oracle_kwargs,
                 )
                 generated_content = (
                     _sanitize_oracle_visible_text(generated_content).strip()
@@ -1057,6 +1065,7 @@ async def append_room_user_turn_async(
     cited_branch_id: str | None = None,
     cited_refs_json: dict[str, Any] | None = None,
     ws_callback: EndingRoomBroadcast | None = None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with Session(get_engine()) as session:
         room = session.get(EndingRoom, room_id)
@@ -1084,6 +1093,7 @@ async def append_room_user_turn_async(
         cited_branch_id=cited_branch_id,
         cited_refs_json=cited_refs_json,
         ws_callback=ws_callback,
+        llm_overrides=llm_overrides,
     )
     return {
         "room_id": room_id,
@@ -1136,6 +1146,7 @@ async def append_thread_user_turn_async(
     cited_branch_id: str | None = None,
     cited_refs_json: dict[str, Any] | None = None,
     ws_callback: EndingRoomBroadcast | None = None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if interaction_mode is None:
         if cited_branch_id:
@@ -1154,6 +1165,7 @@ async def append_thread_user_turn_async(
         cited_branch_id=cited_branch_id,
         cited_refs_json=cited_refs_json,
         ws_callback=ws_callback,
+        llm_overrides=llm_overrides,
     )
     thread_snapshot = _late_load_thread_snapshot(thread_id)
     return {

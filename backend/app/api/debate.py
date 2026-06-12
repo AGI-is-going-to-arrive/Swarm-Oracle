@@ -43,6 +43,7 @@ from app.services.debate import (
 from app.services.debate_argument_map import extract_argument_units
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.llm_client import safe_llm_error_payload, validate_llm_base_url
+from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
 
 router = APIRouter(tags=["debate"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["debate"])
@@ -141,6 +142,9 @@ class CreateDebateRequest(BaseModel):
     llm_model: str | None = None
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
+    proposition_model_profile_id: str | None = None
+    opposition_model_profile_id: str | None = None
+    judge_model_profile_id: str | None = None
     reasoning_effort: str | None = None
     custom_agent_ids: list[str] | None = None
 
@@ -164,7 +168,16 @@ class CreateDebateRequest(BaseModel):
             raise ValueError(f"Unsupported profile_hint: {cleaned}")
         return cleaned
 
-    @field_validator("user_id", "llm_api_key", "llm_base_url", "llm_model", "reasoning_effort")
+    @field_validator(
+        "user_id",
+        "llm_api_key",
+        "llm_base_url",
+        "llm_model",
+        "proposition_model_profile_id",
+        "opposition_model_profile_id",
+        "judge_model_profile_id",
+        "reasoning_effort",
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -705,6 +718,21 @@ def _extract_replay_import_fingerprint(debate: Debate) -> str | None:
     return cleaned or None
 
 
+def _debate_policy_to_overrides(
+    policy: ResolvedProviderPolicy,
+    *,
+    reasoning_effort: str | None,
+) -> dict[str, Any]:
+    return {
+        "api_key": policy.api_key,
+        "base_url": policy.base_url,
+        "model": policy.model,
+        "reasoning_effort": reasoning_effort,
+        "requests_per_minute": policy.requests_per_minute,
+        "tokens_per_minute": policy.tokens_per_minute,
+    }
+
+
 @router.post("/api/debate")
 async def create_debate(
     req: CreateDebateRequest,
@@ -719,6 +747,34 @@ async def create_debate(
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
+    profile_ids = {
+        DebateSide.PROPOSITION.value: req.proposition_model_profile_id,
+        DebateSide.OPPOSITION.value: req.opposition_model_profile_id,
+        DebateSide.JUDGE.value: req.judge_model_profile_id,
+    }
+    llm_overrides_by_side: dict[str, dict[str, Any]] | None = None
+    if any(profile_ids.values()):
+        llm_overrides_by_side = {}
+        with Session(get_engine()) as profile_session:
+            for side, profile_id in profile_ids.items():
+                if not profile_id:
+                    continue
+                policy = resolve_model_profile_policy(
+                    profile_session,
+                    user_id=effective_user_id,
+                    model_profile_id=profile_id,
+                    explicit_api_key=req.llm_api_key,
+                    explicit_base_url=req.llm_base_url,
+                    explicit_model=req.llm_model,
+                    explicit_requests_per_minute=req.llm_requests_per_minute,
+                    explicit_tokens_per_minute=req.llm_tokens_per_minute,
+                )
+                if policy is not None:
+                    llm_overrides_by_side[side] = _debate_policy_to_overrides(
+                        policy,
+                        reasoning_effort=req.reasoning_effort,
+                    )
+
     if req.custom_agent_ids and not settings.FEATURE_CUSTOM_AGENTS:
         raise HTTPException(status_code=400, detail="Custom agents feature is not enabled")
     custom_agent_overrides = None
@@ -787,6 +843,7 @@ async def create_debate(
                 debate.id,
                 ws_callback=debate_ws_manager.broadcast,
                 llm_overrides=llm_overrides,
+                llm_overrides_by_side=llm_overrides_by_side,
                 quota_key=effective_user_id,
             )
         except Exception as exc:
