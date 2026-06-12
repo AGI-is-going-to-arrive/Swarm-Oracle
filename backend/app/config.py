@@ -193,6 +193,7 @@ class Settings(BaseSettings):
     # ENABLE_WEB_SEARCH + a configured provider.
     FEATURE_NEW_SOURCES: bool = Field(default=False)
     FEATURE_SNAPSHOT_EXPORT: bool = Field(default=True)
+    FEATURE_PUBLIC_ARTIFACTS: bool = Field(default=True)
     FEATURE_PREDICTION_JOURNAL: bool = Field(default=True)
     FEATURE_RESULT_VERDICT: bool = Field(default=True)
     FEATURE_RESULT_REPORT: bool = Field(default=True)

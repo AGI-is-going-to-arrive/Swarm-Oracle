@@ -98,6 +98,7 @@ async def test_capabilities_registry_structure():
         "agent_conversation",
         "kg_explorer",
         "replay_trace",
+        "public_artifacts",
     }
     assert expected_keys.issubset(set(result.keys()))
     # Each entry must have enabled/version/server_only/degraded_mode
@@ -233,6 +234,7 @@ class TestNamingFreeze:
             "agent_conversation",
             "kg_explorer",
             "replay_trace",
+            "public_artifacts",
         }
     )
 
@@ -252,7 +254,7 @@ class TestNamingFreeze:
         assert len(self.FROZEN_NEW_WS_EVENTS) == 4
 
     def test_capabilities_keys_frozen(self):
-        assert len(self.FROZEN_CAPABILITIES_KEYS) == 11
+        assert len(self.FROZEN_CAPABILITIES_KEYS) == 12
 
     def test_no_profile_id_reuse(self):
         """Explicit guard: agent_identity_id, NOT profile_id."""
@@ -544,6 +546,7 @@ _TOP_LEVEL_FROZEN_KEYS = frozenset(
         "roundtable_survey",
         "roundtable_analyst",
         "snapshot_export",
+        "public_artifacts",
         "education_templates",
         "persona_export",
         "prediction_journal",
@@ -576,7 +579,7 @@ _PROVIDERS_FROZEN_SUB_KEYS = frozenset(
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 21 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 22 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()
@@ -761,6 +764,7 @@ async def test_capabilities_additive_only_no_regression_on_frozen_keys():
         "FEATURE_GRAPH_ANALYSIS",
         "FEATURE_RESULT_VERDICT",
         "FEATURE_RESULT_REPORT",
+        "FEATURE_PUBLIC_ARTIFACTS",
     )
     snapshots = {name: getattr(settings, name) for name in toggles}
     try:

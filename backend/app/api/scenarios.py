@@ -805,6 +805,10 @@ async def api_capabilities():
             enabled=settings.FEATURE_SNAPSHOT_EXPORT,
             version="1.0" if settings.FEATURE_SNAPSHOT_EXPORT else "0.0",
         ),
+        "public_artifacts": _capability_entry(
+            enabled=settings.FEATURE_PUBLIC_ARTIFACTS,
+            version="1.0" if settings.FEATURE_PUBLIC_ARTIFACTS else "0.0",
+        ),
         "education_templates": _capability_entry(
             enabled=settings.FEATURE_EDUCATION_TEMPLATES,
             version="1.0" if settings.FEATURE_EDUCATION_TEMPLATES else "0.0",
@@ -1746,6 +1750,31 @@ def _require_result_report_feature() -> None:
             "FEATURE_DISABLED",
             "Feature 'result_report' is not enabled",
         )
+
+
+def _require_public_artifacts_feature() -> None:
+    if not settings.FEATURE_PUBLIC_ARTIFACTS:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'public_artifacts' is not enabled",
+        )
+
+
+@router.post("/scenario/{scenario_id}/public-artifact")
+async def create_public_artifact(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Build a sanitized public artifact for user-controlled export."""
+    _require_public_artifacts_feature()
+
+    from app.services.public_artifacts import build_public_artifact_for_scenario
+
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        return build_public_artifact_for_scenario(session, scenario)
 
 
 @router.post("/scenario/{scenario_id}/report:generate")
