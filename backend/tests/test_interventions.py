@@ -95,6 +95,12 @@ def _build_alembic_config(database_module, Config, db_url: str):
     return alembic_config
 
 
+def _current_alembic_head(alembic_config, ScriptDirectory) -> str:
+    head = ScriptDirectory.from_config(alembic_config).get_current_head()
+    assert head is not None
+    return head
+
+
 def _column_names(db_url: str, table_name: str) -> set[str]:
     engine = create_engine(db_url)
     try:
@@ -187,18 +193,19 @@ def test_032_intervention_lifecycle_migration_roundtrip(tmp_path, monkeypatch):
     alembic_runtime = database_module._load_alembic_runtime()
     if alembic_runtime is None:
         pytest.skip("Alembic runtime is not available in this interpreter")
-    Config, command, _ScriptDirectory = alembic_runtime
+    Config, command, ScriptDirectory = alembic_runtime
 
     db_url = f"sqlite:///{tmp_path / '032-intervention-lifecycle.db'}"
     monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setattr(settings, "DATABASE_URL", db_url)
     database_module.dispose_engine()
     alembic_config = _build_alembic_config(database_module, Config, db_url)
+    current_head = _current_alembic_head(alembic_config, ScriptDirectory)
 
     try:
         command.upgrade(alembic_config, "head")
 
-        assert _current_revision(db_url) == "032_intervention_lifecycle"
+        assert _current_revision(db_url) == current_head
         for table_name, expected_columns in _INTERVENTION_LIFECYCLE_COLUMNS.items():
             assert expected_columns <= _column_names(db_url, table_name)
         assert "ix_pending_intervention_status" in _index_names(
@@ -206,7 +213,7 @@ def test_032_intervention_lifecycle_migration_roundtrip(tmp_path, monkeypatch):
             "pending_intervention",
         )
 
-        command.downgrade(alembic_config, "-1")
+        command.downgrade(alembic_config, "031_campaign_gameplay_ledger")
 
         assert _current_revision(db_url) == "031_campaign_gameplay_ledger"
         for table_name, removed_columns in _INTERVENTION_LIFECYCLE_COLUMNS.items():
@@ -218,7 +225,7 @@ def test_032_intervention_lifecycle_migration_roundtrip(tmp_path, monkeypatch):
 
         command.upgrade(alembic_config, "head")
 
-        assert _current_revision(db_url) == "032_intervention_lifecycle"
+        assert _current_revision(db_url) == current_head
         for table_name, expected_columns in _INTERVENTION_LIFECYCLE_COLUMNS.items():
             assert expected_columns <= _column_names(db_url, table_name)
     finally:

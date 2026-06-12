@@ -20,7 +20,6 @@ from sqlalchemy import create_engine, inspect, text
 _PREV_REVISION = "021_scope_debate_argument_unit_dedup_per_turn"
 _GRAPH_EDGE_EVIDENCE_DOWN_REVISION = "023_agent_conversation_quota_ledger"
 _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION = "025_backfill_graph_node_agent_name"
-_HEAD_REVISION = "032_intervention_lifecycle"
 
 
 def _alembic_runtime_or_skip():
@@ -39,6 +38,14 @@ def _build_alembic_config(database_module, Config, db_url: str):
     alembic_config.set_main_option("sqlalchemy.url", db_url)
     alembic_config.attributes["configure_logging"] = False
     return alembic_config
+
+
+def _current_head_revision() -> str:
+    database_module, (Config, _command, ScriptDirectory) = _alembic_runtime_or_skip()
+    alembic_config = _build_alembic_config(database_module, Config, "sqlite:///:memory:")
+    head = ScriptDirectory.from_config(alembic_config).get_current_head()
+    assert head is not None
+    return head
 
 
 def _make_engine(db_url: str):
@@ -397,11 +404,12 @@ def test_owner_user_id_not_null(tmp_path):
 
 
 def test_downgrade_roundtrip(tmp_path):
+    current_head = _current_head_revision()
     db_url = f"sqlite:///{tmp_path/'022_roundtrip.db'}"
     _upgrade_to_head(db_url)
 
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _HEAD_REVISION
+    assert _current_revision(engine) == current_head
     names_after_up_1 = set(inspect(engine).get_table_names())
     assert "agent_conversation_thread" in names_after_up_1
     assert "agent_conversation_turn" in names_after_up_1
@@ -417,9 +425,9 @@ def test_downgrade_roundtrip(tmp_path):
     assert "agent_conversation_quota_ledger" not in names_after_down
     engine.dispose()
 
-    _upgrade_to(db_url, _HEAD_REVISION)
+    _upgrade_to(db_url, current_head)
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _HEAD_REVISION
+    assert _current_revision(engine) == current_head
     names_after_up_2 = set(inspect(engine).get_table_names())
     assert "agent_conversation_thread" in names_after_up_2
     assert "agent_conversation_turn" in names_after_up_2
@@ -428,11 +436,12 @@ def test_downgrade_roundtrip(tmp_path):
 
 
 def test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges(tmp_path):
+    current_head = _current_head_revision()
     db_url = f"sqlite:///{tmp_path/'024_graph_edge_roundtrip.db'}"
     _upgrade_to_head(db_url)
 
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _HEAD_REVISION
+    assert _current_revision(engine) == current_head
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -497,9 +506,9 @@ def test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges(tmp
         assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
     engine.dispose()
 
-    _upgrade_to(db_url, _HEAD_REVISION)
+    _upgrade_to(db_url, current_head)
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _HEAD_REVISION
+    assert _current_revision(engine) == current_head
     graph_edge_columns = {column["name"] for column in inspect(engine).get_columns("graph_edge")}
     assert {"confidence_tier", "source_ref", "source_round_number", "evidence_json"}.issubset(
         graph_edge_columns
@@ -514,6 +523,7 @@ def test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges(tmp
 
 
 def test_026_agent_identity_preferred_tier_sqlite_roundtrip(tmp_path):
+    current_head = _current_head_revision()
     db_url = f"sqlite:///{tmp_path/'026_agent_identity_preferred_tier.db'}"
     _upgrade_to(db_url, _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION)
 
@@ -539,9 +549,9 @@ def test_026_agent_identity_preferred_tier_sqlite_roundtrip(tmp_path):
         )
     engine.dispose()
 
-    _upgrade_to(db_url, _HEAD_REVISION)
+    _upgrade_to(db_url, current_head)
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _HEAD_REVISION
+    assert _current_revision(engine) == current_head
     identity_columns = {col["name"] for col in inspect(engine).get_columns("agent_identity")}
     assert "preferred_tier" in identity_columns
     with engine.begin() as conn:
@@ -575,9 +585,9 @@ def test_026_agent_identity_preferred_tier_sqlite_roundtrip(tmp_path):
         assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
     engine.dispose()
 
-    _upgrade_to(db_url, _HEAD_REVISION)
+    _upgrade_to(db_url, current_head)
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _HEAD_REVISION
+    assert _current_revision(engine) == current_head
     with engine.connect() as conn:
         rows = conn.execute(
             text("SELECT id, preferred_tier FROM agent_identity ORDER BY id")
