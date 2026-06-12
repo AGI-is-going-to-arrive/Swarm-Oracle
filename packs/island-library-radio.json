@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "island-library-radio",
+  "genre": "culture",
+  "title": {
+    "zh": "群岛图书电台",
+    "en": "The Island Library Radio"
+  },
+  "description": {
+    "zh": "分散岛屿把图书馆、气象站和社区电台合并成知识网络，口述传统、灾害预警和学校课程开始互相支撑。",
+    "en": "Scattered islands combine libraries, weather stations, and community radio into a knowledge network where oral tradition, disaster warnings, and school lessons reinforce each other."
+  },
+  "tags": [
+    {
+      "zh": "群岛",
+      "en": "islands"
+    },
+    {
+      "zh": "公共知识",
+      "en": "public knowledge"
+    },
+    {
+      "zh": "电台",
+      "en": "radio"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "broadcast-library",
+      "question": {
+        "zh": "如果群岛社区把图书馆和电台做成同一套公共服务，会怎样改变教育和灾害韧性？",
+        "en": "What if island communities fused libraries and radio into one public service, changing education and disaster resilience?"
+      },
+      "context": {
+        "zh": "每座岛每天共享潮汐、故事、课程和维修公告，但广播时段有限，语言也很多。",
+        "en": "Each island shares tides, stories, lessons, and repair notices daily, but airtime is scarce and languages are many."
+      },
+      "prompt": {
+        "zh": "推演广播排期、方言保护、预警可信度和青年外流之间的关系。",
+        "en": "Explore airtime scheduling, language preservation, warning credibility, and youth migration."
+      },
+      "stakes": [
+        {
+          "zh": "谁决定播出优先级",
+          "en": "who sets broadcast priorities"
+        },
+        {
+          "zh": "本地语言是否更有生命力",
+          "en": "whether local languages gain vitality"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "radio-librarian",
+      "name": {
+        "zh": "电台馆员",
+        "en": "Radio Librarian"
+      },
+      "role": {
+        "zh": "把馆藏、课程和公告编成广播节目",
+        "en": "Turns collections, lessons, and notices into broadcasts"
+      },
+      "perspective": {
+        "zh": "认为知识服务必须能在停电和风暴中继续工作。",
+        "en": "Believes knowledge services must keep working through outages and storms."
+      }
+    },
+    {
+      "id": "reef-teacher",
+      "name": {
+        "zh": "礁湖教师",
+        "en": "Reef Teacher"
+      },
+      "role": {
+        "zh": "为跨岛学生设计课程",
+        "en": "Designs lessons for students across islands"
+      },
+      "perspective": {
+        "zh": "希望课程现代化，但不能把祖辈故事变成装饰。",
+        "en": "Wants modern lessons without reducing ancestral stories to decoration."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "storm-broadcast",
+      "label": {
+        "zh": "风暴广播",
+        "en": "Storm Broadcast"
+      },
+      "filename": "island-library-storm-broadcast.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 9,
+    "rounds": 6,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创文化基础设施设定，关注地方语言和公共服务。",
+      "en": "Original cultural-infrastructure setup focused on local languages and public service."
+    }
+  }
+}

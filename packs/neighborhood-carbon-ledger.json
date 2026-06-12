@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "neighborhood-carbon-ledger",
+  "genre": "society",
+  "title": {
+    "zh": "社区碳账本",
+    "en": "The Neighborhood Carbon Ledger"
+  },
+  "description": {
+    "zh": "一个城市试点把碳预算交给社区共同记账，居民能看见公共设施、商户和家庭选择之间的真实取舍。",
+    "en": "A city pilot hands carbon budgeting to neighborhood ledgers, making the tradeoffs among public facilities, shops, and households visible."
+  },
+  "tags": [
+    {
+      "zh": "气候",
+      "en": "climate"
+    },
+    {
+      "zh": "社区治理",
+      "en": "neighborhood governance"
+    },
+    {
+      "zh": "预算",
+      "en": "budgeting"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "shared-carbon-budget",
+      "question": {
+        "zh": "如果社区拥有公开碳账本和年度碳预算，会怎样改变公平、消费和公共投资？",
+        "en": "What if neighborhoods controlled public carbon ledgers and annual carbon budgets?"
+      },
+      "context": {
+        "zh": "账本不记录个人羞辱榜，只记录设施、采购、交通与商户激励的集体选择。",
+        "en": "The ledger avoids personal shame lists and tracks collective choices in facilities, procurement, transport, and merchant incentives."
+      },
+      "prompt": {
+        "zh": "推演透明账本如何影响低收入住户、商户联盟、学校和城市财政。",
+        "en": "Explore how transparent accounting affects low-income residents, merchant coalitions, schools, and city finance."
+      },
+      "stakes": [
+        {
+          "zh": "减排负担是否公平",
+          "en": "whether the reduction burden is fair"
+        },
+        {
+          "zh": "公开数据是否被滥用",
+          "en": "whether public data is misused"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "tenant-advocate",
+      "name": {
+        "zh": "租户倡议者",
+        "en": "Tenant Advocate"
+      },
+      "role": {
+        "zh": "代表租房家庭争取改造补贴",
+        "en": "Seeks retrofit support for renters"
+      },
+      "perspective": {
+        "zh": "支持减排，但不接受把房东拖延转嫁给租户。",
+        "en": "Supports emissions cuts but rejects passing landlord delays to tenants."
+      }
+    },
+    {
+      "id": "corner-shop-owner",
+      "name": {
+        "zh": "街角店主",
+        "en": "Corner Shop Owner"
+      },
+      "role": {
+        "zh": "经营薄利社区商店",
+        "en": "Runs a low-margin neighborhood shop"
+      },
+      "perspective": {
+        "zh": "愿意换设备，却需要可预期的补贴和顾客耐心。",
+        "en": "Will upgrade equipment if subsidies and customer patience are predictable."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "retrofit-vote",
+      "label": {
+        "zh": "改造投票",
+        "en": "Retrofit Vote"
+      },
+      "filename": "neighborhood-carbon-retrofit-vote.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 10,
+    "rounds": 6,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创当代社会设定，强调分配、公信力和执行成本。",
+      "en": "Original contemporary civic setup emphasizing distribution, trust, and execution cost."
+    }
+  }
+}

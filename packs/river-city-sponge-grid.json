@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "river-city-sponge-grid",
+  "genre": "technology",
+  "title": {
+    "zh": "河城海绵网",
+    "en": "The River City Sponge Grid"
+  },
+  "description": {
+    "zh": "一座常被洪水困扰的城市把公园、屋顶、排水渠和社区仓库连成海绵系统，防灾从单一工程变成街区协作。",
+    "en": "A flood-prone river city links parks, rooftops, drains, and neighborhood stores into a sponge grid, turning resilience from a single project into district cooperation."
+  },
+  "tags": [
+    {
+      "zh": "韧性城市",
+      "en": "resilient cities"
+    },
+    {
+      "zh": "水利",
+      "en": "water systems"
+    },
+    {
+      "zh": "公共工程",
+      "en": "public works"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "distributed-flood-control",
+      "question": {
+        "zh": "如果河城把防洪预算转向分布式海绵网，会怎样改变工程权力和街区责任？",
+        "en": "What if a river city shifted flood spending toward a distributed sponge grid?"
+      },
+      "context": {
+        "zh": "中心堤坝仍重要，但新方案要求学校、商场、屋顶业主和公园共同承担蓄水功能。",
+        "en": "The main levee still matters, but schools, malls, roof owners, and parks must now share retention duties."
+      },
+      "prompt": {
+        "zh": "推演工程指标、物业激励、应急仓库和居民信任如何互相制约。",
+        "en": "Explore how engineering metrics, property incentives, emergency stores, and resident trust constrain one another."
+      },
+      "stakes": [
+        {
+          "zh": "分布式系统是否可靠",
+          "en": "whether the distributed system is reliable"
+        },
+        {
+          "zh": "维护成本是否公平分摊",
+          "en": "whether maintenance costs are shared fairly"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "hydrology-engineer",
+      "name": {
+        "zh": "水文工程师",
+        "en": "Hydrology Engineer"
+      },
+      "role": {
+        "zh": "设计蓄排水指标和失效阈值",
+        "en": "Designs retention metrics and failure thresholds"
+      },
+      "perspective": {
+        "zh": "知道分布式方案更灵活，也更依赖维护纪律。",
+        "en": "Knows distributed systems are flexible but depend on maintenance discipline."
+      }
+    },
+    {
+      "id": "market-manager",
+      "name": {
+        "zh": "市场管理员",
+        "en": "Market Manager"
+      },
+      "role": {
+        "zh": "管理低洼市场和应急物资",
+        "en": "Runs a low-lying market and emergency stores"
+      },
+      "perspective": {
+        "zh": "支持改造，但要求施工不能让旺季生意断流。",
+        "en": "Supports retrofits but cannot lose peak-season trade to construction."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "monsoon-test",
+      "label": {
+        "zh": "季风测试",
+        "en": "Monsoon Test"
+      },
+      "filename": "river-city-monsoon-test.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 10,
+    "rounds": 6,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创城市技术设定，适合推演基础设施与治理协作。",
+      "en": "Original urban-technology setup for infrastructure and governance cooperation."
+    }
+  }
+}

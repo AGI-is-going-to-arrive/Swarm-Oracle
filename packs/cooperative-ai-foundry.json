@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "cooperative-ai-foundry",
+  "genre": "business",
+  "title": {
+    "zh": "合作社 AI 工坊",
+    "en": "The Cooperative AI Foundry"
+  },
+  "description": {
+    "zh": "一批中小企业把内部数据和模型算力放进合作社治理结构，共同购买工具，却必须决定谁能控制收益和风险。",
+    "en": "Small firms pool data and compute inside a cooperative governance model, sharing tools while deciding who controls upside and liability."
+  },
+  "tags": [
+    {
+      "zh": "企业协作",
+      "en": "business cooperation"
+    },
+    {
+      "zh": "AI 治理",
+      "en": "AI governance"
+    },
+    {
+      "zh": "数据权益",
+      "en": "data rights"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "shared-model-governance",
+      "question": {
+        "zh": "如果中小企业通过合作社共享 AI 模型，会怎样改变市场集中和数据权益？",
+        "en": "What if small firms shared AI models through a cooperative, altering market concentration and data rights?"
+      },
+      "context": {
+        "zh": "成员企业贡献订单、售后和库存数据，换取预测、客服和采购模型的使用权。",
+        "en": "Members contribute order, support, and inventory data in exchange for forecasting, service, and procurement models."
+      },
+      "prompt": {
+        "zh": "推演合作社章程、退出权、模型质量、责任分摊和大平台竞争。",
+        "en": "Explore bylaws, exit rights, model quality, shared liability, and competition with large platforms."
+      },
+      "stakes": [
+        {
+          "zh": "数据贡献是否被公平计价",
+          "en": "whether data contributions are priced fairly"
+        },
+        {
+          "zh": "模型事故由谁承担",
+          "en": "who bears model failures"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "factory-owner",
+      "name": {
+        "zh": "小厂老板",
+        "en": "Small Factory Owner"
+      },
+      "role": {
+        "zh": "贡献库存数据并争取采购预测",
+        "en": "Contributes inventory data and seeks procurement forecasts"
+      },
+      "perspective": {
+        "zh": "想要规模效应，但不想把客户关系交给别人。",
+        "en": "Wants scale benefits without handing customer relationships away."
+      }
+    },
+    {
+      "id": "cooperative-steward",
+      "name": {
+        "zh": "合作社理事",
+        "en": "Cooperative Steward"
+      },
+      "role": {
+        "zh": "设计投票、审计和退出规则",
+        "en": "Designs voting, audit, and exit rules"
+      },
+      "perspective": {
+        "zh": "把信任看成产品质量的一部分，而不是合规附录。",
+        "en": "Treats trust as part of product quality, not a compliance appendix."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "member-audit",
+      "label": {
+        "zh": "成员审计",
+        "en": "Member Audit"
+      },
+      "filename": "cooperative-ai-member-audit.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 10,
+    "rounds": 6,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创商业与技术设定，适合讨论中小企业和平台力量。",
+      "en": "Original business-technology setup for small-firm strategy and platform power."
+    }
+  }
+}

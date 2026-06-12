@@ -8,6 +8,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_ROOT.parent
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 _PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678", "your-api-key-here"}
 DEFAULT_LLM_RESPONSES_URL = "http://127.0.0.1:8317/v1"
@@ -198,6 +199,8 @@ class Settings(BaseSettings):
     FEATURE_RESULT_VERDICT: bool = Field(default=True)
     FEATURE_RESULT_REPORT: bool = Field(default=True)
     FEATURE_DOCUMENT_SEED: bool = Field(default=True)
+    FEATURE_LOCAL_PACKS: bool = Field(default=True)
+    PACKS_DIR: Path = Field(default_factory=lambda: (REPO_ROOT / "packs").resolve())
     REPORT_MAX_SECTIONS: int = Field(default=5, ge=1)
     REPORT_MIN_SECTIONS: int = Field(default=2, ge=1)
     REPORT_MAX_TOOL_CALLS_PER_SECTION: int = Field(default=5, ge=0)
@@ -278,6 +281,14 @@ class Settings(BaseSettings):
         if persist_dir.is_absolute():
             return str(persist_dir)
         return str((BACKEND_ROOT / persist_dir).resolve())
+
+    @field_validator("PACKS_DIR", mode="after")
+    @classmethod
+    def normalize_packs_dir(cls, value: Path) -> Path:
+        packs_dir = Path(value)
+        if packs_dir.is_absolute():
+            return packs_dir
+        return (REPO_ROOT / packs_dir).resolve()
 
     @field_validator("CORS_ORIGINS", mode="after")
     @classmethod

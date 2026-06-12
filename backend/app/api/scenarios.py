@@ -833,6 +833,10 @@ async def api_capabilities():
             enabled=settings.FEATURE_DOCUMENT_SEED,
             version="1.0" if settings.FEATURE_DOCUMENT_SEED else "0.0",
         ),
+        "local_packs": _capability_entry(
+            enabled=settings.FEATURE_LOCAL_PACKS,
+            version="1.0" if settings.FEATURE_LOCAL_PACKS else "0.0",
+        ),
     }
     return capabilities
 

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "civic-food-futures",
+  "genre": "society",
+  "title": {
+    "zh": "市民食物期货",
+    "en": "Civic Food Futures"
+  },
+  "description": {
+    "zh": "城市把学校食堂、农场预购和社区厨房连成公开合约系统，让粮价波动不再只由批发市场消化。",
+    "en": "A city links school cafeterias, farm preorders, and community kitchens into public contracts so food-price shocks are not absorbed only by wholesale markets."
+  },
+  "tags": [
+    {
+      "zh": "粮食安全",
+      "en": "food security"
+    },
+    {
+      "zh": "公共采购",
+      "en": "public procurement"
+    },
+    {
+      "zh": "农业",
+      "en": "agriculture"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "public-food-contracts",
+      "question": {
+        "zh": "如果城市用公开预购合约稳定学校和社区食物供应，会怎样改变农民、家庭和市场中介的关系？",
+        "en": "What if a city used public forward contracts to stabilize school and neighborhood food supply?"
+      },
+      "context": {
+        "zh": "合约承诺最低采购量和营养标准，但天气、仓储和小农现金流都可能打破计划。",
+        "en": "Contracts promise minimum purchases and nutrition standards, but weather, storage, and small-farm cash flow can all break the plan."
+      },
+      "prompt": {
+        "zh": "推演公共采购如何影响价格信号、浪费、营养公平和本地农业投资。",
+        "en": "Explore how public procurement affects price signals, waste, nutrition equity, and local farm investment."
+      },
+      "stakes": [
+        {
+          "zh": "稳定价格是否压低创新",
+          "en": "whether stable prices dampen innovation"
+        },
+        {
+          "zh": "弱势家庭是否真正受益",
+          "en": "whether vulnerable families truly benefit"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "school-nutritionist",
+      "name": {
+        "zh": "学校营养师",
+        "en": "School Nutritionist"
+      },
+      "role": {
+        "zh": "把采购合约转化为菜单和健康目标",
+        "en": "Turns procurement contracts into menus and health targets"
+      },
+      "perspective": {
+        "zh": "认为便宜不等于公平，稳定也不能牺牲口味。",
+        "en": "Argues that cheap is not the same as fair, and stability cannot erase taste."
+      }
+    },
+    {
+      "id": "smallholder-grower",
+      "name": {
+        "zh": "小农种植者",
+        "en": "Smallholder Grower"
+      },
+      "role": {
+        "zh": "依靠预购合约规划种植",
+        "en": "Uses forward contracts to plan planting"
+      },
+      "perspective": {
+        "zh": "欢迎确定收入，但担心标准化合同忽略天气现实。",
+        "en": "Welcomes predictable income but worries standardized contracts ignore weather."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "harvest-shortfall",
+      "label": {
+        "zh": "歉收缺口",
+        "en": "Harvest Shortfall"
+      },
+      "filename": "civic-food-harvest-shortfall.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 9,
+    "rounds": 5,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创公共采购设定，适合讨论韧性、营养和市场信号。",
+      "en": "Original public-procurement setup for resilience, nutrition, and market signals."
+    }
+  }
+}

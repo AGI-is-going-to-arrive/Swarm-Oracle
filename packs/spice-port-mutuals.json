@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "spice-port-mutuals",
+  "genre": "business",
+  "title": {
+    "zh": "香料港互助社",
+    "en": "The Spice Port Mutuals"
+  },
+  "description": {
+    "zh": "港口商人、船员家属和仓储工把海损、病假和价格波动做成互助合约，早期风险金融不再只服务远洋资本。",
+    "en": "Port merchants, sailors' families, and warehouse workers build mutual contracts for sea loss, sickness, and price shocks, widening early risk finance beyond ocean capital."
+  },
+  "tags": [
+    {
+      "zh": "港口经济",
+      "en": "port economy"
+    },
+    {
+      "zh": "互助金融",
+      "en": "mutual finance"
+    },
+    {
+      "zh": "香料贸易",
+      "en": "spice trade"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "mutual-risk-pool",
+      "question": {
+        "zh": "如果香料港形成覆盖船员家庭和仓储工的互助保险，会怎样改变贸易风险分配？",
+        "en": "What if a spice port built mutual insurance covering sailors' families and warehouse workers?"
+      },
+      "context": {
+        "zh": "互助社用公开账册记录缴费、赔付和仓储损失，富商担心利润被社会化。",
+        "en": "The mutual publishes dues, payouts, and warehouse losses, while wealthy traders fear socialized downside."
+      },
+      "prompt": {
+        "zh": "推演风险池如何影响工资、航线选择、仓储安全和港口政治。",
+        "en": "Explore how the risk pool affects wages, route choices, warehouse safety, and port politics."
+      },
+      "stakes": [
+        {
+          "zh": "互助社是否能防止道德风险",
+          "en": "whether the mutual can prevent moral hazard"
+        },
+        {
+          "zh": "底层劳动者是否获得议价权",
+          "en": "whether workers gain bargaining power"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "warehouse-clerk",
+      "name": {
+        "zh": "仓储账房",
+        "en": "Warehouse Clerk"
+      },
+      "role": {
+        "zh": "核对货损、保费和赔付清单",
+        "en": "Reconciles cargo loss, dues, and payout ledgers"
+      },
+      "perspective": {
+        "zh": "相信公开账册能让风险不再只靠传闻定价。",
+        "en": "Believes public ledgers can price risk beyond rumor."
+      }
+    },
+    {
+      "id": "sailors-spouse",
+      "name": {
+        "zh": "船员家属代表",
+        "en": "Sailors' Family Delegate"
+      },
+      "role": {
+        "zh": "争取海难与病假保障",
+        "en": "Advocates for wreck and sickness protection"
+      },
+      "perspective": {
+        "zh": "把贸易利润看成家庭承担危险后的共同成果。",
+        "en": "Sees trade profit as built on risks carried by families."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "storm-claim",
+      "label": {
+        "zh": "风暴理赔",
+        "en": "Storm Claim"
+      },
+      "filename": "spice-port-storm-claim.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 9,
+    "rounds": 6,
+    "simulation_mode": "conservative",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创商业史设定，聚焦风险金融与劳动保障。",
+      "en": "Original business-history setup focused on risk finance and labor protection."
+    }
+  }
+}

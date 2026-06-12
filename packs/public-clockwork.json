@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "public-clockwork",
+  "genre": "society",
+  "title": {
+    "zh": "公共钟楼协议",
+    "en": "The Public Clockwork Accord"
+  },
+  "description": {
+    "zh": "城市把精密钟楼从富人玩物改成公共时间基础设施，工坊、学校、法院和市场开始围绕同一套时刻表运转。",
+    "en": "A city turns precision clock towers from elite curiosities into public time infrastructure, forcing workshops, schools, courts, and markets onto shared schedules."
+  },
+  "tags": [
+    {
+      "zh": "城市治理",
+      "en": "urban governance"
+    },
+    {
+      "zh": "劳动",
+      "en": "labor"
+    },
+    {
+      "zh": "公共基础设施",
+      "en": "public infrastructure"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "shared-time",
+      "question": {
+        "zh": "如果城市先把标准时间作为公共服务，会怎样改变劳动、司法和商业信任？",
+        "en": "What if a city made standard time a public service before it became an industrial mandate?"
+      },
+      "context": {
+        "zh": "钟楼报时免费开放，迟到罚款、学校作息和集市合约都想引用这套时间。",
+        "en": "The towers announce time for free, while lateness fines, school hours, and market contracts all try to cite it."
+      },
+      "prompt": {
+        "zh": "推演标准时间如何创造效率，也如何制造新的权力边界。",
+        "en": "Explore how standard time creates efficiency while drawing new lines of power."
+      },
+      "stakes": [
+        {
+          "zh": "工人是否能参与时间规则",
+          "en": "whether workers help govern time rules"
+        },
+        {
+          "zh": "法院是否承认钟楼记录",
+          "en": "whether courts accept tower records"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "clock-keeper",
+      "name": {
+        "zh": "钟楼守时人",
+        "en": "Clock Keeper"
+      },
+      "role": {
+        "zh": "维护公共钟楼与校时日志",
+        "en": "Maintains public towers and calibration logs"
+      },
+      "perspective": {
+        "zh": "认为时间应像水井一样可被公共检查。",
+        "en": "Believes time should be publicly inspectable like a town well."
+      }
+    },
+    {
+      "id": "workshop-apprentice",
+      "name": {
+        "zh": "工坊学徒",
+        "en": "Workshop Apprentice"
+      },
+      "role": {
+        "zh": "在新作息下承担迟到风险",
+        "en": "Bears lateness risk under the new schedule"
+      },
+      "perspective": {
+        "zh": "欢迎准时发薪，却反对把每次误差都变成罚款。",
+        "en": "Welcomes punctual pay, but rejects turning every delay into a fine."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "bell-dispute",
+      "label": {
+        "zh": "钟声争议",
+        "en": "Bell Dispute"
+      },
+      "filename": "public-clockwork-bell-dispute.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 8,
+    "rounds": 5,
+    "simulation_mode": "conservative",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创社会制度设定，适合讨论公共标准和日常生活的边界。",
+      "en": "Original social-institution setup suited to public standards and everyday boundaries."
+    }
+  }
+}

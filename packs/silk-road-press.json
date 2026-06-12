@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "silk-road-press",
+  "genre": "culture",
+  "title": {
+    "zh": "丝路活字局",
+    "en": "The Silk Road Press Houses"
+  },
+  "description": {
+    "zh": "一组商队城市把活字印刷、账册模板和多语词表做成共享基础设施，知识流通开始绕开单一宫廷与寺院。",
+    "en": "Caravan cities turn movable type, ledger templates, and multilingual glossaries into shared infrastructure, letting knowledge circulate beyond any single court or monastery."
+  },
+  "tags": [
+    {
+      "zh": "印刷",
+      "en": "printing"
+    },
+    {
+      "zh": "商队城市",
+      "en": "caravan cities"
+    },
+    {
+      "zh": "知识流通",
+      "en": "knowledge exchange"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "shared-type-registry",
+      "question": {
+        "zh": "如果丝路城市早早建立跨语种活字库，会如何改变商贸、教育和宗教解释权？",
+        "en": "What if Silk Road cities built a shared multilingual type registry, changing trade, education, and religious interpretation?"
+      },
+      "context": {
+        "zh": "字模工坊向商队出租字体，学校用廉价讲义招生，抄写员行会则担心信誉被稀释。",
+        "en": "Type foundries rent scripts to caravans, schools recruit with cheap handouts, and scribal guilds worry their authority will thin."
+      },
+      "prompt": {
+        "zh": "推演低成本复制如何改变信任、翻译误差、税务记录和地方声望。",
+        "en": "Explore how low-cost copying reshapes trust, translation errors, tax records, and local prestige."
+      },
+      "stakes": [
+        {
+          "zh": "谁能认证文本版本",
+          "en": "who can certify editions"
+        },
+        {
+          "zh": "商队信息是否更透明",
+          "en": "whether caravan information becomes more transparent"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "type-founder",
+      "name": {
+        "zh": "字模铸工",
+        "en": "Type Founder"
+      },
+      "role": {
+        "zh": "经营多语字模租赁与维护",
+        "en": "Runs multilingual type rental and maintenance"
+      },
+      "perspective": {
+        "zh": "把标准化看成生意，也看成防止误传的责任。",
+        "en": "Sees standardization as both a business and a duty against distortion."
+      }
+    },
+    {
+      "id": "scribal-guild-elder",
+      "name": {
+        "zh": "抄写行会长老",
+        "en": "Scribal Guild Elder"
+      },
+      "role": {
+        "zh": "维护手抄文本的认证传统",
+        "en": "Defends manuscript certification traditions"
+      },
+      "perspective": {
+        "zh": "承认印刷有用，却担心速度压过校勘。",
+        "en": "Admits printing is useful, but fears speed will outrun verification."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "market-proofsheet",
+      "label": {
+        "zh": "集市校样",
+        "en": "Market Proofsheet"
+      },
+      "filename": "silk-road-market-proofsheet.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 9,
+    "rounds": 6,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创文化与技术设定，强调制度摩擦而非单一发明神话。",
+      "en": "Original cultural-technology setup focused on institutional friction, not a lone-inventor myth."
+    }
+  }
+}

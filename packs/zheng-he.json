@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "id": "zheng-he",
+  "genre": "historical what-if",
+  "title": {
+    "zh": "郑和先抵美洲",
+    "en": "Zheng He Reaches the Americas First"
+  },
+  "description": {
+    "zh": "假设郑和船队在十五世纪建立了横跨太平洋的定期航线，明朝、沿岸社群与美洲城邦都必须重新理解贸易、礼制和海权。",
+    "en": "A fifteenth-century Pacific route links Zheng He's fleet, Ming institutions, coastal communities, and American city-states before Atlantic empires define the age."
+  },
+  "tags": [
+    {
+      "zh": "航海",
+      "en": "navigation"
+    },
+    {
+      "zh": "明代",
+      "en": "Ming era"
+    },
+    {
+      "zh": "跨洋贸易",
+      "en": "transoceanic trade"
+    }
+  ],
+  "scenario_templates": [
+    {
+      "id": "pacific-contact",
+      "question": {
+        "zh": "如果郑和船队比哥伦布更早抵达美洲大陆，太平洋世界会如何重组？",
+        "en": "What if Zheng He's fleet reached the Americas before Columbus, and the Pacific became the first durable contact zone?"
+      },
+      "context": {
+        "zh": "船队没有征服任务，却带来朝贡礼仪、海图、翻译官、作物样本和巨大的后勤需求。",
+        "en": "The fleet brings no conquest mandate, but it carries ritual diplomacy, maps, interpreters, crop samples, and a heavy logistical footprint."
+      },
+      "prompt": {
+        "zh": "推演礼仪外交、疾病风险、商人网络、地方联盟和朝廷预算之间的拉扯。",
+        "en": "Explore the tension among ritual diplomacy, disease risk, merchant networks, local alliances, and court budgets."
+      },
+      "stakes": [
+        {
+          "zh": "新航线是否被制度化",
+          "en": "whether the new route becomes institutional"
+        },
+        {
+          "zh": "沿岸社群是否获得谈判空间",
+          "en": "whether coastal communities gain negotiating room"
+        },
+        {
+          "zh": "朝廷是否能承担长期海政",
+          "en": "whether the court can fund long-term maritime policy"
+        }
+      ]
+    }
+  ],
+  "agent_casts": [
+    {
+      "id": "treasure-fleet-envoy",
+      "name": {
+        "zh": "宝船使节",
+        "en": "Treasure Fleet Envoy"
+      },
+      "role": {
+        "zh": "负责礼仪、翻译和互赠清单",
+        "en": "Manages ritual protocol, interpretation, and exchange ledgers"
+      },
+      "perspective": {
+        "zh": "相信秩序来自可被双方理解的礼节，但低估了海上补给的政治成本。",
+        "en": "Believes order begins with mutually legible ceremony, while underestimating the politics of resupply."
+      }
+    },
+    {
+      "id": "coastal-canoe-master",
+      "name": {
+        "zh": "沿岸舟师",
+        "en": "Coastal Canoe Master"
+      },
+      "role": {
+        "zh": "代表本地航路与渔盐网络",
+        "en": "Represents local routes, fisheries, and salt networks"
+      },
+      "perspective": {
+        "zh": "愿意交换技术，但要求外来船队承认港湾规则和季风知识。",
+        "en": "Welcomes technical exchange but insists the visitors respect harbor rules and seasonal knowledge."
+      }
+    },
+    {
+      "id": "court-budget-censor",
+      "name": {
+        "zh": "户科给事中",
+        "en": "Court Budget Censor"
+      },
+      "role": {
+        "zh": "审查远航支出与边防优先级",
+        "en": "Scrutinizes expedition spending against frontier priorities"
+      },
+      "perspective": {
+        "zh": "担心海上荣耀变成无法结账的财政惯例。",
+        "en": "Fears maritime prestige will become an unfunded fiscal habit."
+      }
+    }
+  ],
+  "demo_snapshots": [
+    {
+      "id": "first-anchorage",
+      "label": {
+        "zh": "初次锚泊",
+        "en": "First Anchorage"
+      },
+      "filename": "zheng-he-first-anchorage.json"
+    }
+  ],
+  "suggested_settings": {
+    "num_agents": 12,
+    "rounds": 7,
+    "simulation_mode": "balanced",
+    "language": "bilingual"
+  },
+  "source_metadata": {
+    "curator": "SwarmOracle",
+    "created_at": "2026-06-12",
+    "license": "original",
+    "notes": {
+      "zh": "原创反事实设定，供本地推演使用，不声称真实历史发生。",
+      "en": "Original counterfactual setup for local simulation; it does not claim this history occurred."
+    }
+  }
+}
