@@ -119,12 +119,9 @@ export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPa
   }
 
   const totalRuns = data.run_count;
-  const finishedRuns = data.runs ? data.runs.filter((r) => {
-    const s = r.status.toLowerCase();
-    return s === 'done' || s === 'error' || s === 'cancelled';
-  }).length : 0;
+  const finishedRuns = data.run_count - data.pending_count;
 
-  const isAllCompleted = finishedRuns === totalRuns && totalRuns > 0;
+  const isAllCompleted = data.pending_count === 0 && data.terminal_count > 0;
 
   // Calculate histogram max values for proportional bar rendering
   const maxVerdictVal = Math.max(...Object.values(data.histogram.verdict_counts), 1);

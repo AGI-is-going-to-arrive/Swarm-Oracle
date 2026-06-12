@@ -239,4 +239,44 @@ describe('MultiRunDistributionPanel', () => {
     retryBtn.click();
     expect(reloadMock).toHaveBeenCalledTimes(1);
   });
+
+  it('renders histograms when there is an unknown terminal status value but pending_count is 0', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: { multi_run: { enabled: true, default_count: 5, max_count: 10 } },
+      error: null,
+    });
+
+    vi.mocked(getRunGroupDistribution).mockResolvedValue({
+      run_group_id: 'rg-123',
+      run_count: 3,
+      terminal_count: 2,
+      pending_count: 0,
+      failed_count: 1,
+      status_counts: { 'done': 1, 'finished_weird': 1, 'failed': 1 },
+      histogram: {
+        verdict_counts: { 'OK': 2 },
+        outcome_counts: { 'Outcome A': 2 },
+      },
+      runs: [
+        { scenario_id: 's1', run_index: 1, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+        { scenario_id: 's2', run_index: 2, status: 'finished_weird', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+        { scenario_id: 's3', run_index: 3, status: 'failed', verdict: null, outcome: null, is_terminal_distribution_row: false },
+      ],
+    });
+
+    render(
+      <I18nextProvider i18n={i18n}>
+        <MultiRunDistributionPanel runGroupId="rg-123" />
+      </I18nextProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Running: 3 / 3 completed')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Verdict Counts (2 worldline counts)')).toBeInTheDocument();
+    expect(screen.getByText('Outcome Counts (2 worldline counts)')).toBeInTheDocument();
+  });
 });

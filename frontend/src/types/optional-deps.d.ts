@@ -2,13 +2,14 @@
 // These are dynamically imported — apps work without them installed.
 
 declare module 'html2canvas' {
-  interface Html2CanvasOptions {
+  export interface Html2CanvasOptions {
     useCORS?: boolean;
     backgroundColor?: string;
     scale?: number;
     logging?: boolean;
     width?: number;
     height?: number;
+    onclone?: (clonedDocument: Document, element: HTMLElement) => void | Promise<void>;
   }
 
   function html2canvas(
