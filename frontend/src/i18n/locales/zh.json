@@ -3349,6 +3349,32 @@
         "question": "如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？",
         "subtitle": "综合话题 · 轮值评审与再裁决"
       }
+    },
+    "gallery": {
+      "title": "公开预言画廊",
+      "load_prompt": "选择或拖入公开预言 JSON 文件进行载入",
+      "load_file": "选择文件",
+      "drop_hint": "将 JSON 文件拖到此处",
+      "error_malformed": "JSON 格式错误，请检查文件格式是否正确。",
+      "error_unknown_version": "未知的 schema 版本，此浏览器仅支持 public_artifact.v1",
+      "empty": "未加载任何工件，请载入有效的 JSON 工件。",
+      "confidence_high": "高置信度",
+      "confidence_medium": "中置信度",
+      "confidence_low": "低置信度",
+      "probability_label": "概率",
+      "sources_title": "已验证来源",
+      "agents_title": "参与推演的 Agent 群",
+      "transcript_title": "分支对话片段",
+      "disclaimer_public": "本页为公开脱敏快照，不包含任何私有配置、密钥或用户凭证。"
+    },
+    "public_artifacts": {
+      "section_title": "公开工件分享 (已脱敏)",
+      "section_desc_public": "导出已脱敏的预测摘要，可安全公开发布。所有私有 API 密钥与用户凭据均已清除。",
+      "download_json": "下载 JSON 工件",
+      "download_html": "下载单文件 HTML",
+      "disabled_hint": "服务端配置已禁用公开工件分享能力。",
+      "export_error": "导出失败：{{message}}",
+      "private_snapshot_note": "提示：常规的“完整快照”包含了所有私有设置（包括本地 API 密钥），仅供个人备份。"
     }
   }
 }

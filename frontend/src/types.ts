@@ -1346,3 +1346,46 @@ export interface CheckpointInfo {
 // ── Type Aliases ─────────────────────────────────────────
 export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';
 export type Branch = BranchInfo;
+
+// ── Public Artifact Export (F1 Gallery) ─────────────────
+export const PUBLIC_ARTIFACT_SCHEMA_VERSION = 'public_artifact.v1' as const;
+export type PublicArtifactConfidence = 'high' | 'medium' | 'low';
+
+export interface PublicArtifactBranchVerdict {
+  branch_index: number;
+  title: string;
+  verdict: string;
+  confidence: PublicArtifactConfidence;
+}
+
+export interface PublicArtifactProbabilityBar {
+  branch_index: number;
+  label: string;
+  probability: number;
+}
+
+export interface PublicArtifactTranscriptExcerpt {
+  branch_index: number;
+  agent_name: string;
+  text: string;
+}
+
+export interface PublicArtifactSourceDomain {
+  domain: string;
+  source_count: number;
+}
+
+export interface PublicArtifactSourceSummary {
+  domains: PublicArtifactSourceDomain[];
+}
+
+export interface PublicArtifact {
+  schema_version: typeof PUBLIC_ARTIFACT_SCHEMA_VERSION;
+  question: string;
+  language: string;
+  display_agent_names: string[];
+  branch_verdicts: PublicArtifactBranchVerdict[];
+  probability_bars: PublicArtifactProbabilityBar[];
+  transcript_excerpts: PublicArtifactTranscriptExcerpt[];
+  source_summary: PublicArtifactSourceSummary;
+}

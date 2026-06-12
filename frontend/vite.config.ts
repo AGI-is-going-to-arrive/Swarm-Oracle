@@ -59,6 +59,10 @@ export default defineConfig({
     // are unexpectedly large in the eager path.
     chunkSizeWarningLimit: 1300,
     rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        gallery: fileURLToPath(new URL('./gallery.html', import.meta.url)),
+      },
       output: {
         manualChunks(id) {
           return resolveManualChunk(id)

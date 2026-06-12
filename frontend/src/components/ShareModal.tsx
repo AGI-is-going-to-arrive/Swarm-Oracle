@@ -4,7 +4,7 @@
 
 import { useState, useCallback, useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { generateSocialCopy, getSessionBoundUserId } from '../api/client';
+import { generateSocialCopy, getSessionBoundUserId, buildPublicArtifact } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
@@ -14,6 +14,8 @@ import ShareablePredictionCard, {
   type ShareablePredictionCardHandle,
 } from './result/ShareablePredictionCard';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { buildSingleFileGalleryHtml } from '../gallery/exportSingleFileHtml';
 import './ShareModal.css';
 
 interface Platform {
@@ -123,6 +125,45 @@ export default function ShareModal({
   const copiedTimerRef = useRef<number | null>(null);
   const predictionCardCopiedTimerRef = useRef<number | null>(null);
   const clipboardSupportsImages = clipboardCanWriteImages();
+
+  const { enabled: publicArtifactsEnabled, loading: capLoading } = useCapabilityCheck('public_artifacts');
+  const [exportingPublicArtifact, setExportingPublicArtifact] = useState(false);
+  const [publicArtifactError, setPublicArtifactError] = useState('');
+
+  const handleDownloadPublicJson = useCallback(async () => {
+    if (exportingPublicArtifact) return;
+    setPublicArtifactError('');
+    setExportingPublicArtifact(true);
+    try {
+      const artifact = await buildPublicArtifact(scenarioId);
+      const jsonStr = JSON.stringify(artifact, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      downloadBlobAsFile(blob, `swarmoracle_public_artifact_${Date.now()}.json`);
+    } catch (err) {
+      console.error('[ShareModal] public artifact JSON export failed', err);
+      setPublicArtifactError(getLocalizedApiErrorMessage(err, t, t('public_artifacts.export_error')));
+    } finally {
+      setExportingPublicArtifact(false);
+    }
+  }, [scenarioId, exportingPublicArtifact, t]);
+
+  const handleDownloadPublicHtml = useCallback(async () => {
+    if (exportingPublicArtifact) return;
+    setPublicArtifactError('');
+    setExportingPublicArtifact(true);
+    try {
+      const artifact = await buildPublicArtifact(scenarioId);
+      const lang = artifact.language === 'zh' ? 'zh' : 'en';
+      const htmlStr = buildSingleFileGalleryHtml(artifact, lang);
+      const blob = new Blob([htmlStr], { type: 'text/html' });
+      downloadBlobAsFile(blob, `swarmoracle_gallery_${Date.now()}.html`);
+    } catch (err) {
+      console.error('[ShareModal] public artifact HTML export failed', err);
+      setPublicArtifactError(getLocalizedApiErrorMessage(err, t, t('public_artifacts.export_error')));
+    } finally {
+      setExportingPublicArtifact(false);
+    }
+  }, [scenarioId, exportingPublicArtifact, t]);
 
   useFocusTrap(dialogRef, true);
 
@@ -400,12 +441,15 @@ export default function ShareModal({
       prediction_card_error: predictionCardError || null,
       prediction_card_copied: predictionCardCopied,
       prediction_card_clipboard_supported: clipboardSupportsImages,
+      exporting_public_artifact: exportingPublicArtifact,
+      public_artifact_error: publicArtifactError || null,
+      public_artifacts_enabled: publicArtifactsEnabled,
     });
 
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError, exportingPredictionCard, predictionCardError, predictionCardCopied, clipboardSupportsImages]);
+  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError, exportingPredictionCard, predictionCardError, predictionCardCopied, clipboardSupportsImages, exportingPublicArtifact, publicArtifactError, publicArtifactsEnabled]);
 
   return (
     <div className="share-overlay" onClick={handleClose}>
@@ -564,6 +608,79 @@ export default function ShareModal({
             </div>
           )}
         </div>
+
+        {/* Public Artifact Section */}
+        <section
+          className="share-modal__public-artifact"
+          style={{
+            borderTop: '1px solid var(--color-border-subtle, oklch(90% 0 0 / 0.3))',
+            padding: '16px 24px',
+            backgroundColor: 'var(--color-base, oklch(98% 0.005 80))'
+          }}
+        >
+          <h3 style={{ margin: '0 0 4px 0', fontSize: '1rem', fontWeight: 700 }}>
+            {t('public_artifacts.section_title')}
+          </h3>
+          <p style={{ margin: '0 0 12px 0', fontSize: '0.8rem', color: 'var(--color-text-secondary, oklch(45% 0.01 80))', lineHeight: '1.4' }}>
+            {t('public_artifacts.section_desc_public')}
+          </p>
+
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+            <button
+              type="button"
+              className="share-platform-btn"
+              onClick={handleDownloadPublicJson}
+              disabled={!publicArtifactsEnabled || exportingPublicArtifact || loading}
+              style={{
+                borderColor: 'oklch(70% 0.1 200)',
+                color: 'oklch(40% 0.15 200)',
+                height: '36px',
+                minHeight: '36px',
+                padding: '6px 12px'
+              }}
+            >
+              <span className="share-platform-icon">📄</span>
+              <span className="share-platform-label">
+                {t('public_artifacts.download_json')}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="share-platform-btn"
+              onClick={handleDownloadPublicHtml}
+              disabled={!publicArtifactsEnabled || exportingPublicArtifact || loading}
+              style={{
+                borderColor: 'oklch(70% 0.1 120)',
+                color: 'oklch(40% 0.15 120)',
+                height: '36px',
+                minHeight: '36px',
+                padding: '6px 12px'
+              }}
+            >
+              <span className="share-platform-icon">🌐</span>
+              <span className="share-platform-label">
+                {t('public_artifacts.download_html')}
+              </span>
+            </button>
+          </div>
+
+          {!publicArtifactsEnabled && !capLoading && (
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.75rem', color: 'var(--color-danger, oklch(60% 0.18 25))' }}>
+              ⚠️ {t('public_artifacts.disabled_hint')}
+            </p>
+          )}
+
+          {publicArtifactError && (
+            <p className="share-modal__error-text" role="alert" style={{ margin: '4px 0 0 0', fontSize: '0.75rem' }}>
+              ⚠️ {publicArtifactError}
+            </p>
+          )}
+
+          <p style={{ margin: '8px 0 0 0', fontSize: '0.75rem', color: 'var(--color-text-muted, oklch(65% 0.01 80))', fontStyle: 'italic', lineHeight: '1.4' }}>
+            {t('public_artifacts.private_snapshot_note')}
+          </p>
+        </section>
         {/* Offscreen ShareArtifact: kept in the DOM so html2canvas can
             rasterize the real layout. position:fixed/left:-99999px keeps
             it out of the viewport without skipping paint. */}

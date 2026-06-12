@@ -13,6 +13,7 @@ import type {
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
   WebSearchFamily,
   ReplayTraceResponse,
+  PublicArtifact,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -539,6 +540,7 @@ export interface CapabilitiesResponse {
   prediction_journal?: CapabilityEntry;
   result_verdict?: CapabilityEntry;
   result_report?: CapabilityEntry;
+  public_artifacts?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -2031,4 +2033,15 @@ export async function getInterventionEffects(
   scenarioId: string,
 ): Promise<InterventionEffectsResponse> {
   return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/intervention-effects`);
+}
+
+/** POST /api/scenario/:id/public-artifact — Generate public artifact. */
+export async function buildPublicArtifact(
+  scenarioId: string,
+  options?: RequestOptions,
+): Promise<PublicArtifact> {
+  return request<PublicArtifact>(
+    `/scenario/${encodeURIComponent(scenarioId)}/public-artifact`,
+    { method: 'POST', signal: options?.signal },
+  );
 }

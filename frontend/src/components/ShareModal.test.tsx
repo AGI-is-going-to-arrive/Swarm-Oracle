@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShareModal from './ShareModal';
 
-const { generateSocialCopyMock, html2canvasMock } = vi.hoisted(() => ({
+const { generateSocialCopyMock, html2canvasMock, buildPublicArtifactMock, useCapabilityCheckMock } = vi.hoisted(() => ({
   generateSocialCopyMock: vi.fn(async (
     ...args: [string?, string?, unknown?, { signal?: AbortSignal }?]
   ) => {
@@ -16,6 +16,27 @@ const { generateSocialCopyMock, html2canvasMock } = vi.hoisted(() => ({
     };
   }),
   html2canvasMock: vi.fn(),
+  buildPublicArtifactMock: vi.fn(async () => {
+    return {
+      schema_version: 'public_artifact.v1',
+      question: 'Mocked Question?',
+      language: 'en',
+      display_agent_names: ['Agent Alpha'],
+      branch_verdicts: [
+        { branch_index: 1, title: 'Branch 1', verdict: 'Verdict 1', confidence: 'high' }
+      ],
+      probability_bars: [
+        { branch_index: 1, label: 'Bar 1', probability: 0.9 }
+      ],
+      transcript_excerpts: [],
+      source_summary: { domains: [] }
+    };
+  }),
+  useCapabilityCheckMock: vi.fn(() => ({
+    loading: false,
+    enabled: true,
+    capabilities: null,
+  })),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -28,6 +49,11 @@ vi.mock('react-i18next', () => ({
 vi.mock('../api/client', () => ({
   generateSocialCopy: generateSocialCopyMock,
   getSessionBoundUserId: vi.fn(() => 'default_user'),
+  buildPublicArtifact: buildPublicArtifactMock,
+}));
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: useCapabilityCheckMock,
 }));
 
 vi.mock('../hooks/screenCaptureHtmlVendor', () => ({
@@ -442,5 +468,66 @@ describe('ShareModal automation callback', () => {
     expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', 0.95);
     expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
+  });
+
+  describe('Public Artifact Export', () => {
+    it('disables buttons and shows hint when capability is disabled', () => {
+      useCapabilityCheckMock.mockReturnValueOnce({
+        loading: false,
+        enabled: false,
+        capabilities: null,
+      });
+
+      render(<ShareModal scenarioId="scenario-disabled" onClose={() => {}} />);
+
+      expect(screen.getByText('public_artifacts.section_title')).toBeInTheDocument();
+      expect(screen.getByText(/public_artifacts\.disabled_hint/)).toBeInTheDocument();
+
+      const downloadJsonBtn = screen.getByRole('button', { name: /public_artifacts\.download_json/ });
+      const downloadHtmlBtn = screen.getByRole('button', { name: /public_artifacts\.download_html/ });
+
+      expect(downloadJsonBtn).toBeDisabled();
+      expect(downloadHtmlBtn).toBeDisabled();
+    });
+
+    it('triggers download public JSON when enabled and button is clicked', async () => {
+      useCapabilityCheckMock.mockReturnValue({
+        loading: false,
+        enabled: true,
+        capabilities: null,
+      });
+
+      const user = userEvent.setup();
+      render(<ShareModal scenarioId="scenario-enabled-json" onClose={() => {}} />);
+
+      const downloadJsonBtn = screen.getByRole('button', { name: /public_artifacts\.download_json/ });
+      expect(downloadJsonBtn).not.toBeDisabled();
+
+      await user.click(downloadJsonBtn);
+
+      expect(buildPublicArtifactMock).toHaveBeenCalledWith('scenario-enabled-json');
+      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
+    });
+
+    it('triggers download public HTML when enabled and button is clicked', async () => {
+      useCapabilityCheckMock.mockReturnValue({
+        loading: false,
+        enabled: true,
+        capabilities: null,
+      });
+
+      const user = userEvent.setup();
+      render(<ShareModal scenarioId="scenario-enabled-html" onClose={() => {}} />);
+
+      const downloadHtmlBtn = screen.getByRole('button', { name: /public_artifacts\.download_html/ });
+      expect(downloadHtmlBtn).not.toBeDisabled();
+
+      await user.click(downloadHtmlBtn);
+
+      expect(buildPublicArtifactMock).toHaveBeenCalledWith('scenario-enabled-html');
+      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
+    });
   });
 });
