@@ -16,6 +16,7 @@ vi.mock('react-i18next', async (importOriginal) => {
           'gallery.load_file': 'Choose File',
           'gallery.error_malformed': 'Malformed JSON file.',
           'gallery.error_unknown_version': 'Unknown schema version.',
+          'gallery.error_too_large': 'Artifact size exceeds the maximum limit of {{max}} MB.',
           'gallery.empty': 'No artifact loaded.',
         };
         return map[key] ?? key;
@@ -27,6 +28,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 
 vi.mock('./parseArtifact', () => ({
   parsePublicArtifact: vi.fn(),
+  MAX_ARTIFACT_BYTES: 2 * 1024 * 1024,
 }));
 
 describe('GalleryApp shell', () => {
@@ -81,5 +83,36 @@ describe('GalleryApp shell', () => {
 
     fireEvent.click(zhButton);
     expect(changeLanguageMock).toHaveBeenCalledWith('zh');
+  });
+
+  it('displays error banner when hash payload exceeds size limit and bails', async () => {
+    const limit = 2 * 1024 * 1024;
+    window.location.hash = '#data=' + 'x'.repeat(limit + 10);
+
+    render(<GalleryApp />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifact size exceeds the maximum limit of {{max}} MB.')).toBeInTheDocument();
+    });
+
+    expect(parsePublicArtifact).not.toHaveBeenCalled();
+  });
+
+  it('displays error banner when uploaded file exceeds size limit and bails', async () => {
+    const limit = 2 * 1024 * 1024;
+    render(<GalleryApp />);
+
+    // Create an oversized file using Object.defineProperty to set size
+    const file = new File([], 'too_large.json');
+    Object.defineProperty(file, 'size', { value: limit + 10 });
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Artifact size exceeds the maximum limit of {{max}} MB.')).toBeInTheDocument();
+    });
+
+    expect(parsePublicArtifact).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,8 @@ import {
   type PublicArtifactSourceDomain,
 } from '../types';
 
+export const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024; // 2 MB
+
 /**
  * Runtime type guard and validator for the PublicArtifact JSON contract.
  * Ensures the object has exactly the expected fields, clamps values, truncates arrays,
@@ -145,16 +147,20 @@ export function parsePublicArtifact(
     const itemObj = item as Record<string, unknown>;
     const branchIndex = itemObj.branch_index;
     const agentName = itemObj.agent_name;
-    const text = itemObj.text;
+    const excerpt = itemObj.excerpt;
+    const round = itemObj.round;
 
-    if (typeof branchIndex !== 'number' || typeof agentName !== 'string' || typeof text !== 'string') {
+    if (typeof branchIndex !== 'number' || typeof agentName !== 'string' || typeof excerpt !== 'string') {
       return { ok: false, reason: 'malformed' };
     }
 
+    const hasRound = typeof round === 'number';
+
     transcript_excerpts.push({
       branch_index: branchIndex,
+      ...(hasRound ? { round } : {}),
       agent_name: agentName.slice(0, 80),
-      text: text.slice(0, 280),
+      excerpt: excerpt.slice(0, 280),
     });
   }
 

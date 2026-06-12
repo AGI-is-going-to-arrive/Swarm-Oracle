@@ -258,4 +258,76 @@ describe('DocumentSeedPanel', () => {
     expect(setWorldContext).toHaveBeenCalledWith(null);
     expect(setAgentsPreview).toHaveBeenCalledWith(null);
   });
+
+  it('clears worldContext when replacement upload fails', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    uploadDocumentSeedMock.mockRejectedValue(new Error('Upload failed'));
+
+    const setWorldContext = vi.fn();
+    const setAgentsPreview = vi.fn();
+
+    const { container } = render(
+      <DocumentSeedPanel
+        worldContext={mockWorldContext}
+        setWorldContext={setWorldContext}
+        agentsPreview={mockSeedResponse.agents_preview}
+        setAgentsPreview={setAgentsPreview}
+      />
+    );
+
+    // Initial check: success summary is present
+    expect(screen.getByText('zhenghe.pdf')).toBeInTheDocument();
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['dummy-text'], 'history.txt', { type: 'text/plain' });
+
+    // Simulate replace upload failure
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(uploadDocumentSeedMock).toHaveBeenCalledWith(file, expect.any(AbortSignal));
+    });
+
+    // Check that setWorldContext(null) and setAgentsPreview(null) were called
+    expect(setWorldContext).toHaveBeenCalledWith(null);
+    expect(setAgentsPreview).toHaveBeenCalledWith(null);
+  });
+
+  it('clears worldContext when replacement validation fails due to invalid extension', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    const setWorldContext = vi.fn();
+    const setAgentsPreview = vi.fn();
+
+    const { container } = render(
+      <DocumentSeedPanel
+        worldContext={mockWorldContext}
+        setWorldContext={setWorldContext}
+        agentsPreview={mockSeedResponse.agents_preview}
+        setAgentsPreview={setAgentsPreview}
+      />
+    );
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['dummy-text'], 'history.exe', { type: 'application/octet-stream' });
+
+    // Simulate replace validation failure
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(setWorldContext).toHaveBeenCalledWith(null);
+    expect(setAgentsPreview).toHaveBeenCalledWith(null);
+  });
 });

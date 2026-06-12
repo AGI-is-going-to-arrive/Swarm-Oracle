@@ -1366,8 +1366,9 @@ export interface PublicArtifactProbabilityBar {
 
 export interface PublicArtifactTranscriptExcerpt {
   branch_index: number;
+  round?: number;
   agent_name: string;
-  text: string;
+  excerpt: string;
 }
 
 export interface PublicArtifactSourceDomain {

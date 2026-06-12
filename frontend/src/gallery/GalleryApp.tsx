@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { parsePublicArtifact } from './parseArtifact';
+import { parsePublicArtifact, MAX_ARTIFACT_BYTES } from './parseArtifact';
 import { GalleryArtifactView } from './GalleryArtifactView';
 import { type PublicArtifact } from '../types';
 import './gallery.css';
@@ -19,6 +19,11 @@ export function GalleryApp() {
       const hash = window.location.hash;
       if (hash.startsWith('#data=')) {
         const dataStr = hash.substring(6);
+        if (dataStr.length > MAX_ARTIFACT_BYTES) {
+          setError(t('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
+          setArtifact(null);
+          return;
+        }
         try {
           // Try decodeURIComponent first
           let decoded = decodeURIComponent(dataStr);
@@ -59,6 +64,11 @@ export function GalleryApp() {
   }, [t, i18n]);
 
   const handleFile = (file: File) => {
+    if (file.size > MAX_ARTIFACT_BYTES) {
+      setError(t('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
+      setArtifact(null);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result;

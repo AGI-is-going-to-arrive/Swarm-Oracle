@@ -3426,6 +3426,7 @@
       "drop_hint": "Drop JSON file here",
       "error_malformed": "Malformed JSON file. Please check if the file format is correct.",
       "error_unknown_version": "Unknown schema version. This viewer only supports public_artifact.v1",
+      "error_too_large": "Artifact size exceeds the maximum limit of {{max}} MB.",
       "empty": "No artifact loaded. Please load a valid artifact JSON.",
       "confidence_high": "High Confidence",
       "confidence_medium": "Medium Confidence",

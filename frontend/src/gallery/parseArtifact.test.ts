@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parsePublicArtifact } from './parseArtifact';
 import { PUBLIC_ARTIFACT_SCHEMA_VERSION } from '../types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 describe('parsePublicArtifact runtime validator', () => {
   const validArtifact = {
@@ -27,7 +29,8 @@ describe('parsePublicArtifact runtime validator', () => {
       {
         branch_index: 1,
         agent_name: 'Zhuge Liang',
-        text: 'The Han dynasty shall rise again.',
+        excerpt: 'The Han dynasty shall rise again.',
+        round: 1,
       },
     ],
     source_summary: {
@@ -152,6 +155,41 @@ describe('parsePublicArtifact runtime validator', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.artifact.branch_verdicts[0].confidence).toBe('low');
+    }
+  });
+
+  it('consumes the backend golden fixture successfully', () => {
+    const goldenPath = path.resolve(__dirname, '../../../samples/public-artifacts/golden.v1.json');
+    const goldenContent = fs.readFileSync(goldenPath, 'utf8');
+    const golden = JSON.parse(goldenContent);
+
+    const result = parsePublicArtifact(golden);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.artifact.transcript_excerpts).toHaveLength(2);
+      result.artifact.transcript_excerpts.forEach((item) => {
+        expect(typeof item.excerpt).toBe('string');
+        expect(typeof item.round).toBe('number');
+        expect('text' in item).toBe(false);
+      });
+    }
+  });
+
+  it('rejects transcript excerpts carrying text but no excerpt', () => {
+    const malformedArtifact = {
+      ...validArtifact,
+      transcript_excerpts: [
+        {
+          branch_index: 1,
+          agent_name: 'Zhuge Liang',
+          text: 'The Han dynasty shall rise again.',
+        },
+      ],
+    };
+    const result = parsePublicArtifact(malformedArtifact);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('malformed');
     }
   });
 });

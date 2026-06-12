@@ -105,8 +105,24 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                               .filter((ex) => ex.branch_index === bar.branch_index)
                               .map((ex, idx) => (
                                 <div key={idx} style={{ fontSize: '0.9rem' }}>
+                                  {ex.round !== undefined && (
+                                    <span
+                                      style={{
+                                        marginRight: '6px',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 'bold',
+                                        backgroundColor: 'var(--color-border-subtle)',
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        color: 'var(--color-text-secondary)',
+                                      }}
+                                      aria-label={`Round ${ex.round}`}
+                                    >
+                                      R{ex.round}
+                                    </span>
+                                  )}
                                   <strong style={{ color: 'var(--color-primary)' }}>{ex.agent_name}:</strong>{' '}
-                                  <span style={{ fontStyle: 'italic', color: 'var(--color-text-secondary)' }}>{ex.text}</span>
+                                  <span style={{ fontStyle: 'italic', color: 'var(--color-text-secondary)' }}>{ex.excerpt}</span>
                                 </div>
                               ))}
                           </div>

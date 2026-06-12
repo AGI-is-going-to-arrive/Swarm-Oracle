@@ -80,6 +80,9 @@ export function DocumentSeedPanel({
       const err = validateFile(file);
       if (err) {
         setValidationError(err);
+        setWorldContext(null);
+        setAgentsPreview(null);
+        setTopWarnings([]);
         return;
       }
 
@@ -94,6 +97,9 @@ export function DocumentSeedPanel({
         setTopWarnings(res.warnings || []);
       } catch {
         if (controller.signal.aborted) return;
+        setWorldContext(null);
+        setAgentsPreview(null);
+        setTopWarnings([]);
         // Map all HTTP / network failures to the generic localized error message as per security rules
         setValidationError(t('document_seed.error_generic', 'Document parsing failed, please try a different file.'));
       } finally {
@@ -105,7 +111,6 @@ export function DocumentSeedPanel({
     },
     [validateFile, setWorldContext, setAgentsPreview, t]
   );
-
   const handleInputChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];

@@ -38,7 +38,51 @@ describe('buildSingleFileGalleryHtml exporter', () => {
 
     // 3. Must escape </script> to prevent script breakout
     expect(html).not.toContain('</script><script>');
-    expect(html).toContain('<\\/script><script>');
+    expect(html).toContain('\\u003c/script>\\u003cscript>');
+  });
+
+  it('prevents script breakout with custom vectors and maintains round-trip lossless parsing', () => {
+    const xssArtifact: PublicArtifact = {
+      schema_version: PUBLIC_ARTIFACT_SCHEMA_VERSION,
+      question: 'Test </script >alert(1) </script\t> </ScRiPt> <!--',
+      language: 'en',
+      display_agent_names: ['Zhuge Liang'],
+      branch_verdicts: [],
+      probability_bars: [],
+      transcript_excerpts: [
+        {
+          branch_index: 1,
+          round: 1,
+          agent_name: 'Zhuge Liang',
+          excerpt: 'Vector: </script >alert(1) <!--',
+        },
+      ],
+      source_summary: { domains: [] },
+    };
+
+    const html = buildSingleFileGalleryHtml(xssArtifact, 'en');
+
+    // Extract JSON data block inside <script id="swarm-artifact" type="application/json">...</script>
+    const startTag = '<script id="swarm-artifact" type="application/json">';
+    const endTag = '</script>';
+    const startIndex = html.indexOf(startTag);
+    expect(startIndex).not.toBe(-1);
+    const jsonStart = startIndex + startTag.length;
+    const jsonEnd = html.indexOf(endTag, jsonStart);
+    expect(jsonEnd).not.toBe(-1);
+
+    const jsonSub = html.substring(jsonStart, jsonEnd);
+
+    // Assert: (a) /<\/script/i has ZERO matches inside that data block
+    expect(/<\/script/i.test(jsonSub)).toBe(false);
+
+    // Assert: (b) there is NO bare < inside that data block
+    expect(jsonSub.includes('<')).toBe(false);
+
+    // Assert: (c) JSON.parse of the unescaped block yields question byte-equal to original
+    const parsed = JSON.parse(jsonSub) as PublicArtifact;
+    expect(parsed.question).toBe(xssArtifact.question);
+    expect(parsed.transcript_excerpts[0].excerpt).toBe(xssArtifact.transcript_excerpts[0].excerpt);
   });
 
   it('does not contain any external script or stylesheet references', () => {

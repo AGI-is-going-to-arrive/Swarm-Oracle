@@ -3426,6 +3426,7 @@
       "drop_hint": "将 JSON 文件拖到此处",
       "error_malformed": "JSON 格式错误，请检查文件格式是否正确。",
       "error_unknown_version": "未知的 schema 版本，此浏览器仅支持 public_artifact.v1",
+      "error_too_large": "工件大小超过最大限制 {{max}} MB。",
       "empty": "未加载任何工件，请载入有效的 JSON 工件。",
       "confidence_high": "高置信度",
       "confidence_medium": "中置信度",

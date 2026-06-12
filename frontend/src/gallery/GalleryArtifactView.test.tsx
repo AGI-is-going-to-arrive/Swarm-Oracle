@@ -55,7 +55,8 @@ describe('GalleryArtifactView rendering', () => {
       {
         branch_index: 1,
         agent_name: 'Zhuge Liang',
-        text: 'The Han dynasty shall rise again.',
+        excerpt: 'The Han dynasty shall rise again.',
+        round: 1,
       },
     ],
     source_summary: {
@@ -91,6 +92,7 @@ describe('GalleryArtifactView rendering', () => {
 
     // Check Excerpts
     expect(screen.getByText('The Han dynasty shall rise again.')).toBeInTheDocument();
+    expect(screen.getByText('R1')).toBeInTheDocument();
   });
 
   it('degrades gracefully with empty arrays', () => {

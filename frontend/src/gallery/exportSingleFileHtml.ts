@@ -20,7 +20,7 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
   const labelProb = isZh ? '概率' : 'Probability';
 
   // Prevent script injection breakout by escaping closing script tag sequences
-  const jsonStr = JSON.stringify(artifact).replace(/<\/script>/gi, '<\\/script>');
+  const jsonStr = JSON.stringify(artifact).replace(/</g, '\\u003c');
 
   return `<!doctype html>
 <html lang="${lang}">
@@ -475,7 +475,7 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
                 const textSpan = document.createElement('span');
                 textSpan.style.fontStyle = 'italic';
                 textSpan.style.color = 'var(--color-text-secondary)';
-                textSpan.textContent = ex.text;
+                textSpan.textContent = ex.excerpt;
 
                 excLine.appendChild(agentSpan);
                 excLine.appendChild(textSpan);
