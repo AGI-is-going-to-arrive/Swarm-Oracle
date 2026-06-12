@@ -26,8 +26,10 @@ from app.api.helpers import (
     resolve_authenticated_user_id,
     verify_session,
 )
+from app.config import settings
 from app.models import Agent, Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
+from app.models.prediction_journal import PredictionJournalEntry
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
 from app.services.llm_client import validate_llm_base_url
 
@@ -142,6 +144,13 @@ async def submit_prediction(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> PredictionResponse:
     """Submit a prediction for a scenario (before or during simulation)."""
+    if not settings.FEATURE_YOU_VS_ORACLE:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'you_vs_oracle' is not enabled",
+        )
+
     engine = get_engine()
     with Session(engine) as session:
         scenario = _require_owned_prediction_scenario(session, scenario_id, principal)
@@ -182,6 +191,18 @@ async def submit_prediction(
             prediction_text=req.prediction_text,
             confidence=req.confidence,
         )
+        if (
+            settings.FEATURE_PREDICTION_JOURNAL
+            and normalized_user_id != ANONYMOUS_USER_ID
+        ):
+            session.add(
+                PredictionJournalEntry(
+                    scenario_id=scenario_id,
+                    user_id=normalized_user_id,
+                    question=scenario.question,
+                    predicted_probability=req.confidence,
+                )
+            )
         try:
             session.add(pred)
             session.commit()
@@ -249,6 +270,13 @@ async def trigger_scoring(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> dict:
     """Score all unscored predictions for a completed scenario."""
+    if not settings.FEATURE_YOU_VS_ORACLE:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'you_vs_oracle' is not enabled",
+        )
+
     engine = get_engine()
     with Session(engine) as session:
         scenario = _require_owned_prediction_scenario(session, scenario_id, principal)

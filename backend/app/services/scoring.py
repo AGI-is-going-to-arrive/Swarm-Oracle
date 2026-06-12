@@ -15,6 +15,7 @@ from sqlalchemy import func, update
 from sqlmodel import Session, select
 
 from app.models.database import get_engine
+from app.models.prediction_journal import PredictionJournalEntry
 from app.models.predictions import Leaderboard, Prediction
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
@@ -26,6 +27,28 @@ from app.services.llm_client import (
 
 logger = logging.getLogger(__name__)
 ANONYMOUS_USER_ID = "anonymous"
+_POSITIVE_VERDICT_MARKERS = (
+    "yes",
+    "true",
+    "succeed",
+    "succeeds",
+    "survive",
+    "survives",
+    "likely succeeds",
+    "probably survives",
+)
+_NEGATIVE_VERDICT_MARKERS = (
+    "no",
+    "false",
+    "fail",
+    "fails",
+    "stall",
+    "stalls",
+    "collapse",
+    "collapses",
+    "likely stalls",
+    "probably fails",
+)
 
 SCORING_PROMPTS = {
     "Chinese": """你是一个精确的预测评估器。请比较用户的预测与实际推演结果，给出准确率评分。
@@ -104,6 +127,85 @@ def _normalize_scoring_result(raw: object) -> tuple[int, str]:
 
     reason = str(reason_raw or "评估输出异常，已回退").strip()[:50]
     return max(0, min(100, score)), reason
+
+
+def calculate_brier_score(predicted_probability: float, actual_outcome: bool) -> float:
+    """Return the binary Brier score for a locked user probability."""
+    probability = max(0.0, min(1.0, float(predicted_probability)))
+    actual = 1.0 if actual_outcome else 0.0
+    return (probability - actual) ** 2
+
+
+def _extract_ai_actual_outcome(parsed_context: object) -> bool | None:
+    if not isinstance(parsed_context, dict):
+        return None
+    result_quality = parsed_context.get("result_quality")
+    if not isinstance(result_quality, dict):
+        return None
+    verdict_text = " ".join(
+        str(result_quality.get(key) or "")
+        for key in ("question_answer", "verdict")
+    ).strip().lower()
+    if not verdict_text:
+        return None
+    if any(marker in verdict_text for marker in _NEGATIVE_VERDICT_MARKERS):
+        return False
+    if any(marker in verdict_text for marker in _POSITIVE_VERDICT_MARKERS):
+        return True
+    return None
+
+
+def _you_vs_oracle_result_for_prediction(
+    prediction: Prediction,
+    parsed_context: object,
+) -> dict[str, object] | None:
+    actual_outcome = _extract_ai_actual_outcome(parsed_context)
+    if actual_outcome is None:
+        return None
+    return {
+        "predicted_probability": prediction.confidence,
+        "ai_actual_outcome": actual_outcome,
+        "brier_score": calculate_brier_score(prediction.confidence, actual_outcome),
+    }
+
+
+def _you_vs_oracle_result_for_prediction_id(prediction_id: str) -> dict[str, object] | None:
+    from app.models import Scenario
+
+    with Session(get_engine()) as session:
+        prediction = session.get(Prediction, prediction_id)
+        if prediction is None:
+            return None
+        scenario = session.get(Scenario, prediction.scenario_id)
+        if scenario is None:
+            return None
+        return _you_vs_oracle_result_for_prediction(prediction, scenario.parsed_context)
+
+
+def _resolve_prediction_journal_entries(
+    session: Session,
+    prediction: Prediction,
+    *,
+    actual_outcome: bool,
+    brier_score: float,
+    resolved_at: datetime,
+) -> None:
+    if prediction.user_id == ANONYMOUS_USER_ID:
+        return
+    entries = list(
+        session.exec(
+            select(PredictionJournalEntry).where(
+                PredictionJournalEntry.scenario_id == prediction.scenario_id,
+                PredictionJournalEntry.user_id == prediction.user_id,
+                PredictionJournalEntry.actual_outcome == None,  # noqa: E711
+            )
+        ).all()
+    )
+    for entry in entries:
+        entry.actual_outcome = actual_outcome
+        entry.brier_score = brier_score
+        entry.resolved_at = resolved_at
+        session.add(entry)
 
 
 def _truncate_at_boundary(text: str, max_chars: int) -> str:
@@ -269,6 +371,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         scenario_question = scenario.question
         provider_policy = dict(scenario.parsed_context or {})
         detected_lang = provider_policy.get("_language", "English")
+        you_vs_oracle = _you_vs_oracle_result_for_prediction(pred, scenario.parsed_context)
 
         # Get actual result from branches' stories
         from app.models import Branch
@@ -376,11 +479,22 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
                     return None
                 if pred.user_id != ANONYMOUS_USER_ID:
                     _update_leaderboard(session, pred.user_id, pred.user_name, score)
+                if you_vs_oracle is not None:
+                    _resolve_prediction_journal_entries(
+                        session,
+                        pred,
+                        actual_outcome=bool(you_vs_oracle["ai_actual_outcome"]),
+                        brier_score=float(you_vs_oracle["brier_score"]),
+                        resolved_at=scored_at,
+                    )
                 session.commit()
             else:
                 session.rollback()
                 logger.info("Prediction %s already scored (race avoided)", prediction_id)
-                return {"score": pred.score, "reason": pred.score_reason or ""}
+                result = {"score": pred.score, "reason": pred.score_reason or ""}
+                if you_vs_oracle is not None:
+                    result["you_vs_oracle"] = you_vs_oracle
+                return result
         except Exception:
             session.rollback()
             logger.exception(
@@ -390,7 +504,10 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
             return None
 
     logger.info("Scored prediction %s: %d (%s)", prediction_id, score, reason)
-    return {"score": score, "reason": reason}
+    result = {"score": score, "reason": reason}
+    if you_vs_oracle is not None:
+        result["you_vs_oracle"] = you_vs_oracle
+    return result
 
 
 async def score_all_for_scenario(
@@ -441,7 +558,12 @@ async def score_all_for_scenario(
             logger.error("Scoring failed for %s: %s", pred.id, result)
             failed += 1
         elif result:
-            results.append({"prediction_id": pred.id, **result})
+            result_payload = {"prediction_id": pred.id, **result}
+            if "you_vs_oracle" not in result_payload:
+                you_vs_oracle = _you_vs_oracle_result_for_prediction_id(pred.id)
+                if you_vs_oracle is not None:
+                    result_payload["you_vs_oracle"] = you_vs_oracle
+            results.append(result_payload)
         else:
             failed += 1
 

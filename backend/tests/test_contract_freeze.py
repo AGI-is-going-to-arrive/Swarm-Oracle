@@ -553,6 +553,9 @@ _TOP_LEVEL_FROZEN_KEYS = frozenset(
         "prediction_journal",
         "result_verdict",
         "result_report",
+        "multi_run",
+        "you_vs_oracle",
+        "social_headlines",
         "document_seed",
         "local_packs",
     }
@@ -582,7 +585,7 @@ _PROVIDERS_FROZEN_SUB_KEYS = frozenset(
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 23 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 27 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()
@@ -767,6 +770,9 @@ async def test_capabilities_additive_only_no_regression_on_frozen_keys():
         "FEATURE_GRAPH_ANALYSIS",
         "FEATURE_RESULT_VERDICT",
         "FEATURE_RESULT_REPORT",
+        "FEATURE_MULTI_RUN",
+        "FEATURE_YOU_VS_ORACLE",
+        "FEATURE_SOCIAL_HEADLINES",
         "FEATURE_PUBLIC_ARTIFACTS",
         "FEATURE_DOCUMENT_SEED",
         "FEATURE_LOCAL_PACKS",

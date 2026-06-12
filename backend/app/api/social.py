@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
@@ -17,12 +20,15 @@ from app.api.helpers import (
     require_session_principal,
     verify_session,
 )
+from app.config import settings
 from app.models import Agent, Branch, BranchStatus, Scenario
+from app.models.checkpoint import FactionEvent, FactionSnapshot
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
+    llm_call,
     llm_request_scope,
     validate_llm_base_url,
 )
@@ -35,6 +41,27 @@ SOCIAL_COPY_MAX_CHARS = {
     "zhihu": 12_000,
     "reddit": 5_000,
     "x": 1_600,
+}
+_DISPLAY_SAFE_REDACTION_RE = re.compile(
+    r"(?i)"
+    r"(authorization\s*:\s*bearer\s+[^\s,;]+|"
+    r"bearer\s+[^\s,;]+|"
+    r"sk-[a-z0-9_\-]+|"
+    r"\b(api[_-]?key|base[_-]?url|authorization|token|owner[_-]?id|"
+    r"owner[_-]?user[_-]?id|user[_-]?id)\b\s*[:=]?\s*[^\s,;]*)"
+)
+_DISPLAY_SAFE_FORBIDDEN_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "token",
+    "base_url",
+    "baseurl",
+    "owner_id",
+    "owner_user_id",
+    "user_id",
+    "full_report",
+    "hidden_report_payload",
 }
 
 
@@ -334,7 +361,271 @@ def _build_social_context(
     return "\n".join(context_lines)
 
 
+def _require_social_headlines_feature() -> None:
+    if not settings.FEATURE_SOCIAL_HEADLINES:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'social_headlines' is not enabled",
+        )
+
+
+def _display_safe_text(value: object, *, max_chars: int = 240) -> str:
+    text = str(value or "").strip()
+    text = _DISPLAY_SAFE_REDACTION_RE.sub("[redacted]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def _load_json_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _safe_payload_summary(raw: str | None) -> str:
+    payload = _load_json_object(raw)
+    visible_parts: list[str] = []
+    for key, value in payload.items():
+        normalized_key = str(key).strip().lower().replace("-", "_")
+        if normalized_key in _DISPLAY_SAFE_FORBIDDEN_KEYS:
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            visible_parts.append(_display_safe_text(value, max_chars=120))
+    return "; ".join(part for part in visible_parts if part)[:240]
+
+
+def _snapshot_lookup(
+    snapshots: list[FactionSnapshot],
+) -> dict[tuple[str, int, str], FactionSnapshot]:
+    return {
+        (snapshot.branch_id, snapshot.round_number, snapshot.faction_key): snapshot
+        for snapshot in snapshots
+    }
+
+
+def _build_display_safe_social_events(
+    scenario: Scenario,
+    branches: list[Branch],
+    snapshots: list[FactionSnapshot],
+    events: list[FactionEvent],
+) -> list[dict[str, Any]]:
+    branch_titles = {
+        branch.id: _display_safe_text(branch.title, max_chars=120)
+        for branch in branches
+    }
+    by_snapshot_key = _snapshot_lookup(snapshots)
+    display_events: list[dict[str, Any]] = []
+    for index, event in enumerate(events, start=1):
+        snapshot = by_snapshot_key.get(
+            (event.branch_id, event.round_number, event.faction_key)
+        )
+        faction_label = (
+            _display_safe_text(snapshot.label, max_chars=80)
+            if snapshot is not None
+            else _display_safe_text(event.faction_key, max_chars=80)
+        )
+        payload_summary = _safe_payload_summary(event.payload_json)
+        event_type = _display_safe_text(event.event_type.replace("_", " "), max_chars=60)
+        branch_title = branch_titles.get(event.branch_id, "worldline")
+        summary_parts = [
+            f"{faction_label} triggered {event_type}",
+            f"on {branch_title}",
+        ]
+        if payload_summary:
+            summary_parts.append(payload_summary)
+        display_events.append(
+            {
+                "event_id": f"event_{index}",
+                "round_number": event.round_number,
+                "event_type": event_type,
+                "branch_title": branch_title,
+                "faction_label": faction_label,
+                "confidence": (
+                    max(0.0, min(1.0, float(snapshot.confidence)))
+                    if snapshot is not None
+                    else None
+                ),
+                "summary": _display_safe_text("; ".join(summary_parts), max_chars=280),
+            }
+        )
+    return display_events
+
+
+def _deterministic_headline_cards(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for index, event in enumerate(events[:5], start=1):
+        faction_label = str(event.get("faction_label") or "Faction")
+        event_type = str(event.get("event_type") or "event")
+        branch_title = str(event.get("branch_title") or "worldline")
+        cards.append(
+            {
+                "card_id": f"headline_{index}",
+                "headline": _display_safe_text(
+                    f"{faction_label}: {event_type}",
+                    max_chars=96,
+                ),
+                "summary": _display_safe_text(
+                    event.get("summary") or f"{event_type} on {branch_title}",
+                    max_chars=220,
+                ),
+                "branch_title": _display_safe_text(branch_title, max_chars=120),
+                "round_number": event.get("round_number"),
+                "event_type": _display_safe_text(event_type, max_chars=60),
+                "faction_label": _display_safe_text(faction_label, max_chars=80),
+                "source_event_id": event.get("event_id"),
+            }
+        )
+    return cards
+
+
+def _normalize_headline_cards(raw: object, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+    if isinstance(raw, dict):
+        raw_cards = raw.get("headline_cards") or raw.get("cards") or []
+    else:
+        raw_cards = raw
+    if not isinstance(raw_cards, list):
+        return []
+    cards: list[dict[str, Any]] = []
+    events_by_id = {str(event.get("event_id")): event for event in events}
+    for index, item in enumerate(raw_cards[:5], start=1):
+        if not isinstance(item, dict):
+            continue
+        source_event_id = str(item.get("source_event_id") or f"event_{index}")
+        source_event = events_by_id.get(
+            source_event_id,
+            events[index - 1] if index <= len(events) else {},
+        )
+        headline = _display_safe_text(item.get("headline"), max_chars=96)
+        summary = _display_safe_text(item.get("summary"), max_chars=220)
+        if not headline:
+            continue
+        cards.append(
+            {
+                "card_id": f"headline_{index}",
+                "headline": headline,
+                "summary": summary
+                or _display_safe_text(source_event.get("summary"), max_chars=220),
+                "branch_title": _display_safe_text(
+                    item.get("branch_title") or source_event.get("branch_title"),
+                    max_chars=120,
+                ),
+                "round_number": item.get("round_number") or source_event.get("round_number"),
+                "event_type": _display_safe_text(
+                    item.get("event_type") or source_event.get("event_type"),
+                    max_chars=60,
+                ),
+                "faction_label": _display_safe_text(
+                    item.get("faction_label") or source_event.get("faction_label"),
+                    max_chars=80,
+                ),
+                "source_event_id": source_event_id,
+            }
+        )
+    return cards
+
+
+async def _generate_headline_cards(
+    scenario: Scenario,
+    events: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    if not events:
+        return "deterministic", []
+    provider_policy = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
+    language = _resolve_social_language(scenario)
+    question_block = format_untrusted_text_block(
+        "Scenario question",
+        _display_safe_text(scenario.question, max_chars=600),
+        max_chars=800,
+    )
+    events_block = format_untrusted_text_block(
+        "Faction event feed",
+        json.dumps(events, ensure_ascii=False),
+        max_chars=6000,
+    )
+    prompt = (
+        "Generate display-safe headline cards for a SwarmOracle social feed.\n"
+        f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
+        f"{question_block}\n"
+        f"{events_block}\n"
+        "Return strict JSON only: "
+        "{\"headline_cards\":[{\"headline\":\"...\",\"summary\":\"...\","
+        "\"source_event_id\":\"event_1\"}]}\n"
+        f"{get_language_directive(language)}"
+    )
+    try:
+        with llm_request_scope(
+            quota_key=(
+                f"user:{provider_policy.get('user_id')}"
+                if provider_policy.get("user_id")
+                else None
+            ),
+            purpose="social_headline_cards",
+        ):
+            raw = await llm_call(
+                prompt,
+                timeout=30.0,
+                model=provider_policy.get("llm_model"),
+                base_url=provider_policy.get("llm_base_url"),
+            )
+        cards = _normalize_headline_cards(raw, events)
+        if cards:
+            return "llm", cards
+    except Exception as exc:
+        logger.debug("social headline generation failed (non-blocking): %s", type(exc).__name__)
+    return "deterministic", _deterministic_headline_cards(events)
+
+
 # ── Endpoints ────────────────────────────────────────────
+
+
+@router.get("/scenario/{scenario_id}/social-feed")
+async def get_social_feed(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    """Return display-safe faction events and headline cards."""
+    _require_social_headlines_feature()
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        branches = list(session.exec(
+            select(Branch).where(Branch.scenario_id == scenario_id)
+        ).all())
+        snapshots = list(session.exec(
+            select(FactionSnapshot).where(FactionSnapshot.scenario_id == scenario_id)
+        ).all())
+        events = list(session.exec(
+            select(FactionEvent)
+            .where(FactionEvent.scenario_id == scenario_id)
+            .order_by(FactionEvent.round_number, FactionEvent.created_at, FactionEvent.id)
+        ).all())
+
+    display_events = _build_display_safe_social_events(
+        scenario,
+        branches,
+        snapshots,
+        events,
+    )
+    generation_mode, headline_cards = await _generate_headline_cards(scenario, display_events)
+    return {
+        "scenario_id": scenario.id,
+        "question": _display_safe_text(scenario.question, max_chars=240),
+        "generation_mode": generation_mode,
+        "events": display_events,
+        "headline_cards": headline_cards,
+    }
 
 
 async def _generate_social_copy(

@@ -70,6 +70,7 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("scenario", "web_context_json", "TEXT"),
     ("scenario", "director_state_json", "TEXT"),
     ("scenario", "gameplay_state_json", "TEXT"),
+    ("scenario", "run_group_id", "TEXT"),
     ("ending_room", "scope_fingerprint", "TEXT"),
     ("ending_room", "current_phase", "TEXT DEFAULT 'OPENING'"),
     ("ending_room", "memory_partition_version", "INTEGER DEFAULT 2"),
@@ -306,6 +307,7 @@ class Scenario(SQLModel, table=True):
     status: ScenarioStatus = ScenarioStatus.PARSING
     created_at: datetime = Field(default_factory=_now)
     user_id: Optional[str] = None
+    run_group_id: Optional[str] = Field(default=None, index=True)
 
     # V2: Pixel visualization layer
     visualization_enabled: bool = Field(default=False)

@@ -1938,6 +1938,10 @@ async def _run_simulation_impl(
         if not scenario:
             raise ValueError(f"Scenario {scenario_id} not found")
         ctx = scenario.parsed_context or {}
+        verdict_only_multi_run = _is_verdict_only_multi_run_context(
+            ctx,
+            scenario.director_state_json,
+        )
         detected_language = ctx.get("_language", "Chinese")
         setting_bg = _format_setting(ctx.get("setting", {}), language=detected_language)
         document_reference_context = _format_document_reference_context(
@@ -2640,38 +2644,41 @@ async def _run_simulation_impl(
         await push({"type": "status", "data": {"status": "narrating"}})
 
     narrated_branch_payloads: list[dict[str, Any]] = []
-    for b in all_branches:
-        _check_cancelled(scenario_id)
-        if b["status"] in ("ACTIVE", "COMPLETED"):
+    if verdict_only_multi_run and branch_id is None:
+        narrated_branch_payloads = _build_verdict_only_branch_payloads(engine, all_branches)
+    else:
+        for b in all_branches:
             _check_cancelled(scenario_id)
-            narration = await _narrate_branch_data(
-                engine,
-                b["id"],
-                agents,
-                language=detected_language,
-                llm_overrides=llm_overrides,
-                web_context_block=web_context_block,
-                question=scenario.question or "",
-            )
-            _check_cancelled(scenario_id)
-            _save_narration(engine, b["id"], narration)
-            await push({
-                "type": "narration",
-                "data": {
-                    "branch_id": b["id"],
+            if b["status"] in ("ACTIVE", "COMPLETED"):
+                _check_cancelled(scenario_id)
+                narration = await _narrate_branch_data(
+                    engine,
+                    b["id"],
+                    agents,
+                    language=detected_language,
+                    llm_overrides=llm_overrides,
+                    web_context_block=web_context_block,
+                    question=scenario.question or "",
+                )
+                _check_cancelled(scenario_id)
+                _save_narration(engine, b["id"], narration)
+                await push({
+                    "type": "narration",
+                    "data": {
+                        "branch_id": b["id"],
+                        "title": narration.get("title", ""),
+                        "story": narration.get("story", ""),
+                        "insight": narration.get("insight", ""),
+                    },
+                })
+                narrated_branch_payloads.append({
+                    "id": b["id"],
+                    "fork_round": b.get("fork_round"),
+                    "probability": b.get("probability", 0),
                     "title": narration.get("title", ""),
                     "story": narration.get("story", ""),
                     "insight": narration.get("insight", ""),
-                },
-            })
-            narrated_branch_payloads.append({
-                "id": b["id"],
-                "fork_round": b.get("fork_round"),
-                "probability": b.get("probability", 0),
-                "title": narration.get("title", ""),
-                "story": narration.get("story", ""),
-                "insight": narration.get("insight", ""),
-            })
+                })
 
     if branch_id is None and settings.FEATURE_RESULT_VERDICT:
         verdict = await _generate_verdict(
@@ -2684,7 +2691,7 @@ async def _run_simulation_impl(
         if verdict is not None:
             _persist_result_quality_verdict(engine, scenario_id, verdict)
 
-    if branch_id is None and settings.FEATURE_RESULT_REPORT:
+    if branch_id is None and settings.FEATURE_RESULT_REPORT and not verdict_only_multi_run:
         try:
             chosen_report_branch = _pick_theater_ending_payload(narrated_branch_payloads)
             report_branch_id = (
@@ -3751,6 +3758,58 @@ def _json_set_parsed_context_expr(
 
 def _json_value(value: object):
     return func.json(json.dumps(value, ensure_ascii=False))
+
+
+def _is_verdict_only_multi_run_context(
+    parsed_context: object,
+    director_state: object,
+) -> bool:
+    for source in (director_state, parsed_context):
+        if not isinstance(source, dict):
+            continue
+        multi_run = source.get("multi_run")
+        if isinstance(multi_run, dict) and bool(multi_run.get("verdict_only")):
+            return True
+    return False
+
+
+def _build_verdict_only_branch_payloads(
+    engine,
+    all_branches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    branch_ids = [
+        str(branch.get("id"))
+        for branch in all_branches
+        if branch.get("status") in ("ACTIVE", "COMPLETED") and branch.get("id")
+    ]
+    if not branch_ids:
+        return payloads
+    with Session(engine) as session:
+        db_branches = list(
+            session.exec(select(Branch).where(Branch.id.in_(branch_ids))).all()
+        )
+        by_id = {branch.id: branch for branch in db_branches}
+        for branch_data in all_branches:
+            branch_id = str(branch_data.get("id") or "")
+            branch = by_id.get(branch_id)
+            if branch is None:
+                continue
+            if branch.status == BranchStatus.ACTIVE:
+                branch.status = BranchStatus.COMPLETED
+                session.add(branch)
+            payloads.append(
+                {
+                    "id": branch.id,
+                    "fork_round": branch_data.get("fork_round"),
+                    "probability": branch.probability,
+                    "title": branch.title,
+                    "story": branch.story or "",
+                    "insight": branch.insight or branch.fork_reason or branch.title,
+                }
+            )
+        session.commit()
+    return payloads
 
 
 async def _generate_verdict(

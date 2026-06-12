@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -114,6 +115,11 @@ _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
         "simulation_rounds",
     }
 )
+
+
+class MultiRunScenarioRequest(CreateScenarioRequest):
+    run_count: int | None = None
+    verdict_only_runs: bool = True
 
 
 async def _run_scenario_background_with_llm_error_taxonomy(
@@ -829,6 +835,22 @@ async def api_capabilities():
             enabled=settings.FEATURE_RESULT_REPORT,
             version="1.0" if settings.FEATURE_RESULT_REPORT else "0.0",
         ),
+        "multi_run": _capability_entry(
+            enabled=settings.FEATURE_MULTI_RUN,
+            version="1.0" if settings.FEATURE_MULTI_RUN else "0.0",
+        )
+        | {
+            "default_count": settings.MULTI_RUN_DEFAULT_COUNT,
+            "max_count": settings.MULTI_RUN_MAX_COUNT,
+        },
+        "you_vs_oracle": _capability_entry(
+            enabled=settings.FEATURE_YOU_VS_ORACLE,
+            version="1.0" if settings.FEATURE_YOU_VS_ORACLE else "0.0",
+        ),
+        "social_headlines": _capability_entry(
+            enabled=settings.FEATURE_SOCIAL_HEADLINES,
+            version="1.0" if settings.FEATURE_SOCIAL_HEADLINES else "0.0",
+        ),
         "document_seed": _capability_entry(
             enabled=settings.FEATURE_DOCUMENT_SEED,
             version="1.0" if settings.FEATURE_DOCUMENT_SEED else "0.0",
@@ -880,6 +902,297 @@ async def api_health_test(req: TestLlmRequest):
 
 
 # ── Scenario CRUD ────────────────────────────────────────
+
+
+def _require_multi_run_feature() -> None:
+    if not settings.FEATURE_MULTI_RUN:
+        raise api_error(404, "FEATURE_DISABLED", "Feature 'multi_run' is not enabled")
+
+
+def _clamp_multi_run_count(value: int | None) -> tuple[int, int]:
+    requested = int(value if value is not None else settings.MULTI_RUN_DEFAULT_COUNT)
+    max_count = max(1, int(settings.MULTI_RUN_MAX_COUNT))
+    return requested, max(1, min(requested, max_count))
+
+
+def _multi_run_metadata(
+    *,
+    run_group_id: str,
+    run_index: int,
+    accepted_run_count: int,
+    verdict_only: bool,
+) -> dict[str, Any]:
+    return {
+        "run_group_id": run_group_id,
+        "run_index": run_index,
+        "accepted_run_count": accepted_run_count,
+        "verdict_only": verdict_only,
+    }
+
+
+@router.post("/scenario/multi-run")
+async def create_multi_run_scenarios(
+    req: MultiRunScenarioRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    """Start N independent worldline runs for the same prompt."""
+    _require_multi_run_feature()
+    if not req.question.strip():
+        raise api_error(400, "QUESTION_EMPTY", "Question cannot be empty")
+
+    if req.llm_base_url:
+        validated_url = validate_llm_base_url(req.llm_base_url)
+        if validated_url is None:
+            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+        if not req.llm_api_key:
+            raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
+        req.llm_base_url = validated_url
+
+    if not req.web_search_enabled:
+        req.web_search_families = None
+        req.web_search_provider = None
+        req.web_search_api_key = None
+        req.web_search_base_url = None
+        req.web_search_intensity = None
+
+    if req.web_search_base_url:
+        effective_web_search_provider = req.web_search_provider or settings.WEB_SEARCH_PROVIDER
+        validated_search_url = validate_web_search_base_url(
+            effective_web_search_provider,
+            req.web_search_base_url,
+        )
+        if validated_search_url is None:
+            raise api_error(
+                400,
+                "WEB_SEARCH_BASE_URL_NOT_ALLOWED",
+                "Provided web_search_base_url is not in the allowed provider list",
+            )
+        req.web_search_base_url = validated_search_url
+
+    effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
+    requested_run_count, accepted_run_count = _clamp_multi_run_count(req.run_count)
+    run_group_id = str(uuid.uuid4())
+    question = req.question.strip()
+    num_agents = req.num_agents or settings.DEFAULT_NUM_AGENTS
+    mode = req.mode or "blackboard"
+    use_hierarchical = req.hierarchical
+    if use_hierarchical is None:
+        use_hierarchical = num_agents > settings.HIERARCHICAL_AGENT_THRESHOLD
+    sim_rounds = (
+        max(1, min(req.rounds, settings.MAX_ROUNDS))
+        if req.rounds is not None
+        else settings.DEFAULT_ROUNDS
+    )
+    viz_enabled = req.visualization_enabled or False
+    web_search_intensity_config = (
+        resolve_web_search_intensity_config(req.web_search_intensity)
+        if req.web_search_enabled
+        else None
+    )
+
+    engine = get_engine()
+    runs: list[dict[str, Any]] = []
+    with Session(engine) as session:
+        for run_index in range(1, accepted_run_count + 1):
+            verdict_only = bool(req.verdict_only_runs and run_index > 1)
+            metadata = _multi_run_metadata(
+                run_group_id=run_group_id,
+                run_index=run_index,
+                accepted_run_count=accepted_run_count,
+                verdict_only=verdict_only,
+            )
+            scenario_parsed_context: dict[str, Any] = {
+                "mode": mode,
+                "hierarchical": use_hierarchical,
+                "simulation_rounds": sim_rounds,
+                "multi_run": metadata,
+                **({
+                    "web_search_intensity": web_search_intensity_config.intensity,
+                    "web_search_max_results": web_search_intensity_config.max_results,
+                    "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
+                } if web_search_intensity_config else {}),
+            }
+            if req.world_context is not None:
+                scenario_parsed_context["world_context"] = req.world_context.model_dump()
+            scenario = Scenario(
+                question=question,
+                status=ScenarioStatus.SIMULATING,
+                visualization_enabled=viz_enabled,
+                user_id=effective_user_id or None,
+                parsed_context=scenario_parsed_context,
+                director_state_json={"multi_run": metadata},
+                run_group_id=run_group_id,
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            session.add(
+                Branch(
+                    scenario_id=scenario.id,
+                    title=_placeholder_root_title(question),
+                    probability=1.0,
+                )
+            )
+            session.commit()
+
+            runs.append(
+                {
+                    "scenario_id": scenario.id,
+                    "run_index": run_index,
+                    "verdict_only": verdict_only,
+                    "status": scenario.status.value,
+                }
+            )
+
+            async def _background_for_run(scenario_id: str = scenario.id) -> None:
+                background_coro = parse_and_run_background(
+                    scenario_id,
+                    question=question,
+                    num_agents=num_agents,
+                    mode=mode,
+                    hierarchical=use_hierarchical,
+                    rounds=sim_rounds,
+                    visualization_enabled=viz_enabled,
+                    reasoning_effort=req.reasoning_effort,
+                    temperature=req.temperature,
+                    branch_sensitivity=req.branch_sensitivity,
+                    fork_prompt_variant=req.fork_prompt_variant,
+                    fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
+                    user_id=effective_user_id,
+                    llm_api_key=req.llm_api_key,
+                    llm_base_url=req.llm_base_url,
+                    llm_model=req.llm_model,
+                    llm_requests_per_minute=req.llm_requests_per_minute,
+                    llm_tokens_per_minute=req.llm_tokens_per_minute,
+                    disable_user_quota=req.disable_user_quota,
+                    custom_agent_identity_ids=req.custom_agent_identity_ids,
+                    continuity_overrides=[
+                        override.model_dump()
+                        for override in (req.continuity_overrides or [])
+                    ] or None,
+                    web_search_families=(
+                        req.web_search_families if req.web_search_enabled else None
+                    ),
+                    web_search_intensity=(
+                        web_search_intensity_config.intensity
+                        if web_search_intensity_config
+                        else None
+                    ),
+                    web_search_max_results=(
+                        web_search_intensity_config.max_results
+                        if web_search_intensity_config
+                        else None
+                    ),
+                    web_search_snippet_limit=(
+                        web_search_intensity_config.snippet_limit
+                        if web_search_intensity_config
+                        else None
+                    ),
+                    world_context=(
+                        req.world_context.model_dump()
+                        if req.world_context is not None
+                        else None
+                    ),
+                )
+                await _run_scenario_background_with_llm_error_taxonomy(
+                    scenario_id,
+                    background_coro,
+                )
+
+            schedule_background_task(_background_for_run())
+
+    return {
+        "run_group_id": run_group_id,
+        "requested_run_count": requested_run_count,
+        "accepted_run_count": accepted_run_count,
+        "verdict_only_runs": bool(req.verdict_only_runs),
+        "reminder": {
+            "estimated_llm_call_count": f"{accepted_run_count} worldline runs",
+            "estimated_duration": "same order as independent scenario runs",
+            "native_search": "inherits the request web_search settings",
+        },
+        "runs": runs,
+    }
+
+
+@router.get("/scenario/run-groups/{run_group_id}")
+async def get_run_group_distribution(
+    run_group_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    """Aggregate a multi-run group as integer worldline counts."""
+    _require_multi_run_feature()
+    engine = get_engine()
+    verdict_counts: dict[str, int] = {}
+    outcome_counts: dict[str, int] = {}
+    runs: list[dict[str, Any]] = []
+    with Session(engine) as session:
+        scenarios = list(
+            session.exec(
+                select(Scenario)
+                .where(Scenario.run_group_id == run_group_id)
+                .order_by(Scenario.created_at, Scenario.id)
+            ).all()
+        )
+        if principal is not None:
+            scenarios = [
+                scenario
+                for scenario in scenarios
+                if scenario.user_id == principal.subject
+            ]
+        if not scenarios:
+            raise api_error(404, "RUN_GROUP_NOT_FOUND", "Run group not found")
+
+        for index, scenario in enumerate(scenarios, start=1):
+            context = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
+            result_quality = context.get("result_quality") if isinstance(context, dict) else None
+            verdict = (
+                str(result_quality.get("verdict") or "").strip()
+                if isinstance(result_quality, dict)
+                else ""
+            ) or "unknown"
+            verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+
+            branch = session.exec(
+                select(Branch)
+                .where(
+                    Branch.scenario_id == scenario.id,
+                    Branch.status == BranchStatus.COMPLETED,
+                )
+                .order_by(Branch.probability.desc(), Branch.id)
+                .limit(1)
+            ).first()
+            outcome = str(branch.title if branch is not None else "").strip() or "unknown"
+            outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+
+            multi_run = (
+                scenario.director_state_json.get("multi_run")
+                if isinstance(scenario.director_state_json, dict)
+                else None
+            )
+            runs.append(
+                {
+                    "scenario_id": scenario.id,
+                    "run_index": (
+                        int(multi_run.get("run_index"))
+                        if isinstance(multi_run, dict) and multi_run.get("run_index") is not None
+                        else index
+                    ),
+                    "status": scenario.status.value,
+                    "verdict": verdict,
+                    "outcome": outcome,
+                }
+            )
+
+    return {
+        "run_group_id": run_group_id,
+        "run_count": len(runs),
+        "histogram": {
+            "verdict_counts": verdict_counts,
+            "outcome_counts": outcome_counts,
+        },
+        "runs": runs,
+    }
 
 
 @router.post("/scenario", response_model=ScenarioResponse)
