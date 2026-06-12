@@ -14,6 +14,8 @@ import type {
   WebSearchFamily,
   ReplayTraceResponse,
   PublicArtifact,
+  WorldContext,
+  DocumentSeedResponse,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -223,6 +225,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   customAgentIdentityIds?: string[];
   continuityOverrides?: ContinuityOverride[];
   campaignContext?: CampaignContext;
+  worldContext?: WorldContext;
 }
 
 export interface ContinuityOverride {
@@ -310,6 +313,7 @@ function buildScenarioRequestBody(
     customAgentIdentityIds,
     continuityOverrides,
     campaignContext,
+    worldContext,
   } = options;
 
   const preflightMode = opts?.preflightMode === true;
@@ -350,6 +354,7 @@ function buildScenarioRequestBody(
       })),
     }),
     ...(campaignContext && { campaign_context: campaignContext }),
+    ...(worldContext && { world_context: worldContext }),
   };
 }
 
@@ -541,6 +546,7 @@ export interface CapabilitiesResponse {
   result_verdict?: CapabilityEntry;
   result_report?: CapabilityEntry;
   public_artifacts?: CapabilityEntry;
+  document_seed?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -1724,6 +1730,35 @@ export async function uploadDocumentForAgents(
     throw await parseErrorResponse(res);
   }
   return parseJsonResponse<DocumentAgentResult>(res, '/agents/from-document');
+}
+
+/**
+ * POST /api/agents/document-seed
+ * Upload a document (.pdf/.txt/.md/.markdown) to extract world_context and agents_preview.
+ * Can be cancelled via AbortSignal.
+ */
+export async function uploadDocumentSeed(
+  file: File,
+  signal?: AbortSignal,
+): Promise<DocumentSeedResponse> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  const res = await fetchWithTimeout(
+    withUserIdQuery('/agents/document-seed'),
+    {
+      method: 'POST',
+      headers: buildSessionHeaders(),
+      body: form,
+      signal,
+    },
+    DOCUMENT_AGENT_UPLOAD_TIMEOUT_MS,
+  );
+
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return parseJsonResponse<DocumentSeedResponse>(res, '/agents/document-seed');
 }
 
 // ── Agent Favorites ──────────────────────────────────────

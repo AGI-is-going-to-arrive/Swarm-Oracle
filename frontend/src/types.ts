@@ -1389,3 +1389,45 @@ export interface PublicArtifact {
   transcript_excerpts: PublicArtifactTranscriptExcerpt[];
   source_summary: PublicArtifactSourceSummary;
 }
+
+// ── Document Seed (F3 DocumentSeedPanel) ─────────────────
+export interface WorldContextEntity {
+  name: string;
+  role: string;
+  traits: string[];
+  perspective: string;
+}
+
+export interface WorldContextSourceMetadata {
+  filename: string;
+  content_type: string;
+  suffix: string;
+  byte_count: number;
+  char_count: number;
+  extraction_method: 'pdf' | 'text' | 'markdown';
+}
+
+export interface WorldContext {
+  title: string;
+  summary: string;
+  key_entities: WorldContextEntity[];
+  constraints: string[];
+  evidence_snippets: string[];
+  source_metadata: WorldContextSourceMetadata;
+  warnings: string[];
+}
+
+export interface DocumentSeedAgentPreview {
+  name: string;
+  role: string;
+  persona: string;
+}
+
+export interface DocumentSeedResponse {
+  world_context: WorldContext;
+  agents_preview: DocumentSeedAgentPreview[];
+  entities_extracted: number;
+  agents_failed: number;
+  source: WorldContextSourceMetadata;
+  warnings: string[];
+}

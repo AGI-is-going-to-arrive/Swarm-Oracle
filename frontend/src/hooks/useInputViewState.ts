@@ -30,6 +30,8 @@ import type {
   CampaignMastery,
   CampaignProfileSummary,
   CampaignWeeklySummary,
+  WorldContext,
+  DocumentSeedAgentPreview,
 } from '../types';
 
 type TranslateFn = (key: string, options?: Record<string, unknown>) => string;
@@ -382,5 +384,16 @@ export function useSharedChallengePrefill(searchParams: URLSearchParams) {
   return {
     sharedChallenge,
     sharedChallengeBanner,
+  };
+}
+
+export function useInputWorldContext() {
+  const [worldContext, setWorldContext] = useState<WorldContext | null>(null);
+  const [agentsPreview, setAgentsPreview] = useState<DocumentSeedAgentPreview[] | null>(null);
+  return {
+    worldContext,
+    setWorldContext,
+    agentsPreview,
+    setAgentsPreview,
   };
 }

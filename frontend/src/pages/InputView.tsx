@@ -27,6 +27,7 @@ import type { WebSearchFamily, CampaignContext } from '../types';
 import { useAgentStore } from '../stores/agentStore';
 import AgentSelectionStrip from '../components/AgentSelectionStrip';
 import { AgentDrawer } from '../components/AgentDrawer';
+import { DocumentSeedPanel } from '../components/DocumentSeedPanel';
 import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
 import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
@@ -56,6 +57,7 @@ import {
   useInputByokSettings,
   useInputCampaignState,
   useSharedChallengePrefill,
+  useInputWorldContext,
 } from '../hooks/useInputViewState';
 import { useWebSearchConfig } from '../hooks/useWebSearchConfig';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
@@ -437,6 +439,12 @@ export function InputView() {
     directorUserId: apiUserId,
   });
   const { sharedChallenge, sharedChallengeBanner } = useSharedChallengePrefill(searchParams);
+  const {
+    worldContext,
+    setWorldContext,
+    agentsPreview,
+    setAgentsPreview,
+  } = useInputWorldContext();
   const todayChallengeQuestion = todayChallenge
     ? (isZh ? todayChallenge.question : todayChallenge.questionEn)
     : '';
@@ -886,6 +894,7 @@ export function InputView() {
       ...buildScenarioRuntimePresetOptions(runtimePreset),
       ...(clampedCustomAgentIds.length > 0 && { customAgentIdentityIds: clampedCustomAgentIds }),
       ...(campaignContext && { campaignContext }),
+      ...(worldContext && { worldContext }),
     };
   }, [
     byokRequestsPerMinute,
@@ -910,6 +919,7 @@ export function InputView() {
     weeklyChallenges,
     campaignChallengeRotation,
     getClampedCustomAgentIds,
+    worldContext,
   ]);
 
   const closeContinuityDialog = useCallback(() => {
@@ -2186,6 +2196,15 @@ export function InputView() {
                         <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
                       </div>
                   </div>
+
+                  <div className="iv-advanced__divider" style={{ margin: '16px 0', borderTop: '1px solid rgba(64, 48, 40, 0.08)' }} />
+
+                  <DocumentSeedPanel
+                    worldContext={worldContext}
+                    setWorldContext={setWorldContext}
+                    agentsPreview={agentsPreview}
+                    setAgentsPreview={setAgentsPreview}
+                  />
                 </div>
               </div>
             </div>
