@@ -1431,3 +1431,96 @@ export interface DocumentSeedResponse {
   source: WorldContextSourceMetadata;
   warnings: string[];
 }
+
+// ── Local Packs (F8 LocalPackPicker) ──────────────────────
+
+export interface LocalizedText {
+  zh: string;
+  en: string;
+}
+
+export interface ScenarioTemplate {
+  id: string;
+  question: LocalizedText;
+  context: LocalizedText;
+  prompt: LocalizedText;
+  stakes?: LocalizedText[];
+}
+
+export interface AgentCast {
+  id: string;
+  name: LocalizedText;
+  role: LocalizedText;
+  perspective: LocalizedText;
+}
+
+export interface DemoSnapshotRef {
+  id: string;
+  label: LocalizedText;
+  filename: string;
+}
+
+export interface SuggestedSettings {
+  num_agents: number;
+  rounds: number;
+  simulation_mode: 'conservative' | 'balanced' | 'aggressive';
+  language: 'zh' | 'en' | 'bilingual';
+}
+
+export interface SourceMetadata {
+  curator: string;
+  created_at: string;
+  license: 'original';
+  notes: LocalizedText;
+}
+
+export interface LocalPack {
+  schema_version: 1;
+  id: string;
+  genre: string;
+  title: LocalizedText;
+  description: LocalizedText;
+  tags: LocalizedText[];
+  scenario_templates: ScenarioTemplate[];
+  agent_casts?: AgentCast[];
+  demo_snapshots?: DemoSnapshotRef[];
+  suggested_settings: SuggestedSettings;
+  source_metadata: SourceMetadata;
+}
+
+export interface LocalPackSummary {
+  schema_version: 1;
+  id: string;
+  genre: string;
+  title: LocalizedText;
+  description: LocalizedText;
+  tags: LocalizedText[];
+  scenario_count: number;
+  agent_cast_count: number;
+  demo_snapshot_count: number;
+  suggested_settings: SuggestedSettings;
+  source_metadata: SourceMetadata;
+}
+
+export interface PackDiagnostic {
+  id_or_filename: string;
+  code: string;
+  message: string;
+}
+
+export interface ListPacksResponse {
+  packs: LocalPackSummary[];
+  count: number;
+}
+
+export interface RefreshPacksResponse {
+  packs: LocalPackSummary[];
+  count: number;
+  diagnostics: PackDiagnostic[];
+  diagnostic_count: number;
+}
+
+export interface DiagnosticsResponse {
+  diagnostics: PackDiagnostic[];
+  count: number;
+}

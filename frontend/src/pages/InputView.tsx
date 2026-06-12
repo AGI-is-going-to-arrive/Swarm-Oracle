@@ -23,11 +23,12 @@ import {
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
 } from '../api/client';
-import type { WebSearchFamily, CampaignContext } from '../types';
+import type { WebSearchFamily, CampaignContext, SuggestedSettings } from '../types';
 import { useAgentStore } from '../stores/agentStore';
 import AgentSelectionStrip from '../components/AgentSelectionStrip';
 import { AgentDrawer } from '../components/AgentDrawer';
 import { DocumentSeedPanel } from '../components/DocumentSeedPanel';
+import { LocalPackPicker } from '../components/LocalPackPicker';
 import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
 import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
@@ -1201,6 +1202,25 @@ export function InputView() {
     });
   }, [isZh]);
 
+  const handleImportPack = useCallback((payload: { question: string; suggested_settings: SuggestedSettings }) => {
+    setQuestion(payload.question);
+    if (Number.isFinite(payload.suggested_settings.rounds) && payload.suggested_settings.rounds > 0) {
+      setRounds(payload.suggested_settings.rounds);
+    }
+    if (Number.isFinite(payload.suggested_settings.num_agents) && payload.suggested_settings.num_agents > 0) {
+      setNumAgents(payload.suggested_settings.num_agents);
+    }
+    if (payload.suggested_settings.simulation_mode) {
+      setRuntimePreset(payload.suggested_settings.simulation_mode);
+    }
+    if (payload.suggested_settings.language === 'zh' || payload.suggested_settings.language === 'en') {
+      i18n.changeLanguage(payload.suggested_settings.language).catch(() => {});
+    }
+    requestAnimationFrame(() => {
+      questionRef.current?.focus();
+    });
+  }, [i18n]);
+
   const handleQuickStartSelect = async (preset: QuickStartPreset) => {
     setQuestion(preset.question);
     await launchSimulation({
@@ -2205,6 +2225,10 @@ export function InputView() {
                     agentsPreview={agentsPreview}
                     setAgentsPreview={setAgentsPreview}
                   />
+
+                  <div className="iv-advanced__divider" style={{ margin: '16px 0', borderTop: '1px solid rgba(64, 48, 40, 0.08)' }} />
+
+                  <LocalPackPicker onImport={handleImportPack} />
                 </div>
               </div>
             </div>

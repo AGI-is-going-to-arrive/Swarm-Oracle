@@ -16,6 +16,7 @@ import type {
   PublicArtifact,
   WorldContext,
   DocumentSeedResponse,
+  ListPacksResponse, LocalPack, RefreshPacksResponse, DiagnosticsResponse,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -547,6 +548,7 @@ export interface CapabilitiesResponse {
   result_report?: CapabilityEntry;
   public_artifacts?: CapabilityEntry;
   document_seed?: CapabilityEntry;
+  local_packs?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -2079,4 +2081,24 @@ export async function buildPublicArtifact(
     `/scenario/${encodeURIComponent(scenarioId)}/public-artifact`,
     { method: 'POST', signal: options?.signal },
   );
+}
+
+/** GET /api/packs — List local packs summaries */
+export async function listLocalPacks(): Promise<ListPacksResponse> {
+  return safeGet('/packs');
+}
+
+/** GET /api/packs/:id — Fetch a single local pack detail */
+export async function getLocalPack(id: string): Promise<LocalPack> {
+  return safeGet(`/packs/${encodeURIComponent(id)}`);
+}
+
+/** POST /api/packs/refresh — Refresh all local packs from disk */
+export async function refreshLocalPacks(): Promise<RefreshPacksResponse> {
+  return request('/packs/refresh', { method: 'POST' });
+}
+
+/** GET /api/packs/diagnostics — Get current pack diagnostics */
+export async function getLocalPackDiagnostics(): Promise<DiagnosticsResponse> {
+  return safeGet('/packs/diagnostics');
 }
