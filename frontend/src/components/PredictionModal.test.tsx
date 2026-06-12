@@ -1,5 +1,5 @@
 import type { ComponentProps } from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   submitPrediction: vi.fn(),
+  listPredictions: vi.fn(() => Promise.resolve([])),
   getSessionBoundUserId: vi.fn(() => 'default_user'),
   getSessionPrincipalSubject: vi.fn(() => null),
 }));
@@ -470,5 +471,104 @@ describe('PredictionModal automation callback', () => {
 
     expect(submitPrediction).toHaveBeenCalled();
     expect(window.localStorage.getItem(lockKey)).toBeNull();
+  });
+
+  it('lock flow submits confidence, after lock the value is read-only / non-editable, unlocked allows skip/close, and 409 surfaces already-locked state', async () => {
+    const user = userEvent.setup();
+    const { submitPrediction, listPredictions } = await import('../api/client');
+
+    // 1. Unlocked allows close/skip
+    const onClose = vi.fn();
+    const { unmount } = render(
+      <PredictionModal
+        scenarioId="scenario-lock-test"
+        onClose={onClose}
+      />
+    );
+    const closeBtn = screen.getByRole('button', { name: 'prediction.cancel' });
+    await user.click(closeBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+
+    // 2. Lock flow submits confidence & makes it read-only
+    vi.mocked(submitPrediction).mockResolvedValue({
+      id: 'prediction-lock-flow',
+      scenario_id: 'scenario-lock-test',
+      user_name: 'Test Director',
+      prediction_text: 'Structured bet',
+      confidence: 0.85,
+      score: null,
+      score_reason: null,
+      created_at: '2026-03-19T00:00:00Z',
+    });
+
+    const onPlacedBet = vi.fn().mockResolvedValue(undefined);
+    const { unmount: unmountLocked } = render(
+      <PredictionModal
+        scenarioId="scenario-lock-test"
+        onClose={() => {}}
+        onPlacedBet={onPlacedBet}
+      />
+    );
+
+    const slider = screen.getByLabelText('prediction.lock.probability_label') as HTMLInputElement;
+    expect(slider).toBeEnabled();
+    fireEvent.change(slider, { target: { value: '0.85' } });
+
+    await user.type(screen.getByLabelText('prediction.text_label'), 'Testing lock flow.');
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalledWith(
+      'scenario-lock-test',
+      expect.any(String),
+      0.85,
+      expect.any(String),
+      expect.any(String)
+    );
+
+    await waitFor(() => {
+      expect(slider).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Locked' })).toBeDisabled();
+    });
+    unmountLocked();
+
+    // 3. 409 duplicate submission surfaces the already-locked state and sets confidence
+    vi.mocked(submitPrediction).mockRejectedValueOnce({
+      status: 409,
+      message: 'Already locked',
+    });
+    vi.mocked(listPredictions)
+      .mockResolvedValueOnce([]) // for mount
+      .mockResolvedValueOnce([   // for 409 catch
+        {
+          id: 'pred-already-locked',
+          scenario_id: 'scenario-lock-test',
+          user_name: 'Local Director',
+          prediction_text: 'Locked prediction text',
+          confidence: 0.9,
+          score: null,
+          score_reason: null,
+          created_at: '2026-03-19T00:00:00Z',
+        }
+      ]);
+
+    const { unmount: unmount409 } = render(
+      <PredictionModal
+        scenarioId="scenario-lock-test"
+        onClose={() => {}}
+      />
+    );
+
+    const slider409 = screen.getByLabelText('prediction.lock.probability_label') as HTMLInputElement;
+
+    await user.type(screen.getByLabelText('prediction.text_label'), 'Another attempt.');
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(await screen.findByText('prediction.lock.already_locked')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(slider409).toBeDisabled();
+      expect(Number(slider409.value)).toBe(0.9);
+    });
+    unmount409();
   });
 });

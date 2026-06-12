@@ -1,5 +1,16 @@
 {
   "translation": {
+    "you_vs_oracle": {
+      "card_title": "You vs. Oracle",
+      "predicted_probability": "Your Locked Probability",
+      "actual_outcome": "AI Actual Outcome",
+      "outcome_true": "True",
+      "outcome_false": "False",
+      "brier_score": "Brier Score",
+      "brier_hint": "Lower score is better (0.0 is perfect, 1.0 is worst).",
+      "disabled_placeholder": "You-vs-Oracle comparison is disabled. Check capability settings.",
+      "empty_state": "No comparison available. You might not have locked a prediction, or the scenario has no verdict yet."
+    },
     "multi_run": {
       "input_section_title": "Multi-Run Settings",
       "input_label": "Worldline Runs",
@@ -1057,6 +1068,11 @@
       "text_label": "Your Prediction",
       "text_placeholder": "Write the signal you are reading, the hinge you expect, or the branch you believe will hold...",
       "confidence_label": "Confidence",
+      "lock": {
+        "probability_label": "Pre-simulation locked probability of your bet",
+        "already_locked": "This prediction is already locked.",
+        "locked_badge": "Locked: "
+      },
       "name_label": "Your Name",
       "name_placeholder": "Anonymous Oracle",
       "submit": "Submit Prediction",

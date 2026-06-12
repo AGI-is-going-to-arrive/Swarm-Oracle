@@ -4,9 +4,9 @@
 
 import { useState, useRef, useEffect, useCallback, useId, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getSessionBoundUserId, submitPrediction } from '../api/client';
+import { getSessionBoundUserId, submitPrediction, listPredictions } from '../api/client';
 import { useFocusTrap } from '../hooks/useFocusTrap';
-import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { getLocalizedApiErrorMessage, getApiErrorStatus } from '../lib/apiErrorMessage';
 import { createCompatUuid } from '../lib/compatUuid';
 import { getDirectorIdentity, updateDirectorName } from '../lib/directorIdentity';
 import {
@@ -97,11 +97,31 @@ export default function PredictionModal({
   const [userName, setUserName] = useState(directorIdentity.userName);
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [isLocked, setIsLocked] = useState(false);
+  const [isPersistenceRetry, setIsPersistenceRetry] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittedPredictionRef = useRef<{ pendingMeta: ScenarioMeta } | null>(null);
   const submittingRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    listPredictions(scenarioId)
+      .then((preds) => {
+        if (!active) return;
+        const currentUserName = userName || directorIdentity.userName;
+        const matched = preds.find(p => p.user_name === currentUserName);
+        if (matched) {
+          setIsLocked(true);
+          setConfidence(matched.confidence);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [scenarioId, userName, directorIdentity.userName]);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
@@ -200,7 +220,7 @@ export default function PredictionModal({
     initialMeta?.commitment.branchTitle
     ?? t('prediction.commitment_empty');
   const oracleLabel = userName.trim() || t('prediction.name_placeholder');
-  const isDisabled = status === 'submitting' || status === 'success';
+  const isDisabled = status === 'submitting' || status === 'success' || isLocked;
   const effectiveTargetBranchId =
     branchOptions.some((branch) => branch.id === targetBranchId)
       ? targetBranchId
@@ -246,10 +266,12 @@ export default function PredictionModal({
   );
   const isPredictionTooLong = predictionPayloadLength > PREDICTION_TEXT_LIMIT;
   const canSubmit =
-    Boolean(text.trim())
-    && !isDisabled
-    && (effectiveBetKind !== 'branch_winner' || hasValidBranchTarget)
-    && !isPredictionTooLong;
+    (isPersistenceRetry && status !== 'submitting' && status !== 'success') || (
+      Boolean(text.trim())
+      && !isDisabled
+      && (effectiveBetKind !== 'branch_winner' || hasValidBranchTarget)
+      && !isPredictionTooLong
+    );
 
   const handleSubmit = async () => {
     const trimmed = text.trim();
@@ -296,6 +318,7 @@ export default function PredictionModal({
           trimmedName || undefined,
           apiUserId,
         );
+        setIsLocked(true);
         if (trimmedName) {
           updateDirectorName(trimmedName);
         }
@@ -314,6 +337,22 @@ export default function PredictionModal({
         submittedPredictionRef.current = { pendingMeta: nextMeta };
       } catch (err) {
         submittingRef.current = false;
+        const apiStatus = getApiErrorStatus(err);
+        if (apiStatus === 409) {
+          setIsLocked(true);
+          setStatus('idle');
+          setErrorMsg(t('prediction.lock.already_locked'));
+          listPredictions(scenarioId)
+            .then((preds) => {
+              const currentUserName = userName || directorIdentity.userName;
+              const matched = preds.find(p => p.user_name === currentUserName);
+              if (matched) {
+                setConfidence(matched.confidence);
+              }
+            })
+            .catch(() => {});
+          return;
+        }
         setStatus('error');
         setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error')));
         return;
@@ -325,12 +364,14 @@ export default function PredictionModal({
       await onPlacedBet?.(nextMeta);
     } catch (err) {
       submittingRef.current = false;
+      setIsPersistenceRetry(true);
       setStatus('error');
       setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error_persistence')));
       return;
     }
 
     submittedPredictionRef.current = null;
+    setIsPersistenceRetry(false);
     submittingRef.current = false;
     setStatus('success');
     closeTimerRef.current = setTimeout(() => onClose(), 1200);
@@ -555,7 +596,7 @@ export default function PredictionModal({
           {/* Confidence Slider */}
           <div className="pred-field">
             <label className="pred-label" htmlFor="pred-confidence">
-              {t('prediction.confidence_label')}
+              {t('prediction.lock.probability_label')}
               <span className={`pred-confidence-badge${confidence > 0.7 ? ' pred-confidence-badge--high' : confidence <= 0.3 ? ' pred-confidence-badge--low' : ''}`}>{confidenceLabel} — {Math.round(confidence * 100)}%</span>
             </label>
             <input
@@ -568,8 +609,13 @@ export default function PredictionModal({
               value={confidence}
               onChange={(e) => setConfidence(Number(e.target.value))}
               disabled={isDisabled}
-              aria-label={t('prediction.confidence_label')}
+              aria-label={t('prediction.lock.probability_label')}
             />
+            {isLocked && (
+              <p className="pred-lock-status" style={{ color: 'var(--color-primary, #c61583)', fontWeight: 'bold', marginTop: '0.25rem', fontSize: '0.875rem' }}>
+                {t('prediction.lock.locked_badge')}{Math.round(confidence * 100)}%
+              </p>
+            )}
           </div>
 
           {/* User Name */}
@@ -600,16 +646,18 @@ export default function PredictionModal({
             onClick={handleClose}
             disabled={status === 'submitting'}
           >
-            {t('prediction.cancel')}
+            {isLocked ? (isZh ? '关闭' : 'Close') : t('prediction.cancel')}
           </button>
           <button
             className="btn btn-primary"
             onClick={handleSubmit}
             disabled={!canSubmit}
           >
-            {status === 'submitting'
-              ? t('prediction.submitting')
-              : t('prediction.submit')}
+            {isLocked && !isPersistenceRetry
+              ? (isZh ? '已锁定' : 'Locked')
+              : status === 'submitting'
+                ? t('prediction.submitting')
+                : t('prediction.submit')}
           </button>
         </footer>
       </div>

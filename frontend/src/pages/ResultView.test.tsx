@@ -224,6 +224,7 @@ const {
     result_verdict: { enabled: true },
     result_report: { enabled: false },
     web_search: { providers: {} },
+    you_vs_oracle: { enabled: false },
   };
   let currentCapabilityLoading = false;
   return {
@@ -266,11 +267,19 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
-  useCapabilityCheck: () => {
+  useCapabilityCheck: (key: string) => {
     const capabilities = getMockCapabilities();
+    const hasKey = key in capabilities;
+    let enabled = false;
+    if (hasKey) {
+      const entry = capabilities[key as keyof typeof capabilities];
+      if (entry && 'enabled' in entry) {
+        enabled = Boolean(entry.enabled);
+      }
+    }
     return {
       loading: getMockCapabilityLoading(),
-      enabled: capabilities.causal_graph.enabled,
+      enabled,
       capabilities,
     };
   },
@@ -5488,5 +5497,156 @@ describe('ResultView P4-1 i18n key coverage', () => {
       expect(zhReason[code]).toBeTruthy();
       expect(enReason[code]).not.toBe(zhReason[code]);
     }
+  });
+});
+
+describe('ResultView You-vs-Oracle comparison card', () => {
+  const setMockCapabilitiesMock = setMockCapabilities;
+  const setMockCapabilityLoadingMock = setMockCapabilityLoading;
+
+  beforeEach(() => {
+    setMockCapabilitiesMock({
+      you_vs_oracle: { enabled: true },
+    });
+    setMockCapabilityLoadingMock(false);
+  });
+
+  it('renders predicted vs actual + brier when you_vs_oracle present and capability enabled', async () => {
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+    const getStoryMock = vi.mocked(apiClient.getStory);
+
+    listPredictionsMock.mockResolvedValueOnce([
+      {
+        id: 'prediction-1',
+        scenario_id: 'scenario-1',
+        user_name: 'Local Director',
+        prediction_text: 'Test rationale',
+        confidence: 0.7,
+        score: 0.09,
+        score_reason: 'Good prediction',
+        created_at: '2026-03-17T00:00:00Z',
+      },
+    ]);
+
+    scorePredictionsMock.mockResolvedValueOnce({
+      scored: 1,
+      results: [
+        {
+          prediction_id: 'prediction-1',
+          user_id: 'user-1',
+          user_name: 'Local Director',
+          you_vs_oracle: {
+            predicted_probability: 0.7,
+            ai_actual_outcome: true,
+            brier_score: 0.09,
+          },
+        },
+      ],
+    });
+
+    getStoryMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const card = await screen.findByRole('region', { name: 'you_vs_oracle.card_title' });
+    expect(card).toBeInTheDocument();
+    expect(within(card).getByText('70%')).toBeInTheDocument();
+    expect(within(card).getByText('you_vs_oracle.outcome_true')).toBeInTheDocument();
+    expect(within(card).getByText('0.0900')).toBeInTheDocument();
+    expect(within(card).getByText('you_vs_oracle.brier_hint')).toBeInTheDocument();
+  });
+
+  it('renders disabled placeholder when capability disabled', async () => {
+    setMockCapabilitiesMock({
+      you_vs_oracle: { enabled: false },
+    });
+
+    const getStoryMock = vi.mocked(apiClient.getStory);
+    getStoryMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('you_vs_oracle.disabled_placeholder')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+  });
+
+  it('renders nothing/empty when no verdict or no locked prediction', async () => {
+    // 1. No verdict (verdict is null / hasVerdict is false)
+    const getStoryMock = vi.mocked(apiClient.getStory);
+    getStoryMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: null,
+      verdict_confidence: null,
+      branches: [],
+    });
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+      expect(screen.queryByText('you_vs_oracle.empty_state')).toBeNull();
+    });
+    unmount();
+
+    // 2. Verdict present but no locked prediction (no you_vs_oracle payload)
+    getStoryMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    });
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    scorePredictionsMock.mockResolvedValueOnce({
+      scored: 0,
+      results: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('you_vs_oracle.empty_state')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
   });
 });

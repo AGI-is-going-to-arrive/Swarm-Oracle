@@ -1,5 +1,16 @@
 {
   "translation": {
+    "you_vs_oracle": {
+      "card_title": "您 vs 预言机",
+      "predicted_probability": "您锁定的概率",
+      "actual_outcome": "AI 最终结果",
+      "outcome_true": "发生",
+      "outcome_false": "未发生",
+      "brier_score": "Brier 评分",
+      "brier_hint": "评分越低越好（0.0 表示完美预测，1.0 表示最差预测）。",
+      "disabled_placeholder": "您 vs 预言机 对比功能已禁用。请检查相关能力配置。",
+      "empty_state": "无可对比数据。您可能未锁定预测，或者场景尚未得出结论。"
+    },
     "multi_run": {
       "input_section_title": "多运行设置",
       "input_label": "世界线运行数",
@@ -1057,6 +1068,11 @@
       "text_label": "你的预测",
       "text_placeholder": "写下你的判断依据，例如关键角色、转折信号或你看好的世界线...",
       "confidence_label": "自信度",
+      "lock": {
+        "probability_label": "预推演锁定概率（您的押注）",
+        "already_locked": "此预测已锁定。",
+        "locked_badge": "已锁定: "
+      },
       "name_label": "你的名字",
       "name_placeholder": "匿名预言家",
       "submit": "提交预测",

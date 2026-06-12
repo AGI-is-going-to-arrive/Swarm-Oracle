@@ -18,6 +18,7 @@ import type {
   DocumentSeedResponse,
   ListPacksResponse, LocalPack, RefreshPacksResponse, DiagnosticsResponse,
   MultiRunResponse, RunGroupDistributionResponse,
+  ScorePredictionResultItem,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -551,6 +552,7 @@ export interface CapabilitiesResponse {
   document_seed?: CapabilityEntry;
   local_packs?: CapabilityEntry;
   multi_run?: CapabilityEntry & { default_count: number; max_count: number };
+  you_vs_oracle?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -1141,7 +1143,7 @@ export async function listPredictions(scenarioId: string): Promise<PredictionInf
 export async function scorePredictions(
   scenarioId: string,
   options?: LlmProviderRequestOptions,
-): Promise<{ scored: number }> {
+): Promise<{ scored: number; results?: ScorePredictionResultItem[] }> {
   return request(`/scenario/${encodeURIComponent(scenarioId)}/score-predictions`, {
     method: 'POST',
     body: JSON.stringify({

@@ -1560,3 +1560,19 @@ export interface RunGroupDistributionResponse {
     outcome: string;
   }>;
 }
+
+export interface YouVsOracleComparison {
+  predicted_probability: number;
+  ai_actual_outcome: boolean;
+  brier_score: number;
+}
+
+export interface ScorePredictionResultItem {
+  prediction_id?: string;
+  user_id?: string;
+  user_name?: string;
+  predicted_probability?: number;
+  ai_actual_outcome?: boolean;
+  brier_score?: number;
+  you_vs_oracle?: YouVsOracleComparison;
+}

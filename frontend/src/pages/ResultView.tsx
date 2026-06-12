@@ -2,7 +2,7 @@
    SwarmOracle — ResultView (Multi-Ending Comparison)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo, useCallback, useRef, type FocusEvent } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, useId, type FocusEvent } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -98,6 +98,7 @@ import type {
   PredictionInfo,
   Scenario,
   StoryData,
+  ScorePredictionResultItem,
 } from '../types';
 import { WeeklyLeaderboard } from '../components/campaign';
 import {
@@ -177,6 +178,7 @@ export default function ResultView() {
   const [agentFollowupTarget, setAgentFollowupTarget] = useState<AgentInfo | null>(null);
   const [profileTarget, setProfileTarget] = useState<AgentInfo | null>(null);
   const [predictions, setPredictions] = useState<PredictionInfo[]>([]);
+  const [scoreResults, setScoreResults] = useState<ScorePredictionResultItem[]>([]);
   const [expandedBranch, setExpandedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -466,6 +468,17 @@ export default function ResultView() {
         setScenario(scenario);
         setAgents(agentList);
         setPredictions(preds);
+
+        if (scenario.status === 'done' && preds.some(p => p.score !== null)) {
+          try {
+            const scoreRes = await scorePredictions(id);
+            if (!cancelled && scoreRes && scoreRes.results) {
+              setScoreResults(scoreRes.results);
+            }
+          } catch (e) {
+            console.error('Failed to pre-score predictions:', e);
+          }
+        }
 
         if (scenario.status !== 'done') {
           if (scenario.run_group_id && capabilities?.multi_run?.enabled) {
@@ -830,7 +843,7 @@ export default function ResultView() {
     setScoring(true);
     setScoreError('');
     try {
-      await scorePredictions(id, {
+      const scoreRes = await scorePredictions(id, {
         llmApiKey: providerPolicy.apiKey || undefined,
         llmBaseUrl: providerPolicy.baseUrl || undefined,
         llmModel: providerPolicy.model || undefined,
@@ -838,6 +851,9 @@ export default function ResultView() {
         llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
         userId: apiUserId,
       });
+      if (scoreRes && scoreRes.results) {
+        setScoreResults(scoreRes.results);
+      }
       // Reload predictions to show scores
       const preds = await listPredictions(id);
       setPredictions(preds);
@@ -1931,6 +1947,11 @@ export default function ResultView() {
         />
       )}
 
+      <YouVsOracleCard
+        scoreResults={scoreResults}
+        hasVerdict={!!storyData?.verdict}
+      />
+
       <ResultReportPanel />
 
       {/* HOPs probability sampling animation */}
@@ -2095,5 +2116,102 @@ export default function ResultView() {
       />
     </div>
     </ResultContextProvider>
+  );
+}
+
+interface YouVsOracleCardProps {
+  scoreResults: ScorePredictionResultItem[];
+  hasVerdict: boolean;
+}
+
+function YouVsOracleCard({ scoreResults, hasVerdict }: YouVsOracleCardProps) {
+  const { t } = useTranslation();
+  const { enabled, loading: capLoading } = useCapabilityCheck('you_vs_oracle');
+  const titleId = useId();
+
+  if (capLoading) return null;
+
+  if (!enabled) {
+    return (
+      <div className="you-vs-oracle-disabled-placeholder" style={{ padding: '1rem', border: '1px dashed var(--color-border, #ccc)', borderRadius: '8px', margin: '1rem 0', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
+        {t('you_vs_oracle.disabled_placeholder')}
+      </div>
+    );
+  }
+
+  const youVsOracleData = scoreResults.find(r => r?.you_vs_oracle !== undefined)?.you_vs_oracle;
+
+  if (!hasVerdict || !youVsOracleData) {
+    if (!hasVerdict) {
+      return null;
+    }
+    return (
+      <div className="you-vs-oracle-empty" style={{ padding: '1rem', border: '1px solid var(--color-border, #ccc)', borderRadius: '8px', margin: '1rem 0', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
+        {t('you_vs_oracle.empty_state')}
+      </div>
+    );
+  }
+
+  const { predicted_probability, ai_actual_outcome, brier_score } = youVsOracleData;
+
+  if (
+    typeof predicted_probability !== 'number' ||
+    typeof brier_score !== 'number' ||
+    isNaN(predicted_probability) ||
+    isNaN(brier_score)
+  ) {
+    return null;
+  }
+
+  const formattedProbability = `${Math.round(predicted_probability * 100)}%`;
+  const formattedOutcome = ai_actual_outcome ? t('you_vs_oracle.outcome_true') : t('you_vs_oracle.outcome_false');
+
+  return (
+    <section
+      className="you-vs-oracle-card"
+      role="region"
+      aria-labelledby={titleId}
+      style={{
+        padding: '1.5rem',
+        border: '1px solid var(--color-border, #ccc)',
+        borderRadius: '8px',
+        margin: '1rem 0',
+        backgroundColor: 'var(--color-bg-card, #fff)',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+      }}
+    >
+      <h3 id={titleId} style={{ marginTop: 0, marginBottom: '1rem', color: 'var(--color-text-primary, #111)', fontSize: '1.25rem' }}>
+        {t('you_vs_oracle.card_title')}
+      </h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+        <div style={{ padding: '1rem', background: 'var(--color-bg-secondary, #f9f9f9)', borderRadius: '6px' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #666)', display: 'block', marginBottom: '0.25rem' }}>
+            {t('you_vs_oracle.predicted_probability')}
+          </span>
+          <strong style={{ fontSize: '1.5rem', color: 'var(--color-primary, #c61583)' }}>
+            {formattedProbability}
+          </strong>
+        </div>
+        <div style={{ padding: '1rem', background: 'var(--color-bg-secondary, #f9f9f9)', borderRadius: '6px' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #666)', display: 'block', marginBottom: '0.25rem' }}>
+            {t('you_vs_oracle.actual_outcome')}
+          </span>
+          <strong style={{ fontSize: '1.5rem', color: 'var(--color-text-primary, #111)' }}>
+            {formattedOutcome}
+          </strong>
+        </div>
+        <div style={{ padding: '1rem', background: 'var(--color-bg-secondary, #f9f9f9)', borderRadius: '6px' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary, #666)', display: 'block', marginBottom: '0.25rem' }}>
+            {t('you_vs_oracle.brier_score')}
+          </span>
+          <strong style={{ fontSize: '1.5rem', color: 'var(--color-text-primary, #111)' }}>
+            {brier_score.toFixed(4)}
+          </strong>
+        </div>
+      </div>
+      <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--color-text-secondary, #666)', fontStyle: 'italic' }}>
+        {t('you_vs_oracle.brier_hint')}
+      </p>
+    </section>
   );
 }
