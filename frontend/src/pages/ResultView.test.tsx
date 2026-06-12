@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../api/client';
 import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
-import type { Scenario } from '../types';
+import type { Scenario, YouVsOracleComparison } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
@@ -5695,5 +5695,177 @@ describe('ResultView You-vs-Oracle comparison card', () => {
     expect(reloadCapabilityMock).toHaveBeenCalledTimes(1);
 
     setMockCapabilityError(null);
+  });
+
+  it('renders actual outcome unavailable message when not_scorable and reason actual_outcome_unavailable', async () => {
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+    const getStoryMock = vi.mocked(apiClient.getStory);
+
+    scorePredictionsMock.mockReset();
+
+    listPredictionsMock.mockImplementation(async () => [
+      {
+        id: 'prediction-1',
+        scenario_id: 'scenario-1',
+        user_name: 'Local Director',
+        prediction_text: 'Test rationale',
+        confidence: 0.7,
+        score: 0.09,
+        score_reason: 'Good prediction',
+        created_at: '2026-03-17T00:00:00Z',
+      },
+    ]);
+
+    scorePredictionsMock.mockImplementation(async () => ({
+      scored: 1,
+      results: [
+        {
+          prediction_id: 'prediction-1',
+          user_id: 'user-1',
+          user_name: 'Local Director',
+          you_vs_oracle: {
+            status: 'not_scorable',
+            reason: 'actual_outcome_unavailable',
+          },
+        },
+      ],
+    }));
+
+    getStoryMock.mockImplementation(async () => ({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('you_vs_oracle.not_scorable_actual_outcome_unavailable')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+  });
+
+  it('renders generic not scorable message when status is not_scorable with generic/missing reason', async () => {
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+    const getStoryMock = vi.mocked(apiClient.getStory);
+
+    scorePredictionsMock.mockReset();
+
+    listPredictionsMock.mockImplementation(async () => [
+      {
+        id: 'prediction-1',
+        scenario_id: 'scenario-1',
+        user_name: 'Local Director',
+        prediction_text: 'Test rationale',
+        confidence: 0.7,
+        score: 0.09,
+        score_reason: 'Good prediction',
+        created_at: '2026-03-17T00:00:00Z',
+      },
+    ]);
+
+    scorePredictionsMock.mockImplementation(async () => ({
+      scored: 1,
+      results: [
+        {
+          prediction_id: 'prediction-1',
+          user_id: 'user-1',
+          user_name: 'Local Director',
+          you_vs_oracle: {
+            status: 'not_scorable',
+            reason: 'something_else',
+          },
+        },
+      ],
+    }));
+
+    getStoryMock.mockImplementation(async () => ({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('you_vs_oracle.not_scorable_generic')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+  });
+
+  it('renders nothing when you_vs_oracle data is malformed', async () => {
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+    const getStoryMock = vi.mocked(apiClient.getStory);
+
+    scorePredictionsMock.mockReset();
+
+    listPredictionsMock.mockImplementation(async () => [
+      {
+        id: 'prediction-1',
+        scenario_id: 'scenario-1',
+        user_name: 'Local Director',
+        prediction_text: 'Test rationale',
+        confidence: 0.7,
+        score: 0.09,
+        score_reason: 'Good prediction',
+        created_at: '2026-03-17T00:00:00Z',
+      },
+    ]);
+
+    scorePredictionsMock.mockImplementation(async () => ({
+      scored: 1,
+      results: [
+        {
+          prediction_id: 'prediction-1',
+          user_id: 'user-1',
+          user_name: 'Local Director',
+          you_vs_oracle: {
+            predicted_probability: NaN,
+            ai_actual_outcome: true,
+            brier_score: undefined as unknown as number,
+          } as unknown as YouVsOracleComparison,
+        },
+      ],
+    }));
+
+    getStoryMock.mockImplementation(async () => ({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+      expect(screen.queryByText('you_vs_oracle.empty_state')).toBeNull();
+      expect(screen.queryByText('you_vs_oracle.not_scorable_generic')).toBeNull();
+    });
   });
 });

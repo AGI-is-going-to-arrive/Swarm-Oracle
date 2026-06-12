@@ -9,7 +9,9 @@
       "brier_score": "Brier Score",
       "brier_hint": "Lower score is better (0.0 is perfect, 1.0 is worst).",
       "disabled_placeholder": "You-vs-Oracle comparison is disabled. Check capability settings.",
-      "empty_state": "No comparison available. You might not have locked a prediction, or the scenario has no verdict yet."
+      "empty_state": "No comparison available. You might not have locked a prediction, or the scenario has no verdict yet.",
+      "not_scorable_actual_outcome_unavailable": "This prediction can't be scored: the simulation didn't record a structured outcome.",
+      "not_scorable_generic": "This prediction cannot be scored."
     },
     "multi_run": {
       "input_section_title": "Multi-Run Settings",

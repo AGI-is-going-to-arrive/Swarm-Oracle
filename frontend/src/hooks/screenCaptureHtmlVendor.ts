@@ -118,6 +118,21 @@ export function oklchStringToRgb(input: string): string {
   });
 }
 
+/**
+ * Structured check to see if a node is an HTMLElement or SVGElement.
+ * This avoids cross-realm instanceof failures in iframes.
+ */
+export function isStylableElement(node: unknown): node is HTMLElement | SVGElement {
+  if (typeof node !== 'object' || node === null) return false;
+  const obj = node as Record<string, unknown>;
+  return (
+    obj.nodeType === 1 &&
+    'style' in obj &&
+    typeof obj.style === 'object' &&
+    obj.style !== null
+  );
+}
+
 // Inner helper to walk the cloned elements and replace computed colors
 function onCloneWrapper(clonedDoc: Document, liveHtmlBg: string, liveBodyBg: string): void {
   try {
@@ -149,7 +164,7 @@ function onCloneWrapper(clonedDoc: Document, liveHtmlBg: string, liveBodyBg: str
 
     // (C) Convert :root oklch CUSTOM PROPERTIES inline on the clone's documentElement
     try {
-      const rs = window.getComputedStyle(clonedDoc.documentElement);
+      const rs = (clonedDoc.defaultView ?? window).getComputedStyle(clonedDoc.documentElement);
       for (let i = 0; i < rs.length; i++) {
         const n = rs.item(i);
         if (n.startsWith('--')) {
@@ -179,9 +194,9 @@ function onCloneWrapper(clonedDoc: Document, liveHtmlBg: string, liveBodyBg: str
     try {
       const allElements = clonedDoc.querySelectorAll('*');
       allElements.forEach((el) => {
-        if (!(el instanceof HTMLElement || el instanceof SVGElement)) return;
+        if (!isStylableElement(el)) return;
         try {
-          const computed = window.getComputedStyle(el);
+          const computed = (el.ownerDocument?.defaultView ?? window).getComputedStyle(el);
 
           // (D) 1. Pin properties: read getComputedStyle and write inline
           pinProps.forEach((prop) => {

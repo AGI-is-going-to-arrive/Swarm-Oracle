@@ -1566,11 +1566,17 @@ export interface RunGroupDistributionResponse {
   }>;
 }
 
-export interface YouVsOracleComparison {
-  predicted_probability: number;
-  ai_actual_outcome: boolean;
-  brier_score: number;
-}
+export type YouVsOracleComparison =
+  | {
+      status?: 'scorable';
+      predicted_probability: number;
+      ai_actual_outcome: boolean;
+      brier_score: number;
+    }
+  | {
+      status: 'not_scorable';
+      reason?: string;
+    };
 
 export interface ScorePredictionResultItem {
   prediction_id?: string;

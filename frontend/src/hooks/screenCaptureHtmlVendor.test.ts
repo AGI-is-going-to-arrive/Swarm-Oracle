@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { oklchStringToRgb, html2canvas } from './screenCaptureHtmlVendor';
+import { oklchStringToRgb, html2canvas, isStylableElement } from './screenCaptureHtmlVendor';
 
 // Mock html2canvas library
 vi.mock('html2canvas', () => {
@@ -18,6 +18,35 @@ vi.mock('html2canvas', () => {
   };
 });
 
+describe('isStylableElement', () => {
+  it('identifies real div element as true', () => {
+    const div = document.createElement('div');
+    expect(isStylableElement(div)).toBe(true);
+  });
+
+  it('identifies SVG element as true', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    expect(isStylableElement(svg)).toBe(true);
+  });
+
+  it('identifies duck-typed object as true', () => {
+    const duck = { nodeType: 1, style: {} };
+    expect(isStylableElement(duck)).toBe(true);
+  });
+
+  it('identifies text node as false', () => {
+    const txt = document.createTextNode('hello');
+    expect(isStylableElement(txt)).toBe(false);
+  });
+
+  it('identifies null, undefined, and strings as false', () => {
+    expect(isStylableElement(null)).toBe(false);
+    expect(isStylableElement(undefined)).toBe(false);
+    expect(isStylableElement('div')).toBe(false);
+    expect(isStylableElement(123)).toBe(false);
+  });
+});
+
 describe('oklchStringToRgb', () => {
   it('converts oklch(0 0 0) to black rgb(0, 0, 0)', () => {
     expect(oklchStringToRgb('oklch(0 0 0)')).toBe('rgb(0, 0, 0)');
@@ -27,7 +56,7 @@ describe('oklchStringToRgb', () => {
     const converted = oklchStringToRgb('oklch(0.62 0.17 29)');
     expect(converted).not.toContain('oklch');
     expect(converted).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
-    
+
     // Check that red channel is strong (hue 29 is a warm red/orange)
     const match = converted.match(/\d+/g);
     expect(match).not.toBeNull();
@@ -134,5 +163,51 @@ describe('html2canvas wrapper', () => {
     expect(colorBase).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
     expect(colorText).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
   });
-});
 
+  it('pins oklch values on elements from external documents', async () => {
+    // Create an external document to simulate cross-realm elements
+    const extDoc = document.implementation.createHTMLDocument('external');
+    const extDiv = extDoc.createElement('div');
+    extDiv.style.color = 'oklch(0.62 0.17 29)';
+
+    // We override the default mock of html2canvas for this test
+    const html2canvasMock = vi.mocked(await import('html2canvas')).default as unknown as {
+      mockImplementationOnce: (fn: (element: HTMLElement, options?: { onclone?: (doc: Document, el: HTMLElement) => Promise<void> }) => Promise<unknown>) => void;
+    };
+    html2canvasMock.mockImplementationOnce(async (_element: HTMLElement, options?: { onclone?: (doc: Document, el: HTMLElement) => Promise<void> }) => {
+      if (options && typeof options.onclone === 'function') {
+        const dummyDoc = document.implementation.createHTMLDocument('test');
+        // Append extDiv to the dummyDoc BEFORE calling onclone,
+        // simulating it being cloned as part of the document
+        dummyDoc.body.appendChild(extDiv);
+
+        const dummyElement = dummyDoc.createElement('div');
+        dummyDoc.body.appendChild(dummyElement);
+        await options.onclone(dummyDoc, dummyElement);
+        return { dummyDoc };
+      }
+      return {};
+    });
+
+    const originalGetComputedStyle = window.getComputedStyle;
+
+    // Stub window.getComputedStyle for our test setup
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el) => {
+      if (el === extDiv) {
+        return {
+          getPropertyValue: (prop: string) => prop === 'color' ? 'oklch(0.62 0.17 29)' : ''
+        } as unknown as CSSStyleDeclaration;
+      }
+      return {
+        getPropertyValue: () => ''
+      } as unknown as CSSStyleDeclaration;
+    });
+
+    const element = document.createElement('div');
+    await html2canvas(element);
+
+    window.getComputedStyle = originalGetComputedStyle;
+
+    expect(extDiv.style.color).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  });
+});

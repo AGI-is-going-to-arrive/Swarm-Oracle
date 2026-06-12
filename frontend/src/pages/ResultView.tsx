@@ -2197,6 +2197,17 @@ function YouVsOracleCard({ scoreResults, hasVerdict }: YouVsOracleCardProps) {
     );
   }
 
+  if (youVsOracleData.status === 'not_scorable') {
+    const msg = youVsOracleData.reason === 'actual_outcome_unavailable'
+      ? t('you_vs_oracle.not_scorable_actual_outcome_unavailable')
+      : t('you_vs_oracle.not_scorable_generic');
+    return (
+      <div className="you-vs-oracle-empty" style={{ padding: '1rem', border: '1px solid var(--color-border, #ccc)', borderRadius: '8px', margin: '1rem 0', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
+        {msg}
+      </div>
+    );
+  }
+
   const { predicted_probability, ai_actual_outcome, brier_score } = youVsOracleData;
 
   if (

@@ -9,7 +9,9 @@
       "brier_score": "Brier 评分",
       "brier_hint": "评分越低越好（0.0 表示完美预测，1.0 表示最差预测）。",
       "disabled_placeholder": "您 vs 预言机 对比功能已禁用。请检查相关能力配置。",
-      "empty_state": "无可对比数据。您可能未锁定预测，或者场景尚未得出结论。"
+      "empty_state": "无可对比数据。您可能未锁定预测，或者场景尚未得出结论。",
+      "not_scorable_actual_outcome_unavailable": "该预测暂无法评分：本次推演未记录结构化结果。",
+      "not_scorable_generic": "该预测暂无法评分。"
     },
     "multi_run": {
       "input_section_title": "多运行设置",
