@@ -612,7 +612,7 @@ async def test_capabilities_llm_provider_metadata_shape_freeze():
 
     result = await api_capabilities()
     entry = result["llm_provider"]
-    assert {
+    assert set(entry.keys()) == {
         "enabled",
         "version",
         "server_only",
@@ -620,7 +620,7 @@ async def test_capabilities_llm_provider_metadata_shape_freeze():
         "provider",
         "model",
         "provider_capability",
-    }.issubset(entry.keys())
+    }
     assert isinstance(entry["provider"], str)
     assert isinstance(entry["model"], str)
     assert set(entry["provider_capability"].keys()) == {

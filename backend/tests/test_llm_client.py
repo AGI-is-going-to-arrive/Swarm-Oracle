@@ -1153,6 +1153,79 @@ class TestLLMCall:
             )
 
     @pytest.mark.asyncio
+    async def test_unexpected_response_structure_log_sanitizes_body(self, monkeypatch, caplog):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "error": {
+                        "message": (
+                            "upstream leaked api_key=sk-raw-secret and "
+                            "Authorization: Bearer raw-token"
+                        )
+                    }
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        caplog.set_level("ERROR")
+
+        with pytest.raises(llm_client.LLMError, match="Unexpected response structure"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+        assert "sk-raw-secret" not in caplog.text
+        assert "raw-token" not in caplog.text
+        assert "Bearer raw-token" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_empty_content_log_sanitizes_success_body(self, monkeypatch, caplog):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [{"message": {"content": "   "}}],
+                    "debug": (
+                        "provider included api_key=sk-empty-secret and "
+                        "Authorization: Bearer empty-token"
+                    ),
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        caplog.set_level("ERROR")
+
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+        assert "sk-empty-secret" not in caplog.text
+        assert "empty-token" not in caplog.text
+        assert "Bearer empty-token" not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_llm_call_uses_responses_top_level_output_text(self, monkeypatch):
         class _FakeResponse:
             def raise_for_status(self):
@@ -1836,6 +1909,53 @@ class TestLlmCallStructuredOutputs:
                 "schema": {"type": "object", "additionalProperties": True},
             },
         }
+        assert "text" not in captured_payload
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "https://api.openai.com/v1/responses",
+            "https://api.x.ai/v1/responses",
+        ],
+    )
+    async def test_responses_packet_capture_injects_text_format_json_schema(
+        self,
+        monkeypatch,
+        base_url,
+    ):
+        captured_payload: dict = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"text": '{"answer":"ok"}'}],
+                        }
+                    ]
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url=base_url,
+            api_key="provider-key",
+        )
+
+        assert result == {"answer": "ok"}
+        assert captured_payload["text"]["format"] == {
+            "type": "json_schema",
+            "name": "swarmoracle_json_response",
+            "schema": {"type": "object", "additionalProperties": True},
+        }
+        assert "response_format" not in captured_payload
 
     @pytest.mark.asyncio
     async def test_ollama_class_injects_format_schema(self, monkeypatch):
@@ -1954,6 +2074,78 @@ class TestLlmCallStructuredOutputs:
         assert "response_format" not in payloads[1]
         assert "Structured output rejected by provider" in caplog.text
         assert "forbidden upstream" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_responses_structured_body_error_strips_text_format(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    200,
+                    json={"error": {"message": "text.format json_schema is not supported"}},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"text": '{"answer":"fallback"}'}],
+                        }
+                    ]
+                },
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        caplog.set_level("WARNING")
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/responses",
+            api_key="openai-key",
+        )
+
+        assert result == {"answer": "fallback"}
+        assert len(payloads) == 2
+        assert payloads[0]["text"]["format"]["type"] == "json_schema"
+        assert "text" not in payloads[1]
+        assert "response_format" not in payloads[1]
+        assert "Structured output rejected by provider" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_quota_body_error_does_not_strip_or_retry(self, monkeypatch, caplog):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            return httpx.Response(
+                200,
+                json={"error": {"message": "quota exceeded for this account"}},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        caplog.set_level("WARNING")
+
+        with pytest.raises(LLMError, match="Unexpected response structure"):
+            await llm_call_json(
+                "Return JSON.",
+                base_url="https://api.openai.com/v1/chat/completions",
+                api_key="openai-key",
+            )
+
+        assert len(payloads) == 1
+        assert "response_format" in payloads[0]
+        assert "Structured output rejected by provider" not in caplog.text
 
 
 # ── P2-1: detect_provider tests ──────────────────────────

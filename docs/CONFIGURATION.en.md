@@ -16,6 +16,7 @@ Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern 
 ## 1. LLM Configuration (Required)
 
 SwarmOracle works with any OpenAI-compatible API, including OpenAI, compatible gateways, and local services such as Ollama.
+`response_format` support for xAI, OpenRouter, and SiliconFlow is currently treated as an OpenAI-compatible assumption; the existing fail-soft fallback handles provider rejection, and F9 will move this to explicit per-profile capability.
 
 | Variable | Meaning | Example |
 |----------|---------|---------|

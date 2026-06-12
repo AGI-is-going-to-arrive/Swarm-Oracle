@@ -16,6 +16,7 @@
 ## 1. LLM 配置（必填）
 
 SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama 等本地服务都可以）。
+xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前按 OpenAI-compatible 假设处理；现有 fail-soft 会在 provider 拒绝时降级，F9 会改成每个 profile 显式声明能力。
 
 | 配置项 | 说明 | 示例 |
 |--------|------|------|

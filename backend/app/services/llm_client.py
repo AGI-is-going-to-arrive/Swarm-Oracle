@@ -845,10 +845,24 @@ def _build_structured_output_params(
     provider_profile: LLMProviderProfile,
     schema: dict[str, Any],
     name: str,
+    is_chat: bool,
 ) -> tuple[dict[str, Any], frozenset[str]]:
     if not provider_profile.supports_structured_outputs:
         return {}, frozenset()
     if provider_profile.structured_output_api == "response_format_json_schema":
+        if not is_chat:
+            return (
+                {
+                    "text": {
+                        "format": {
+                            "type": "json_schema",
+                            "name": name,
+                            "schema": dict(schema),
+                        },
+                    },
+                },
+                frozenset({"text"}),
+            )
         return (
             {
                 "response_format": {
@@ -882,11 +896,7 @@ def _body_mentions_structured_output_param(body: str) -> bool:
     )
 
 
-def _is_structured_output_rejection(status_code: int, body: str) -> bool:
-    if status_code < 400 or status_code >= 500:
-        return False
-    if _is_non_retryable_optional_param_error(status_code, body):
-        return False
+def _body_mentions_structured_output_rejection(body: str) -> bool:
     lowered = body.lower()
     if not any(
         marker in lowered
@@ -900,19 +910,39 @@ def _is_structured_output_rejection(status_code: int, body: str) -> bool:
             "extraneous",
             "not allowed",
             "does not support",
+            "forbidden",
+            "disallowed",
+            "rejected",
         )
     ):
         return False
     return _body_mentions_structured_output_param(body)
 
 
+def _is_structured_output_rejection(status_code: int, body: str) -> bool:
+    if status_code < 400 or status_code >= 500:
+        return False
+    if _is_non_retryable_optional_param_error(status_code, body):
+        return False
+    return _body_mentions_structured_output_rejection(body)
+
+
+def _structured_output_body_error_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _detect_structured_output_body_error(response_body: object) -> str | None:
     if not isinstance(response_body, dict):
         return None
     error_field = response_body.get("error")
-    if isinstance(error_field, dict):
-        return "structured output body error"
-    if isinstance(error_field, str) and error_field:
+    if isinstance(error_field, (dict, str)) and _body_mentions_structured_output_rejection(
+        _structured_output_body_error_text(error_field)
+    ):
         return "structured output body error"
     outputs = response_body.get("output", [])
     if not isinstance(outputs, list):
@@ -922,6 +952,9 @@ def _detect_structured_output_body_error(response_body: object) -> str | None:
             isinstance(item, dict)
             and item.get("status") == "failed"
             and item.get("error") is not None
+            and _body_mentions_structured_output_rejection(
+                _structured_output_body_error_text(item.get("error"))
+            )
         ):
             return "structured output body error"
     return None
@@ -1946,6 +1979,7 @@ async def llm_call(
             provider_profile=provider_profile,
             schema=structured_output_schema,
             name=structured_output_name,
+            is_chat=is_chat,
         )
         payload.update(structured_output_params)
     if native_search_domains is not None and not is_chat:
@@ -2112,7 +2146,7 @@ async def llm_call(
                 raise KeyError("No message block in output")
     except (KeyError, IndexError, TypeError, StopIteration) as exc:
         logger.error("Unexpected LLM response structure: %s",
-                     json.dumps(data, ensure_ascii=False)[:500])
+                     _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]))
         raise LLMError("Unexpected response structure") from exc
 
     usage = data.get("usage", {})
@@ -2122,7 +2156,7 @@ async def llm_call(
     if not text.strip():
         logger.error(
             "LLM returned empty non-stream content despite success response: %s",
-            json.dumps(data, ensure_ascii=False)[:500],
+            _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]),
         )
         raise LLMError("Empty non-stream content")
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
