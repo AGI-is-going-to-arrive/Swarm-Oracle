@@ -26,6 +26,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call,
     llm_request_scope,
+    safe_llm_error_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 MAX_SURVEY_PARTICIPANTS = 6
 MAX_SURVEY_CONCURRENCY = 3
 _SURVEY_MEMORY_LIMIT = 5
+_FALLBACK_LLM_ERROR_MESSAGE = "LLM request failed"
 
 
 class RoundtableSurveyServiceError(Exception):
@@ -463,13 +465,24 @@ async def _run_single_survey_call(
                 )
                 error_message: str | None = None
             except LLMError as exc:
+                safe_payload = safe_llm_error_payload(exc)
+                error_message = (
+                    safe_payload["message"]
+                    if safe_payload is not None
+                    else _FALLBACK_LLM_ERROR_MESSAGE
+                )
+                error_code = (
+                    safe_payload["code"]
+                    if safe_payload is not None
+                    else "LLM_REQUEST_FAILED"
+                )
                 logger.warning(
-                    "roundtable survey llm call failed participant_id=%s error=%s",
+                    "roundtable survey llm call failed participant_id=%s code=%s exception_type=%s",
                     participant.participant_id,
-                    exc,
+                    error_code,
+                    type(exc).__name__,
                 )
                 answer = ""
-                error_message = str(exc)
     elapsed_ms = int((time.monotonic() - started) * 1000)
     payload: dict[str, Any] = {
         "participant_id": participant.participant_id,

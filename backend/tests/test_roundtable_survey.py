@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 
 import pytest
@@ -489,13 +490,19 @@ async def test_survey_enforces_concurrency_limit(monkeypatch):
     assert max_active <= 3
 
 
-def test_survey_surfaces_llm_errors_inside_response_event(client, monkeypatch):
+def test_survey_redacts_llm_error_text_in_response_and_logs(
+    client,
+    monkeypatch,
+    caplog,
+):
     fixture = _seed_roundtable_scenario(participant_count=1)
+    secret_error = "Authorization: Bearer sk-f9-ending-survey-secret"
 
     async def _boom(_prompt: str, **_kwargs) -> str:
-        raise LLMError("provider unavailable")
+        raise LLMError(secret_error)
 
     monkeypatch.setattr("app.services.roundtable_survey.llm_call", _boom)
+    caplog.set_level(logging.WARNING, logger="app.services.roundtable_survey")
 
     with client.stream(
         "POST",
@@ -510,7 +517,15 @@ def test_survey_surfaces_llm_errors_inside_response_event(client, monkeypatch):
     frames = _parse_sse_payload(raw)
     assert response.status_code == 200
     assert frames[0][0] == "survey_response"
-    assert frames[0][1]["error"] == "provider unavailable"
+    assert frames[0][1]["error"] == "LLM request failed"
+    assert "sk-f9-ending-survey-secret" not in raw
+    assert "Authorization: Bearer" not in raw
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sk-f9-ending-survey-secret" not in log_text
+    assert "Authorization: Bearer" not in log_text
+    assert "LLM_REQUEST_FAILED" in log_text
+    assert "LLMError" in log_text
 
 
 def test_survey_rejects_cross_room_participant_mix(client):

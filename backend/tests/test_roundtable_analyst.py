@@ -19,6 +19,7 @@ from app.models.ending_room import (
     EndingRoomStatus,
     EndingRoomType,
 )
+from app.services.llm_client import LLMError
 from app.services.roundtable_analyst import (
     MAX_ANALYST_ITERATIONS,
     build_roundtable_analyst_stream,
@@ -314,6 +315,41 @@ def test_analyst_sse_stream_emits_final_response_event(client, monkeypatch):
                 "answer": "The hinge was institutional, not tactical.",
                 "iterations": 1,
                 "stopped_reason": "final_response",
+            },
+        )
+    ]
+
+
+def test_analyst_redacts_llm_error_text_in_response_event(client, monkeypatch):
+    fixture = _seed_analyst_scenario()
+    secret_error = "xai-analyst-secret-xxxxxxxxxxxxxxxxxxxx"
+
+    async def _boom(_prompt: str, **_kwargs) -> dict:
+        raise LLMError(secret_error)
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.llm_call_json",
+        _boom,
+    )
+
+    with client.stream(
+        "POST",
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={"question": "Trace the decisive hinge."},
+    ) as response:
+        raw = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert secret_error not in raw
+    frames = _parse_sse_payload(raw)
+    assert frames == [
+        (
+            "analyst_response",
+            {
+                "answer": "",
+                "error": "LLM request failed",
+                "iterations": 1,
+                "stopped_reason": "llm_error",
             },
         )
     ]

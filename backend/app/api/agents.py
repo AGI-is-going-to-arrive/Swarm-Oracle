@@ -23,6 +23,7 @@ from app.api.helpers import (
 )
 from app.api.schemas import CreateScenarioRequest, WorldContext
 from app.config import settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine
 from app.services.agent_identity import preview_identity_match
@@ -837,7 +838,7 @@ def _redact_metadata(meta: dict | None) -> dict:
             continue
         if raw_value is None:
             continue
-        safe[raw_key] = str(raw_value)
+        safe[raw_key] = _scrub_sensitive_text(str(raw_value))
     return safe
 
 
@@ -899,7 +900,8 @@ def _redact_document_text(text: str) -> str:
     """
     if not text:
         return text
-    redacted = _RE_SK_KEY.sub("[REDACTED_KEY]", text)
+    redacted = _scrub_sensitive_text(text)
+    redacted = _RE_SK_KEY.sub("[REDACTED_KEY]", redacted)
     redacted = _RE_KEY_PREFIXED.sub("[REDACTED_KEY]", redacted)
     redacted = _RE_EMAIL.sub("[REDACTED_EMAIL]", redacted)
     redacted = _RE_TOKEN_PARAM.sub("[REDACTED]", redacted)

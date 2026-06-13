@@ -362,6 +362,52 @@ async def test_redaction_only_allowlisted_metadata_keys_are_returned(
     assert "should_not_leak" not in resp.text
 
 
+async def test_redaction_scrubs_document_and_allowlisted_metadata_values(
+    client: AsyncClient,
+):
+    _create_identity("inspector-value-redact")
+    secret_text = (
+        "xai-inspector-secret-xxxxxxxx "
+        "sk-ant-inspector-secret-xxxxxxxx "
+        "Authorization: Bearer inspectorBearerSecret123 "
+        "api_key=inspectorApiSecret123 "
+        "https://inspector-user:inspector-pass@example.com/private"
+    )
+    _store_raw_memory(
+        "inspector-value-redact",
+        document=f"memory document leaked {secret_text}",
+        metadata={
+            "scenario_id": "scenario-value-redact",
+            "created_at": "2026-05-10T14:00:00Z",
+            "source": f"allowlisted metadata leaked {secret_text}",
+            "language": f"en {secret_text}",
+        },
+    )
+
+    resp = await client.get(
+        "/api/agents/identities/inspector-value-redact/memories",
+        params={"user_id": OWNER_USER},
+    )
+
+    assert resp.status_code == 200
+    raw_text = resp.text
+    forbidden_values = (
+        "xai-inspector-secret-xxxxxxxx",
+        "sk-ant-inspector-secret-xxxxxxxx",
+        "Authorization: Bearer inspectorBearerSecret123",
+        "api_key=inspectorApiSecret123",
+        "https://inspector-user:inspector-pass@example.com/private",
+        "inspector-user:inspector-pass@",
+    )
+    for value in forbidden_values:
+        assert value not in raw_text, f"leaked sensitive value: {value}"
+
+    entry = resp.json()["memories"][0]
+    assert entry["metadata"]["source"]
+    assert entry["metadata"]["language"]
+    assert "https://example.com/private" in raw_text
+
+
 # ── Compaction + cap ────────────────────────────────────
 
 

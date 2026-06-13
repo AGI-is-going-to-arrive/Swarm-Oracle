@@ -27,6 +27,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call_json,
     llm_request_scope,
+    safe_llm_error_payload,
 )
 from app.services.web_context import fetch_web_context
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ANALYST_ITERATIONS = 5
 _MAX_TOOL_ITEMS = 8
+_FALLBACK_LLM_ERROR_MESSAGE = "LLM request failed"
 
 
 class RoundtableAnalystServiceError(Exception):
@@ -507,11 +509,17 @@ async def build_roundtable_analyst_stream(
                         temperature=0.7,
                     )
                 except LLMError as exc:
+                    safe_payload = safe_llm_error_payload(exc)
+                    error_message = (
+                        safe_payload["message"]
+                        if safe_payload is not None
+                        else _FALLBACK_LLM_ERROR_MESSAGE
+                    )
                     yield {
                         "event": "analyst_response",
                         "data": {
                             "answer": "",
-                            "error": str(exc),
+                            "error": error_message,
                             "iterations": iteration,
                             "stopped_reason": "llm_error",
                         },
