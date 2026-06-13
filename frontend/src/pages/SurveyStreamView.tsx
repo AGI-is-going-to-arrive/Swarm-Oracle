@@ -180,14 +180,18 @@ export default function SurveyStreamView({
     });
 
     const policy = loadLlmProviderPolicy();
+    const useProfile = Boolean(selectedProfileId);
     void start({
       question: normalizedQuestion,
       participant_ids: orderedParticipantIds,
       ...(roomId ? { room_id: roomId } : {}),
-      ...(selectedProfileId ? { survey_model_profile_id: selectedProfileId } : {}),
-      ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
-      ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
-      ...(policy.model ? { llm_model: policy.model } : {}),
+      ...(useProfile
+        ? { survey_model_profile_id: selectedProfileId }
+        : {
+            ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
+            ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
+            ...(policy.model ? { llm_model: policy.model } : {}),
+          }),
     });
   }, [orderedParticipantIds, question, roomId, setCache, start, selectedProfileId]);
 

@@ -157,13 +157,17 @@ export default function AnalystStreamView({
     });
 
     const policy = loadLlmProviderPolicy();
+    const useProfile = Boolean(selectedProfileId);
     void start({
       question: normalizedQuestion,
       ...(roomId ? { room_id: roomId } : {}),
-      ...(selectedProfileId ? { analyst_model_profile_id: selectedProfileId } : {}),
-      ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
-      ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
-      ...(policy.model ? { llm_model: policy.model } : {}),
+      ...(useProfile
+        ? { analyst_model_profile_id: selectedProfileId }
+        : {
+            ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
+            ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
+            ...(policy.model ? { llm_model: policy.model } : {}),
+          }),
     });
   }, [question, roomId, setCache, start, selectedProfileId]);
 
