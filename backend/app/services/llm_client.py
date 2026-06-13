@@ -1941,7 +1941,7 @@ async def llm_call(
     # SSRF + key-exfil guard: when the caller provides a custom base_url
     # (BYOK mode), they MUST also supply their own api_key. Never send the
     # server's default LLM_API_KEY to an arbitrary third-party URL.
-    if base_url and not api_key:
+    if base_url and not api_key and not is_local_provider_url(base_url):
         raise LLMError(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )
@@ -2406,7 +2406,7 @@ async def llm_call_json_for_family_query_reformulation(
     failures as non-retryable.
     """
     target_url = _resolve_llm_api_url(base_url)
-    if base_url and not api_key:
+    if base_url and not api_key and not is_local_provider_url(base_url):
         raise LLMError(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )
@@ -2678,7 +2678,7 @@ async def llm_call_stream(
     purpose = request_context.purpose
     target_url = _resolve_llm_api_url(base_url)
     # SSRF + key-exfil guard: BYOK base_url requires a matching api_key.
-    if base_url and not api_key:
+    if base_url and not api_key and not is_local_provider_url(base_url):
         raise LLMError(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )

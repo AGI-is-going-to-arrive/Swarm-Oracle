@@ -10,6 +10,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -18,6 +19,45 @@ from app.main import app
 from app.models import Branch, Scenario, ScenarioStatus
 from app.models.predictions import Leaderboard, Prediction
 from app.services.scoring import _update_leaderboard, recompute_leaderboard_entry
+
+
+def _seed_done_scenario_with_prediction(
+    *,
+    parsed_context: dict | None = None,
+    confidence: float = 0.75,
+) -> str:
+    from app.models.database import get_engine
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Will the harbor route survive?",
+            status=ScenarioStatus.DONE,
+            parsed_context=parsed_context,
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+        session.add(
+            Branch(
+                scenario_id=scenario_id,
+                title="Harbor route survives",
+                probability=0.7,
+                story="The route survives after supply guilds coordinate.",
+                insight="Local coordination keeps the route open.",
+            )
+        )
+        session.add(
+            Prediction(
+                scenario_id=scenario_id,
+                user_id="oracle-user",
+                user_name="Oracle User",
+                prediction_text="The route survives.",
+                confidence=confidence,
+            )
+        )
+        session.commit()
+        return scenario_id
 
 # ── Model Unit Tests ─────────────────────────────────────
 
@@ -1123,6 +1163,134 @@ def test_score_predictions_endpoint_returns_attempt_and_failure_stats(tmp_path):
         "all_failed": False,
         "results": [{"prediction_id": "p-1", "score": 88, "reason": "命中主线"}],
     }
+
+
+def test_score_predictions_inherited_remote_byok_url_uses_server_default(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    monkeypatch.setattr(settings, "LLM_API_KEY", "sk-server-default", raising=False)
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={
+            "_language": "English",
+            "llm_base_url": "https://api.openai.com/v1",
+            "llm_model": "byok-profile-model",
+            "result_quality": {"actual_outcome": True},
+        }
+    )
+
+    async def fake_llm(_prompt: str, **kwargs):
+        if (
+            kwargs.get("api_key") is not None
+            or kwargs.get("base_url") is not None
+            or kwargs.get("model") is not None
+        ):
+            raise AssertionError(f"expected server default provider, got {kwargs!r}")
+        return {"score": 91, "reason": "server default scored it"}
+
+    monkeypatch.setattr("app.services.scoring.llm_call_json_with_stream_fallback", fake_llm)
+
+    response = TestClient(app).post(f"/api/scenario/{scenario_id}/score-predictions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempted"] == 1
+    assert payload["scored"] == 1
+    assert payload["failed"] == 0
+    assert payload["all_failed"] is False
+    assert payload["results"][0]["score"] == 91
+
+
+def test_score_predictions_inherited_remote_byok_url_without_server_key_is_400(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    monkeypatch.setattr(settings, "LLM_API_KEY", "", raising=False)
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={
+            "_language": "English",
+            "llm_base_url": "https://api.openai.com/v1",
+            "result_quality": {"actual_outcome": True},
+        }
+    )
+    called = False
+
+    async def unexpected_llm(_prompt: str, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("LLM should not be called without a server default key")
+
+    monkeypatch.setattr("app.services.scoring.llm_call_json_with_stream_fallback", unexpected_llm)
+
+    response = TestClient(app).post(f"/api/scenario/{scenario_id}/score-predictions")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+    assert called is False
+
+
+def test_score_predictions_explicit_base_url_without_key_still_requires_key(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={"_language": "English", "result_quality": {"actual_outcome": True}}
+    )
+
+    response = TestClient(app).post(
+        f"/api/scenario/{scenario_id}/score-predictions",
+        json={"llm_base_url": "https://api.openai.com/v1"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_local_provider_llm_call_allows_missing_api_key(monkeypatch):
+    from app.services import llm_client
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        text = ""
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "choices": [{"message": {"content": "OK"}}],
+                "output_text": "OK",
+                "usage": {},
+            }
+
+    class FakeClient:
+        async def post(self, url: str, *, json: dict, headers: dict, timeout: float):
+            captured.update(
+                {
+                    "url": url,
+                    "json": json,
+                    "headers": headers,
+                    "timeout": timeout,
+                }
+            )
+            return FakeResponse()
+
+    monkeypatch.setattr(llm_client.settings, "LLM_API_KEY", "", raising=False)
+    monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: FakeClient())
+    monkeypatch.setattr(llm_client, "_reserve_runtime_slot", AsyncMock(return_value=None))
+    monkeypatch.setattr(llm_client, "_release_runtime_slot", AsyncMock())
+    monkeypatch.setattr(llm_client, "_reconcile_rate_limit_usage", AsyncMock())
+
+    result = await llm_client.llm_call(
+        "Respond with OK",
+        base_url="http://127.0.0.1:8317/v1",
+        api_key=None,
+    )
+
+    assert result == "OK"
+    assert captured["url"] == "http://127.0.0.1:8317/v1/chat/completions"
 
 
 if __name__ == "__main__":

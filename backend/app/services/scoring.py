@@ -24,6 +24,7 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
+from app.services.llm_resolution import resolve_post_completion_llm_call_config
 
 logger = logging.getLogger(__name__)
 ANONYMOUS_USER_ID = "anonymous"
@@ -369,18 +370,13 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
 
     # Call LLM for scoring
     overrides = llm_overrides or {}
-    effective_base_url = overrides.get("base_url") or provider_policy.get("llm_base_url")
-    effective_model = overrides.get("model") or provider_policy.get("llm_model")
-    effective_api_key = overrides.get("api_key")
-    effective_requests_per_minute = (
-        overrides.get("requests_per_minute")
-        if overrides.get("requests_per_minute") is not None
-        else provider_policy.get("llm_requests_per_minute")
-    )
-    effective_tokens_per_minute = (
-        overrides.get("tokens_per_minute")
-        if overrides.get("tokens_per_minute") is not None
-        else provider_policy.get("llm_tokens_per_minute")
+    effective_llm = resolve_post_completion_llm_call_config(
+        parsed_context=provider_policy,
+        request_api_key=overrides.get("api_key"),
+        request_base_url=overrides.get("base_url"),
+        request_model=overrides.get("model"),
+        request_requests_per_minute=overrides.get("requests_per_minute"),
+        request_tokens_per_minute=overrides.get("tokens_per_minute"),
     )
     quota_key = overrides.get("quota_key") or provider_policy.get("user_id")
 
@@ -408,15 +404,15 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="prediction_scoring",
-            requests_per_minute=effective_requests_per_minute,
-            tokens_per_minute=effective_tokens_per_minute,
+            requests_per_minute=effective_llm.requests_per_minute,
+            tokens_per_minute=effective_llm.tokens_per_minute,
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort="low",
-                model=effective_model,
-                api_key=effective_api_key,
-                base_url=effective_base_url,
+                model=effective_llm.model,
+                api_key=effective_llm.api_key,
+                base_url=effective_llm.base_url,
             )
 
         score, reason = _normalize_scoring_result(result)
@@ -501,6 +497,14 @@ async def score_all_for_scenario(
     engine = get_engine()
 
     with Session(engine) as session:
+        from app.models import Scenario
+
+        scenario = session.get(Scenario, scenario_id)
+        provider_policy = dict(
+            scenario.parsed_context
+            if scenario is not None and isinstance(scenario.parsed_context, dict)
+            else {}
+        )
         unscored = list(session.exec(
             select(Prediction).where(
                 Prediction.scenario_id == scenario_id,
@@ -516,6 +520,16 @@ async def score_all_for_scenario(
             "all_failed": False,
             "results": [],
         }
+
+    overrides = llm_overrides or {}
+    resolve_post_completion_llm_call_config(
+        parsed_context=provider_policy,
+        request_api_key=overrides.get("api_key"),
+        request_base_url=overrides.get("base_url"),
+        request_model=overrides.get("model"),
+        request_requests_per_minute=overrides.get("requests_per_minute"),
+        request_tokens_per_minute=overrides.get("tokens_per_minute"),
+    )
 
     # M-9 fix: Score concurrently with a semaphore to limit LLM concurrency
     sem = asyncio.Semaphore(5)

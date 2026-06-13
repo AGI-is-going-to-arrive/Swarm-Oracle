@@ -325,6 +325,51 @@ async def test_build_report_persists_complete_report_with_evidence_coords(monkey
 
 
 @pytest.mark.asyncio
+async def test_build_report_ignores_inherited_remote_byok_url_when_request_has_no_key(
+    monkeypatch,
+):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed_context = dict(scenario.parsed_context or {})
+        parsed_context["llm_base_url"] = "https://api.openai.com/v1"
+        parsed_context["llm_model"] = "byok-profile-model"
+        scenario.parsed_context = parsed_context
+        session.add(scenario)
+        session.commit()
+    calls: list[dict[str, Any]] = []
+
+    async def fake_llm(prompt: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        if (
+            kwargs.get("api_key") is not None
+            or kwargs.get("base_url") is not None
+            or kwargs.get("model") is not None
+        ):
+            raise AssertionError(f"expected server default provider, got {kwargs!r}")
+        if "REPORT_OUTLINE" in prompt:
+            return _outline_payload(["timeline"])
+        if "REPORT_INTERVIEWS" in prompt:
+            return {"action": "interview_agents", "interview_evidence": []}
+        return _section_payload("timeline")
+
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report.status == "complete"
+    assert calls
+    assert all(call.get("base_url") is None for call in calls)
+
+
+@pytest.mark.asyncio
 async def test_build_report_attaches_reducer_charts_to_semantic_sections(monkeypatch):
     from app.services.result_report import builder
 

@@ -32,6 +32,7 @@ from app.services.llm_client import (
     llm_request_scope,
     validate_llm_base_url,
 )
+from app.services.llm_resolution import resolve_post_completion_llm_call_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
@@ -680,18 +681,13 @@ async def _generate_social_copy(
         language=social_language,
     )
     provider_policy = scenario.parsed_context or {}
-    effective_base_url = req.llm_base_url or provider_policy.get("llm_base_url")
-    effective_model = req.llm_model or provider_policy.get("llm_model")
-    effective_api_key = req.llm_api_key
-    effective_requests_per_minute = (
-        req.llm_requests_per_minute
-        if req.llm_requests_per_minute is not None
-        else provider_policy.get("llm_requests_per_minute")
-    )
-    effective_tokens_per_minute = (
-        req.llm_tokens_per_minute
-        if req.llm_tokens_per_minute is not None
-        else provider_policy.get("llm_tokens_per_minute")
+    effective_llm = resolve_post_completion_llm_call_config(
+        parsed_context=provider_policy,
+        request_api_key=req.llm_api_key,
+        request_base_url=req.llm_base_url,
+        request_model=req.llm_model,
+        request_requests_per_minute=req.llm_requests_per_minute,
+        request_tokens_per_minute=req.llm_tokens_per_minute,
     )
     quota_key = req.user_id or provider_policy.get("user_id")
 
@@ -724,15 +720,15 @@ async def _generate_social_copy(
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="social_copy",
-            requests_per_minute=effective_requests_per_minute,
-            tokens_per_minute=effective_tokens_per_minute,
+            requests_per_minute=effective_llm.requests_per_minute,
+            tokens_per_minute=effective_llm.tokens_per_minute,
         ):
             copy = await llm_call(
                 prompt,
                 timeout=60.0,
-                api_key=effective_api_key,
-                base_url=effective_base_url,
-                model=effective_model,
+                api_key=effective_llm.api_key,
+                base_url=effective_llm.base_url,
+                model=effective_llm.model,
             )
     except (LLMBackpressureError, LLMCircuitOpenError) as exc:
         raise api_error_from_exception(503, "SOCIAL_LLM_TEMPORARILY_UNAVAILABLE", exc) from exc
@@ -754,6 +750,7 @@ async def generate_social_copy(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Generate platform-specific social media copy without provider overrides."""
+    _require_social_headlines_feature()
     return await _generate_social_copy(
         scenario_id,
         platform,
@@ -770,6 +767,7 @@ async def generate_social_copy_with_overrides(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Generate platform-specific social media copy with provider overrides in the POST body."""
+    _require_social_headlines_feature()
     return await _generate_social_copy(
         scenario_id,
         platform,
