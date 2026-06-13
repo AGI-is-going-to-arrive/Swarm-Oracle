@@ -100,7 +100,7 @@ describe('ModelProfileManager', () => {
 
     render(<ModelProfileManager />);
     expect(screen.getByText('common.capability_error_title')).toBeInTheDocument();
-    
+
     const retryBtn = screen.getByRole('button', { name: 'common.retry' });
     fireEvent.click(retryBtn);
     expect(reloadMock).toHaveBeenCalledTimes(1);
@@ -116,7 +116,7 @@ describe('ModelProfileManager', () => {
     listModelProfilesMock.mockResolvedValue({ profiles: mockProfiles, count: 2 });
 
     render(<ModelProfileManager />);
-    
+
     await waitFor(() => {
       expect(screen.getByText('OpenAI GPT-4o')).toBeInTheDocument();
       expect(screen.getByText('Ollama Llama 3')).toBeInTheDocument();

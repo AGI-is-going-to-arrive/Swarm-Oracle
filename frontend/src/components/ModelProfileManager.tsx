@@ -307,7 +307,7 @@ export function ModelProfileManager() {
   return (
     <div className="model-profile-manager" data-testid="model-profile-manager">
       <div className="model-profile-manager__container">
-        
+
         {/* Left Side: Profile List */}
         <div className="model-profile-manager__list-panel">
           <div className="model-profile-manager__panel-header">
@@ -475,7 +475,7 @@ export function ModelProfileManager() {
                   disabled={isSaving || (isEditing && keyCleared)}
                   placeholder={isEditing ? t('model_profiles.api_key_placeholder') : ''}
                 />
-                
+
                 {isEditing && selectedProfile?.has_api_key && (
                   <div className="model-profile-manager__key-status">
                     {!keyCleared ? (

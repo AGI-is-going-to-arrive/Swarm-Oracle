@@ -58,7 +58,7 @@ Other failures keep the existing generic error path.
 
 ## 2. Feature Flags
 
-`.env.example` and `.env.docker` now enable the following user-visible features by default. You do not need to turn them on manually for local use.
+`.env.example` and the `.env.docker.example` template now enable the following user-visible features by default. You do not need to turn them on manually for local use.
 
 | Flag | Default | What you will see |
 |------|---------|-------------------|
@@ -75,9 +75,16 @@ Other failures keep the existing generic error path.
 | `FEATURE_ROUNDTABLE_SURVEY` | On | Roundtable Deep Dive can send one question to multiple representatives and compare answers. |
 | `FEATURE_ROUNDTABLE_ANALYST` | On | Roundtable Deep Dive can ask a research analyst to synthesize graph, memory, and evidence context. |
 | `FEATURE_SNAPSHOT_EXPORT` | On | The home page can import scenario snapshots; the result page can export a ZIP snapshot. |
+| `FEATURE_PUBLIC_ARTIFACTS` | On | The share modal can export de-identified public artifact JSON or a single-file HTML gallery. |
 | `FEATURE_PREDICTION_JOURNAL` | On | `/me/journal` can record predictions, mark outcomes, and show calibration. |
 | `FEATURE_RESULT_VERDICT` | On | The result page tries to show a one-sentence verdict, confidence, and per-worldline answers. |
 | `FEATURE_RESULT_REPORT` | On | The result page shows the full report entry, with a standalone view and retry path at `/result/:id/report`. |
+| `FEATURE_MULTI_RUN` | On | The home page can start multi-run simulations, and result pages show run-group distributions and terminal histograms. |
+| `FEATURE_YOU_VS_ORACLE` | On | The result page can compare the user's forecast against the Oracle result. |
+| `FEATURE_SOCIAL_HEADLINES` | On | Result-page social feeds generate headline cards that can be downloaded or copied. |
+| `FEATURE_DOCUMENT_SEED` | On | The home page can turn uploaded documents into scenario seed context. |
+| `FEATURE_LOCAL_PACKS` | On | The home page can load local scenario packs and carry pack materials into simulations. |
+| `FEATURE_MODEL_PROFILES` | On | The model profile page can manage local profiles and let simulations choose one at launch. |
 | `FEATURE_EDUCATION_TEMPLATES` | On | The home page shows education templates for classroom-style prompts. |
 | `FEATURE_PERSONA_EXPORT` | On | Agent Library can export persona backups and create Agents from backups. |
 

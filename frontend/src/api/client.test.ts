@@ -321,7 +321,6 @@ describe('api client request parsing', () => {
     );
   });
 });
-
 describe('web search wire-format', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -916,4 +915,3 @@ describe('model profile client APIs', () => {
     expect(body.user_id).toBe('explicit-user');
   });
 });
-

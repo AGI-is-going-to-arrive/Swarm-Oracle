@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 import app.api.debate as debate_api
 import app.api.ending_rooms as ending_rooms_api
 import app.api.scenarios as scenarios_api
+from app.main import app
 from app.models import (
     Agent,
     AgentMessage,
@@ -22,9 +23,7 @@ from app.models import (
     Scenario,
     ScenarioStatus,
 )
-from app.main import app
 from app.models.database import get_engine
-
 
 SECRET_KEY = "sk-f9-model-profile-secret-1234567890"
 

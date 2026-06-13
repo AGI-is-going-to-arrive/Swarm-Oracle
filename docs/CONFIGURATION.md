@@ -58,7 +58,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前按 OpenAI-comp
 
 ## 2. 功能开关（Feature Flags）
 
-`.env.example` 与 `.env.docker` 现在默认开启这组用户能直接看到的功能；本地启动后不需要再手动打开：
+`.env.example` 与 `.env.docker.example` 模板现在默认开启这组用户能直接看到的功能；本地启动后不需要再手动打开：
 
 | 开关 | 默认 | 打开后你会看到什么 |
 |------|------|------------------|
@@ -75,9 +75,16 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前按 OpenAI-comp
 | `FEATURE_ROUNDTABLE_SURVEY` | ✅ 开 | 圆桌 Deep Dive 里可以把同一个问题群发给多位代表，横向比较回答。 |
 | `FEATURE_ROUNDTABLE_ANALYST` | ✅ 开 | 圆桌 Deep Dive 里可以让研究分析师梳理因果图、角色记忆和搜索证据。 |
 | `FEATURE_SNAPSHOT_EXPORT` | ✅ 开 | 首页可以导入 scenario snapshot，结果页可以导出 ZIP snapshot。 |
+| `FEATURE_PUBLIC_ARTIFACTS` | ✅ 开 | 分享弹窗可以导出脱敏 public artifact JSON 或单文件 HTML gallery。 |
 | `FEATURE_PREDICTION_JOURNAL` | ✅ 开 | `/me/journal` 可以记录预测、标记结果，并查看校准曲线。 |
 | `FEATURE_RESULT_VERDICT` | ✅ 开 | 结果页会尽量给出一句话结论、置信度和每条世界线对原问题的回答。 |
 | `FEATURE_RESULT_REPORT` | ✅ 开 | 结果页会显示完整报告入口，也可以在 `/result/:id/report` 单独查看或重试生成。 |
+| `FEATURE_MULTI_RUN` | ✅ 开 | 首页可以发起多次推演，结果页会显示 run group 分布和终局直方图。 |
+| `FEATURE_YOU_VS_ORACLE` | ✅ 开 | 结果页可以把用户预测和 Oracle 结果做并排对比。 |
+| `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
+| `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
+| `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包，并把包内素材带入推演。 |
+| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页可以管理本地模型 profile，并在启动推演时选择。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
 
