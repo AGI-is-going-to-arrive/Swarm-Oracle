@@ -2232,9 +2232,10 @@ export async function createModelProfile(
   input: ModelProfileInput,
   options?: RequestOptions,
 ): Promise<ModelProfile> {
+  const body = { ...input, user_id: getSessionBoundUserId(input.user_id) };
   return request<ModelProfile>('/model-profiles', {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify(body),
     signal: options?.signal,
   });
 }

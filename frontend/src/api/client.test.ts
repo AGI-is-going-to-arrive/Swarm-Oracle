@@ -20,6 +20,7 @@ import {
   normalizeScenarioAgentSource,
   pinIdentityMemory,
   unpinIdentityMemory,
+  createModelProfile,
 } from './client';
 import type {
   CreateScenarioOptions,
@@ -845,3 +846,74 @@ describe('identity memory client APIs', () => {
     ).rejects.toThrow('API 409 IDENTITY_MEMORY_PIN_LIMIT_REACHED: At most 20 memories can be pinned per identity.');
   });
 });
+
+describe('model profile client APIs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it('injects user_id from session/storage if not provided in createModelProfile', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ id: 'profile-1', name: 'Test Profile' })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    localStorage.setItem('swarmoracle_user_id', 'test-user-from-local');
+
+    const result = await createModelProfile({
+      name: 'Test Profile',
+      provider: 'openai',
+      model: 'gpt-4',
+    });
+
+    expect(result).toEqual({ id: 'profile-1', name: 'Test Profile' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[0]).toBe('/api/model-profiles');
+
+    const init = callArgs[1] as RequestInit;
+    expect(init.method).toBe('POST');
+
+    const body = JSON.parse(init.body as string);
+    expect(body.user_id).toBe('test-user-from-local');
+    expect(body.name).toBe('Test Profile');
+    expect(body.provider).toBe('openai');
+    expect(body.model).toBe('gpt-4');
+  });
+
+  it('respects explicitly provided user_id in createModelProfile', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ id: 'profile-2', name: 'Test Profile 2' })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    localStorage.setItem('swarmoracle_user_id', 'test-user-from-local');
+
+    const result = await createModelProfile({
+      user_id: 'explicit-user',
+      name: 'Test Profile 2',
+      provider: 'openai',
+      model: 'gpt-4',
+    });
+
+    expect(result).toEqual({ id: 'profile-2', name: 'Test Profile 2' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const callArgs = fetchMock.mock.calls[0];
+    const init = callArgs[1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.user_id).toBe('explicit-user');
+  });
+});
+
