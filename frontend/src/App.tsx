@@ -46,6 +46,7 @@ const ReplayView = lazy(() => import('./pages/ReplayView'));
 const SetupWizardView = lazy(() => import('./pages/SetupWizardView'));
 // Personal Prediction Journal at /me/journal
 const PersonalJournalView = lazy(() => import('./pages/PersonalJournalView'));
+const ModelProfilesView = lazy(() => import('./pages/ModelProfilesView'));
 const GameplayCardsModalPreview = lazy(() =>
   import('./pages/E2EPreviewSurfaces').then((mod) => ({ default: mod.GameplayCardsModalPreview }))
 );
@@ -101,6 +102,7 @@ export default function App() {
             <Route path="/admin/setup" element={<SetupWizardView />} />
             {/* Personal Prediction Journal */}
             <Route path="/me/journal" element={<PersonalJournalView />} />
+            <Route path="/model-profiles" element={<ModelProfilesView />} />
             <Route path="/__gameplay_cards_modal_preview" element={<GameplayCardsModalPreview />} />
             <Route path="/__prediction_modal_preview" element={<PredictionModalPreview />} />
             <Route path="/__intervention_receipt_preview" element={<InterventionReceiptPreview />} />

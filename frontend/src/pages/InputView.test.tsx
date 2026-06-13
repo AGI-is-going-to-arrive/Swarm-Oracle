@@ -3434,4 +3434,31 @@ describe('InputView Model Profile Integration', () => {
     const hint = await screen.findByText('model_profiles.disabled_hint');
     expect(hint).toBeInTheDocument();
   });
+
+  it('renders a Link to /model-profiles when model profiles capability is enabled', async () => {
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      model_profiles: { enabled: true },
+    });
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Open BYOK section
+    const byokHeader = await screen.findByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader);
+
+    // Check that the Link exists and points to /model-profiles
+    const manageLink = await screen.findByTestId('manage-profiles-link');
+    expect(manageLink).toBeInTheDocument();
+    expect(manageLink.getAttribute('href')).toBe('/model-profiles');
+    expect(screen.getByText('model_profiles.manage_link')).toBeInTheDocument();
+  });
 });

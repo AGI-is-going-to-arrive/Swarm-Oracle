@@ -3578,7 +3578,10 @@
       "error_load": "Failed to load model profiles",
       "error_save": "Failed to save model profile",
       "error_delete": "Failed to delete model profile",
-      "byok_custom_option": "BYOK Custom Settings"
+      "byok_custom_option": "BYOK Custom Settings",
+      "title_page": "Model Profiles",
+      "manage_link": "Manage model profiles",
+      "capability_error": "Could not check model profile availability. Please retry."
     }
   }
 }

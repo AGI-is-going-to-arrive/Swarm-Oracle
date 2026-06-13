@@ -2719,7 +2719,17 @@ export function InputView() {
                       ) : (
                         <div className="model-profile-selectors-section" style={{ gridColumn: '1 / -1', marginBottom: '1.5rem', borderBottom: '1px solid rgba(64, 48, 40, 0.08)', paddingBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                           <div className="byok-field">
-                            <label className="byok-label" htmlFor="scenario-profile-select">{t('model_profiles.title')}</label>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                              <label className="byok-label" htmlFor="scenario-profile-select" style={{ marginBottom: 0 }}>{t('model_profiles.title')}</label>
+                              <Link
+                                to="/model-profiles"
+                                className="agent-link"
+                                style={{ fontSize: '0.85rem' }}
+                                data-testid="manage-profiles-link"
+                              >
+                                {t('model_profiles.manage_link', 'Manage model profiles')}
+                              </Link>
+                            </div>
                             <span className="byok-field-help">{t('model_profiles.placeholder_select')}</span>
                             <select
                               id="scenario-profile-select"

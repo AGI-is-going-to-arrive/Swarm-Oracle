@@ -3578,7 +3578,10 @@
       "error_load": "加载模型配置失败",
       "error_save": "保存模型配置失败",
       "error_delete": "删除模型配置失败",
-      "byok_custom_option": "BYOK 自定义设置"
+      "byok_custom_option": "BYOK 自定义设置",
+      "title_page": "模型配置",
+      "manage_link": "管理模型配置",
+      "capability_error": "无法确认模型配置是否可用，请重试。"
     }
   }
 }
