@@ -41,9 +41,9 @@
       zd: "保存多套 LLM 接入信息（服务商、Base URL、模型、密钥、限速），推演或辩论前直接挑一套用；密钥只存在本地，列表和编辑表单都不回显。", ed: "Save several LLM setups (provider, base URL, model, key, rate limits) and pick one before a run or debate; keys stay local and never reappear in the list or edit form." },
     { id: "F45", img: "05-journal.png", hero: false, zt: "你的预测 vs 预言机", et: "Your Prediction vs the Oracle",
       zd: "在结果页提交你自己的预测，系统会和 AI 推演出的结局对比给出命中情况；无法判定对错时显示「暂不可评分」并说明原因，不硬凑分数。", ed: "Submit your own prediction on the result page and the system compares it with the AI’s ending; when a worldline can’t be judged it says “not scorable yet” and explains why instead of forcing a score." },
-    { id: "F46", img: "02-result.png", hero: false, zt: "社交动态与头条卡", et: "Social Feed & Headline Cards",
+    { id: "F46", img: "27-social.png", hero: false, zt: "社交动态与头条卡", et: "Social Feed & Headline Cards",
       zd: "结果页的「社交动态」把推演结果改写成几条社交平台风格的头条卡片，可一键复制文字或下载图片，方便分享。", ed: "The result page’s Social Feed rewrites your outcome into a few platform-styled headline cards you can copy as text or download as images." },
-    { id: "F43", img: "02-result.png", hero: false, zt: "公开分享与画廊", et: "Public Sharing & Gallery",
+    { id: "F43", img: "26-gallery.png", hero: false, zt: "公开分享与画廊", et: "Public Sharing & Gallery",
       zd: "结果页分享弹窗可导出脱敏的公开 artifact——去掉密钥和私密字段的 JSON，或一个能离线打开的单文件 HTML 画廊，方便把你的世界线公开展示给别人。", ed: "The share dialog exports a redacted public artifact — a JSON with keys and private fields stripped, or a single-file HTML gallery that opens offline — to publish your worldline for others." }
   ];
 
