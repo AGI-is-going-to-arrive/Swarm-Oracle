@@ -352,8 +352,7 @@ export function ModelProfileManager() {
                       onClick={() => handleStartEdit(profile)}
                       disabled={isSaving}
                     >
-                      {t('common.save') /* Use standard edit text or translate */}
-                      Edit
+                      {t('model_profiles.edit', 'Edit')}
                     </button>
                     <button
                       type="button"
@@ -361,7 +360,7 @@ export function ModelProfileManager() {
                       onClick={() => void handleDelete(profile.id)}
                       disabled={isSaving}
                     >
-                      Delete
+                      {t('model_profiles.delete', 'Delete')}
                     </button>
                   </div>
                 </div>
