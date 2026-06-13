@@ -234,6 +234,8 @@ export default function ResultView() {
   const [campaignNotice, setCampaignNotice] = useState('');
   const [derivedScenarioMeta, setDerivedScenarioMeta] = useState<ScenarioMeta | null>(null);
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const refresh = useCallback(() => setRefreshTrigger((prev) => prev + 1), []);
   const endingRoomLiveSnapshot = useEndingRoomStore((state) => state.snapshot);
   const endingRoomLiveResult = useEndingRoomStore((state) => state.result);
   const endingRoomLiveActiveThreadId = useEndingRoomStore((state) => state.activeThreadId);
@@ -731,6 +733,7 @@ export default function ResultView() {
     searchParams,
     t,
     capabilities,
+    refreshTrigger,
   ]);
 
   useEffect(() => {
@@ -1941,7 +1944,10 @@ export default function ResultView() {
       <ResultHeader />
 
       {scenario?.run_group_id && (
-        <MultiRunDistributionPanel runGroupId={scenario.run_group_id} />
+        <MultiRunDistributionPanel
+          runGroupId={scenario.run_group_id}
+          onRefresh={refresh}
+        />
       )}
 
       {resultVerdictEnabled && (
@@ -2196,9 +2202,26 @@ function YouVsOracleCard({ scoreResults, hasVerdict }: YouVsOracleCardProps) {
       return null;
     }
     return (
-      <div className="you-vs-oracle-empty" style={{ padding: '1rem', border: '1px solid var(--color-border, #ccc)', borderRadius: '8px', margin: '1rem 0', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
-        {t('you_vs_oracle.empty_state')}
-      </div>
+      <section
+        className="you-vs-oracle-card"
+        role="region"
+        aria-labelledby={titleId}
+        style={{
+          padding: '1.5rem',
+          border: '1px solid var(--color-border, #ccc)',
+          borderRadius: '8px',
+          margin: '1rem 0',
+          backgroundColor: 'var(--color-bg-card, #fff)',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+        }}
+      >
+        <h3 id={titleId} style={{ marginTop: 0, marginBottom: '1rem', color: 'var(--color-text-primary, #111)', fontSize: '1.25rem' }}>
+          {t('you_vs_oracle.card_title')}
+        </h3>
+        <div className="you-vs-oracle-empty" style={{ padding: '1rem', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
+          {t('you_vs_oracle.empty_state')}
+        </div>
+      </section>
     );
   }
 
@@ -2207,9 +2230,26 @@ function YouVsOracleCard({ scoreResults, hasVerdict }: YouVsOracleCardProps) {
       ? t('you_vs_oracle.not_scorable_actual_outcome_unavailable')
       : t('you_vs_oracle.not_scorable_generic');
     return (
-      <div className="you-vs-oracle-empty" style={{ padding: '1rem', border: '1px solid var(--color-border, #ccc)', borderRadius: '8px', margin: '1rem 0', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
-        {msg}
-      </div>
+      <section
+        className="you-vs-oracle-card"
+        role="region"
+        aria-labelledby={titleId}
+        style={{
+          padding: '1.5rem',
+          border: '1px solid var(--color-border, #ccc)',
+          borderRadius: '8px',
+          margin: '1rem 0',
+          backgroundColor: 'var(--color-bg-card, #fff)',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+        }}
+      >
+        <h3 id={titleId} style={{ marginTop: 0, marginBottom: '1rem', color: 'var(--color-text-primary, #111)', fontSize: '1.25rem' }}>
+          {t('you_vs_oracle.card_title')}
+        </h3>
+        <div className="you-vs-oracle-empty" style={{ padding: '1rem', textAlign: 'center', color: 'var(--color-text-secondary, #666)' }}>
+          {msg}
+        </div>
+      </section>
     );
   }
 

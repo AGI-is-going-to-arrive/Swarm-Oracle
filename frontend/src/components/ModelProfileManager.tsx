@@ -494,7 +494,7 @@ export function ModelProfileManager() {
                         </button>
                       </>
                     ) : (
-                      <span className="badge badge--warning">Key will be cleared on save</span>
+                      <span className="badge badge--warning">{t('model_profiles.key_cleared_on_save')}</span>
                     )}
                   </div>
                 )}

@@ -330,4 +330,35 @@ describe('DocumentSeedPanel', () => {
     expect(setWorldContext).toHaveBeenCalledWith(null);
     expect(setAgentsPreview).toHaveBeenCalledWith(null);
   });
+
+  it('displays specific error message for unsupported file types', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    const setWorldContext = vi.fn();
+    const setAgentsPreview = vi.fn();
+
+    const { container } = render(
+      <DocumentSeedPanel
+        worldContext={null}
+        setWorldContext={setWorldContext}
+        agentsPreview={[]}
+        setAgentsPreview={setAgentsPreview}
+      />
+    );
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['dummy-text'], 'history.exe', { type: 'application/octet-stream' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Unsupported file type. Upload a PDF, TXT, or Markdown file.')).toBeInTheDocument();
+    });
+  });
 });

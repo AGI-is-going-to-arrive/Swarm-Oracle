@@ -52,6 +52,7 @@
       "dropzone_aria": "Choose a document to seed world context",
       "parsing": "Parsing document...",
       "error_generic": "Document parsing failed, please try a different file.",
+      "error_invalid_extension": "Unsupported file type. Upload a PDF, TXT, or Markdown file.",
       "error_too_large": "File is larger than {{max}} MB. Please upload a smaller document.",
       "error_empty": "File is empty.",
       "replace": "Replace Document",
@@ -111,7 +112,13 @@
         "TEXT_TOO_LONG": "Character count exceeds allowed limits",
         "UNKNOWN_FIELD": "JSON contains unknown or extra forbidden fields"
       },
-      "select_pack_hint": "Select a pack from the list to view scenario templates and preview details."
+      "select_pack_hint": "Select a pack from the list to view scenario templates and preview details.",
+      "field_prompt": "Prompt",
+      "field_stakes": "Stakes",
+      "meta_curator": "Curator",
+      "meta_created": "Created",
+      "meta_license": "License",
+      "meta_notes": "Notes"
     },
     "llm_banner": {
       "not_configured": "LLM provider is not configured yet. Simulation capabilities will be unavailable.",
@@ -3582,7 +3589,12 @@
       "byok_custom_option": "BYOK Custom Settings",
       "title_page": "Model Profiles",
       "manage_link": "Manage model profiles",
-      "capability_error": "Could not check model profile availability. Please retry."
+      "capability_error": "Could not check model profile availability. Please retry.",
+      "label_proposition": "Proposition Profile",
+      "label_opposition": "Opposition Profile",
+      "label_judge": "Judge Profile (Optional)",
+      "option_none_default": "None / Default",
+      "key_cleared_on_save": "Key will be cleared on save"
     }
   }
 }

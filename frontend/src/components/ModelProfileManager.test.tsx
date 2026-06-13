@@ -193,7 +193,7 @@ describe('ModelProfileManager', () => {
     const clearBtn = screen.getByRole('button', { name: 'model_profiles.clear_key' });
     fireEvent.click(clearBtn);
 
-    expect(screen.getByText('Key will be cleared on save')).toBeInTheDocument();
+    expect(screen.getByText('model_profiles.key_cleared_on_save')).toBeInTheDocument();
 
     // Clear base_url to satisfy validation
     fireEvent.change(screen.getByLabelText('model_profiles.base_url'), { target: { value: '' } });

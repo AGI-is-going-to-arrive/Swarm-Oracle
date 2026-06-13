@@ -30,17 +30,29 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
   <title>${titleText}</title>
   <style>
     :root {
+      --color-primary: #c0407f;
       --color-primary: oklch(55% 0.22 350);
+      --color-primary-dim: #d46f9f;
       --color-primary-dim: oklch(65% 0.18 350);
+      --color-danger: #e1523d;
       --color-danger: oklch(60% 0.18 25);
+      --color-success: #4e9a5c;
       --color-success: oklch(65% 0.15 150);
+      --color-warning: #cf992d;
       --color-warning: oklch(75% 0.16 80);
+      --color-base: #faf8f5;
       --color-base: oklch(98% 0.005 80);
+      --color-surface: #fcfbfa;
       --color-surface: oklch(99% 0.002 80);
+      --color-text-primary: #333230;
       --color-text-primary: oklch(20% 0.01 80);
+      --color-text-secondary: #73716e;
       --color-text-secondary: oklch(45% 0.01 80);
+      --color-text-muted: #a6a4a1;
       --color-text-muted: oklch(65% 0.01 80);
+      --color-border-subtle: #e6dfd5;
       --color-border-subtle: oklch(90% 0.01 80);
+      --color-border-default: #d9d2c9;
       --color-border-default: oklch(85% 0.01 80);
       --font-body: 'Instrument Sans', 'Noto Sans SC', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       --font-heading: 'Cormorant Garamond', 'Noto Serif SC', Georgia, serif;

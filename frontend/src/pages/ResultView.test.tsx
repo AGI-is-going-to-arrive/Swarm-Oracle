@@ -5659,7 +5659,7 @@ describe('ResultView You-vs-Oracle comparison card', () => {
     );
 
     expect(await screen.findByText('you_vs_oracle.empty_state')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'you_vs_oracle.card_title' })).toBeInTheDocument();
   });
 
   it('renders retry button and triggers reload on capability error', async () => {
@@ -5750,7 +5750,7 @@ describe('ResultView You-vs-Oracle comparison card', () => {
     );
 
     expect(await screen.findByText('you_vs_oracle.not_scorable_actual_outcome_unavailable')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'you_vs_oracle.card_title' })).toBeInTheDocument();
   });
 
   it('renders generic not scorable message when status is not_scorable with generic/missing reason', async () => {
@@ -5806,7 +5806,7 @@ describe('ResultView You-vs-Oracle comparison card', () => {
     );
 
     expect(await screen.findByText('you_vs_oracle.not_scorable_generic')).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'you_vs_oracle.card_title' })).toBeInTheDocument();
   });
 
   it('renders nothing when you_vs_oracle data is malformed', async () => {

@@ -52,6 +52,7 @@
       "dropzone_aria": "选择文档以播种世界线上下文",
       "parsing": "正在解析文档...",
       "error_generic": "文档解析失败，请尝试其他文件。",
+      "error_invalid_extension": "不支持的文件类型。请上传 PDF、TXT 或 Markdown 文件。",
       "error_too_large": "文件大小超过 {{max}} MB。请上传更小的文档。",
       "error_empty": "文件为空。",
       "replace": "替换文档",
@@ -111,7 +112,13 @@
         "TEXT_TOO_LONG": "字符长度超过允许的上限限制",
         "UNKNOWN_FIELD": "JSON 包含未定义或禁止的多余字段"
       },
-      "select_pack_hint": "从列表中选择一个主题包，以查看假设场景模板并预览详细信息。"
+      "select_pack_hint": "从列表中选择一个主题包，以查看假设场景模板并预览详细信息。",
+      "field_prompt": "提示词",
+      "field_stakes": "推演押注",
+      "meta_curator": "创建者",
+      "meta_created": "创建时间",
+      "meta_license": "许可证",
+      "meta_notes": "备注"
     },
     "llm_banner": {
       "not_configured": "LLM 服务尚未配置。推演功能将不可用。",
@@ -3582,7 +3589,12 @@
       "byok_custom_option": "BYOK 自定义设置",
       "title_page": "模型配置",
       "manage_link": "管理模型配置",
-      "capability_error": "无法确认模型配置是否可用，请重试。"
+      "capability_error": "无法确认模型配置是否可用，请重试。",
+      "label_proposition": "正方配置",
+      "label_opposition": "反方配置",
+      "label_judge": "裁判配置 (可选)",
+      "option_none_default": "无 / 默认",
+      "key_cleared_on_save": "密钥将在保存时清除"
     }
   }
 }

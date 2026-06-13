@@ -435,14 +435,14 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
                               <p>{getLocalized(temp.context, i18n.language)}</p>
                             </div>
                             <div className="local-pack-picker__field">
-                              <h6>Prompt</h6>
+                              <h6>{t('local_packs.field_prompt')}</h6>
                               <p className="local-pack-picker__prompt-text">
                                 {getLocalized(temp.prompt, i18n.language)}
                               </p>
                             </div>
                             {(temp.stakes || []).length > 0 && (
                               <div className="local-pack-picker__field">
-                                <h6>Stakes</h6>
+                                <h6>{t('local_packs.field_stakes')}</h6>
                                 <ul className="local-pack-picker__stakes-list">
                                   {temp.stakes?.map((stake, sIdx) => (
                                     <li key={sIdx}>{getLocalized(stake, i18n.language)}</li>
@@ -511,16 +511,16 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
                     <h5>{t('local_packs.source_metadata_label', 'Source Metadata')}</h5>
                     <div className="local-pack-picker__source-grid">
                       <div>
-                        <strong>Curator:</strong> {selectedPackDetail.source_metadata.curator}
+                        <strong>{t('local_packs.meta_curator')}:</strong> {selectedPackDetail.source_metadata.curator}
                       </div>
                       <div>
-                        <strong>Created:</strong> {selectedPackDetail.source_metadata.created_at}
+                        <strong>{t('local_packs.meta_created')}:</strong> {selectedPackDetail.source_metadata.created_at}
                       </div>
                       <div>
-                        <strong>License:</strong> {selectedPackDetail.source_metadata.license}
+                        <strong>{t('local_packs.meta_license')}:</strong> {selectedPackDetail.source_metadata.license}
                       </div>
                       <div>
-                        <strong>Notes:</strong> {getLocalized(selectedPackDetail.source_metadata.notes, i18n.language)}
+                        <strong>{t('local_packs.meta_notes')}:</strong> {getLocalized(selectedPackDetail.source_metadata.notes, i18n.language)}
                       </div>
                     </div>
                   </div>

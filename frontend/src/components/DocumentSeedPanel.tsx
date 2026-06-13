@@ -61,7 +61,7 @@ export function DocumentSeedPanel({
     (file: File): string | null => {
       const ext = getFileExtension(file.name);
       if (!ACCEPTED_EXTENSIONS.includes(ext)) {
-        return t('document_seed.error_generic', 'Document parsing failed, please try a different file.');
+        return t('document_seed.error_invalid_extension', 'Unsupported file type. Upload a PDF, TXT, or Markdown file.');
       }
       if (file.size > MAX_BYTES) {
         return t('document_seed.error_too_large', 'File is larger than {{max}} MB. Please upload a smaller document.', { max: 25 });

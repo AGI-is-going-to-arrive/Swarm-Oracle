@@ -279,4 +279,57 @@ describe('MultiRunDistributionPanel', () => {
     expect(screen.getByText('Verdict Counts (2 worldline counts)')).toBeInTheDocument();
     expect(screen.getByText('Outcome Counts (2 worldline counts)')).toBeInTheDocument();
   });
+
+  it('calls onRefresh and does not call window.location.reload when completed', async () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const reloadMock = vi.fn();
+    const originalLocation = window.location;
+    delete (window as any).location;
+    window.location = { ...originalLocation, reload: reloadMock } as any;
+
+    const onRefreshMock = vi.fn();
+
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: { multi_run: { enabled: true, default_count: 5, max_count: 10 } },
+      error: null,
+    });
+
+    vi.mocked(getRunGroupDistribution).mockResolvedValue({
+      run_group_id: 'rg-123',
+      run_count: 3,
+      terminal_count: 3,
+      pending_count: 0,
+      failed_count: 0,
+      status_counts: { 'done': 3 },
+      histogram: {
+        verdict_counts: { 'OK': 3 },
+        outcome_counts: { 'Outcome A': 3 },
+      },
+      runs: [
+        { scenario_id: 's1', run_index: 1, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+        { scenario_id: 's2', run_index: 2, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+        { scenario_id: 's3', run_index: 3, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+      ],
+    });
+
+    render(
+      <I18nextProvider i18n={i18n}>
+        <MultiRunDistributionPanel runGroupId="rg-123" onRefresh={onRefreshMock} />
+      </I18nextProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Running: 3 / 3 completed')).toBeInTheDocument();
+    });
+
+    // Wait for the 1000ms setTimeout to fire in real time
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    expect(onRefreshMock).toHaveBeenCalledTimes(1);
+    expect(reloadMock).not.toHaveBeenCalled();
+
+    (window as any).location = originalLocation;
+  });
 });

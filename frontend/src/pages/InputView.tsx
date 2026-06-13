@@ -2748,7 +2748,7 @@ export function InputView() {
 
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                             <div className="byok-field">
-                              <label className="byok-label" htmlFor="debate-prop-profile">Proposition Profile</label>
+                              <label className="byok-label" htmlFor="debate-prop-profile">{t('model_profiles.label_proposition')}</label>
                               <select
                                 id="debate-prop-profile"
                                 className="form-control"
@@ -2764,7 +2764,7 @@ export function InputView() {
                               </select>
                             </div>
                             <div className="byok-field">
-                              <label className="byok-label" htmlFor="debate-opp-profile">Opposition Profile</label>
+                              <label className="byok-label" htmlFor="debate-opp-profile">{t('model_profiles.label_opposition')}</label>
                               <select
                                 id="debate-opp-profile"
                                 className="form-control"
@@ -2781,7 +2781,7 @@ export function InputView() {
                             </div>
                           </div>
                           <div className="byok-field">
-                            <label className="byok-label" htmlFor="debate-judge-profile">Judge Profile (Optional)</label>
+                            <label className="byok-label" htmlFor="debate-judge-profile">{t('model_profiles.label_judge')}</label>
                             <select
                               id="debate-judge-profile"
                               className="form-control"
@@ -2790,7 +2790,7 @@ export function InputView() {
                               disabled={isSubmitting}
                               style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                             >
-                              <option value="">None / Default</option>
+                              <option value="">{t('model_profiles.option_none_default')}</option>
                               {profiles.map((p) => (
                                 <option key={p.id} value={p.id}>{p.name}</option>
                               ))}

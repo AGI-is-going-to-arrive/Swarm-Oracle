@@ -7,9 +7,10 @@ import './MultiRunDistributionPanel.css';
 
 interface MultiRunDistributionPanelProps {
   runGroupId: string;
+  onRefresh?: () => void;
 }
 
-export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPanelProps) {
+export function MultiRunDistributionPanel({ runGroupId, onRefresh }: MultiRunDistributionPanelProps) {
   const { t } = useTranslation();
   const { enabled, loading: capLoading, error: capError, reload } = useCapabilityCheck('multi_run');
   const [data, setData] = useState<RunGroupDistributionResponse | null>(null);
@@ -61,15 +62,15 @@ export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPa
     };
   }, [runGroupId, enabled, capLoading, t]);
 
-  // When all runs complete, we reload the parent view to fetch final scenario state
+  // When all runs complete, we trigger the onRefresh callback to let the parent refetch state
   useEffect(() => {
     if (isFinished) {
-      const reloadTimer = setTimeout(() => {
-        window.location.reload();
+      const refreshTimer = setTimeout(() => {
+        onRefresh?.();
       }, 1000);
-      return () => clearTimeout(reloadTimer);
+      return () => clearTimeout(refreshTimer);
     }
-  }, [isFinished]);
+  }, [isFinished, onRefresh]);
 
   if (capLoading) return null;
 
