@@ -408,6 +408,49 @@ async def test_redaction_scrubs_document_and_allowlisted_metadata_values(
     assert "https://example.com/private" in raw_text
 
 
+async def test_redaction_scrubs_top_level_projected_metadata_values(
+    client: AsyncClient,
+):
+    _create_identity("inspector-projection-redact")
+    polluted_scenario_id = "xai-pollutedscenariosecretxxxxxxxx"
+    polluted_created_at = "Authorization: Bearer sk-polluted-timestamp"
+    benign_scenario_id = "123e4567-e89b-42d3-a456-426614174000"
+    benign_created_at = "2026-05-10T15:00:00Z"
+
+    _store_raw_memory(
+        "inspector-projection-redact",
+        document="polluted top-level projection",
+        metadata={
+            "scenario_id": polluted_scenario_id,
+            "created_at": polluted_created_at,
+        },
+    )
+    _store_raw_memory(
+        "inspector-projection-redact",
+        document="benign top-level projection",
+        metadata={
+            "scenario_id": benign_scenario_id,
+            "created_at": benign_created_at,
+        },
+    )
+
+    resp = await client.get(
+        "/api/agents/identities/inspector-projection-redact/memories",
+        params={"user_id": OWNER_USER},
+    )
+
+    assert resp.status_code == 200
+    raw_text = resp.text
+    assert polluted_scenario_id not in raw_text
+    assert polluted_created_at not in raw_text
+
+    by_doc = {entry["document"]: entry for entry in resp.json()["memories"]}
+    benign_entry = by_doc["benign top-level projection"]
+    assert benign_entry["source_scenario_id"] == benign_scenario_id
+    assert benign_entry["timestamp"] == benign_created_at
+    assert benign_entry["metadata"]["scenario_id"] == benign_scenario_id
+
+
 # ── Compaction + cap ────────────────────────────────────
 
 

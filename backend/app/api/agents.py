@@ -943,10 +943,14 @@ def _normalise_inspector_entry(
         "document": _redact_document_text(document),
         "metadata": _redact_metadata(meta),
         "source_scenario_id": (
-            str(meta.get("scenario_id")) if meta.get("scenario_id") else None
+            _scrub_sensitive_text(str(meta.get("scenario_id")))
+            if meta.get("scenario_id")
+            else None
         ),
         "timestamp": (
-            str(meta.get("created_at")) if meta.get("created_at") else None
+            _scrub_sensitive_text(str(meta.get("created_at")))
+            if meta.get("created_at")
+            else None
         ),
         "confidence": confidence,
         "is_compacted": is_compacted,
