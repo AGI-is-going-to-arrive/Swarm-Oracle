@@ -2,7 +2,7 @@ English | [中文](FEATURES.md)
 
 # SwarmOracle Feature Catalog
 
-This catalog covers the 41 user-visible features checked for release prep. Entry points and default flags match the current code, usage guide, and configuration docs. The three search-related features are off by default and need configuration first.
+This catalog covers the 48 user-visible features checked for release prep. Entry points and default flags match the current code, usage guide, and configuration docs. The three search-related features are off by default and need configuration first.
 
 ## Core Simulation
 
@@ -220,3 +220,33 @@ This is backend search behavior and has no separate UI or standalone screenshot.
 **Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page shows a full report entry with sectioned conclusions, evidence sources, and uncertainty notes. The evidence drawer can jump back to the cited replay message; the report can also be opened at `/result/:id/report`. If generation fails, finishes partially, or the report runs too long, the page shows a readable notice without blocking the original result page. Structured `interview_evidence` evidence remains planned; the ordinary `premortem` chapter is already produced by the report generation path.
 Entry: `/result/:id` -> full report; standalone page `/result/:id/report`
 ![Result full report](screenshots-en/23-full-report.png)
+
+## More to Play With
+
+### F42 Model Profiles
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The Model Profiles page lets you save several LLM connections (name, provider, base URL, model, API key, rate limits) and pick one before a simulation or debate, instead of retyping them each time. The key stays local: neither the list nor the edit form ever shows it back (the key box is empty on edit and only shows a "key is set" badge), and the page states that for local single-user deployments the key is stored as plaintext in local SQLite.
+Entry: `/model-profiles`; you can also pick a saved profile from the home page and debate setup
+
+### F43 Public Artifacts and Gallery
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page share modal can export a de-identified public artifact: a JSON with private fields stripped, or a single-file HTML gallery you can open offline. It is meant for showing a result to others without leaking your prompt details or keys.
+Entry: `/result/:id` -> Share -> export public artifact / HTML gallery
+
+### F44 Multi-Run Distribution
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** You can run the same question several times at once, and the result page draws the ending distribution and a terminal histogram for that run group, so you can see which endings are stable and which are flukes.
+Entry: start a multi-run from the home page -> the distribution / probability-sampling panel on `/result/:id`
+
+### F45 You vs. Oracle
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** After you submit your own prediction on the result page, the app compares your call against the AI-simulated outcome and shows how you did. When a worldline cannot be judged right or wrong, it shows "not scorable" with the reason instead of forcing a score.
+Entry: `/result/:id` -> submit a prediction -> the "You vs. Oracle" card
+
+### F46 Social Feed and Headline Cards
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The "Social Feed" on the result page rewrites the outcome into a few social-style headline cards that you can copy as text or download as images to share.
+Entry: `/result/:id` -> "Social Feed"
+
+### F47 Document Seed
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The home page lets you upload a PDF, TXT, or Markdown file; the app distills it into background context for the simulation, so agents build on your material instead of a one-line question. Unsupported file types are rejected with a message telling you to use PDF, TXT, or Markdown.
+Entry: `/` home -> upload a document as background
+
+### F48 Local Packs
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs" on the home page bundle preset scenarios (bilingual, with prompts, stakes, and materials); one click carries a whole pack into a simulation, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
+Entry: `/` home -> Local Packs -> pick a pack / Manage all
