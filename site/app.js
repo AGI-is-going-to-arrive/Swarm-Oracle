@@ -32,9 +32,9 @@
     { id: "F38", img: "01-home.png", hero: false, config: true, zt: "搜索增强推演", et: "Search-Augmented Simulation",
       zd: "打开后系统会在推演前搜索资料并把相关片段注入角色提示，推荐路径优先用服务端已配置搜索，高级路径允许本轮用自己的 provider。", ed: "When enabled, the system searches before simulating and injects relevant snippets into role prompts; the recommended path uses server-configured search, the advanced path lets you use your own provider for the round." },
     { id: "F48", img: "22-local-packs.png", hero: false, zt: "本地主题包", et: "Local Packs",
-      zd: "首页的「本地主题包」收录一批双语预设场景（含提示词、押注点和素材），点一下就把整包带入推演，适合快速上手或课堂演示。", ed: "The home page bundles bilingual preset packs (with prompts, betting hooks and material); one click loads a whole pack into a run — handy for a quick start or a classroom demo." },
+      zd: "首页的「本地主题包」收录一批双语预设场景，可搜索、预览，点一下就把场景的问题和推荐设置填入提问框，适合快速上手或课堂演示。", ed: "The home page bundles bilingual preset packs you can search and preview; one click fills the question box with the pack’s question and suggested settings — handy for a quick start or a classroom demo." },
     { id: "F44", img: "23-multi-run.png", hero: false, zt: "多次推演分布", et: "Multi-Run Distribution",
-      zd: "同一个问题可以一次跑多遍，结果页把这组推演的结局分布和概率采样画出来，看清哪些结局更稳、哪些只是偶然。", ed: "Run the same question several times; the result page charts the spread of endings and a probability sampling, so the stable outcomes stand out from the flukes." },
+      zd: "同一个问题可以连跑多次，结果页用直方图汇总各次的结局分布；单次推演也会用概率采样图（如图）展示各结局的可能性。", ed: "Run the same question several times and the result page sums the endings into histograms; a single run also shows a probability-sampling chart (pictured) of how likely each ending is." },
     { id: "F47", img: "24-document-seed.png", hero: false, zt: "文档种子", et: "Document Seed",
       zd: "首页可上传 PDF、TXT 或 Markdown，系统把内容提炼成推演背景，让 Agent 基于你的资料展开，而不只凭一句问题。", ed: "Upload a PDF, TXT or Markdown on the home page and the system distills it into the run’s backdrop, so agents build on your material rather than a single question." },
     { id: "F42", img: "25-model-profiles.png", hero: false, zt: "模型配置", et: "Model Profiles",
@@ -44,7 +44,7 @@
     { id: "F46", img: "02-result.png", hero: false, zt: "社交动态与头条卡", et: "Social Feed & Headline Cards",
       zd: "结果页的「社交动态」把推演结果改写成几条社交平台风格的头条卡片，可一键复制文字或下载图片，方便分享。", ed: "The result page’s Social Feed rewrites your outcome into a few platform-styled headline cards you can copy as text or download as images." },
     { id: "F43", img: "02-result.png", hero: false, zt: "公开分享与画廊", et: "Public Sharing & Gallery",
-      zd: "结果页分享弹窗可导出脱敏的公开 artifact——一份去私密字段的 JSON，或一个能离线打开的单文件 HTML 画廊，发给别人看也不带出你的提问细节。", ed: "The share dialog exports a redacted public artifact — a JSON with private fields stripped, or a single-file HTML gallery that opens offline — so you can share without leaking your question details." }
+      zd: "结果页分享弹窗可导出脱敏的公开 artifact——去掉密钥和私密字段的 JSON，或一个能离线打开的单文件 HTML 画廊，方便把你的世界线公开展示给别人。", ed: "The share dialog exports a redacted public artifact — a JSON with keys and private fields stripped, or a single-file HTML gallery that opens offline — to publish your worldline for others." }
   ];
 
   var MODES = [

@@ -228,7 +228,7 @@ Entry: `/result/:id` -> full report; standalone page `/result/:id/report`
 Entry: `/model-profiles`; you can also pick a saved profile from the home page and debate setup
 
 ### F43 Public Artifacts and Gallery
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page share modal can export a de-identified public artifact: a JSON with private fields stripped, or a single-file HTML gallery you can open offline. It is meant for showing a result to others without leaking your prompt details or keys.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page share modal can export a de-identified public artifact: a JSON with keys and private fields stripped, or a single-file HTML gallery you can open offline. It is meant for sharing a result publicly: the export drops API keys and private fields, while your question and the endings travel with the artifact (that is the part you are sharing).
 Entry: `/result/:id` -> Share -> export public artifact / HTML gallery
 
 ### F44 Multi-Run Distribution
@@ -248,5 +248,5 @@ Entry: `/result/:id` -> "Social Feed"
 Entry: `/` home -> upload a document as background
 
 ### F48 Local Packs
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs" on the home page bundle preset scenarios (bilingual, with prompts, stakes, and materials); one click carries a whole pack into a simulation, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs" on the home page bundle preset scenarios (bilingual, with prompts, stakes, and materials you can preview after picking a pack); one click fills the question box with the pack's question and suggested settings, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
 Entry: `/` home -> Local Packs -> pick a pack / Manage all
