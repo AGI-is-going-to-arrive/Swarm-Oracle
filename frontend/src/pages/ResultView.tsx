@@ -235,7 +235,15 @@ export default function ResultView() {
   const [derivedScenarioMeta, setDerivedScenarioMeta] = useState<ScenarioMeta | null>(null);
   const [localMetaRevision, setLocalMetaRevision] = useState(0);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const refresh = useCallback(() => setRefreshTrigger((prev) => prev + 1), []);
+  // Multi-run completion refetches final scenario state exactly once. The load
+  // effect clears state and unmounts the panel; the remounted panel would
+  // otherwise re-fire onRefresh and loop, so guard it to a single trigger.
+  const refreshTriggeredRef = useRef(false);
+  const refresh = useCallback(() => {
+    if (refreshTriggeredRef.current) return;
+    refreshTriggeredRef.current = true;
+    setRefreshTrigger((prev) => prev + 1);
+  }, []);
   const endingRoomLiveSnapshot = useEndingRoomStore((state) => state.snapshot);
   const endingRoomLiveResult = useEndingRoomStore((state) => state.result);
   const endingRoomLiveActiveThreadId = useEndingRoomStore((state) => state.activeThreadId);
