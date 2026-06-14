@@ -135,6 +135,18 @@ class TestValidateLlmBaseUrl:
         url = "https://api.x.ai/v1"
         assert validate_llm_base_url(url) == url
 
+    def test_accepts_gemini_openai_compatible_provider_host(self):
+        url = "https://generativelanguage.googleapis.com/v1beta/openai"
+        assert validate_llm_base_url(url) == url
+
+    def test_rejects_gemini_spoofed_provider_host(self):
+        assert (
+            validate_llm_base_url(
+                "https://generativelanguage.googleapis.com.evil.test/v1beta/openai"
+            )
+            is None
+        )
+
     @pytest.mark.parametrize(
         "url",
         [
@@ -1076,6 +1088,57 @@ class TestLLMCall:
         assert captured["url"] == "http://127.0.0.1:8317/v1/chat/completions"
 
     @pytest.mark.asyncio
+    async def test_gemini_openai_base_url_routes_to_chat_completions(self, monkeypatch):
+        captured = {}
+
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Gemini OK",
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+                }
+
+        class _FakeClient:
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                captured["url"] = str(url)
+                captured["json"] = json
+                captured["headers"] = headers
+                captured["timeout"] = timeout
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with OK.",
+            reasoning_effort="low",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key="gemini-key",
+            model="gemini-2.5-flash",
+            native_search_domains=["example.com"],
+        )
+
+        assert result == "Gemini OK"
+        assert (
+            captured["url"]
+            == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        )
+        assert captured["headers"]["Authorization"] == "Bearer gemini-key"
+        assert captured["json"]["model"] == "gemini-2.5-flash"
+        assert captured["json"]["messages"] == [{"role": "user", "content": "Reply with OK."}]
+        assert "input" not in captured["json"]
+        assert "tools" not in captured["json"]
+
+    @pytest.mark.asyncio
     async def test_llm_call_reconciles_actual_usage_tokens(self, monkeypatch):
         self._reset_runtime_guard()
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
@@ -1779,6 +1842,14 @@ class TestStripReasoningBlocks:
     ("https://api.x.ai/v1/", "https://api.x.ai/v1/chat/completions"),
     ("https://api.x.ai/v1/chat/completions", "https://api.x.ai/v1/chat/completions"),
     (
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    ),
+    (
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    ),
+    (
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
     ),
@@ -2381,7 +2452,12 @@ class TestDetectProvider:
         ("https://api.x.ai/v1", "xai", True, "responses"),
         ("https://api.openai.com/v1", "openai", True, "responses"),
         ("https://api.anthropic.com/v1", "anthropic", True, "messages"),
-        ("https://generativelanguage.googleapis.com/v1", "gemini", True, "chat_extension"),
+        (
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "gemini",
+            True,
+            "chat_extension",
+        ),
         ("https://api.perplexity.ai/v1", "perplexity", True, "chat_extension"),
         ("https://api.deepseek.com/v1", "deepseek", False, "none"),
         ("https://api.minimax.chat/v1", "minimax", False, "none"),

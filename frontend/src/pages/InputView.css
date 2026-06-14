@@ -7,6 +7,7 @@
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   overflow: hidden;
@@ -21,7 +22,7 @@
   flex-direction: column;
   align-items: center;
   padding: 40px 24px;
-  max-width: 900px;
+  max-width: var(--iv-content-max-wide);
   width: 100%;
 }
 
@@ -65,7 +66,7 @@
   align-items: center;
   gap: 32px;
   width: 100%;
-  max-width: 700px;
+  max-width: var(--iv-content-max);
   margin-bottom: 80px;
 }
 
@@ -445,7 +446,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 32px;
+  gap: var(--space-8, 32px);
   width: 100%;
 }
 
@@ -2220,3 +2221,8 @@
     outline-offset: 2px;
   }
 }
+
+/* NOTE: the campaign cards (每日挑战 / 本周主题 / 我的成长) intentionally stay in a
+   single vertical column on every breakpoint — see .iv-challenges base rule above.
+   A previous attempt to put them in a 3-column grid on desktop broke the CJK title
+   layout (large serif headings collapsed to one glyph per line in ~309px columns). */

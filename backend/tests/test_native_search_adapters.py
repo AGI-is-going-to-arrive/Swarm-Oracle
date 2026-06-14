@@ -231,6 +231,11 @@ class TestGetAdapter:
         assert adapter.parse_citations({}) == []
         assert adapter.detect_body_error({}) is None
 
+    def test_gemini_returns_null_adapter(self):
+        adapter = get_adapter("gemini")
+        assert isinstance(adapter, _NullAdapter)
+        assert adapter.build_search_tools() == []
+
     def test_null_adapter_max_domains(self):
         adapter = get_adapter("unknown_provider")
         assert adapter.max_domains == 0

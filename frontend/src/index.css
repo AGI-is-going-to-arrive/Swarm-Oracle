@@ -1000,6 +1000,8 @@
   /* InputView Staged Reveal */
   --iv-hero-gap: var(--space-4);
   --iv-hero-max-width: 700px;
+  --iv-content-max: 720px;
+  --iv-content-max-wide: 1040px;
   --iv-config-trigger-border: var(--border-default);
   --iv-config-body-bg: var(--bg-surface);
 

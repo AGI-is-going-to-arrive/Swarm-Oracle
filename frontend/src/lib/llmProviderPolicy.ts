@@ -39,6 +39,13 @@ export const LLM_PROVIDER_PRESETS: LlmProviderPreset[] = [
     logoPlaceholder: '🔍',
   },
   {
+    id: 'gemini',
+    nameKey: 'setup.provider_gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    requiresApiKey: true,
+    logoPlaceholder: '✨',
+  },
+  {
     id: 'ollama',
     nameKey: 'setup.provider_ollama',
     baseUrl: 'http://localhost:11434/v1',

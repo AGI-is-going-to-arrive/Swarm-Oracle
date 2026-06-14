@@ -6,7 +6,10 @@ import type { ModelProfile } from '../types';
 // Mock translation
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback || key,
+    t: (key: string, fallback?: string) => {
+      if (key === 'setup.provider_gemini') return 'Google Gemini';
+      return fallback || key;
+    },
     i18n: { language: 'en' },
   }),
 }));
@@ -162,6 +165,60 @@ describe('ModelProfileManager', () => {
         supports_structured_outputs: false,
         supports_native_search: false,
       });
+    });
+  });
+
+  it('offers Gemini and applies its OpenAI-compatible base URL when selected', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    createModelProfileMock.mockResolvedValue({
+      ...mockProfiles[0],
+      id: 'gemini-profile',
+      provider: 'gemini',
+    });
+
+    render(<ModelProfileManager />);
+
+    await screen.findByText('model_profiles.no_profiles');
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.add_profile' }));
+
+    const providerSelect = screen.getByLabelText('model_profiles.provider') as HTMLSelectElement;
+    const geminiOption = screen.getByRole('option', { name: 'Google Gemini' }) as HTMLOptionElement;
+    expect(geminiOption.value).toBe('gemini');
+
+    fireEvent.change(providerSelect, { target: { value: 'gemini' } });
+
+    expect(providerSelect.value).toBe('gemini');
+    expect(screen.getByLabelText('model_profiles.base_url')).toHaveValue(
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+    );
+
+    fireEvent.change(screen.getByLabelText('model_profiles.profile_name'), {
+      target: { value: 'Gemini Profile' },
+    });
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), {
+      target: { value: 'gemini-2.5-pro' },
+    });
+    fireEvent.change(screen.getByLabelText('model_profiles.api_key'), {
+      target: { value: 'sk-gemini' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(createModelProfileMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Gemini Profile',
+          provider: 'gemini',
+          base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+          model: 'gemini-2.5-pro',
+          api_key: 'sk-gemini',
+        }),
+      );
     });
   });
 

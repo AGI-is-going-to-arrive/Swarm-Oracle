@@ -12,17 +12,15 @@ import {
   deleteModelProfile,
 } from '../api/client';
 import type { ModelProfile } from '../types';
+import { LLM_PROVIDER_PRESETS } from '../lib/llmProviderPolicy';
 import './ModelProfileManager.css';
 
-// Default base URLs mapped by provider IDs
-const PROVIDER_BASE_URLS: Record<string, string> = {
-  openai: 'https://api.openai.com/v1',
-  anthropic: 'https://api.anthropic.com/v1',
-  deepseek: 'https://api.deepseek.com/v1',
-  ollama: 'http://localhost:11434/v1',
-  lmstudio: 'http://localhost:1234/v1',
-  custom: '',
-};
+const DEFAULT_PROVIDER_ID = 'openai';
+const PROVIDER_PRESET_BASE_URLS = LLM_PROVIDER_PRESETS.map((preset) => preset.baseUrl);
+
+function getProviderBaseUrl(providerId: string): string {
+  return LLM_PROVIDER_PRESETS.find((preset) => preset.id === providerId)?.baseUrl ?? '';
+}
 
 export function ModelProfileManager() {
   const { t } = useTranslation();
@@ -42,8 +40,8 @@ export function ModelProfileManager() {
   // Form states
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [provider, setProvider] = useState('openai');
-  const [baseUrl, setBaseUrl] = useState(PROVIDER_BASE_URLS.openai);
+  const [provider, setProvider] = useState(DEFAULT_PROVIDER_ID);
+  const [baseUrl, setBaseUrl] = useState(getProviderBaseUrl(DEFAULT_PROVIDER_ID));
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [keyCleared, setKeyCleared] = useState(false);
@@ -82,9 +80,8 @@ export function ModelProfileManager() {
   const handleProviderChange = (newProvider: string) => {
     setProvider(newProvider);
     // If base URL matches previous preset or is empty, suggest the new preset URL
-    const currentPresetUrls = Object.values(PROVIDER_BASE_URLS);
-    if (!baseUrl || currentPresetUrls.includes(baseUrl)) {
-      setBaseUrl(PROVIDER_BASE_URLS[newProvider] || '');
+    if (!baseUrl || PROVIDER_PRESET_BASE_URLS.includes(baseUrl)) {
+      setBaseUrl(getProviderBaseUrl(newProvider));
     }
   };
 
@@ -99,8 +96,8 @@ export function ModelProfileManager() {
     // Reset fields to defaults
     setName('');
     setDescription('');
-    setProvider('openai');
-    setBaseUrl(PROVIDER_BASE_URLS.openai);
+    setProvider(DEFAULT_PROVIDER_ID);
+    setBaseUrl(getProviderBaseUrl(DEFAULT_PROVIDER_ID));
     setModel('');
     setApiKey('');
     setKeyCleared(false);
@@ -427,12 +424,11 @@ export function ModelProfileManager() {
                   onChange={(e) => handleProviderChange(e.target.value)}
                   disabled={isSaving}
                 >
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="ollama">Ollama</option>
-                  <option value="lmstudio">LM Studio</option>
-                  <option value="custom">Custom</option>
+                  {LLM_PROVIDER_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {t(preset.nameKey)}
+                    </option>
+                  ))}
                 </select>
               </div>
 

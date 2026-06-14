@@ -3261,6 +3261,7 @@
       "provider_openai": "OpenAI",
       "provider_anthropic": "Anthropic",
       "provider_deepseek": "DeepSeek",
+      "provider_gemini": "Google Gemini",
       "provider_ollama": "Ollama (local)",
       "provider_lmstudio": "LM Studio (local)",
       "provider_custom": "Custom endpoint",

@@ -27,7 +27,7 @@
   --wz-dot-success: #4f8a5a;
   --wz-dot-error: #b14a3c;
 
-  --wz-step-w: 600px;
+  --wz-step-w: 720px;
 }
 
 @supports (color: oklch(0% 0 0)) {
@@ -161,7 +161,7 @@
 
 @media (min-width: 768px) {
   .provider-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
 }
 
@@ -178,6 +178,7 @@
     box-shadow 180ms ease, background 180ms ease;
   outline: none;
   position: relative;
+  min-width: 0;
 }
 
 .provider-card:hover,

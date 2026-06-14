@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
 import SetupWizardView from './SetupWizardView';
+import { LLM_PROVIDER_PRESETS } from '../lib/llmProviderPolicy';
+
+const GEMINI_BASE_URL =
+  'https://generativelanguage.googleapis.com/v1beta/openai';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -19,18 +23,57 @@ const renderWizard = () =>
     </MemoryRouter>,
   );
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.clear();
+  window.localStorage.clear();
+});
 
 describe('SetupWizardView provider selection', () => {
+  it('protects the Gemini provider preset contract', () => {
+    const geminiPreset = LLM_PROVIDER_PRESETS.find(
+      (preset) => preset.id === 'gemini',
+    );
+
+    expect(geminiPreset).toMatchObject({
+      nameKey: 'setup.provider_gemini',
+      baseUrl: GEMINI_BASE_URL,
+      requiresApiKey: true,
+    });
+  });
+
   it('makes the first radio tabbable before any preset is selected', () => {
     renderWizard();
 
     const radios = screen.getAllByRole('radio');
-    expect(radios).toHaveLength(6);
+    expect(radios).toHaveLength(7);
+    const geminiRadio = screen.getByRole('radio', {
+      name: /setup\.provider_gemini/i,
+    });
+    expect(geminiRadio).toHaveTextContent(GEMINI_BASE_URL);
     expect(radios[0]).toHaveAttribute('tabIndex', '0');
     expect(radios.slice(1).every((radio) => radio.getAttribute('tabIndex') === '-1')).toBe(
       true,
     );
+  });
+
+  it('prefills Gemini base URL and keeps the API key required', async () => {
+    const user = userEvent.setup();
+    renderWizard();
+
+    const geminiRadio = screen.getByRole('radio', {
+      name: /setup\.provider_gemini/i,
+    });
+    await user.click(geminiRadio);
+
+    expect(geminiRadio).toHaveAttribute('aria-checked', 'true');
+    await user.click(screen.getByRole('button', { name: 'setup.next' }));
+
+    expect(screen.getByLabelText(/setup\.base_url_label/i)).toHaveValue(
+      GEMINI_BASE_URL,
+    );
+    expect(screen.getByLabelText(/setup\.api_key_label/i)).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'setup.next' })).toBeDisabled();
   });
 
   it('selects the initial focused radio with Space', async () => {
