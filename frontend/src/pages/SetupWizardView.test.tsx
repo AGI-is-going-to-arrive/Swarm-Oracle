@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -14,6 +14,12 @@ vi.mock('react-i18next', () => ({
     t: (key: string) => key,
     i18n: { changeLanguage: vi.fn(), language: 'en' },
   }),
+}));
+
+vi.mock('../api/client', () => ({
+  listModelProfiles: vi.fn(() => Promise.resolve({ profiles: [], count: 0 })),
+  createModelProfile: vi.fn(() => Promise.resolve({})),
+  listModels: vi.fn(() => Promise.resolve({ models: [], provider: 'openai', supported: false })),
 }));
 
 const renderWizard = () =>
@@ -138,13 +144,15 @@ describe('SetupWizardView provider selection', () => {
     await user.click(screen.getByRole('button', { name: 'setup.finish' }));
 
     // Read policy back and check
-    const finalPolicy = loadLlmProviderPolicy();
-    expect(finalPolicy.apiKey).toBe('new-secret-key');
-    expect(finalPolicy.baseUrl).toBe('https://api.openai.com/v1');
-    expect(finalPolicy.model).toBe('custom-model');
-    expect(finalPolicy.reasoningEffort).toBe('high');
-    expect(finalPolicy.disableUserQuota).toBe(true);
-    expect(finalPolicy.requestsPerMinute).toBe(100);
-    expect(finalPolicy.tokensPerMinute).toBe(50000);
+    await waitFor(() => {
+      const finalPolicy = loadLlmProviderPolicy();
+      expect(finalPolicy.apiKey).toBe('new-secret-key');
+      expect(finalPolicy.baseUrl).toBe('https://api.openai.com/v1');
+      expect(finalPolicy.model).toBe('custom-model');
+      expect(finalPolicy.reasoningEffort).toBe('high');
+      expect(finalPolicy.disableUserQuota).toBe(true);
+      expect(finalPolicy.requestsPerMinute).toBe(100);
+      expect(finalPolicy.tokensPerMinute).toBe(50000);
+    });
   });
 });

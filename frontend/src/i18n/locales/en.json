@@ -3287,7 +3287,10 @@
       "back": "Back",
       "next": "Next",
       "finish": "Finish",
-      "skip": "Skip for now"
+      "skip": "Skip for now",
+      "save_profile_checkbox": "Also save as model profile",
+      "go_to_profiles": "Go to model profiles",
+      "save_profile_failed_hint": "Failed to save model profile, but your settings are applied locally."
     },
     "onboarding": {
       "welcome_title": "Welcome to SwarmOracle",
@@ -3599,6 +3602,14 @@
       "test_connection": "Test Connection",
       "test_ok": "Connection test successful.",
       "test_failed": "Connection test failed."
+    },
+    "model_select": {
+      "placeholder": "Enter model name...",
+      "loading": "Fetching available models...",
+      "manual_input": "Manual Input",
+      "use_dropdown": "Select Recommended",
+      "fallback_hint": "Model enumeration not supported, please enter manually",
+      "list_failed": "Failed to fetch model list, please enter manually"
     }
   }
 }

@@ -1951,6 +1951,28 @@ export async function adminTestLlm<T = unknown>(
   });
 }
 
+export interface ListModelsResponse {
+  models: string[];
+  provider: string;
+  supported: boolean;
+  reason?: string;
+}
+
+/** GET /api/admin/list-models — list available models for base_url and api_key */
+export async function listModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<ListModelsResponse> {
+  const queryParams = new URLSearchParams();
+  queryParams.set('base_url', baseUrl);
+  if (apiKey) {
+    queryParams.set('api_key', apiKey);
+  }
+  return request(`/admin/list-models?${queryParams.toString()}`, {
+    method: 'GET',
+  });
+}
+
 // ── S2-1: Conversation thread reload ──────────────────────
 
 /** Single conversation thread item for the scenario list view. */

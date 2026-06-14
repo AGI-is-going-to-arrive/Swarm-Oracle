@@ -12,7 +12,7 @@
 */
 
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -23,6 +23,8 @@ import {
 } from '../lib/llmProviderPolicy';
 import { ProviderPresetCard } from '../components/Setup/ProviderPresetCard';
 import { ConnectionTester } from '../components/Setup/ConnectionTester';
+import { ModelSelect } from '../components/ModelSelect';
+import { listModelProfiles, createModelProfile } from '../api/client';
 import './SetupWizardView.css';
 
 type WizardStep = 'provider_select' | 'api_config' | 'connection_test';
@@ -45,6 +47,9 @@ export default function SetupWizardView() {
   );
   const [apiKey, setApiKey] = useState<string>(initialPolicy.apiKey);
   const [baseUrl, setBaseUrl] = useState<string>(initialPolicy.baseUrl);
+  const [model, setModel] = useState<string>(initialPolicy.model);
+  const [saveToProfiles, setSaveToProfiles] = useState<boolean>(true);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   const stepIndex = STEP_ORDER.indexOf(step);
   const stepNumber = stepIndex + 1;
@@ -67,8 +72,9 @@ export default function SetupWizardView() {
   const apiConfigValid = useMemo(() => {
     if (!baseUrl.trim()) return false;
     if (requiresApiKey && !apiKey.trim()) return false;
+    if (!model.trim()) return false;
     return true;
-  }, [baseUrl, apiKey, requiresApiKey]);
+  }, [baseUrl, apiKey, requiresApiKey, model]);
 
   const goNext = () => {
     if (step === 'provider_select' && selectedPreset) {
@@ -83,12 +89,48 @@ export default function SetupWizardView() {
     else if (step === 'connection_test') setStep('api_config');
   };
 
-  const handleFinish = () => {
-    saveLlmProviderPolicy({
-      ...initialPolicy,
-      apiKey: apiKey.trim(),
-      baseUrl: baseUrl.trim(),
-    });
+  const handleFinish = async () => {
+    setIsSaving(true);
+    let hasProfiles = false;
+    try {
+      const res = await listModelProfiles();
+      hasProfiles = res.profiles && res.profiles.length > 0;
+    } catch (err) {
+      console.error('Failed to list model profiles:', err);
+    }
+
+    if (saveToProfiles) {
+      const profileName = selectedPreset && selectedPreset.id !== 'custom'
+        ? t(selectedPreset.nameKey)
+        : '我的配置';
+
+      try {
+        await createModelProfile({
+          name: profileName,
+          provider: selectedPreset ? selectedPreset.id : 'custom',
+          base_url: baseUrl.trim(),
+          model: model.trim(),
+          api_key: apiKey.trim(),
+        });
+      } catch (err) {
+        console.error('Failed to create model profile:', err);
+        alert(t('setup.save_profile_failed_hint'));
+      }
+    }
+
+    if (hasProfiles) {
+      // 优先级: 已落库 profile 时以 DB profile 为准，sessionStorage 草稿不覆盖已存 profile
+      saveLlmProviderPolicy({});
+    } else {
+      saveLlmProviderPolicy({
+        ...initialPolicy,
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+      });
+    }
+
+    setIsSaving(false);
     navigate('/');
   };
 
@@ -160,6 +202,7 @@ export default function SetupWizardView() {
                 className="wizard__input"
                 spellCheck={false}
                 autoComplete="off"
+                disabled={isSaving}
               />
             </label>
 
@@ -181,12 +224,40 @@ export default function SetupWizardView() {
                 className="wizard__input"
                 spellCheck={false}
                 autoComplete="off"
-                disabled={!requiresApiKey && selectedPreset?.id !== 'custom'}
+                disabled={(!requiresApiKey && selectedPreset?.id !== 'custom') || isSaving}
               />
               {!requiresApiKey ? (
                 <span className="wizard__hint">{t('setup.no_key_hint')}</span>
               ) : null}
             </label>
+
+            <label className="wizard__field">
+              <span className="wizard__field-label">
+                {t('model_profiles.model')}
+              </span>
+              <ModelSelect
+                baseUrl={baseUrl}
+                apiKey={apiKey}
+                value={model}
+                onChange={setModel}
+                disabled={isSaving}
+              />
+            </label>
+
+            <div className="wizard__field wizard__field--checkbox" style={{ marginTop: '8px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={saveToProfiles}
+                  onChange={(e) => setSaveToProfiles(e.target.checked)}
+                  className="wizard__checkbox"
+                  disabled={isSaving}
+                />
+                <span className="wizard__field-label" style={{ margin: 0 }}>
+                  {t('setup.save_profile_checkbox')}
+                </span>
+              </label>
+            </div>
           </div>
         ) : null}
 
@@ -216,8 +287,20 @@ export default function SetupWizardView() {
                   {apiKey ? '••••••••' : t('setup.summary_no_key')}
                 </span>
               </div>
+              <div className="wizard__summary-row">
+                <span className="wizard__summary-key">
+                  {t('model_profiles.model')}
+                </span>
+                <span className="wizard__summary-val">{model || '—'}</span>
+              </div>
             </div>
-            <ConnectionTester baseUrl={baseUrl} apiKey={apiKey} model={undefined} />
+            <ConnectionTester baseUrl={baseUrl} apiKey={apiKey} model={model} />
+            
+            <div className="wizard__go-to-profiles-wrap" style={{ marginTop: '16px' }}>
+              <Link to="/model-profiles" className="wizard__link">
+                {t('setup.go_to_profiles')} &rarr;
+              </Link>
+            </div>
           </div>
         ) : null}
       </section>
@@ -228,6 +311,7 @@ export default function SetupWizardView() {
             type="button"
             className="wizard__btn wizard__btn--ghost"
             onClick={handleSkip}
+            disabled={isSaving}
           >
             {t('setup.skip')}
           </button>
@@ -238,6 +322,7 @@ export default function SetupWizardView() {
               type="button"
               className="wizard__btn wizard__btn--secondary"
               onClick={goBack}
+              disabled={isSaving}
             >
               {t('setup.back')}
             </button>
@@ -249,7 +334,8 @@ export default function SetupWizardView() {
               onClick={goNext}
               disabled={
                 (step === 'provider_select' && !selectedPreset) ||
-                (step === 'api_config' && !apiConfigValid)
+                (step === 'api_config' && !apiConfigValid) ||
+                isSaving
               }
             >
               {t('setup.next')}
@@ -259,8 +345,9 @@ export default function SetupWizardView() {
               type="button"
               className="wizard__btn wizard__btn--primary"
               onClick={handleFinish}
+              disabled={isSaving}
             >
-              {t('setup.finish')}
+              {isSaving ? '...' : t('setup.finish')}
             </button>
           )}
         </div>

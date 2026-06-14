@@ -3287,7 +3287,10 @@
       "back": "上一步",
       "next": "下一步",
       "finish": "完成",
-      "skip": "稍后再说"
+      "skip": "稍后再说",
+      "save_profile_checkbox": "同时保存为模型档案",
+      "go_to_profiles": "前往模型配置",
+      "save_profile_failed_hint": "保存模型档案失败，但您的配置已在本地生效。"
     },
     "onboarding": {
       "welcome_title": "欢迎使用 SwarmOracle",
@@ -3599,6 +3602,14 @@
       "test_connection": "测试连接",
       "test_ok": "连接测试成功。",
       "test_failed": "连接测试失败。"
+    },
+    "model_select": {
+      "placeholder": "请输入模型名称...",
+      "loading": "正在获取可用模型...",
+      "manual_input": "手动输入",
+      "use_dropdown": "选择已推荐模型",
+      "fallback_hint": "不支持模型枚举，请手动输入",
+      "list_failed": "获取模型列表失败，请手动输入"
     }
   }
 }
