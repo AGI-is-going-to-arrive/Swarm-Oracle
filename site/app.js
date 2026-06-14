@@ -38,7 +38,7 @@
     { id: "F47", img: "24-document-seed.png", hero: false, zt: "文档种子", et: "Document Seed",
       zd: "首页可上传 PDF、TXT 或 Markdown，系统把内容提炼成推演背景，让 Agent 基于你的资料展开，而不只凭一句问题。", ed: "Upload a PDF, TXT or Markdown on the home page and the system distills it into the run’s backdrop, so agents build on your material rather than a single question." },
     { id: "F42", img: "25-model-profiles.png", hero: false, zt: "模型配置", et: "Model Profiles",
-      zd: "保存多套 LLM 接入信息（服务商、Base URL、模型、密钥、限速），推演或辩论前直接挑一套用；密钥只存在本地，列表和编辑表单都不回显。", ed: "Save several LLM setups (provider, base URL, model, key, rate limits) and pick one before a run or debate; keys stay local and never reappear in the list or edit form." },
+      zd: "保存多套 LLM 接入信息（服务商、Base URL、模型、密钥、限速）；服务商 preset 与配置向导一致，包含 Google Gemini，切换时会自动带出默认 Base URL。", ed: "Save several LLM setups (provider, base URL, model, key, rate limits); provider presets match the setup wizard, include Google Gemini, and fill the default Base URL when switched." },
     { id: "F45", img: "28-you-vs-oracle.png", hero: false, zt: "你的预测 vs 预言机", et: "Your Prediction vs the Oracle",
       zd: "在结果页提交你自己的预测，系统会和 AI 推演出的结局对比给出命中情况；无法判定对错时显示「暂不可评分」并说明原因，不硬凑分数。", ed: "Submit your own prediction on the result page and the system compares it with the AI’s ending; when a worldline can’t be judged it says “not scorable yet” and explains why instead of forcing a score." },
     { id: "F46", img: "27-social.png", hero: false, zt: "社交动态与头条卡", et: "Social Feed & Headline Cards",

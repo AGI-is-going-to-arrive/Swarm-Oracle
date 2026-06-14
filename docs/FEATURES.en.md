@@ -224,7 +224,7 @@ Entry: `/result/:id` -> full report; standalone page `/result/:id/report`
 ## More to Play With
 
 ### F42 Model Profiles
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The Model Profiles page lets you save several LLM connections (name, provider, base URL, model, API key, rate limits) and pick one before a simulation or debate, instead of retyping them each time. The key stays local: neither the list nor the edit form ever shows it back (the key box is empty on edit and only shows a "key is set" badge), and the page states that for local single-user deployments the key is stored as plaintext in local SQLite.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The Model Profiles page lets you save several LLM connections (name, provider, base URL, model, API key, rate limits) and pick one before a simulation or debate, instead of retyping them each time. The provider dropdown uses the same preset list as the `/admin/setup` wizard: OpenAI, Anthropic, DeepSeek, Google Gemini, Ollama, local LM Studio, and custom endpoint. Changing the preset fills the default Base URL when the field is empty or still contains an old preset URL. The key stays local: neither the list nor the edit form ever shows it back (the key box is empty on edit and only shows a "key is set" badge), and the page states that for local single-user deployments the key is stored as plaintext in local SQLite.
 Entry: `/model-profiles`; you can also pick a saved profile from the home page and debate setup
 
 ### F43 Public Artifacts and Gallery

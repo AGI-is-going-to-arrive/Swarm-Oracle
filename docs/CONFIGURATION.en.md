@@ -15,8 +15,8 @@ Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern 
 
 ## 1. LLM Configuration (Required)
 
-SwarmOracle works with any OpenAI-compatible API, including OpenAI, compatible gateways, and local services such as Ollama.
-`response_format` support for xAI, OpenRouter, and SiliconFlow is currently treated as an OpenAI-compatible assumption; the existing fail-soft fallback handles provider rejection, and F9 will move this to explicit per-profile capability.
+SwarmOracle works with any OpenAI-compatible API, including OpenAI, Google Gemini's OpenAI-compatible endpoint, compatible gateways, and local services such as Ollama. For Google Gemini, use `https://generativelanguage.googleapis.com/v1beta/openai` as the Base URL and provide a Gemini API key.
+`response_format` support for xAI, OpenRouter, and SiliconFlow is still treated as an OpenAI-compatible assumption; the existing fail-soft fallback handles provider rejection. The Gemini OpenAI-compatible chat path does not inject native-search tools; search enhancement still follows the search provider settings below.
 
 | Variable | Meaning | Example |
 |----------|---------|---------|
