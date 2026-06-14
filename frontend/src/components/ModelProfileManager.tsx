@@ -13,6 +13,7 @@ import {
 } from '../api/client';
 import type { ModelProfile } from '../types';
 import { LLM_PROVIDER_PRESETS } from '../lib/llmProviderPolicy';
+import { ConnectionTester } from './Setup/ConnectionTester';
 import './ModelProfileManager.css';
 
 const DEFAULT_PROVIDER_ID = 'openai';
@@ -562,6 +563,19 @@ export function ModelProfileManager() {
                 <label htmlFor="mp-native-search" className="form-check-label">
                   {t('model_profiles.supports_native_search')}
                 </label>
+              </div>
+
+              <div className="form-group">
+                <ConnectionTester
+                  baseUrl={baseUrl}
+                  apiKey={apiKey}
+                  model={model}
+                  requestsPerMinute={rpm && !isNaN(parseInt(rpm, 10)) ? parseInt(rpm, 10) : undefined}
+                  tokensPerMinute={tpm && !isNaN(parseInt(tpm, 10)) ? parseInt(tpm, 10) : undefined}
+                  testButtonText={t('model_profiles.test_connection')}
+                  testSuccessText={t('model_profiles.test_ok')}
+                  testFailureText={t('model_profiles.test_failed')}
+                />
               </div>
 
               <div className="model-profile-manager__storage-notice">

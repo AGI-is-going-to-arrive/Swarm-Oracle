@@ -3595,7 +3595,10 @@
       "label_opposition": "反方配置",
       "label_judge": "裁判配置 (可选)",
       "option_none_default": "无 / 默认",
-      "key_cleared_on_save": "密钥将在保存时清除"
+      "key_cleared_on_save": "密钥将在保存时清除",
+      "test_connection": "测试连接",
+      "test_ok": "连接测试成功。",
+      "test_failed": "连接测试失败。"
     }
   }
 }

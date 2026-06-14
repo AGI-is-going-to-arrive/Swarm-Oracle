@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
    SwarmOracle — Setup Wizard Connection Tester (S0-1)
    ═══════════════════════════════════════════════════════════
-   Calls POST /api/admin/test-llm and surfaces a 4-state UI:
+   Calls POST /api/health/test and surfaces a 4-state UI:
    idle / testing / success / error.
    - StatusDot is inlined (per task spec — no separate file)
    - aria-live="polite" announces state transitions
@@ -10,11 +10,23 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { adminTestLlm, isApiError } from '../../api/client';
+import { testLlmConnection, isApiError } from '../../api/client';
 
 export interface ConnectionTesterProps {
   baseUrl: string;
   apiKey: string;
+  model?: string;
+  requestsPerMinute?: number;
+  tokensPerMinute?: number;
+  // Custom translations to override setup.*
+  testButtonText?: string;
+  testingText?: string;
+  testIdleText?: string;
+  testSuccessText?: string;
+  testFailureText?: string;
+  testFailureNetworkText?: string;
+  showLogText?: string;
+  hideLogText?: string;
 }
 
 export type TesterStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -92,7 +104,21 @@ function normalizeTestResult(
   };
 }
 
-export function ConnectionTester({ baseUrl, apiKey }: ConnectionTesterProps) {
+export function ConnectionTester({
+  baseUrl,
+  apiKey,
+  model,
+  requestsPerMinute,
+  tokensPerMinute,
+  testButtonText,
+  testingText,
+  testIdleText,
+  testSuccessText,
+  testFailureText,
+  testFailureNetworkText,
+  showLogText,
+  hideLogText,
+}: ConnectionTesterProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<TesterStatus>('idle');
   const [message, setMessage] = useState<string>('');
@@ -102,28 +128,31 @@ export function ConnectionTester({ baseUrl, apiKey }: ConnectionTesterProps) {
 
   const runTest = async () => {
     setStatus('testing');
-    setMessage(t('setup.testing'));
+    setMessage(testingText || t('setup.testing'));
     setLatencyMs(null);
     setRawPayload(null);
 
     try {
-      const payload = await adminTestLlm<TestResultPayload>({
-        base_url: baseUrl,
-        api_key: apiKey,
-      });
-      const result = normalizeTestResult(
-        payload,
-        t('setup.test_success'),
-        t('setup.test_failure'),
+      const payload = await testLlmConnection(
+        apiKey || undefined,
+        baseUrl || undefined,
+        model || undefined,
+        requestsPerMinute,
+        tokensPerMinute,
       );
-      setRawPayload(payload);
+      const result = normalizeTestResult(
+        payload as TestResultPayload,
+        testSuccessText || t('setup.test_success'),
+        testFailureText || t('setup.test_failure'),
+      );
+      setRawPayload(payload as TestResultPayload);
       setStatus(result.status);
       setMessage(result.message);
       setLatencyMs(result.latencyMs);
     } catch (err) {
       // ApiError (HTTP-level failure) vs network/parse failures.
       if (isApiError(err)) {
-        const errorMessage = err.message || t('setup.test_failure');
+        const errorMessage = err.message || testFailureText || t('setup.test_failure');
         const errorPayload: TestResultPayload = {
           status: 'error',
           message: errorMessage,
@@ -133,7 +162,7 @@ export function ConnectionTester({ baseUrl, apiKey }: ConnectionTesterProps) {
         setMessage(errorMessage);
       } else {
         setStatus('error');
-        setMessage(t('setup.test_failure_network'));
+        setMessage(testFailureNetworkText || t('setup.test_failure_network'));
       }
     }
   };
@@ -149,9 +178,9 @@ export function ConnectionTester({ baseUrl, apiKey }: ConnectionTesterProps) {
           className="tester__btn"
           onClick={runTest}
           disabled={!canTest}
-          aria-label={t('setup.test_button')}
+          aria-label={testButtonText || t('setup.test_button')}
         >
-          {status === 'testing' ? t('setup.testing') : t('setup.test_button')}
+          {status === 'testing' ? (testingText || t('setup.testing')) : (testButtonText || t('setup.test_button'))}
         </button>
         <span className={dotClass} aria-hidden="true" />
         <span
@@ -159,7 +188,7 @@ export function ConnectionTester({ baseUrl, apiKey }: ConnectionTesterProps) {
           aria-live="polite"
           role="status"
         >
-          {status === 'idle' ? t('setup.test_idle') : message}
+          {status === 'idle' ? (testIdleText || t('setup.test_idle')) : message}
           {status === 'success' && latencyMs != null
             ? ` · ${latencyMs} ms`
             : ''}
@@ -174,7 +203,7 @@ export function ConnectionTester({ baseUrl, apiKey }: ConnectionTesterProps) {
             onClick={() => setShowLog((prev) => !prev)}
             aria-expanded={showLog}
           >
-            {showLog ? t('setup.hide_log') : t('setup.show_log')}
+            {showLog ? (hideLogText || t('setup.hide_log')) : (showLogText || t('setup.show_log'))}
           </button>
           {showLog ? (
             <pre className="tester__log">

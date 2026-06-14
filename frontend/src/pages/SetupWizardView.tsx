@@ -217,7 +217,7 @@ export default function SetupWizardView() {
                 </span>
               </div>
             </div>
-            <ConnectionTester baseUrl={baseUrl} apiKey={apiKey} />
+            <ConnectionTester baseUrl={baseUrl} apiKey={apiKey} model={undefined} />
           </div>
         ) : null}
       </section>

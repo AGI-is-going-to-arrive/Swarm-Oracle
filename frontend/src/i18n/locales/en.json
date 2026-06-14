@@ -3595,7 +3595,10 @@
       "label_opposition": "Opposition Profile",
       "label_judge": "Judge Profile (Optional)",
       "option_none_default": "None / Default",
-      "key_cleared_on_save": "Key will be cleared on save"
+      "key_cleared_on_save": "Key will be cleared on save",
+      "test_connection": "Test Connection",
+      "test_ok": "Connection test successful.",
+      "test_failed": "Connection test failed."
     }
   }
 }

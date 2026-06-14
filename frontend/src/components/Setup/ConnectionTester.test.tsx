@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConnectionTester } from './ConnectionTester';
-import { adminTestLlm } from '../../api/client';
+import { testLlmConnection } from '../../api/client';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -13,7 +13,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../../api/client', () => ({
-  adminTestLlm: vi.fn(),
+  testLlmConnection: vi.fn(),
   isApiError: vi.fn((error: unknown) => error instanceof Error && 'status' in error),
 }));
 
@@ -24,7 +24,7 @@ afterEach(() => {
 
 describe('ConnectionTester', () => {
   it('treats the backend nested llm ok response as success', async () => {
-    vi.mocked(adminTestLlm).mockResolvedValue({
+    vi.mocked(testLlmConnection).mockResolvedValue({
       server: 'ok',
       llm: {
         status: 'ok',
@@ -52,7 +52,7 @@ describe('ConnectionTester', () => {
   });
 
   it('surfaces the backend nested llm error response as failure', async () => {
-    vi.mocked(adminTestLlm).mockResolvedValue({
+    vi.mocked(testLlmConnection).mockResolvedValue({
       server: 'ok',
       llm: {
         status: 'error',
@@ -77,11 +77,11 @@ describe('ConnectionTester', () => {
   });
 
   it('keeps the legacy top-level success response including latency', async () => {
-    vi.mocked(adminTestLlm).mockResolvedValue({
+    vi.mocked(testLlmConnection).mockResolvedValue({
       status: 'success',
       message: 'legacy ok',
       latency_ms: 42,
-    });
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
 
     const user = userEvent.setup();
     const { container } = render(
