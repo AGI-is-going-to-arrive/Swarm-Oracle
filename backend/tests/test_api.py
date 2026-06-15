@@ -216,11 +216,15 @@ class TestHealthEndpoint:
         assert "llm" in data
         assert data["llm"]["model"] == "gpt-5.4-mini"
 
-    def test_health_test_returns_probe_summary(self, client, monkeypatch):
+    @pytest.mark.parametrize("payload_extra", [{}, {"include_probe": True}])
+    def test_health_test_returns_probe_summary(self, client, monkeypatch, payload_extra):
         async def _fake_health_check(**kwargs):
             return {"status": "ok", "model": "test-model", "response": "OK"}
 
+        probe_calls = []
+
         async def _fake_probe(**kwargs):
+            probe_calls.append(kwargs)
             return {
                 "status": "ok",
                 "model": "test-model",
@@ -244,6 +248,7 @@ class TestHealthEndpoint:
             "llm_api_key": "sk-test",
             "llm_base_url": "http://127.0.0.1:9000/v1/chat/completions",
             "llm_model": "test-model",
+            **payload_extra,
         })
 
         assert resp.status_code == 200
@@ -252,6 +257,30 @@ class TestHealthEndpoint:
         assert data["llm"]["status"] == "ok"
         assert data["probe"]["estimated_parallelism"] == 6
         assert data["probe"]["recommended"]["agents_max"] == 24
+        assert len(probe_calls) == 1
+
+    def test_health_test_can_skip_parallelism_probe(self, client, monkeypatch):
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "test-model", "response": "OK"}
+
+        fake_probe = AsyncMock(return_value={"status": "ok", "estimated_parallelism": 6})
+
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", fake_probe)
+
+        resp = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://127.0.0.1:9000/v1/chat/completions",
+            "llm_model": "test-model",
+            "include_probe": False,
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["server"] == "ok"
+        assert data["llm"]["status"] == "ok"
+        assert data["probe"] is None
+        fake_probe.assert_not_awaited()
 
     @pytest.mark.parametrize(
         ("base_url", "api_key", "expected"),

@@ -668,6 +668,7 @@ export async function testLlmConnection(
   model?: string,
   requestsPerMinute?: number,
   tokensPerMinute?: number,
+  includeProbe?: boolean,
 ): Promise<{
   server: string;
   llm: { status: string; model: string; response?: string; error?: string };
@@ -688,6 +689,7 @@ export async function testLlmConnection(
       ...(model && { llm_model: model }),
       ...(requestsPerMinute != null && { llm_requests_per_minute: requestsPerMinute }),
       ...(tokensPerMinute != null && { llm_tokens_per_minute: tokensPerMinute }),
+      ...(includeProbe === false ? { include_probe: false } : {}),
     }),
   });
 }

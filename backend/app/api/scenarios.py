@@ -893,7 +893,7 @@ async def api_health_test(req: TestLlmRequest):
         model=req.llm_model or None,
     )
     probe = None
-    if llm_status.get("status") == "ok":
+    if req.include_probe and llm_status.get("status") == "ok":
         probe = await measure_provider_parallelism(
             api_key=req.llm_api_key or None,
             base_url=validated_base_url,

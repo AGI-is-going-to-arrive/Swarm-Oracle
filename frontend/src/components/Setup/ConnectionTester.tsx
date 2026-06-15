@@ -147,6 +147,7 @@ export function ConnectionTester({
         model || undefined,
         requestsPerMinute,
         tokensPerMinute,
+        false,
       );
       const result = normalizeTestResult(
         payload as TestResultPayload,

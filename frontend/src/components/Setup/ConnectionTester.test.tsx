@@ -49,6 +49,18 @@ describe('ConnectionTester', () => {
     expect(screen.getByRole('status')).not.toHaveTextContent(
       'setup.test_failure',
     );
+
+    // ConnectionTester must request a credential-only check (no 36-call parallelism
+    // probe) — the 6th arg is includeProbe=false, so the backend skips the slow
+    // measure_provider_parallelism path that caused the 53s timeout. (Gate3 setup-timeout fix)
+    expect(testLlmConnection).toHaveBeenCalledWith(
+      'key',
+      'https://api.example.com/v1',
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
   });
 
   it('surfaces the backend nested llm error response as failure', async () => {

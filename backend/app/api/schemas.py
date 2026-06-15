@@ -488,6 +488,7 @@ class TestLlmRequest(BaseModel):
     llm_model: str | None = None
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
+    include_probe: bool = True
 
     @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
     @classmethod
