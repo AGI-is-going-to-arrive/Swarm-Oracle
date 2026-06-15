@@ -1638,6 +1638,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             id=s.id,
             question=s.question,
             status=s.status.value,
+            run_group_id=s.run_group_id,
             created_at=s.created_at.isoformat(),
             total_rounds=ctx.get("simulation_rounds"),
             agents=[

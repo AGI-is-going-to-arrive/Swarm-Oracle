@@ -123,6 +123,7 @@ import { ResultContextProvider, type ResultViewContextValue } from './result/Res
 import ResultHeader from './result/ResultHeader';
 import SocialFeedPanel from './result/SocialFeedPanel';
 import { MultiRunDistributionPanel } from '../components/result/MultiRunDistributionPanel';
+import { MultiRunWaitingPanel } from '../components/result/MultiRunWaitingPanel';
 import ResultVerdictPanel from './result/ResultVerdictPanel';
 import { ResultReportPanel } from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
@@ -493,16 +494,16 @@ export default function ResultView() {
         }
 
         if (scenario.status !== 'done') {
-          if (scenario.run_group_id && capabilities?.multi_run?.enabled) {
-            setStoryData({
-              scenario_id: id,
-              question: scenario.question,
-              status: scenario.status,
-              branches: scenario.branches || [],
-            });
+          // error/cancelled 是终态：停止轮询、退出 loading，由主体渲染（multi-run 仍会显示分布
+          // 面板 + 失败计数，不会卡在永久 loading）。codex 审查 M3。
+          if (scenario.status === 'error' || scenario.status === 'cancelled') {
             setLoading(false);
             return;
           }
+          // parsing/simulating/narrating：retryTimer 轮询直到终态。不再按 capabilities.multi_run
+          // .enabled 提前分流——该 capability 异步加载、未就绪时反而会显示单场景 loading_narration
+          // （multi-run“正在生成结局叙事”的根因）。loading 态改由 run_group_id + capability!==false
+          // 决定渲染 MultiRunWaitingPanel（见下方 loading 分支）。
           retryTimer = window.setTimeout(() => {
             retryTimer = null;
             void load();
@@ -1850,6 +1851,18 @@ export default function ResultView() {
   }, [activeEndingRoomBranch, agents.length, analysisBranch?.title, campaignSummary, completedObjectiveCount, directorBetHighlights, directorInterventionSummary, directorMomentHighlights, displayArchive, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenario?.question, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
 
   if (loading) {
+    // multi-run 等待态：展示多世界线推演进度（自轮询 run-group）+ 观看首条入口 + 本地慢提示，
+    // 替代单场景那行干巴巴的 loading_narration，避免“看起来跳过推演 / 卡死”的误判。
+    // capability 明确关闭（kill-switch）时回退 loading_narration，避免对已禁用的 run-group 端点
+    // 持续打 404；undefined（capability 加载中）仍渲染面板，规避时序 bug。codex 审查 M4。
+    if (scenario?.run_group_id && capabilities?.multi_run?.enabled !== false) {
+      return (
+        <div className="result-view">
+          <ProgressIndicator currentStep={3} />
+          <MultiRunWaitingPanel runGroupId={scenario.run_group_id} firstRunId={id} />
+        </div>
+      );
+    }
     return (
       <div className="result-view">
         <p className="result-loading">

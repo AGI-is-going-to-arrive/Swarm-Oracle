@@ -15,6 +15,12 @@ vi.mock('../../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: useCapabilityCheckMock,
 }));
 
+const navigateMock = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => navigateMock };
+});
+
 i18n.init({
   lng: 'en',
   resources: {
@@ -54,6 +60,9 @@ i18n.init({
           status_completed_badge: 'Completed',
           feeds_distribution: 'Feeds into the distribution',
           feeds_distribution_short: 'Included',
+          action_label: 'Action',
+          watch_worldline: 'Watch simulation',
+          view_worldline_result: 'View result',
         },
       },
     },
@@ -331,5 +340,49 @@ describe('MultiRunDistributionPanel', () => {
     expect(reloadMock).not.toHaveBeenCalled();
 
     (window as any).location = originalLocation;
+  });
+
+  it('renders per-worldline actions and navigates (watch first / view others)', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: { multi_run: { enabled: true, default_count: 5, max_count: 10 } },
+      error: null,
+    });
+
+    vi.mocked(getRunGroupDistribution).mockResolvedValue({
+      run_group_id: 'rg-123',
+      run_count: 3,
+      terminal_count: 3,
+      pending_count: 0,
+      failed_count: 0,
+      status_counts: { done: 3 },
+      histogram: { verdict_counts: { OK: 3 }, outcome_counts: { 'Outcome A': 3 } },
+      runs: [
+        { scenario_id: 's1', run_index: 1, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+        { scenario_id: 's2', run_index: 2, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+        { scenario_id: 's3', run_index: 3, status: 'done', verdict: 'OK', outcome: 'Outcome A', is_terminal_distribution_row: true },
+      ],
+    } as never);
+
+    render(
+      <I18nextProvider i18n={i18n}>
+        <MultiRunDistributionPanel runGroupId="rg-123" />
+      </I18nextProvider>,
+    );
+
+    // Run #1 is the full simulation → "Watch simulation" jumps to its live theater
+    // and carries a backTo so the sim page returns to this run-group result page.
+    const watchBtn = await screen.findByRole('button', { name: 'Watch simulation' });
+    watchBtn.click();
+    expect(navigateMock).toHaveBeenCalledWith('/sim/s1', {
+      state: { backTo: '/result/s1' },
+    });
+
+    // Runs #2 and #3 (quick-verdict worldlines) each expose "View result".
+    const viewBtns = screen.getAllByRole('button', { name: 'View result' });
+    expect(viewBtns.length).toBe(2);
+    viewBtns[0].click();
+    expect(navigateMock).toHaveBeenCalledWith('/result/s2');
   });
 });

@@ -33,7 +33,7 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 - **Custom Agents**: Create, import, and export your own characters in the Agent Workshop.
 - **Prediction journal and leaderboard**: Record predictions, review calibration, and view the global leaderboard.
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
-- **Bring your own LLM**: Compatible with any OpenAI-format API.
+- **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API, with saved profiles selectable from the home page.
 
 > For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
 
@@ -59,7 +59,7 @@ Import a sanitized snapshot from `samples/snapshots/` to view an offline demo wi
 
 ### Tier 3: BYOK Full Run
 
-Configure your own OpenAI-compatible LLM service and run full simulations. Docker and local development use the same core configuration keys.
+Configure your own OpenAI-compatible LLM service and run full simulations. Docker and local development use the same core configuration keys; you can also save a model profile from `/admin/setup`, and the home page treats profiles with a key as configured LLM access.
 
 ## Quick Start
 

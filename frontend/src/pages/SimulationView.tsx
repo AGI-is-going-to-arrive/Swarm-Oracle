@@ -1251,11 +1251,20 @@ export function SimulationView() {
     visualizationEnabled,
   ]);
 
+  // Back target: prefer an explicit origin passed via navigation state (e.g. the
+  // multi-run waiting panel sends backTo=/result/<firstRunId> when you click
+  // "watch this worldline"), then fall back to the run-group result page when the
+  // scenario belongs to a multi-run (survives a hard refresh — state is gone but
+  // scenario.run_group_id is loaded), and finally to home for plain single runs.
+  const backTo =
+    (location.state as { backTo?: string } | null)?.backTo ??
+    (scenario?.run_group_id ? `/result/${scenario.id ?? id ?? ''}` : '/');
+
   return (
     <div className={`simulation-view ${viewMode === 'theater' ? 'simulation-view--theater' : ''} ${canUseReplayControls ? 'simulation-view--replay-ready' : ''}`}>
       {/* Header */}
       <header className="sim-header">
-        <button className="btn btn-ghost btn--back" onClick={() => navigate('/')}>
+        <button className="btn btn-ghost btn--back" onClick={() => navigate(backTo)}>
           {t('sim.status.back')}
         </button>
         <div className="sim-header__info">
@@ -1372,7 +1381,7 @@ export function SimulationView() {
       {error && (
         <div className="sim-error">
           <p>⚠️ {error}</p>
-          <button className="btn btn-ghost" onClick={() => navigate('/')}>
+          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
             {t('sim.status.back')}
           </button>
         </div>
@@ -1390,7 +1399,7 @@ export function SimulationView() {
             <strong>{t('simulation.cancelled_title')}</strong>
             <span>{t('simulation.cancelled_desc')}</span>
           </div>
-          <button className="btn btn-ghost" onClick={() => navigate('/')}>
+          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
             {t('sim.status.back')}
           </button>
         </div>

@@ -33,7 +33,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 - **自定义 Agent**：在 Agent 工坊里创建、导入、导出你自己的角色
 - **预测日志与排行榜**：记录预测、复盘校准，也能看全局排行榜
 - **Snapshot 导入 / 导出**：把一次推演打包保存，之后再导入继续查看
-- **支持自带 LLM**：兼容任何 OpenAI 格式的 API
+- **模型配置与自带 LLM**：兼容任何 OpenAI 格式的 API，可保存 profile 后在首页直接选择
 
 > 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**；逐项功能图鉴见 **[FEATURES.md](docs/FEATURES.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
 
@@ -59,7 +59,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ### Tier 3：BYOK 完整运行
 
-配置你自己的 OpenAI-compatible LLM 服务后运行完整推演。Docker 和本地开发都使用同一组核心配置项。
+配置你自己的 OpenAI-compatible LLM 服务后运行完整推演。Docker 和本地开发都使用同一组核心配置项；也可以在 `/admin/setup` 保存模型 profile，之后首页会把带 key 的 profile 当作已配置 LLM 来使用。
 
 ## 快速开始
 

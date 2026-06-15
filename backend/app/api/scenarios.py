@@ -27,6 +27,7 @@ from app.api.errors import api_error
 from app.api.helpers import (
     SessionPrincipal,
     get_running_task,
+    get_session_principal,
     load_scenario_response,
     parse_and_run_background,
     parse_key_moments,
@@ -68,7 +69,7 @@ from app.models import (
     ScenarioCampaignLog,
     ScenarioStatus,
 )
-from app.models.database import get_engine
+from app.models.database import get_engine, get_session
 from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import (
     detect_provider,
@@ -79,6 +80,7 @@ from app.services.llm_client import (
 )
 from app.services.model_profiles import (
     ResolvedProviderPolicy,
+    has_profile_with_api_key,
     resolve_model_profile_policy,
 )
 from app.services.result_report import builder as result_report_builder
@@ -639,7 +641,10 @@ def _capability_entry(
 
 
 @router.get("/capabilities")
-async def api_capabilities():
+async def api_capabilities(
+    session: Session = Depends(get_session),
+    principal: SessionPrincipal | None = Depends(get_session_principal),
+):
     """Lightweight server capability hints — no LLM calls.
 
     Use this for feature-flag checks on page mount instead of /api/health
@@ -650,10 +655,23 @@ async def api_capabilities():
     from app.services.web_context import PROVIDER_CAPABILITIES
 
     ws_hint = _build_web_search_server_hint()
-    llm_configured = is_static_llm_configured(
+    static_llm_configured = is_static_llm_configured(
         base_url=settings.LLM_RESPONSES_URL,
         api_key=settings.LLM_API_KEY,
     )
+    profile_user_id = principal.subject if isinstance(principal, SessionPrincipal) else None
+    profile_llm_configured = False
+    if settings.FEATURE_MODEL_PROFILES:
+        if isinstance(session, Session):
+            profile_llm_configured = has_profile_with_api_key(session, profile_user_id)
+        else:
+            # Direct unit tests call this endpoint function without FastAPI DI.
+            with Session(get_engine()) as fallback_session:
+                profile_llm_configured = has_profile_with_api_key(
+                    fallback_session,
+                    profile_user_id,
+                )
+    llm_configured = static_llm_configured or profile_llm_configured
     llm_provider_profile = detect_provider(_cfg.LLM_RESPONSES_URL)
     llm_provider_capability: dict[str, object] = {
         "supports_structured_outputs": llm_provider_profile.supports_structured_outputs,
@@ -734,6 +752,8 @@ async def api_capabilities():
     )
     capabilities = {
         "llm_configured": llm_configured,
+        "llm_static_configured": static_llm_configured,
+        "llm_profile_configured": profile_llm_configured,
         "llm_provider": {
             **_capability_entry(
                 enabled=True,
@@ -948,7 +968,7 @@ async def create_multi_run_scenarios(
     if not req.question.strip():
         raise api_error(400, "QUESTION_EMPTY", "Question cannot be empty")
 
-    if req.llm_base_url:
+    if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
@@ -978,6 +998,31 @@ async def create_multi_run_scenarios(
         req.web_search_base_url = validated_search_url
 
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
+    engine = get_engine()
+    model_profile_policy: ResolvedProviderPolicy | None = None
+    resolved_llm_api_key = req.llm_api_key
+    resolved_llm_base_url = req.llm_base_url
+    resolved_llm_model = req.llm_model
+    resolved_llm_requests_per_minute = req.llm_requests_per_minute
+    resolved_llm_tokens_per_minute = req.llm_tokens_per_minute
+    if req.model_profile_id:
+        with Session(engine) as session:
+            model_profile_policy = resolve_model_profile_policy(
+                session,
+                user_id=effective_user_id,
+                model_profile_id=req.model_profile_id,
+                explicit_api_key=req.llm_api_key,
+                explicit_base_url=req.llm_base_url,
+                explicit_model=req.llm_model,
+                explicit_requests_per_minute=req.llm_requests_per_minute,
+                explicit_tokens_per_minute=req.llm_tokens_per_minute,
+            )
+        resolved_llm_api_key = model_profile_policy.api_key
+        resolved_llm_base_url = model_profile_policy.base_url
+        resolved_llm_model = model_profile_policy.model
+        resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
+        resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
+
     requested_run_count, accepted_run_count = _clamp_multi_run_count(req.run_count)
     run_group_id = str(uuid.uuid4())
     question = req.question.strip()
@@ -998,7 +1043,6 @@ async def create_multi_run_scenarios(
         else None
     )
 
-    engine = get_engine()
     runs: list[dict[str, Any]] = []
     with Session(engine) as session:
         for run_index in range(1, accepted_run_count + 1):
@@ -1067,11 +1111,11 @@ async def create_multi_run_scenarios(
                     fork_prompt_variant=req.fork_prompt_variant,
                     fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
                     user_id=effective_user_id,
-                    llm_api_key=req.llm_api_key,
-                    llm_base_url=req.llm_base_url,
-                    llm_model=req.llm_model,
-                    llm_requests_per_minute=req.llm_requests_per_minute,
-                    llm_tokens_per_minute=req.llm_tokens_per_minute,
+                    llm_api_key=resolved_llm_api_key,
+                    llm_base_url=resolved_llm_base_url,
+                    llm_model=resolved_llm_model,
+                    llm_requests_per_minute=resolved_llm_requests_per_minute,
+                    llm_tokens_per_minute=resolved_llm_tokens_per_minute,
                     disable_user_quota=req.disable_user_quota,
                     custom_agent_identity_ids=req.custom_agent_identity_ids,
                     continuity_overrides=[

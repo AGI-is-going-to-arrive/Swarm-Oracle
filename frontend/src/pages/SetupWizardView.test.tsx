@@ -106,7 +106,7 @@ describe('SetupWizardView provider selection', () => {
     expect(screen.getByRole('button', { name: 'setup.next' })).not.toBeDisabled();
   });
 
-  it('preserves pre-existing model and RPM when wizard is finished', async () => {
+  it('clears credentials/base_url/model but keeps non-secret global prefs after saving a profile', async () => {
     const user = userEvent.setup();
     const { saveLlmProviderPolicy, loadLlmProviderPolicy } = await import('../lib/llmProviderPolicy');
 
@@ -147,12 +147,13 @@ describe('SetupWizardView provider selection', () => {
     await waitFor(() => {
       const finalPolicy = loadLlmProviderPolicy();
       // A profile is saved (saveToProfiles defaults on), so the DB owns the credentials
-      // and the plaintext key is cleared from the session draft; the non-secret fields
-      // below are still preserved so the wizard never loses pre-existing config.
-      // codex Gate3 MEDIUM (refined: clear only the secret, keep advanced prefs).
+      // AND base_url + model. All three are cleared from the session draft — leaving a
+      // residual base_url with no key would make the home page validateByok hit
+      // `baseUrl && !apiKey` → BYOK_INVALID and deadlock the launch. Only the global
+      // prefs the DB profile does NOT carry (reasoningEffort / quota / rpm / tpm) survive.
       expect(finalPolicy.apiKey).toBe('');
-      expect(finalPolicy.baseUrl).toBe('https://api.openai.com/v1');
-      expect(finalPolicy.model).toBe('custom-model');
+      expect(finalPolicy.baseUrl).toBe('');
+      expect(finalPolicy.model).toBe('');
       expect(finalPolicy.reasoningEffort).toBe('high');
       expect(finalPolicy.disableUserQuota).toBe(true);
       expect(finalPolicy.requestsPerMinute).toBe(100);

@@ -601,6 +601,7 @@ class ScenarioResponse(BaseModel):
     id: str
     question: str
     status: str
+    run_group_id: str | None = None
     created_at: str
     agents: list[dict] = []
     branches: list[dict] = []

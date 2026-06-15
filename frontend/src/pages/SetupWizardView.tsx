@@ -24,7 +24,7 @@ import {
 import { ProviderPresetCard } from '../components/Setup/ProviderPresetCard';
 import { ConnectionTester } from '../components/Setup/ConnectionTester';
 import { ModelSelect } from '../components/ModelSelect';
-import { listModelProfiles, createModelProfile } from '../api/client';
+import { createModelProfile } from '../api/client';
 import './SetupWizardView.css';
 
 type WizardStep = 'provider_select' | 'api_config' | 'connection_test';
@@ -93,13 +93,6 @@ export default function SetupWizardView() {
   const handleFinish = async () => {
     setIsSaving(true);
     setSaveError(null);
-    let hasProfiles = false;
-    try {
-      const res = await listModelProfiles();
-      hasProfiles = res.profiles && res.profiles.length > 0;
-    } catch (err) {
-      console.error('Failed to list model profiles:', err);
-    }
 
     let createdProfile = false;
     if (saveToProfiles) {
@@ -132,16 +125,17 @@ export default function SetupWizardView() {
       }
     }
 
-    if (hasProfiles || createdProfile) {
-      // DB profile 持有凭据（SSOT）。从 session 草稿里清掉明文 api_key，避免与 DB 档案
-      // 重复残留；但保留 baseUrl/model 以及 DB 档案不承载的全局偏好（reasoningEffort /
-      // disableUserQuota / rpm / tpm），以免走一遍向导反而丢用户既有配置。
-      // codex Gate3 MEDIUM（改良：只清密钥，不整体清空草稿——后者会丢高级字段）。
+    if (createdProfile) {
+      // 仅当本次成功建档：凭据 + base_url + model 已进 DB（SSOT），session 草稿把这三个全部
+      // 清掉（只清 api_key 而留 base_url 会让首页 validateByok 命中 `baseUrl && !apiKey` →
+      // BYOK_INVALID 死锁）。仅保留 DB 档案不承载的全局偏好（reasoningEffort/quota/rpm/tpm）。
+      // 不能用 `hasProfiles || createdProfile`：用户已有旧档案但本次「取消保存为档案」时，会误清
+      // 掉他刚填的 endpoint/key/model。未建档（saveToProfiles=false）一律走 else 保留明文草稿。
       saveLlmProviderPolicy({
         ...initialPolicy,
         apiKey: '',
-        baseUrl: baseUrl.trim(),
-        model: model.trim(),
+        baseUrl: '',
+        model: '',
       });
     } else {
       saveLlmProviderPolicy({

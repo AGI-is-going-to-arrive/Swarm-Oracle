@@ -133,6 +133,27 @@ def list_model_profiles(session: Session, user_id: str) -> list[ModelProfile]:
     )
 
 
+def has_profile_with_api_key(session: Session, user_id: str | None = None) -> bool:
+    """Return whether model-profile SSOT has persisted LLM credentials.
+
+    When a signed session principal is available, callers pass ``user_id`` to
+    keep the check aligned with profile CRUD scoping.  Local self-hosted
+    capability probes may not have a stable user identity, so ``user_id=None``
+    intentionally checks for any local profile with a non-empty key.
+    """
+    stmt = (
+        select(ModelProfile.id)
+        .where(
+            ModelProfile.api_key.is_not(None),
+            ModelProfile.api_key != "",
+        )
+        .limit(1)
+    )
+    if user_id:
+        stmt = stmt.where(ModelProfile.user_id == user_id)
+    return session.exec(stmt).first() is not None
+
+
 def create_model_profile(session: Session, payload: dict[str, Any], user_id: str) -> ModelProfile:
     name = _clean_text(payload.get("name"), max_length=100, field_name="name")
     model = _clean_text(payload.get("model"), max_length=120, field_name="model")

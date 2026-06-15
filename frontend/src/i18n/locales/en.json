@@ -14,6 +14,20 @@
       "not_scorable_generic": "This prediction cannot be scored."
     },
     "multi_run": {
+      "waiting_title": "Simulating {{total}} worldlines…",
+      "waiting_title_generic": "Simulating worldlines…",
+      "waiting_subtitle": "Multiple parallel worldlines are running. Once all finish, their outcomes are aggregated into a probability distribution.",
+      "waiting_progress": "Completed {{finished}} / {{total}}",
+      "watch_first_run": "Watch the first worldline unfold",
+      "waiting_slow_hint": "Multiple runs on a local model can take a few minutes. The simulation is running in the background — please wait.",
+      "waiting_exhausted": "The simulation is still running in the background, but live updates have paused. Tap retry to resume fetching progress.",
+      "run_full_sim_badge": "Full simulation",
+      "run_quick_verdict_badge": "Quick verdict",
+      "watch_worldline": "Watch simulation",
+      "view_worldline_result": "View result",
+      "worldline_simulating": "Simulating…",
+      "worldline_done": "Done",
+      "action_label": "Action",
       "input_section_title": "Multi-Run Settings",
       "input_label": "Worldline Runs",
       "reminder_title": "Run Estimates",
@@ -346,7 +360,12 @@
         "error": "❌ ERROR",
         "back": "← Back",
         "loading": "Loading...",
-        "view_results": "View Results →"
+        "view_results": "View Results →",
+        "done": "Done",
+        "simulating": "Simulating",
+        "parsing": "Parsing",
+        "narrating": "Narrating",
+        "cancelled": "Cancelled"
       },
       "timeline": {
         "parsing": "Parsing",

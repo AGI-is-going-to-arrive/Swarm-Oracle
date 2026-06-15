@@ -6,6 +6,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCapabilities, type CapabilitiesResponse } from '../api/client';
 
+type CapabilityKey = {
+  [K in keyof CapabilitiesResponse]-?: NonNullable<CapabilitiesResponse[K]> extends { enabled?: boolean } ? K : never;
+}[keyof CapabilitiesResponse];
+
 interface CapabilityCheckResult {
   loading: boolean;
   enabled: boolean;
@@ -95,7 +99,7 @@ function traversePath(root: unknown, path: string): unknown {
  *   Example: `useCapabilityCheck('web_search', 'providers.polymarket.enabled')`.
  */
 export function useCapabilityCheck(
-  key: keyof CapabilitiesResponse,
+  key: CapabilityKey,
   nestedPath?: string,
 ): CapabilityCheckResult {
   const [loading, setLoading] = useState(true);

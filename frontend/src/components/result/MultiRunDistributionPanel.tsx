@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { getRunGroupDistribution } from '../../api/client';
 import type { RunGroupDistributionResponse } from '../../types';
@@ -12,6 +13,7 @@ interface MultiRunDistributionPanelProps {
 
 export function MultiRunDistributionPanel({ runGroupId, onRefresh }: MultiRunDistributionPanelProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { enabled, loading: capLoading, error: capError, reload } = useCapabilityCheck('multi_run');
   const [data, setData] = useState<RunGroupDistributionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,6 +236,7 @@ export function MultiRunDistributionPanel({ runGroupId, onRefresh }: MultiRunDis
                 <th>{t('multi_run.status_label')}</th>
                 <th>{t('multi_run.verdict_label')}</th>
                 <th>{t('multi_run.outcome_label')}</th>
+                <th>{t('multi_run.action_label')}</th>
               </tr>
             </thead>
             <tbody>
@@ -262,6 +265,31 @@ export function MultiRunDistributionPanel({ runGroupId, onRefresh }: MultiRunDis
                     </td>
                     <td>{displayVerdict}</td>
                     <td>{displayOutcome}</td>
+                    <td>
+                      {run.run_index === 1 ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost multi-run-row__action"
+                          onClick={() =>
+                            navigate(`/sim/${run.scenario_id}`, {
+                              state: { backTo: `/result/${run.scenario_id}` },
+                            })
+                          }
+                        >
+                          {t('multi_run.watch_worldline')}
+                        </button>
+                      ) : statusLower === 'done' ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost multi-run-row__action"
+                          onClick={() => navigate(`/result/${run.scenario_id}`)}
+                        >
+                          {t('multi_run.view_worldline_result')}
+                        </button>
+                      ) : (
+                        <span className="multi-run-row__action-empty">—</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

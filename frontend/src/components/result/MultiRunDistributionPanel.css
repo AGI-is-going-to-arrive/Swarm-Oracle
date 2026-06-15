@@ -265,3 +265,13 @@
   margin-bottom: 1rem;
   font-style: italic;
 }
+
+.multi-run-row__action {
+  font-size: 0.82rem;
+  padding: 3px 12px;
+  white-space: nowrap;
+}
+
+.multi-run-row__action-empty {
+  color: #b8b2a7;
+}

@@ -143,7 +143,7 @@
     </ol>
     <div class="how__notes reveal" style="--d:120ms">
       <p class="how__note" data-zh="开箱即用：核心推演与多数功能（结果结论、因果图谱、知识图谱、反事实对比、辩论、圆桌）默认开启；只有「搜索增强」需自行配置搜索 provider。" data-en="Works out of the box: core simulation and most features (result verdict, causal graph, knowledge graph, counterfactual compare, debate, roundtable) are on by default; only Search-Augmented Simulation needs you to configure a search provider.">开箱即用：核心推演与多数功能（结果结论、因果图谱、知识图谱、反事实对比、辩论、圆桌）默认开启；只有「搜索增强」需自行配置搜索 provider。</p>
-      <p class="how__note" data-zh="前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置，或在首页高级设置里临时填入自己的 key）。" data-en="Prerequisite: you need one OpenAI-compatible LLM endpoint (configured in .env, or filled in temporarily under Advanced settings on the home page).">前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置，或在首页高级设置里临时填入自己的 key）。</p>
+      <p class="how__note" data-zh="前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置、/admin/setup 保存模型 profile，或在首页高级设置里临时填入自己的 key）。" data-en="Prerequisite: you need one OpenAI-compatible LLM endpoint (configured in .env, saved as a model profile from /admin/setup, or filled in temporarily under Advanced settings on the home page).">前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置、/admin/setup 保存模型 profile，或在首页高级设置里临时填入自己的 key）。</p>
     </div>
   </div>
 </section>
@@ -248,7 +248,7 @@
     <div class="tech reveal">
       <div class="tech__row"><span class="tech__layer" data-zh="前端" data-en="Frontend">前端</span><span class="tech__stack"><b>Vite + React 19 + TypeScript</b> + Phaser 3 + Zustand</span><span class="tech__port">18928</span></div>
       <div class="tech__row"><span class="tech__layer" data-zh="后端" data-en="Backend">后端</span><span class="tech__stack"><b>FastAPI</b> + SQLModel + Alembic + ChromaDB</span><span class="tech__port">18927</span></div>
-      <div class="tech__row"><span class="tech__layer" data-zh="LLM" data-en="LLM">LLM</span><span class="tech__stack" data-zh="OpenAI-compatible API（按环境变量配置）" data-en="OpenAI-compatible API (configured via env vars)">OpenAI-compatible API（按环境变量配置）</span><span class="tech__port">—</span></div>
+      <div class="tech__row"><span class="tech__layer" data-zh="LLM" data-en="LLM">LLM</span><span class="tech__stack" data-zh="OpenAI-compatible API（环境变量、模型 profile 或本轮 BYOK）" data-en="OpenAI-compatible API (env vars, model profiles, or per-run BYOK)">OpenAI-compatible API（环境变量、模型 profile 或本轮 BYOK）</span><span class="tech__port">—</span></div>
       <div class="tech__row"><span class="tech__layer" data-zh="数据库" data-en="Database">数据库</span><span class="tech__stack" data-zh="SQLite + ChromaDB（向量检索）" data-en="SQLite + ChromaDB (vector retrieval)">SQLite + ChromaDB（向量检索）</span><span class="tech__port">—</span></div>
       <div class="tech__row"><span class="tech__layer" data-zh="部署" data-en="Deployment">部署</span><span class="tech__stack">Docker Compose (backend + frontend)</span><span class="tech__port">—</span></div>
     </div>
@@ -274,7 +274,7 @@
           <div class="code__head"><span class="code__title">docker-compose</span><button type="button" class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">docker compose</span> up --build -d</code></pre>
         </div>
-        <p class="qs__note" data-zh="先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令。" data-en="First edit .env.docker with LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME, then run the command.">先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令。</p>
+        <p class="qs__note" data-zh="先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令；也可启动后到 /admin/setup 保存模型 profile。" data-en="First edit .env.docker with LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME, then run the command; after startup you can also save a model profile at /admin/setup.">先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令；也可启动后到 /admin/setup 保存模型 profile。</p>
       </div>
       <div class="qs__panel" id="panel-local" data-panel="local" role="tabpanel" aria-labelledby="tab-local" hidden>
         <div class="code">

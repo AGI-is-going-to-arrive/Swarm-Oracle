@@ -41,9 +41,11 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 - `LLM_ALLOW_LOCAL_BYOK_HOSTS=true` 是为了本地开发和 Docker quickstart 默认可用；多用户、暴露公网或 LAN 部署应设为 `false`，这样请求级 BYOK 会拒绝内置本地别名及等价 loopback / unspecified IP 形态。部署级 `LLM_RESPONSES_URL` 不受这个开关影响。
 - 带 `user:pass@host`、query、fragment 或 path params 的请求级 BYOK URL 一律拒绝。
 
-`GET /api/capabilities` 会返回零成本静态字段 `llm_configured: boolean`。当运行时仍是占位 URL（`http://127.0.0.1:8317/v1`、`http://localhost:8317/v1` 或 `http://host.docker.internal:8317/v1`），且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时为 `false`；配置了真实 key，或显式改到其它 endpoint 时为 `true`。这个字段不会调用 `health_check()`，不会发起 LLM 或网络请求。
+`GET /api/capabilities` 会返回零成本字段 `llm_configured: boolean`。它等于服务端静态 LLM 配置或本地模型 profile 探测的合并结果：`llm_static_configured` 表示 `.env` / Docker 配置是否可用，`llm_profile_configured` 表示 `FEATURE_MODEL_PROFILES=true` 且当前用户有至少一个带 API key 的 profile。任一为 `true` 时，首页都不会再把 LLM 视为未配置。这个探测不会调用 `health_check()`，不会发起 LLM 或网络请求，也不会回显 profile 的 API key。
 
-已知限制：如果你真实使用的本地 OpenAI-compatible 代理刚好也是 `:8317/v1` 且不需要 API key，`llm_configured` 会把它当作未配置。首页提示可以关闭，诊断按钮仍可用于确认实际连通性。
+静态配置仍按原规则判断：当运行时仍是占位 URL（`http://127.0.0.1:8317/v1`、`http://localhost:8317/v1` 或 `http://host.docker.internal:8317/v1`），且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时，`llm_static_configured=false`；配置了真实 key，或显式改到其它 endpoint 时为 `true`。
+
+已知限制：如果你真实使用的本地 OpenAI-compatible 代理刚好也是 `:8317/v1` 且不需要 API key，静态配置探测会把它当作未配置；保存一个带 key 的 model profile 仍会让 `llm_configured` 变为 `true`。首页提示可以关闭，诊断按钮仍可用于确认实际连通性。
 
 主推演 / 辩论 / 会客厅主路径上的已识别 LLM provider 失败会暴露稳定机器码和短安全消息，不回显 provider body、HTML、stack trace、Authorization header、URL 凭据或 API key：
 
@@ -79,12 +81,12 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `FEATURE_PREDICTION_JOURNAL` | ✅ 开 | `/me/journal` 可以记录预测、标记结果，并查看校准曲线。 |
 | `FEATURE_RESULT_VERDICT` | ✅ 开 | 结果页会尽量给出一句话结论、置信度和每条世界线对原问题的回答。 |
 | `FEATURE_RESULT_REPORT` | ✅ 开 | 结果页会显示完整报告入口，也可以在 `/result/:id/report` 单独查看或重试生成。 |
-| `FEATURE_MULTI_RUN` | ✅ 开 | 首页可以发起多次推演，结果页会显示 run group 分布和终局直方图。 |
+| `FEATURE_MULTI_RUN` | ✅ 开 | 首页可以发起多次推演；等待面板会列出每条世界线，结果页会显示 run group 分布和终局直方图。 |
 | `FEATURE_YOU_VS_ORACLE` | ✅ 开 | 结果页可以把用户预测和 Oracle 结果做并排对比。 |
 | `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
 | `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
 | `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包，并把包内素材带入推演。 |
-| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页可以管理本地模型 profile，并在启动推演时选择。 |
+| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页视为已配置 LLM，并可在启动推演时选择。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
 

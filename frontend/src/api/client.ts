@@ -529,6 +529,8 @@ export interface WebSearchProvidersBlock {
 /** Phase 3: full capabilities registry response */
 export interface CapabilitiesResponse {
   llm_configured?: boolean & { enabled?: never };
+  llm_static_configured?: boolean;
+  llm_profile_configured?: boolean;
   web_search: CapabilityEntry & {
     scope: 'server';
     server_enabled: boolean;

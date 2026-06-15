@@ -224,7 +224,7 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 ## 更多玩法
 
 ### F42 模型配置
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 在「模型配置」页可以保存多套 LLM 接入信息（名称、服务商、Base URL、模型、API 密钥、限速），推演或辩论开始前直接挑一套用，不用每次手填。服务商下拉与 `/admin/setup` 配置向导使用同一组 preset，当前包括 OpenAI、Anthropic、DeepSeek、Google Gemini、Ollama、本地 LM Studio 和自定义端点；切换 preset 会在 Base URL 为空或仍是旧 preset URL 时自动带出默认地址。密钥只存在本地：列表和编辑表单都不会把它显示出来（编辑时密钥框是空的，只标「密钥已设置」），页面也写明本地单用户部署时密钥以明文存在本地 SQLite。
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 在「模型配置」页可以保存多套 LLM 接入信息（名称、服务商、Base URL、模型、API 密钥、限速），推演或辩论开始前直接挑一套用，不用每次手填。`/admin/setup` 保存并测试成功的 profile 也会进入同一套选择逻辑：只要 profile 带有 key，首页就会把 LLM 视为已配置，并自动选中可用 profile。服务商下拉与 `/admin/setup` 配置向导使用同一组 preset，当前包括 OpenAI、Anthropic、DeepSeek、Google Gemini、Ollama、本地 LM Studio 和自定义端点；切换 preset 会在 Base URL 为空或仍是旧 preset URL 时自动带出默认地址。密钥只存在本地：列表和编辑表单都不会把它显示出来（编辑时密钥框是空的，只标「密钥已设置」），页面也写明本地单用户部署时密钥以明文存在本地 SQLite。
 入口：`/model-profiles`；首页和辩论设置里也能直接选已存的配置
 
 ### F43 公开分享与画廊
@@ -232,7 +232,7 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 入口：`/result/:id` -> 分享 -> 导出公开 artifact / HTML 画廊
 
 ### F44 多次推演分布
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 同一个问题可以一次跑多遍，结果页会把这一组推演的结局分布和终局直方图画出来，让你看清哪些结局更稳定、哪些只是偶然。
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 同一个问题可以一次跑多遍，等待面板会列出每条世界线的进度：首条是完整推演，可点「观看推演」进入实时 `/sim`；后续条目走快速结论，完成后可点「查看结果」。结果页会把这一组推演的结局分布和终局直方图画出来，让你看清哪些结局更稳定、哪些只是偶然。
 入口：首页发起多次推演 -> `/result/:id` 的分布 / 概率采样面板
 
 ### F45 你的预测 vs 预言机

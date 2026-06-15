@@ -3352,12 +3352,82 @@ describe('InputView Model Profile Integration', () => {
     });
   });
 
+  it('auto-selects the first profile so a setup→home BYOK user launches on DB credentials (B1)', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('textbox', { name: 'home.question_input_label' });
+
+    // Without any manual selection the auto-select effect should pick profile-1 (the
+    // freshly-built profile). This is what lets a setup→home BYOK user launch immediately
+    // on DB credentials instead of hitting the residual-base_url BYOK_INVALID deadlock.
+    const byokHeader = screen.getByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader);
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    await waitFor(() => expect((selector as HTMLSelectElement).value).toBe('profile-1'));
+
+    const textarea = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'What if Mars has water?',
+        modelProfileId: 'profile-1',
+      }));
+    });
+  });
+
+  it('blocks launch when server LLM config comes only from an unselected saved profile', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('textbox', { name: 'home.question_input_label' });
+
+    const byokHeader = screen.getByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader);
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    await waitFor(() => expect((selector as HTMLSelectElement).value).toBe('profile-1'));
+    fireEvent.change(selector, { target: { value: '' } });
+
+    const textarea = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
+
+    await screen.findByText('llm_banner.not_configured');
+    expect(screen.getByRole('button', { name: 'home.submit' })).toBeDisabled();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
   it('preserves existing BYOK path unchanged when no profile is selected', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue({
       llm_configured: true,
       model_profiles: { enabled: true },
     });
+    // No profile is available, so the auto-select effect stays inert and the pure-BYOK
+    // path (user edits fields directly, no profile id) is exercised. (setup-config-fix B1)
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
 
     render(
       <MemoryRouter>

@@ -475,6 +475,57 @@ export function InputView() {
   } = useInputByokSettings(t, {
     onWebSearchServerHint: setWebSearchServerEnabled,
   });
+
+  // 建档后 / 已有档案时，自动选中首个 model profile（list 按 updated_at desc，故为最近的），
+  // 让首页直接用 DB 凭据推演。否则"未选档案 + sessionStorage 残留 base_url 无 key"会让
+  // launchSimulation 的 validateByok 命中 `baseUrl && !apiKey` → BYOK_INVALID → 推演死锁。
+  // 仅在「无本地明文 BYOK」「未手动选过档案」时抢选一次（ref 守卫防重复 + 不覆盖用户选择）。
+  const autoSelectProfileRef = useRef(false);
+  useEffect(() => {
+    if (autoSelectProfileRef.current) return;
+    if (selectedProfileId || llmApiKey.trim()) return;
+    // 只自动选「带 api_key」的档案——与后端 llm_configured 口径一致（no-key 档案后端不算已
+    // 配置，自动选中会隐藏 banner 却在推演时回退服务端默认/失败）。无带 key 档案则不抢选。
+    const first = profiles.find((p) => p.has_api_key);
+    if (!first) return;
+    autoSelectProfileRef.current = true;
+    setSelectedProfileId(first.id);
+    setLlmModel(first.model);
+    setLlmBaseUrl(first.base_url || '');
+    setLlmRequestsPerMinute(first.rpm != null ? String(first.rpm) : '');
+    setLlmTokensPerMinute(first.tpm != null ? String(first.tpm) : '');
+    setLlmApiKey('');
+  }, [
+    profiles,
+    selectedProfileId,
+    llmApiKey,
+    setSelectedProfileId,
+    setLlmModel,
+    setLlmBaseUrl,
+    setLlmRequestsPerMinute,
+    setLlmTokensPerMinute,
+    setLlmApiKey,
+  ]);
+
+  // 防 stale 选择：选中的档案在最新列表中已不存在（被删除 / 切 user）时，清空选择并重置档案
+  // 派生字段，避免提交携带不存在的 modelProfileId。profiles 为空视为加载中，不清。
+  useEffect(() => {
+    if (!selectedProfileId || profiles.length === 0) return;
+    if (profiles.some((p) => p.id === selectedProfileId)) return;
+    setSelectedProfileId('');
+    setLlmModel('');
+    setLlmBaseUrl('');
+    setLlmRequestsPerMinute('');
+    setLlmTokensPerMinute('');
+  }, [
+    profiles,
+    selectedProfileId,
+    setSelectedProfileId,
+    setLlmModel,
+    setLlmBaseUrl,
+    setLlmRequestsPerMinute,
+    setLlmTokensPerMinute,
+  ]);
   const {
     campaignProfile,
     campaignBadges,
@@ -1642,6 +1693,19 @@ export function InputView() {
   const isTpmOverridden = !!activeProfile && llmTokensPerMinute !== (activeProfile.tpm != null ? String(activeProfile.tpm) : '');
   const isApiKeyOverridden = !!activeProfile && llmApiKey !== '';
 
+  const staticLlmConfigured = caps?.llm_static_configured === true;
+  const profileOnlyLlmConfigured =
+    caps?.llm_configured === true &&
+    caps?.llm_static_configured === false &&
+    caps?.llm_profile_configured === true;
+  const hasUsableLlmCredential =
+    staticLlmConfigured ||
+    Boolean(activeProfile?.has_api_key) ||
+    Boolean(llmApiKey.trim());
+  const llmNotConfigured =
+    !hasUsableLlmCredential &&
+    (caps?.llm_configured === false || profileOnlyLlmConfigured);
+
   return (
     <div className="input-view">
       {/* S1-5: First-visit onboarding guide. Suppressed while a launch is in
@@ -1650,7 +1714,7 @@ export function InputView() {
         open={!onboarding.completed && !isSubmitting}
         onComplete={onboarding.complete}
       />
-      {caps?.llm_configured === false && <LlmNotConfiguredBanner />}
+      {llmNotConfigured && <LlmNotConfiguredBanner />}
       {/* Loading Overlay */}
       {isSubmitting && (
         <div
@@ -1761,7 +1825,7 @@ export function InputView() {
                 <button
                   className="btn btn-primary btn--submit"
                   onClick={() => requestLaunch(question)}
-                  disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked || caps?.llm_configured === false}
+                  disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked || llmNotConfigured}
                 >
                   {isSubmitting ? <span className="spinner spinner--sm" /> : null}
                   {multiRunCaps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.submit')}
@@ -1779,7 +1843,7 @@ export function InputView() {
                 <button
                   className="btn btn-ghost btn--submit"
                   onClick={() => void launchDebate({ nextQuestion: question })}
-                  disabled={!question.trim() || isSubmitting || caps?.llm_configured === false}
+                  disabled={!question.trim() || isSubmitting || llmNotConfigured}
                 >
                   {t('debate.entry_cta')}
                 </button>
@@ -1798,8 +1862,8 @@ export function InputView() {
               {/* Task 1d: We implement onboarding final CTA -> setup by displaying a prominent warning banner
                   (LlmNotConfiguredBanner) at the top of InputView, and the degraded warning block below,
                   both pointing to /admin/setup, which will be visible after onboarding completes on first run
-                  when caps?.llm_configured === false. This avoids editing OnboardingGuide.tsx which is outside the WRITE SET. */}
-              {caps?.llm_configured === false && (
+                  when llmNotConfigured. This avoids editing OnboardingGuide.tsx which is outside the WRITE SET. */}
+              {llmNotConfigured && (
                 <div className="degraded-llm-warning" style={{ marginTop: '12px', textAlign: 'left' }}>
                   <p className="byok-probe-warning" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                     <span>⚠️ {t('degraded_hints.llm_required')}</span>

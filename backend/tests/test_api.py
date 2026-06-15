@@ -38,6 +38,7 @@ from app.models import (
     EndingRoomType,
     InterventionLog,
     Leaderboard,
+    ModelProfile,
     PendingIntervention,
     Prediction,
     ReplayArtifact,
@@ -309,6 +310,77 @@ class TestHealthEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["llm_configured"] is expected
+
+    def test_capabilities_use_model_profile_key_when_static_llm_is_placeholder(
+        self,
+        client,
+        monkeypatch,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("capabilities must not call health_check")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+        monkeypatch.setattr(
+            scenarios_api.settings,
+            "LLM_RESPONSES_URL",
+            "http://127.0.0.1:8317/v1",
+        )
+        monkeypatch.setattr(scenarios_api.settings, "LLM_API_KEY", "sk-12345678")
+        with Session(get_engine()) as session:
+            session.add(
+                ModelProfile(
+                    user_id="owner-a",
+                    name="Homepage BYOK profile",
+                    provider="openai",
+                    model="gpt-4o-mini",
+                    api_key="sk-homepage-byok-real-key",
+                )
+            )
+            session.commit()
+
+        resp = client.get("/api/capabilities")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["llm_configured"] is True
+        assert data["llm_static_configured"] is False
+        assert data["llm_profile_configured"] is True
+
+    def test_capabilities_ignore_model_profile_key_when_feature_disabled(
+        self,
+        client,
+        monkeypatch,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("capabilities must not call health_check")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", False)
+        monkeypatch.setattr(
+            scenarios_api.settings,
+            "LLM_RESPONSES_URL",
+            "http://127.0.0.1:8317/v1",
+        )
+        monkeypatch.setattr(scenarios_api.settings, "LLM_API_KEY", "")
+        with Session(get_engine()) as session:
+            session.add(
+                ModelProfile(
+                    user_id="owner-a",
+                    name="Disabled homepage BYOK profile",
+                    provider="openai",
+                    model="gpt-4o-mini",
+                    api_key="sk-disabled-profile-real-key",
+                )
+            )
+            session.commit()
+
+        resp = client.get("/api/capabilities")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["llm_configured"] is False
+        assert data["llm_static_configured"] is False
+        assert data["llm_profile_configured"] is False
 
     def test_capabilities_include_llm_provider_metadata(self, client, monkeypatch):
         monkeypatch.setattr(
@@ -1787,6 +1859,169 @@ class TestReplayArtifactEndpoints:
         assert data["scene_theme"] == "ancient_empire"
         assert data["mode"] == "blackboard"
         assert data["total_rounds"] == 6
+
+    def test_get_scenario_includes_run_group_id_for_multi_run(self, client, monkeypatch):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        scheduled: list[object] = []
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        try:
+            resp = client.post(
+                "/api/scenario/multi-run",
+                json={
+                    "question": "What if the canal closes overnight?",
+                    "run_count": 2,
+                    "num_agents": 3,
+                    "rounds": 1,
+                },
+            )
+
+            assert resp.status_code == 200
+            created = resp.json()
+            group_id = created["run_group_id"]
+            scenario_id = created["runs"][0]["scenario_id"]
+
+            get_resp = client.get(f"/api/scenario/{scenario_id}")
+
+            assert get_resp.status_code == 200
+            assert get_resp.json()["run_group_id"] == group_id
+            assert get_resp.json()["run_group_id"] is not None
+        finally:
+            for coro in scheduled:
+                _close_scheduled_coro(coro)
+
+    def test_multi_run_model_profile_forwards_resolved_llm_policy_to_each_run(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        profile_api_key = "sk-multirun-profile-secret-123456789"
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="multi-run-owner",
+                name="Multi-run profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="profile-model",
+                api_key=profile_api_key,
+                rpm=23,
+                tpm=23000,
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+
+        scheduled: list[object] = []
+        captured: list[dict[str, object]] = []
+
+        async def _noop():
+            return None
+
+        def _fake_background(*_args, **kwargs):
+            captured.append(kwargs)
+            return _noop()
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        try:
+            resp = client.post(
+                "/api/scenario/multi-run",
+                json={
+                    "question": "Can a saved profile drive every run?",
+                    "user_id": "multi-run-owner",
+                    "model_profile_id": profile_id,
+                    "run_count": 2,
+                    "num_agents": 3,
+                    "rounds": 1,
+                },
+            )
+
+            assert resp.status_code == 200
+            assert len(scheduled) == 2
+            for coro in scheduled:
+                asyncio.run(coro)
+        finally:
+            for coro in scheduled:
+                if getattr(coro, "cr_frame", None) is not None:
+                    _close_scheduled_coro(coro)
+
+        assert len(captured) == 2
+        for kwargs in captured:
+            assert kwargs["llm_api_key"] == profile_api_key
+            assert kwargs["llm_base_url"] == "https://api.openai.com/v1"
+            assert kwargs["llm_model"] == "profile-model"
+            assert kwargs["llm_requests_per_minute"] == 23
+            assert kwargs["llm_tokens_per_minute"] == 23000
+
+    def test_multi_run_explicit_byok_forwards_llm_policy_to_each_run(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        scheduled: list[object] = []
+        captured: list[dict[str, object]] = []
+
+        async def _noop():
+            return None
+
+        def _fake_background(*_args, **kwargs):
+            captured.append(kwargs)
+            return _noop()
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        try:
+            resp = client.post(
+                "/api/scenario/multi-run",
+                json={
+                    "question": "Can explicit BYOK drive every run?",
+                    "llm_api_key": "sk-explicit-multirun-secret",
+                    "llm_base_url": "https://api.openai.com/v1",
+                    "llm_model": "explicit-model",
+                    "llm_requests_per_minute": 7,
+                    "llm_tokens_per_minute": 7000,
+                    "run_count": 2,
+                    "num_agents": 3,
+                    "rounds": 1,
+                },
+            )
+
+            assert resp.status_code == 200
+            assert len(scheduled) == 2
+            for coro in scheduled:
+                asyncio.run(coro)
+        finally:
+            for coro in scheduled:
+                if getattr(coro, "cr_frame", None) is not None:
+                    _close_scheduled_coro(coro)
+
+        assert len(captured) == 2
+        for kwargs in captured:
+            assert kwargs["llm_api_key"] == "sk-explicit-multirun-secret"
+            assert kwargs["llm_base_url"] == "https://api.openai.com/v1"
+            assert kwargs["llm_model"] == "explicit-model"
+            assert kwargs["llm_requests_per_minute"] == 7
+            assert kwargs["llm_tokens_per_minute"] == 7000
+
+    def test_get_scenario_run_group_id_defaults_none_for_single_run(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+
+        resp = client.get(f"/api/scenario/{scenario_id}")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "run_group_id" in data
+        assert data["run_group_id"] is None
 
     def test_get_scenario_agents_include_persona_and_identity_id(self, client):
         """GET /api/scenario/{id} exposes scenario agent picker fields."""

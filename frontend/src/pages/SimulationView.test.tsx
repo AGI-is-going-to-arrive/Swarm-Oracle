@@ -472,6 +472,50 @@ describe('SimulationView replay automation output', () => {
     expect(metaRow).not.toBe(questionRow);
   });
 
+  it('back button returns to the run-group result page for a multi-run worldline', async () => {
+    mockStore.scenario = { ...baseScenario, id: 'scenario-1', status: 'done', run_group_id: 'rg-1' };
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const backBtn = await screen.findByRole('button', { name: 'sim.status.back' });
+    backBtn.click();
+    expect(navigateMock).toHaveBeenCalledWith('/result/scenario-1');
+  });
+
+  it('back button honors an explicit backTo passed via navigation state', async () => {
+    mockStore.scenario = { ...baseScenario, id: 'scenario-1', status: 'done', run_group_id: 'rg-1' };
+    render(
+      <MemoryRouter
+        initialEntries={[{ pathname: '/sim/scenario-1', state: { backTo: '/result/origin-9' } }]}
+      >
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const backBtn = await screen.findByRole('button', { name: 'sim.status.back' });
+    backBtn.click();
+    expect(navigateMock).toHaveBeenCalledWith('/result/origin-9');
+  });
+
+  it('back button falls back to home for a plain single-run scenario', async () => {
+    mockStore.scenario = { ...baseScenario, id: 'scenario-1', status: 'done' };
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const backBtn = await screen.findByRole('button', { name: 'sim.status.back' });
+    backBtn.click();
+    expect(navigateMock).toHaveBeenCalledWith('/');
+  });
+
   it('shows the runtime preset badge using the localized current-mode label rather than internal preset slug', async () => {
     render(
       <MemoryRouter initialEntries={['/sim/scenario-1']}>
