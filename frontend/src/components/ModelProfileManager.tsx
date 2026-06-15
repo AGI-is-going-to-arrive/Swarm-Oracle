@@ -575,6 +575,8 @@ export function ModelProfileManager() {
                   testButtonText={t('model_profiles.test_connection')}
                   testSuccessText={t('model_profiles.test_ok')}
                   testFailureText={t('model_profiles.test_failed')}
+                  disabled={Boolean(isEditing && selectedProfile?.has_api_key && !keyCleared && !apiKey.trim())}
+                  disabledHint={t('model_profiles.test_needs_key')}
                 />
               </div>
 

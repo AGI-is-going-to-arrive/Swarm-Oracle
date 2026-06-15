@@ -146,7 +146,11 @@ describe('SetupWizardView provider selection', () => {
     // Read policy back and check
     await waitFor(() => {
       const finalPolicy = loadLlmProviderPolicy();
-      expect(finalPolicy.apiKey).toBe('new-secret-key');
+      // A profile is saved (saveToProfiles defaults on), so the DB owns the credentials
+      // and the plaintext key is cleared from the session draft; the non-secret fields
+      // below are still preserved so the wizard never loses pre-existing config.
+      // codex Gate3 MEDIUM (refined: clear only the secret, keep advanced prefs).
+      expect(finalPolicy.apiKey).toBe('');
       expect(finalPolicy.baseUrl).toBe('https://api.openai.com/v1');
       expect(finalPolicy.model).toBe('custom-model');
       expect(finalPolicy.reasoningEffort).toBe('high');

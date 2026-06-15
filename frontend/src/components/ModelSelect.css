@@ -1,0 +1,52 @@
+/* ── ModelSelect Component ──
+   Shared by the Setup wizard (which defines the --wz-* tokens) and the
+   homepage BYOK panel (which does NOT — the hex fallbacks in var(token, hex)
+   cover that case so the dropdown row / toggle / hints are styled everywhere). */
+.model-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-select__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-select__control {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-select__toggle-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--wz-border-strong, rgba(64, 48, 40, 0.32));
+  background: var(--wz-surface, #ffffff);
+  color: var(--wz-text, #2a201c);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms ease;
+}
+
+.model-select__toggle-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.model-select__toggle-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.model-select__hint {
+  font-size: 0.78rem;
+  color: var(--wz-text-muted, #6b5a52);
+}
+
+.model-select__hint--error {
+  color: var(--wz-dot-error, #b14a3c);
+}

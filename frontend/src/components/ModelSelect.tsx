@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listModels } from '../api/client';
+import './ModelSelect.css';
 
 export interface ModelSelectProps {
   baseUrl: string;
@@ -37,18 +38,29 @@ export function ModelSelect({
   }, [value]);
 
   useEffect(() => {
+    // request-id guard: cleanup flips `active` so a slow in-flight listModels()
+    // resolving after baseUrl/apiKey changed (or after unmount) can never apply a
+    // stale provider's model list. (codex Gate3 MEDIUM ModelSelect.tsx:58)
+    // setState stays wrapped in setTimeout to satisfy react-hooks/set-state-in-effect.
+    let active = true;
+
     if (!baseUrl.trim()) {
-      const initTimer = setTimeout(() => {
+      const resetTimer = setTimeout(() => {
+        if (!active) return;
         setModels([]);
         setSupported(false);
         setLoading(false);
         setError(null);
         setIsManual(true);
       }, 0);
-      return () => clearTimeout(initTimer);
+      return () => {
+        active = false;
+        clearTimeout(resetTimer);
+      };
     }
 
     const startTimer = setTimeout(() => {
+      if (!active) return;
       setLoading(true);
       setError(null);
     }, 0);
@@ -56,19 +68,21 @@ export function ModelSelect({
     const timer = setTimeout(async () => {
       try {
         const res = await listModels(baseUrl, apiKey);
+        if (!active) return;
         const fetchedModels = res.models || [];
         setModels(fetchedModels);
         setSupported(res.supported);
         setLoading(false);
 
         if (res.supported && fetchedModels.length > 0) {
-          // If value matches one of the fetched models, or if it is empty, default to dropdown mode
+          // value matches a fetched model (or is empty) → default to dropdown mode
           const hasMatch = fetchedModels.includes(valueRef.current);
           setIsManual(!hasMatch && valueRef.current !== '');
         } else {
           setIsManual(true);
         }
       } catch (err) {
+        if (!active) return;
         setError(err instanceof Error ? err.message : 'Unknown error');
         setModels([]);
         setSupported(false);
@@ -78,6 +92,7 @@ export function ModelSelect({
     }, 500);
 
     return () => {
+      active = false;
       clearTimeout(startTimer);
       clearTimeout(timer);
     };

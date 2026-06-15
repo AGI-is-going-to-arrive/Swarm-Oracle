@@ -1,6 +1,12 @@
 .model-profile-manager {
   padding: 1.5rem;
+  /* sRGB literal first so browsers without OKLCH support (the shared tokens
+     resolve to oklch()) still render a light surface + dark text and never fall
+     back to the dark-on-dark bug. Modern browsers use the token line below.
+     codex Gate3 MEDIUM ModelProfileManager.css:3 */
+  background-color: #f3f1ee;
   background-color: var(--bg-base, #f3f1ee);
+  color: #181611;
   color: var(--text-primary, #181611);
   border-radius: 8px;
 }
@@ -142,7 +148,7 @@
   border-radius: 6px;
 }
 
-.badge {
+.model-profile-manager .badge {
   display: inline-block;
   padding: 0.25rem 0.5rem;
   font-size: 0.75rem;
@@ -150,13 +156,13 @@
   border-radius: 4px;
 }
 
-.badge--success {
+.model-profile-manager .badge--success {
   background-color: rgba(58, 168, 91, 0.1);
   color: #3aa85b;
   border: 1px solid #3aa85b;
 }
 
-.badge--warning {
+.model-profile-manager .badge--warning {
   background-color: rgba(226, 160, 0, 0.1);
   color: #e2a000;
   border: 1px solid #e2a000;
@@ -181,8 +187,9 @@
   }
 }
 
-/* Custom buttons mapping */
-.btn--primary {
+/* Custom buttons mapping (scoped to the manager so the lazy-loaded route CSS
+   chunk can't restyle .btn--* on other pages). codex Gate3 MEDIUM */
+.model-profile-manager .btn--primary {
   background-color: #c61583;
   background-color: oklch(55% 0.22 350);
   border-color: #c61583;
@@ -190,7 +197,7 @@
   color: #ffffff;
   color: oklch(100% 0 0);
 }
-.btn--primary:hover {
+.model-profile-manager .btn--primary:hover {
   background-color: #a0106a;
   background-color: oklch(45% 0.20 350);
   border-color: #a0106a;
@@ -199,14 +206,14 @@
   color: oklch(100% 0 0);
 }
 
-.btn--secondary {
+.model-profile-manager .btn--secondary {
   background-color: transparent;
   border-color: #d1cdc7;
   border-color: oklch(85% 0.01 80);
   color: #181611;
   color: oklch(20% 0.01 80);
 }
-.btn--secondary:hover {
+.model-profile-manager .btn--secondary:hover {
   background-color: #f2eee7;
   background-color: oklch(95% 0.01 80);
   border-color: #d1cdc7;
@@ -215,7 +222,7 @@
   color: oklch(20% 0.01 80);
 }
 
-.btn--danger {
+.model-profile-manager .btn--danger {
   background-color: #d74745;
   background-color: oklch(60% 0.18 25);
   border-color: #d74745;
@@ -223,7 +230,7 @@
   color: #ffffff;
   color: oklch(100% 0 0);
 }
-.btn--danger:hover {
+.model-profile-manager .btn--danger:hover {
   background-color: #c03836;
   background-color: oklch(52% 0.17 25);
   border-color: #c03836;
@@ -232,12 +239,12 @@
   color: oklch(100% 0 0);
 }
 
-.btn--sm {
+.model-profile-manager .btn--sm {
   padding: 6px 16px;
   font-size: var(--text-xs);
 }
 
-.btn--link {
+.model-profile-manager .btn--link {
   background: transparent;
   border: none;
   padding: 0;
@@ -247,18 +254,20 @@
   cursor: pointer;
   border-radius: 0;
 }
-.btn--link:hover {
+.model-profile-manager .btn--link:hover {
   color: #a0106a;
   color: oklch(45% 0.20 350);
   background: transparent;
 }
 
-/* Form layouts and controls */
-.form-group {
+/* Form layouts and controls (scoped to the manager — these generic class names
+   are also used by InputView, so an unscoped global would cross-pollute the
+   homepage after the route chunk loads). codex Gate3 MEDIUM */
+.model-profile-manager .form-group {
   margin-bottom: 1.25rem;
 }
 
-.form-group label {
+.model-profile-manager .form-group label {
   display: block;
   margin-bottom: 0.5rem;
   font-size: var(--text-xs);
@@ -268,7 +277,7 @@
   font-weight: 600;
 }
 
-.form-control {
+.model-profile-manager .form-control {
   width: 100%;
   padding: 10px 0;
   background: transparent;
@@ -282,16 +291,16 @@
   transition: border-color var(--transition-base);
 }
 
-.form-control:focus {
+.model-profile-manager .form-control:focus {
   border-bottom-color: var(--color-primary, #c61583);
 }
 
-textarea.form-control {
+.model-profile-manager textarea.form-control {
   min-height: 80px;
   resize: vertical;
 }
 
-select.form-control {
+.model-profile-manager select.form-control {
   appearance: none;
   background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2358554f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
   background-repeat: no-repeat;
@@ -300,16 +309,16 @@ select.form-control {
   padding-right: 20px;
 }
 
-.form-row {
+.model-profile-manager .form-row {
   display: flex;
   gap: 1rem;
 }
 
-.form-group.col {
+.model-profile-manager .form-group.col {
   flex: 1;
 }
 
-.form-check {
+.model-profile-manager .form-check {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -317,7 +326,7 @@ select.form-control {
   cursor: pointer;
 }
 
-.form-check-input {
+.model-profile-manager .form-check-input {
   width: 16px;
   height: 16px;
   cursor: pointer;
@@ -325,7 +334,7 @@ select.form-control {
   accent-color: oklch(55% 0.22 350);
 }
 
-.form-check-label {
+.model-profile-manager .form-check-label {
   font-size: var(--text-sm);
   color: var(--text-primary);
   cursor: pointer;

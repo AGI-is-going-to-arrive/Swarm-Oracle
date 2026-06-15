@@ -25,8 +25,13 @@ export interface ConnectionTesterProps {
   testSuccessText?: string;
   testFailureText?: string;
   testFailureNetworkText?: string;
+  testTimeoutText?: string;
   showLogText?: string;
   hideLogText?: string;
+  /** When true the test button is disabled (e.g. an edited profile whose stored
+   *  key isn't available client-side); disabledHint explains why in the status line. */
+  disabled?: boolean;
+  disabledHint?: string;
 }
 
 export type TesterStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -116,8 +121,11 @@ export function ConnectionTester({
   testSuccessText,
   testFailureText,
   testFailureNetworkText,
+  testTimeoutText,
   showLogText,
   hideLogText,
+  disabled,
+  disabledHint,
 }: ConnectionTesterProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<TesterStatus>('idle');
@@ -161,14 +169,21 @@ export function ConnectionTester({
         setStatus('error');
         setMessage(errorMessage);
       } else {
+        // A timeout (AbortController fired in client.ts request()) is NOT a bad
+        // base URL — the probe can be slow (e.g. a local model doing a real
+        // completion). Surface a distinct message instead of misleading the user
+        // into "check your base URL". (Gate3 F-1, found via live 53s local probe)
         setStatus('error');
-        setMessage(testFailureNetworkText || t('setup.test_failure_network'));
+        const isTimeout = err instanceof Error && /timed out/i.test(err.message);
+        setMessage(isTimeout
+          ? (testTimeoutText || t('setup.test_failure_timeout'))
+          : (testFailureNetworkText || t('setup.test_failure_network')));
       }
     }
   };
 
   const dotClass = `status-dot status-dot--${status}`;
-  const canTest = baseUrl.trim().length > 0 && status !== 'testing';
+  const canTest = baseUrl.trim().length > 0 && status !== 'testing' && !disabled;
 
   return (
     <div className="tester">
@@ -188,7 +203,9 @@ export function ConnectionTester({
           aria-live="polite"
           role="status"
         >
-          {status === 'idle' ? (testIdleText || t('setup.test_idle')) : message}
+          {status === 'idle'
+            ? (disabled && disabledHint ? disabledHint : (testIdleText || t('setup.test_idle')))
+            : message}
           {status === 'success' && latencyMs != null
             ? ` · ${latencyMs} ms`
             : ''}

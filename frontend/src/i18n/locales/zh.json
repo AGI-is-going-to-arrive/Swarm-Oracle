@@ -3277,6 +3277,7 @@
       "test_success": "连接成功。",
       "test_failure": "连接失败。",
       "test_failure_network": "网络异常，请检查 base URL 后重试。",
+      "test_failure_timeout": "探测超时（模型可能响应较慢），凭据可能仍然有效，请稍后重试。",
       "test_failure_parse": "服务端返回了不可解析的响应。",
       "show_log": "显示原始响应",
       "hide_log": "隐藏原始响应",
@@ -3602,7 +3603,8 @@
       "key_cleared_on_save": "密钥将在保存时清除",
       "test_connection": "测试连接",
       "test_ok": "连接测试成功。",
-      "test_failed": "连接测试失败。"
+      "test_failed": "连接测试失败。",
+      "test_needs_key": "编辑已保存的配置时，请先重新输入密钥再测试连接。"
     },
     "model_select": {
       "placeholder": "请输入模型名称...",

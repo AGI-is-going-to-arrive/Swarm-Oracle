@@ -120,7 +120,7 @@ describe('ModelSelect', () => {
 
     // Toggle manual input
     const toggleBtn = screen.getByRole('button', { name: 'model_select.manual_input' });
-    
+
     act(() => {
       fireEvent.click(toggleBtn);
     });
@@ -131,7 +131,7 @@ describe('ModelSelect', () => {
 
     // Toggle back to dropdown
     const dropdownBtn = screen.getByRole('button', { name: 'model_select.use_dropdown' });
-    
+
     act(() => {
       fireEvent.click(dropdownBtn);
     });

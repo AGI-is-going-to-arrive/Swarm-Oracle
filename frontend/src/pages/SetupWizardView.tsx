@@ -101,6 +101,7 @@ export default function SetupWizardView() {
       console.error('Failed to list model profiles:', err);
     }
 
+    let createdProfile = false;
     if (saveToProfiles) {
       const profileName = selectedPreset && selectedPreset.id !== 'custom'
         ? t(selectedPreset.nameKey)
@@ -114,6 +115,7 @@ export default function SetupWizardView() {
           model: model.trim(),
           api_key: apiKey.trim(),
         });
+        createdProfile = true;
       } catch (err) {
         console.error('Failed to create model profile:', err);
         // fail-soft: persist to sessionStorage so BYOK still works, surface an inline
@@ -130,9 +132,17 @@ export default function SetupWizardView() {
       }
     }
 
-    if (hasProfiles) {
-      // 优先级: 已落库 profile 时以 DB profile 为准，sessionStorage 草稿不覆盖已存 profile
-      saveLlmProviderPolicy({});
+    if (hasProfiles || createdProfile) {
+      // DB profile 持有凭据（SSOT）。从 session 草稿里清掉明文 api_key，避免与 DB 档案
+      // 重复残留；但保留 baseUrl/model 以及 DB 档案不承载的全局偏好（reasoningEffort /
+      // disableUserQuota / rpm / tpm），以免走一遍向导反而丢用户既有配置。
+      // codex Gate3 MEDIUM（改良：只清密钥，不整体清空草稿——后者会丢高级字段）。
+      saveLlmProviderPolicy({
+        ...initialPolicy,
+        apiKey: '',
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+      });
     } else {
       saveLlmProviderPolicy({
         ...initialPolicy,
@@ -243,18 +253,19 @@ export default function SetupWizardView() {
               ) : null}
             </label>
 
-            <label className="wizard__field">
-              <span className="wizard__field-label">
+            <div className="wizard__field">
+              <label className="wizard__field-label" htmlFor="wizard-model">
                 {t('model_profiles.model')}
-              </span>
+              </label>
               <ModelSelect
+                inputId="wizard-model"
                 baseUrl={baseUrl}
                 apiKey={apiKey}
                 value={model}
                 onChange={setModel}
                 disabled={isSaving}
               />
-            </label>
+            </div>
 
             <div className="wizard__field wizard__field--checkbox" style={{ marginTop: '8px' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
@@ -307,7 +318,7 @@ export default function SetupWizardView() {
               </div>
             </div>
             <ConnectionTester baseUrl={baseUrl} apiKey={apiKey} model={model} />
-            
+
             <div className="wizard__go-to-profiles-wrap" style={{ marginTop: '16px' }}>
               <Link to="/model-profiles" className="wizard__link">
                 {t('setup.go_to_profiles')} &rarr;

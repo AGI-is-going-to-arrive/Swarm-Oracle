@@ -3277,6 +3277,7 @@
       "test_success": "Connected successfully.",
       "test_failure": "Connection failed.",
       "test_failure_network": "Network error — check the base URL and try again.",
+      "test_failure_timeout": "Probe timed out (the model may be slow); your credentials may still be valid — try again shortly.",
       "test_failure_parse": "Server returned an unexpected response.",
       "show_log": "Show raw response",
       "hide_log": "Hide raw response",
@@ -3602,7 +3603,8 @@
       "key_cleared_on_save": "Key will be cleared on save",
       "test_connection": "Test Connection",
       "test_ok": "Connection test successful.",
-      "test_failed": "Connection test failed."
+      "test_failed": "Connection test failed.",
+      "test_needs_key": "Re-enter the API key before testing the connection when editing a saved profile."
     },
     "model_select": {
       "placeholder": "Enter model name...",
