@@ -32,9 +32,9 @@ def test_list_models_enumerates_openai_compatible_models(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
 
     client = TestClient(app)
-    response = client.get(
+    response = client.post(
         "/api/admin/list-models",
-        params={"base_url": "https://api.openai.com/v1/", "api_key": "sk-test"},
+        json={"base_url": "https://api.openai.com/v1/", "api_key": "sk-test"},
     )
 
     assert response.status_code == 200
@@ -48,6 +48,7 @@ def test_list_models_enumerates_openai_compatible_models(monkeypatch):
         "url": "https://api.openai.com/v1/models",
         "headers": {"Authorization": "Bearer sk-test"},
     }
+    assert "api_key" not in httpx.URL(str(seen["url"])).query.decode()
 
 
 def test_list_models_returns_unsupported_without_admin_token_for_divergent_provider(
@@ -61,9 +62,9 @@ def test_list_models_returns_unsupported_without_admin_token_for_divergent_provi
     monkeypatch.setattr(settings, "ADMIN_TOKEN", "super-secret-token")
 
     client = TestClient(app)
-    response = client.get(
+    response = client.post(
         "/api/admin/list-models",
-        params={"base_url": "https://api.anthropic.com/v1", "api_key": "sk-test"},
+        json={"base_url": "https://api.anthropic.com/v1", "api_key": "sk-test"},
     )
 
     assert response.status_code == 200
@@ -75,9 +76,9 @@ def test_list_models_returns_unsupported_without_admin_token_for_divergent_provi
 
 def test_list_models_rejects_disallowed_base_url():
     client = TestClient(app)
-    response = client.get(
+    response = client.post(
         "/api/admin/list-models",
-        params={"base_url": "http://api.openai.com/v1", "api_key": "sk-test"},
+        json={"base_url": "http://api.openai.com/v1", "api_key": "sk-test"},
     )
 
     assert response.status_code == 400
@@ -101,9 +102,9 @@ def test_list_models_timeout_returns_fail_soft(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
 
     client = TestClient(app)
-    response = client.get(
+    response = client.post(
         "/api/admin/list-models",
-        params={"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
+        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
     )
 
     assert response.status_code == 200
@@ -134,9 +135,9 @@ def test_list_models_caps_returned_model_count(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
 
     client = TestClient(app)
-    response = client.get(
+    response = client.post(
         "/api/admin/list-models",
-        params={"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
+        json={"base_url": "https://api.openai.com/v1", "api_key": "sk-test"},
     )
 
     assert response.status_code == 200

@@ -1958,18 +1958,17 @@ export interface ListModelsResponse {
   reason?: string;
 }
 
-/** GET /api/admin/list-models — list available models for base_url and api_key */
+/** POST /api/admin/list-models — list available models for base_url and api_key */
 export async function listModels(
   baseUrl: string,
   apiKey?: string,
 ): Promise<ListModelsResponse> {
-  const queryParams = new URLSearchParams();
-  queryParams.set('base_url', baseUrl);
-  if (apiKey) {
-    queryParams.set('api_key', apiKey);
-  }
-  return request(`/admin/list-models?${queryParams.toString()}`, {
-    method: 'GET',
+  return request('/admin/list-models', {
+    method: 'POST',
+    body: JSON.stringify({
+      base_url: baseUrl,
+      ...(apiKey ? { api_key: apiKey } : {}),
+    }),
   });
 }
 

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.api.errors import api_error
@@ -78,6 +78,11 @@ class TestLlmRequest(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+
+class ListModelsRequest(BaseModel):
+    base_url: str
+    api_key: str | None = None
 
 
 def _validate_admin_llm_base_url(base_url: str | None) -> str | None:
@@ -151,13 +156,10 @@ async def api_preflight():
     return [asdict(result) for result in await run_preflight()]
 
 
-@router.get("/list-models")
-async def api_list_models(
-    base_url: str = Query(...),
-    api_key: str | None = Query(default=None),
-):
+@router.post("/list-models")
+async def api_list_models(request: ListModelsRequest):
     """List models from an OpenAI-compatible provider without hard-failing callers."""
-    normalized_base_url = base_url.strip()
+    normalized_base_url = request.base_url.strip()
     validated_base_url = _validate_admin_llm_base_url(normalized_base_url)
     if validated_base_url is None:
         raise api_error(
@@ -174,7 +176,7 @@ async def api_list_models(
         )
 
     models_url = _models_url_from_base_url(validated_base_url)
-    normalized_api_key = (api_key or "").strip()
+    normalized_api_key = (request.api_key or "").strip()
     headers = (
         {"Authorization": f"Bearer {normalized_api_key}"}
         if normalized_api_key
