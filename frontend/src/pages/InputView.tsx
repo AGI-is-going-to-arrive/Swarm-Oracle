@@ -36,6 +36,7 @@ import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
 import { LlmNotConfiguredBanner } from '../components/LlmNotConfiguredBanner';
 import { LlmErrorHint } from '../components/LlmErrorHint';
+import ModelSelect from '../components/ModelSelect';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useOnboardingState } from '../hooks/useOnboardingState';
 import {
@@ -2838,13 +2839,13 @@ export function InputView() {
                           {isModelOverridden && <span className="override-badge" style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>({t('model_profiles.overridden')})</span>}
                         </label>
                         <span className="byok-field-help">{t('home.byok_model_help')}</span>
-                        <input
-                          id="byok-model"
-                          type="text"
-                          className="input byok-input"
+                        <ModelSelect
+                          inputId="byok-model"
+                          inputClassName="input byok-input"
+                          baseUrl={llmBaseUrl}
+                          apiKey={llmApiKey}
                           value={llmModel}
-                          onChange={(e) => setLlmModel(e.target.value)}
-                          placeholder="gpt-4o / claude-3.5-sonnet / ..."
+                          onChange={setLlmModel}
                           disabled={isSubmitting}
                         />
                       </div>

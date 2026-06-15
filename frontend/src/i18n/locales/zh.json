@@ -3290,7 +3290,8 @@
       "skip": "稍后再说",
       "save_profile_checkbox": "同时保存为模型档案",
       "go_to_profiles": "前往模型配置",
-      "save_profile_failed_hint": "保存模型档案失败，但您的配置已在本地生效。"
+      "save_profile_failed_hint": "保存模型档案失败，但您的配置已在本地生效。",
+      "default_profile_name": "我的配置"
     },
     "onboarding": {
       "welcome_title": "欢迎使用 SwarmOracle",

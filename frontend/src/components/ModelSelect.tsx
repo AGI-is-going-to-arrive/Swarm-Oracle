@@ -9,6 +9,10 @@ export interface ModelSelectProps {
   onChange: (model: string) => void;
   provider?: string;
   disabled?: boolean;
+  /** Applies this id to the rendered <input>/<select> so an external <label htmlFor> can associate with it. */
+  inputId?: string;
+  /** Overrides the default `wizard__input` class on the rendered control (e.g. to reuse host-page input styling). */
+  inputClassName?: string;
 }
 
 export function ModelSelect({
@@ -17,6 +21,8 @@ export function ModelSelect({
   value,
   onChange,
   disabled,
+  inputId,
+  inputClassName,
 }: ModelSelectProps) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -85,9 +91,10 @@ export function ModelSelect({
         <div className="model-select__control">
           {showDropdown ? (
             <select
+              id={inputId}
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              className="wizard__input"
+              className={inputClassName ?? 'wizard__input'}
               style={{ width: '100%' }}
               disabled={disabled}
               aria-label={t('model_profiles.model')}
@@ -101,11 +108,12 @@ export function ModelSelect({
             </select>
           ) : (
             <input
+              id={inputId}
               type="text"
               value={value}
               onChange={(e) => onChange(e.target.value)}
               placeholder={t('model_select.placeholder')}
-              className="wizard__input"
+              className={inputClassName ?? 'wizard__input'}
               style={{ width: '100%' }}
               disabled={disabled}
               spellCheck={false}

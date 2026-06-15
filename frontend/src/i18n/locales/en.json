@@ -3290,7 +3290,8 @@
       "skip": "Skip for now",
       "save_profile_checkbox": "Also save as model profile",
       "go_to_profiles": "Go to model profiles",
-      "save_profile_failed_hint": "Failed to save model profile, but your settings are applied locally."
+      "save_profile_failed_hint": "Failed to save model profile, but your settings are applied locally.",
+      "default_profile_name": "My Configuration"
     },
     "onboarding": {
       "welcome_title": "Welcome to SwarmOracle",

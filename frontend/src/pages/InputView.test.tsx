@@ -26,6 +26,7 @@ const {
   getSessionBoundUserIdMock,
   createMultiRunMock,
   listModelProfilesMock,
+  listModelsMock,
   setMockLanguage,
   getMockLanguage,
   stableTranslator,
@@ -160,6 +161,7 @@ const {
     }),
     listAgentIdentitiesMock: vi.fn(),
     listModelProfilesMock: vi.fn(),
+    listModelsMock: vi.fn(),
     getSessionBoundUserIdMock: vi.fn(() => 'default_user'),
     setMockLanguage,
     getMockLanguage,
@@ -222,6 +224,7 @@ vi.mock('../api/client', () => ({
   listAgentIdentities: listAgentIdentitiesMock,
   getSessionBoundUserId: getSessionBoundUserIdMock,
   listModelProfiles: listModelProfilesMock,
+  listModels: listModelsMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -390,6 +393,8 @@ describe('InputView campaign progress', () => {
     getCapabilitiesMock.mockReset();
     listModelProfilesMock.mockReset();
     listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    listModelsMock.mockReset();
+    listModelsMock.mockResolvedValue({ models: [], supported: false });
     // Default: server web search disabled (tests that need it override)
     getCapabilitiesMock.mockResolvedValue({});
     identityPreflightMock.mockResolvedValue({

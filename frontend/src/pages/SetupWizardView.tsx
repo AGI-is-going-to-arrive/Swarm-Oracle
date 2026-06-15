@@ -50,6 +50,7 @@ export default function SetupWizardView() {
   const [model, setModel] = useState<string>(initialPolicy.model);
   const [saveToProfiles, setSaveToProfiles] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const stepIndex = STEP_ORDER.indexOf(step);
   const stepNumber = stepIndex + 1;
@@ -91,6 +92,7 @@ export default function SetupWizardView() {
 
   const handleFinish = async () => {
     setIsSaving(true);
+    setSaveError(null);
     let hasProfiles = false;
     try {
       const res = await listModelProfiles();
@@ -102,7 +104,7 @@ export default function SetupWizardView() {
     if (saveToProfiles) {
       const profileName = selectedPreset && selectedPreset.id !== 'custom'
         ? t(selectedPreset.nameKey)
-        : '我的配置';
+        : t('setup.default_profile_name');
 
       try {
         await createModelProfile({
@@ -114,7 +116,17 @@ export default function SetupWizardView() {
         });
       } catch (err) {
         console.error('Failed to create model profile:', err);
-        alert(t('setup.save_profile_failed_hint'));
+        // fail-soft: persist to sessionStorage so BYOK still works, surface an inline
+        // error, and stay on the wizard so the user actually sees it (no blocking alert).
+        setSaveError(t('setup.save_profile_failed_hint'));
+        saveLlmProviderPolicy({
+          ...initialPolicy,
+          apiKey: apiKey.trim(),
+          baseUrl: baseUrl.trim(),
+          model: model.trim(),
+        });
+        setIsSaving(false);
+        return;
       }
     }
 
@@ -304,6 +316,24 @@ export default function SetupWizardView() {
           </div>
         ) : null}
       </section>
+
+      {saveError ? (
+        <div
+          className="wizard__save-error"
+          role="alert"
+          style={{
+            margin: '0 0 1rem',
+            padding: '0.75rem 1rem',
+            border: '1px solid #f5c6cb',
+            background: '#fdf3f4',
+            color: '#721c24',
+            borderRadius: '8px',
+            fontSize: '0.9rem',
+          }}
+        >
+          {saveError}
+        </div>
+      ) : null}
 
       <footer className="wizard__footer">
         <div className="wizard__footer-left">
