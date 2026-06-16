@@ -2403,9 +2403,9 @@ def test_roundtable_phase_insight_llm_rewrites_commentary_and_body(monkeypatch):
 
     async def _rewrite(input_text, **kwargs):
         prompts.append(input_text)
-        assert "model" not in kwargs
-        assert "api_key" not in kwargs
-        assert "base_url" not in kwargs
+        assert kwargs["model"] is None
+        assert kwargs["api_key"] is None
+        assert kwargs["base_url"] is None
         assert "max_tokens" not in kwargs
         return "For the question 'What broke first?', The pressure moved from roads to legitimacy."
 

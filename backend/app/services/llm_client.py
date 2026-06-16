@@ -357,6 +357,36 @@ def detect_provider(base_url: str | None) -> LLMProviderProfile:
     return _KNOWN_LLM_PROVIDERS.get(hostname, _UNKNOWN_PROXY_PROFILE)
 
 
+def _merge_provider_capability_overrides(
+    provider_profile: LLMProviderProfile,
+    *,
+    supports_structured_outputs_override: bool | None,
+    supports_native_search_override: bool | None,
+) -> LLMProviderProfile:
+    supports_structured_outputs = (
+        provider_profile.supports_structured_outputs
+        if supports_structured_outputs_override is None
+        else supports_structured_outputs_override
+    )
+    supports_native_search = (
+        provider_profile.supports_native_search
+        if supports_native_search_override is None
+        else supports_native_search_override
+    )
+    structured_output_api = provider_profile.structured_output_api
+    if supports_structured_outputs and structured_output_api == "none":
+        structured_output_api = "response_format_json_schema"
+    return LLMProviderProfile(
+        name=provider_profile.name,
+        supports_native_search=supports_native_search,
+        native_search_api=provider_profile.native_search_api,
+        requires_specific_endpoint=provider_profile.requires_specific_endpoint,
+        is_proxy=provider_profile.is_proxy,
+        supports_structured_outputs=supports_structured_outputs,
+        structured_output_api=structured_output_api,
+    )
+
+
 class LLMError(Exception):
     """Raised when LLM call fails."""
 
@@ -529,6 +559,24 @@ class LLMRequestContext:
     purpose: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    concurrency: int | None = None
+    concurrency_semaphore: asyncio.Semaphore | None = None
+    supports_structured_outputs_override: bool | None = None
+    supports_native_search_override: bool | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeSlotReservation:
+    """Concrete runtime guards acquired for one LLM call."""
+
+    reservation_id: str | None = None
+    sqlite_db_path: str | None = None
+    quota_key: str | None = None
+    global_pending_acquired: bool = False
+    user_pending_acquired: bool = False
+    request_semaphore: asyncio.Semaphore | None = None
+    purpose_semaphore: asyncio.Semaphore | None = None
+    global_semaphore: asyncio.Semaphore | None = None
 
 
 _REQUEST_CONTEXT = ContextVar("llm_request_context", default=LLMRequestContext())
@@ -569,9 +617,13 @@ def llm_request_scope(
     purpose: str | None | object = _REQUEST_SCOPE_UNSET,
     requests_per_minute: int | None | object = _REQUEST_SCOPE_UNSET,
     tokens_per_minute: int | None | object = _REQUEST_SCOPE_UNSET,
+    concurrency: int | None | object = _REQUEST_SCOPE_UNSET,
+    supports_structured_outputs_override: bool | None | object = _REQUEST_SCOPE_UNSET,
+    supports_native_search_override: bool | None | object = _REQUEST_SCOPE_UNSET,
 ):
     """Attach request-scoped quota metadata to downstream LLM calls."""
     current = _REQUEST_CONTEXT.get()
+    scoped_concurrency = _resolve_scoped_concurrency(current, concurrency)
     token = _REQUEST_CONTEXT.set(
         LLMRequestContext(
             quota_key=current.quota_key if quota_key is _REQUEST_SCOPE_UNSET else quota_key,
@@ -585,6 +637,18 @@ def llm_request_scope(
                 current.tokens_per_minute
                 if tokens_per_minute is _REQUEST_SCOPE_UNSET
                 else tokens_per_minute
+            ),
+            concurrency=scoped_concurrency[0],
+            concurrency_semaphore=scoped_concurrency[1],
+            supports_structured_outputs_override=(
+                current.supports_structured_outputs_override
+                if supports_structured_outputs_override is _REQUEST_SCOPE_UNSET
+                else _coerce_optional_bool_override(supports_structured_outputs_override)
+            ),
+            supports_native_search_override=(
+                current.supports_native_search_override
+                if supports_native_search_override is _REQUEST_SCOPE_UNSET
+                else _coerce_optional_bool_override(supports_native_search_override)
             ),
         )
     )
@@ -609,6 +673,34 @@ def _coerce_optional_non_negative_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _coerce_optional_positive_int(value: Any) -> int | None:
+    parsed = _coerce_optional_non_negative_int(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return max(1, parsed)
+
+
+def _coerce_optional_bool_override(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _resolve_scoped_concurrency(
+    current: LLMRequestContext,
+    raw_concurrency: int | None | object,
+) -> tuple[int | None, asyncio.Semaphore | None]:
+    if raw_concurrency is _REQUEST_SCOPE_UNSET:
+        return current.concurrency, current.concurrency_semaphore
+
+    parsed = _coerce_optional_positive_int(raw_concurrency)
+    if parsed is None:
+        return current.concurrency, current.concurrency_semaphore
+
+    effective = min(current.concurrency, parsed) if current.concurrency is not None else parsed
+    if current.concurrency == effective and current.concurrency_semaphore is not None:
+        return effective, current.concurrency_semaphore
+    return effective, asyncio.Semaphore(effective)
 
 
 def _provider_key(base_url: str | None) -> str:
@@ -754,6 +846,9 @@ def get_runtime_parallelism_limit() -> int:
         candidate_limits.append(global_pending_limit)
 
     request_context = _REQUEST_CONTEXT.get()
+    if request_context.concurrency is not None:
+        candidate_limits.append(request_context.concurrency)
+
     quota_key = _normalize_quota_key(request_context.quota_key)
     user_limit = _get_user_pending_limit()
     if quota_key and user_limit is not None:
@@ -967,6 +1062,61 @@ def _drop_structured_output_params(
     for key in tuple(param_keys):
         payload.pop(key, None)
     param_keys.clear()
+
+
+def _body_mentions_native_search_param(body: str) -> bool:
+    lowered = body.lower()
+    normalized = re.sub(r"[\s\"'`.-]+", "_", lowered)
+    return any(
+        marker in lowered or re.sub(r"[\s\"'`.-]+", "_", marker) in normalized
+        for marker in (
+            "tools",
+            "tool",
+            "web_search",
+            "web search",
+            "native search",
+            "web_search_call",
+        )
+    )
+
+
+def _body_mentions_native_search_rejection(body: str) -> bool:
+    lowered = body.lower()
+    if not any(
+        marker in lowered
+        for marker in (
+            "not supported",
+            "unsupported",
+            "unrecognized",
+            "unknown parameter",
+            "invalid parameter",
+            "unexpected parameter",
+            "extraneous",
+            "not allowed",
+            "does not support",
+            "forbidden",
+            "disallowed",
+            "rejected",
+            "failed",
+        )
+    ):
+        return False
+    return _body_mentions_native_search_param(body)
+
+
+def _is_native_search_rejection(status_code: int, body: str) -> bool:
+    if status_code < 400 or status_code >= 500:
+        return False
+    if _is_non_retryable_optional_param_error(status_code, body):
+        return False
+    return _body_mentions_native_search_rejection(body)
+
+
+def _drop_native_search_tools(payload: dict[str, Any], param_keys: set[str]) -> None:
+    for key in tuple(param_keys):
+        payload.pop(key, None)
+    param_keys.clear()
+    _last_native_citations.set([])
 
 
 def _estimate_probe_recommendations(parallelism: int) -> dict[str, int]:
@@ -1652,7 +1802,7 @@ async def _reserve_runtime_slot(
     provider_key: str,
     lease_seconds: float,
     estimated_tokens: int | None = None,
-) -> str | None:
+) -> RuntimeSlotReservation | None:
     global _pending_requests
     effective_tokens = max(1, int(estimated_tokens or _estimate_tokens("")))
     deadline = monotonic() + max(lease_seconds, _RATE_LIMIT_WINDOW_SECONDS * 2)
@@ -1660,6 +1810,7 @@ async def _reserve_runtime_slot(
     while True:
         now = monotonic()
         reservation_id: str | None = None
+        reservation_db_path: str | None = None
         use_in_process_counts = False
         wait_seconds: float | None = None
         user_limit = _get_user_pending_limit()
@@ -1694,6 +1845,7 @@ async def _reserve_runtime_slot(
                         lease_seconds=lease_seconds,
                         estimated_tokens=effective_tokens,
                     )
+                    reservation_db_path = db_path
                 except LLMRateLimitWindowError as exc:
                     wait_seconds = exc.wait_seconds
                 except LLMBackpressureError:
@@ -1746,34 +1898,64 @@ async def _reserve_runtime_slot(
             await asyncio.sleep(wait_seconds)
             continue
 
+        request_semaphore = _REQUEST_CONTEXT.get().concurrency_semaphore
         purpose_semaphore = _get_purpose_semaphore(purpose)
         semaphore = _get_global_semaphore()
+        acquired_request = False
         acquired_purpose = False
         acquired_global = False
         try:
+            if request_semaphore is not None:
+                await request_semaphore.acquire()
+                acquired_request = True
             if purpose_semaphore is not None:
                 await purpose_semaphore.acquire()
                 acquired_purpose = True
             if semaphore is not None:
                 await semaphore.acquire()
                 acquired_global = True
-            return reservation_id
+            if (
+                reservation_id is None
+                and not use_in_process_counts
+                and not acquired_request
+                and not acquired_purpose
+                and not acquired_global
+            ):
+                return None
+            return RuntimeSlotReservation(
+                reservation_id=reservation_id,
+                sqlite_db_path=reservation_db_path,
+                quota_key=quota_key,
+                global_pending_acquired=(
+                    use_in_process_counts and global_pending_limit is not None
+                ),
+                user_pending_acquired=(
+                    use_in_process_counts and quota_key is not None and user_limit is not None
+                ),
+                request_semaphore=request_semaphore if acquired_request else None,
+                purpose_semaphore=purpose_semaphore if acquired_purpose else None,
+                global_semaphore=semaphore if acquired_global else None,
+            )
         except BaseException:
             if acquired_global and semaphore is not None:
                 semaphore.release()
             if acquired_purpose and purpose_semaphore is not None:
                 purpose_semaphore.release()
+            if acquired_request and request_semaphore is not None:
+                request_semaphore.release()
             async with _guard_lock:
-                db_path = _runtime_guard_db_path()
-                if db_path is not None and reservation_id is not None:
+                if reservation_db_path is not None and reservation_id is not None:
                     try:
-                        _release_sqlite_runtime_slot(db_path=db_path, reservation_id=reservation_id)
+                        _release_sqlite_runtime_slot(
+                            db_path=reservation_db_path,
+                            reservation_id=reservation_id,
+                        )
                     except (sqlite3.Error, SQLAlchemyError) as exc:
                         logger.warning("SQLite runtime guard release failed: %s", exc)
                 if reservation_id is None:
-                    if _get_global_pending_limit() is not None:
+                    if use_in_process_counts and global_pending_limit is not None:
                         _pending_requests = max(0, _pending_requests - 1)
-                    if quota_key and _get_user_pending_limit() is not None:
+                    if use_in_process_counts and quota_key and user_limit is not None:
                         next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
                         if next_count == 0:
                             _pending_by_quota.pop(quota_key, None)
@@ -1786,32 +1968,43 @@ async def _release_runtime_slot(
     *,
     quota_key: str | None,
     purpose: str | None = None,
-    reservation_id: str | None,
+    reservation_id: RuntimeSlotReservation | str | None,
 ) -> None:
     global _pending_requests
-    semaphore = _get_global_semaphore()
-    if semaphore is not None:
-        semaphore.release()
-    purpose_semaphore = _get_purpose_semaphore(purpose)
-    if purpose_semaphore is not None:
-        purpose_semaphore.release()
+    if isinstance(reservation_id, RuntimeSlotReservation):
+        reservation = reservation_id
+    elif reservation_id is not None:
+        reservation = RuntimeSlotReservation(reservation_id=reservation_id, quota_key=quota_key)
+    else:
+        reservation = None
+
+    if reservation is None:
+        return
+
+    if reservation.global_semaphore is not None:
+        reservation.global_semaphore.release()
+    if reservation.purpose_semaphore is not None:
+        reservation.purpose_semaphore.release()
+    if reservation.request_semaphore is not None:
+        reservation.request_semaphore.release()
     async with _guard_lock:
-        db_path = _runtime_guard_db_path()
-        if db_path is not None and reservation_id is not None:
+        if reservation.sqlite_db_path is not None and reservation.reservation_id is not None:
             try:
-                _release_sqlite_runtime_slot(db_path=db_path, reservation_id=reservation_id)
+                _release_sqlite_runtime_slot(
+                    db_path=reservation.sqlite_db_path,
+                    reservation_id=reservation.reservation_id,
+                )
             except (sqlite3.Error, SQLAlchemyError) as exc:
                 logger.warning("SQLite runtime guard release failed: %s", exc)
 
-        if reservation_id is None:
-            if _get_global_pending_limit() is not None:
-                _pending_requests = max(0, _pending_requests - 1)
-            if quota_key and _get_user_pending_limit() is not None:
-                next_count = max(0, _pending_by_quota.get(quota_key, 0) - 1)
-                if next_count == 0:
-                    _pending_by_quota.pop(quota_key, None)
-                else:
-                    _pending_by_quota[quota_key] = next_count
+        if reservation.global_pending_acquired:
+            _pending_requests = max(0, _pending_requests - 1)
+        if reservation.user_pending_acquired and reservation.quota_key:
+            next_count = max(0, _pending_by_quota.get(reservation.quota_key, 0) - 1)
+            if next_count == 0:
+                _pending_by_quota.pop(reservation.quota_key, None)
+            else:
+                _pending_by_quota[reservation.quota_key] = next_count
 
 
 async def _record_provider_success(provider_key: str) -> None:
@@ -1971,7 +2164,13 @@ async def llm_call(
 
     # ── Native search tools injection (Responses API only) ──
     _native_adapter = None
-    provider_profile = detect_provider(base_url or target_url)
+    provider_profile = _merge_provider_capability_overrides(
+        detect_provider(base_url or target_url),
+        supports_structured_outputs_override=(
+            request_context.supports_structured_outputs_override
+        ),
+        supports_native_search_override=request_context.supports_native_search_override,
+    )
     structured_output_params: dict[str, Any] = {}
     structured_output_keys: frozenset[str] = frozenset()
     if structured_output_schema is not None:
@@ -1982,6 +2181,8 @@ async def llm_call(
             is_chat=is_chat,
         )
         payload.update(structured_output_params)
+    native_search_force_on = request_context.supports_native_search_override is True
+    native_search_tools_injected_by_force = False
     if native_search_domains is not None and not is_chat:
         if (provider_profile.supports_native_search
                 and not provider_profile.is_proxy):
@@ -1991,6 +2192,7 @@ async def llm_call(
             if tools:
                 _native_adapter = adapter
                 payload["tools"] = tools
+                native_search_tools_injected_by_force = native_search_force_on
 
     logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
                  payload["model"],
@@ -1998,7 +2200,7 @@ async def llm_call(
                  effort, len(input_text), bool(api_key or base_url),
                  bool(_native_adapter))
 
-    reservation_id = await _reserve_runtime_slot(
+    reservation = await _reserve_runtime_slot(
         quota_key=quota_key,
         purpose=purpose,
         provider_key=provider_key,
@@ -2013,6 +2215,45 @@ async def llm_call(
         last_exc: Exception | None = None
         attempt_payload = dict(payload)
         active_structured_output_keys = set(structured_output_keys)
+        active_native_search_keys = (
+            {"tools"} if native_search_tools_injected_by_force and "tools" in payload else set()
+        )
+        native_fallback_used = False
+
+        async def _request_without_native_tools_once() -> dict[str, Any]:
+            nonlocal native_fallback_used
+            if native_fallback_used:
+                raise LLMError("Native search no-tools fallback already used")
+            native_fallback_used = True
+            try:
+                fallback_resp = await client.post(
+                    target_url,
+                    json=attempt_payload,
+                    headers={
+                        "Authorization": f"Bearer {target_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=timeout,
+                )
+                fallback_resp.raise_for_status()
+                return fallback_resp.json()
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code == 429 or status_code >= 500:
+                    await _record_provider_failure(provider_key)
+                logger.error(
+                    "LLM native no-tools fallback HTTP error %s: %s",
+                    status_code,
+                    _sanitize_error(exc.response.text[:500]),
+                )
+                raise _llm_error_from_http_status(exc) from exc
+            except httpx.RequestError as exc:
+                await _record_provider_failure(provider_key)
+                logger.error(
+                    "LLM native no-tools fallback connection error: %s",
+                    _sanitize_error(str(exc)),
+                )
+                raise _llm_error_from_request(exc) from exc
 
         for attempt in range(max_retries + 1):
             try:
@@ -2040,6 +2281,17 @@ async def llm_call(
                             active_structured_output_keys,
                         )
                         continue
+                if _native_adapter is not None:
+                    body_error = _native_adapter.detect_body_error(candidate_data)
+                    if body_error and active_native_search_keys:
+                        if _body_mentions_native_search_rejection(body_error):
+                            logger.warning(
+                                "Native search rejected by provider; retrying without native tools"
+                            )
+                            _drop_native_search_tools(attempt_payload, active_native_search_keys)
+                            _native_adapter = None
+                            data = await _request_without_native_tools_once()
+                            break
                 data = candidate_data
                 break  # Success — exit retry loop
             except httpx.HTTPStatusError as exc:
@@ -2057,6 +2309,17 @@ async def llm_call(
                         active_structured_output_keys,
                     )
                     continue
+                if active_native_search_keys and _is_native_search_rejection(
+                    status_code,
+                    exc.response.text,
+                ):
+                    logger.warning(
+                        "Native search rejected by provider; retrying without native tools"
+                    )
+                    _drop_native_search_tools(attempt_payload, active_native_search_keys)
+                    _native_adapter = None
+                    data = await _request_without_native_tools_once()
+                    break
                 # Retry on 429 (rate limit) and 5xx (server errors)
                 if status_code == 429 or status_code >= 500:
                     last_exc = exc
@@ -2101,7 +2364,7 @@ async def llm_call(
                 raise LLMError(f"Native search response error: {body_error}")
         await _reconcile_rate_limit_usage(
             provider_key=provider_key,
-            reservation_id=reservation_id,
+            reservation_id=reservation.reservation_id if reservation is not None else None,
             estimated_tokens=estimated_tokens,
             actual_tokens=_extract_total_usage_tokens(data),
         )
@@ -2109,7 +2372,7 @@ async def llm_call(
         await _release_runtime_slot(
             quota_key=quota_key,
             purpose=purpose,
-            reservation_id=reservation_id,
+            reservation_id=reservation,
         )
     assert data is not None
 
@@ -2435,7 +2698,7 @@ async def llm_call_json_for_family_query_reformulation(
         if max_output_tokens is not None and max_output_tokens > 0:
             payload["max_output_tokens"] = int(max_output_tokens)
 
-    reservation_id = await _reserve_runtime_slot(
+    reservation = await _reserve_runtime_slot(
         quota_key=_normalize_quota_key(_REQUEST_CONTEXT.get().quota_key),
         purpose=_REQUEST_CONTEXT.get().purpose,
         provider_key=provider_key,
@@ -2479,7 +2742,7 @@ async def llm_call_json_for_family_query_reformulation(
 
         await _reconcile_rate_limit_usage(
             provider_key=provider_key,
-            reservation_id=reservation_id,
+            reservation_id=reservation.reservation_id if reservation is not None else None,
             estimated_tokens=estimated_tokens,
             actual_tokens=_extract_total_usage_tokens(data),
         )
@@ -2487,7 +2750,7 @@ async def llm_call_json_for_family_query_reformulation(
         await _release_runtime_slot(
             quota_key=_normalize_quota_key(_REQUEST_CONTEXT.get().quota_key),
             purpose=_REQUEST_CONTEXT.get().purpose,
-            reservation_id=reservation_id,
+            reservation_id=reservation,
         )
 
     if data is None:
@@ -2706,7 +2969,13 @@ async def llm_call_stream(
             payload["reasoning"] = {"effort": effort}
         payload["stream"] = True
 
-    provider_profile = detect_provider(base_url or target_url)
+    provider_profile = _merge_provider_capability_overrides(
+        detect_provider(base_url or target_url),
+        supports_structured_outputs_override=(
+            request_context.supports_structured_outputs_override
+        ),
+        supports_native_search_override=request_context.supports_native_search_override,
+    )
     structured_output_keys: frozenset[str] = frozenset()
     if structured_output_schema is not None:
         structured_output_params, structured_output_keys = _build_structured_output_params(
@@ -2720,7 +2989,7 @@ async def llm_call_stream(
     logger.debug("LLM stream request → %s (effort=%s, %d chars, byok=%s)",
                  payload["model"], effort, len(input_text), bool(api_key or base_url))
 
-    reservation_id = await _reserve_runtime_slot(
+    reservation = await _reserve_runtime_slot(
         quota_key=quota_key,
         purpose=purpose,
         provider_key=provider_key,
@@ -2845,7 +3114,7 @@ async def llm_call_stream(
         await _release_runtime_slot(
             quota_key=quota_key,
             purpose=purpose,
-            reservation_id=reservation_id,
+            reservation_id=reservation,
         )
 
 

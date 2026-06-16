@@ -892,7 +892,9 @@ async def _append_followup_turns_with_retry(
         "data": prepared_user_turn,
     })
     import app.services.ending_room_service as _pkg
-    stream_supported = await _pkg._oracle_followup_streaming_supported()
+    stream_supported = await _pkg._oracle_followup_streaming_supported(
+        llm_overrides=llm_overrides,
+    )
     oracle_kwargs = (
         {"llm_overrides": llm_overrides}
         if llm_overrides is not None

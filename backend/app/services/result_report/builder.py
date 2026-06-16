@@ -86,6 +86,9 @@ class ReportGenerationOverrides:
     model: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
+    concurrency: int | None = None
+    supports_structured_outputs_override: bool | None = None
+    supports_native_search_override: bool | None = None
     temperature: float | None = None
 
 
@@ -196,6 +199,21 @@ def _report_llm_scope_kwargs(
         overrides.tokens_per_minute
         if overrides and overrides.tokens_per_minute is not None
         else parsed_context.get("llm_tokens_per_minute")
+    )
+    scope_kwargs["concurrency"] = (
+        overrides.concurrency
+        if overrides and overrides.concurrency is not None
+        else parsed_context.get("llm_concurrency")
+    )
+    scope_kwargs["supports_structured_outputs_override"] = (
+        overrides.supports_structured_outputs_override
+        if overrides and overrides.supports_structured_outputs_override is not None
+        else _normalize_optional_bool(parsed_context.get("supports_structured_outputs"))
+    )
+    scope_kwargs["supports_native_search_override"] = (
+        overrides.supports_native_search_override
+        if overrides and overrides.supports_native_search_override is not None
+        else _normalize_optional_bool(parsed_context.get("supports_native_search"))
     )
     return scope_kwargs
 
@@ -2157,8 +2175,19 @@ def _normalize_overrides(
             overrides.get("requests_per_minute")
         ),
         tokens_per_minute=_normalize_positive_int(overrides.get("tokens_per_minute")),
+        concurrency=_normalize_positive_int(overrides.get("concurrency")),
+        supports_structured_outputs_override=_normalize_optional_bool(
+            overrides.get("supports_structured_outputs_override")
+        ),
+        supports_native_search_override=_normalize_optional_bool(
+            overrides.get("supports_native_search_override")
+        ),
         temperature=normalized_temperature,
     )
+
+
+def _normalize_optional_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 def _normalize_positive_int(value: Any) -> int | None:

@@ -456,7 +456,14 @@ def _normalise_candidate(entry: dict) -> dict | None:
     }
 
 
-async def scan_entities_from_samples(text: str, llm_call_fn) -> list[dict]:
+async def scan_entities_from_samples(
+    text: str,
+    llm_call_fn,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> list[dict]:
     sample = _scan_sample(text)
     if not sample:
         return []
@@ -476,7 +483,15 @@ async def scan_entities_from_samples(text: str, llm_call_fn) -> list[dict]:
         f"{sample_block}"
     )
     try:
-        payload = _parse_json_payload(await _call_llm(llm_call_fn, prompt))
+        payload = _parse_json_payload(
+            await _call_llm(
+                llm_call_fn,
+                prompt,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+            )
+        )
     except Exception:
         return []
 
@@ -598,6 +613,10 @@ async def refine_entities_from_fulltext(
     text: str,
     candidates: list[dict],
     llm_call_fn,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
 ) -> list[dict]:
     cleaned = str(text or "")
     if not cleaned.strip():
@@ -620,7 +639,15 @@ async def refine_entities_from_fulltext(
         )
         try:
             async with sem:
-                payload = _parse_json_payload(await _call_llm(llm_call_fn, prompt))
+                payload = _parse_json_payload(
+                    await _call_llm(
+                        llm_call_fn,
+                        prompt,
+                        api_key=api_key,
+                        base_url=base_url,
+                        model=model,
+                    )
+                )
         except Exception:
             return None
         return _normalise_refined_entity(payload, candidate)
@@ -649,7 +676,14 @@ async def refine_entities_from_fulltext(
     return list(merged.values())[:MAX_ENTITIES]
 
 
-async def _extract_entities_from_chunks(chunks: list[str], llm_call_fn) -> list[dict]:
+async def _extract_entities_from_chunks(
+    chunks: list[str],
+    llm_call_fn,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> list[dict]:
     merged: dict[str, dict] = {}
     trait_keys: dict[str, set[str]] = {}
 
@@ -666,7 +700,15 @@ async def _extract_entities_from_chunks(chunks: list[str], llm_call_fn) -> list[
             f"{format_untrusted_text_block('document chunk', chunk)}"
         )
         try:
-            payload = _parse_json_payload(await _call_llm(llm_call_fn, prompt))
+            payload = _parse_json_payload(
+                await _call_llm(
+                    llm_call_fn,
+                    prompt,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                )
+            )
         except Exception:
             continue
 
@@ -703,20 +745,52 @@ async def _extract_entities_from_chunks(chunks: list[str], llm_call_fn) -> list[
     return list(merged.values())[:MAX_ENTITIES]
 
 
-async def extract_entities(chunks: list[str], llm_call_fn) -> list[dict]:
+async def extract_entities(
+    chunks: list[str],
+    llm_call_fn,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> list[dict]:
     """Extract and merge candidate Agent entities from document chunks."""
     text = "\n\n".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
     if not text:
         return []
     if len(text) <= settings.DOCUMENT_MAX_TEXT_FOR_SCAN:
-        return await _extract_entities_from_chunks(chunks, llm_call_fn)
+        return await _extract_entities_from_chunks(
+            chunks,
+            llm_call_fn,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
 
-    candidates = await scan_entities_from_samples(text, llm_call_fn)
+    candidates = await scan_entities_from_samples(
+        text,
+        llm_call_fn,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+    )
     if candidates:
-        refined = await refine_entities_from_fulltext(text, candidates, llm_call_fn)
+        refined = await refine_entities_from_fulltext(
+            text,
+            candidates,
+            llm_call_fn,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
         if refined:
             return refined
-    return await _extract_entities_from_chunks(chunks, llm_call_fn)
+    return await _extract_entities_from_chunks(
+        chunks,
+        llm_call_fn,
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+    )
 
 
 def _clamp_bias_value(value: Any) -> float:
@@ -757,7 +831,14 @@ def _fallback_persona(entity: dict) -> dict:
     }
 
 
-async def generate_persona_from_entity(entity: dict, llm_call_fn) -> dict:
+async def generate_persona_from_entity(
+    entity: dict,
+    llm_call_fn,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> dict:
     """Generate a bounded persona payload for one extracted entity."""
     fallback = _fallback_persona(entity if isinstance(entity, dict) else {})
     entity_text = json.dumps(
@@ -786,7 +867,14 @@ async def generate_persona_from_entity(entity: dict, llm_call_fn) -> dict:
     for temperature in PERSONA_RETRY_TEMPERATURES:
         try:
             payload = _parse_json_payload(
-                await _call_llm(llm_call_fn, prompt, temperature=temperature)
+                await _call_llm(
+                    llm_call_fn,
+                    prompt,
+                    temperature=temperature,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                )
             )
         except Exception:
             continue

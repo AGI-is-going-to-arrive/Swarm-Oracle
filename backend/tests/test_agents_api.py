@@ -3,12 +3,14 @@
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlmodel import Session
 
+import app.api.agents as agents_api
 from app.config import settings
 from app.main import app
 from app.models.agent_identity import AgentIdentity
@@ -30,6 +32,40 @@ def _make_signed_session_token(secret: str, subject: str) -> str:
     signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
     signature_segment = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
     return f"v1.{payload_segment}.{signature_segment}"
+
+
+def _seed_model_profile(
+    *,
+    user_id: str,
+    model: str = "profile-agent-model",
+    api_key: str = "sk-agent-profile",
+    base_url: str = "https://api.openai.com/v1",
+    rpm: int | None = 23,
+    tpm: int | None = 2300,
+    concurrency: int | None = 2,
+    supports_structured_outputs: bool | None = True,
+    supports_native_search: bool | None = False,
+) -> str:
+    from app.models.model_profile import ModelProfile
+
+    with Session(get_engine()) as session:
+        profile = ModelProfile(
+            user_id=user_id,
+            name=f"{user_id} profile",
+            provider="openai",
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            rpm=rpm,
+            tpm=tpm,
+            concurrency=concurrency,
+            supports_structured_outputs=supports_structured_outputs,
+            supports_native_search=supports_native_search,
+        )
+        session.add(profile)
+        session.commit()
+        session.refresh(profile)
+        return profile.id
 
 
 @pytest.fixture(autouse=True)
@@ -200,6 +236,306 @@ class TestWorkshopCRUD:
         resp = await client.delete("/api/agents/workshop/nonexistent")
         assert resp.status_code == 404
         assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
+
+
+class TestDocumentModelProfileEndpoints:
+    """Model profile carriers for document-powered Agent endpoints."""
+
+    def test_document_endpoints_accept_model_profile_id_carrier(self):
+        seed_sig = inspect.signature(agents_api.parse_document_seed_world)
+        ingest_sig = inspect.signature(agents_api.create_agents_from_document)
+
+        assert seed_sig.parameters["model_profile_id"].default is None
+        assert ingest_sig.parameters["model_profile_id"].default is None
+
+    async def test_document_seed_rejects_unowned_model_profile(
+        self,
+        client: AsyncClient,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+        monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+        profile_id = _seed_model_profile(user_id="different-owner")
+        called = False
+
+        async def unexpected_extract_entities(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            return []
+
+        monkeypatch.setattr(
+            agents_api,
+            "extract_entities",
+            unexpected_extract_entities,
+        )
+
+        resp = await client.post(
+            "/api/agents/document-seed",
+            params={"user_id": "agent-owner", "model_profile_id": profile_id},
+            files={"file": ("seed.txt", b"Harbor envoys coordinate.", "text/plain")},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "MODEL_PROFILE_NOT_FOUND"
+        assert called is False
+
+    async def test_document_seed_model_profile_threads_scope(
+        self,
+        client: AsyncClient,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+        monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+        profile_id = _seed_model_profile(
+            user_id="agent-owner",
+            rpm=29,
+            tpm=2900,
+            concurrency=4,
+            supports_structured_outputs=False,
+            supports_native_search=True,
+        )
+        captured: dict = {}
+        original_scope = agents_api.llm_request_scope
+
+        def spy_scope(**kwargs):
+            captured["scope"] = dict(kwargs)
+            return original_scope(**kwargs)
+
+        async def fake_extract_entities(_chunks, _llm_call, **_kwargs):
+            return [
+                {
+                    "name": "Harbor Envoy",
+                    "role": "planner",
+                    "traits": ["careful"],
+                    "perspective": "port logistics",
+                }
+            ]
+
+        async def fake_generate_persona_from_entity(entity, _llm_call, **_kwargs):
+            return {
+                "name": entity["name"],
+                "role": entity["role"],
+                "persona": "Coordinates port logistics with careful evidence.",
+                "decision_bias": {
+                    "caution": 0.7,
+                    "optimism": 0.4,
+                    "conservatism": 0.5,
+                    "risk_tolerance": 0.3,
+                    "creativity": 0.6,
+                },
+            }
+
+        monkeypatch.setattr(agents_api, "llm_request_scope", spy_scope)
+        monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+        monkeypatch.setattr(
+            agents_api,
+            "generate_persona_from_entity",
+            fake_generate_persona_from_entity,
+        )
+
+        resp = await client.post(
+            "/api/agents/document-seed",
+            params={"user_id": "agent-owner", "model_profile_id": profile_id},
+            files={"file": ("seed.txt", b"Harbor envoys coordinate.", "text/plain")},
+        )
+
+        assert resp.status_code == 200
+        assert captured["scope"] == {
+            "quota_key": "user:agent-owner",
+            "purpose": "document_seed",
+            "requests_per_minute": 29,
+            "tokens_per_minute": 2900,
+            "concurrency": 4,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": True,
+        }
+
+    async def test_document_seed_model_profile_threads_provider_to_llm(
+        self,
+        client: AsyncClient,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+        monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+        profile_id = _seed_model_profile(
+            user_id="agent-owner",
+            model="profile-agent-model",
+            api_key="sk-agent-profile",
+            base_url="https://api.openai.com/v1",
+        )
+        captured_calls: list[dict] = []
+
+        async def fake_llm(prompt: str, **kwargs):
+            captured_calls.append(dict(kwargs))
+            if "Create one SwarmOracle custom Agent persona" in prompt:
+                return json.dumps({
+                    "name": "Harbor Envoy",
+                    "role": "planner",
+                    "persona": "Coordinates port logistics with careful evidence.",
+                    "decision_bias": {
+                        "caution": 0.7,
+                        "optimism": 0.4,
+                        "conservatism": 0.5,
+                        "risk_tolerance": 0.3,
+                        "creativity": 0.6,
+                    },
+                })
+            return json.dumps({
+                "entities": [
+                    {
+                        "name": "Harbor Envoy",
+                        "role": "planner",
+                        "traits": ["careful"],
+                        "perspective": "port logistics",
+                    }
+                ]
+            })
+
+        monkeypatch.setattr(agents_api, "llm_call", fake_llm)
+
+        resp = await client.post(
+            "/api/agents/document-seed",
+            params={"user_id": "agent-owner", "model_profile_id": profile_id},
+            files={"file": ("seed.txt", b"Harbor envoys coordinate.", "text/plain")},
+        )
+
+        assert resp.status_code == 200
+        assert captured_calls
+        assert all(call.get("api_key") == "sk-agent-profile" for call in captured_calls)
+        assert all(call.get("base_url") == "https://api.openai.com/v1" for call in captured_calls)
+        assert all(call.get("model") == "profile-agent-model" for call in captured_calls)
+
+    async def test_from_document_model_profile_threads_scope(
+        self,
+        client: AsyncClient,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+        profile_id = _seed_model_profile(
+            user_id="agent-owner",
+            rpm=31,
+            tpm=3100,
+            concurrency=3,
+            supports_structured_outputs=True,
+            supports_native_search=False,
+        )
+        captured: dict = {}
+        original_scope = agents_api.llm_request_scope
+
+        def spy_scope(**kwargs):
+            captured["scope"] = dict(kwargs)
+            return original_scope(**kwargs)
+
+        async def fake_extract_pdf_text(_blob):
+            return "Harbor envoys coordinate supply lines."
+
+        async def fake_extract_entities(_chunks, _llm_call, **_kwargs):
+            return [
+                {
+                    "name": "Harbor Envoy",
+                    "role": "planner",
+                    "traits": ["careful"],
+                    "perspective": "port logistics",
+                }
+            ]
+
+        async def fake_generate_persona_from_entity(entity, _llm_call, **_kwargs):
+            return {
+                "name": entity["name"],
+                "role": entity["role"],
+                "persona": "Coordinates port logistics with careful evidence.",
+                "decision_bias": {
+                    "caution": 0.7,
+                    "optimism": 0.4,
+                    "conservatism": 0.5,
+                    "risk_tolerance": 0.3,
+                    "creativity": 0.6,
+                },
+            }
+
+        monkeypatch.setattr(agents_api, "llm_request_scope", spy_scope)
+        monkeypatch.setattr(agents_api, "_extract_pdf_text_with_timeout", fake_extract_pdf_text)
+        monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+        monkeypatch.setattr(
+            agents_api,
+            "generate_persona_from_entity",
+            fake_generate_persona_from_entity,
+        )
+
+        resp = await client.post(
+            "/api/agents/from-document",
+            params={"user_id": "agent-owner", "model_profile_id": profile_id},
+            files={"file": ("seed.pdf", b"%PDF-test", "application/pdf")},
+        )
+
+        assert resp.status_code == 201
+        assert captured["scope"] == {
+            "quota_key": "user:agent-owner",
+            "purpose": "document_ingestion",
+            "requests_per_minute": 31,
+            "tokens_per_minute": 3100,
+            "concurrency": 3,
+            "supports_structured_outputs_override": True,
+            "supports_native_search_override": False,
+        }
+
+    async def test_from_document_model_profile_threads_provider_to_llm(
+        self,
+        client: AsyncClient,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+        profile_id = _seed_model_profile(
+            user_id="agent-owner",
+            model="profile-agent-model",
+            api_key="sk-agent-profile",
+            base_url="https://api.openai.com/v1",
+        )
+        captured_calls: list[dict] = []
+
+        async def fake_extract_pdf_text(_blob):
+            return "Harbor envoys coordinate supply lines."
+
+        async def fake_llm(prompt: str, **kwargs):
+            captured_calls.append(dict(kwargs))
+            if "Create one SwarmOracle custom Agent persona" in prompt:
+                return json.dumps({
+                    "name": "Harbor Envoy",
+                    "role": "planner",
+                    "persona": "Coordinates port logistics with careful evidence.",
+                    "decision_bias": {
+                        "caution": 0.7,
+                        "optimism": 0.4,
+                        "conservatism": 0.5,
+                        "risk_tolerance": 0.3,
+                        "creativity": 0.6,
+                    },
+                })
+            return json.dumps({
+                "entities": [
+                    {
+                        "name": "Harbor Envoy",
+                        "role": "planner",
+                        "traits": ["careful"],
+                        "perspective": "port logistics",
+                    }
+                ]
+            })
+
+        monkeypatch.setattr(agents_api, "_extract_pdf_text_with_timeout", fake_extract_pdf_text)
+        monkeypatch.setattr(agents_api, "llm_call", fake_llm)
+
+        resp = await client.post(
+            "/api/agents/from-document",
+            params={"user_id": "agent-owner", "model_profile_id": profile_id},
+            files={"file": ("seed.pdf", b"%PDF-test", "application/pdf")},
+        )
+
+        assert resp.status_code == 201
+        assert captured_calls
+        assert all(call.get("api_key") == "sk-agent-profile" for call in captured_calls)
+        assert all(call.get("base_url") == "https://api.openai.com/v1" for call in captured_calls)
+        assert all(call.get("model") == "profile-agent-model" for call in captured_calls)
 
 
 class TestIdentityProfileEndpoint:

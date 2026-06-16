@@ -40,6 +40,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Callable, Literal
 
 from fastapi import HTTPException
@@ -65,6 +66,10 @@ from app.services.llm_client import (
     llm_call_stream,
     llm_request_scope,
     validate_llm_base_url,
+)
+from app.services.llm_resolution import (
+    merge_profile_provider_overrides,
+    recover_profile_provider_overrides,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,6 +144,11 @@ class LLMOverrides:
     base_url: str | None
     model: str | None
     disable_user_quota: bool
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
+    concurrency: int | None = None
+    supports_structured_outputs_override: bool | None = None
+    supports_native_search_override: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -310,6 +320,59 @@ def resolve_byok_overrides(
         base_url=base_url,
         model=model,
         disable_user_quota=bool(disable_user_quota),
+    )
+
+
+def _recover_thread_profile_overrides(
+    session: Session,
+    thread: AgentConversationThread,
+    overrides: LLMOverrides,
+) -> LLMOverrides:
+    scenario = session.get(Scenario, thread.scenario_id)
+    if scenario is None:
+        return overrides
+    carrier = SimpleNamespace(
+        parsed_context=(
+            scenario.parsed_context
+            if isinstance(scenario.parsed_context, dict)
+            else {}
+        ),
+        user_id=thread.owner_user_id or scenario.user_id,
+    )
+    recovered = recover_profile_provider_overrides(session, carrier)
+    if not recovered:
+        return overrides
+    merged = merge_profile_provider_overrides(
+        {
+            "api_key": overrides.api_key,
+            "base_url": overrides.base_url,
+            "model": overrides.model,
+            "requests_per_minute": overrides.requests_per_minute,
+            "tokens_per_minute": overrides.tokens_per_minute,
+            "concurrency": overrides.concurrency,
+            "supports_structured_outputs_override": (
+                overrides.supports_structured_outputs_override
+            ),
+            "supports_native_search_override": (
+                overrides.supports_native_search_override
+            ),
+        },
+        recovered,
+    )
+    return LLMOverrides(
+        api_key=merged.get("api_key"),
+        base_url=merged.get("base_url"),
+        model=merged.get("model"),
+        disable_user_quota=overrides.disable_user_quota,
+        requests_per_minute=merged.get("requests_per_minute"),
+        tokens_per_minute=merged.get("tokens_per_minute"),
+        concurrency=merged.get("concurrency"),
+        supports_structured_outputs_override=merged.get(
+            "supports_structured_outputs_override"
+        ),
+        supports_native_search_override=merged.get(
+            "supports_native_search_override"
+        ),
     )
 
 
@@ -1703,6 +1766,7 @@ async def stream_assistant_turn(
         engine = get_engine()
         stream_cancel_event = cancel_event or asyncio.Event()
         _register_turn_cancel_event(assistant_turn_id, stream_cancel_event)
+        active_overrides = overrides
 
         try:
             # Hydrate thread + assistant turn + history in a short-lived session.
@@ -1721,6 +1785,11 @@ async def stream_assistant_turn(
                         raise api_error(404, "TURN_NOT_FOUND", "Assistant turn not found")
 
                     quota_owner = thread.owner_user_id
+                    active_overrides = _recover_thread_profile_overrides(
+                        session,
+                        thread,
+                        active_overrides,
+                    )
 
                     # HC-31: quota key authority = thread.owner_user_id (never body).
                     history = list(
@@ -1754,7 +1823,7 @@ async def stream_assistant_turn(
                             "turn_id": assistant_turn_id,
                             "thread_id": thread_id,
                             "status": "scenario_deleted",
-                            "model": overrides.model or settings.LLM_MODEL_NAME,
+                            "model": active_overrides.model or settings.LLM_MODEL_NAME,
                             "code": "SCENARIO_DELETED",
                             "message": _map_error_message("SCENARIO_DELETED"),
                         },
@@ -1771,14 +1840,14 @@ async def stream_assistant_turn(
 
             # HC-31 audit: when ``disable_user_quota`` is applied to a local
             # provider, emit a structured log line so abuse is auditable.
-            local_provider = is_local_provider_url(overrides.base_url)
-            if overrides.disable_user_quota and local_provider:
+            local_provider = is_local_provider_url(active_overrides.base_url)
+            if active_overrides.disable_user_quota and local_provider:
                 _structured_log(
                     "agent_conversation.disable_user_quota",
                     owner_user_id=quota_owner or "",
                     thread_id=thread_id,
                     turn_id=assistant_turn_id,
-                    provider=overrides.base_url or "",
+                    provider=active_overrides.base_url or "",
                     local_provider=local_provider,
                     source="disable_user_quota",
                     request_id=request_id or "",
@@ -1820,7 +1889,7 @@ async def stream_assistant_turn(
                         "thread_id": thread_id,
                         "sequence": assistant_turn.sequence,
                         "status": "scenario_deleted",
-                        "model": overrides.model or settings.LLM_MODEL_NAME,
+                        "model": active_overrides.model or settings.LLM_MODEL_NAME,
                         "code": "SCENARIO_DELETED",
                         "message": _map_error_message("SCENARIO_DELETED"),
                     },
@@ -1838,7 +1907,7 @@ async def stream_assistant_turn(
                             "thread_id": thread_id,
                             "sequence": assistant_turn.sequence,
                             "status": "scenario_deleted",
-                            "model": overrides.model or settings.LLM_MODEL_NAME,
+                            "model": active_overrides.model or settings.LLM_MODEL_NAME,
                             "code": "SCENARIO_DELETED",
                             "message": _map_error_message("SCENARIO_DELETED"),
                         },
@@ -1852,7 +1921,7 @@ async def stream_assistant_turn(
                             expected_from=_CAS_EXPECTED_FROM_DEFAULT,
                             content="",
                             error_code="USER_ABORTED",
-                            model=overrides.model,
+                            model=active_overrides.model,
                         )
                 return
 
@@ -1865,7 +1934,7 @@ async def stream_assistant_turn(
                     "turn_id": assistant_turn_id,
                     "thread_id": thread_id,
                     "sequence": assistant_turn.sequence,
-                    "model": overrides.model or settings.LLM_MODEL_NAME,
+                    "model": active_overrides.model or settings.LLM_MODEL_NAME,
                     "request_id": request_id or "",
                 },
             }
@@ -1873,7 +1942,7 @@ async def stream_assistant_turn(
             # HC-31: quota_key is always from thread.owner_user_id — *not* body.
             quota_key = (
                 None
-                if (overrides.disable_user_quota and local_provider)
+                if (active_overrides.disable_user_quota and local_provider)
                 else (f"user:{quota_owner}" if quota_owner else None)
             )
 
@@ -1884,21 +1953,30 @@ async def stream_assistant_turn(
                 with llm_request_scope(
                     quota_key=quota_key,
                     purpose="agent_conversation",
+                    requests_per_minute=active_overrides.requests_per_minute,
+                    tokens_per_minute=active_overrides.tokens_per_minute,
+                    concurrency=active_overrides.concurrency,
+                    supports_structured_outputs_override=(
+                        active_overrides.supports_structured_outputs_override
+                    ),
+                    supports_native_search_override=(
+                        active_overrides.supports_native_search_override
+                    ),
                 ):
                     # Pluggable for tests — if a factory is given we skip real LLM.
                     if _llm_stream_factory is not None:
                         stream = _llm_stream_factory(
                             prompt,
-                            api_key=overrides.api_key,
-                            base_url=overrides.base_url,
-                            model=overrides.model,
+                            api_key=active_overrides.api_key,
+                            base_url=active_overrides.base_url,
+                            model=active_overrides.model,
                         )
                     else:
                         stream = llm_call_stream(
                             prompt,
-                            api_key=overrides.api_key,
-                            base_url=overrides.base_url,
-                            model=overrides.model,
+                            api_key=active_overrides.api_key,
+                            base_url=active_overrides.base_url,
+                            model=active_overrides.model,
                             reasoning_effort="medium",
                             temperature=0.7,
                         )
@@ -1913,7 +1991,8 @@ async def stream_assistant_turn(
                                 "turn_id": assistant_turn_id,
                                 "sequence": assistant_turn.sequence,
                                 "delta": delta,
-                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                                "model": active_overrides.model
+                                or settings.LLM_MODEL_NAME,
                             },
                         }
             except asyncio.CancelledError:
@@ -1932,7 +2011,8 @@ async def stream_assistant_turn(
                                 "thread_id": thread_id,
                                 "sequence": assistant_turn.sequence,
                                 "status": "scenario_deleted",
-                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                                "model": active_overrides.model
+                                or settings.LLM_MODEL_NAME,
                                 "code": "SCENARIO_DELETED",
                                 "message": _map_error_message("SCENARIO_DELETED"),
                             },
@@ -1945,7 +2025,7 @@ async def stream_assistant_turn(
                         expected_from=_CAS_EXPECTED_FROM_DEFAULT,
                         content="".join(accumulated),
                         error_code="USER_ABORTED",
-                        model=overrides.model,
+                        model=active_overrides.model,
                     )
                 aborted = True
                 raise
@@ -1988,7 +2068,7 @@ async def stream_assistant_turn(
                         expected_from=_CAS_EXPECTED_FROM_DEFAULT,
                         content=full_text,
                         error_code=error_code,
-                        model=overrides.model,
+                        model=active_overrides.model,
                     )
                     if committed:
                         yield {
@@ -1998,7 +2078,8 @@ async def stream_assistant_turn(
                                 "thread_id": thread_id,
                                 "sequence": assistant_turn.sequence,
                                 "status": "error",
-                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                                "model": active_overrides.model
+                                or settings.LLM_MODEL_NAME,
                                 "code": error_code,
                                 "message": _map_error_message(error_code),
                             },
@@ -2018,7 +2099,8 @@ async def stream_assistant_turn(
                                     "thread_id": thread_id,
                                     "sequence": assistant_turn.sequence,
                                     "status": "scenario_deleted",
-                                    "model": overrides.model or settings.LLM_MODEL_NAME,
+                                    "model": active_overrides.model
+                                    or settings.LLM_MODEL_NAME,
                                     "code": "SCENARIO_DELETED",
                                     "message": _map_error_message("SCENARIO_DELETED"),
                                 },
@@ -2031,7 +2113,7 @@ async def stream_assistant_turn(
                         expected_from=_CAS_EXPECTED_FROM_DEFAULT,
                         content=full_text,
                         error_code=None,
-                        model=overrides.model,
+                        model=active_overrides.model,
                     )
                     if committed:
                         yield {
@@ -2041,7 +2123,8 @@ async def stream_assistant_turn(
                                 "thread_id": thread_id,
                                 "sequence": assistant_turn.sequence,
                                 "status": "committed",
-                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                                "model": active_overrides.model
+                                or settings.LLM_MODEL_NAME,
                             },
                         }
                     else:
@@ -2055,7 +2138,8 @@ async def stream_assistant_turn(
                                     "thread_id": thread_id,
                                     "sequence": assistant_turn.sequence,
                                     "status": "scenario_deleted",
-                                    "model": overrides.model or settings.LLM_MODEL_NAME,
+                                    "model": active_overrides.model
+                                    or settings.LLM_MODEL_NAME,
                                     "code": "SCENARIO_DELETED",
                                     "message": _map_error_message("SCENARIO_DELETED"),
                                 },

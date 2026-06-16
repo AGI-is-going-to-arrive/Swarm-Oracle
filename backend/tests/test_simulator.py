@@ -10,6 +10,7 @@ import json
 import logging
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
@@ -26,6 +27,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.models.model_profile import ModelProfile
 from app.services.blackboard import Blackboard
 from app.services.llm_client import llm_request_scope
 from app.services.replay import write_checkpoint
@@ -523,6 +525,224 @@ class TestNativeSearchRuntimeWiring:
 
 
 class TestRunSimulation:
+    @pytest.mark.asyncio
+    async def test_replay_runtime_rehydrates_owned_model_profile_provider(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        profile_id = ""
+
+        with Session(engine) as session:
+            profile = ModelProfile(
+                user_id="profile-owner",
+                name="Owned replay profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="fresh-profile-model",
+                api_key="sk-replay-profile-secret",
+                rpm=17,
+                tpm=1700,
+                concurrency=7,
+                supports_structured_outputs=True,
+                supports_native_search=None,
+            )
+            session.add(profile)
+            session.flush()
+            profile_id = profile.id
+
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.user_id = "profile-owner"
+            scenario.parsed_context = {
+                "_language": "English",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+                "model_profile_id": profile_id,
+                "llm_requests_per_minute": 3,
+                "llm_tokens_per_minute": 300,
+                "llm_concurrency": 3,
+                "supports_structured_outputs": False,
+                "supports_native_search": False,
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Replay Agent",
+                    role="Analyst",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        captured: dict[str, object] = {}
+        original_scope = simulator_module.llm_request_scope
+
+        def _spy_scope(**kwargs):
+            if kwargs.get("purpose") == "scenario_turn_generation":
+                captured["scope"] = dict(kwargs)
+            return original_scope(**kwargs)
+
+        async def _fake_llm_call(*_args, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            captured["base_url"] = kwargs.get("base_url")
+            captured["model"] = kwargs.get("model")
+            return "The replay continues with the selected profile."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "The replay continues with the selected profile.",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Profile replay",
+                "story": "Replay completed.",
+                "insight": "The profile provider was restored.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr(simulator_module, "llm_request_scope", _spy_scope)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        assert {key: captured[key] for key in ("api_key", "base_url", "model")} == {
+            "api_key": "sk-replay-profile-secret",
+            "base_url": "https://api.openai.com/v1",
+            "model": "fresh-profile-model",
+        }
+        assert captured["scope"] == {
+            "purpose": "scenario_turn_generation",
+            "requests_per_minute": 17,
+            "tokens_per_minute": 1700,
+            "concurrency": 7,
+            "supports_structured_outputs_override": True,
+            "supports_native_search_override": False,
+        }
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            serialized_context = json.dumps(
+                scenario.parsed_context,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        assert "sk-replay-profile-secret" not in serialized_context
+        assert '"api_key"' not in serialized_context
+        assert '"llm_base_url"' not in serialized_context
+        assert '"llm_model"' not in serialized_context
+
+    @pytest.mark.asyncio
+    async def test_replay_runtime_falls_back_when_model_profile_missing(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.user_id = "profile-owner"
+            scenario.parsed_context = {
+                "_language": "English",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+                "model_profile_id": "deleted-profile",
+                "llm_model": "legacy-model",
+                "llm_base_url": "https://legacy.example/v1",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Replay Agent",
+                    role="Analyst",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        resolver_calls = {"count": 0}
+        captured: dict[str, object] = {}
+
+        def _missing_profile(*_args, **_kwargs):
+            resolver_calls["count"] += 1
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "MODEL_PROFILE_NOT_FOUND"},
+            )
+
+        async def _fake_llm_call(*_args, **kwargs):
+            captured["api_key"] = kwargs.get("api_key")
+            captured["base_url"] = kwargs.get("base_url")
+            captured["model"] = kwargs.get("model")
+            return "The replay falls back to stored non-secret runtime data."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "The replay falls back to stored non-secret runtime data.",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Fallback replay",
+                "story": "Replay completed.",
+                "insight": "Missing profile did not abort replay.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(
+            "app.services.model_profiles.resolve_model_profile_policy",
+            _missing_profile,
+        )
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        assert resolver_calls["count"] == 1
+        assert captured == {
+            "api_key": None,
+            "base_url": "https://legacy.example/v1",
+            "model": "legacy-model",
+        }
+
     @pytest.mark.asyncio
     async def test_full_run_persists_narrating_status_before_narration_broadcast(self, monkeypatch):
         engine = get_engine()

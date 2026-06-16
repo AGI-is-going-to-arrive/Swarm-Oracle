@@ -488,6 +488,11 @@ async def build_roundtable_analyst_stream(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
+    concurrency: int | None = None,
+    supports_structured_outputs_override: bool | None = None,
+    supports_native_search_override: bool | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Prepare and return the analyst SSE event stream."""
 
@@ -496,7 +501,14 @@ async def build_roundtable_analyst_stream(
 
     async def _iter() -> AsyncIterator[dict[str, Any]]:
         history_blocks: list[str] = []
-        with llm_request_scope(purpose="roundtable_analyst"):
+        with llm_request_scope(
+            purpose="roundtable_analyst",
+            requests_per_minute=requests_per_minute,
+            tokens_per_minute=tokens_per_minute,
+            concurrency=concurrency,
+            supports_structured_outputs_override=supports_structured_outputs_override,
+            supports_native_search_override=supports_native_search_override,
+        ):
             for iteration in range(1, MAX_ANALYST_ITERATIONS + 1):
                 prompt = _build_analyst_prompt(context, normalized_question, history_blocks)
                 try:

@@ -470,8 +470,10 @@ class TestLLMCall:
             lease_seconds=30,
         )
 
-        assert reservation_a is None
-        assert reservation_b is None
+        assert reservation_a is not None
+        assert reservation_b is not None
+        assert reservation_a.reservation_id is None
+        assert reservation_b.reservation_id is None
         assert llm_client._pending_requests == 2
         assert llm_client._pending_by_quota == {}
 
@@ -503,7 +505,8 @@ class TestLLMCall:
             lease_seconds=30,
         )
 
-        assert reservation_id is None
+        assert reservation_id is not None
+        assert reservation_id.reservation_id is None
         assert llm_client._pending_requests == 999
 
         await llm_client._release_runtime_slot(
@@ -531,6 +534,18 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "MAX_AGENTS", 123)
 
         assert llm_client.get_runtime_parallelism_limit() == 123
+
+    def test_runtime_parallelism_limit_includes_request_profile_concurrency(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 5)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 24)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        with llm_client.llm_request_scope(concurrency=1):
+            assert llm_client.get_runtime_parallelism_limit() == 1
+
+        with llm_client.llm_request_scope(concurrency=10):
+            assert llm_client.get_runtime_parallelism_limit() == 2
 
     def test_purpose_lane_limit_preserves_headroom_for_interactive_work(self, monkeypatch):
         """Scenario fan-out should leave at least one global slot for other lanes."""
@@ -596,7 +611,8 @@ class TestLLMCall:
             ),
             timeout=1.0,
         )
-        assert oracle_slot is None
+        assert oracle_slot is not None
+        assert oracle_slot.reservation_id is None
         assert not blocked_scenario.done()
 
         await llm_client._release_runtime_slot(
@@ -903,14 +919,16 @@ class TestLLMCall:
             lease_seconds=30,
             estimated_tokens=25,
         )
-        assert first is None
+        assert first is not None
+        assert first.reservation_id is None
         second = await llm_client._reserve_runtime_slot(
             quota_key=None,
             provider_key="provider-in-process",
             lease_seconds=30,
             estimated_tokens=30,
         )
-        assert second is None
+        assert second is not None
+        assert second.reservation_id is None
 
     @pytest.mark.asyncio
     async def test_request_scoped_rate_limits_override_server_defaults(self, monkeypatch):
@@ -938,7 +956,8 @@ class TestLLMCall:
                 lease_seconds=30,
                 estimated_tokens=25,
             )
-            assert first is None
+            assert first is not None
+            assert first.reservation_id is None
 
             # Verify the scope limits are effective:
             # _get_rate_limits() should return the scope values, not the
@@ -974,6 +993,131 @@ class TestLLMCall:
 
         assert llm_client._get_global_semaphore() is semaphore
         semaphore.release()
+
+    @pytest.mark.asyncio
+    async def test_release_uses_recorded_semaphore_after_runtime_change(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 1)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        first = await llm_client._reserve_runtime_slot(
+            quota_key=None,
+            provider_key="provider",
+            lease_seconds=30,
+        )
+        blocked = asyncio.create_task(
+            llm_client._reserve_runtime_slot(
+                quota_key=None,
+                provider_key="provider",
+                lease_seconds=30,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not blocked.done()
+
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 0)
+        await llm_client._release_runtime_slot(
+            quota_key=None,
+            reservation_id=first,
+        )
+
+        second = await asyncio.wait_for(blocked, timeout=1.0)
+        await llm_client._release_runtime_slot(
+            quota_key=None,
+            reservation_id=second,
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_profile_concurrency_tightens_global_limit(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 5)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        with llm_client.llm_request_scope(concurrency=1):
+            first = await llm_client._reserve_runtime_slot(
+                quota_key=None,
+                provider_key="provider",
+                lease_seconds=30,
+            )
+            blocked = asyncio.create_task(
+                llm_client._reserve_runtime_slot(
+                    quota_key=None,
+                    provider_key="provider",
+                    lease_seconds=30,
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not blocked.done()
+
+            await llm_client._release_runtime_slot(
+                quota_key=None,
+                reservation_id=first,
+            )
+            second = await asyncio.wait_for(blocked, timeout=1.0)
+            await llm_client._release_runtime_slot(
+                quota_key=None,
+                reservation_id=second,
+            )
+
+    @pytest.mark.asyncio
+    async def test_nested_request_profile_concurrency_restores_outer_scope(self, monkeypatch):
+        self._reset_runtime_guard()
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        with llm_client.llm_request_scope(concurrency=2):
+            with llm_client.llm_request_scope(concurrency=1):
+                first = await llm_client._reserve_runtime_slot(
+                    quota_key=None,
+                    provider_key="provider",
+                    lease_seconds=30,
+                )
+                blocked = asyncio.create_task(
+                    llm_client._reserve_runtime_slot(
+                        quota_key=None,
+                        provider_key="provider",
+                        lease_seconds=30,
+                    )
+                )
+                await asyncio.sleep(0.05)
+                assert not blocked.done()
+                await llm_client._release_runtime_slot(
+                    quota_key=None,
+                    reservation_id=first,
+                )
+                second = await asyncio.wait_for(blocked, timeout=1.0)
+                await llm_client._release_runtime_slot(
+                    quota_key=None,
+                    reservation_id=second,
+                )
+
+            outer_first = await llm_client._reserve_runtime_slot(
+                quota_key=None,
+                provider_key="provider",
+                lease_seconds=30,
+            )
+            outer_second = await asyncio.wait_for(
+                llm_client._reserve_runtime_slot(
+                    quota_key=None,
+                    provider_key="provider",
+                    lease_seconds=30,
+                ),
+                timeout=1.0,
+            )
+            await llm_client._release_runtime_slot(
+                quota_key=None,
+                reservation_id=outer_first,
+            )
+            await llm_client._release_runtime_slot(
+                quota_key=None,
+                reservation_id=outer_second,
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _LLM_CONTENT_OK, reason=_SKIP_REASON)
@@ -2188,6 +2332,68 @@ class TestLlmCallStructuredOutputs:
         assert "format" not in captured_payload
 
     @pytest.mark.asyncio
+    async def test_structured_force_off_disables_detected_provider_support(self, monkeypatch):
+        captured_payload: dict = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"ok"}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+        with llm_client.llm_request_scope(supports_structured_outputs_override=False):
+            result = await llm_call_json(
+                "Return JSON.",
+                base_url="https://api.openai.com/v1/chat/completions",
+                api_key="openai-key",
+            )
+
+        assert result == {"answer": "ok"}
+        assert "response_format" not in captured_payload
+        assert "text" not in captured_payload
+        assert "format" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_structured_force_on_retries_without_params_after_rejection(
+        self,
+        monkeypatch,
+    ):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "Unknown parameter: response_format"}},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"fallback"}'}}]},
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+        with llm_client.llm_request_scope(supports_structured_outputs_override=True):
+            result = await llm_call_json(
+                "Return JSON.",
+                base_url="https://api.deepseek.com/v1/chat/completions",
+                api_key="deepseek-key",
+            )
+
+        assert result == {"answer": "fallback"}
+        assert len(payloads) == 2
+        assert "response_format" in payloads[0]
+        assert "response_format" not in payloads[1]
+
+    @pytest.mark.asyncio
     async def test_structured_rejection_falls_back_to_parser_path(self, monkeypatch, caplog):
         payloads: list[dict] = []
 
@@ -2729,6 +2935,241 @@ class TestLlmCallNativeSearch:
         )
         assert result == "proxy answer"
         assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_native_search_force_off_disables_detected_provider_support(self, monkeypatch):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "plain answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(supports_native_search_override=False):
+            result = await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert result == "plain answer"
+        assert "tools" not in captured_payload
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "base_url,api_key",
+        [
+            ("https://openrouter.ai/api/v1/responses", "or-key"),
+            ("http://localhost:1234/v1/responses", None),
+        ],
+    )
+    async def test_native_search_force_on_without_adapter_does_not_inject_tools(
+        self,
+        monkeypatch,
+        base_url,
+        api_key,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "proxy answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(supports_native_search_override=True):
+            result = await llm_call(
+                "test prompt",
+                base_url=base_url,
+                api_key=api_key,
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert result == "proxy answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_native_search_force_on_retries_once_without_tools_and_clears_citations(
+        self,
+        monkeypatch,
+    ):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "Unknown parameter: tools"}},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "fallback answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+        llm_client._last_native_citations.set(["stale"])
+
+        with llm_client.llm_request_scope(supports_native_search_override=True):
+            result = await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["example.com"],
+            )
+
+        assert result == "fallback answer"
+        assert len(payloads) == 2
+        assert "tools" in payloads[0]
+        assert "tools" not in payloads[1]
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_force_on_no_tools_fallback_failure_is_not_retried(
+        self,
+        monkeypatch,
+    ):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "Unknown parameter: tools"}},
+                    request=request,
+                )
+            return httpx.Response(
+                500,
+                json={"error": {"message": "fallback failed"}},
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_failure",
+                            _noop_async_none)
+        llm_client._last_native_citations.set(["stale"])
+
+        with llm_client.llm_request_scope(supports_native_search_override=True):
+            with pytest.raises(LLMError, match="LLM returned 500"):
+                await llm_call(
+                    "test prompt",
+                    base_url="https://api.x.ai/v1/responses",
+                    api_key="xai-key",
+                    native_search_domains=["example.com"],
+                )
+
+        assert len(payloads) == 2
+        assert "tools" in payloads[0]
+        assert "tools" not in payloads[1]
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_force_on_body_reject_retries_without_tools(
+        self,
+        monkeypatch,
+    ):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "output": [
+                            {
+                                "type": "web_search_call",
+                                "status": "failed",
+                            },
+                            {
+                                "type": "message",
+                                "content": [{"text": "tool failed answer"}],
+                            },
+                        ],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    },
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "fallback answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(supports_native_search_override=True):
+            result = await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["example.com"],
+            )
+
+        assert result == "fallback answer"
+        assert len(payloads) == 2
+        assert "tools" in payloads[0]
+        assert "tools" not in payloads[1]
+        assert llm_client.get_last_native_citations() == []
 
     @pytest.mark.asyncio
     async def test_citations_populated_from_response(self, monkeypatch):

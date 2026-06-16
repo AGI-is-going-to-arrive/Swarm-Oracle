@@ -35,6 +35,10 @@ from app.services.campaign import (
     normalize_scenario_gameplay_state,
 )
 from app.services.llm_client import is_local_provider_url, llm_request_scope
+from app.services.llm_resolution import (
+    merge_profile_provider_overrides,
+    recover_profile_provider_overrides,
+)
 from app.services.parser import parse_question
 from app.services.runtime_lock import (
     RuntimeLockLease,
@@ -731,20 +735,17 @@ async def run_sim_background(
                 lock_label=f"simulation:{scenario_id}",
             )
 
-        sim_kwargs: dict = {
-            "scenario_id": scenario_id,
-            "ws_callback": ws_manager.broadcast,
-            "llm_overrides": llm_overrides,
-        }
-        if branch_id is not None:
-            sim_kwargs["branch_id"] = branch_id
-
+        effective_llm_overrides = dict(llm_overrides or {})
         scope_kwargs: dict[str, object] = {"purpose": "scenario_runtime"}
         with Session(get_engine()) as session:
             scenario = session.get(Scenario, scenario_id)
             parsed_context = scenario.parsed_context if scenario and isinstance(scenario.parsed_context, dict) else {}  # noqa: E501
+            effective_llm_overrides = merge_profile_provider_overrides(
+                effective_llm_overrides,
+                recover_profile_provider_overrides(session, scenario) if scenario else None,
+            )
             effective_base_url = (
-                (llm_overrides or {}).get("base_url")
+                effective_llm_overrides.get("base_url")
                 or parsed_context.get("llm_base_url")
             )
             user_id = parsed_context.get("user_id")
@@ -753,8 +754,39 @@ async def run_sim_background(
                 scope_kwargs["quota_key"] = None
             elif user_id:
                 scope_kwargs["quota_key"] = f"user:{user_id}"
-            scope_kwargs["requests_per_minute"] = parsed_context.get("llm_requests_per_minute")
-            scope_kwargs["tokens_per_minute"] = parsed_context.get("llm_tokens_per_minute")
+            scope_kwargs["requests_per_minute"] = (
+                effective_llm_overrides.get("requests_per_minute")
+                if effective_llm_overrides.get("requests_per_minute") is not None
+                else parsed_context.get("llm_requests_per_minute")
+            )
+            scope_kwargs["tokens_per_minute"] = (
+                effective_llm_overrides.get("tokens_per_minute")
+                if effective_llm_overrides.get("tokens_per_minute") is not None
+                else parsed_context.get("llm_tokens_per_minute")
+            )
+            scope_kwargs["concurrency"] = (
+                effective_llm_overrides.get("concurrency")
+                if effective_llm_overrides.get("concurrency") is not None
+                else parsed_context.get("llm_concurrency")
+            )
+            scope_kwargs["supports_structured_outputs_override"] = (
+                effective_llm_overrides.get("supports_structured_outputs_override")
+                if effective_llm_overrides.get("supports_structured_outputs_override") is not None
+                else parsed_context.get("supports_structured_outputs")
+            )
+            scope_kwargs["supports_native_search_override"] = (
+                effective_llm_overrides.get("supports_native_search_override")
+                if effective_llm_overrides.get("supports_native_search_override") is not None
+                else parsed_context.get("supports_native_search")
+            )
+
+        sim_kwargs: dict = {
+            "scenario_id": scenario_id,
+            "ws_callback": ws_manager.broadcast,
+            "llm_overrides": effective_llm_overrides or llm_overrides,
+        }
+        if branch_id is not None:
+            sim_kwargs["branch_id"] = branch_id
 
         async def _run_simulation_with_lock_guard() -> None:
             simulation_task = asyncio.create_task(run_simulation(**sim_kwargs))
@@ -902,9 +934,13 @@ async def parse_and_run_background(
     llm_api_key: str | None,
     llm_base_url: str | None,
     llm_model: str | None,
+    model_profile_id: str | None = None,
     llm_requests_per_minute: int | None,
     llm_tokens_per_minute: int | None,
     disable_user_quota: bool | None,
+    concurrency: int | None = None,
+    supports_structured_outputs: bool | None = None,
+    supports_native_search: bool | None = None,
     custom_agent_identity_ids: list[str] | None = None,
     continuity_overrides: list[dict] | None = None,
     web_search_families: list[str] | None = None,
@@ -975,6 +1011,9 @@ async def parse_and_run_background(
             purpose="scenario_parse",
             requests_per_minute=llm_requests_per_minute,
             tokens_per_minute=llm_tokens_per_minute,
+            concurrency=concurrency,
+            supports_structured_outputs_override=supports_structured_outputs,
+            supports_native_search_override=supports_native_search,
         ):
             parsed = await parse_question(
                 question,
@@ -1066,10 +1105,13 @@ async def parse_and_run_background(
     if web_search_snippet_limit is not None:
         parsed["web_search_snippet_limit"] = web_search_snippet_limit
 
-    # Only persist non-sensitive display config.
-    if llm_base_url:
+    # Only persist non-sensitive display config. Model-profile provider fields are
+    # resolved fresh at replay/runtime time; the profile id is the durable pointer.
+    if model_profile_id:
+        parsed["model_profile_id"] = str(model_profile_id).strip()
+    elif llm_base_url:
         parsed["llm_base_url"] = llm_base_url
-    if llm_model:
+    if llm_model and not model_profile_id:
         parsed["llm_model"] = llm_model
     if temperature is not None:
         parsed["llm_temperature"] = temperature
@@ -1079,6 +1121,12 @@ async def parse_and_run_background(
         parsed["llm_requests_per_minute"] = llm_requests_per_minute
     if llm_tokens_per_minute is not None:
         parsed["llm_tokens_per_minute"] = llm_tokens_per_minute
+    if concurrency is not None:
+        parsed["llm_concurrency"] = concurrency
+    if supports_structured_outputs is not None:
+        parsed["supports_structured_outputs"] = supports_structured_outputs
+    if supports_native_search is not None:
+        parsed["supports_native_search"] = supports_native_search
     parsed["agents"] = [
         _strip_untrusted_agent_provenance(agent_data)
         for agent_data in parsed.get("agents", [])
@@ -1361,6 +1409,9 @@ async def parse_and_run_background(
         purpose="scenario_runtime",
         requests_per_minute=llm_requests_per_minute,
         tokens_per_minute=llm_tokens_per_minute,
+        concurrency=concurrency,
+        supports_structured_outputs_override=supports_structured_outputs,
+        supports_native_search_override=supports_native_search,
     ):
         await run_sim_background(
             scenario_id,

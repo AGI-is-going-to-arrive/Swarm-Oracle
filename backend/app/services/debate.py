@@ -953,14 +953,27 @@ async def _enhance_insights_with_llm(
                 '"strategy":"The core strategic clash this phase (what each side is trying to do and why)"}'  # noqa: E501
             )
         try:
-            raw = await llm_call_json_with_stream_fallback(
-                prompt,
-                temperature=0.75,
-                reasoning_effort=overrides.get("reasoning_effort") or "medium",
-                model=overrides.get("model"),
-                api_key=overrides.get("api_key"),
-                base_url=overrides.get("base_url"),
-            )
+            with llm_request_scope(
+                quota_key=None,
+                purpose=f"debate_phase_insight_{phase_name}",
+                requests_per_minute=overrides.get("requests_per_minute"),
+                tokens_per_minute=overrides.get("tokens_per_minute"),
+                concurrency=overrides.get("concurrency"),
+                supports_structured_outputs_override=overrides.get(
+                    "supports_structured_outputs_override"
+                ),
+                supports_native_search_override=overrides.get(
+                    "supports_native_search_override"
+                ),
+            ):
+                raw = await llm_call_json_with_stream_fallback(
+                    prompt,
+                    temperature=0.75,
+                    reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                    model=overrides.get("model"),
+                    api_key=overrides.get("api_key"),
+                    base_url=overrides.get("base_url"),
+                )
             if isinstance(raw, dict):
                 for key in ("stakes", "judge_focus", "commentary", "strategy"):
                     val = str(raw.get(key) or "").strip()
@@ -1393,6 +1406,13 @@ async def _generate_judge_analysis(
             purpose="debate_judge_summary",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
@@ -1546,6 +1566,13 @@ async def _generate_turn_content(
             purpose=f"debate_turn_{phase.value}",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             raw_text = await llm_call(
                 combined_prompt,
@@ -1582,6 +1609,13 @@ async def _generate_turn_content(
             purpose=f"debate_turn_{phase.value}_retry",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             raw_text = await llm_call(
                 combined_prompt,
@@ -1897,12 +1931,26 @@ async def run_debate_background(
                     llm_overrides_by_side,
                     DebateSide.JUDGE,
                 )
-                cast = await build_cast_async(
-                    debate.language,
-                    debate.profile_id,
-                    question=debate.question,
-                    llm_overrides=judge_overrides,
-                )
+                persona_overrides = judge_overrides or {}
+                with llm_request_scope(
+                    quota_key=f"user:{quota_key}" if quota_key else None,
+                    purpose="debate_persona_generation",
+                    requests_per_minute=persona_overrides.get("requests_per_minute"),
+                    tokens_per_minute=persona_overrides.get("tokens_per_minute"),
+                    concurrency=persona_overrides.get("concurrency"),
+                    supports_structured_outputs_override=persona_overrides.get(
+                        "supports_structured_outputs_override"
+                    ),
+                    supports_native_search_override=persona_overrides.get(
+                        "supports_native_search_override"
+                    ),
+                ):
+                    cast = await build_cast_async(
+                        debate.language,
+                        debate.profile_id,
+                        question=debate.question,
+                        llm_overrides=judge_overrides,
+                    )
                 with Session(engine) as _persona_session:
                     persona_debate = _persona_session.get(Debate, debate_id)
                     if persona_debate is not None:
@@ -2194,7 +2242,7 @@ async def run_debate_background(
                     turn_id=persisted_turn["id"],
                     speaker_side=side.value,
                     language=debate.language,
-                    llm_overrides=llm_overrides,
+                    llm_overrides=judge_overrides,
                     quota_key=quota_key,
                 )
             except Exception:
@@ -3161,14 +3209,27 @@ async def _generate_supporting_turn_reason(
 
     overrides = llm_overrides or {}
     try:
-        raw = await llm_call(
-            prompt,
-            temperature=0.75,
-            reasoning_effort=overrides.get("reasoning_effort") or "medium",
-            model=overrides.get("model"),
-            api_key=overrides.get("api_key"),
-            base_url=overrides.get("base_url"),
-        )
+        with llm_request_scope(
+            quota_key=None,
+            purpose="debate_supporting_turn_reason",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
+        ):
+            raw = await llm_call(
+                prompt,
+                temperature=0.75,
+                reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                model=overrides.get("model"),
+                api_key=overrides.get("api_key"),
+                base_url=overrides.get("base_url"),
+            )
     except Exception:
         logger.debug(
             "LLM supporting turn reason failed for kind=%s phase=%s",

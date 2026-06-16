@@ -730,6 +730,9 @@ def _debate_policy_to_overrides(
         "reasoning_effort": reasoning_effort,
         "requests_per_minute": policy.requests_per_minute,
         "tokens_per_minute": policy.tokens_per_minute,
+        "concurrency": policy.concurrency,
+        "supports_structured_outputs_override": policy.supports_structured_outputs,
+        "supports_native_search_override": policy.supports_native_search,
     }
 
 

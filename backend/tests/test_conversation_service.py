@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -19,10 +20,13 @@ from app.models.database import (
     get_engine,
 )
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.models.model_profile import ModelProfile
 from app.services.conversation_service import (
     _build_prompt,
     _load_prompt_context,
     create_thread_with_first_turn,
+    resolve_byok_overrides,
+    stream_assistant_turn,
 )
 
 
@@ -404,3 +408,114 @@ def test_create_thread_with_first_turn_accepts_same_scenario_origin_branch():
     )
     assert outcome.thread.origin_branch_id == branch_id
     assert outcome.thread.scenario_id == scenario_id
+
+
+@pytest.mark.asyncio
+async def test_stream_assistant_turn_rehydrates_profile_from_scenario_context(monkeypatch):
+    engine = get_engine()
+    with Session(engine) as session:
+        profile = ModelProfile(
+            user_id="conv-owner",
+            name="Conversation profile",
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            model="conversation-profile-model",
+            api_key="sk-conversation-profile",
+            rpm=41,
+            tpm=4100,
+            concurrency=7,
+            supports_structured_outputs=False,
+            supports_native_search=True,
+        )
+        session.add(profile)
+        session.commit()
+        session.refresh(profile)
+        profile_id = profile.id
+
+        scenario = Scenario(
+            question="Will node chat reuse the launch profile?",
+            status=ScenarioStatus.DONE,
+            user_id=None,
+            parsed_context={
+                "model_profile_id": profile_id,
+                "llm_concurrency": 1,
+                "supports_structured_outputs": True,
+                "supports_native_search": False,
+            },
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id,
+        owner_user_id="conv-owner",
+        agent_identity_id=None,
+        origin_branch_id=None,
+        origin_round_number=None,
+        origin_node_id=None,
+        origin_node_type=None,
+        first_user_content="hello",
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _fake_stream(_prompt: str, **kwargs):
+        captured["stream_kwargs"] = kwargs
+        yield "profile answer"
+
+    class _Scope:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *_args):
+            return False
+
+    def _spy_scope(**kwargs):
+        captured["scope"] = kwargs
+        return _Scope()
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.llm_request_scope",
+        _spy_scope,
+    )
+
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id,
+        assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello",
+        assistant_turn_preclaimed=False,
+        owner_user_id="conv-owner",
+        overrides=resolve_byok_overrides(
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            disable_user_quota=False,
+        ),
+        request_id="req-profile",
+        cancel_event=asyncio.Event(),
+        _llm_stream_factory=_fake_stream,
+    )
+    events = [event async for event in stream]
+
+    assert captured["stream_kwargs"] == {
+        "api_key": "sk-conversation-profile",
+        "base_url": "https://api.openai.com/v1",
+        "model": "conversation-profile-model",
+    }
+    assert captured["scope"] == {
+        "quota_key": "user:conv-owner",
+        "purpose": "agent_conversation",
+        "requests_per_minute": 41,
+        "tokens_per_minute": 4100,
+        "concurrency": 7,
+        "supports_structured_outputs_override": False,
+        "supports_native_search_override": True,
+    }
+    assert [event["event"] for event in events] == [
+        "turn_started",
+        "turn_token_delta",
+        "turn_completed",
+    ]
+    assert events[0]["data"]["model"] == "conversation-profile-model"

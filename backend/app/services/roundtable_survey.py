@@ -448,11 +448,23 @@ async def _run_single_survey_call(
     api_key: str | None,
     base_url: str | None,
     model: str | None,
+    requests_per_minute: int | None,
+    tokens_per_minute: int | None,
+    concurrency: int | None,
+    supports_structured_outputs_override: bool | None,
+    supports_native_search_override: bool | None,
 ) -> dict[str, Any]:
     prompt = _build_survey_prompt(participant, question)
     started = time.monotonic()
     async with semaphore:
-        with llm_request_scope(purpose="roundtable_survey"):
+        with llm_request_scope(
+            purpose="roundtable_survey",
+            requests_per_minute=requests_per_minute,
+            tokens_per_minute=tokens_per_minute,
+            concurrency=concurrency,
+            supports_structured_outputs_override=supports_structured_outputs_override,
+            supports_native_search_override=supports_native_search_override,
+        ):
             try:
                 answer = await llm_call(
                     prompt,
@@ -508,6 +520,11 @@ async def build_roundtable_survey_stream(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
+    concurrency: int | None = None,
+    supports_structured_outputs_override: bool | None = None,
+    supports_native_search_override: bool | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Prepare and return the survey SSE event stream."""
 
@@ -520,7 +537,12 @@ async def build_roundtable_survey_stream(
     )
 
     async def _iter() -> AsyncIterator[dict[str, Any]]:
-        semaphore = asyncio.Semaphore(MAX_SURVEY_CONCURRENCY)
+        concurrency_limit = (
+            concurrency
+            if isinstance(concurrency, int) and concurrency > 0
+            else MAX_SURVEY_CONCURRENCY
+        )
+        semaphore = asyncio.Semaphore(concurrency_limit)
         tasks = [
             asyncio.create_task(
                 _run_single_survey_call(
@@ -530,6 +552,13 @@ async def build_roundtable_survey_stream(
                     api_key=api_key,
                     base_url=base_url,
                     model=model,
+                    requests_per_minute=requests_per_minute,
+                    tokens_per_minute=tokens_per_minute,
+                    concurrency=concurrency,
+                    supports_structured_outputs_override=(
+                        supports_structured_outputs_override
+                    ),
+                    supports_native_search_override=supports_native_search_override,
                 )
             )
             for participant in participant_contexts

@@ -42,6 +42,10 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
+from app.services.llm_resolution import (
+    merge_profile_provider_overrides,
+    recover_profile_provider_overrides,
+)
 from app.services.memory import (
     build_agent_context,
     compress_rounds,
@@ -134,6 +138,26 @@ _FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
 _FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
 _IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS = 5.0
 _RESULT_VERDICT_TIMEOUT_SECONDS = 10.0
+
+
+def _llm_scope_kwargs(
+    overrides: dict[str, Any] | None,
+    *,
+    purpose: str,
+) -> dict[str, Any]:
+    overrides = overrides or {}
+    return {
+        "purpose": purpose,
+        "requests_per_minute": overrides.get("requests_per_minute"),
+        "tokens_per_minute": overrides.get("tokens_per_minute"),
+        "concurrency": overrides.get("concurrency"),
+        "supports_structured_outputs_override": overrides.get(
+            "supports_structured_outputs_override"
+        ),
+        "supports_native_search_override": overrides.get(
+            "supports_native_search_override"
+        ),
+    }
 
 
 class SimulationCancelled(Exception):
@@ -369,7 +393,9 @@ async def _summarize_identity_compaction_group(
 
     try:
         _overrides = llm_overrides or {}
-        with llm_request_scope(purpose="identity_compaction"):
+        with llm_request_scope(
+            **_llm_scope_kwargs(_overrides, purpose="identity_compaction")
+        ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort="low",
@@ -1976,16 +2002,53 @@ async def _run_simulation_impl(
         viz_enabled = getattr(scenario, "visualization_enabled", False)
         scene_theme = getattr(scenario, "scene_theme", None)
 
-        # P4-E: BYOK overrides — received via function param (memory-only, not from DB)
-        # Merge model name from parsed_context (non-sensitive, kept for display)
         if llm_overrides is None:
             llm_overrides = {}
+        else:
+            llm_overrides = dict(llm_overrides)
+
+        llm_overrides = merge_profile_provider_overrides(
+            llm_overrides,
+            recover_profile_provider_overrides(session, scenario),
+        )
+
+        # P4-E: BYOK overrides — received via function param (memory-only, not from DB).
+        # Legacy parsed_context provider fields remain a fallback for non-profile rows.
         if not llm_overrides.get("model") and ctx.get("llm_model"):
             llm_overrides["model"] = ctx.get("llm_model")
         if not llm_overrides.get("base_url") and ctx.get("llm_base_url"):
             llm_overrides["base_url"] = ctx.get("llm_base_url")
         if llm_overrides.get("temperature") is None and ctx.get("llm_temperature") is not None:
             llm_overrides["temperature"] = ctx.get("llm_temperature")
+        if (
+            llm_overrides.get("requests_per_minute") is None
+            and ctx.get("llm_requests_per_minute") is not None
+        ):
+            llm_overrides["requests_per_minute"] = ctx.get("llm_requests_per_minute")
+        if (
+            llm_overrides.get("tokens_per_minute") is None
+            and ctx.get("llm_tokens_per_minute") is not None
+        ):
+            llm_overrides["tokens_per_minute"] = ctx.get("llm_tokens_per_minute")
+        if (
+            llm_overrides.get("concurrency") is None
+            and ctx.get("llm_concurrency") is not None
+        ):
+            llm_overrides["concurrency"] = ctx.get("llm_concurrency")
+        if (
+            llm_overrides.get("supports_structured_outputs_override") is None
+            and isinstance(ctx.get("supports_structured_outputs"), bool)
+        ):
+            llm_overrides["supports_structured_outputs_override"] = ctx.get(
+                "supports_structured_outputs"
+            )
+        if (
+            llm_overrides.get("supports_native_search_override") is None
+            and isinstance(ctx.get("supports_native_search"), bool)
+        ):
+            llm_overrides["supports_native_search_override"] = ctx.get(
+                "supports_native_search"
+            )
 
         # Load agents
         db_agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
@@ -2700,6 +2763,17 @@ async def _run_simulation_impl(
                 else ""
             )
             if report_branch_id:
+                report_override_keys = {
+                    "api_key",
+                    "base_url",
+                    "model",
+                    "temperature",
+                    "requests_per_minute",
+                    "tokens_per_minute",
+                    "concurrency",
+                    "supports_structured_outputs_override",
+                    "supports_native_search_override",
+                }
                 report_overrides = {
                     key: (
                         value
@@ -2709,7 +2783,7 @@ async def _run_simulation_impl(
                         else value
                     )
                     for key, value in (llm_overrides or {}).items()
-                    if key in {"api_key", "base_url", "model", "temperature"}
+                    if key in report_override_keys
                 }
                 from app.api.helpers import schedule_background_task
                 from app.services.result_report.builder import build_report_safe
@@ -3127,7 +3201,12 @@ async def _gather_agent_messages(
                 # H5 fix: per-agent cancel guard before each LLM call.
                 _check_cancelled(scenario_id)
                 # Pass-1: natural language generation (no JSON constraint)
-                with llm_request_scope(purpose="scenario_turn_generation"):
+                with llm_request_scope(
+                    **_llm_scope_kwargs(
+                        _overrides,
+                        purpose="scenario_turn_generation",
+                    )
+                ):
                     raw_text = await llm_call(
                         ctx, reasoning_effort=effort,
                         model=_overrides.get("model"),
@@ -3191,7 +3270,12 @@ async def _gather_agent_messages(
                         f'"diverge": "if there is a clear divergence stance, describe it; '
                         f'otherwise null"}}'
                     )
-                with llm_request_scope(purpose="scenario_turn_generation"):
+                with llm_request_scope(
+                    **_llm_scope_kwargs(
+                        _overrides,
+                        purpose="scenario_turn_generation",
+                    )
+                ):
                     result = await llm_call_json(
                         extract_prompt,
                         reasoning_effort="low",
@@ -3644,7 +3728,9 @@ async def _detect_fork(
 
     try:
         _overrides = llm_overrides or {}
-        with llm_request_scope(purpose="scenario_fork_detection"):
+        with llm_request_scope(
+            **_llm_scope_kwargs(_overrides, purpose="scenario_fork_detection")
+        ):
             result = await llm_call_json_with_stream_fallback(
                 prompt, reasoning_effort="medium",
                 model=_overrides.get("model"),
@@ -3922,7 +4008,9 @@ async def _generate_verdict(
             )
 
         _overrides = llm_overrides or {}
-        with llm_request_scope(purpose="scenario_result_verdict"):
+        with llm_request_scope(
+            **_llm_scope_kwargs(_overrides, purpose="scenario_result_verdict")
+        ):
             raw_text = await asyncio.wait_for(
                 llm_call(
                     prompt,

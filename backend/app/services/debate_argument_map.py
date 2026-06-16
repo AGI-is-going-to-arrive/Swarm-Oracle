@@ -797,6 +797,13 @@ async def enrich_argument_units_for_turn(
         purpose="debate_argument_map_enrichment",
         requests_per_minute=overrides.get("requests_per_minute"),
         tokens_per_minute=overrides.get("tokens_per_minute"),
+        concurrency=overrides.get("concurrency"),
+        supports_structured_outputs_override=overrides.get(
+            "supports_structured_outputs_override"
+        ),
+        supports_native_search_override=overrides.get(
+            "supports_native_search_override"
+        ),
     ):
         result = await llm_call_json_with_stream_fallback(
             prompt,

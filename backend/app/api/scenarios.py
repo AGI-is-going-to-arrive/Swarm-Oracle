@@ -78,6 +78,10 @@ from app.services.llm_client import (
     safe_llm_error_payload,
     validate_llm_base_url,
 )
+from app.services.llm_resolution import (
+    merge_profile_provider_overrides,
+    recover_profile_provider_overrides,
+)
 from app.services.model_profiles import (
     ResolvedProviderPolicy,
     has_profile_with_api_key,
@@ -117,8 +121,12 @@ _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
     {
         "_language",
         "hierarchical",
+        "llm_concurrency",
         "mode",
+        "model_profile_id",
         "simulation_rounds",
+        "supports_native_search",
+        "supports_structured_outputs",
     }
 )
 
@@ -1005,6 +1013,9 @@ async def create_multi_run_scenarios(
     resolved_llm_model = req.llm_model
     resolved_llm_requests_per_minute = req.llm_requests_per_minute
     resolved_llm_tokens_per_minute = req.llm_tokens_per_minute
+    resolved_concurrency = None
+    resolved_supports_structured_outputs = None
+    resolved_supports_native_search = None
     if req.model_profile_id:
         with Session(engine) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -1022,6 +1033,11 @@ async def create_multi_run_scenarios(
         resolved_llm_model = model_profile_policy.model
         resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
         resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
+        resolved_concurrency = model_profile_policy.concurrency
+        resolved_supports_structured_outputs = (
+            model_profile_policy.supports_structured_outputs
+        )
+        resolved_supports_native_search = model_profile_policy.supports_native_search
 
     requested_run_count, accepted_run_count = _clamp_multi_run_count(req.run_count)
     run_group_id = str(uuid.uuid4())
@@ -1064,6 +1080,8 @@ async def create_multi_run_scenarios(
                     "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
                 } if web_search_intensity_config else {}),
             }
+            if req.model_profile_id:
+                scenario_parsed_context["model_profile_id"] = req.model_profile_id
             if req.world_context is not None:
                 scenario_parsed_context["world_context"] = req.world_context.model_dump()
             scenario = Scenario(
@@ -1114,8 +1132,12 @@ async def create_multi_run_scenarios(
                     llm_api_key=resolved_llm_api_key,
                     llm_base_url=resolved_llm_base_url,
                     llm_model=resolved_llm_model,
+                    model_profile_id=req.model_profile_id,
                     llm_requests_per_minute=resolved_llm_requests_per_minute,
                     llm_tokens_per_minute=resolved_llm_tokens_per_minute,
+                    concurrency=resolved_concurrency,
+                    supports_structured_outputs=resolved_supports_structured_outputs,
+                    supports_native_search=resolved_supports_native_search,
                     disable_user_quota=req.disable_user_quota,
                     custom_agent_identity_ids=req.custom_agent_identity_ids,
                     continuity_overrides=[
@@ -1336,6 +1358,9 @@ async def create_scenario(
     resolved_llm_model = req.llm_model
     resolved_llm_requests_per_minute = req.llm_requests_per_minute
     resolved_llm_tokens_per_minute = req.llm_tokens_per_minute
+    resolved_concurrency = None
+    resolved_supports_structured_outputs = None
+    resolved_supports_native_search = None
     if req.model_profile_id:
         with Session(engine) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -1353,6 +1378,11 @@ async def create_scenario(
         resolved_llm_model = model_profile_policy.model
         resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
         resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
+        resolved_concurrency = model_profile_policy.concurrency
+        resolved_supports_structured_outputs = (
+            model_profile_policy.supports_structured_outputs
+        )
+        resolved_supports_native_search = model_profile_policy.supports_native_search
 
     if req.continuity_overrides and not effective_user_id:
         raise api_error(
@@ -1415,6 +1445,8 @@ async def create_scenario(
             "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
         } if web_search_intensity_config else {}),
     }
+    if req.model_profile_id:
+        scenario_parsed_context["model_profile_id"] = req.model_profile_id
     if req.world_context is not None:
         scenario_parsed_context["world_context"] = req.world_context.model_dump()
     # Campaign Phase 1: persist authoritative challenge/track context so that
@@ -1591,8 +1623,12 @@ async def create_scenario(
         llm_api_key=resolved_llm_api_key,
         llm_base_url=resolved_llm_base_url,
         llm_model=resolved_llm_model,
+        model_profile_id=req.model_profile_id,
         llm_requests_per_minute=resolved_llm_requests_per_minute,
         llm_tokens_per_minute=resolved_llm_tokens_per_minute,
+        concurrency=resolved_concurrency,
+        supports_structured_outputs=resolved_supports_structured_outputs,
+        supports_native_search=resolved_supports_native_search,
         disable_user_quota=req.disable_user_quota,
         custom_agent_identity_ids=req.custom_agent_identity_ids,
         continuity_overrides=[
@@ -2231,6 +2267,7 @@ async def generate_result_report(
     _require_result_report_feature()
 
     engine = get_engine()
+    recovered_profile_overrides: dict[str, Any] | None = None
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
         if scenario.status != ScenarioStatus.DONE:
@@ -2248,6 +2285,7 @@ async def generate_result_report(
             .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
         ).first()
         dominant_branch_id = dominant_branch.id if dominant_branch is not None else None
+        recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
 
     request_body = req or ResultReportGenerateRequest()
     validated_base_url = validate_llm_base_url(request_body.llm_base_url)
@@ -2271,14 +2309,17 @@ async def generate_result_report(
             "No branch is ready for report generation",
         )
 
-    overrides = {
-        "api_key": request_body.llm_api_key or None,
-        "base_url": validated_base_url,
-        "model": request_body.llm_model or None,
-        "requests_per_minute": request_body.llm_requests_per_minute,
-        "tokens_per_minute": request_body.llm_tokens_per_minute,
-        "temperature": request_body.temperature,
-    }
+    overrides = merge_profile_provider_overrides(
+        {
+            "api_key": request_body.llm_api_key or None,
+            "base_url": validated_base_url,
+            "model": request_body.llm_model or None,
+            "requests_per_minute": request_body.llm_requests_per_minute,
+            "tokens_per_minute": request_body.llm_tokens_per_minute,
+            "temperature": request_body.temperature,
+        },
+        recovered_profile_overrides,
+    )
 
     return StreamingResponse(
         result_report_builder.build_report_sse_stream(

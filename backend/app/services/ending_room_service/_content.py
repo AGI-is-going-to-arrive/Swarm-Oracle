@@ -189,12 +189,14 @@ async def _enhance_roundtable_phase_insights(
     planned_turns: list[dict[str, Any]],
     language: str,
     scenario_question: str | None,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Optionally rewrite Worldline Roundtable phase insights via server LLM."""
 
     if not settings.FEATURE_ROUNDTABLE_INSIGHT_LLM:
         return insights
 
+    overrides = llm_overrides or {}
     rewritten = [dict(insight) for insight in insights]
     rewrite_count = min(len(rewritten), _MAX_INSIGHT_REWRITES)
     if rewrite_count <= 0:
@@ -218,6 +220,15 @@ async def _enhance_roundtable_phase_insights(
                 with llm_request_scope(
                     quota_key=None,
                     purpose=f"roundtable_phase_insight_{phase}_{index}",
+                    requests_per_minute=overrides.get("requests_per_minute"),
+                    tokens_per_minute=overrides.get("tokens_per_minute"),
+                    concurrency=overrides.get("concurrency"),
+                    supports_structured_outputs_override=overrides.get(
+                        "supports_structured_outputs_override"
+                    ),
+                    supports_native_search_override=overrides.get(
+                        "supports_native_search_override"
+                    ),
                 ):
                     raw_output = await asyncio.wait_for(
                         llm_call(
@@ -225,6 +236,9 @@ async def _enhance_roundtable_phase_insights(
                             reasoning_effort="low",
                             temperature=0.45,
                             timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+                            model=overrides.get("model"),
+                            api_key=overrides.get("api_key"),
+                            base_url=overrides.get("base_url"),
                         ),
                         timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS + 1.0,
                     )
@@ -1946,15 +1960,23 @@ def _oracle_plain_generation_text(result: Any) -> str:
     return text
 
 
-async def _oracle_plain_stream_generation_text(prompt: str) -> str:
+async def _oracle_plain_stream_generation_text(
+    prompt: str,
+    *,
+    llm_overrides: dict[str, Any] | None = None,
+) -> str:
     import app.services.ending_room_service as _pkg
 
+    overrides = llm_overrides or {}
     chunks: list[str] = []
     stream_iter = _pkg.llm_call_stream(
         prompt,
         reasoning_effort="medium",
         temperature=0.82,
         timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+        model=overrides.get("model"),
+        api_key=overrides.get("api_key"),
+        base_url=overrides.get("base_url"),
     ).__aiter__()
     try:
         while True:
@@ -2452,6 +2474,13 @@ async def _maybe_rewrite_oracle_copy(
             purpose=purpose,
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             legacy_call = (
@@ -2470,7 +2499,10 @@ async def _maybe_rewrite_oracle_copy(
                 )
             elif streaming_first:
                 result = await asyncio.wait_for(
-                    _oracle_plain_stream_generation_text(gen_prompt),
+                    _oracle_plain_stream_generation_text(
+                        gen_prompt,
+                        llm_overrides=overrides,
+                    ),
                     timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
                 )
             else:
@@ -2553,6 +2585,13 @@ async def _maybe_rewrite_oracle_copy(
             purpose=f"{purpose}:rewrite",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             result = await asyncio.wait_for(
@@ -2605,6 +2644,13 @@ async def _maybe_rewrite_oracle_copy(
             purpose=f"{purpose}:plain_text_retry",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             plain_result = await asyncio.wait_for(
@@ -2652,6 +2698,13 @@ async def _maybe_rewrite_oracle_copy(
                     purpose=f"{purpose}:no_effort_retry",
                     requests_per_minute=overrides.get("requests_per_minute"),
                     tokens_per_minute=overrides.get("tokens_per_minute"),
+                    concurrency=overrides.get("concurrency"),
+                    supports_structured_outputs_override=overrides.get(
+                        "supports_structured_outputs_override"
+                    ),
+                    supports_native_search_override=overrides.get(
+                        "supports_native_search_override"
+                    ),
                 ):
                     import app.services.ending_room_service as _pkg_r
                     no_effort_result = await asyncio.wait_for(
@@ -2723,15 +2776,34 @@ async def _maybe_rewrite_oracle_copy(
     return anchor_copy
 
 
-async def _oracle_followup_streaming_supported() -> bool:
+async def _oracle_followup_streaming_supported(
+    *,
+    llm_overrides: dict[str, Any] | None = None,
+) -> bool:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return False
+    overrides = llm_overrides or {}
     try:
         import app.services.ending_room_service as _pkg
-        probe = await _pkg.probe_streaming_support(
-            model=settings.LLM_MODEL_NAME,
-            timeout=_ORACLE_STREAM_PROBE_TIMEOUT_SECONDS,
-        )
+        with llm_request_scope(
+            quota_key=None,
+            purpose="oracle_followup_stream_probe",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
+        ):
+            probe = await _pkg.probe_streaming_support(
+                model=overrides.get("model") or settings.LLM_MODEL_NAME,
+                api_key=overrides.get("api_key"),
+                base_url=overrides.get("base_url"),
+                timeout=_ORACLE_STREAM_PROBE_TIMEOUT_SECONDS,
+            )
     except Exception as exc:  # pragma: no cover - defensive fallback
         logger.warning("Oracle follow-up stream probe failed: %s", exc)
         return False
@@ -2784,6 +2856,13 @@ async def _stream_oracle_copy(
             purpose=purpose,
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
+            concurrency=overrides.get("concurrency"),
+            supports_structured_outputs_override=overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            supports_native_search_override=overrides.get(
+                "supports_native_search_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             stream_iter = _pkg.llm_call_stream(

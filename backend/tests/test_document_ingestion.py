@@ -449,11 +449,11 @@ async def test_extract_entities_long_document_uses_scan_then_refine(
     monkeypatch.setattr(document_ingestion.settings, "DOCUMENT_MAX_TEXT_FOR_SCAN", 20)
     calls: list[str] = []
 
-    async def fake_scan(_text, _llm_call_fn):
+    async def fake_scan(_text, _llm_call_fn, **_kwargs):
         calls.append("scan")
         return [{"name": "刘备", "aliases": ["玄德"], "kind": "person"}]
 
-    async def fake_refine(_text, _candidates, _llm_call_fn):
+    async def fake_refine(_text, _candidates, _llm_call_fn, **_kwargs):
         calls.append("refine")
         return [{"name": "刘备", "role": "主公", "traits": [], "perspective": ""}]
 
@@ -476,7 +476,7 @@ async def test_extract_entities_long_document_falls_back_when_scan_finds_nothing
 
     monkeypatch.setattr(document_ingestion.settings, "DOCUMENT_MAX_TEXT_FOR_SCAN", 20)
 
-    async def fake_scan(_text, _llm_call_fn):
+    async def fake_scan(_text, _llm_call_fn, **_kwargs):
         return []
 
     monkeypatch.setattr(document_ingestion, "scan_entities_from_samples", fake_scan)
@@ -496,10 +496,10 @@ async def test_extract_entities_long_document_falls_back_when_refine_finds_nothi
 
     monkeypatch.setattr(document_ingestion.settings, "DOCUMENT_MAX_TEXT_FOR_SCAN", 20)
 
-    async def fake_scan(_text, _llm_call_fn):
+    async def fake_scan(_text, _llm_call_fn, **_kwargs):
         return [{"name": "Ghost", "aliases": [], "kind": "person"}]
 
-    async def fake_refine(_text, _candidates, _llm_call_fn):
+    async def fake_refine(_text, _candidates, _llm_call_fn, **_kwargs):
         return []
 
     monkeypatch.setattr(document_ingestion, "scan_entities_from_samples", fake_scan)

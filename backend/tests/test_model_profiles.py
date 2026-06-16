@@ -201,6 +201,75 @@ def test_model_profile_crud_redacts_api_key_and_scopes_by_user(caplog):
     assert SECRET_KEY not in "\n".join(record.getMessage() for record in caplog.records)
 
 
+def test_model_profile_supports_fields_preserve_tristate_create_update_resolve():
+    from app.models.model_profile import ModelProfile
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    client = TestClient(app)
+    values = (None, True, False)
+
+    for structured in values:
+        for native in values:
+            created = client.post(
+                "/api/model-profiles",
+                json=_profile_payload(
+                    user_id="tristate-owner",
+                    name=f"tri-{structured}-{native}",
+                    supports_structured_outputs=structured,
+                    supports_native_search=native,
+                ),
+            )
+            assert created.status_code == 201
+            body = created.json()
+            assert body["supports_structured_outputs"] is structured
+            assert body["supports_native_search"] is native
+
+            with Session(get_engine()) as session:
+                stored = session.get(ModelProfile, body["id"])
+                assert stored is not None
+                assert stored.supports_structured_outputs is structured
+                assert stored.supports_native_search is native
+                policy = resolve_model_profile_policy(
+                    session,
+                    user_id="tristate-owner",
+                    model_profile_id=body["id"],
+                )
+                assert policy is not None
+                assert policy.supports_structured_outputs is structured
+                assert policy.supports_native_search is native
+
+    default_created = client.post(
+        "/api/model-profiles",
+        json={
+            key: value
+            for key, value in _profile_payload(
+                user_id="tristate-default-owner",
+                name="tri-default",
+            ).items()
+            if key not in {"supports_structured_outputs", "supports_native_search"}
+        },
+    )
+    assert default_created.status_code == 201
+    default_body = default_created.json()
+    assert default_body["supports_structured_outputs"] is None
+    assert default_body["supports_native_search"] is None
+
+    profile_id = default_body["id"]
+    for structured in values:
+        for native in values:
+            patched = client.patch(
+                f"/api/model-profiles/{profile_id}",
+                params={"user_id": "tristate-default-owner"},
+                json={
+                    "supports_structured_outputs": structured,
+                    "supports_native_search": native,
+                },
+            )
+            assert patched.status_code == 200
+            assert patched.json()["supports_structured_outputs"] is structured
+            assert patched.json()["supports_native_search"] is native
+
+
 def test_model_profile_feature_gate_and_byok_base_url_rules(monkeypatch):
     import app.api.model_profiles as model_profiles_api
 
@@ -326,6 +395,8 @@ def test_resolve_model_profile_policy_override_matrix():
         )
         assert empty_model_policy is not None
         assert empty_model_policy.model == "profile-model"
+        assert empty_model_policy.supports_structured_outputs is None
+        assert empty_model_policy.supports_native_search is None
 
 
 @pytest.mark.asyncio
@@ -385,6 +456,10 @@ async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
     assert captured["llm_model"] == "explicit-model"
     assert captured["llm_requests_per_minute"] == 19
     assert captured["llm_tokens_per_minute"] == 0
+    assert captured["concurrency"] == 3
+    assert captured["supports_structured_outputs"] is True
+    assert captured["supports_native_search"] is False
+    assert captured["model_profile_id"] == profile_id
 
     scenario_id = response.json()["id"]
     with Session(get_engine()) as session:
@@ -392,7 +467,8 @@ async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
         assert scenario is not None
         _assert_secret_absent(scenario.parsed_context)
         assert "llm_base_url" not in scenario.parsed_context
-        assert "model_profile_id" not in scenario.parsed_context
+        assert "llm_model" not in scenario.parsed_context
+        assert scenario.parsed_context["model_profile_id"] == profile_id
 
     _mark_scenario_done_for_public_surfaces(scenario_id)
 
@@ -485,6 +561,9 @@ def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, cap
     assert by_side["proposition"]["model"] == "explicit-debate-model"
     assert by_side["opposition"]["requests_per_minute"] == 0
     assert by_side["judge"]["tokens_per_minute"] == 7000
+    assert by_side["proposition"]["concurrency"] == 3
+    assert by_side["opposition"]["supports_structured_outputs_override"] is True
+    assert by_side["judge"]["supports_native_search_override"] is False
 
     capabilities = client.get("/api/capabilities")
     assert capabilities.status_code == 200
@@ -549,6 +628,9 @@ def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     assert room_response.status_code == 200
     _assert_secret_absent(room_response.json(), *secrets.values())
     assert captured["room"]["api_key"] == secrets["room"]
+    assert captured["room"]["concurrency"] == 3
+    assert captured["room"]["supports_structured_outputs_override"] is True
+    assert captured["room"]["supports_native_search_override"] is False
     room_id = room_response.json()["id"]
 
     async def _fake_append_room_user_turn_async(*_args, **kwargs):
@@ -575,6 +657,9 @@ def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     assert followup_response.status_code == 200
     _assert_secret_absent(followup_response.json(), *secrets.values())
     assert captured["followup"]["api_key"] == secrets["followup"]
+    assert captured["followup"]["concurrency"] == 3
+    assert captured["followup"]["supports_structured_outputs_override"] is True
+    assert captured["followup"]["supports_native_search_override"] is False
 
     async def _survey_stream():
         yield {
@@ -602,6 +687,11 @@ def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     assert secrets["survey"] not in survey_response.text
     assert captured["survey"]["api_key"] == secrets["survey"]
     assert captured["survey"]["model"] == "survey-model"
+    assert captured["survey"]["requests_per_minute"] == 12
+    assert captured["survey"]["tokens_per_minute"] == 12000
+    assert captured["survey"]["concurrency"] == 3
+    assert captured["survey"]["supports_structured_outputs_override"] is True
+    assert captured["survey"]["supports_native_search_override"] is False
 
     async def _analyst_stream():
         yield {"event": "analyst_response", "data": {"answer": "analyst ok"}}
@@ -625,6 +715,11 @@ def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     assert secrets["analyst"] not in analyst_response.text
     assert captured["analyst"]["api_key"] == secrets["analyst"]
     assert captured["analyst"]["model"] == "analyst-model"
+    assert captured["analyst"]["requests_per_minute"] == 12
+    assert captured["analyst"]["tokens_per_minute"] == 12000
+    assert captured["analyst"]["concurrency"] == 3
+    assert captured["analyst"]["supports_structured_outputs_override"] is True
+    assert captured["analyst"]["supports_native_search_override"] is False
 
     capabilities = client.get("/api/capabilities")
     assert capabilities.status_code == 200

@@ -41,6 +41,7 @@ from app.services.llm_client import (
     llm_request_scope,
     validate_llm_base_url,
 )
+from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
 from app.services.parser import parse_question
 from app.services.persona_export import (
     MAX_BULK_EXPORT,
@@ -308,6 +309,58 @@ def _is_pdf_upload(file: UploadFile) -> bool:
         return True
     filename = (file.filename or "").lower()
     return content_type in PDF_FALLBACK_CONTENT_TYPES and filename.endswith(".pdf")
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _resolve_document_model_profile_policy_sync(
+    *,
+    user_id: str | None,
+    model_profile_id: str | None,
+) -> ResolvedProviderPolicy | None:
+    if not model_profile_id:
+        return None
+    with Session(get_engine()) as session:
+        return resolve_model_profile_policy(
+            session,
+            user_id=user_id,
+            model_profile_id=model_profile_id,
+        )
+
+
+async def _resolve_document_model_profile_policy(
+    *,
+    user_id: str | None,
+    model_profile_id: str | None,
+) -> ResolvedProviderPolicy | None:
+    return await asyncio.to_thread(
+        _resolve_document_model_profile_policy_sync,
+        user_id=user_id,
+        model_profile_id=model_profile_id,
+    )
+
+
+def _profile_scope_kwargs(policy: ResolvedProviderPolicy | None) -> dict[str, object]:
+    if policy is None:
+        return {}
+    return {
+        "requests_per_minute": policy.requests_per_minute,
+        "tokens_per_minute": policy.tokens_per_minute,
+        "concurrency": policy.concurrency,
+        "supports_structured_outputs_override": policy.supports_structured_outputs,
+        "supports_native_search_override": policy.supports_native_search,
+    }
+
+
+def _profile_llm_kwargs(policy: ResolvedProviderPolicy | None) -> dict[str, Any]:
+    if policy is None:
+        return {}
+    return policy.llm_overrides()
 
 
 def _normalized_upload_content_type(file: UploadFile) -> str:
@@ -619,7 +672,7 @@ async def preflight_identity_continuity(
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
     if not effective_user_id:
         raise api_error(400, "USER_ID_REQUIRED", "user_id is required")
-    if req.llm_base_url:
+    if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(
@@ -635,6 +688,37 @@ async def preflight_identity_continuity(
             )
         req.llm_base_url = validated_url
 
+    resolved_llm_api_key = req.llm_api_key
+    resolved_llm_base_url = req.llm_base_url
+    resolved_llm_model = req.llm_model
+    resolved_llm_requests_per_minute = req.llm_requests_per_minute
+    resolved_llm_tokens_per_minute = req.llm_tokens_per_minute
+    resolved_concurrency = None
+    resolved_supports_structured_outputs = None
+    resolved_supports_native_search = None
+    if req.model_profile_id:
+        with Session(get_engine()) as session:
+            model_profile_policy = resolve_model_profile_policy(
+                session,
+                user_id=effective_user_id,
+                model_profile_id=req.model_profile_id,
+                explicit_api_key=req.llm_api_key,
+                explicit_base_url=req.llm_base_url,
+                explicit_model=req.llm_model,
+                explicit_requests_per_minute=req.llm_requests_per_minute,
+                explicit_tokens_per_minute=req.llm_tokens_per_minute,
+            )
+        resolved_llm_api_key = model_profile_policy.api_key
+        resolved_llm_base_url = model_profile_policy.base_url
+        resolved_llm_model = model_profile_policy.model
+        resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
+        resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
+        resolved_concurrency = model_profile_policy.concurrency
+        resolved_supports_structured_outputs = (
+            model_profile_policy.supports_structured_outputs
+        )
+        resolved_supports_native_search = model_profile_policy.supports_native_search
+
     num_agents = req.num_agents or settings.DEFAULT_NUM_AGENTS
     use_hierarchical = req.hierarchical
     if use_hierarchical is None:
@@ -645,7 +729,7 @@ async def preflight_identity_continuity(
         else settings.DEFAULT_ROUNDS
     )
 
-    local_provider = is_local_provider_url(req.llm_base_url)
+    local_provider = is_local_provider_url(resolved_llm_base_url)
     quota_key = (
         None
         if (req.disable_user_quota and local_provider)
@@ -658,8 +742,11 @@ async def preflight_identity_continuity(
         with llm_request_scope(
             quota_key=quota_key,
             purpose="identity_preflight_parse",
-            requests_per_minute=req.llm_requests_per_minute,
-            tokens_per_minute=req.llm_tokens_per_minute,
+            requests_per_minute=resolved_llm_requests_per_minute,
+            tokens_per_minute=resolved_llm_tokens_per_minute,
+            concurrency=resolved_concurrency,
+            supports_structured_outputs_override=resolved_supports_structured_outputs,
+            supports_native_search_override=resolved_supports_native_search,
         ):
             parsed = await asyncio.wait_for(
                 parse_question(
@@ -669,10 +756,10 @@ async def preflight_identity_continuity(
                     default_rounds=sim_rounds,
                     max_rounds=settings.MAX_ROUNDS,
                     hierarchical=use_hierarchical,
-                    api_key=req.llm_api_key,
-                    base_url=req.llm_base_url,
+                    api_key=resolved_llm_api_key,
+                    base_url=resolved_llm_base_url,
                     temperature=req.temperature,
-                    model=req.llm_model,
+                    model=resolved_llm_model,
                     world_context=(
                         req.world_context.model_dump()
                         if req.world_context is not None
@@ -1207,6 +1294,7 @@ async def unpin_identity_memory(
 async def parse_document_seed_world(
     file: UploadFile = File(...),
     user_id: str | None = None,
+    model_profile_id: str | None = None,
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Parse an uploaded PDF/txt/md into a bounded scenario world_context."""
@@ -1214,16 +1302,25 @@ async def parse_document_seed_world(
         raise api_error(404, "FEATURE_DISABLED", "Document seed feature is not enabled")
 
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    model_profile_policy = await _resolve_document_model_profile_policy(
+        user_id=effective_user_id,
+        model_profile_id=_normalize_optional_text(model_profile_id),
+    )
     blob = await _read_document_upload(file)
     _validate_document_seed_filename(file)
     document_text, extraction_method = await _extract_document_seed_text(file, blob)
     chunks = chunk_document(document_text)
+    profile_llm_kwargs = _profile_llm_kwargs(model_profile_policy)
 
     quota_key = f"user:{effective_user_id}" if effective_user_id else None
-    with llm_request_scope(quota_key=quota_key, purpose="document_seed"):
+    with llm_request_scope(
+        quota_key=quota_key,
+        purpose="document_seed",
+        **_profile_scope_kwargs(model_profile_policy),
+    ):
         try:
             entities = await asyncio.wait_for(
-                extract_entities(chunks, llm_call),
+                extract_entities(chunks, llm_call, **profile_llm_kwargs),
                 timeout=settings.DOCUMENT_ENTITY_TIMEOUT,
             )
         except asyncio.TimeoutError as exc:
@@ -1238,7 +1335,11 @@ async def parse_document_seed_world(
         async def _generate_with_limit(entity: dict[str, Any]) -> dict[str, Any]:
             async with sem:
                 return await asyncio.wait_for(
-                    generate_persona_from_entity(entity, llm_call),
+                    generate_persona_from_entity(
+                        entity,
+                        llm_call,
+                        **profile_llm_kwargs,
+                    ),
                     timeout=settings.DOCUMENT_PERSONA_SINGLE_TIMEOUT,
                 )
 
@@ -1303,6 +1404,7 @@ async def parse_document_seed_world(
 async def create_agents_from_document(
     file: UploadFile = File(...),
     user_id: str | None = None,
+    model_profile_id: str | None = None,
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Create custom agent identities from entities extracted from an uploaded PDF."""
@@ -1312,6 +1414,10 @@ async def create_agents_from_document(
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
         raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
+    model_profile_policy = await _resolve_document_model_profile_policy(
+        user_id=effective_user_id,
+        model_profile_id=_normalize_optional_text(model_profile_id),
+    )
 
     if not _is_pdf_upload(file):
         raise api_error(
@@ -1340,13 +1446,15 @@ async def create_agents_from_document(
         )
 
     chunks = chunk_document(document_text)
+    profile_llm_kwargs = _profile_llm_kwargs(model_profile_policy)
     with llm_request_scope(
         quota_key=f"user:{effective_user_id}",
         purpose="document_ingestion",
+        **_profile_scope_kwargs(model_profile_policy),
     ):
         try:
             entities = await asyncio.wait_for(
-                extract_entities(chunks, llm_call),
+                extract_entities(chunks, llm_call, **profile_llm_kwargs),
                 timeout=settings.DOCUMENT_ENTITY_TIMEOUT,
             )
         except asyncio.TimeoutError as exc:
@@ -1360,7 +1468,11 @@ async def create_agents_from_document(
         async def _generate_with_limit(entity: dict) -> dict:
             async with sem:
                 return await asyncio.wait_for(
-                    generate_persona_from_entity(entity, llm_call),
+                    generate_persona_from_entity(
+                        entity,
+                        llm_call,
+                        **profile_llm_kwargs,
+                    ),
                     timeout=settings.DOCUMENT_PERSONA_SINGLE_TIMEOUT,
                 )
 

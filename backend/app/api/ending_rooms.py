@@ -307,6 +307,9 @@ def _role_policy_to_overrides(policy: ResolvedProviderPolicy) -> dict[str, Any]:
         "model": policy.model,
         "requests_per_minute": policy.requests_per_minute,
         "tokens_per_minute": policy.tokens_per_minute,
+        "concurrency": policy.concurrency,
+        "supports_structured_outputs_override": policy.supports_structured_outputs,
+        "supports_native_search_override": policy.supports_native_search,
     }
 
 
@@ -854,6 +857,7 @@ async def create_roundtable_survey_endpoint(
 
     _require_roundtable_feature("FEATURE_ROUNDTABLE_SURVEY", "roundtable_survey")
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    survey_llm_overrides: dict[str, Any]
     if req.survey_model_profile_id:
         owner_user_id = await asyncio.to_thread(
             _scenario_owner_user_id_sync,
@@ -868,23 +872,31 @@ async def create_roundtable_survey_endpoint(
             explicit_base_url=req.llm_base_url,
             explicit_model=req.llm_model,
         )
-        validated_key = policy.api_key if policy is not None else None
-        validated_url = policy.base_url if policy is not None else None
-        model = policy.model if policy is not None else req.llm_model
+        survey_llm_overrides = (
+            _role_policy_to_overrides(policy)
+            if policy is not None
+            else {
+                "api_key": None,
+                "base_url": None,
+                "model": req.llm_model,
+            }
+        )
     else:
         validated_key, validated_url = _validate_roundtable_llm_overrides(
             req.llm_api_key, req.llm_base_url,
         )
-        model = req.llm_model
+        survey_llm_overrides = {
+            "api_key": validated_key,
+            "base_url": validated_url,
+            "model": req.llm_model,
+        }
     try:
         stream = await build_roundtable_survey_stream(
             scenario_id,
             req.question,
             req.participant_ids,
             room_id=req.room_id,
-            api_key=validated_key,
-            base_url=validated_url,
-            model=model,
+            **survey_llm_overrides,
         )
     except RoundtableSurveyServiceError as exc:
         _raise_roundtable_service_error(exc)
@@ -923,6 +935,7 @@ async def create_roundtable_analyst_endpoint(
 
     _require_roundtable_feature("FEATURE_ROUNDTABLE_ANALYST", "roundtable_analyst")
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    analyst_llm_overrides: dict[str, Any]
     if req.analyst_model_profile_id:
         owner_user_id = await asyncio.to_thread(
             _scenario_owner_user_id_sync,
@@ -937,22 +950,30 @@ async def create_roundtable_analyst_endpoint(
             explicit_base_url=req.llm_base_url,
             explicit_model=req.llm_model,
         )
-        validated_key = policy.api_key if policy is not None else None
-        validated_url = policy.base_url if policy is not None else None
-        model = policy.model if policy is not None else req.llm_model
+        analyst_llm_overrides = (
+            _role_policy_to_overrides(policy)
+            if policy is not None
+            else {
+                "api_key": None,
+                "base_url": None,
+                "model": req.llm_model,
+            }
+        )
     else:
         validated_key, validated_url = _validate_roundtable_llm_overrides(
             req.llm_api_key, req.llm_base_url,
         )
-        model = req.llm_model
+        analyst_llm_overrides = {
+            "api_key": validated_key,
+            "base_url": validated_url,
+            "model": req.llm_model,
+        }
     try:
         stream = await build_roundtable_analyst_stream(
             scenario_id,
             req.question,
             room_id=req.room_id,
-            api_key=validated_key,
-            base_url=validated_url,
-            model=model,
+            **analyst_llm_overrides,
         )
     except RoundtableAnalystServiceError as exc:
         _raise_roundtable_service_error(exc)

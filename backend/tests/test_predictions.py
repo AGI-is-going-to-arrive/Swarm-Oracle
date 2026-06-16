@@ -25,6 +25,7 @@ def _seed_done_scenario_with_prediction(
     *,
     parsed_context: dict | None = None,
     confidence: float = 0.75,
+    user_id: str | None = None,
 ) -> str:
     from app.models.database import get_engine
 
@@ -33,6 +34,7 @@ def _seed_done_scenario_with_prediction(
             question="Will the harbor route survive?",
             status=ScenarioStatus.DONE,
             parsed_context=parsed_context,
+            user_id=user_id,
         )
         session.add(scenario)
         session.commit()
@@ -58,6 +60,41 @@ def _seed_done_scenario_with_prediction(
         )
         session.commit()
         return scenario_id
+
+
+def _seed_model_profile(
+    *,
+    user_id: str,
+    model: str = "profile-model",
+    api_key: str = "sk-profile",
+    base_url: str = "https://api.openai.com/v1",
+    rpm: int | None = 11,
+    tpm: int | None = 1100,
+    concurrency: int | None = 2,
+    supports_structured_outputs: bool | None = True,
+    supports_native_search: bool | None = False,
+) -> str:
+    from app.models.database import get_engine
+    from app.models.model_profile import ModelProfile
+
+    with Session(get_engine()) as session:
+        profile = ModelProfile(
+            user_id=user_id,
+            name=f"{user_id} profile",
+            provider="openai",
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            rpm=rpm,
+            tpm=tpm,
+            concurrency=concurrency,
+            supports_structured_outputs=supports_structured_outputs,
+            supports_native_search=supports_native_search,
+        )
+        session.add(profile)
+        session.commit()
+        session.refresh(profile)
+        return profile.id
 
 # ── Model Unit Tests ─────────────────────────────────────
 
@@ -462,11 +499,95 @@ class TestPredictionAPIValidation(unittest.TestCase):
             llm_api_key="sk-test",
             llm_base_url="https://example.com/v1/chat/completions",
             llm_model="gpt-test",
+            model_profile_id=" profile-1 ",
         )
 
         self.assertEqual(req.llm_api_key, "sk-test")
         self.assertEqual(req.llm_base_url, "https://example.com/v1/chat/completions")
         self.assertEqual(req.llm_model, "gpt-test")
+        self.assertEqual(req.model_profile_id, "profile-1")
+
+    def test_score_predictions_request_defaults_model_profile_id_to_none(self):
+        from app.api.predictions import ScorePredictionsRequest
+
+        self.assertIsNone(ScorePredictionsRequest().model_profile_id)
+
+    def test_score_predictions_rejects_unowned_model_profile(self):
+        from app.services import scoring as scoring_module
+
+        scenario_id = _seed_done_scenario_with_prediction(user_id="prediction-owner")
+        profile_id = _seed_model_profile(user_id="different-owner")
+        client = TestClient(app)
+
+        async def unexpected_score_all_for_scenario(*_args, **_kwargs):
+            raise AssertionError("profile ownership should fail before scoring")
+
+        with patch.object(
+            scoring_module,
+            "score_all_for_scenario",
+            side_effect=unexpected_score_all_for_scenario,
+        ):
+            response = client.post(
+                f"/api/scenario/{scenario_id}/score-predictions",
+                json={"model_profile_id": profile_id},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"]["code"], "MODEL_PROFILE_NOT_FOUND")
+
+    def test_score_predictions_model_profile_threads_effective_overrides(self):
+        from app.services import scoring as scoring_module
+
+        scenario_id = _seed_done_scenario_with_prediction(user_id="prediction-owner")
+        profile_id = _seed_model_profile(
+            user_id="prediction-owner",
+            model="profile-score-model",
+            api_key="sk-score-profile",
+            rpm=17,
+            tpm=1700,
+            concurrency=4,
+            supports_structured_outputs=False,
+            supports_native_search=True,
+        )
+        captured: dict = {}
+
+        async def fake_score_all_for_scenario(_scenario_id: str, *, llm_overrides=None):
+            captured["overrides"] = dict(llm_overrides or {})
+            return {
+                "attempted": 0,
+                "scored": 0,
+                "failed": 0,
+                "all_failed": False,
+                "results": [],
+            }
+
+        client = TestClient(app)
+        with patch.object(
+            scoring_module,
+            "score_all_for_scenario",
+            side_effect=fake_score_all_for_scenario,
+        ):
+            response = client.post(
+                f"/api/scenario/{scenario_id}/score-predictions",
+                json={"model_profile_id": profile_id},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            captured["overrides"],
+            {
+                "api_key": "sk-score-profile",
+                "base_url": "https://api.openai.com/v1",
+                "model": "profile-score-model",
+                "requests_per_minute": 17,
+                "tokens_per_minute": 1700,
+                "concurrency": 4,
+                "supports_structured_outputs_override": False,
+                "supports_native_search_override": True,
+                "model_profile_id": profile_id,
+                "quota_key": "prediction-owner",
+            },
+        )
 
 
 # ── Scoring Mock Tests ─────────────────────────────────
@@ -1162,6 +1283,71 @@ def test_score_predictions_endpoint_returns_attempt_and_failure_stats(tmp_path):
         "failed": 2,
         "all_failed": False,
         "results": [{"prediction_id": "p-1", "score": 88, "reason": "命中主线"}],
+    }
+
+
+def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
+    from app.config import settings
+    from app.services import scoring as scoring_module
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    profile_id = _seed_model_profile(
+        user_id="score-owner",
+        model="score-profile-model",
+        api_key="sk-score-profile",
+        rpm=31,
+        tpm=3100,
+        concurrency=4,
+        supports_structured_outputs=False,
+        supports_native_search=True,
+    )
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": profile_id,
+            "llm_concurrency": 1,
+            "supports_structured_outputs": True,
+            "supports_native_search": False,
+            "result_quality": {"actual_outcome": True},
+        },
+        user_id="score-owner",
+    )
+    captured: dict[str, object] = {}
+    original_scope = scoring_module.llm_request_scope
+
+    def spy_scope(**kwargs):
+        captured["scope"] = dict(kwargs)
+        return original_scope(**kwargs)
+
+    async def fake_llm(_prompt: str, **kwargs):
+        captured["llm"] = dict(kwargs)
+        return {"score": 93, "reason": "profile scored it"}
+
+    monkeypatch.setattr(scoring_module, "llm_request_scope", spy_scope)
+    monkeypatch.setattr(
+        scoring_module,
+        "llm_call_json_with_stream_fallback",
+        fake_llm,
+    )
+
+    response = TestClient(app).post(f"/api/scenario/{scenario_id}/score-predictions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempted"] == 1
+    assert payload["scored"] == 1
+    assert captured["llm"]["api_key"] == "sk-score-profile"
+    assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
+    assert captured["llm"]["model"] == "score-profile-model"
+    assert captured["scope"] == {
+        "quota_key": None,
+        "purpose": "prediction_scoring",
+        "requests_per_minute": 31,
+        "tokens_per_minute": 3100,
+        "concurrency": 4,
+        "supports_structured_outputs_override": False,
+        "supports_native_search_override": True,
     }
 
 

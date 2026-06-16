@@ -695,6 +695,101 @@ class TestIdentityPreflightEndpoint:
         assert resp.status_code == 200
         assert captured["world_context"] == world_context
 
+    def test_preflight_model_profile_threads_provider_and_runtime(
+        self,
+        client,
+        monkeypatch,
+    ):
+        from app.config import settings
+
+        previous_identity = settings.FEATURE_AGENT_IDENTITY
+        previous_profiles = settings.FEATURE_MODEL_PROFILES
+        settings.FEATURE_AGENT_IDENTITY = True
+        settings.FEATURE_MODEL_PROFILES = True
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="director-profile",
+                name="Director preflight profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="preflight-profile-model",
+                api_key="sk-preflight-profile",
+                rpm=17,
+                tpm=1700,
+                concurrency=4,
+                supports_structured_outputs=False,
+                supports_native_search=None,
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+
+        captured: dict[str, object] = {}
+        original_scope = agents_api.llm_request_scope
+
+        def spy_scope(**kwargs):
+            captured["scope"] = dict(kwargs)
+            return original_scope(**kwargs)
+
+        async def _fake_parse_question(*_args, **kwargs):
+            captured["parse"] = dict(kwargs)
+            return {
+                "setting": {},
+                "key_variable": "test",
+                "initial_title": "Test",
+                "agents": [
+                    {
+                        "name": "Profile Agent",
+                        "role": "Analyst",
+                        "persona": "Uses the selected profile.",
+                    },
+                ],
+                "groups": [],
+                "simulation_rounds": 5,
+                "branch_sensitivity": 0.7,
+            }
+
+        def _fake_preview(user_id, name, role, persona):
+            return {
+                "name": name,
+                "role": role,
+                "persona": persona,
+                "continuity_key": "ck-profile",
+                "match_kind": "new",
+                "needs_confirmation": False,
+                "candidate_identity": None,
+            }
+
+        monkeypatch.setattr(agents_api, "llm_request_scope", spy_scope)
+        monkeypatch.setattr(agents_api, "parse_question", _fake_parse_question)
+        monkeypatch.setattr(agents_api, "preview_identity_match", _fake_preview)
+
+        try:
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "What if model profile preflight is used?",
+                "user_id": "director-profile",
+                "num_agents": 3,
+                "model_profile_id": profile_id,
+            })
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous_identity
+            settings.FEATURE_MODEL_PROFILES = previous_profiles
+
+        assert resp.status_code == 200
+        assert captured["parse"]["api_key"] == "sk-preflight-profile"
+        assert captured["parse"]["base_url"] == "https://api.openai.com/v1"
+        assert captured["parse"]["model"] == "preflight-profile-model"
+        assert captured["scope"] == {
+            "quota_key": "user:director-profile",
+            "purpose": "identity_preflight_parse",
+            "requests_per_minute": 17,
+            "tokens_per_minute": 1700,
+            "concurrency": 4,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": None,
+        }
+
     def test_preflight_parse_timeout_returns_launch_safe_status(self, client, monkeypatch):
         from app.config import settings
 
@@ -975,6 +1070,179 @@ class TestByokValidation:
 
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+    def test_report_generate_rehydrates_profile_from_parsed_context(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="report-owner",
+                name="Report retry profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="report-profile-model",
+                api_key="sk-report-profile",
+                rpm=29,
+                tpm=2900,
+                concurrency=6,
+                supports_structured_outputs=False,
+                supports_native_search=True,
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+            scenario = Scenario(
+                question="Will the report retry keep its profile?",
+                status=ScenarioStatus.DONE,
+                user_id="report-owner",
+                parsed_context={
+                    "_language": "English",
+                    "model_profile_id": profile_id,
+                    "llm_concurrency": 1,
+                    "supports_structured_outputs": True,
+                    "supports_native_search": False,
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Profile branch",
+                    probability=1.0,
+                    status=BranchStatus.COMPLETED,
+                    story="The report retry uses the saved profile.",
+                )
+            )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        async def _fake_report_stream(*args, **kwargs):
+            captured["args"] = args
+            captured["overrides"] = dict(kwargs.get("overrides") or {})
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _fake_report_stream,
+        )
+
+        with client.stream(
+            "POST",
+            f"/api/scenario/{scenario_id}/report:generate",
+        ) as response:
+            body = "".join(response.iter_text())
+
+        assert response.status_code == 200
+        assert "event: report_started" in body
+        assert captured["overrides"] == {
+            "api_key": "sk-report-profile",
+            "base_url": "https://api.openai.com/v1",
+            "model": "report-profile-model",
+            "requests_per_minute": 29,
+            "tokens_per_minute": 2900,
+            "temperature": None,
+            "concurrency": 6,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": True,
+            "model_profile_id": profile_id,
+        }
+
+    @pytest.mark.asyncio
+    async def test_run_sim_background_rehydrates_profile_for_runtime_scope(
+        self,
+        monkeypatch,
+    ):
+        import app.api.helpers as helpers_module
+
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="runtime-owner",
+                name="Runtime profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="runtime-profile-model",
+                api_key="sk-runtime-profile",
+                rpm=37,
+                tpm=3700,
+                concurrency=5,
+                supports_structured_outputs=False,
+                supports_native_search=True,
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+            scenario = Scenario(
+                question="Will resumed narration use the saved profile?",
+                status=ScenarioStatus.SIMULATING,
+                user_id="runtime-owner",
+                parsed_context={
+                    "_language": "English",
+                    "user_id": "runtime-owner",
+                    "model_profile_id": profile_id,
+                    "llm_requests_per_minute": 1,
+                    "llm_tokens_per_minute": 2,
+                    "llm_concurrency": 1,
+                    "supports_structured_outputs": True,
+                    "supports_native_search": False,
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+
+        captured: dict[str, object] = {}
+
+        async def _fake_run_simulation(**kwargs):
+            captured["llm_overrides"] = dict(kwargs.get("llm_overrides") or {})
+
+        class _Scope:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, *_args):
+                return False
+
+        def _spy_scope(**kwargs):
+            captured["scope"] = kwargs
+            return _Scope()
+
+        monkeypatch.setattr(helpers_module, "run_simulation", _fake_run_simulation)
+        monkeypatch.setattr(helpers_module, "llm_request_scope", _spy_scope)
+
+        await helpers_module.run_sim_background(scenario_id)
+
+        assert captured["llm_overrides"] == {
+            "api_key": "sk-runtime-profile",
+            "base_url": "https://api.openai.com/v1",
+            "model": "runtime-profile-model",
+            "requests_per_minute": 37,
+            "tokens_per_minute": 3700,
+            "concurrency": 5,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": True,
+            "model_profile_id": profile_id,
+        }
+        assert captured["scope"] == {
+            "purpose": "scenario_runtime",
+            "quota_key": "user:runtime-owner",
+            "requests_per_minute": 37,
+            "tokens_per_minute": 3700,
+            "concurrency": 5,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": True,
+        }
 
     def test_scenario_docker_host_accepted(self, client):
         """host.docker.internal must remain in allowlist."""
@@ -1737,7 +2005,13 @@ class TestReplayArtifactEndpoints:
                     "simulation_rounds": 2,
                     "full_report": {"version": "forged"},
                     "result_quality": {"verdict": "forged"},
+                    "model_profile_id": "profile-from-replay",
+                    "llm_concurrency": 4,
+                    "supports_structured_outputs": True,
+                    "supports_native_search": False,
+                    "llm_api_key": "sk-replay-secret",
                     "llm_base_url": "https://user:pass@api.openai.com/v1",
+                    "llm_model": "secret-model",
                     "api_key": "sk-replay-secret",
                     "user_id": "owner-a",
                     "owner_user_id": "owner-a",
@@ -1778,7 +2052,14 @@ class TestReplayArtifactEndpoints:
             "hierarchical": False,
             "_language": "English",
             "simulation_rounds": 2,
+            "model_profile_id": "profile-from-replay",
+            "llm_concurrency": 4,
+            "supports_structured_outputs": True,
+            "supports_native_search": False,
         }
+        assert "llm_api_key" not in parsed
+        assert "llm_base_url" not in parsed
+        assert "llm_model" not in parsed
         assert imported.director_state_json == {
             "safe": "kept",
             "note": "[redacted-bearer]",
@@ -1910,6 +2191,9 @@ class TestReplayArtifactEndpoints:
                 api_key=profile_api_key,
                 rpm=23,
                 tpm=23000,
+                concurrency=4,
+                supports_structured_outputs=False,
+                supports_native_search=True,
             )
             session.add(profile)
             session.commit()
@@ -1943,6 +2227,7 @@ class TestReplayArtifactEndpoints:
             )
 
             assert resp.status_code == 200
+            response_body = resp.json()
             assert len(scheduled) == 2
             for coro in scheduled:
                 asyncio.run(coro)
@@ -1956,8 +2241,21 @@ class TestReplayArtifactEndpoints:
             assert kwargs["llm_api_key"] == profile_api_key
             assert kwargs["llm_base_url"] == "https://api.openai.com/v1"
             assert kwargs["llm_model"] == "profile-model"
+            assert kwargs["model_profile_id"] == profile_id
             assert kwargs["llm_requests_per_minute"] == 23
             assert kwargs["llm_tokens_per_minute"] == 23000
+            assert kwargs["concurrency"] == 4
+            assert kwargs["supports_structured_outputs"] is False
+            assert kwargs["supports_native_search"] is True
+        with Session(get_engine()) as session:
+            for run in response_body["runs"]:
+                scenario = session.get(Scenario, run["scenario_id"])
+                assert scenario is not None
+                parsed_context = scenario.parsed_context or {}
+                assert parsed_context["model_profile_id"] == profile_id
+                assert "llm_base_url" not in parsed_context
+                assert "llm_model" not in parsed_context
+                assert profile_api_key not in json.dumps(parsed_context)
 
     def test_multi_run_explicit_byok_forwards_llm_policy_to_each_run(
         self,

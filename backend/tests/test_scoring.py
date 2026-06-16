@@ -16,6 +16,9 @@ def test_post_completion_resolution_drops_inherited_remote_byok_url_for_server_d
             "llm_model": "byok-profile-model",
             "llm_requests_per_minute": 3,
             "llm_tokens_per_minute": 4000,
+            "llm_concurrency": 2,
+            "supports_structured_outputs": False,
+            "supports_native_search": True,
         }
     )
 
@@ -24,6 +27,9 @@ def test_post_completion_resolution_drops_inherited_remote_byok_url_for_server_d
     assert resolved.model is None
     assert resolved.requests_per_minute is None
     assert resolved.tokens_per_minute is None
+    assert resolved.concurrency == 2
+    assert resolved.supports_structured_outputs_override is False
+    assert resolved.supports_native_search_override is True
 
 
 def test_post_completion_resolution_keeps_inherited_local_provider_url_without_key():
@@ -33,6 +39,9 @@ def test_post_completion_resolution_keeps_inherited_local_provider_url_without_k
             "llm_model": "local-model",
             "llm_requests_per_minute": 3,
             "llm_tokens_per_minute": 4000,
+            "llm_concurrency": 2,
+            "supports_structured_outputs": False,
+            "supports_native_search": True,
         }
     )
 
@@ -41,3 +50,6 @@ def test_post_completion_resolution_keeps_inherited_local_provider_url_without_k
     assert resolved.model == "local-model"
     assert resolved.requests_per_minute == 3
     assert resolved.tokens_per_minute == 4000
+    assert resolved.concurrency == 2
+    assert resolved.supports_structured_outputs_override is False
+    assert resolved.supports_native_search_override is True

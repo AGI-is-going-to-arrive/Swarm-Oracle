@@ -18,6 +18,7 @@ from app.api.helpers import (
     parse_key_moments,
     require_owned_scenario,
     require_session_principal,
+    resolve_authenticated_user_id,
     verify_session,
 )
 from app.config import settings
@@ -32,7 +33,12 @@ from app.services.llm_client import (
     llm_request_scope,
     validate_llm_base_url,
 )
-from app.services.llm_resolution import resolve_post_completion_llm_call_config
+from app.services.llm_resolution import (
+    merge_profile_provider_overrides,
+    recover_profile_provider_overrides,
+    resolve_post_completion_llm_call_config,
+)
+from app.services.model_profiles import resolve_model_profile_policy
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
@@ -72,9 +78,10 @@ class SocialCopyRequest(BaseModel):
     llm_model: str | None = None
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
+    model_profile_id: str | None = None
     user_id: str | None = None
 
-    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @field_validator("llm_api_key", "llm_base_url", "llm_model", "model_profile_id")
     @classmethod
     def normalize_optional_byok(cls, v: str | None) -> str | None:
         if v is None:
@@ -566,6 +573,34 @@ async def _generate_headline_cards(
         f"{get_language_directive(language)}"
     )
     try:
+        context_api_key = provider_policy.get("llm_api_key")
+        recovered_profile_overrides = None
+        with Session(get_engine()) as session:
+            recovered_profile_overrides = recover_profile_provider_overrides(
+                session,
+                scenario,
+            )
+        request_overrides = merge_profile_provider_overrides(
+            {
+                "api_key": context_api_key if isinstance(context_api_key, str) else None,
+            },
+            recovered_profile_overrides,
+        )
+        effective_llm = resolve_post_completion_llm_call_config(
+            parsed_context=provider_policy,
+            request_api_key=request_overrides.get("api_key"),
+            request_base_url=request_overrides.get("base_url"),
+            request_model=request_overrides.get("model"),
+            request_requests_per_minute=request_overrides.get("requests_per_minute"),
+            request_tokens_per_minute=request_overrides.get("tokens_per_minute"),
+            request_concurrency=request_overrides.get("concurrency"),
+            request_supports_structured_outputs_override=request_overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            request_supports_native_search_override=request_overrides.get(
+                "supports_native_search_override"
+            ),
+        )
         with llm_request_scope(
             quota_key=(
                 f"user:{provider_policy.get('user_id')}"
@@ -573,12 +608,20 @@ async def _generate_headline_cards(
                 else None
             ),
             purpose="social_headline_cards",
+            requests_per_minute=effective_llm.requests_per_minute,
+            tokens_per_minute=effective_llm.tokens_per_minute,
+            concurrency=effective_llm.concurrency,
+            supports_structured_outputs_override=(
+                effective_llm.supports_structured_outputs_override
+            ),
+            supports_native_search_override=effective_llm.supports_native_search_override,
         ):
             raw = await llm_call(
                 prompt,
                 timeout=30.0,
-                model=provider_policy.get("llm_model"),
-                base_url=provider_policy.get("llm_base_url"),
+                api_key=effective_llm.api_key,
+                base_url=effective_llm.base_url,
+                model=effective_llm.model,
             )
         cards = _normalize_headline_cards(raw, events)
         if cards:
@@ -644,7 +687,7 @@ async def _generate_social_copy(
     )
 
     # SSRF protection: validate BYOK base_url against allowlist
-    if req.llm_base_url:
+    if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
@@ -662,8 +705,28 @@ async def _generate_social_copy(
     platform_config = SOCIAL_PLATFORM_PROMPTS[platform]
 
     engine = get_engine()
+    model_profile_policy = None
+    recovered_profile_overrides = None
+    owner_user_id: str | None = None
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
+        owner_user_id = scenario.user_id or (principal.subject if principal else None)
+        if req.model_profile_id:
+            model_profile_policy = resolve_model_profile_policy(
+                session,
+                user_id=owner_user_id,
+                model_profile_id=req.model_profile_id,
+                explicit_api_key=req.llm_api_key,
+                explicit_base_url=req.llm_base_url,
+                explicit_model=req.llm_model,
+                explicit_requests_per_minute=req.llm_requests_per_minute,
+                explicit_tokens_per_minute=req.llm_tokens_per_minute,
+            )
+        else:
+            recovered_profile_overrides = recover_profile_provider_overrides(
+                session,
+                scenario,
+            )
 
         branches = list(session.exec(
             select(Branch).where(Branch.scenario_id == scenario_id)
@@ -681,15 +744,59 @@ async def _generate_social_copy(
         language=social_language,
     )
     provider_policy = scenario.parsed_context or {}
-    effective_llm = resolve_post_completion_llm_call_config(
-        parsed_context=provider_policy,
-        request_api_key=req.llm_api_key,
-        request_base_url=req.llm_base_url,
-        request_model=req.llm_model,
-        request_requests_per_minute=req.llm_requests_per_minute,
-        request_tokens_per_minute=req.llm_tokens_per_minute,
-    )
-    quota_key = req.user_id or provider_policy.get("user_id")
+    if model_profile_policy is not None:
+        effective_api_key = model_profile_policy.api_key
+        effective_base_url = model_profile_policy.base_url
+        effective_model = model_profile_policy.model
+        effective_requests_per_minute = model_profile_policy.requests_per_minute
+        effective_tokens_per_minute = model_profile_policy.tokens_per_minute
+        effective_concurrency = model_profile_policy.concurrency
+        effective_supports_structured_outputs = (
+            model_profile_policy.supports_structured_outputs
+        )
+        effective_supports_native_search = model_profile_policy.supports_native_search
+    else:
+        request_overrides = merge_profile_provider_overrides(
+            {
+                "api_key": req.llm_api_key,
+                "base_url": req.llm_base_url,
+                "model": req.llm_model,
+                "requests_per_minute": req.llm_requests_per_minute,
+                "tokens_per_minute": req.llm_tokens_per_minute,
+            },
+            recovered_profile_overrides,
+        )
+        effective_llm = resolve_post_completion_llm_call_config(
+            parsed_context=provider_policy,
+            request_api_key=request_overrides.get("api_key"),
+            request_base_url=request_overrides.get("base_url"),
+            request_model=request_overrides.get("model"),
+            request_requests_per_minute=request_overrides.get("requests_per_minute"),
+            request_tokens_per_minute=request_overrides.get("tokens_per_minute"),
+            request_concurrency=request_overrides.get("concurrency"),
+            request_supports_structured_outputs_override=request_overrides.get(
+                "supports_structured_outputs_override"
+            ),
+            request_supports_native_search_override=request_overrides.get(
+                "supports_native_search_override"
+            ),
+        )
+        effective_api_key = effective_llm.api_key
+        effective_base_url = effective_llm.base_url
+        effective_model = effective_llm.model
+        effective_requests_per_minute = effective_llm.requests_per_minute
+        effective_tokens_per_minute = effective_llm.tokens_per_minute
+        effective_concurrency = effective_llm.concurrency
+        effective_supports_structured_outputs = (
+            effective_llm.supports_structured_outputs_override
+        )
+        effective_supports_native_search = effective_llm.supports_native_search_override
+    quota_key = resolve_authenticated_user_id(req.user_id, principal)
+    if quota_key is None:
+        quota_key = owner_user_id
+    if quota_key is None:
+        context_user_id = provider_policy.get("user_id")
+        quota_key = context_user_id if isinstance(context_user_id, str) else None
 
     prompt_language = "Chinese" if output_language == "Chinese" else "English"
     platform_name = platform_config["name"].get(output_language, platform_config["name"]["English"])
@@ -720,15 +827,18 @@ async def _generate_social_copy(
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose="social_copy",
-            requests_per_minute=effective_llm.requests_per_minute,
-            tokens_per_minute=effective_llm.tokens_per_minute,
+            requests_per_minute=effective_requests_per_minute,
+            tokens_per_minute=effective_tokens_per_minute,
+            concurrency=effective_concurrency,
+            supports_structured_outputs_override=effective_supports_structured_outputs,
+            supports_native_search_override=effective_supports_native_search,
         ):
             copy = await llm_call(
                 prompt,
                 timeout=60.0,
-                api_key=effective_llm.api_key,
-                base_url=effective_llm.base_url,
-                model=effective_llm.model,
+                api_key=effective_api_key,
+                base_url=effective_base_url,
+                model=effective_model,
             )
     except (LLMBackpressureError, LLMCircuitOpenError) as exc:
         raise api_error_from_exception(503, "SOCIAL_LLM_TEMPORARILY_UNAVAILABLE", exc) from exc

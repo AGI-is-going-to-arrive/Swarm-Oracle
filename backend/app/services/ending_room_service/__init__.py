@@ -2318,6 +2318,7 @@ async def run_ending_room_background(
                 planned_turns=planned_turns,
                 language=room_language,
                 scenario_question=_load_scenario_question(room_scenario_id),
+                llm_overrides=llm_overrides,
             )
 
         for committed_turn in existing_auto_turn_refs:

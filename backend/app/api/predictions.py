@@ -32,6 +32,7 @@ from app.models.database import get_engine
 from app.models.prediction_journal import PredictionJournalEntry
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
 from app.services.llm_client import validate_llm_base_url
+from app.services.model_profiles import resolve_model_profile_policy
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["predictions"], dependencies=[Depends(verify_session)])
@@ -117,9 +118,10 @@ class ScorePredictionsRequest(BaseModel):
     llm_model: str | None = None
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
+    model_profile_id: str | None = None
     user_id: str | None = None
 
-    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @field_validator("llm_api_key", "llm_base_url", "llm_model", "model_profile_id")
     @classmethod
     def normalize_optional_byok(cls, v: str | None) -> str | None:
         if v is None:
@@ -285,8 +287,10 @@ async def trigger_scoring(
         )
 
     engine = get_engine()
+    owner_user_id: str | None = None
     with Session(engine) as session:
         scenario = _require_owned_prediction_scenario(session, scenario_id, principal)
+        owner_user_id = scenario.user_id or (principal.subject if principal else None)
         if scenario.status != ScenarioStatus.DONE:
             raise api_error(
                 400,
@@ -297,28 +301,81 @@ async def trigger_scoring(
     from app.services.scoring import score_all_for_scenario
 
     req = req or ScorePredictionsRequest()
-    if req.llm_base_url:
+    if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
         if not req.llm_api_key:
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
+
+    model_profile_policy = None
+    if req.model_profile_id:
+        with Session(engine) as session:
+            model_profile_policy = resolve_model_profile_policy(
+                session,
+                user_id=owner_user_id,
+                model_profile_id=req.model_profile_id,
+                explicit_api_key=req.llm_api_key,
+                explicit_base_url=req.llm_base_url,
+                explicit_model=req.llm_model,
+                explicit_requests_per_minute=req.llm_requests_per_minute,
+                explicit_tokens_per_minute=req.llm_tokens_per_minute,
+            )
+
+    resolved_llm_api_key = (
+        model_profile_policy.api_key if model_profile_policy else req.llm_api_key
+    )
+    resolved_llm_base_url = (
+        model_profile_policy.base_url if model_profile_policy else req.llm_base_url
+    )
+    resolved_llm_model = (
+        model_profile_policy.model if model_profile_policy else req.llm_model
+    )
+    resolved_llm_requests_per_minute = (
+        model_profile_policy.requests_per_minute
+        if model_profile_policy
+        else req.llm_requests_per_minute
+    )
+    resolved_llm_tokens_per_minute = (
+        model_profile_policy.tokens_per_minute
+        if model_profile_policy
+        else req.llm_tokens_per_minute
+    )
+    resolved_concurrency = model_profile_policy.concurrency if model_profile_policy else None
+    resolved_supports_structured_outputs = (
+        model_profile_policy.supports_structured_outputs
+        if model_profile_policy
+        else None
+    )
+    resolved_supports_native_search = (
+        model_profile_policy.supports_native_search if model_profile_policy else None
+    )
+    quota_user_id = resolve_authenticated_user_id(req.user_id, principal)
+    if quota_user_id is None and model_profile_policy is not None:
+        quota_user_id = owner_user_id
     llm_overrides = None
     if (
-        req.llm_api_key
-        or req.llm_base_url
-        or req.llm_model
-        or req.llm_requests_per_minute is not None
-        or req.llm_tokens_per_minute is not None
+        req.model_profile_id
+        or resolved_llm_api_key
+        or resolved_llm_base_url
+        or resolved_llm_model
+        or resolved_llm_requests_per_minute is not None
+        or resolved_llm_tokens_per_minute is not None
     ):
         llm_overrides = {
-            "api_key": req.llm_api_key,
-            "base_url": req.llm_base_url,
-            "model": req.llm_model,
-            "requests_per_minute": req.llm_requests_per_minute,
-            "tokens_per_minute": req.llm_tokens_per_minute,
-            "quota_key": resolve_authenticated_user_id(req.user_id, principal),
+            "api_key": resolved_llm_api_key,
+            "base_url": resolved_llm_base_url,
+            "model": resolved_llm_model,
+            "requests_per_minute": resolved_llm_requests_per_minute,
+            "tokens_per_minute": resolved_llm_tokens_per_minute,
+            "concurrency": resolved_concurrency,
+            "supports_structured_outputs_override": resolved_supports_structured_outputs,
+            "supports_native_search_override": resolved_supports_native_search,
+            "model_profile_id": (
+                model_profile_policy.model_profile_id if model_profile_policy else None
+            ),
+            "quota_key": quota_user_id,
         }
 
     summary = await score_all_for_scenario(scenario_id, llm_overrides=llm_overrides)

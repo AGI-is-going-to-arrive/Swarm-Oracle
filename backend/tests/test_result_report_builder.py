@@ -124,6 +124,48 @@ def _seed_report_scenario() -> str:
     return "scenario-report"
 
 
+def test_report_scope_kwargs_inherits_profile_runtime_fields():
+    from app.services.result_report import builder
+
+    context = builder.BuilderContext(
+        scenario_id="scenario-report-scope",
+        question="Can report scopes inherit profile runtime fields?",
+        language="en",
+        parsed_context={
+            "user_id": "report-owner",
+            "llm_requests_per_minute": 11,
+            "llm_tokens_per_minute": 11000,
+            "llm_concurrency": 2,
+            "supports_structured_outputs": False,
+            "supports_native_search": True,
+        },
+        branch_id="branch-a",
+        branch_title="Branch A",
+        branch_story="Story",
+        branch_insight="Insight",
+        web_context_blocks=[],
+    )
+
+    inherited = builder._report_llm_scope_kwargs(context, None)
+    assert inherited["requests_per_minute"] == 11
+    assert inherited["tokens_per_minute"] == 11000
+    assert inherited["concurrency"] == 2
+    assert inherited["supports_structured_outputs_override"] is False
+    assert inherited["supports_native_search_override"] is True
+
+    overrides = builder._normalize_overrides(
+        {
+            "concurrency": 4,
+            "supports_structured_outputs_override": True,
+            "supports_native_search_override": False,
+        }
+    )
+    override_scope = builder._report_llm_scope_kwargs(context, overrides)
+    assert override_scope["concurrency"] == 4
+    assert override_scope["supports_structured_outputs_override"] is True
+    assert override_scope["supports_native_search_override"] is False
+
+
 def _seed_report_faction_data(scenario_id: str) -> None:
     engine = get_engine()
     with Session(engine) as session:
@@ -1543,6 +1585,11 @@ async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypa
             "base_url": "https://example.com/v1/chat/completions",
             "model": "model-a",
             "temperature": 0.2,
+            "requests_per_minute": 17,
+            "tokens_per_minute": 1700,
+            "concurrency": 3,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": True,
         },
     )
     await asyncio.sleep(0)
@@ -1550,7 +1597,10 @@ async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypa
     assert captured_overrides["api_key"] is secret
     assert repr(captured_overrides) == (
         "{'api_key': ***, 'base_url': 'https://example.com/v1/chat/completions', "
-        "'model': 'model-a', 'temperature': 0.2}"
+        "'model': 'model-a', 'temperature': 0.2, 'requests_per_minute': 17, "
+        "'tokens_per_minute': 1700, 'concurrency': 3, "
+        "'supports_structured_outputs_override': False, "
+        "'supports_native_search_override': True}"
     )
 
 

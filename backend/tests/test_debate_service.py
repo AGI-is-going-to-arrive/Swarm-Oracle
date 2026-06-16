@@ -6,6 +6,7 @@ import asyncio
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 from sqlmodel import Session
@@ -845,6 +846,51 @@ async def test_run_debate_background_uses_per_side_model_profile_overrides(monke
     assert result["result"]["adjudication_mode"] == "llm_hybrid"
 
 
+async def test_verdict_argmap_enrichment_uses_judge_overrides(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "FEATURE_ARGUMENT_MAP", True)
+    monkeypatch.setattr(debate_module, "_ARGMAP_AVAILABLE", True)
+    scheduled: list[dict[str, object]] = []
+
+    def _fake_argmap_extract(*_args, **_kwargs):
+        return []
+
+    def _fake_schedule_enrichment(**kwargs):
+        scheduled.append(kwargs)
+
+    monkeypatch.setattr(debate_module, "_argmap_extract", _fake_argmap_extract)
+    monkeypatch.setattr(debate_module, "_argmap_link_verdict", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        debate_module,
+        "_argmap_schedule_enrichment",
+        _fake_schedule_enrichment,
+    )
+
+    debate = create_debate_record("Should verdict enrichment use the judge profile?")
+
+    async def _push(_debate_id: str, _event: dict) -> None:
+        return None
+
+    await run_debate_background(
+        debate.id,
+        ws_callback=_push,
+        quota_key="debate-user",
+        llm_overrides={"api_key": "sk-global", "model": "global-model"},
+        llm_overrides_by_side={
+            "proposition": {"api_key": "sk-proposition", "model": "proposition-model"},
+            "opposition": {"api_key": "sk-opposition", "model": "opposition-model"},
+            "judge": {"api_key": "sk-judge-profile", "model": "judge-model"},
+        },
+    )
+
+    verdict_calls = [
+        call for call in scheduled if call.get("speaker_side") == DebateSide.JUDGE.value
+    ]
+    assert verdict_calls
+    verdict_overrides = verdict_calls[-1]["llm_overrides"]
+    assert verdict_overrides["api_key"] == "sk-judge-profile"
+    assert verdict_overrides["model"] == "judge-model"
+
+
 @pytest.mark.asyncio
 async def test_run_debate_background_broadcasts_participants_after_persona_upgrade(
     monkeypatch,
@@ -944,6 +990,12 @@ async def test_run_debate_background_broadcasts_participants_after_persona_upgra
 async def test_phase_insight_enhancement_forwards_llm_overrides(monkeypatch):
     monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
     captured: dict[str, object] = {}
+    scopes: list[dict[str, object]] = []
+
+    @contextmanager
+    def _capture_scope(**kwargs):
+        scopes.append(kwargs)
+        yield
 
     async def _fake_json_call(_prompt: str, **kwargs):
         captured.update(kwargs)
@@ -954,6 +1006,7 @@ async def test_phase_insight_enhancement_forwards_llm_overrides(monkeypatch):
             "strategy": "One side narrows the promise while the other attacks delay.",
         }
 
+    monkeypatch.setattr(debate_module, "llm_request_scope", _capture_scope)
     monkeypatch.setattr(
         debate_module,
         "llm_call_json_with_stream_fallback",
@@ -994,23 +1047,41 @@ async def test_phase_insight_enhancement_forwards_llm_overrides(monkeypatch):
             "model": "byok-model",
             "api_key": "byok-key",
             "base_url": "https://byok.example/v1",
+            "requests_per_minute": 31,
+            "tokens_per_minute": 3100,
+            "concurrency": 3,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": None,
         },
     )
 
     assert captured["model"] == "byok-model"
     assert captured["api_key"] == "byok-key"
     assert captured["base_url"] == "https://byok.example/v1"
+    assert scopes
+    assert scopes[0]["requests_per_minute"] == 31
+    assert scopes[0]["tokens_per_minute"] == 3100
+    assert scopes[0]["concurrency"] == 3
+    assert scopes[0]["supports_structured_outputs_override"] is False
+    assert scopes[0]["supports_native_search_override"] is None
 
 
 @pytest.mark.asyncio
 async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
     monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
     captured: dict[str, object] = {}
+    scopes: list[dict[str, object]] = []
+
+    @contextmanager
+    def _capture_scope(**kwargs):
+        scopes.append(kwargs)
+        yield
 
     async def _fake_llm_call(_prompt: str, **kwargs):
         captured.update(kwargs)
         return "This mattered because the deadline turned a vague promise into a testable claim."
 
+    monkeypatch.setattr(debate_module, "llm_request_scope", _capture_scope)
     monkeypatch.setattr(debate_module, "llm_call", _fake_llm_call)
 
     reason = await debate_module._generate_supporting_turn_reason(
@@ -1025,6 +1096,11 @@ async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
             "model": "byok-model",
             "api_key": "byok-key",
             "base_url": "https://byok.example/v1",
+            "requests_per_minute": 37,
+            "tokens_per_minute": 3700,
+            "concurrency": 5,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": None,
         },
     )
 
@@ -1032,6 +1108,15 @@ async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
     assert captured["model"] == "byok-model"
     assert captured["api_key"] == "byok-key"
     assert captured["base_url"] == "https://byok.example/v1"
+    assert scopes == [{
+        "quota_key": None,
+        "purpose": "debate_supporting_turn_reason",
+        "requests_per_minute": 37,
+        "tokens_per_minute": 3700,
+        "concurrency": 5,
+        "supports_structured_outputs_override": False,
+        "supports_native_search_override": None,
+    }]
 
 
 # ---------------------------------------------------------------------------

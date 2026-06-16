@@ -24,7 +24,11 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
-from app.services.llm_resolution import resolve_post_completion_llm_call_config
+from app.services.llm_resolution import (
+    merge_profile_provider_overrides,
+    recover_profile_provider_overrides,
+    resolve_post_completion_llm_call_config,
+)
 
 logger = logging.getLogger(__name__)
 ANONYMOUS_USER_ID = "anonymous"
@@ -327,6 +331,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         dict with score and reason, or None if scoring fails.
     """
     engine = get_engine()
+    overrides = dict(llm_overrides or {})
 
     with Session(engine) as session:
         pred = session.get(Prediction, prediction_id)
@@ -344,6 +349,10 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         scenario_id = pred.scenario_id
         scenario_question = scenario.question
         provider_policy = dict(scenario.parsed_context or {})
+        overrides = merge_profile_provider_overrides(
+            overrides,
+            recover_profile_provider_overrides(session, scenario),
+        )
         detected_lang = provider_policy.get("_language", "English")
         you_vs_oracle = _you_vs_oracle_result_for_prediction(pred, scenario.parsed_context)
 
@@ -369,7 +378,6 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         actual_result = "\n".join(actual_parts)
 
     # Call LLM for scoring
-    overrides = llm_overrides or {}
     effective_llm = resolve_post_completion_llm_call_config(
         parsed_context=provider_policy,
         request_api_key=overrides.get("api_key"),
@@ -377,6 +385,13 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         request_model=overrides.get("model"),
         request_requests_per_minute=overrides.get("requests_per_minute"),
         request_tokens_per_minute=overrides.get("tokens_per_minute"),
+        request_concurrency=overrides.get("concurrency"),
+        request_supports_structured_outputs_override=overrides.get(
+            "supports_structured_outputs_override"
+        ),
+        request_supports_native_search_override=overrides.get(
+            "supports_native_search_override"
+        ),
     )
     quota_key = overrides.get("quota_key") or provider_policy.get("user_id")
 
@@ -406,6 +421,11 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
             purpose="prediction_scoring",
             requests_per_minute=effective_llm.requests_per_minute,
             tokens_per_minute=effective_llm.tokens_per_minute,
+            concurrency=effective_llm.concurrency,
+            supports_structured_outputs_override=(
+                effective_llm.supports_structured_outputs_override
+            ),
+            supports_native_search_override=effective_llm.supports_native_search_override,
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
@@ -495,6 +515,7 @@ async def score_all_for_scenario(
     import asyncio
 
     engine = get_engine()
+    overrides = dict(llm_overrides or {})
 
     with Session(engine) as session:
         from app.models import Scenario
@@ -505,6 +526,11 @@ async def score_all_for_scenario(
             if scenario is not None and isinstance(scenario.parsed_context, dict)
             else {}
         )
+        if scenario is not None:
+            overrides = merge_profile_provider_overrides(
+                overrides,
+                recover_profile_provider_overrides(session, scenario),
+            )
         unscored = list(session.exec(
             select(Prediction).where(
                 Prediction.scenario_id == scenario_id,
@@ -521,22 +547,33 @@ async def score_all_for_scenario(
             "results": [],
         }
 
-    overrides = llm_overrides or {}
-    resolve_post_completion_llm_call_config(
+    effective_llm = resolve_post_completion_llm_call_config(
         parsed_context=provider_policy,
         request_api_key=overrides.get("api_key"),
         request_base_url=overrides.get("base_url"),
         request_model=overrides.get("model"),
         request_requests_per_minute=overrides.get("requests_per_minute"),
         request_tokens_per_minute=overrides.get("tokens_per_minute"),
+        request_concurrency=overrides.get("concurrency"),
+        request_supports_structured_outputs_override=overrides.get(
+            "supports_structured_outputs_override"
+        ),
+        request_supports_native_search_override=overrides.get(
+            "supports_native_search_override"
+        ),
     )
 
     # M-9 fix: Score concurrently with a semaphore to limit LLM concurrency
-    sem = asyncio.Semaphore(5)
+    fanout_limit = (
+        effective_llm.concurrency
+        if isinstance(effective_llm.concurrency, int) and effective_llm.concurrency > 0
+        else 5
+    )
+    sem = asyncio.Semaphore(fanout_limit)
 
     async def _score_with_limit(pred_id: str) -> dict | None:
         async with sem:
-            return await score_prediction(pred_id, llm_overrides=llm_overrides)
+            return await score_prediction(pred_id, llm_overrides=overrides)
 
     tasks = [_score_with_limit(pred.id) for pred in unscored]
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)

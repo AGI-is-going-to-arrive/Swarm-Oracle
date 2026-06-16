@@ -81,6 +81,14 @@ def _build_custom_agent_injection(
     )
 
 
+class _NoopScope:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 # ═══════════════════════════════════════════════════════════
 # 1. Ownership validation (X-5) — through real guard logic
 # ═══════════════════════════════════════════════════════════
@@ -634,6 +642,131 @@ class TestCustomAgentOwnership:
             member.agent_id == leader.id and member.is_leader
             for member in members
         )
+
+    async def test_parse_background_persists_and_scopes_profile_runtime_fields(
+        self,
+        monkeypatch,
+    ):
+        from app.api import helpers
+        from app.config import settings
+
+        scope_calls: list[dict[str, object]] = []
+
+        def _capture_scope(**kwargs):
+            scope_calls.append(kwargs)
+            return _NoopScope()
+
+        async def fake_parse_question(*args, **kwargs):
+            return {
+                "agents": [
+                    {"name": "Alpha", "role": "Analyst", "persona": "", "tier": "IMPORTANT"},
+                ],
+                "groups": [],
+            }
+
+        async def fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers, "llm_request_scope", _capture_scope)
+        monkeypatch.setattr(helpers, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", False)
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="alice")
+
+        await helpers.parse_and_run_background(
+            scenario_id,
+            question="Can profile runtime fields survive parsing?",
+            num_agents=1,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id="alice",
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=11,
+            llm_tokens_per_minute=11000,
+            concurrency=2,
+            supports_structured_outputs=False,
+            supports_native_search=True,
+            disable_user_quota=None,
+            custom_agent_identity_ids=None,
+        )
+
+        by_purpose = {call["purpose"]: call for call in scope_calls}
+        for purpose in ("scenario_parse", "scenario_runtime"):
+            assert by_purpose[purpose]["requests_per_minute"] == 11
+            assert by_purpose[purpose]["tokens_per_minute"] == 11000
+            assert by_purpose[purpose]["concurrency"] == 2
+            assert by_purpose[purpose]["supports_structured_outputs_override"] is False
+            assert by_purpose[purpose]["supports_native_search_override"] is True
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            parsed_context = scenario.parsed_context or {}
+        assert parsed_context["llm_requests_per_minute"] == 11
+        assert parsed_context["llm_tokens_per_minute"] == 11000
+        assert parsed_context["llm_concurrency"] == 2
+        assert parsed_context["supports_structured_outputs"] is False
+        assert parsed_context["supports_native_search"] is True
+        assert "model_profile_id" not in parsed_context
+
+    async def test_run_sim_background_rehydrates_profile_runtime_scope_fields(
+        self,
+        monkeypatch,
+    ):
+        from app.api import helpers
+
+        scope_calls: list[dict[str, object]] = []
+
+        def _capture_scope(**kwargs):
+            scope_calls.append(kwargs)
+            return _NoopScope()
+
+        async def fake_run_simulation(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers, "llm_request_scope", _capture_scope)
+        monkeypatch.setattr(helpers, "run_simulation", fake_run_simulation)
+        monkeypatch.setattr(helpers, "acquire_runtime_lock", lambda *args, **kwargs: object())
+        monkeypatch.setattr(helpers, "release_runtime_lock", lambda lease: None)
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="alice")
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "user_id": "alice",
+                "llm_requests_per_minute": 13,
+                "llm_tokens_per_minute": 13000,
+                "llm_concurrency": 2,
+                "supports_structured_outputs": False,
+                "supports_native_search": True,
+            }
+            session.add(scenario)
+            session.commit()
+
+        await helpers.run_sim_background(scenario_id)
+
+        assert len(scope_calls) == 1
+        runtime_scope = scope_calls[0]
+        assert runtime_scope["purpose"] == "scenario_runtime"
+        assert runtime_scope["requests_per_minute"] == 13
+        assert runtime_scope["tokens_per_minute"] == 13000
+        assert runtime_scope["concurrency"] == 2
+        assert runtime_scope["supports_structured_outputs_override"] is False
+        assert runtime_scope["supports_native_search_override"] is True
 
     @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", False)
     def test_custom_agents_feature_disabled_ignores_ids(self):

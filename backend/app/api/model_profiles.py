@@ -40,8 +40,8 @@ class CreateModelProfileRequest(BaseModel):
     rpm: int | None = None
     tpm: int | None = None
     concurrency: int | None = None
-    supports_structured_outputs: bool = False
-    supports_native_search: bool = False
+    supports_structured_outputs: bool | None = None
+    supports_native_search: bool | None = None
 
 
 class UpdateModelProfileRequest(BaseModel):

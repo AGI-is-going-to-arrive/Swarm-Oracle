@@ -184,8 +184,8 @@ def create_model_profile(session: Session, payload: dict[str, Any], user_id: str
         rpm=_clean_limit(payload.get("rpm"), field_name="rpm"),
         tpm=_clean_limit(payload.get("tpm"), field_name="tpm"),
         concurrency=_clean_limit(payload.get("concurrency"), field_name="concurrency"),
-        supports_structured_outputs=bool(payload.get("supports_structured_outputs", False)),
-        supports_native_search=bool(payload.get("supports_native_search", False)),
+        supports_structured_outputs=payload.get("supports_structured_outputs"),
+        supports_native_search=payload.get("supports_native_search"),
     )
     session.add(profile)
     session.commit()
@@ -242,9 +242,9 @@ def update_model_profile(
             )
 
     if "supports_structured_outputs" in updates:
-        profile.supports_structured_outputs = bool(updates["supports_structured_outputs"])
+        profile.supports_structured_outputs = updates["supports_structured_outputs"]
     if "supports_native_search" in updates:
-        profile.supports_native_search = bool(updates["supports_native_search"])
+        profile.supports_native_search = updates["supports_native_search"]
 
     profile.updated_at = _now()
     session.add(profile)

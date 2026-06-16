@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,8 +19,12 @@ from app.models import (
     Branch,
     BranchStatus,
     EndingRoom,
+    EndingRoomParticipant,
+    EndingRoomPhase,
+    EndingRoomRoleSlot,
     EndingRoomStatus,
     EndingRoomThread,
+    EndingRoomType,
     Round,
     Scenario,
     ScenarioStatus,
@@ -411,6 +416,316 @@ def test_create_worldline_roundtable_and_fetch_result(client):
     assert result_payload["status"] == "done"
     assert result_payload["room_type"] == "worldline_roundtable"
     assert result_payload["result"]["summary"]
+
+
+def test_roundtable_phase_insight_llm_scope_keeps_room_profile_overrides(client, monkeypatch):  # noqa: E501
+    import app.services.ending_room_service._content as content
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", False)
+    monkeypatch.setattr(settings, "FEATURE_ROUNDTABLE_INSIGHT_LLM", True)
+    monkeypatch.setattr(
+        "app.api.ending_rooms.schedule_background_task",
+        lambda coro: coro.close(),
+    )
+    scopes: list[dict] = []
+    calls: list[dict] = []
+
+    @contextmanager
+    def _capture_scope(**kwargs):
+        scopes.append(kwargs)
+        yield
+
+    async def _fake_llm_call(*_args, **kwargs):
+        calls.append(dict(kwargs))
+        return "This phase now preserves supply pressure and visible branch stakes."
+
+    monkeypatch.setattr(content, "llm_request_scope", _capture_scope)
+    monkeypatch.setattr(content, "llm_call", _fake_llm_call)
+    fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+
+    asyncio.run(run_ending_room_background(create_resp.json()["id"], llm_overrides={
+        "requests_per_minute": 11,
+        "tokens_per_minute": 2200,
+            "concurrency": 2,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": None,
+            "api_key": "sk-roundtable-profile",
+            "base_url": "https://api.openai.com/v1",
+            "model": "roundtable-profile-model",
+        }))
+
+    phase_scopes = [
+        scope for scope in scopes
+        if str(scope.get("purpose") or "").startswith("roundtable_phase_insight_")
+    ]
+    assert phase_scopes
+    for scope in phase_scopes:
+        assert scope["requests_per_minute"] == 11
+        assert scope["tokens_per_minute"] == 2200
+        assert scope["concurrency"] == 2
+        assert scope["supports_structured_outputs_override"] is False
+        assert "supports_native_search_override" in scope
+        assert scope["supports_native_search_override"] is None
+    assert calls
+    for call in calls:
+        assert call["api_key"] == "sk-roundtable-profile"
+        assert call["base_url"] == "https://api.openai.com/v1"
+        assert call["model"] == "roundtable-profile-model"
+
+
+def test_oracle_no_effort_retry_scope_keeps_runtime_overrides(monkeypatch):
+    import app.services.ending_room_service as ending_room_service
+    import app.services.ending_room_service._content as content
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    scopes: list[dict] = []
+
+    @contextmanager
+    def _capture_scope(**kwargs):
+        scopes.append(kwargs)
+        yield
+
+    async def _empty_json(*_args, **_kwargs):
+        return {"content": ""}
+
+    async def _fake_llm_call(*_args, **kwargs):
+        if kwargs.get("reasoning_effort") is not None:
+            raise RuntimeError("400 unsupported parameter: reasoning_effort")
+        return "No effort retry keeps the profile scoped runtime override values."
+
+    monkeypatch.setattr(content, "llm_request_scope", _capture_scope)
+    monkeypatch.setattr(ending_room_service, "llm_call_json", _empty_json)
+    monkeypatch.setattr(ending_room_service, "llm_call", _fake_llm_call)
+    room = EndingRoom(
+        id="room-no-effort",
+        scenario_id="scenario-no-effort",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Ending Chamber",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        id="participant-no-effort",
+        room_id=room.id,
+        role_slot=EndingRoomRoleSlot.AGENT,
+        display_name="Bridge Keeper",
+    )
+
+    result = asyncio.run(content._maybe_rewrite_oracle_copy(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="The bridge stays open and the council keeps logistics visible.",
+        purpose="oracle_test",
+        llm_overrides={
+            "requests_per_minute": 13,
+            "tokens_per_minute": 2600,
+            "concurrency": 4,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": None,
+        },
+    ))
+
+    assert result
+    no_effort_scope = next(
+        scope for scope in scopes if scope["purpose"] == "oracle_test:no_effort_retry"
+    )
+    assert no_effort_scope["requests_per_minute"] == 13
+    assert no_effort_scope["tokens_per_minute"] == 2600
+    assert no_effort_scope["concurrency"] == 4
+    assert no_effort_scope["supports_structured_outputs_override"] is False
+    assert "supports_native_search_override" in no_effort_scope
+    assert no_effort_scope["supports_native_search_override"] is None
+
+
+def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypatch):
+    import app.services.ending_room_service as ending_room_service
+    import app.services.ending_room_service._content as content
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    scopes: list[dict] = []
+    probe_calls: list[dict] = []
+
+    @contextmanager
+    def _capture_scope(**kwargs):
+        scopes.append(kwargs)
+        yield
+
+    async def _fake_probe(**kwargs):
+        probe_calls.append(dict(kwargs))
+        return {"supported": True}
+
+    monkeypatch.setattr(content, "llm_request_scope", _capture_scope)
+    monkeypatch.setattr(ending_room_service, "probe_streaming_support", _fake_probe)
+
+    supported = asyncio.run(content._oracle_followup_streaming_supported(
+        llm_overrides={
+            "requests_per_minute": 17,
+            "tokens_per_minute": 3400,
+            "concurrency": 5,
+            "supports_structured_outputs_override": False,
+            "supports_native_search_override": None,
+            "api_key": "sk-oracle-probe-profile",
+            "base_url": "https://api.openai.com/v1",
+            "model": "oracle-probe-model",
+        },
+    ))
+
+    assert supported is True
+    assert probe_calls == [{
+        "model": "oracle-probe-model",
+        "api_key": "sk-oracle-probe-profile",
+        "base_url": "https://api.openai.com/v1",
+        "timeout": content._ORACLE_STREAM_PROBE_TIMEOUT_SECONDS,
+    }]
+    assert scopes == [{
+        "quota_key": None,
+        "purpose": "oracle_followup_stream_probe",
+        "requests_per_minute": 17,
+        "tokens_per_minute": 3400,
+        "concurrency": 5,
+        "supports_structured_outputs_override": False,
+        "supports_native_search_override": None,
+    }]
+
+
+def test_oracle_followup_caller_passes_profile_runtime_overrides(client, monkeypatch):
+    import app.services.ending_room_service as ending_room_service
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", False)
+    fixture = _seed_ready_scenario()
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    room_id = create_resp.json()["id"]
+    asyncio.run(run_ending_room_background(room_id))
+
+    captured: dict[str, object] = {}
+
+    async def _fake_probe(*, llm_overrides=None):
+        captured["llm_overrides"] = llm_overrides
+        return False
+
+    monkeypatch.setattr(
+        ending_room_service,
+        "_oracle_followup_streaming_supported",
+        _fake_probe,
+    )
+
+    overrides = {
+        "requests_per_minute": 17,
+        "tokens_per_minute": 3400,
+        "concurrency": 5,
+        "supports_structured_outputs_override": False,
+        "supports_native_search_override": None,
+        "api_key": "sk-oracle-followup-profile",
+        "base_url": "https://api.openai.com/v1",
+        "model": "oracle-followup-model",
+    }
+    payload = asyncio.run(
+        ending_room_service.append_room_user_turn_async(
+            room_id,
+            content="继续沿着这个结局说。",
+            llm_overrides=overrides,
+        )
+    )
+
+    assert payload["turns"]
+    assert captured["llm_overrides"] == overrides
+
+
+def test_oracle_streaming_first_generation_threads_profile_provider(monkeypatch):
+    import app.services.ending_room_service as ending_room_service
+    import app.services.ending_room_service._content as content
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    captured: dict[str, object] = {}
+
+    class _FakeStream:
+        def __init__(self, chunks: list[str]):
+            self._chunks = iter(chunks)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def aclose(self):
+            return None
+
+    def _fake_stream(_prompt: str, **kwargs):
+        captured.update(kwargs)
+        return _FakeStream([
+            "Streaming profile provider copy keeps the room voice visible."
+        ])
+
+    monkeypatch.setattr(ending_room_service, "llm_call_stream", _fake_stream)
+    room = EndingRoom(
+        id="room-streaming-profile",
+        scenario_id="scenario-streaming-profile",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Ending Chamber",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        id="participant-streaming-profile",
+        room_id=room.id,
+        role_slot=EndingRoomRoleSlot.AGENT,
+        display_name="Bridge Keeper",
+    )
+
+    result = asyncio.run(content._maybe_rewrite_oracle_copy(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="The bridge stays open and the council keeps logistics visible.",
+        purpose="oracle_streaming_profile",
+        streaming_first=True,
+        llm_overrides={
+            "api_key": "sk-oracle-streaming-profile",
+            "base_url": "https://api.openai.com/v1",
+            "model": "oracle-streaming-model",
+        },
+    ))
+
+    assert result == "Streaming profile provider copy keeps the room voice visible."
+    assert captured["api_key"] == "sk-oracle-streaming-profile"
+    assert captured["base_url"] == "https://api.openai.com/v1"
+    assert captured["model"] == "oracle-streaming-model"
 
 
 def test_get_active_worldline_roundtable_returns_existing_completed_snapshot(client):
