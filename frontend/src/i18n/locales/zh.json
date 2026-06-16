@@ -3606,6 +3606,7 @@
       "overridden": "已覆盖",
       "validation_base_url_api_key": "配置了基准 URL 的模型必须提供 API 密钥",
       "validation_invalid_base_url": "基准 URL 必须使用 http 或 https，且不能包含用户信息、查询参数或片段标识符",
+      "validation_concurrency_invalid": "最大并发数必须是 1 到 {{max}} 之间的整数（留空表示不限制）",
       "validation_name_required": "配置名称必填",
       "validation_model_required": "模型名称必填",
       "error_load": "加载模型配置失败",
@@ -3623,7 +3624,12 @@
       "test_connection": "测试连接",
       "test_ok": "连接测试成功。",
       "test_failed": "连接测试失败。",
-      "test_needs_key": "编辑已保存的配置时，请先重新输入密钥再测试连接。"
+      "test_needs_key": "编辑已保存的配置时，请先重新输入密钥再测试连接。",
+      "option_auto": "自动",
+      "option_enabled": "启用",
+      "option_disabled": "禁用",
+      "concurrency_placeholder": "例如 4 (留空表示不限制)",
+      "concurrency_helper": "控制并发请求数，避免触发模型服务的速率限制。若不限制请留空。"
     },
     "model_select": {
       "placeholder": "请输入模型名称...",

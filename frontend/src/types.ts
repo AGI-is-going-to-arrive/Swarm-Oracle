@@ -1648,8 +1648,8 @@ export interface ModelProfile {
   rpm?: number | null;
   tpm?: number | null;
   concurrency?: number | null;
-  supports_structured_outputs: boolean;
-  supports_native_search: boolean;
+  supports_structured_outputs: boolean | null;
+  supports_native_search: boolean | null;
   storage_notice: string;
   created_at: string;
   updated_at: string;
@@ -1666,8 +1666,8 @@ export interface ModelProfileInput {
   rpm?: number | null;
   tpm?: number | null;
   concurrency?: number | null;
-  supports_structured_outputs?: boolean;
-  supports_native_search?: boolean;
+  supports_structured_outputs?: boolean | null;
+  supports_native_search?: boolean | null;
 }
 
 export interface ModelProfilePatchInput {
@@ -1680,6 +1680,6 @@ export interface ModelProfilePatchInput {
   rpm?: number | null;
   tpm?: number | null;
   concurrency?: number | null;
-  supports_structured_outputs?: boolean;
-  supports_native_search?: boolean;
+  supports_structured_outputs?: boolean | null;
+  supports_native_search?: boolean | null;
 }

@@ -18,6 +18,11 @@ import './ModelProfileManager.css';
 
 const DEFAULT_PROVIDER_ID = 'openai';
 const PROVIDER_PRESET_BASE_URLS = LLM_PROVIDER_PRESETS.map((preset) => preset.baseUrl);
+// Concurrency must stay a positive, safe integer: the backend coerces <=0 to "no cap"
+// (a silent no-op), and values past Number.MAX_SAFE_INTEGER lose precision via parseInt
+// before they are sent (silent data corruption). 1024 is a generous upper bound — real
+// per-profile LLM fan-out never approaches it.
+const MAX_CONCURRENCY = 1024;
 
 function getProviderBaseUrl(providerId: string): string {
   return LLM_PROVIDER_PRESETS.find((preset) => preset.id === providerId)?.baseUrl ?? '';
@@ -49,8 +54,8 @@ export function ModelProfileManager() {
   const [rpm, setRpm] = useState<string>('');
   const [tpm, setTpm] = useState<string>('');
   const [concurrency, setConcurrency] = useState<string>('');
-  const [supportsStructuredOutputs, setSupportsStructuredOutputs] = useState(false);
-  const [supportsNativeSearch, setSupportsNativeSearch] = useState(false);
+  const [supportsStructuredOutputs, setSupportsStructuredOutputs] = useState<'auto' | 'on' | 'off'>('auto');
+  const [supportsNativeSearch, setSupportsNativeSearch] = useState<'auto' | 'on' | 'off'>('auto');
 
   // Feedback states
   const [formErrors, setFormErrors] = useState<string[]>([]);
@@ -105,8 +110,8 @@ export function ModelProfileManager() {
     setRpm('');
     setTpm('');
     setConcurrency('');
-    setSupportsStructuredOutputs(false);
-    setSupportsNativeSearch(false);
+    setSupportsStructuredOutputs('auto');
+    setSupportsNativeSearch('auto');
   };
 
   // Open edit form
@@ -128,8 +133,14 @@ export function ModelProfileManager() {
     setRpm(profile.rpm !== null && profile.rpm !== undefined ? String(profile.rpm) : '');
     setTpm(profile.tpm !== null && profile.tpm !== undefined ? String(profile.tpm) : '');
     setConcurrency(profile.concurrency !== null && profile.concurrency !== undefined ? String(profile.concurrency) : '');
-    setSupportsStructuredOutputs(profile.supports_structured_outputs);
-    setSupportsNativeSearch(profile.supports_native_search);
+
+    const mapApiToState = (val: boolean | null | undefined): 'auto' | 'on' | 'off' => {
+      if (val === true) return 'on';
+      if (val === false) return 'off';
+      return 'auto';
+    };
+    setSupportsStructuredOutputs(mapApiToState(profile.supports_structured_outputs));
+    setSupportsNativeSearch(mapApiToState(profile.supports_native_search));
   };
 
   // Cancel edit/create
@@ -147,6 +158,7 @@ export function ModelProfileManager() {
     const trimmedName = name.trim();
     const trimmedModel = model.trim();
     const trimmedBaseUrl = baseUrl.trim();
+    const trimmedConcurrency = concurrency.trim();
 
     if (!trimmedName) {
       errors.push(t('model_profiles.validation_name_required'));
@@ -176,6 +188,21 @@ export function ModelProfileManager() {
       }
     }
 
+    if (trimmedConcurrency) {
+      // Reject 0 / negatives (backend treats <=0 as "no cap" — a silent no-op that
+      // looks like the user limited concurrency but did not) and values beyond a safe
+      // integer / sane upper bound (parseInt precision loss = silent data corruption).
+      const parsedConcurrency = Number(trimmedConcurrency);
+      const concurrencyValid =
+        /^\d+$/.test(trimmedConcurrency) &&
+        Number.isSafeInteger(parsedConcurrency) &&
+        parsedConcurrency >= 1 &&
+        parsedConcurrency <= MAX_CONCURRENCY;
+      if (!concurrencyValid) {
+        errors.push(t('model_profiles.validation_concurrency_invalid', { max: MAX_CONCURRENCY }));
+      }
+    }
+
     setFormErrors(errors);
     return errors.length === 0;
   };
@@ -189,8 +216,15 @@ export function ModelProfileManager() {
     setApiError(null);
 
     const parseOptionalNumber = (val: string): number | null => {
-      const parsed = parseInt(val, 10);
-      return isNaN(parsed) ? null : parsed;
+      const trimmed = val.trim();
+      if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+      return parseInt(trimmed, 10);
+    };
+
+    const mapStateToApi = (val: 'auto' | 'on' | 'off'): boolean | null => {
+      if (val === 'on') return true;
+      if (val === 'off') return false;
+      return null;
     };
 
     try {
@@ -205,8 +239,8 @@ export function ModelProfileManager() {
           rpm: parseOptionalNumber(rpm),
           tpm: parseOptionalNumber(tpm),
           concurrency: parseOptionalNumber(concurrency),
-          supports_structured_outputs: supportsStructuredOutputs,
-          supports_native_search: supportsNativeSearch,
+          supports_structured_outputs: mapStateToApi(supportsStructuredOutputs),
+          supports_native_search: mapStateToApi(supportsNativeSearch),
         };
         await createModelProfile(payload);
       } else if (isEditing && selectedProfile) {
@@ -219,8 +253,8 @@ export function ModelProfileManager() {
           rpm: parseOptionalNumber(rpm),
           tpm: parseOptionalNumber(tpm),
           concurrency: parseOptionalNumber(concurrency),
-          supports_structured_outputs: supportsStructuredOutputs,
-          supports_native_search: supportsNativeSearch,
+          supports_structured_outputs: mapStateToApi(supportsStructuredOutputs),
+          supports_native_search: mapStateToApi(supportsNativeSearch),
         };
 
         if (keyCleared) {
@@ -528,41 +562,48 @@ export function ModelProfileManager() {
                 <label htmlFor="mp-concurrency">{t('model_profiles.concurrency')}</label>
                 <input
                   id="mp-concurrency"
-                  type="number"
-                  min="1"
+                  type="text"
+                  inputMode="numeric"
                   className="form-control"
                   value={concurrency}
                   onChange={(e) => setConcurrency(e.target.value)}
+                  placeholder={t('model_profiles.concurrency_placeholder')}
+                  aria-describedby="mp-concurrency-helper"
                   disabled={isSaving}
                 />
+                <p id="mp-concurrency-helper" className="model-profile-manager__helper-text">
+                  {t('model_profiles.concurrency_helper')}
+                </p>
               </div>
 
-              <div className="form-group form-check">
-                <input
+              <div className="form-group">
+                <label htmlFor="mp-structured">{t('model_profiles.supports_structured_outputs')}</label>
+                <select
                   id="mp-structured"
-                  type="checkbox"
-                  className="form-check-input"
-                  checked={supportsStructuredOutputs}
-                  onChange={(e) => setSupportsStructuredOutputs(e.target.checked)}
+                  className="form-control"
+                  value={supportsStructuredOutputs}
+                  onChange={(e) => setSupportsStructuredOutputs(e.target.value as 'auto' | 'on' | 'off')}
                   disabled={isSaving}
-                />
-                <label htmlFor="mp-structured" className="form-check-label">
-                  {t('model_profiles.supports_structured_outputs')}
-                </label>
+                >
+                  <option value="auto">{t('model_profiles.option_auto')}</option>
+                  <option value="on">{t('model_profiles.option_enabled')}</option>
+                  <option value="off">{t('model_profiles.option_disabled')}</option>
+                </select>
               </div>
 
-              <div className="form-group form-check">
-                <input
+              <div className="form-group">
+                <label htmlFor="mp-native-search">{t('model_profiles.supports_native_search')}</label>
+                <select
                   id="mp-native-search"
-                  type="checkbox"
-                  className="form-check-input"
-                  checked={supportsNativeSearch}
-                  onChange={(e) => setSupportsNativeSearch(e.target.checked)}
+                  className="form-control"
+                  value={supportsNativeSearch}
+                  onChange={(e) => setSupportsNativeSearch(e.target.value as 'auto' | 'on' | 'off')}
                   disabled={isSaving}
-                />
-                <label htmlFor="mp-native-search" className="form-check-label">
-                  {t('model_profiles.supports_native_search')}
-                </label>
+                >
+                  <option value="auto">{t('model_profiles.option_auto')}</option>
+                  <option value="on">{t('model_profiles.option_enabled')}</option>
+                  <option value="off">{t('model_profiles.option_disabled')}</option>
+                </select>
               </div>
 
               <div className="form-group">

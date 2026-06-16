@@ -3606,6 +3606,7 @@
       "overridden": "Overridden",
       "validation_base_url_api_key": "A profile with a base URL must have an API key",
       "validation_invalid_base_url": "Base URL must use http or https, and cannot contain userinfo, query parameters, or fragments",
+      "validation_concurrency_invalid": "Max concurrency must be an integer between 1 and {{max}} (leave blank for unlimited)",
       "validation_name_required": "Profile name is required",
       "validation_model_required": "Model name is required",
       "error_load": "Failed to load model profiles",
@@ -3623,7 +3624,12 @@
       "test_connection": "Test Connection",
       "test_ok": "Connection test successful.",
       "test_failed": "Connection test failed.",
-      "test_needs_key": "Re-enter the API key before testing the connection when editing a saved profile."
+      "test_needs_key": "Re-enter the API key before testing the connection when editing a saved profile.",
+      "option_auto": "Auto",
+      "option_enabled": "Enabled",
+      "option_disabled": "Disabled",
+      "concurrency_placeholder": "e.g. 4 (leave blank for unlimited)",
+      "concurrency_helper": "Controls max concurrent requests to avoid rate limits. Leave blank for unlimited."
     },
     "model_select": {
       "placeholder": "Enter model name...",

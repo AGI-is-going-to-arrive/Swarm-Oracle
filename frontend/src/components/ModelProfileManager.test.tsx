@@ -6,9 +6,11 @@ import type { ModelProfile } from '../types';
 // Mock translation
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => {
+    t: (key: string, fallback?: unknown) => {
       if (key === 'setup.provider_gemini') return 'Google Gemini';
-      return fallback || key;
+      // Real i18next accepts an interpolation options object as the 2nd arg; in that
+      // case return the key (the mock does not interpolate). Keep string-fallback support.
+      return typeof fallback === 'string' ? fallback || key : key;
     },
     i18n: { language: 'en' },
   }),
@@ -162,9 +164,125 @@ describe('ModelProfileManager', () => {
         rpm: null,
         tpm: null,
         concurrency: null,
-        supports_structured_outputs: false,
-        supports_native_search: false,
+        supports_structured_outputs: null,
+        supports_native_search: null,
       });
+    });
+  });
+
+  it('supports three-state select roundtrip for supports fields', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    createModelProfileMock.mockResolvedValue({ ...mockProfiles[0], id: 'new-id-2' });
+
+    render(<ModelProfileManager />);
+
+    const addBtn = screen.getByRole('button', { name: 'model_profiles.add_profile' });
+    fireEvent.click(addBtn);
+
+    fireEvent.change(screen.getByLabelText('model_profiles.profile_name'), { target: { value: 'Three-State Profile' } });
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), { target: { value: 'gpt-4' } });
+    fireEvent.change(screen.getByLabelText('model_profiles.api_key'), { target: { value: 'sk-test' } });
+
+    const structuredSelect = screen.getByLabelText('model_profiles.supports_structured_outputs') as HTMLSelectElement;
+    const nativeSearchSelect = screen.getByLabelText('model_profiles.supports_native_search') as HTMLSelectElement;
+    expect(structuredSelect.value).toBe('auto');
+    expect(nativeSearchSelect.value).toBe('auto');
+
+    fireEvent.change(structuredSelect, { target: { value: 'on' } });
+    fireEvent.change(nativeSearchSelect, { target: { value: 'off' } });
+
+    const saveBtn = screen.getByRole('button', { name: 'model_profiles.save' });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+        supports_structured_outputs: true,
+        supports_native_search: false,
+      }));
+    });
+  });
+
+  it('validates concurrency field strictly and rejects invalid values', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    createModelProfileMock.mockResolvedValue({ ...mockProfiles[0], id: 'new-id-concurrency' });
+
+    render(<ModelProfileManager />);
+
+    const addBtn = screen.getByRole('button', { name: 'model_profiles.add_profile' });
+    fireEvent.click(addBtn);
+
+    fireEvent.change(screen.getByLabelText('model_profiles.profile_name'), { target: { value: 'Concurrency Profile' } });
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), { target: { value: 'gpt-4' } });
+    fireEvent.change(screen.getByLabelText('model_profiles.api_key'), { target: { value: 'sk-test' } });
+    const concurrencyInput = screen.getByLabelText('model_profiles.concurrency') as HTMLInputElement;
+
+    // Float decimal
+    fireEvent.change(concurrencyInput, { target: { value: '1.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(screen.getByText('model_profiles.validation_concurrency_invalid')).toBeInTheDocument();
+      expect(createModelProfileMock).not.toHaveBeenCalled();
+    });
+
+    // Negative number
+    fireEvent.change(concurrencyInput, { target: { value: '-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(screen.getByText('model_profiles.validation_concurrency_invalid')).toBeInTheDocument();
+      expect(createModelProfileMock).not.toHaveBeenCalled();
+    });
+
+    // Zero — backend coerces <=0 to "no cap" (silent no-op), so the UI must reject it
+    fireEvent.change(concurrencyInput, { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(screen.getByText('model_profiles.validation_concurrency_invalid')).toBeInTheDocument();
+      expect(createModelProfileMock).not.toHaveBeenCalled();
+    });
+
+    // Unsafe-large integer (> Number.MAX_SAFE_INTEGER) — parseInt would silently lose precision
+    fireEvent.change(concurrencyInput, { target: { value: '9007199254740993' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(screen.getByText('model_profiles.validation_concurrency_invalid')).toBeInTheDocument();
+      expect(createModelProfileMock).not.toHaveBeenCalled();
+    });
+
+    // Above the sane upper bound (MAX_CONCURRENCY = 1024)
+    fireEvent.change(concurrencyInput, { target: { value: '2048' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(screen.getByText('model_profiles.validation_concurrency_invalid')).toBeInTheDocument();
+      expect(createModelProfileMock).not.toHaveBeenCalled();
+    });
+
+    // Non-numeric
+    fireEvent.change(concurrencyInput, { target: { value: 'abc' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(screen.getByText('model_profiles.validation_concurrency_invalid')).toBeInTheDocument();
+      expect(createModelProfileMock).not.toHaveBeenCalled();
+    });
+
+    // Valid positive integer
+    fireEvent.change(concurrencyInput, { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+    await waitFor(() => {
+      expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+        concurrency: 5,
+      }));
     });
   });
 
