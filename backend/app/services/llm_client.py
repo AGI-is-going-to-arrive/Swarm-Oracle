@@ -442,6 +442,7 @@ def resolve_native_search_injection_decision(
     *,
     provider_profile: LLMProviderProfile,
     is_chat: bool,
+    supports_native_search_override: bool | None,
     native_search_upstream_override: object,
     native_search_domains: list[str] | None,
 ) -> NativeSearchInjectionDecision:
@@ -456,7 +457,7 @@ def resolve_native_search_injection_decision(
         # Security boundary: only an explicit upstream declaration releases the
         # proxy gate; auto/null/off keep detected provider proxy protections.
         effective_is_proxy = False
-        supports_native_search = True
+        supports_native_search = supports_native_search_override is not False
         adapter_provider = declared_adapter_provider
     else:
         provider_name = provider_profile.name
@@ -2304,10 +2305,13 @@ async def llm_call(
         in {"xai_responses", "openai_responses"}
     )
     native_search_tools_injected_by_force = False
-    if native_search_domains is not None:
+    if native_search_domains:
         native_decision = resolve_native_search_injection_decision(
             provider_profile=provider_profile,
             is_chat=is_chat,
+            supports_native_search_override=(
+                request_context.supports_native_search_override
+            ),
             native_search_upstream_override=(
                 request_context.native_search_upstream_override
             ),

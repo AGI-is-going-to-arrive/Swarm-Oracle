@@ -35,8 +35,8 @@ export interface ConnectionTesterProps {
   disabledHint?: string;
   /** When true, also request a native-search static probe (model-profiles page). */
   includeNativeProbe?: boolean;
-  /** Tri-state native-search override from the profile control (null = auto). */
-  supportsNativeSearch?: boolean | null;
+  /** Native search upstream override. */
+  nativeSearchUpstream?: string;
 }
 
 export type TesterStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -133,7 +133,7 @@ export function ConnectionTester({
   disabled,
   disabledHint,
   includeNativeProbe,
-  supportsNativeSearch,
+  nativeSearchUpstream,
 }: ConnectionTesterProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<TesterStatus>('idle');
@@ -157,7 +157,7 @@ export function ConnectionTester({
         tokensPerMinute,
         false,
         includeNativeProbe,
-        supportsNativeSearch,
+        nativeSearchUpstream,
       );
       const result = normalizeTestResult(
         payload as TestResultPayload,
@@ -245,7 +245,11 @@ export function ConnectionTester({
             <p className="tester__native-detail">
               {`provider=${rawPayload.native_search.detail.provider} · ${rawPayload.native_search.detail.api_form} · is_proxy=${String(
                 rawPayload.native_search.detail.is_proxy,
-              )} · adapter=${rawPayload.native_search.detail.adapter}`}
+              )} · adapter=${rawPayload.native_search.detail.adapter}${
+                rawPayload.native_search.detail.native_search_upstream
+                  ? ` · native_search_upstream=${rawPayload.native_search.detail.native_search_upstream}`
+                  : ''
+              }`}
             </p>
           ) : null}
         </div>

@@ -55,7 +55,7 @@ export function ModelProfileManager() {
   const [tpm, setTpm] = useState<string>('');
   const [concurrency, setConcurrency] = useState<string>('');
   const [supportsStructuredOutputs, setSupportsStructuredOutputs] = useState<'auto' | 'on' | 'off'>('auto');
-  const [supportsNativeSearch, setSupportsNativeSearch] = useState<'auto' | 'on' | 'off'>('auto');
+  const [nativeSearchUpstream, setNativeSearchUpstream] = useState<'off' | 'auto' | 'xai_responses' | 'openai_responses'>('auto');
 
   // Feedback states
   const [formErrors, setFormErrors] = useState<string[]>([]);
@@ -111,7 +111,7 @@ export function ModelProfileManager() {
     setTpm('');
     setConcurrency('');
     setSupportsStructuredOutputs('auto');
-    setSupportsNativeSearch('auto');
+    setNativeSearchUpstream('auto');
   };
 
   // Open edit form
@@ -140,7 +140,7 @@ export function ModelProfileManager() {
       return 'auto';
     };
     setSupportsStructuredOutputs(mapApiToState(profile.supports_structured_outputs));
-    setSupportsNativeSearch(mapApiToState(profile.supports_native_search));
+    setNativeSearchUpstream((profile.native_search_upstream as 'off' | 'auto' | 'xai_responses' | 'openai_responses') || 'auto');
   };
 
   // Cancel edit/create
@@ -240,7 +240,7 @@ export function ModelProfileManager() {
           tpm: parseOptionalNumber(tpm),
           concurrency: parseOptionalNumber(concurrency),
           supports_structured_outputs: mapStateToApi(supportsStructuredOutputs),
-          supports_native_search: mapStateToApi(supportsNativeSearch),
+          native_search_upstream: nativeSearchUpstream,
         };
         await createModelProfile(payload);
       } else if (isEditing && selectedProfile) {
@@ -254,7 +254,7 @@ export function ModelProfileManager() {
           tpm: parseOptionalNumber(tpm),
           concurrency: parseOptionalNumber(concurrency),
           supports_structured_outputs: mapStateToApi(supportsStructuredOutputs),
-          supports_native_search: mapStateToApi(supportsNativeSearch),
+          native_search_upstream: nativeSearchUpstream,
         };
 
         if (keyCleared) {
@@ -596,13 +596,14 @@ export function ModelProfileManager() {
                 <select
                   id="mp-native-search"
                   className="form-control"
-                  value={supportsNativeSearch}
-                  onChange={(e) => setSupportsNativeSearch(e.target.value as 'auto' | 'on' | 'off')}
+                  value={nativeSearchUpstream}
+                  onChange={(e) => setNativeSearchUpstream(e.target.value as 'off' | 'auto' | 'xai_responses' | 'openai_responses')}
                   disabled={isSaving}
                 >
-                  <option value="auto">{t('model_profiles.option_auto')}</option>
-                  <option value="on">{t('model_profiles.option_enabled')}</option>
-                  <option value="off">{t('model_profiles.option_disabled')}</option>
+                  <option value="off">{t('model_profiles.option_upstream_off')}</option>
+                  <option value="auto">{t('model_profiles.option_upstream_auto')}</option>
+                  <option value="xai_responses">{t('model_profiles.option_upstream_xai')}</option>
+                  <option value="openai_responses">{t('model_profiles.option_upstream_openai')}</option>
                 </select>
               </div>
 
@@ -617,13 +618,7 @@ export function ModelProfileManager() {
                   testSuccessText={t('model_profiles.test_ok')}
                   testFailureText={t('model_profiles.test_failed')}
                   includeNativeProbe
-                  supportsNativeSearch={
-                    supportsNativeSearch === 'on'
-                      ? true
-                      : supportsNativeSearch === 'off'
-                        ? false
-                        : null
-                  }
+                  nativeSearchUpstream={nativeSearchUpstream}
                   disabled={Boolean(isEditing && selectedProfile?.has_api_key && !keyCleared && !apiKey.trim())}
                   disabledHint={t('model_profiles.test_needs_key')}
                 />

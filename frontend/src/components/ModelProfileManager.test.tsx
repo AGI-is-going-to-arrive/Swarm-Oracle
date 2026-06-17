@@ -57,6 +57,7 @@ const mockProfiles: ModelProfile[] = [
     concurrency: 5,
     supports_structured_outputs: true,
     supports_native_search: false,
+    native_search_upstream: 'off',
     storage_notice: 'Local storage only',
     created_at: '2026-06-12T15:50:32Z',
     updated_at: '2026-06-12T15:50:32Z',
@@ -75,6 +76,7 @@ const mockProfiles: ModelProfile[] = [
     concurrency: null,
     supports_structured_outputs: false,
     supports_native_search: false,
+    native_search_upstream: 'off',
     storage_notice: 'Local storage only',
     created_at: '2026-06-12T15:50:32Z',
     updated_at: '2026-06-12T15:50:32Z',
@@ -165,7 +167,7 @@ describe('ModelProfileManager', () => {
         tpm: null,
         concurrency: null,
         supports_structured_outputs: null,
-        supports_native_search: null,
+        native_search_upstream: 'auto',
       });
     });
   });
@@ -203,7 +205,39 @@ describe('ModelProfileManager', () => {
     await waitFor(() => {
       expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
         supports_structured_outputs: true,
-        supports_native_search: false,
+        native_search_upstream: 'off',
+      }));
+    });
+  });
+
+  it('passes the native_search_upstream xai_responses value as a string through the create payload', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    createModelProfileMock.mockResolvedValue({ ...mockProfiles[0], id: 'new-id-xai' });
+
+    render(<ModelProfileManager />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.add_profile' }));
+    fireEvent.change(screen.getByLabelText('model_profiles.profile_name'), { target: { value: 'Upstream Profile' } });
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), { target: { value: 'grok-composer-2.5-fast' } });
+    fireEvent.change(screen.getByLabelText('model_profiles.api_key'), { target: { value: 'sk-test' } });
+
+    // The native-search select is now a 4-option upstream enum; selecting an
+    // upstream-specific value must be sent verbatim (NOT mapped to a boolean).
+    const nativeSearchSelect = screen.getByLabelText('model_profiles.supports_native_search') as HTMLSelectElement;
+    fireEvent.change(nativeSearchSelect, { target: { value: 'xai_responses' } });
+    expect(nativeSearchSelect.value).toBe('xai_responses');
+
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+        native_search_upstream: 'xai_responses',
       }));
     });
   });
@@ -381,6 +415,44 @@ describe('ModelProfileManager', () => {
       expect(patchModelProfileMock).toHaveBeenCalledWith('profile-1', expect.objectContaining({
         api_key: '',
         base_url: '',
+      }));
+    });
+  });
+
+  it('backfills native_search_upstream on edit and round-trips xai_responses', async () => {
+    const xaiProfile: ModelProfile = {
+      ...mockProfiles[0],
+      id: 'profile-xai',
+      name: 'Grok Proxy',
+      native_search_upstream: 'xai_responses',
+    };
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [xaiProfile], count: 1 });
+    patchModelProfileMock.mockResolvedValue({ ...xaiProfile });
+
+    render(<ModelProfileManager />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Grok Proxy')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Edit/ })[0]);
+
+    // Editing an existing profile must back-fill the upstream select from
+    // profile.native_search_upstream (not reset to the 'auto' default).
+    const nativeSelect = screen.getByLabelText('model_profiles.supports_native_search') as HTMLSelectElement;
+    expect(nativeSelect.value).toBe('xai_responses');
+
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(patchModelProfileMock).toHaveBeenCalledWith('profile-xai', expect.objectContaining({
+        native_search_upstream: 'xai_responses',
       }));
     });
   });

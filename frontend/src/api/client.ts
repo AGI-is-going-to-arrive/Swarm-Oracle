@@ -675,6 +675,7 @@ export interface NativeSearchProbe {
     api_form: 'chat' | 'responses';
     adapter: string;
     supports_native_search: boolean;
+    native_search_upstream?: string;
   };
 }
 
@@ -687,7 +688,7 @@ export async function testLlmConnection(
   tokensPerMinute?: number,
   includeProbe?: boolean,
   includeNativeProbe?: boolean,
-  supportsNativeSearch?: boolean | null,
+  nativeSearchUpstream?: string,
 ): Promise<{
   server: string;
   llm: { status: string; model: string; response?: string; error?: string };
@@ -712,7 +713,7 @@ export async function testLlmConnection(
       ...(tokensPerMinute != null && { llm_tokens_per_minute: tokensPerMinute }),
       ...(includeProbe === false ? { include_probe: false } : {}),
       ...(includeNativeProbe ? { include_native_probe: true } : {}),
-      ...(supportsNativeSearch != null && { supports_native_search_override: supportsNativeSearch }),
+      ...(nativeSearchUpstream && { native_search_upstream_override: nativeSearchUpstream }),
     }),
   });
 }

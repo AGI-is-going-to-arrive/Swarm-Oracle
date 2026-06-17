@@ -659,6 +659,7 @@ def _build_native_search_probe_hint(
     decision = resolve_native_search_injection_decision(
         provider_profile=merged,
         is_chat=is_chat,
+        supports_native_search_override=supports_native_search_override,
         native_search_upstream_override=native_search_upstream_override,
         native_search_domains=None,
     )

@@ -136,7 +136,7 @@ describe('ConnectionTester', () => {
         baseUrl="http://127.0.0.1:8317/v1"
         apiKey="key"
         includeNativeProbe
-        supportsNativeSearch={null}
+        nativeSearchUpstream="auto"
       />,
     );
 
@@ -149,7 +149,7 @@ describe('ConnectionTester', () => {
     expect(screen.getByText('local proxy cannot use native search')).toBeInTheDocument();
     expect(container.querySelector('.tester__native-detail')).toHaveTextContent('provider=local');
 
-    // includeNativeProbe (7th) + supportsNativeSearch=null (8th) forwarded to the API
+    // includeNativeProbe (7th) + nativeSearchUpstream="auto" (8th) forwarded to the API
     expect(testLlmConnection).toHaveBeenCalledWith(
       'key',
       'http://127.0.0.1:8317/v1',
@@ -158,7 +158,7 @@ describe('ConnectionTester', () => {
       undefined,
       false,
       true,
-      null,
+      'auto',
     );
   });
 
@@ -186,7 +186,7 @@ describe('ConnectionTester', () => {
         baseUrl="https://api.x.ai/v1/responses"
         apiKey="key"
         includeNativeProbe
-        supportsNativeSearch
+        nativeSearchUpstream="xai_responses"
       />,
     );
 

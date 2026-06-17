@@ -3060,6 +3060,56 @@ class TestLlmCallNativeSearch:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("supports_native_search_override", "expect_tools"),
+        [
+            (False, False),
+            (None, True),
+            (True, True),
+        ],
+    )
+    async def test_native_search_declared_upstream_respects_supports_override_tristate(
+        self,
+        monkeypatch,
+        supports_native_search_override,
+        expect_tools,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "proxy answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(
+            supports_native_search_override=supports_native_search_override,
+            native_search_upstream_override="xai_responses",
+        ):
+            result = await llm_call(
+                "test prompt",
+                base_url="http://127.0.0.1:8317/v1/responses",
+                api_key="proxy-key",
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert result == "proxy answer"
+        assert ("tools" in captured_payload) is expect_tools
+
+    @pytest.mark.asyncio
     async def test_native_search_declared_xai_upstream_chat_endpoint_does_not_inject(
         self,
         monkeypatch,
@@ -3094,6 +3144,51 @@ class TestLlmCallNativeSearch:
             )
 
         assert result == "chat answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("domains", [None, []])
+    async def test_native_search_empty_domains_are_equivalent_to_absent_domains(
+        self,
+        monkeypatch,
+        domains,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "plain answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        def fail_if_called(**_kwargs):
+            raise AssertionError("native search decision should not run for empty domains")
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr(
+            "app.services.llm_client.resolve_native_search_injection_decision",
+            fail_if_called,
+        )
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        result = await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=domains,
+        )
+
+        assert result == "plain answer"
         assert "tools" not in captured_payload
 
     @pytest.mark.asyncio
