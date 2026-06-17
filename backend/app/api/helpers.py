@@ -53,6 +53,7 @@ from app.services.simulation_cancel import (
     clear_cancel_token,
     get_or_create_cancel_token,
     is_cancelled,
+    request_cancel,
 )
 from app.services.simulator import reconcile_scenario_done_if_complete, run_simulation
 
@@ -662,6 +663,126 @@ def _finalize_background_task(task: asyncio.Task) -> None:
             exc_type,
             scrubbed,
         )
+
+
+def _cancel_task_threadsafe(task: asyncio.Task) -> None:
+    if task.done():
+        return
+    try:
+        loop = task.get_loop()
+    except RuntimeError:
+        task.cancel()
+        return
+    if loop.is_running():
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+            return
+        except RuntimeError:
+            pass
+    task.cancel()
+
+
+def _cleanup_finished_background_tasks(tasks: set[asyncio.Task]) -> None:
+    for task in list(tasks):
+        if task.done():
+            _finalize_background_task(task)
+            for scenario_id, registered_task in list(_task_registry.items()):
+                if registered_task is task:
+                    clear_running_task(scenario_id, task)
+                    _running_simulations.discard(scenario_id)
+                    _parse_phase_simulations.discard(scenario_id)
+                    clear_cancel_token(scenario_id)
+
+
+async def shutdown_background_tasks(
+    *,
+    timeout: float = 5.0,
+    reason: str = "shutdown",
+) -> None:
+    """Cancel fire-and-forget tasks and wait briefly for their cleanup paths."""
+    scenario_ids = set(_running_simulations)
+    for scenario_id in scenario_ids:
+        get_or_create_cancel_token(scenario_id)
+        request_cancel(scenario_id, reason=reason)
+
+    tasks = {
+        task
+        for task in [*_background_tasks, *_task_registry.values()]
+        if task is not None
+    }
+    if not tasks:
+        return
+
+    _cleanup_finished_background_tasks(tasks)
+    pending_tasks = {task for task in tasks if not task.done()}
+    if not pending_tasks:
+        return
+
+    for task in pending_tasks:
+        _cancel_task_threadsafe(task)
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    current_loop = asyncio.get_running_loop()
+    same_loop_tasks = {
+        task
+        for task in pending_tasks
+        if not task.done() and task.get_loop() is current_loop
+    }
+    if same_loop_tasks:
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining > 0:
+            await asyncio.wait(same_loop_tasks, timeout=remaining)
+
+    foreign_tasks = {
+        task
+        for task in pending_tasks
+        if not task.done() and task.get_loop() is not current_loop
+    }
+    while foreign_tasks and time.monotonic() < deadline:
+        await asyncio.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        foreign_tasks = {task for task in foreign_tasks if not task.done()}
+
+    _cleanup_finished_background_tasks(tasks)
+    stragglers = [task for task in pending_tasks if not task.done()]
+    if stragglers:
+        logger.warning(
+            "Timed out waiting for %d background task(s) during %s",
+            len(stragglers),
+            reason,
+        )
+
+
+def shutdown_background_tasks_sync(
+    *,
+    timeout: float = 5.0,
+    reason: str = "shutdown",
+) -> None:
+    """Synchronous wrapper for test teardown and non-async shutdown paths."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(shutdown_background_tasks(timeout=timeout, reason=reason))
+        return
+
+    error: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            asyncio.run(shutdown_background_tasks(timeout=timeout, reason=reason))
+        except BaseException as exc:  # pragma: no cover - defensive sync wrapper
+            error.append(exc)
+
+    thread = threading.Thread(
+        target=_run,
+        name="background-task-shutdown",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout + 1.0)
+    if thread.is_alive():
+        logger.warning("Timed out joining background task shutdown thread")
+    if error:
+        raise error[0]
 
 
 def parse_key_moments(raw: str | None) -> list[str]:

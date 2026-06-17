@@ -60,9 +60,8 @@ async def lifespan(app: FastAPI):
     )
     yield
     # Graceful shutdown: cancel outstanding background tasks and dispose DB engine
-    from app.api.helpers import _background_tasks
-    for task in list(_background_tasks):
-        task.cancel()
+    from app.api.helpers import shutdown_background_tasks
+    await shutdown_background_tasks(reason="app_shutdown")
     await close_shared_async_client()
     dispose_engine()
     logging.getLogger(__name__).info("SwarmOracle shut down gracefully.")

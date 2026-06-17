@@ -560,6 +560,43 @@ class TestBackgroundTaskScheduling:
         assert "api key [redacted]" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_shutdown_background_tasks_cancels_and_drains_task(self):
+        scenario_id = "scenario-drain"
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def wait_until_shutdown() -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            helpers_api._running_simulations.add(scenario_id)
+            helpers_api.register_running_task(scenario_id, task)
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            finally:
+                helpers_api.clear_cancel_token(scenario_id)
+                helpers_api.clear_running_task(scenario_id, task)
+                helpers_api._running_simulations.discard(scenario_id)
+                helpers_api._parse_phase_simulations.discard(scenario_id)
+
+        task = helpers_api.schedule_background_task(wait_until_shutdown())
+        await started.wait()
+
+        await helpers_api.shutdown_background_tasks(
+            timeout=1.0,
+            reason="test_shutdown",
+        )
+
+        assert cancelled.is_set()
+        assert task.done()
+        assert task not in helpers_api._background_tasks
+        assert helpers_api.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_api._running_simulations
+
+    @pytest.mark.asyncio
     async def test_run_sim_background_redacts_failure_log_without_traceback(
         self,
         monkeypatch,

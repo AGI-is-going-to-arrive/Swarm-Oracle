@@ -23,6 +23,7 @@ os.environ.setdefault("ORACLE_CHAMBERS_USE_LLM", "false")
 @pytest.fixture(autouse=True)
 def setup_test_db(tmp_path, monkeypatch):
     """Create isolated SQLite + Chroma state for each test."""
+    from app.api.helpers import shutdown_background_tasks_sync
     from app.config import settings
     from app.models.database import dispose_engine, init_db
     from app.services.vector_store import reset_vector_store
@@ -42,5 +43,6 @@ def setup_test_db(tmp_path, monkeypatch):
 
     init_db()
     yield
+    shutdown_background_tasks_sync(timeout=5.0, reason="test_teardown")
     dispose_engine()
     reset_vector_store()
