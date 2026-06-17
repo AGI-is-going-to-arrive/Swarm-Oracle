@@ -3301,6 +3301,7 @@
       "show_log": "Show raw response",
       "hide_log": "Hide raw response",
       "native_probe_title": "Native search",
+      "native_probe_probing": "Probing…",
       "native_probe_supported": "Supported (a search tool is injected during simulation)",
       "native_probe_unsupported": "Not supported (no search tool is injected)",
       "summary_provider": "Provider",

@@ -718,6 +718,28 @@ export async function testLlmConnection(
   });
 }
 
+/** POST /api/health/test — test native search static probe only (quick probe) */
+export async function probeNativeSearch(
+  apiKey?: string,
+  baseUrl?: string,
+  model?: string,
+  nativeSearchUpstream?: string,
+): Promise<NativeSearchProbe | null> {
+  const payload = await request<{ native_search?: NativeSearchProbe | null }>('/health/test', {
+    method: 'POST',
+    body: JSON.stringify({
+      native_probe_only: true,
+      include_native_probe: true,
+      ...(apiKey && { llm_api_key: apiKey }),
+      ...(baseUrl && { llm_base_url: baseUrl }),
+      ...(model && { llm_model: model }),
+      ...(nativeSearchUpstream && { native_search_upstream_override: nativeSearchUpstream }),
+    }),
+  });
+  return payload?.native_search ?? null;
+}
+
+
 /** POST /api/scenario — create a new "What If…" scenario */
 export async function createScenario(
   options: CreateScenarioOptions,
