@@ -80,6 +80,8 @@ from app.services.llm_client import (
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
+    model_profile_provider_unresolved,
+    raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
 )
 from app.services.model_profiles import (
@@ -1080,6 +1082,8 @@ async def create_multi_run_scenarios(
                     "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
                 } if web_search_intensity_config else {}),
             }
+            if effective_user_id:
+                scenario_parsed_context["user_id"] = effective_user_id
             if req.model_profile_id:
                 scenario_parsed_context["model_profile_id"] = req.model_profile_id
             if req.world_context is not None:
@@ -2268,6 +2272,7 @@ async def generate_result_report(
 
     engine = get_engine()
     recovered_profile_overrides: dict[str, Any] | None = None
+    has_model_profile_pointer = False
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
         if scenario.status != ScenarioStatus.DONE:
@@ -2285,6 +2290,14 @@ async def generate_result_report(
             .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
         ).first()
         dominant_branch_id = dominant_branch.id if dominant_branch is not None else None
+        parsed_context = (
+            scenario.parsed_context
+            if isinstance(scenario.parsed_context, dict)
+            else {}
+        )
+        has_model_profile_pointer = bool(
+            str(parsed_context.get("model_profile_id") or "").strip()
+        )
         recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
 
     request_body = req or ResultReportGenerateRequest()
@@ -2319,7 +2332,16 @@ async def generate_result_report(
             "temperature": request_body.temperature,
         },
         recovered_profile_overrides,
+        include_quota_user_id=True,
     )
+    if has_model_profile_pointer and model_profile_provider_unresolved(
+        scenario,
+        recovered_profile_overrides,
+        explicit_api_key=request_body.llm_api_key,
+        explicit_base_url=request_body.llm_base_url,
+        explicit_model=request_body.llm_model,
+    ):
+        raise_unresolved_model_profile_provider()
 
     return StreamingResponse(
         result_report_builder.build_report_sse_stream(

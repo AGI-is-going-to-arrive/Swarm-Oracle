@@ -1,0 +1,43 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — ResultReportView Styles (Impeccable Editorial)
+   ═══════════════════════════════════════════════════════════ */
+
+.result-report-view {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 32px 80px;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+@media (max-width: 640px) {
+  .result-report-view {
+    padding: 40px 20px;
+  }
+}
+
+/* Focus styling for buttons in the report view shell to keep them clean of Tailwind mixins */
+.result-report-view .btn:focus {
+  outline: none;
+}
+
+.result-report-view .btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--color-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-report-view * {
+    animation-delay: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .result-report-view .flat-card {
+    border: 1px solid CanvasText !important;
+  }
+}

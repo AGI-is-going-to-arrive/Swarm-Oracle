@@ -198,6 +198,7 @@ class Settings(BaseSettings):
     FEATURE_PREDICTION_JOURNAL: bool = Field(default=True)
     FEATURE_RESULT_VERDICT: bool = Field(default=True)
     FEATURE_RESULT_REPORT: bool = Field(default=True)
+    FEATURE_FORK_TITLE_REWRITE: bool = Field(default=False)
     FEATURE_MULTI_RUN: bool = Field(default=True)
     FEATURE_YOU_VS_ORACLE: bool = Field(default=True)
     FEATURE_SOCIAL_HEADLINES: bool = Field(default=True)

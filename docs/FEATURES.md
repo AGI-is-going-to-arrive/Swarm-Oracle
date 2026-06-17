@@ -217,14 +217,14 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 该功能是后台检索行为，没有独立 UI 或单独截图。
 
 ### F41 结果完整报告
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 结果页会显示完整报告入口，按章节汇总关键结论、证据出处和不确定性。证据侧栏可以跳回 replay 里的对应发言；报告也可以在 `/result/:id/report` 独立查看。生成失败、只完成一部分或报告过长时，页面都会给出可读的提示，不影响原本的结果页。结构化 `interview_evidence` 证据链仍是计划中；普通 `premortem` 章节已由报告生成链路产出。
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 结果页会显示完整报告入口，按章节汇总关键结论、证据出处和不确定性。证据侧栏可以跳回 replay 里的对应发言；报告也可以在 `/result/:id/report` 独立查看。生成失败、只完成一部分或报告过长时，页面都会给出可读的提示，不影响原本的结果页。报告正文支持表格和删除线等安全 Markdown 展示；有可用 transcript / Agent 数据时，`interview_evidence` 会尝试补充访谈式证据。访谈生成失败时只降级该证据块；主报告走静态 / 失败兜底时，会留下空证据和状态说明。
 入口：`/result/:id` -> 完整报告；独立页 `/result/:id/report`
 ![结果完整报告](screenshots/23-full-report.png)
 
 ## 更多玩法
 
 ### F42 模型配置
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 在「模型配置」页可以保存多套 LLM 接入信息（名称、服务商、Base URL、模型、API 密钥、限速），推演或辩论开始前直接挑一套用，不用每次手填。`/admin/setup` 保存并测试成功的 profile 也会进入同一套选择逻辑：只要 profile 带有 key，首页就会把 LLM 视为已配置，并自动选中可用 profile。服务商下拉与 `/admin/setup` 配置向导使用同一组 preset，当前包括 OpenAI、Anthropic、DeepSeek、Google Gemini、Ollama、本地 LM Studio 和自定义端点；切换 preset 会在 Base URL 为空或仍是旧 preset URL 时自动带出默认地址。密钥只存在本地：列表和编辑表单都不会把它显示出来（编辑时密钥框是空的，只标「密钥已设置」），页面也写明本地单用户部署时密钥以明文存在本地 SQLite。
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 在「模型配置」页可以保存多套 LLM 接入信息（名称、服务商、Base URL、模型、API 密钥、限速、并发和 provider 能力覆盖），推演或辩论开始前直接挑一套用，不用每次手填。结构化输出和原生搜索是三态设置：自动检测、强制开启、强制关闭；自动检测会跟随 provider 能力，并发值只会收紧本次 profile 的 LLM 调用，不会放大全局上限。`/admin/setup` 保存并测试成功的 profile 也会进入同一套选择逻辑：只要 profile 带有 key，首页就会把 LLM 视为已配置，并自动选中可用 profile。服务商下拉与 `/admin/setup` 配置向导使用同一组 preset，当前包括 OpenAI、Anthropic、DeepSeek、Google Gemini、Ollama、本地 LM Studio 和自定义端点；切换 preset 会在 Base URL 为空或仍是旧 preset URL 时自动带出默认地址。密钥只存在本地：列表和编辑表单都不会把它显示出来（编辑时密钥框是空的，只标「密钥已设置」），页面也写明本地单用户部署时密钥以明文存在本地 SQLite。依赖已保存 profile 的报告、续跑 / 重放、分支标题重写、社交文案或评分如果无法恢复同一个 profile，会要求重新选择或提供完整 provider 信息；社交头条卡会退回确定性卡片。
 入口：`/model-profiles`；首页和辩论设置里也能直接选已存的配置
 
 ### F43 公开分享与画廊

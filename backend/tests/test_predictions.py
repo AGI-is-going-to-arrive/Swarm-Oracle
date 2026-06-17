@@ -1341,7 +1341,7 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "score-profile-model"
     assert captured["scope"] == {
-        "quota_key": None,
+        "quota_key": "user:score-owner",
         "purpose": "prediction_scoring",
         "requests_per_minute": 31,
         "tokens_per_minute": 3100,
@@ -1349,6 +1349,39 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
         "supports_structured_outputs_override": False,
         "supports_native_search_override": True,
     }
+
+
+def test_score_predictions_stored_profile_missing_fails_closed(monkeypatch):
+    from app.config import settings
+    from app.services import scoring as scoring_module
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    monkeypatch.setattr(settings, "LLM_API_KEY", "sk-server-default", raising=False)
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": "deleted-score-profile",
+            "llm_base_url": "https://legacy.example/v1",
+            "llm_model": "legacy-score-model",
+            "result_quality": {"actual_outcome": True},
+        },
+        user_id="score-owner",
+    )
+
+    async def unexpected_llm(*_args, **_kwargs):
+        raise AssertionError("missing stored profile must fail before LLM work")
+
+    monkeypatch.setattr(
+        scoring_module,
+        "llm_call_json_with_stream_fallback",
+        unexpected_llm,
+    )
+
+    response = TestClient(app).post(f"/api/scenario/{scenario_id}/score-predictions")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
 
 
 def test_score_predictions_inherited_remote_byok_url_uses_server_default(monkeypatch):

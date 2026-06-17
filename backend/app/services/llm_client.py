@@ -2811,6 +2811,48 @@ def _recover_keyed_json_like_response(cleaned: str) -> dict[str, Any] | None:
     return recovered or None
 
 
+_AGENT_MESSAGE_PROMPT_LEAK_RE = re.compile(
+    r"^\s*export\s+(?:interface|const|function|type)\b[^\n]*(?:[;={]|\([^\n]*\)\s*(?:=>|\{))|"
+    r"buildCharacterSystemPrompt|CharacterPromptContext|SummaryContext|"
+    r"DivergenceCheckContext|packages/llm/src|"
+    r"SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT|"
+    r"你现在只作为角色|"
+    r"You are speaking only as the character named|"
+    r"Output only first-person plain-text character speech",
+    re.IGNORECASE | re.MULTILINE,
+)
+_AGENT_MESSAGE_WHOLE_CODE_FENCE_RE = re.compile(
+    r"^\s*```(?:ts|typescript|json)\b[\s\S]*```\s*$",
+    re.IGNORECASE,
+)
+_AGENT_MESSAGE_ROLE_MARKER_LINE_RE = re.compile(
+    r"^\s*(?:system|assistant|user|tool)\s*[:：]",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _has_agent_message_code_prefix_lines(text: str) -> bool:
+    consecutive = 0
+    for raw_line in text.splitlines():
+        line = raw_line.lstrip()
+        if line.startswith(("import ", "//", "/*")):
+            consecutive += 1
+            if consecutive >= 3:
+                return True
+        elif line:
+            consecutive = 0
+    return False
+
+
+def _has_agent_message_prompt_leak_shape(text: str) -> bool:
+    return (
+        bool(_AGENT_MESSAGE_PROMPT_LEAK_RE.search(text))
+        or bool(_AGENT_MESSAGE_WHOLE_CODE_FENCE_RE.fullmatch(text))
+        or bool(_AGENT_MESSAGE_ROLE_MARKER_LINE_RE.search(text))
+        or _has_agent_message_code_prefix_lines(text)
+    )
+
+
 def _recover_agent_message_payload(cleaned: str) -> dict[str, Any] | None:
     """Best-effort fallback for agent message outputs when JSON framing is broken."""
     recovered = _recover_keyed_json_like_response(cleaned) or {}
@@ -2831,7 +2873,7 @@ def _recover_agent_message_payload(cleaned: str) -> dict[str, Any] | None:
 
     if not recovered.get("content"):
         plain = cleaned.strip()
-        if plain:
+        if plain and not _has_agent_message_prompt_leak_shape(plain):
             recovered["content"] = plain[:500]
 
     if not recovered.get("emotion"):

@@ -37,6 +37,8 @@ from app.services.campaign import (
 from app.services.llm_client import is_local_provider_url, llm_request_scope
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
+    model_profile_provider_unresolved,
+    raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
 )
 from app.services.parser import parse_question
@@ -740,15 +742,34 @@ async def run_sim_background(
         with Session(get_engine()) as session:
             scenario = session.get(Scenario, scenario_id)
             parsed_context = scenario.parsed_context if scenario and isinstance(scenario.parsed_context, dict) else {}  # noqa: E501
+            recovered_profile_overrides = (
+                recover_profile_provider_overrides(session, scenario)
+                if scenario
+                else None
+            )
+            if (
+                scenario
+                and model_profile_provider_unresolved(
+                    scenario,
+                    recovered_profile_overrides,
+                    explicit_api_key=effective_llm_overrides.get("api_key"),
+                    explicit_base_url=effective_llm_overrides.get("base_url"),
+                    explicit_model=effective_llm_overrides.get("model"),
+                )
+            ):
+                raise_unresolved_model_profile_provider()
             effective_llm_overrides = merge_profile_provider_overrides(
                 effective_llm_overrides,
-                recover_profile_provider_overrides(session, scenario) if scenario else None,
+                recovered_profile_overrides,
+                include_quota_user_id=True,
             )
             effective_base_url = (
                 effective_llm_overrides.get("base_url")
                 or parsed_context.get("llm_base_url")
             )
-            user_id = parsed_context.get("user_id")
+            user_id = effective_llm_overrides.get("quota_user_id") or parsed_context.get(
+                "user_id"
+            )
             disable_user_quota = bool(parsed_context.get("disable_user_quota"))
             if disable_user_quota and is_local_provider_url(effective_base_url):
                 scope_kwargs["quota_key"] = None

@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import distinct, func
+from sqlmodel import select
+
 from app.api.errors import api_error
 from app.config import settings
 from app.services.llm_client import is_local_provider_url
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,77 @@ def _optional_bool(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def _has_single_model_profile_owner(session: Any) -> bool:
+    """Return whether id-only profile recovery is safe for a local single-user DB."""
+    try:
+        from app.models import ModelProfile
+
+        owner_count = session.exec(
+            select(func.count(distinct(ModelProfile.user_id))),
+        ).one()
+    except Exception:
+        logger.exception("Failed to count distinct model profile owners")
+        return False
+    if isinstance(owner_count, tuple):
+        owner_count = owner_count[0]
+    try:
+        return int(owner_count or 0) <= 1
+    except (TypeError, ValueError):
+        return False
+
+
+def scenario_has_model_profile_pointer(scenario: Any) -> bool:
+    """Return whether a scenario carries a persisted ModelProfile pointer."""
+
+    context = getattr(scenario, "parsed_context", None)
+    if not isinstance(context, Mapping):
+        return False
+    return _clean_optional_text(context.get("model_profile_id")) is not None
+
+
+def model_profile_provider_unresolved(
+    scenario: Any,
+    recovered: Mapping[str, Any] | None,
+    *,
+    explicit_api_key: object = None,
+    explicit_base_url: object = None,
+    explicit_model: object = None,
+) -> bool:
+    """Return whether a profile-backed scenario must fail closed.
+
+    Profile-backed replay/post-completion paths persist only ``model_profile_id``
+    plus non-secret runtime fields. If the profile cannot be recovered and the
+    caller did not provide a complete explicit provider override, falling back
+    to legacy fields or the server default provider would silently run the wrong
+    credentials.
+    """
+
+    if not scenario_has_model_profile_pointer(scenario):
+        return False
+    has_complete_explicit_provider = (
+        _clean_optional_text(explicit_api_key) is not None
+        and _clean_optional_text(explicit_base_url) is not None
+        and _clean_optional_text(explicit_model) is not None
+    )
+    if has_complete_explicit_provider:
+        return False
+    if recovered and _clean_optional_text(recovered.get("api_key")) is not None:
+        return False
+    return True
+
+
+def raise_unresolved_model_profile_provider() -> None:
+    """Raise the shared API error for an unrecoverable profile-backed LLM call."""
+
+    raise api_error(
+        400,
+        "BYOK_API_KEY_REQUIRED",
+        "Model profile credentials could not be resolved; provide API key, "
+        "base URL, and model, or reselect the profile. / 无法解析模型配置，请提供 "
+        "API 密钥、base URL 和模型，或重新选择配置。",
+    )
+
+
 def recover_profile_provider_overrides(
     session: Any,
     scenario: Any,
@@ -48,41 +125,85 @@ def recover_profile_provider_overrides(
         return None
     user_id = _clean_optional_text(getattr(scenario, "user_id", None))
     user_id = user_id or _clean_optional_text(context.get("user_id"))
-    try:
-        from app.services.model_profiles import resolve_model_profile_policy
-
-        policy = resolve_model_profile_policy(
-            session,
-            user_id=user_id,
-            model_profile_id=model_profile_id,
+    scenario_id = _clean_optional_text(getattr(scenario, "id", None)) or "<unknown>"
+    if not settings.FEATURE_MODEL_PROFILES:
+        logger.warning(
+            "Cannot recover model profile %s for scenario %s because model profiles are disabled",
+            model_profile_id,
+            scenario_id,
         )
+        return None
+    try:
+        from app.models import ModelProfile
+
+        profile = session.get(ModelProfile, model_profile_id)
     except Exception:
+        logger.exception(
+            "Failed to recover model profile %s for scenario %s",
+            model_profile_id,
+            scenario_id,
+        )
         return None
-    if policy is None:
+    if profile is None:
+        logger.warning(
+            "Cannot recover model profile %s for scenario %s because the profile does not exist",
+            model_profile_id,
+            scenario_id,
+        )
         return None
+
+    profile_user_id = _clean_optional_text(getattr(profile, "user_id", None))
+    if user_id and profile_user_id and user_id != profile_user_id:
+        logger.warning(
+            "Cannot recover model profile %s for scenario %s because user_id does not match",
+            model_profile_id,
+            scenario_id,
+        )
+        return None
+    if not user_id:
+        if not _has_single_model_profile_owner(session):
+            logger.warning(
+                "Cannot recover model profile %s for scenario %s without user_id "
+                "because multiple profile owners may exist",
+                model_profile_id,
+                scenario_id,
+            )
+            return None
+        logger.info(
+            "Recovering model profile %s for scenario %s by id only in local single-user mode",
+            model_profile_id,
+            scenario_id,
+        )
+    quota_user_id = user_id or profile_user_id
     return {
-        "api_key": policy.api_key,
-        "base_url": policy.base_url,
-        "model": policy.model,
-        "requests_per_minute": policy.requests_per_minute,
-        "tokens_per_minute": policy.tokens_per_minute,
-        "concurrency": policy.concurrency,
-        "supports_structured_outputs_override": policy.supports_structured_outputs,
-        "supports_native_search_override": policy.supports_native_search,
-        "model_profile_id": policy.model_profile_id,
+        "api_key": profile.api_key,
+        "base_url": profile.base_url,
+        "model": profile.model,
+        "requests_per_minute": profile.rpm,
+        "tokens_per_minute": profile.tpm,
+        "concurrency": profile.concurrency,
+        "supports_structured_outputs_override": profile.supports_structured_outputs,
+        "supports_native_search_override": profile.supports_native_search,
+        "model_profile_id": profile.id,
+        "quota_user_id": quota_user_id,
     }
 
 
 def merge_profile_provider_overrides(
     overrides: Mapping[str, Any] | None,
     recovered: Mapping[str, Any] | None,
+    *,
+    include_quota_user_id: bool = False,
 ) -> dict[str, Any]:
     """Merge recovered profile overrides without replacing explicit request values."""
 
     merged = dict(overrides or {})
     if not recovered:
         return merged
-    for key in ("api_key", "base_url", "model", "model_profile_id"):
+    text_keys = ["api_key", "base_url", "model", "model_profile_id"]
+    if include_quota_user_id:
+        text_keys.append("quota_user_id")
+    for key in text_keys:
         if _clean_optional_text(merged.get(key)) is None:
             recovered_value = _clean_optional_text(recovered.get(key))
             if recovered_value is not None:

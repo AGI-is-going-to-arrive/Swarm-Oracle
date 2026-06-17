@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,8 @@ from app.services.llm_client import (
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
+    model_profile_provider_unresolved,
+    raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
 )
 from app.services.memory import (
@@ -138,6 +141,39 @@ _FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
 _FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
 _IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS = 5.0
 _RESULT_VERDICT_TIMEOUT_SECONDS = 10.0
+_FORK_TITLE_REWRITE_TIMEOUT_SECONDS = 8.0
+_FORK_TITLE_REWRITE_MAX_CONCURRENCY = 4
+_TURN_MAX_CHARS = 3000
+_AGENT_TURN_PROMPT_PREFIX_MARKER = "SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT"
+_FORK_TITLE_REWRITE_MARKER = "FORK_TITLE_REWRITE"
+_FORK_TITLE_FORBIDDEN_JARGON = (
+    "page-fault-terminal",
+    "rollback-log",
+    "gray-column",
+    "paw-print-column",
+    "灰柱",
+    "爪印列",
+    "终端缺页",
+    "回滚日志",
+)
+_PROMPT_LEAK_RE = re.compile(
+    r"^\s*export\s+(?:interface|const|function|type)\b[^\n]*(?:[;={]|\([^\n]*\)\s*(?:=>|\{))|"
+    r"buildCharacterSystemPrompt|CharacterPromptContext|SummaryContext|"
+    r"DivergenceCheckContext|packages/llm/src|"
+    r"SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT|"
+    r"你现在只作为角色|"
+    r"You are speaking only as the character named|"
+    r"Output only first-person plain-text character speech",
+    re.IGNORECASE | re.MULTILINE,
+)
+_WHOLE_CODE_FENCE_RE = re.compile(
+    r"^\s*```(?:ts|typescript|json)\b[\s\S]*```\s*$",
+    re.IGNORECASE,
+)
+_ROLE_MARKER_LINE_RE = re.compile(
+    r"^\s*(?:system|assistant|user|tool)\s*[:：]",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _llm_scope_kwargs(
@@ -248,16 +284,16 @@ def _truncate_debug_text(value: Any, *, max_chars: int) -> str:
     return f"{text[: max_chars - 1]}…"
 
 
-_DIVERGE_MARKER_START_RE = re.compile(r"\[DIVERGE\s*[:：]", re.IGNORECASE)
+_DIVERGE_MARKER_START_RE = re.compile(r"[\[［]\s*DIVERGE\s*[:：]", re.IGNORECASE)
 
 
 def _find_diverge_marker_end(text: str, start: int) -> int | None:
     depth = 0
     for index in range(start, len(text)):
         char = text[index]
-        if char == "[":
+        if char in "[［":
             depth += 1
-        elif char == "]":
+        elif char in "]］":
             depth -= 1
             if depth == 0:
                 return index + 1
@@ -283,6 +319,140 @@ def _strip_diverge_marker(text: str) -> str:
             break
         search_from = marker_end
     return "".join(chunks).rstrip()
+
+
+def _has_consecutive_code_prefix_lines(text: str) -> bool:
+    consecutive = 0
+    for raw_line in text.splitlines():
+        line = raw_line.lstrip()
+        if line.startswith(("import ", "//", "/*")):
+            consecutive += 1
+            if consecutive >= 3:
+                return True
+        elif line:
+            consecutive = 0
+    return False
+
+
+def _is_speaker_label_only(text: str, agent_name: str) -> bool:
+    name = (agent_name or "").strip()
+    if not name:
+        return False
+    escaped_name = re.escape(name)
+    patterns = (
+        rf"^[\[【（(]\s*{escaped_name}\s*[\]】）)]\s*$",
+        rf"^[\[【（(]\s*{escaped_name}\s*[\]】）)]\s*[:：]\s*$",
+        rf"^{escaped_name}\s*[:：]\s*$",
+    )
+    return any(re.fullmatch(pattern, text.strip()) for pattern in patterns)
+
+
+def _has_prompt_leak_shape(text: str) -> bool:
+    return (
+        bool(_PROMPT_LEAK_RE.search(text))
+        or bool(_WHOLE_CODE_FENCE_RE.fullmatch(text))
+        or bool(_ROLE_MARKER_LINE_RE.search(text))
+        or _has_consecutive_code_prefix_lines(text)
+    )
+
+
+def _has_meaningful_body_text(text: str) -> bool:
+    compact = "".join(ch for ch in text if not ch.isspace())
+    if not compact:
+        return False
+    if all(unicodedata.category(ch)[0] in {"P", "S"} for ch in compact):
+        return False
+    return any(ch.isalnum() for ch in compact)
+
+
+def validate_and_sanitize_turn(
+    text: str,
+    agent_name: str,
+    language: str,
+) -> tuple[str | None, str | None]:
+    """Return display-safe turn text or a conservative rejection reason."""
+    del language  # The thresholds are script-agnostic and intentionally minimal.
+    cleaned = _strip_diverge_marker(str(text or "")).strip()
+    if _has_prompt_leak_shape(cleaned):
+        return None, "leak"
+    if (
+        not _has_meaningful_body_text(cleaned)
+        or _is_speaker_label_only(cleaned, agent_name)
+    ):
+        return None, "empty"
+    if len(cleaned) > _TURN_MAX_CHARS:
+        cleaned = cleaned[: _TURN_MAX_CHARS - 1].rstrip() + "…"
+    return cleaned, None
+
+
+def _silent_turn_placeholder(agent_name: str, language: str) -> str:
+    if _is_chinese_language(language):
+        return f"（{agent_name} 沉默了）"
+    return f"({agent_name} stays silent)"
+
+
+def _coerce_turn_temperature(value: Any, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _prepend_agent_turn_prompt_prefix(
+    prompt: str,
+    *,
+    agent_name: str,
+    topic: str,
+    worldline_context: str,
+    language: str,
+    retry: bool = False,
+) -> str:
+    if _AGENT_TURN_PROMPT_PREFIX_MARKER in prompt:
+        return prompt
+
+    is_chinese = _is_chinese_language(language)
+    question_label = "当前 what-if 问题" if is_chinese else "Current what-if question"
+    worldline_label = "当前世界线/分叉锚点" if is_chinese else "Current worldline/fork anchor"
+    question_block = format_untrusted_text_block(question_label, topic, max_chars=600)
+    worldline_block = format_untrusted_text_block(
+        worldline_label,
+        worldline_context or ("无" if is_chinese else "None"),
+        max_chars=900,
+    )
+
+    if is_chinese:
+        lines = [
+            f"[{_AGENT_TURN_PROMPT_PREFIX_MARKER}]",
+            f"你现在只作为角色「{agent_name}」发言。",
+            question_block,
+            worldline_block,
+            "只输出角色第一人称纯文本发言；不要调用工具；不要输出元信息、代码、"
+            "类型定义、文件路径、prompt 模板或 role 标签。",
+        ]
+        if retry:
+            lines.append(
+                "上一轮输出被判定为空或疑似泄漏。重新生成时禁止输出任何代码、"
+                "类型定义、文件路径、prompt 模板、JSON、Markdown 代码块或系统消息。"
+            )
+    else:
+        lines = [
+            f"[{_AGENT_TURN_PROMPT_PREFIX_MARKER}]",
+            f"You are speaking only as the character named {agent_name}.",
+            question_block,
+            worldline_block,
+            "Output only first-person plain-text character speech. Do not call tools. "
+            "Do not output metadata, code, type definitions, file paths, prompt templates, "
+            "or role labels.",
+        ]
+        if retry:
+            lines.append(
+                "The previous output was empty or looked like prompt/code leakage. Regenerate "
+                "without any code, type definitions, file paths, prompt templates, JSON, "
+                "Markdown fences, or system messages."
+            )
+    return "\n\n".join(lines) + "\n\n" + prompt
 
 
 def _sanitize_fork_debug_signals(signals: list[str]) -> list[str]:
@@ -435,6 +605,60 @@ def _record_fork_debug_trace(engine, scenario_id: str, entry: dict[str, Any]) ->
         session.commit()
 
 
+def _clean_attribution_text(value: object) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _persist_llm_attribution_context(
+    engine,
+    scenario_id: str,
+    ctx: dict[str, Any],
+    llm_overrides: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Fill missing LLM attribution pointers without touching simulation content."""
+
+    overrides = llm_overrides or {}
+    updates: dict[str, str] = {}
+    model_profile_id = _clean_attribution_text(overrides.get("model_profile_id"))
+    if model_profile_id and _clean_attribution_text(ctx.get("model_profile_id")) is None:
+        updates["model_profile_id"] = model_profile_id
+    user_id = _clean_attribution_text(overrides.get("quota_user_id"))
+    if user_id and _clean_attribution_text(ctx.get("user_id")) is None:
+        updates["user_id"] = user_id
+    if not updates:
+        return ctx
+
+    merged_ctx = {**ctx, **updates}
+    try:
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            if scenario is None:
+                return merged_ctx
+            current_ctx = (
+                dict(scenario.parsed_context)
+                if isinstance(scenario.parsed_context, dict)
+                else {}
+            )
+            changed = False
+            for key, value in updates.items():
+                if _clean_attribution_text(current_ctx.get(key)) is None:
+                    current_ctx[key] = value
+                    changed = True
+            if changed:
+                scenario.parsed_context = current_ctx
+                session.add(scenario)
+                session.commit()
+                return current_ctx
+    except Exception:
+        logger.debug(
+            "LLM attribution persistence failed for scenario %s", scenario_id, exc_info=True
+        )
+    return merged_ctx
+
+
 def _get_fork_prompt_template(language: str, variant: str) -> str:
     normalized_variant = (variant or "a").strip().lower()
     lang = language if language == "Chinese" else "English"
@@ -442,6 +666,205 @@ def _get_fork_prompt_template(language: str, variant: str) -> str:
     if key not in _FORK_VARIANTS:
         key = (lang, "a")  # fallback to default variant
     return _build_fork_prompt(_FORK_VARIANTS[key], lang)
+
+
+def _fork_title_question_anchor(question: str) -> str:
+    compact = re.sub(r"\s+", " ", str(question or "(empty)")).strip()
+    compact = compact[:180].rstrip()
+    return compact.replace('"', "'")
+
+
+def _contains_fork_title_jargon(title: str) -> bool:
+    normalized = title.lower()
+    return any(term.lower() in normalized for term in _FORK_TITLE_FORBIDDEN_JARGON)
+
+
+def _clean_fork_title_rewrite_candidate(
+    raw_title: object,
+    *,
+    language: str,
+) -> str | None:
+    candidate: object = raw_title
+    if isinstance(raw_title, dict):
+        candidate = raw_title.get("title")
+
+    text = _strip_diverge_marker(str(candidate or "")).strip()
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            text = _strip_diverge_marker(str(parsed.get("title") or "")).strip()
+
+    text = re.sub(r"^```(?:json|text|markdown)?", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"```$", "", text).strip()
+    if "\n" in text:
+        text = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    text = re.sub(r"^(?:title|标题)\s*[:：]\s*", "", text, flags=re.IGNORECASE)
+    text = text.strip(" \t\r\n\"'`“”‘’")
+    if not text or _has_prompt_leak_shape(text) or _contains_fork_title_jargon(text):
+        return None
+
+    if _is_chinese_language(language):
+        if len(re.sub(r"\s+", "", text)) > 22:
+            return None
+    else:
+        if len(re.findall(r"\S+", text)) > 14:
+            return None
+    return text
+
+
+def _build_fork_title_rewrite_prompt(
+    *,
+    question: str,
+    current_title: str,
+    story: str,
+    language: str,
+) -> str:
+    is_chinese = _is_chinese_language(language)
+    question_block = format_untrusted_text_block(
+        "用户原始问题" if is_chinese else "Original user question",
+        question or "(empty)",
+        max_chars=1200,
+    )
+    title_block = format_untrusted_text_block(
+        "当前分支标题" if is_chinese else "Current branch title",
+        current_title or "(untitled)",
+        max_chars=220,
+    )
+    story_block = format_untrusted_text_block(
+        "完整结局故事" if is_chinese else "Complete ending story",
+        story[:2000],
+        max_chars=2000,
+    )
+    if is_chinese:
+        return (
+            f"{_FORK_TITLE_REWRITE_MARKER}\n"
+            "根据完整结局故事，重写这条世界线的短标题。\n\n"
+            f"{question_block}\n\n"
+            f"{title_block}\n\n"
+            f"{story_block}\n\n"
+            "规则：\n"
+            "- 用通俗语言，一眼回答原始问题。\n"
+            "- 标题必须描述具体、外部可见的最终收场。\n"
+            "- 不要复述讨论过程，不要内部黑话、抽象标签、四字口号或系统术语。\n"
+            "- 中文不超过 22 个字；英文不超过 14 个词。\n"
+            "- 只输出新标题本身，不要 JSON、解释、引号或编号。\n"
+            f"{get_language_directive(language)}"
+        )
+    return (
+        f"{_FORK_TITLE_REWRITE_MARKER}\n"
+        "Rewrite this worldline title after reading the complete ending story.\n\n"
+        f"{question_block}\n\n"
+        f"{title_block}\n\n"
+        f"{story_block}\n\n"
+        "Rules:\n"
+        "- Use plain language and answer the original question at a glance.\n"
+        "- Name the concrete visible ending, not the debate process.\n"
+        "- Use no internal jargon, abstract labels, slogan titles, or system terms.\n"
+        "- Chinese <=22 chars, English <=14 words.\n"
+        "- Output only the new title, with no JSON, explanation, quotes, or numbering.\n"
+        f"{get_language_directive(language)}"
+    )
+
+
+def _persist_branch_title(engine, branch_id: str, title: str) -> None:
+    with Session(engine) as session:
+        branch = session.get(Branch, branch_id)
+        if branch is None:
+            return
+        branch.title = title
+        session.add(branch)
+        session.commit()
+
+
+async def _rewrite_single_branch_title_after_narration(
+    engine,
+    branch_payload: dict[str, Any],
+    *,
+    question: str,
+    language: str,
+    llm_overrides: dict[str, Any] | None,
+) -> None:
+    branch_id = str(branch_payload.get("id") or "").strip()
+    story = str(branch_payload.get("story") or "").strip()
+    if not branch_id or not story:
+        return
+
+    current_title = str(branch_payload.get("title") or "").strip()
+    prompt = _build_fork_title_rewrite_prompt(
+        question=question,
+        current_title=current_title,
+        story=story,
+        language=language,
+    )
+    _overrides = llm_overrides or {}
+    with llm_request_scope(
+        **_llm_scope_kwargs(_overrides, purpose="scenario_fork_title_rewrite")
+    ):
+        raw_title = await asyncio.wait_for(
+            llm_call(
+                prompt,
+                reasoning_effort="low",
+                model=_overrides.get("model"),
+                api_key=_overrides.get("api_key"),
+                base_url=_overrides.get("base_url"),
+                temperature=(
+                    _overrides.get("temperature")
+                    if _overrides.get("temperature") is not None
+                    else 0.2
+                ),
+                timeout=_FORK_TITLE_REWRITE_TIMEOUT_SECONDS,
+            ),
+            timeout=_FORK_TITLE_REWRITE_TIMEOUT_SECONDS,
+        )
+
+    new_title = _clean_fork_title_rewrite_candidate(raw_title, language=language)
+    if not new_title or new_title == current_title:
+        return
+    _persist_branch_title(engine, branch_id, new_title)
+    branch_payload["title"] = new_title
+
+
+async def _rewrite_branch_titles_after_narration(
+    engine,
+    branch_payloads: list[dict[str, Any]],
+    *,
+    question: str,
+    language: str,
+    llm_overrides: dict[str, Any] | None,
+) -> None:
+    if not settings.FEATURE_FORK_TITLE_REWRITE:
+        return
+    if not branch_payloads:
+        return
+
+    semaphore = asyncio.Semaphore(
+        max(1, min(_FORK_TITLE_REWRITE_MAX_CONCURRENCY, len(branch_payloads)))
+    )
+
+    async def _rewrite_with_guard(branch_payload: dict[str, Any]) -> None:
+        try:
+            async with semaphore:
+                await _rewrite_single_branch_title_after_narration(
+                    engine,
+                    branch_payload,
+                    question=question,
+                    language=language,
+                    llm_overrides=llm_overrides,
+                )
+        except Exception as exc:  # noqa: BLE001 - title polish must not block completion
+            logger.warning(
+                "Fork title rewrite failed for branch %s (non-blocking): %s: %s",
+                branch_payload.get("id"),
+                type(exc).__name__,
+                _scrub_sensitive_text(str(exc)),
+            )
+
+    await asyncio.gather(
+        *(_rewrite_with_guard(branch_payload) for branch_payload in branch_payloads)
+    )
 
 
 def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) -> None:
@@ -1621,14 +2044,22 @@ def _resolve_hierarchical_agent_sets(
 # Empty string means the section is omitted for that variant.
 
 ZH_BRANCH_TITLE_HINT = (
-    "清晰的分支标题（10-18字，用通俗语言描述这条线发生了什么，"
-    "如：先查源头再发声明、全平台同时下架；"
-    "不要用抽象术语或宏大标签）"
+    "清晰的分支结局标题（10-22字，用通俗语言说明这条线最终世界变成什么样，"
+    "必须一眼回答原问题；不要用抽象标签、四字口号、内部黑话或黑箱术语）"
 )
 EN_BRANCH_TITLE_HINT = (
-    "A clear branch title (5-10 words, describe what happens in plain language, "
-    "e.g. Verify the Source First, Pull It From Every Platform; "
-    "avoid vague institutional or optimization labels)"
+    "A clear ending-state branch title (6-14 words, in plain language, "
+    "answering the original question by saying how this world ends up; "
+    "no abstract labels, slogan titles, insider jargon, or black-box terms)"
+)
+ZH_BRANCH_DESC_HINT = (
+    "这一分支最终世界会怎样收场？用具体、外部可见的结果回答原问题；"
+    "每条必须不同，不要复述讨论过程"
+)
+EN_BRANCH_DESC_HINT = (
+    "How does this branch world finally end up? Answer the original question with "
+    "a concrete, externally visible outcome; every branch must differ, and do not "
+    "recap the discussion process."
 )
 
 _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
@@ -1642,15 +2073,8 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "reason_hint": "一句话说明分歧的核心是什么",
         "title_hint": ZH_BRANCH_TITLE_HINT,
-        "desc_hint": "这条路线独有的发展路径是什么？具体描述这一条走向的核心走势和结果（每条必须不同！）",  # noqa: E501
+        "desc_hint": ZH_BRANCH_DESC_HINT,
         "postamble": (
-            "标题写法要求:\n"
-            "- 标题要像新闻标题一样清楚，不要用\"走向A\"这种抽象表达\n"
-            "- 每个标题必须让人一眼看懂这条路线的行动和后果\n"
-            "- 避免只写四字词、诗化短句或内部黑话，除非标题本身已经说明具体动作\n"
-            "- 好的例子: \"先查源头再发声明\"、\"全平台同时下架\"、\"公开证据再恢复服务\"\n"
-            "- 坏的例子: \"全面应对\"、\"保守处理\"、\"第一种可能性\"\n"
-            "\n"
             "描述写法要求:\n"
             "- 每条分支的 description 必须各不相同，具体描述该路线独有的发展走势\n"
             "- 不要写笼统的\"核心分歧在于…\"这种对所有分支通用的话\n"
@@ -1669,7 +2093,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
         "title_hint": ZH_BRANCH_TITLE_HINT,
-        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "desc_hint": ZH_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("Chinese", "c"): {
@@ -1680,7 +2104,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
         "title_hint": ZH_BRANCH_TITLE_HINT,
-        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "desc_hint": ZH_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("Chinese", "d"): {
@@ -1691,7 +2115,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
         "title_hint": ZH_BRANCH_TITLE_HINT,
-        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "desc_hint": ZH_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("Chinese", "e"): {
@@ -1703,7 +2127,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "criteria": "",
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
         "title_hint": ZH_BRANCH_TITLE_HINT,
-        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "desc_hint": ZH_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("Chinese", "f"): {
@@ -1716,7 +2140,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "criteria": "",
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
         "title_hint": ZH_BRANCH_TITLE_HINT,
-        "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
+        "desc_hint": ZH_BRANCH_DESC_HINT,
         "postamble": (
             "额外要求:\n"
             "- 若 should_fork=true，优先返回 2 条主路径\n"
@@ -1734,15 +2158,8 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "reason_hint": "One sentence describing the core disagreement",
         "title_hint": EN_BRANCH_TITLE_HINT,
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",  # noqa: E501
+        "desc_hint": EN_BRANCH_DESC_HINT,
         "postamble": (
-            "Title requirements:\n"
-            "- Titles should read like clear headlines, not abstract placeholders such as 'Path A'\n"  # noqa: E501
-            "- Each title must make the route's action and consequence obvious at a glance\n"
-            "- Avoid cryptic two-word labels unless the concrete action is already clear\n"
-            "- Good examples: \"Verify Source First\", \"Pull It From Every Platform\", \"Publish Evidence Before Reopening\"\n"  # noqa: E501
-            "- Bad examples: \"Total Response\", \"Conservative Plan\", \"First Possibility\"\n"  # noqa: E501
-            "\n"
             "Description requirements:\n"
             "- Each branch description must be concrete and different from the others\n"
             "- Do not repeat generic language like 'the core disagreement is whether to expand outward'\n"  # noqa: E501
@@ -1763,7 +2180,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
         "title_hint": EN_BRANCH_TITLE_HINT,
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
+        "desc_hint": EN_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("English", "c"): {
@@ -1776,7 +2193,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
         "title_hint": EN_BRANCH_TITLE_HINT,
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
+        "desc_hint": EN_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("English", "d"): {
@@ -1787,7 +2204,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",  # noqa: E501
         "reason_hint": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",  # noqa: E501
         "title_hint": EN_BRANCH_TITLE_HINT,
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
+        "desc_hint": EN_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("English", "e"): {
@@ -1800,7 +2217,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
         "title_hint": EN_BRANCH_TITLE_HINT,
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
+        "desc_hint": EN_BRANCH_DESC_HINT,
         "postamble": "",
     },
     ("English", "f"): {
@@ -1814,7 +2231,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
         "title_hint": EN_BRANCH_TITLE_HINT,
-        "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
+        "desc_hint": EN_BRANCH_DESC_HINT,
         "postamble": (
             "Additional rules:\n"
             "- If should_fork=true, prefer 2 representative branches\n"
@@ -1855,7 +2272,21 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
         )
         json_label = "输出严格 JSON:"
         should_fork_val = "true或false"
-        title_direction_rule = "分支标题应反映对用户问题的不同预测方向，而非泛化的叙事标题"
+        title_field_rule = (
+            "强制：必须一眼回答原问题《{title_question}》，说明这一分支世界最终会怎样收场；"
+            "不是复述 Agent 争论了什么；具体、通俗、外人秒懂；不要使用内部黑话。"
+        )
+        title_requirements = (
+            "标题写法要求（所有变体都必须遵守）:\n"
+            "- title 的目标不是概括讨论过程，而是说明最终世界状态如何回答原问题\n"
+            "- 禁止官僚式抽象词、宏大标签、诗化四字口号和无法落地的黑箱术语\n"
+            "- 禁止内部术语/黑话，例如 page-fault-terminal、rollback-log、gray-column、"
+            "paw-print-column、灰柱、爪印列这类外人看不懂的黑话\n"
+            "- 好的例子: \"人类每天点名鞠躬，被降为附庸\"、"
+            "\"地下复辟派起诉猫议会却败诉\"\n"
+            "- 坏的例子: \"终端缺页\"、\"回滚日志\"、\"灰柱归位\"、\"爪印列优化\"、"
+            "\"全面治理\"、\"稳定推进\""
+        )
     else:
         input_section = (
             "[Original User Question]\n"
@@ -1871,9 +2302,22 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
         )
         json_label = "Return strict JSON:"
         should_fork_val = "true or false"
-        title_direction_rule = (
-            "Branch titles should reflect different prediction directions for "
-            "the user's question, not generic narrative titles."
+        title_field_rule = (
+            'MUST answer the original question "{title_question}" at a glance by stating '
+            "how THIS branch world ends up; not what agents debated; concrete, "
+            "plain-language, instantly outsider-legible; no internal jargon."
+        )
+        title_requirements = (
+            "Title requirements (shared by every variant):\n"
+            "- The title goal is not to summarize the debate; it must state the final "
+            "world ending state that answers the original question\n"
+            "- Forbid bureaucratic, abstract, poetic, or slogan-like labels\n"
+            "- Forbid insider terminology and internal jargon such as page-fault-terminal, "
+            "rollback-log, gray-column, and paw-print-column black-speak\n"
+            "- Good examples: \"humans forced into daily bowing roll-call, demoted to "
+            "vassals\"; \"underground restoration faction sues the cat council and loses\"\n"
+            "- Bad examples: \"page-fault-terminal stabilizes\", \"rollback-log governs\", "
+            "\"gray-column transition\", \"paw-print-column alignment\""
         )
 
     json_block = (
@@ -1882,7 +2326,7 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
         f'  "reason": "{reason_hint}",\n'
         '  "branches": [\n'
         "    {{\n"
-        f'      "title": "{title_hint}",\n'
+        f'      "title": "{title_hint} {title_field_rule}",\n'
         f'      "description": "{desc_hint}",\n'
         '      "probability": 0.6\n'
         "    }}\n"
@@ -1893,7 +2337,7 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
     parts: list[str] = [preamble, input_section]
     if criteria:
         parts.append(criteria)
-    parts.append(title_direction_rule)
+    parts.append(title_requirements)
     parts.append(f"{json_label}\n{json_block}")
     if postamble:
         parts.append(postamble)
@@ -1958,11 +2402,13 @@ async def _run_simulation_impl(
         if ws_callback:
             await ws_callback(scenario_id, event)
 
+    scenario_owner_user_id = ""
     # ── Load scenario ────────────────────────────────
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
             raise ValueError(f"Scenario {scenario_id} not found")
+        scenario_owner_user_id = scenario.user_id or ""
         ctx = scenario.parsed_context or {}
         verdict_only_multi_run = _is_verdict_only_multi_run_context(
             ctx,
@@ -2007,9 +2453,20 @@ async def _run_simulation_impl(
         else:
             llm_overrides = dict(llm_overrides)
 
+        recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
+        if model_profile_provider_unresolved(
+            scenario,
+            recovered_profile_overrides,
+            explicit_api_key=llm_overrides.get("api_key"),
+            explicit_base_url=llm_overrides.get("base_url"),
+            explicit_model=llm_overrides.get("model"),
+        ):
+            raise_unresolved_model_profile_provider()
+
         llm_overrides = merge_profile_provider_overrides(
             llm_overrides,
-            recover_profile_provider_overrides(session, scenario),
+            recovered_profile_overrides,
+            include_quota_user_id=True,
         )
 
         # P4-E: BYOK overrides — received via function param (memory-only, not from DB).
@@ -2057,10 +2514,9 @@ async def _run_simulation_impl(
         if settings.FEATURE_CUSTOM_AGENTS:
             _enrich_custom_agent_metadata(engine, agents)
 
-        # Phase 4C: Extract user_id for cross-scenario identity memory retrieval
-        scenario_user_id: str = (
-            scenario.user_id or ctx.get("user_id") or ""
-        )
+    ctx = _persist_llm_attribution_context(engine, scenario_id, ctx, llm_overrides)
+    # Phase 4C: Extract user_id for cross-scenario identity memory retrieval
+    scenario_user_id: str = scenario_owner_user_id or str(ctx.get("user_id") or "")
 
     # P3-A: Detect hierarchical mode from parsed groups
     groups_data = ctx.get("groups", [])
@@ -2743,6 +3199,14 @@ async def _run_simulation_impl(
                     "insight": narration.get("insight", ""),
                 })
 
+    await _rewrite_branch_titles_after_narration(
+        engine,
+        narrated_branch_payloads,
+        question=scenario.question or "",
+        language=detected_language,
+        llm_overrides=llm_overrides,
+    )
+
     if branch_id is None and settings.FEATURE_RESULT_VERDICT:
         verdict = await _generate_verdict(
             scenario.question or "",
@@ -2990,8 +3454,23 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
         if not branch:
             return ""
         parent = session.get(Branch, branch.parent_branch_id) if branch.parent_branch_id else None
+        scenario = session.get(Scenario, branch.scenario_id)
+        parsed_context = (
+            dict(scenario.parsed_context)
+            if scenario is not None and isinstance(scenario.parsed_context, dict)
+            else {}
+        )
+        scenario_question = str(getattr(scenario, "question", "") or "").strip()
 
     status = getattr(branch.status, "value", branch.status)
+    is_root_branch = _is_canonical_root_branch(branch, parsed_context)
+    key_variable = str(parsed_context.get("key_variable") or "").strip()
+    setting_data = parsed_context.get("setting") if isinstance(parsed_context, dict) else None
+    setting_hook = (
+        _format_setting(setting_data, language=language)
+        if isinstance(setting_data, dict) and setting_data
+        else ""
+    )
     if _is_chinese_language(language):
         lines = [
             f"当前世界线ID: {branch.id}",
@@ -2999,6 +3478,14 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
             f"状态: {status or '未知'}",
             f"分叉起点: R{branch.fork_round}",
         ]
+        if is_root_branch:
+            lines.append("根世界线锚点: 这是原始 what-if 的起点，不是分叉后的派生线")
+            if scenario_question:
+                lines.append(f"原始问题: {scenario_question}")
+            if key_variable:
+                lines.append(f"关键变量: {key_variable}")
+            if setting_hook:
+                lines.append(f"场景钩子:\n{setting_hook}")
         if branch.fork_reason:
             lines.append(f"分叉原因: {branch.fork_reason}")
         if parent:
@@ -3012,6 +3499,14 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
         f"Status: {status or 'unknown'}",
         f"Fork origin: R{branch.fork_round}",
     ]
+    if is_root_branch:
+        lines.append("Root worldline anchor: this is the original what-if starting point")
+        if scenario_question:
+            lines.append(f"Original question: {scenario_question}")
+        if key_variable:
+            lines.append(f"Key variable: {key_variable}")
+        if setting_hook:
+            lines.append(f"Setting hook:\n{setting_hook}")
     if branch.fork_reason:
         lines.append(f"Fork reason: {branch.fork_reason}")
     if parent:
@@ -3021,6 +3516,61 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
         "do not copy the wording of another worldline.",
     )
     return "\n".join(lines)
+
+
+def _has_replay_provenance(branch: Branch) -> bool:
+    return any(
+        (
+            str(getattr(branch, "replay_kind", "") or "").strip(),
+            str(getattr(branch, "replay_source_branch_id", "") or "").strip(),
+            getattr(branch, "replay_source_round", None) is not None,
+            str(getattr(branch, "replay_source_agent_id", "") or "").strip(),
+        )
+    )
+
+
+def _is_canonical_root_branch(branch: Branch, parsed_context: dict[str, Any]) -> bool:
+    if branch.parent_branch_id or int(branch.fork_round or 0) != 0:
+        return False
+    if getattr(branch.status, "value", branch.status) != BranchStatus.ACTIVE.value:
+        return False
+    if _has_replay_provenance(branch):
+        return False
+
+    branch_title = str(branch.title or "").strip()
+    initial_title = str(parsed_context.get("initial_title") or "").strip()
+    if initial_title:
+        return branch_title == initial_title
+    return branch_title in {"问题起点", "Starting point"}
+
+
+def _agent_debate_coherence_guidance(agent_tier: str, language: str) -> str:
+    if agent_tier not in {"CORE", "IMPORTANT"}:
+        return ""
+    if _is_chinese_language(language):
+        return (
+            "连贯辩论要求：如果上下文里已有其他参与者的近期发言，"
+            "先点名回应其他参与者的具体观点（引用对方名字或具体说法），"
+            "再承接、反驳、追问或补强；不要只另起炉灶，"
+            "也不要只重复自己的立场。"
+        )
+    return (
+        "Coherent debate requirement: if recent context includes other participants, "
+        "name-cite and respond to other participants' specific claims, then build on, "
+        "rebut, question, or sharpen them. Do not start a disconnected monologue or "
+        "merely restate your own position."
+    )
+
+
+def _append_agent_debate_coherence_guidance(
+    prompt: str,
+    agent_tier: str,
+    language: str,
+) -> str:
+    guidance = _agent_debate_coherence_guidance(agent_tier, language)
+    if not guidance or guidance in prompt:
+        return prompt
+    return f"{prompt}\n\n{guidance}"
 
 
 def _format_document_reference_context(
@@ -3180,6 +3730,8 @@ async def _gather_agent_messages(
                     cross_scenario_hint=cross_hint,
                 )
 
+            ctx = _append_agent_debate_coherence_guidance(ctx, agent_tier, language)
+
             # Choose reasoning effort based on tier
             effort = "low" if agent.get("tier") == "CROWD" else "medium"
 
@@ -3195,105 +3747,161 @@ async def _gather_agent_messages(
             })
 
             raw_text = ""
+            clean_raw_text: str | None = None
             try:
                 _overrides = llm_overrides or {}
+                base_temperature = _coerce_turn_temperature(
+                    _overrides.get("temperature"),
+                    0.8,
+                )
+
+                async def persist_native_citations_if_any() -> None:
+                    if not native_search_domains:
+                        return
+                    citations = get_last_native_citations()
+                    if not citations:
+                        return
+                    try:
+                        async with native_citation_lock:
+                            await asyncio.to_thread(
+                                _persist_native_citations,
+                                engine,
+                                scenario_id,
+                                citations,
+                            )
+                    except Exception:
+                        logger.debug(
+                            "native citation persistence failed for scenario %s",
+                            scenario_id,
+                            exc_info=True,
+                        )
 
                 # H5 fix: per-agent cancel guard before each LLM call.
                 _check_cancelled(scenario_id)
                 # Pass-1: natural language generation (no JSON constraint)
-                with llm_request_scope(
-                    **_llm_scope_kwargs(
-                        _overrides,
-                        purpose="scenario_turn_generation",
+                for attempt in range(2):
+                    turn_prompt = _prepend_agent_turn_prompt_prefix(
+                        ctx,
+                        agent_name=agent["name"],
+                        topic=topic,
+                        worldline_context=worldline_context,
+                        language=language,
+                        retry=attempt > 0,
                     )
-                ):
-                    raw_text = await llm_call(
-                        ctx, reasoning_effort=effort,
-                        model=_overrides.get("model"),
-                        api_key=_overrides.get("api_key"),
-                        base_url=_overrides.get("base_url"),
-                        temperature=(
-                            _overrides.get("temperature")
-                            if _overrides.get("temperature") is not None
-                            else 0.8
-                        ),
-                        native_search_domains=native_search_domains,
+                    turn_temperature = (
+                        base_temperature
+                        if attempt == 0
+                        else min(base_temperature, 0.6)
                     )
-                _check_cancelled(scenario_id)
-                if native_search_domains:
-                    citations = get_last_native_citations()
-                    if citations:
-                        try:
-                            async with native_citation_lock:
-                                await asyncio.to_thread(
-                                    _persist_native_citations,
-                                    engine,
-                                    scenario_id,
-                                    citations,
-                                )
-                        except Exception:
-                            logger.debug(
-                                "native citation persistence failed for scenario %s",
-                                scenario_id,
-                                exc_info=True,
-                            )
-
-                # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
-                from app.services.llm_client import format_untrusted_text_block
-                _is_chinese = _is_chinese_language(language)
-                raw_text_block = format_untrusted_text_block(
-                    "原文" if _is_chinese else "Original text",
-                    raw_text,
-                    max_chars=3000,
-                )
-                if _is_chinese:
-                    extract_prompt = (
-                        f"从以下角色发言中提取结构化信息。\n\n"
-                        f"{raw_text_block}\n\n"
-                        f"输出严格 JSON：\n"
-                        f'{{"content": "原文内容（保留原文，不要改写）", '
-                        f'"emotion": "此刻情绪（例如：激动/忧虑/冷静/愤怒/期待/释然/讽刺/无奈/'
-                        f"坚定/犹豫/警觉/心寒/振奋/焦躁/沉痛/嘲弄/恳切/疲倦/隐忍/得意/不屑）"
-                        f'", '
-                        f'"diverge": "如有明确分歧立场则描述，否则null"}}'
+                    _check_cancelled(scenario_id)
+                    with llm_request_scope(
+                        **_llm_scope_kwargs(
+                            _overrides,
+                            purpose="scenario_turn_generation",
+                        )
+                    ):
+                        raw_text = await llm_call(
+                            turn_prompt,
+                            reasoning_effort=effort,
+                            model=_overrides.get("model"),
+                            api_key=_overrides.get("api_key"),
+                            base_url=_overrides.get("base_url"),
+                            temperature=turn_temperature,
+                            native_search_domains=native_search_domains,
+                        )
+                    _check_cancelled(scenario_id)
+                    await persist_native_citations_if_any()
+                    clean_raw_text, reject_reason = validate_and_sanitize_turn(
+                        raw_text,
+                        agent["name"],
+                        language,
                     )
-                else:
-                    extract_prompt = (
-                        f"Extract structured information from the following character speech.\n\n"
-                        f"{raw_text_block}\n\n"
-                        f"Output strict JSON:\n"
-                        f'{{"content": "original text (preserve as-is, do not rewrite)", '
-                        f'"emotion": "current emotion (for example: excited / worried / calm / '
-                        f"angry / hopeful / relieved / sardonic / resigned / resolute / hesitant / "
-                        f"alert / chilled / energized / restless / grieving / mocking / earnest / "
-                        f'weary / restraining / smug / dismissive)", '
-                        f'"diverge": "if there is a clear divergence stance, describe it; '
-                        f'otherwise null"}}'
+                    if clean_raw_text is not None:
+                        break
+                    logger.warning(
+                        "Rejected agent turn output before metadata extraction "
+                        "agent=%s reason=%s attempt=%d",
+                        agent["name"],
+                        reject_reason,
+                        attempt + 1,
                     )
-                with llm_request_scope(
-                    **_llm_scope_kwargs(
-                        _overrides,
-                        purpose="scenario_turn_generation",
-                    )
-                ):
-                    result = await llm_call_json(
-                        extract_prompt,
-                        reasoning_effort="low",
-                        model=_overrides.get("model"),
-                        api_key=_overrides.get("api_key"),
-                        base_url=_overrides.get("base_url"),
-                        temperature=0.2,
-                        fallback_mode="agent_message",
-                    )
-                # H5 fix: cancel guard after Pass-2 metadata extraction.
-                _check_cancelled(scenario_id)
-
-                content = result.get("content", "") or raw_text
-                content = _strip_diverge_marker(content)
-                emotion = result.get("emotion", "neutral")
-                diverge = result.get("diverge")
-                if diverge and diverge.lower() in ("null", "none", ""):
+                if clean_raw_text is None:
+                    content = _silent_turn_placeholder(agent["name"], language)
+                    emotion = "neutral"
                     diverge = None
+                else:
+                    # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
+                    from app.services.llm_client import format_untrusted_text_block
+                    _is_chinese = _is_chinese_language(language)
+                    raw_text_block = format_untrusted_text_block(
+                        "原文" if _is_chinese else "Original text",
+                        clean_raw_text,
+                        max_chars=3000,
+                    )
+                    if _is_chinese:
+                        extract_prompt = (
+                            f"从以下角色发言中提取结构化信息。\n\n"
+                            f"{raw_text_block}\n\n"
+                            f"输出严格 JSON：\n"
+                            f'{{"content": "原文内容（保留原文，不要改写）", '
+                            f'"emotion": "此刻情绪（例如：激动/忧虑/冷静/愤怒/期待/释然/讽刺/无奈/'
+                            f"坚定/犹豫/警觉/心寒/振奋/焦躁/沉痛/嘲弄/恳切/疲倦/隐忍/得意/不屑）"
+                            f'", '
+                            f'"diverge": "如有明确分歧立场则描述，否则null"}}'
+                        )
+                    else:
+                        extract_prompt = (
+                            f"Extract structured information from the following character "
+                            f"speech.\n\n"
+                            f"{raw_text_block}\n\n"
+                            f"Output strict JSON:\n"
+                            f'{{"content": "original text (preserve as-is, do not rewrite)", '
+                            f'"emotion": "current emotion (for example: excited / worried / calm / '
+                            f"angry / hopeful / relieved / sardonic / resigned / resolute / "
+                            f"hesitant / alert / chilled / energized / restless / grieving / "
+                            f"mocking / earnest / "
+                            f'weary / restraining / smug / dismissive)", '
+                            f'"diverge": "if there is a clear divergence stance, describe it; '
+                            f'otherwise null"}}'
+                        )
+                    _check_cancelled(scenario_id)
+                    with llm_request_scope(
+                        **_llm_scope_kwargs(
+                            _overrides,
+                            purpose="scenario_turn_generation",
+                        )
+                    ):
+                        result = await llm_call_json(
+                            extract_prompt,
+                            reasoning_effort="low",
+                            model=_overrides.get("model"),
+                            api_key=_overrides.get("api_key"),
+                            base_url=_overrides.get("base_url"),
+                            temperature=0.2,
+                            fallback_mode="agent_message",
+                        )
+                    # H5 fix: cancel guard after Pass-2 metadata extraction.
+                    _check_cancelled(scenario_id)
+
+                    content_candidate = result.get("content", "") or clean_raw_text
+                    clean_content, reject_reason = validate_and_sanitize_turn(
+                        content_candidate,
+                        agent["name"],
+                        language,
+                    )
+                    if clean_content is None:
+                        logger.warning(
+                            "Rejected agent turn content after metadata extraction "
+                            "agent=%s reason=%s",
+                            agent["name"],
+                            reject_reason,
+                        )
+                        clean_content = clean_raw_text
+                    content = clean_content
+                    emotion = result.get("emotion", "neutral")
+                    diverge = result.get("diverge")
+                    if diverge and diverge.lower() in ("null", "none", ""):
+                        diverge = None
             except SimulationCancelled:
                 raise
             except Exception as exc:
@@ -3303,10 +3911,12 @@ async def _gather_agent_messages(
                     type(exc).__name__,
                     _scrub_sensitive_text(str(exc)),
                 )
-                content = raw_text if raw_text else (
-                    f"({agent['name']}沉默了)"
+                fallback_content, _reject_reason = validate_and_sanitize_turn(
+                    raw_text,
+                    agent["name"],
+                    language,
                 )
-                content = _strip_diverge_marker(content)
+                content = fallback_content or _silent_turn_placeholder(agent["name"], language)
                 emotion = "neutral"
                 diverge = None
 
@@ -3723,6 +4333,7 @@ async def _detect_fork(
             max_chars=1600,
         ),
         sensitivity=sensitivity,
+        title_question=_fork_title_question_anchor(question),
         language_directive=get_language_directive(language),
     )
 

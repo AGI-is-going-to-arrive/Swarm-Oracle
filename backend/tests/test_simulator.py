@@ -34,6 +34,7 @@ from app.services.replay import write_checkpoint
 from app.services.simulator import (
     _agent_to_dict,
     _apply_normalized_active_branch_probabilities,
+    _build_worldline_context,
     _coerce_stance_value,
     _compress_round_memory,
     _create_branch,
@@ -69,6 +70,7 @@ from app.services.simulator import (
     pop_next_pending_intervention,
     reconcile_scenario_done_if_complete,
     run_simulation,
+    validate_and_sanitize_turn,
 )
 from app.services.web_context import WebSearchResult, WebSearchSnippet
 from app.visualization.mapper import VisualizationMapper
@@ -109,6 +111,8 @@ def _make_agent(engine, scenario_id, name="TestAgent", tier=AgentTier.IMPORTANT)
         ("Before [DIVERGE: hidden signal] after", "Before  after"),
         ("Before [DIVERGE : hidden signal] after", "Before  after"),
         ("Before [DIVERGE： use [A] branch] after", "Before  after"),
+        ("Before [ DIVERGE: hidden signal] after", "Before  after"),
+        ("Before ［DIVERGE： use ［A］ branch］ after", "Before  after"),
         ("Before [DIVERGE: unclosed marker", "Before"),
         (
             "Before [diverge: first] middle [DIVERGE：second] after",
@@ -121,16 +125,136 @@ def test_strip_diverge_marker_handles_user_facing_edges(raw: str, expected: str)
     assert _strip_diverge_marker(raw) == expected
 
 
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        ("", "empty"),
+        ("[DIVERGE: split only]", "empty"),
+        ("export interface CharacterPromptContext { name: string }", "leak"),
+        ("```ts\nexport const buildCharacterSystemPrompt = () => '';\n```", "leak"),
+        (
+            "[SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT]\n"
+            "你现在只作为角色「林默」发言。",
+            "leak",
+        ),
+        ("[ 林默 ]", "empty"),
+    ],
+)
+def test_validate_and_sanitize_turn_rejects_empty_and_prompt_leaks(raw: str, reason: str):
+    cleaned, reject_reason = validate_and_sanitize_turn(raw, "林默", "Chinese")
+
+    assert cleaned is None
+    assert reject_reason == reason
+
+
+def test_validate_and_sanitize_turn_keeps_valid_tiny_utterance():
+    cleaned, reject_reason = validate_and_sanitize_turn("喵。", "林默", "Chinese")
+
+    assert cleaned == "喵。"
+    assert reject_reason is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "我引用了 export function 这个短语，意思是制度被写成口号，而不是在输出代码。",
+        "import 粮食这个词在猫议会里很敏感。\n// 这是墙上的口号，不是源码。",
+        "普通 [临时方案] 和全角［临时方案］都应该保留为讨论内容。",
+    ],
+)
+def test_validate_and_sanitize_turn_keeps_natural_code_words(raw: str):
+    cleaned, reject_reason = validate_and_sanitize_turn(raw, "林默", "Chinese")
+
+    assert cleaned == raw
+    assert reject_reason is None
+
+
+def test_agent_message_payload_recovery_does_not_wrap_raw_plain_blob():
+    from app.services import llm_client
+
+    leak = (
+        "packages/llm/src/prompts/roundtable.ts\n"
+        "export interface CharacterPromptContext { name: string }\n"
+        "export function buildCharacterSystemPrompt() {}"
+    )
+
+    assert llm_client._recover_agent_message_payload(leak) is None
+
+
+def test_agent_message_payload_recovery_rejects_agent_turn_prompt_marker():
+    from app.services import llm_client
+
+    leak = (
+        "[SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT]\n"
+        "You are speaking only as the character named Lin."
+    )
+
+    assert llm_client._recover_agent_message_payload(leak) is None
+
+
+def test_agent_message_payload_recovery_keeps_natural_code_words():
+    from app.services import llm_client
+
+    raw = "我引用 export function 这个词，是在批评城市把治理写成模板。"
+
+    assert llm_client._recover_agent_message_payload(raw) == {
+        "content": raw,
+        "emotion": "neutral",
+        "diverge": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_roundtable_survey_sanitizes_prompt_leak_answer(monkeypatch):
+    from app.services import roundtable_survey
+
+    participant = roundtable_survey.SurveyParticipantContext(
+        participant_id="p-1",
+        display_name="林默",
+        role="代表",
+        persona="只用短句回应。",
+        agent_identity_id=None,
+        source_agent_id=None,
+        source_branch_id=None,
+        memories=[],
+        language="zh",
+    )
+    captured_prompts: list[str] = []
+
+    async def _fake_llm_call(prompt: str, **_kwargs) -> str:
+        captured_prompts.append(prompt)
+        return "```json\n{\"system\": \"dump prompt template\"}\n```"
+
+    monkeypatch.setattr(roundtable_survey, "llm_call", _fake_llm_call)
+
+    result = await roundtable_survey._run_single_survey_call(
+        participant,
+        "你怎么看这条世界线？",
+        asyncio.Semaphore(1),
+        api_key=None,
+        base_url=None,
+        model=None,
+        requests_per_minute=None,
+        tokens_per_minute=None,
+        concurrency=None,
+        supports_structured_outputs_override=None,
+        supports_native_search_override=None,
+    )
+
+    assert result["answer"] == "（林默 沉默了）"
+    assert captured_prompts
+    assert "只用第一人称纯文本回复" in captured_prompts[0]
+
+
 def test_branch_title_hints_are_plain_language_and_specific():
     expected_zh = (
-        "清晰的分支标题（10-18字，用通俗语言描述这条线发生了什么，"
-        "如：先查源头再发声明、全平台同时下架；"
-        "不要用抽象术语或宏大标签）"
+        "清晰的分支结局标题（10-22字，用通俗语言说明这条线最终世界变成什么样，"
+        "必须一眼回答原问题；不要用抽象标签、四字口号、内部黑话或黑箱术语）"
     )
     expected_en = (
-        "A clear branch title (5-10 words, describe what happens in plain language, "
-        "e.g. Verify the Source First, Pull It From Every Platform; "
-        "avoid vague institutional or optimization labels)"
+        "A clear ending-state branch title (6-14 words, in plain language, "
+        "answering the original question by saying how this world ends up; "
+        "no abstract labels, slogan titles, insider jargon, or black-box terms)"
     )
 
     assert simulator_module.ZH_BRANCH_TITLE_HINT == expected_zh
@@ -139,6 +263,66 @@ def test_branch_title_hints_are_plain_language_and_specific():
     assert "governance strategy" not in simulator_module.EN_BRANCH_TITLE_HINT
     assert "行动 + 目标/后果" not in simulator_module.ZH_BRANCH_TITLE_HINT
     assert "Secure Supply Lines Before Northern Push" not in simulator_module.EN_BRANCH_TITLE_HINT
+
+
+def test_fork_prompt_titles_are_question_anchored_and_anti_jargon_in_shared_skeleton():
+    zh_prompt = simulator_module._get_fork_prompt_template("Chinese", "b")
+    en_prompt = simulator_module._get_fork_prompt_template("English", "c")
+
+    assert '"title": "' in zh_prompt
+    assert "必须一眼回答原问题《{title_question}》" in zh_prompt
+    assert "page-fault-terminal" in zh_prompt
+    assert "rollback-log" in zh_prompt
+    assert "灰柱" in zh_prompt
+    assert "官僚式抽象词" in zh_prompt
+    assert "四字口号" in zh_prompt
+    assert "每天点名鞠躬" in zh_prompt
+    assert "地下复辟派起诉猫议会却败诉" in zh_prompt
+
+    assert '"title": "' in en_prompt
+    assert "answer the original question \"{title_question}\"" in en_prompt
+    assert "page-fault-terminal" in en_prompt
+    assert "rollback-log" in en_prompt
+    assert "gray-column" in en_prompt
+    assert "paw-print-column" in en_prompt
+    assert "bureaucratic" in en_prompt
+    assert "humans forced into daily bowing roll-call" in en_prompt
+    assert "underground restoration faction sues the cat council and loses" in en_prompt
+
+
+@pytest.mark.asyncio
+async def test_detect_fork_binds_title_field_to_actual_question(monkeypatch):
+    engine = get_engine()
+    sid = _make_scenario(engine)
+    bid = _create_branch(engine, sid, title="主线", probability=1.0)
+
+    captured_prompts: list[str] = []
+
+    async def _fake_fork_llm(prompt, *_args, **_kwargs):
+        captured_prompts.append(prompt)
+        return {"should_fork": False, "reason": "no split", "branches": []}
+
+    monkeypatch.setattr(
+        "app.services.simulator.llm_call_json_with_stream_fallback",
+        _fake_fork_llm,
+    )
+
+    question = "如果猫掌握了全球法院，人类最后会怎样？"
+    await _detect_fork(
+        engine,
+        bid,
+        ["猫法庭和人类地下组织分裂"],
+        0.7,
+        language="Chinese",
+        prompt_variant="a",
+        recent_summary="[林默](calm): 人类可能只能上诉。",
+        question=question,
+    )
+
+    assert captured_prompts
+    assert f"必须一眼回答原问题《{question}》" in captured_prompts[0]
+    assert "不是复述 Agent 争论了什么" in captured_prompts[0]
+    assert "不要使用内部黑话" in captured_prompts[0]
 
 
 def test_root_branch_default_title_is_plain_language():
@@ -653,7 +837,7 @@ class TestRunSimulation:
         assert '"llm_model"' not in serialized_context
 
     @pytest.mark.asyncio
-    async def test_replay_runtime_falls_back_when_model_profile_missing(
+    async def test_replay_runtime_fails_closed_when_model_profile_missing(
         self,
         monkeypatch,
     ):
@@ -687,41 +871,17 @@ class TestRunSimulation:
             )
             session.commit()
 
-        resolver_calls = {"count": 0}
-        captured: dict[str, object] = {}
-
-        def _missing_profile(*_args, **_kwargs):
-            resolver_calls["count"] += 1
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "MODEL_PROFILE_NOT_FOUND"},
+        async def _fake_llm_call(*_args, **kwargs):
+            raise AssertionError(
+                f"profile-backed replay must not call LLM with {kwargs!r}"
             )
 
-        async def _fake_llm_call(*_args, **kwargs):
-            captured["api_key"] = kwargs.get("api_key")
-            captured["base_url"] = kwargs.get("base_url")
-            captured["model"] = kwargs.get("model")
-            return "The replay falls back to stored non-secret runtime data."
-
         async def _fake_llm_call_json(*_args, **_kwargs):
-            return {
-                "content": "The replay falls back to stored non-secret runtime data.",
-                "emotion": "calm",
-                "diverge": None,
-            }
+            raise AssertionError("profile-backed replay must fail before JSON LLM call")
 
         async def _fake_narrate_branch(*_args, **_kwargs):
-            return {
-                "title": "Fallback replay",
-                "story": "Replay completed.",
-                "insight": "Missing profile did not abort replay.",
-                "key_moments": [],
-            }
+            raise AssertionError("profile-backed replay must fail before narration")
 
-        monkeypatch.setattr(
-            "app.services.model_profiles.resolve_model_profile_policy",
-            _missing_profile,
-        )
         monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
         monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
         monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
@@ -734,14 +894,11 @@ class TestRunSimulation:
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
-        await run_simulation(scenario_id)
+        with pytest.raises(HTTPException) as exc_info:
+            await run_simulation(scenario_id)
 
-        assert resolver_calls["count"] == 1
-        assert captured == {
-            "api_key": None,
-            "base_url": "https://legacy.example/v1",
-            "model": "legacy-model",
-        }
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["code"] == "BYOK_API_KEY_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_full_run_persists_narrating_status_before_narration_broadcast(self, monkeypatch):
@@ -811,6 +968,316 @@ class TestRunSimulation:
             scenario = session.get(Scenario, scenario_id)
             assert scenario is not None
             assert scenario.status == ScenarioStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_fork_title_rewrite_updates_persisted_title_after_narration(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        profile_id = ""
+
+        with Session(engine) as session:
+            profile = ModelProfile(
+                user_id="profile-owner",
+                name="Title rewrite profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="title-model",
+                api_key="sk-title-rewrite-secret",
+                rpm=19,
+                tpm=1900,
+                concurrency=5,
+                supports_structured_outputs=True,
+                supports_native_search=False,
+            )
+            session.add(profile)
+            session.flush()
+            profile_id = profile.id
+
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.user_id = "profile-owner"
+            scenario.question = "Can the habitat survive one more week?"
+            scenario.parsed_context = {
+                "_language": "English",
+                "initial_title": "Stabilize first",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+                "model_profile_id": profile_id,
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Systems Lead",
+                    role="Engineer",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        captured_title_prompt = ""
+        captured_title_kwargs: dict[str, object] = {}
+
+        async def _fake_llm_call(prompt, *_args, **kwargs):
+            nonlocal captured_title_prompt, captured_title_kwargs
+            if "FORK_TITLE_REWRITE" in prompt:
+                captured_title_prompt = prompt
+                captured_title_kwargs = dict(kwargs)
+                return "Habitat survives on life support"
+            return "Life support stays stable."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "Life support stays stable.", "emotion": "focused"}
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "ignored narrator title",
+                "story": "The habitat survives by prioritizing life support.",
+                "insight": "Repair sequencing matters more than expansion.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "FEATURE_FORK_TITLE_REWRITE",
+            True,
+            raising=False,
+        )
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert branch.title == "Habitat survives on life support"
+        assert "FORK_TITLE_REWRITE" in captured_title_prompt
+        assert "Can the habitat survive one more week?" in captured_title_prompt
+        assert "Stabilize first" in captured_title_prompt
+        assert "The habitat survives by prioritizing life support." in captured_title_prompt
+        assert "plain language" in captured_title_prompt
+        assert "no internal jargon" in captured_title_prompt
+        assert captured_title_kwargs["api_key"] == "sk-title-rewrite-secret"
+        assert captured_title_kwargs["base_url"] == "https://api.openai.com/v1"
+        assert captured_title_kwargs["model"] == "title-model"
+
+    @pytest.mark.asyncio
+    async def test_fork_title_rewrite_failure_preserves_existing_title(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.question = "Can the habitat survive one more week?"
+            scenario.parsed_context = {
+                "_language": "English",
+                "initial_title": "Stabilize first",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Systems Lead",
+                    role="Engineer",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        events: list[dict] = []
+
+        async def _fake_ws_callback(_scenario_id: str, event: dict):
+            events.append(event)
+
+        async def _fake_llm_call(prompt, *_args, **_kwargs):
+            if "FORK_TITLE_REWRITE" in prompt:
+                raise RuntimeError("title provider unavailable")
+            return "Life support stays stable."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "Life support stays stable.", "emotion": "focused"}
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "ignored narrator title",
+                "story": "The habitat survives by prioritizing life support.",
+                "insight": "Repair sequencing matters more than expansion.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "FEATURE_FORK_TITLE_REWRITE",
+            True,
+            raising=False,
+        )
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id, ws_callback=_fake_ws_callback)
+
+        with Session(engine) as session:
+            branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert branch.title == "Stabilize first"
+        assert any(event.get("type") == "simulation_done" for event in events)
+
+    @pytest.mark.asyncio
+    async def test_fork_title_rewrite_flag_off_skips_title_llm_call(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.question = "Can the habitat survive one more week?"
+            scenario.parsed_context = {
+                "_language": "English",
+                "initial_title": "Stabilize first",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Systems Lead",
+                    role="Engineer",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        title_prompt_count = 0
+
+        async def _fake_llm_call(prompt, *_args, **_kwargs):
+            nonlocal title_prompt_count
+            if "FORK_TITLE_REWRITE" in prompt:
+                title_prompt_count += 1
+                raise AssertionError("title rewrite LLM must be skipped when flag is off")
+            return "Life support stays stable."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "Life support stays stable.", "emotion": "focused"}
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "ignored narrator title",
+                "story": "The habitat survives by prioritizing life support.",
+                "insight": "Repair sequencing matters more than expansion.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "FEATURE_FORK_TITLE_REWRITE",
+            False,
+            raising=False,
+        )
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        assert branch.title == "Stabilize first"
+        assert title_prompt_count == 0
+
+    @pytest.mark.asyncio
+    async def test_fork_title_rewrite_runs_with_bounded_concurrency(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "FEATURE_FORK_TITLE_REWRITE",
+            True,
+            raising=False,
+        )
+        payloads = [
+            {"id": f"branch-{index}", "title": f"Branch {index}"}
+            for index in range(8)
+        ]
+        active = 0
+        max_active = 0
+        calls: list[str] = []
+
+        async def fake_rewrite(_engine, branch_payload, **_kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            calls.append(branch_payload["id"])
+            await asyncio.sleep(0)
+            active -= 1
+
+        monkeypatch.setattr(
+            simulator_module,
+            "_rewrite_single_branch_title_after_narration",
+            fake_rewrite,
+        )
+
+        await simulator_module._rewrite_branch_titles_after_narration(
+            object(),
+            payloads,
+            question="Can the habitat survive?",
+            language="English",
+            llm_overrides=None,
+        )
+
+        assert set(calls) == {payload["id"] for payload in payloads}
+        assert 1 < max_active <= simulator_module._FORK_TITLE_REWRITE_MAX_CONCURRENCY
 
     @pytest.mark.asyncio
     async def test_causal_graph_event_nodes_use_persisted_message_ids(self, monkeypatch):
@@ -1767,6 +2234,385 @@ class TestGatherHierarchicalMessages:
 
 class TestGatherAgentMessages:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("tier", [AgentTier.CORE, AgentTier.IMPORTANT])
+    async def test_core_and_important_prompts_build_on_other_agents_points(
+        self,
+        monkeypatch,
+        tier,
+    ):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        prior_round_id = _create_round(engine, bid, 1)
+        current_round_id = _create_round(engine, bid, 2)
+
+        other_agent_id = _make_agent(engine, sid, name="李白", tier=AgentTier.IMPORTANT)
+        target_agent_id = _make_agent(engine, sid, name="杜甫", tier=tier)
+        _save_message(
+            engine,
+            prior_round_id,
+            other_agent_id,
+            "猫议会已经把人类上诉期限压到一天。",
+            "worried",
+            None,
+        )
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, target_agent_id))
+
+        captured_prompts: list[str] = []
+
+        async def _capture_llm_call(prompt, *_args, **_kwargs):
+            captured_prompts.append(prompt)
+            return "我同意李白那句上诉期限被压缩，这会逼人类转入地下。"
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "我同意李白那句上诉期限被压缩，这会逼人类转入地下。",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _capture_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            current_round_id,
+            2,
+            [agent_dict],
+            "时代: 猫法庭\n地点: 全球法院\n背景: 猫掌握司法权",
+            "猫掌权后人类还能否上诉",
+            language="Chinese",
+        )
+
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "点名回应其他参与者的具体观点" in prompt
+        assert "承接、反驳、追问或补强" in prompt
+        assert "不要只另起炉灶" in prompt
+        assert "李白" in prompt
+        assert "上诉期限压到一天" in prompt
+
+    @pytest.mark.asyncio
+    async def test_root_worldline_context_includes_question_key_variable_and_setting(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            scenario.question = "如果猫掌握了全球法院，人类最后会怎样？"
+            scenario.parsed_context = {
+                "key_variable": "猫法庭如何处置人类上诉权",
+                "setting": {
+                    "time_period": "近未来",
+                    "location": "全球法院",
+                    "background": "猫议会接管司法系统",
+                },
+            }
+            session.add(scenario)
+            session.commit()
+
+        bid = _create_branch(engine, sid, title="问题起点", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+        agent_id = _make_agent(engine, sid, name="林默", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        captured_prompts: list[str] = []
+
+        async def _capture_llm_call(prompt, *_args, **_kwargs):
+            captured_prompts.append(prompt)
+            return "猫议会会先限制上诉窗口。"
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "猫议会会先限制上诉窗口。", "emotion": "calm", "diverge": None}
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _capture_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "时代: 近未来\n地点: 全球法院\n背景: 猫议会接管司法系统",
+            "猫法庭如何处置人类上诉权",
+            language="Chinese",
+        )
+
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "根世界线锚点" in prompt
+        assert "如果猫掌握了全球法院，人类最后会怎样？" in prompt
+        assert "猫法庭如何处置人类上诉权" in prompt
+        assert "全球法院" in prompt
+
+    def test_imported_history_branch_without_provenance_does_not_get_root_anchor(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            scenario.question = "Imported replay question"
+            scenario.parsed_context = {
+                "simulation_rounds": 2,
+                "mode": "blackboard",
+                "hierarchical": False,
+            }
+            branch = Branch(
+                scenario_id=sid,
+                parent_branch_id=None,
+                fork_round=0,
+                title="Imported Branch",
+                story="Imported story",
+                insight="Imported insight",
+                status=BranchStatus.COMPLETED,
+                probability=1.0,
+            )
+            session.add(scenario)
+            session.add(branch)
+            session.commit()
+            branch_id = branch.id
+
+        context = _build_worldline_context(engine, branch_id, language="Chinese")
+
+        assert "根世界线锚点" not in context
+        assert "原始问题" not in context
+
+    @pytest.mark.asyncio
+    async def test_retries_bad_agent_turn_then_keeps_valid_tiny_content(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_id = _make_agent(engine, sid, name="林默", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        prompts: list[str] = []
+        temperatures: list[float | None] = []
+        raw_outputs = [
+            "export interface CharacterPromptContext { name: string }",
+            "喵。",
+        ]
+
+        async def _fake_llm_call(prompt, *_args, **kwargs):
+            prompts.append(prompt)
+            temperatures.append(kwargs.get("temperature"))
+            return raw_outputs.pop(0)
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "喵。", "emotion": "calm", "diverge": None}
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        results = await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "时代: 测试\n地点: 本地\n背景: 输出过滤",
+            "原始问题是什么？",
+            language="Chinese",
+        )
+
+        assert results[0]["content"] == "喵。"
+        assert len(prompts) == 2
+        assert temperatures == [0.8, 0.6]
+        assert "只输出角色第一人称纯文本发言" in prompts[0]
+        assert "禁止输出任何代码" in prompts[1]
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_retry_skips_second_agent_turn_llm_call(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_id = _make_agent(engine, sid, name="林默", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        cancel_checks = iter([False, False, False, True])
+        llm_call_count = 0
+
+        def _is_cancelled_after_first_rejection(_scenario_id):
+            return next(cancel_checks, True)
+
+        async def _fake_llm_call(*_args, **_kwargs):
+            nonlocal llm_call_count
+            llm_call_count += 1
+            return "export interface CharacterPromptContext { name: string }"
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            raise AssertionError("metadata extraction must not run after cancellation")
+
+        monkeypatch.setattr(simulator_module, "is_cancelled", _is_cancelled_after_first_rejection)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        with pytest.raises(simulator_module.SimulationCancelled):
+            await _gather_agent_messages(
+                engine,
+                sid,
+                bid,
+                rid,
+                1,
+                [agent_dict],
+                "时代: 测试\n地点: 本地\n背景: 取消",
+                "原始问题是什么？",
+                language="Chinese",
+            )
+
+        assert llm_call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cancel_before_metadata_skips_agent_turn_llm_json_call(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_id = _make_agent(engine, sid, name="林默", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        cancel_checks = iter([False, False, False, True])
+        llm_json_call_count = 0
+
+        def _is_cancelled_after_valid_pass_one(_scenario_id):
+            return next(cancel_checks, True)
+
+        async def _fake_llm_call(*_args, **_kwargs):
+            return "猫议会会先限制上诉窗口。"
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            nonlocal llm_json_call_count
+            llm_json_call_count += 1
+            raise AssertionError("metadata extraction must not run after cancellation")
+
+        monkeypatch.setattr(simulator_module, "is_cancelled", _is_cancelled_after_valid_pass_one)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        with pytest.raises(simulator_module.SimulationCancelled):
+            await _gather_agent_messages(
+                engine,
+                sid,
+                bid,
+                rid,
+                1,
+                [agent_dict],
+                "时代: 测试\n地点: 本地\n背景: 取消",
+                "原始问题是什么？",
+                language="Chinese",
+            )
+
+        assert llm_json_call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_replaces_repeated_bad_agent_turn_with_silent_placeholder(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_id = _make_agent(engine, sid, name="林默", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        pushed_events: list[dict] = []
+        raw_outputs = [
+            "[DIVERGE: split only]",
+            "```ts\nexport interface CharacterPromptContext { name: string }\n```",
+        ]
+
+        async def _fake_llm_call(*_args, **_kwargs):
+            return raw_outputs.pop(0)
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            raise AssertionError("metadata extraction must not run for rejected raw output")
+
+        async def _push(event):
+            pushed_events.append(event)
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        results = await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "时代: 测试\n地点: 本地\n背景: 输出过滤",
+            "原始问题是什么？",
+            push=_push,
+            language="Chinese",
+        )
+
+        assert results[0]["content"] == "（林默 沉默了）"
+        speak_events = [event for event in pushed_events if event["type"] == "agent_speak"]
+        assert speak_events[0]["data"]["message"] == "（林默 沉默了）"
+        with Session(engine) as session:
+            stored = session.exec(select(AgentMessage)).one()
+        assert stored.content == "（林默 沉默了）"
+        assert "CharacterPromptContext" not in stored.content
+
+    @pytest.mark.asyncio
     async def test_strips_diverge_marker_from_extracted_content(self, monkeypatch):
         engine = get_engine()
         sid = _make_scenario(engine)
@@ -2049,6 +2895,8 @@ class TestGatherAgentMessages:
         assert "放大生态拿下默认入口" in prompt
         assert "资源优先投入客服中台" in prompt
         assert "不要复用" in prompt
+        assert "点名回应其他参与者的具体观点" in prompt
+        assert "承接、反驳、追问或补强" in prompt
 
     @pytest.mark.asyncio
     async def test_respects_request_scoped_parallelism_limit(self, monkeypatch):

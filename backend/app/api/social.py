@@ -35,6 +35,8 @@ from app.services.llm_client import (
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
+    model_profile_provider_unresolved,
+    raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
     resolve_post_completion_llm_call_config,
 )
@@ -585,7 +587,14 @@ async def _generate_headline_cards(
                 "api_key": context_api_key if isinstance(context_api_key, str) else None,
             },
             recovered_profile_overrides,
+            include_quota_user_id=True,
         )
+        if model_profile_provider_unresolved(
+            scenario,
+            recovered_profile_overrides,
+            explicit_api_key=context_api_key,
+        ):
+            return "deterministic", _deterministic_headline_cards(events)
         effective_llm = resolve_post_completion_llm_call_config(
             parsed_context=provider_policy,
             request_api_key=request_overrides.get("api_key"),
@@ -601,12 +610,11 @@ async def _generate_headline_cards(
                 "supports_native_search_override"
             ),
         )
+        quota_user_id = request_overrides.get("quota_user_id") or provider_policy.get(
+            "user_id"
+        )
         with llm_request_scope(
-            quota_key=(
-                f"user:{provider_policy.get('user_id')}"
-                if provider_policy.get("user_id")
-                else None
-            ),
+            quota_key=f"user:{quota_user_id}" if quota_user_id else None,
             purpose="social_headline_cards",
             requests_per_minute=effective_llm.requests_per_minute,
             tokens_per_minute=effective_llm.tokens_per_minute,
@@ -744,6 +752,7 @@ async def _generate_social_copy(
         language=social_language,
     )
     provider_policy = scenario.parsed_context or {}
+    recovered_quota_user_id: object = None
     if model_profile_policy is not None:
         effective_api_key = model_profile_policy.api_key
         effective_base_url = model_profile_policy.base_url
@@ -765,7 +774,17 @@ async def _generate_social_copy(
                 "tokens_per_minute": req.llm_tokens_per_minute,
             },
             recovered_profile_overrides,
+            include_quota_user_id=True,
         )
+        if model_profile_provider_unresolved(
+            scenario,
+            recovered_profile_overrides,
+            explicit_api_key=req.llm_api_key,
+            explicit_base_url=req.llm_base_url,
+            explicit_model=req.llm_model,
+        ):
+            raise_unresolved_model_profile_provider()
+        recovered_quota_user_id = request_overrides.get("quota_user_id")
         effective_llm = resolve_post_completion_llm_call_config(
             parsed_context=provider_policy,
             request_api_key=request_overrides.get("api_key"),
@@ -794,6 +813,12 @@ async def _generate_social_copy(
     quota_key = resolve_authenticated_user_id(req.user_id, principal)
     if quota_key is None:
         quota_key = owner_user_id
+    if quota_key is None:
+        quota_key = (
+            recovered_quota_user_id
+            if isinstance(recovered_quota_user_id, str)
+            else None
+        )
     if quota_key is None:
         context_user_id = provider_policy.get("user_id")
         quota_key = context_user_id if isinstance(context_user_id, str) else None

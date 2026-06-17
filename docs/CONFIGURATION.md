@@ -43,6 +43,10 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 `GET /api/capabilities` 会返回零成本字段 `llm_configured: boolean`。它等于服务端静态 LLM 配置或本地模型 profile 探测的合并结果：`llm_static_configured` 表示 `.env` / Docker 配置是否可用，`llm_profile_configured` 表示 `FEATURE_MODEL_PROFILES=true` 且当前用户有至少一个带 API key 的 profile。任一为 `true` 时，首页都不会再把 LLM 视为未配置。这个探测不会调用 `health_check()`，不会发起 LLM 或网络请求，也不会回显 profile 的 API key。
 
+模型 profile 还可以保存 RPM/TPM、并发上限，以及结构化输出 / 原生搜索的三态能力覆盖（自动检测、强制开启、强制关闭）。自动检测会把字段保存为 `null`，运行时跟随 provider capability；只有强制开启 / 关闭才写入明确布尔值。这些字段会进入主推演、multi-run、预测评分、社交文案、可生成式头条卡和报告生成等 LLM 调用链；profile 并发只会收紧有效上限，最终仍受全局并发、全局 pending、用户 pending 和用途 lane 限制。
+
+保存过 `model_profile_id` 的 scenario 在报告、续跑 / 重放分支、分支标题重写、社交文案和评分等后续 LLM 调用里会尝试恢复同一个 profile。恢复只允许当前用户自己的 profile；缺少用户归属时只在本地单用户 profile 库里按 id 恢复。若 profile 已删除、归属不匹配或无法安全确认，后端会 fail closed，要求重新选择 profile，或在本次请求里同时提供 API key、Base URL 和模型。社交头条卡不满足安全恢复条件时会退回确定性卡片，而不是调用错误的 provider。
+
 静态配置仍按原规则判断：当运行时仍是占位 URL（`http://127.0.0.1:8317/v1`、`http://localhost:8317/v1` 或 `http://host.docker.internal:8317/v1`），且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时，`llm_static_configured=false`；配置了真实 key，或显式改到其它 endpoint 时为 `true`。
 
 已知限制：如果你真实使用的本地 OpenAI-compatible 代理刚好也是 `:8317/v1` 且不需要 API key，静态配置探测会把它当作未配置；保存一个带 key 的 model profile 仍会让 `llm_configured` 变为 `true`。首页提示可以关闭，诊断按钮仍可用于确认实际连通性。
@@ -86,7 +90,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
 | `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
 | `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包，并把包内素材带入推演。 |
-| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页视为已配置 LLM，并可在启动推演时选择。 |
+| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页视为已配置 LLM，并可在启动推演时选择。Profile 可保存限速、并发和结构化输出 / 原生搜索能力覆盖。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
 
@@ -96,7 +100,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 还有几个后端内部/实验开关默认保持关闭，不作为普通用户入口介绍：`FEATURE_ROUNDTABLE_INSIGHT_LLM`、`FEATURE_HALLUCINATION_GATE`、`FEATURE_IDENTITY_COMPACTION`。
 
-`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现完整报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。重试会沿用当前标签页的 BYOK provider policy；`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
+`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现完整报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。报告正文使用安全 Markdown 渲染，支持 GFM 表格和删除线，不放行图片。重试会沿用当前标签页的 BYOK provider policy；`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
 
 > 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
 

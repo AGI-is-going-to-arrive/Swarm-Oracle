@@ -33,7 +33,8 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 - **Custom Agents**: Create, import, and export your own characters in the Agent Workshop.
 - **Prediction journal and leaderboard**: Record predictions, review calibration, and view the global leaderboard.
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
-- **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API, with saved profiles selectable from the home page.
+- **Full report and evidence replay**: Generate a standalone report from the result page, jump evidence back to replay, and render table-friendly Markdown.
+- **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API, with saved profiles carrying rate limits, concurrency, and capability overrides selectable from the home page.
 
 > For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
 
@@ -59,7 +60,7 @@ Import a sanitized snapshot from `samples/snapshots/` to view an offline demo wi
 
 ### Tier 3: BYOK Full Run
 
-Configure your own OpenAI-compatible LLM service and run full simulations. Docker and local development use the same core configuration keys; you can also save a model profile from `/admin/setup`, and the home page treats profiles with a key as configured LLM access.
+Configure your own OpenAI-compatible LLM service and run full simulations. Docker and local development use the same core configuration keys; you can also save a model profile from `/admin/setup` with its Base URL, model, key, rate limits, concurrency, and structured-output / native-search capability overrides. The home page treats profiles with a key as configured LLM access. If later LLM-backed paths cannot recover the original profile, they ask you to reselect it or provide a complete key / Base URL / model instead of silently switching credentials.
 
 ## Quick Start
 

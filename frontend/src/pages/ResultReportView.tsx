@@ -7,6 +7,46 @@ import type { Scenario, StoryData } from '../types';
 import { ResultContextProvider } from './result/ResultContext';
 import { ResultReportPanel } from './result/ResultReportPanel';
 import { ProgressIndicator } from '../components/ProgressIndicator';
+import './ResultView.css';
+import './ResultReportView.css';
+
+interface ReportStatePanelProps {
+  title?: string;
+  desc: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  isPrimary?: boolean;
+}
+
+function ReportStatePanel({ title, desc, actionLabel, onAction, isPrimary = false }: ReportStatePanelProps) {
+  return (
+    <div className="my-8">
+      <div className="report-panel-container flat-card">
+        <div className="flex flex-col items-center text-center">
+          {title && (
+            <h1 className="text-xl font-semibold text-[color:var(--text-primary)] mb-2">
+              {title}
+            </h1>
+          )}
+          <p className="text-sm text-[color:var(--text-secondary)] mb-5 max-w-md">
+            {desc}
+          </p>
+          {actionLabel && onAction && (
+            <div>
+              <button
+                type="button"
+                onClick={onAction}
+                className={isPrimary ? 'btn btn-primary' : 'btn'}
+              >
+                {actionLabel}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function ResultReportView() {
   const { id } = useParams<{ id: string }>();
@@ -55,7 +95,7 @@ export default function ResultReportView() {
 
   if (capLoading) {
     return (
-      <div className="p-4 sm:p-8 max-w-4xl mx-auto">
+      <div className="result-report-view">
         <ProgressIndicator currentStep={4} />
         <div className="mt-8 animate-pulse motion-reduce:animate-none space-y-4">
           <div className="h-8 bg-[color:var(--bg-hover)] rounded w-1/3" />
@@ -68,31 +108,20 @@ export default function ResultReportView() {
 
   if (capError) {
     return (
-      <div className="min-h-screen bg-[color:var(--bg-base)] py-8">
-        <div className="max-w-4xl mx-auto px-4">
-          <div className="mb-6 flex justify-between items-center">
-            <button
-              type="button"
-              onClick={() => navigate(`/result/${id}`)}
-              className="text-[color:var(--text-secondary)] hover:text-[color:var(--color-primary)] flex items-center space-x-2 rounded focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)]"
-            >
-              <span aria-hidden="true">←</span>
-              <span>{t('result.report.backToOverview')}</span>
-            </button>
-          </div>
-          <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center text-center forced-colors:border">
-            <p className="text-sm text-[color:var(--text-secondary)] mb-4">
-              {t('result.report.couldNotConfirmAvailability')}
-            </p>
-            <button
-              type="button"
-              onClick={() => void reloadCap?.()}
-              className="px-5 py-2 rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-hover)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] forced-colors:border transition-colors motion-reduce:transition-none"
-            >
-              {t('result.report.retry')}
-            </button>
-          </div>
-        </div>
+      <div className="result-report-view">
+        <button
+          type="button"
+          onClick={() => navigate(`/result/${id}`)}
+          className="btn btn-ghost result-back"
+        >
+          <span aria-hidden="true">←</span>
+          <span>{t('result.report.backToOverview')}</span>
+        </button>
+        <ReportStatePanel
+          desc={t('result.report.couldNotConfirmAvailability')}
+          actionLabel={t('result.report.retry')}
+          onAction={() => void reloadCap?.()}
+        />
       </div>
     );
   }
@@ -100,41 +129,29 @@ export default function ResultReportView() {
   // F4: Render friendly "Feature Not Enabled" panel with return button if disabled.
   if (!isReportEnabled) {
     return (
-      <div className="min-h-screen bg-[color:var(--bg-base)] py-8">
-        <div className="max-w-4xl mx-auto px-4">
-          <div className="mb-6 flex justify-between items-center">
-            <button
-              type="button"
-              onClick={() => navigate(`/result/${id}`)}
-              className="text-[color:var(--text-secondary)] hover:text-[color:var(--color-primary)] flex items-center space-x-2 rounded focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)]"
-            >
-              <span aria-hidden="true">←</span>
-              <span>{t('result.report.backToOverview')}</span>
-            </button>
-          </div>
-          <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center text-center forced-colors:border">
-            <h1 className="text-xl font-semibold text-[color:var(--text-primary)] mb-2">
-              {t('result.report.featureNotEnabled')}
-            </h1>
-            <p className="text-sm text-[color:var(--text-secondary)] mb-5 max-w-md">
-              {t('result.report.featureNotEnabledDesc')}
-            </p>
-            <button
-              type="button"
-              onClick={() => navigate(`/result/${id}`)}
-              className="px-5 py-2 rounded border border-[color:var(--border-default)] bg-[color:var(--color-primary)] text-white hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] forced-colors:border transition-colors motion-reduce:transition-none"
-            >
-              {t('result.report.backToOverview')}
-            </button>
-          </div>
-        </div>
+      <div className="result-report-view">
+        <button
+          type="button"
+          onClick={() => navigate(`/result/${id}`)}
+          className="btn btn-ghost result-back"
+        >
+          <span aria-hidden="true">←</span>
+          <span>{t('result.report.backToOverview')}</span>
+        </button>
+        <ReportStatePanel
+          title={t('result.report.featureNotEnabled')}
+          desc={t('result.report.featureNotEnabledDesc')}
+          actionLabel={t('result.report.backToOverview')}
+          onAction={() => navigate(`/result/${id}`)}
+          isPrimary={true}
+        />
       </div>
     );
   }
 
   if (loading) {
     return (
-      <div className="p-4 sm:p-8 max-w-4xl mx-auto">
+      <div className="result-report-view">
         <ProgressIndicator currentStep={4} />
         <div className="mt-8 animate-pulse motion-reduce:animate-none space-y-4">
           <div className="h-8 bg-[color:var(--bg-hover)] rounded w-1/3" />
@@ -147,34 +164,21 @@ export default function ResultReportView() {
 
   if (loadError) {
     return (
-      <div className="min-h-screen bg-[color:var(--bg-base)] py-8">
-        <div className="max-w-4xl mx-auto px-4">
-          <div className="mb-6 flex justify-between items-center">
-            <button
-              type="button"
-              onClick={() => navigate(`/result/${id}`)}
-              className="text-[color:var(--text-secondary)] hover:text-[color:var(--color-primary)] flex items-center space-x-2 rounded focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)]"
-            >
-              <span aria-hidden="true">←</span>
-              <span>{t('result.report.backToOverview')}</span>
-            </button>
-          </div>
-          <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center text-center forced-colors:border">
-            <h1 className="text-xl font-semibold text-[color:var(--text-primary)] mb-2">
-              {t('result.report.couldNotLoadReport')}
-            </h1>
-            <p className="text-sm text-[color:var(--text-secondary)] mb-5 max-w-md">
-              {t('result.report.loadReportErrorDesc')}
-            </p>
-            <button
-              type="button"
-              onClick={refetch}
-              className="px-5 py-2 rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-hover)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] forced-colors:border transition-colors motion-reduce:transition-none"
-            >
-              {t('result.report.retry')}
-            </button>
-          </div>
-        </div>
+      <div className="result-report-view">
+        <button
+          type="button"
+          onClick={() => navigate(`/result/${id}`)}
+          className="btn btn-ghost result-back"
+        >
+          <span aria-hidden="true">←</span>
+          <span>{t('result.report.backToOverview')}</span>
+        </button>
+        <ReportStatePanel
+          title={t('result.report.couldNotLoadReport')}
+          desc={t('result.report.loadReportErrorDesc')}
+          actionLabel={t('result.report.retry')}
+          onAction={refetch}
+        />
       </div>
     );
   }
@@ -196,24 +200,28 @@ export default function ResultReportView() {
 
   return (
     <ResultContextProvider value={contextValue}>
-      <div className="min-h-screen bg-[color:var(--bg-base)] py-8">
-        <div className="max-w-4xl mx-auto px-4">
-          <div className="mb-6 flex justify-between items-center">
-            <button
-              type="button"
-              onClick={() => navigate(`/result/${id}`)}
-              className="text-[color:var(--text-secondary)] hover:text-[color:var(--color-primary)] flex items-center space-x-2 rounded focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)]"
-            >
-              <span aria-hidden="true">←</span>
-              <span>{t('result.report.backToOverview')}</span>
-            </button>
-          </div>
-          {/* Standalone page owns the <h1>; the panel renders its title as <h2>. */}
-          <h1 className="text-3xl font-bold text-[color:var(--text-primary)] mb-4">
+      <div className="result-report-view">
+        <button
+          type="button"
+          onClick={() => navigate(`/result/${id}`)}
+          className="btn btn-ghost result-back"
+        >
+          <span aria-hidden="true">←</span>
+          <span>{t('result.report.backToOverview')}</span>
+        </button>
+
+        <header className="result-header">
+          <h1 className="result-title">
             {t('result.report.fullReport')}
           </h1>
-          <ResultReportPanel variant="standalone" onRefresh={refetch} />
-        </div>
+          {storyData?.question && (
+            <div className="result-question">
+              {storyData.question}
+            </div>
+          )}
+        </header>
+
+        <ResultReportPanel variant="standalone" onRefresh={refetch} />
       </div>
     </ResultContextProvider>
   );

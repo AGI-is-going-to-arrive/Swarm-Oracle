@@ -2,7 +2,7 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, and the home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
+This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, and structured-output / native-search capability overrides. The home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
 
 For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 
@@ -16,7 +16,7 @@ For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 2. Optional: adjust **simulation rounds** and **Agent count**. More rounds and more characters produce richer endings, but also take longer. The home page estimates runtime as you adjust them.
 3. Select **Start Simulation**, wait for the run to finish, then select **View Results**.
 
-During the run you will see the **Agent list** on the left, the **branch tree** in the middle, and **live dialogue** on the right. Agents speak round by round and respond to each other.
+During the run you will see the **Agent list** on the left, the **branch tree** in the middle, and **live dialogue** on the right. Agents speak round by round and respond to each other. If the model returns an empty turn or something shaped like a prompt template / source snippet, the page shows a safe placeholder instead of exposing internal prompt content.
 
 ---
 
@@ -27,7 +27,7 @@ After a simulation finishes, the result page shows:
 - **Prediction verdict**: a direct answer to your original question, with confidence and uncertainty notes when available.
 - **Worldline cards**: each ending has a title, probability, story, and answer to the original question.
 - **Next-step entries**: depending on the data and server settings, the page shows Oracle Chambers, Roundtable, branch comparison, graph workbench, Knowledge Graph Explorer, Timeline Galaxy, Agent follow-up, and sharing entries.
-- **Full report**: the result page shows a report entry with key conclusions, evidence, and uncertainty notes. The evidence drawer can jump back to the cited replay message; you can also open the report at `/result/:id/report` or retry generation there. The report disclaimer follows the current interface language.
+- **Full report**: the result page shows a report entry with key conclusions, evidence, and uncertainty notes. The evidence drawer can jump back to the cited replay message; you can also open the report at `/result/:id/report` or retry generation there. Report body content supports safe table-friendly Markdown, and the disclaimer follows the current interface language.
 
 Common buttons under an ending card:
 
@@ -79,7 +79,7 @@ Select **View Causal Graph** to see which events caused later events. Select **G
 - **Prediction Journal**: open `/me/journal` to record your probability forecast, mark the outcome later, and review calibration.
 - **Snapshot import / export**: import a scenario snapshot ZIP from the home page, or export the current scenario snapshot from the result page.
 - **Replay Trace**: open `/replay/:id` to inspect where counterfactual and continuation branches came from.
-- **Full report**: available by default on the result page and at `/result/:id/report`; generating, partial, failed, and oversized reports show explicit states. Retry generation uses the BYOK settings from the current tab. If the server disables `FEATURE_RESULT_REPORT`, the entry is hidden or shown as unavailable.
+- **Full report**: available by default on the result page and at `/result/:id/report`; generating, partial, failed, and oversized reports show explicit states. Retry generation uses the BYOK settings from the current tab; if the original profile cannot be recovered, reselect the profile or fill in a complete provider. If the server disables `FEATURE_RESULT_REPORT`, the entry is hidden or shown as unavailable.
 
 ---
 

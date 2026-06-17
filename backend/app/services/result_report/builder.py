@@ -84,6 +84,7 @@ class ReportGenerationOverrides:
     api_key: str | None = None
     base_url: str | None = None
     model: str | None = None
+    quota_user_id: str | None = None
     requests_per_minute: int | None = None
     tokens_per_minute: int | None = None
     concurrency: int | None = None
@@ -174,6 +175,12 @@ def _report_runtime_lock_lease_seconds() -> float:
     return max(60.0, settings.REPORT_PLAN_TIMEOUT_SECONDS + section_budget + 60.0)
 
 
+def _report_sse_stall_timeout_seconds() -> float:
+    """Maximum visible silence before a manual SSE retry fails closed."""
+
+    return _report_runtime_lock_lease_seconds() + 5.0
+
+
 def _report_llm_scope_kwargs(
     context: BuilderContext,
     overrides: ReportGenerationOverrides | None,
@@ -184,7 +191,9 @@ def _report_llm_scope_kwargs(
         (overrides.base_url if overrides else None)
         or parsed_context.get("llm_base_url")
     )
-    user_id = parsed_context.get("user_id")
+    user_id = (overrides.quota_user_id if overrides else None) or parsed_context.get(
+        "user_id"
+    )
     disable_user_quota = bool(parsed_context.get("disable_user_quota"))
     if disable_user_quota and is_local_provider_url(effective_base_url):
         scope_kwargs["quota_key"] = None
@@ -442,15 +451,6 @@ async def _build_report_unlocked(
             truncated_agents=0,
             message="Report sections failed before interviews could run.",
         )
-    elif final_tier == "static":
-        interview_evidence = []
-        interview_status = InterviewStatus(
-            status="skipped",
-            requested_agents=0,
-            completed_agents=0,
-            truncated_agents=0,
-            message="Static fallback report did not run interview generation.",
-        )
     else:
         interview_evidence, interview_status = await _build_interview_evidence(
             context,
@@ -535,6 +535,8 @@ async def build_report_sse_stream(
         )
     )
     last_heartbeat = time.monotonic()
+    last_progress = last_heartbeat
+    stall_timeout_seconds = _report_sse_stall_timeout_seconds()
 
     try:
         while not task.done() or not queue.empty():
@@ -542,10 +544,39 @@ async def build_report_sse_stream(
                 event = await asyncio.wait_for(queue.get(), timeout=0.05)
             except TimeoutError:
                 now = time.monotonic()
+                if not task.done() and now - last_progress >= stall_timeout_seconds:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(
+                            _persist_failed_report_if_absent,
+                            scenario_id,
+                            dominant_branch_id,
+                        )
+                    yield encode_sse_event(
+                        ResultReportSSEEvent(
+                            event="report_failed",
+                            data={
+                                "report_id": scenario_id,
+                                "status": "failed",
+                                "error_code": "REPORT_TIMEOUT",
+                                "message": "Result report generation timed out",
+                            },
+                        ),
+                    )
+                    yield encode_sse_event(
+                        ResultReportSSEEvent(
+                            event="report_complete",
+                            data={"report_id": scenario_id, "status": "failed"},
+                        ),
+                    )
+                    return
                 if now - last_heartbeat >= _SSE_HEARTBEAT_INTERVAL_SECONDS:
                     last_heartbeat = now
                     yield ": keepalive\n\n"
                 continue
+            last_progress = time.monotonic()
             yield encode_sse_event(event)
 
         try:
@@ -1903,7 +1934,7 @@ def _persist_failed_report_if_absent(
             else {}
         )
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
-        if existing is not None:
+        if existing is not None and existing.status != "generating":
             return existing
 
         branch = _load_failed_report_branch(session, scenario_id, dominant_branch_id)
@@ -2171,6 +2202,7 @@ def _normalize_overrides(
         api_key=api_key or None,
         base_url=base_url or None,
         model=model or None,
+        quota_user_id=_normalize_optional_text(overrides.get("quota_user_id")),
         requests_per_minute=_normalize_positive_int(
             overrides.get("requests_per_minute")
         ),
@@ -2188,6 +2220,13 @@ def _normalize_overrides(
 
 def _normalize_optional_bool(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
 
 
 def _normalize_positive_int(value: Any) -> int | None:

@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { memo } from 'react';
 
@@ -11,6 +12,7 @@ function SafeMarkdownImpl({ children, className }: SafeMarkdownProps) {
   return (
     <div className={className}>
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
         disallowedElements={['img']}
         unwrapDisallowed

@@ -28,6 +28,7 @@ from app.services.llm_client import (
     llm_request_scope,
     safe_llm_error_payload,
 )
+from app.services.simulator import _silent_turn_placeholder, validate_and_sanitize_turn
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class SurveyParticipantContext:
     display_name: str
     role: str
     persona: str
+    language: str
     agent_identity_id: str | None
     source_agent_id: str | None
     source_branch_id: str | None
@@ -353,6 +355,7 @@ def _load_participant_contexts(
                         language,
                     ),
                     persona=_resolve_persona(snapshot, parsed_agent, source_agent),
+                    language=language,
                     agent_identity_id=identity_id,
                     source_agent_id=participant.source_agent_id,
                     source_branch_id=participant.source_branch_id,
@@ -402,8 +405,21 @@ def _build_survey_prompt(
         participant.persona,
         max_chars=800,
     )
+    if participant.language == "zh":
+        anchor_prefix = (
+            f"你现在只作为「{participant.display_name}」回应当前圆桌问题。"
+            "只用第一人称纯文本回复，不要调用工具，不要输出元信息、代码、"
+            "文件路径、prompt 模板或 role 标签。"
+        )
+    else:
+        anchor_prefix = (
+            f"You are answering only as {participant.display_name}. "
+            "Reply in first-person plain text only. Do not call tools, and do not output "
+            "metadata, code, file paths, prompt templates, or role labels."
+        )
     memory_block = _build_memory_block(participant.memories)
     prompt_parts = [
+        anchor_prefix,
         "You are a participant in a Worldline Roundtable — a structured debate where "
         "representatives from divergent worldlines compare outcomes and defend their positions.",
         "Stay fully in character. Your opinions, reasoning, and emotional tone must reflect "
@@ -495,6 +511,24 @@ async def _run_single_survey_call(
                     type(exc).__name__,
                 )
                 answer = ""
+            if error_message is None:
+                clean_answer, reject_reason = validate_and_sanitize_turn(
+                    answer,
+                    participant.display_name,
+                    participant.language,
+                )
+                if clean_answer is None:
+                    logger.warning(
+                        "roundtable survey answer rejected participant_id=%s reason=%s",
+                        participant.participant_id,
+                        reject_reason,
+                    )
+                    answer = _silent_turn_placeholder(
+                        participant.display_name,
+                        participant.language,
+                    )
+                else:
+                    answer = clean_answer
     elapsed_ms = int((time.monotonic() - started) * 1000)
     payload: dict[str, Any] = {
         "participant_id": participant.participant_id,

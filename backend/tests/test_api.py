@@ -1155,7 +1155,160 @@ class TestByokValidation:
             "supports_structured_outputs_override": False,
             "supports_native_search_override": True,
             "model_profile_id": profile_id,
+            "quota_user_id": "report-owner",
         }
+
+    def test_report_generate_rehydrates_profile_by_id_for_local_single_user_run_group(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="local-report-owner",
+                name="Local single-user report profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="local-report-profile-model",
+                api_key="sk-local-report-profile",
+                rpm=31,
+                tpm=3100,
+                concurrency=7,
+                supports_structured_outputs=True,
+                supports_native_search=False,
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+            scenario = Scenario(
+                question="Can a non-primary report recover its local profile key?",
+                status=ScenarioStatus.DONE,
+                user_id=None,
+                run_group_id="report-run-group",
+                parsed_context={
+                    "_language": "English",
+                    "model_profile_id": profile_id,
+                    "multi_run": {
+                        "run_group_id": "report-run-group",
+                        "run_index": 2,
+                        "accepted_run_count": 2,
+                        "verdict_only": True,
+                    },
+                },
+                director_state_json={
+                    "multi_run": {
+                        "run_group_id": "report-run-group",
+                        "run_index": 2,
+                        "accepted_run_count": 2,
+                        "verdict_only": True,
+                    }
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Second worldline",
+                    probability=1.0,
+                    status=BranchStatus.COMPLETED,
+                    story="The second worldline can still generate a report.",
+                )
+            )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        async def _fake_report_stream(*args, **kwargs):
+            captured["args"] = args
+            captured["overrides"] = dict(kwargs.get("overrides") or {})
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _fake_report_stream,
+        )
+
+        with client.stream(
+            "POST",
+            f"/api/scenario/{scenario_id}/report:generate",
+        ) as response:
+            body = "".join(response.iter_text())
+
+        assert response.status_code == 200
+        assert "event: report_started" in body
+        assert "byok_invalid" not in body
+        assert "Unauthorized" not in body
+        assert captured["overrides"] == {
+            "api_key": "sk-local-report-profile",
+            "base_url": "https://api.openai.com/v1",
+            "model": "local-report-profile-model",
+            "requests_per_minute": 31,
+            "tokens_per_minute": 3100,
+            "temperature": None,
+            "concurrency": 7,
+            "supports_structured_outputs_override": True,
+            "supports_native_search_override": False,
+            "model_profile_id": profile_id,
+            "quota_user_id": "local-report-owner",
+        }
+
+    def test_report_generate_fails_closed_when_profile_pointer_is_unresolved(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        with Session(get_engine()) as session:
+            scenario = Scenario(
+                question="Does unresolved profile fallback to server default?",
+                status=ScenarioStatus.DONE,
+                user_id=None,
+                parsed_context={
+                    "_language": "English",
+                    "model_profile_id": "missing-report-profile",
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Missing profile branch",
+                    probability=1.0,
+                    status=BranchStatus.COMPLETED,
+                    story="The report should fail before calling the LLM.",
+                )
+            )
+            session.commit()
+
+        stream_called = False
+
+        async def _fake_report_stream(*_args, **_kwargs):
+            nonlocal stream_called
+            stream_called = True
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _fake_report_stream,
+        )
+
+        response = client.post(f"/api/scenario/{scenario_id}/report:generate")
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+        assert stream_called is False
 
     @pytest.mark.asyncio
     async def test_run_sim_background_rehydrates_profile_for_runtime_scope(
@@ -1233,6 +1386,7 @@ class TestByokValidation:
             "supports_structured_outputs_override": False,
             "supports_native_search_override": True,
             "model_profile_id": profile_id,
+            "quota_user_id": "runtime-owner",
         }
         assert captured["scope"] == {
             "purpose": "scenario_runtime",
@@ -2252,6 +2406,7 @@ class TestReplayArtifactEndpoints:
                 scenario = session.get(Scenario, run["scenario_id"])
                 assert scenario is not None
                 parsed_context = scenario.parsed_context or {}
+                assert parsed_context["user_id"] == "multi-run-owner"
                 assert parsed_context["model_profile_id"] == profile_id
                 assert "llm_base_url" not in parsed_context
                 assert "llm_model" not in parsed_context

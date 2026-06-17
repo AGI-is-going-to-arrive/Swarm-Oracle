@@ -373,6 +373,68 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
     }
 
 
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_social_copy_stored_profile_missing_fails_closed(
+    client: TestClient,
+    monkeypatch,
+    method: str,
+):
+    monkeypatch.setattr(settings, "FEATURE_SOCIAL_HEADLINES", True, raising=False)
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    monkeypatch.setattr(settings, "LLM_API_KEY", "sk-server-default", raising=False)
+    scenario_id = _seed_social_scenario(
+        user_id="social-owner",
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": "deleted-social-profile",
+            "llm_base_url": "https://legacy.example/v1",
+            "llm_model": "legacy-social-model",
+        },
+    )
+
+    async def unexpected_llm(_prompt: str, **_kwargs):
+        raise AssertionError("missing stored profile must fail before LLM work")
+
+    monkeypatch.setattr(social_api, "llm_call", unexpected_llm)
+
+    response = _request_social_copy(client, method, scenario_id, body={})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+
+def test_social_copy_stored_profile_missing_rejects_key_only_override(
+    client: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "FEATURE_SOCIAL_HEADLINES", True, raising=False)
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    scenario_id = _seed_social_scenario(
+        user_id="social-owner",
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": "deleted-social-profile",
+            "llm_base_url": "https://legacy.example/v1",
+            "llm_model": "legacy-social-model",
+        },
+    )
+
+    async def unexpected_llm(_prompt: str, **_kwargs):
+        raise AssertionError("key-only override must not inherit legacy provider")
+
+    monkeypatch.setattr(social_api, "llm_call", unexpected_llm)
+
+    response = _request_social_copy(
+        client,
+        "POST",
+        scenario_id,
+        body={"llm_api_key": "sk-new-request-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+
 def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
     scenario = Scenario(
         id="scenario-social-headlines",
@@ -504,7 +566,7 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "stored-headline-model"
     assert captured["scope"] == {
-        "quota_key": None,
+        "quota_key": "user:social-owner",
         "purpose": "social_headline_cards",
         "requests_per_minute": 41,
         "tokens_per_minute": 4100,
@@ -512,6 +574,45 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
         "supports_structured_outputs_override": True,
         "supports_native_search_override": False,
     }
+
+
+def test_social_headline_cards_stored_profile_missing_uses_deterministic_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    scenario = Scenario(
+        id="scenario-social-headlines-missing-profile",
+        question="What if harbor councils publish every correction?",
+        status=ScenarioStatus.DONE,
+        user_id="social-owner",
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": "deleted-headline-profile",
+            "llm_base_url": "https://legacy.example/v1",
+            "llm_model": "legacy-headline-model",
+        },
+    )
+    events = [
+        {
+            "event_id": "event_1",
+            "branch_id": "branch-1",
+            "round_number": 1,
+            "event_type": "stance_shift",
+            "title": "Harbor correction",
+            "summary": "The harbor coalition publishes every correction.",
+            "faction_label": "Harbor coalition",
+        }
+    ]
+
+    async def unexpected_llm(_prompt: str, **_kwargs):
+        raise AssertionError("missing stored profile must not use fallback LLM")
+
+    monkeypatch.setattr(social_api, "llm_call", unexpected_llm)
+
+    mode, cards = asyncio.run(social_api._generate_headline_cards(scenario, events))
+
+    assert mode == "deterministic"
+    assert cards == social_api._deterministic_headline_cards(events)
 
 
 def test_social_copy_quota_uses_authenticated_principal(

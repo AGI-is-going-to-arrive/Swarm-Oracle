@@ -165,6 +165,33 @@ def test_report_scope_kwargs_inherits_profile_runtime_fields():
     assert override_scope["supports_structured_outputs_override"] is True
     assert override_scope["supports_native_search_override"] is False
 
+    profile_only_context = builder.BuilderContext(
+        scenario_id="scenario-report-profile-only-scope",
+        question="Can profile-only reports keep their quota identity?",
+        language="en",
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": "profile-only-report",
+        },
+        branch_id="branch-a",
+        branch_title="Branch A",
+        branch_story="Story",
+        branch_insight="Insight",
+        web_context_blocks=[],
+    )
+    profile_overrides = builder._normalize_overrides(
+        {
+            "quota_user_id": "report-owner",
+            "concurrency": 3,
+        }
+    )
+    profile_scope = builder._report_llm_scope_kwargs(
+        profile_only_context,
+        profile_overrides,
+    )
+    assert profile_scope["quota_key"] == "user:report-owner"
+    assert profile_scope["concurrency"] == 3
+
 
 def _seed_report_faction_data(scenario_id: str) -> None:
     engine = get_engine()
@@ -796,6 +823,15 @@ async def test_static_tier_used_when_generation_and_rewrite_fail(monkeypatch):
             _outline_payload(["timeline"]),
             RuntimeError("generation failed"),
             RuntimeError("rewrite failed"),
+            {
+                "action": "interview_agents",
+                "interview_evidence": [
+                    {
+                        "agent_name": "Privacy Advocate",
+                        "excerpt": "Privacy safeguards make the approval defensible.",
+                    }
+                ],
+            },
         ],
     )
     monkeypatch.setattr(builder.settings, "REPORT_MIN_SECTIONS", 1)
@@ -811,11 +847,25 @@ async def test_static_tier_used_when_generation_and_rewrite_fail(monkeypatch):
     assert report.generation_mode == "static"
     assert report.tier == "static"
     assert report.sections[0].id == "timeline"
-    assert len(fake_llm.prompts) == 3
+    assert report.interview_evidence == [
+        {
+            "branch_index": 0,
+            "round": 1,
+            "agent_name": "Privacy Advocate",
+            "excerpt": "Privacy safeguards make the approval defensible.",
+        }
+    ]
+    assert report.interview_status is not None
+    assert report.interview_status.status == "partial"
+    assert report.interview_status.requested_agents == 2
+    assert report.interview_status.completed_agents == 1
+    assert len(fake_llm.prompts) == 4
     assert any("tier=generation" in prompt for prompt in fake_llm.prompts)
     assert any("tier=rewrite" in prompt for prompt in fake_llm.prompts)
+    assert any("REPORT_INTERVIEWS" in prompt for prompt in fake_llm.prompts)
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.generation_mode == "static"
+    assert persisted.interview_evidence == report.interview_evidence
 
 
 @pytest.mark.asyncio
@@ -1102,6 +1152,64 @@ async def test_build_report_releases_durable_lock_after_early_failure(monkeypatc
         persisted.model_dump(mode="json"),
         ensure_ascii=False,
     )
+
+
+def test_persist_failed_report_replaces_stale_generating_report():
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    failed = builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+    generating_payload = failed.model_dump(mode="json")
+    generating_payload["status"] = "generating"
+    builder._persist_report_payload(scenario_id, generating_payload)
+
+    replaced = builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+
+    assert replaced.status == "failed"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+
+
+def test_report_sse_stall_timeout_covers_full_report_budget():
+    from app.services.result_report import builder
+
+    assert (
+        builder._report_sse_stall_timeout_seconds()
+        >= builder._report_runtime_lock_lease_seconds()
+    )
+    assert (
+        builder._report_sse_stall_timeout_seconds()
+        > builder.settings.REPORT_SECTION_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_sse_stream_times_out_stalled_generation(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+
+    async def stalled_build_report(*_args: Any, **_kwargs: Any):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(builder, "build_report", stalled_build_report)
+    monkeypatch.setattr(builder, "_report_sse_stall_timeout_seconds", lambda: 0.01)
+
+    frames: list[str] = []
+    async for frame in builder.build_report_sse_stream(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    ):
+        frames.append(frame)
+
+    payload = "".join(frames)
+    assert "event: report_started" in payload
+    assert "event: report_failed" in payload
+    assert "REPORT_TIMEOUT" in payload
+    assert "event: report_complete" in payload
+    assert '"report_id": "scenario-report"' in payload
+    assert '"status": "failed"' in payload
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
 
 
 @pytest.mark.asyncio

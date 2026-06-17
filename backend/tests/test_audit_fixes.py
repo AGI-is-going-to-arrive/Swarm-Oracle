@@ -381,19 +381,27 @@ class TestForkPromptTemplateConsistency:
         en_template = _get_fork_prompt_template("English", variant)
 
         assert "通俗语言" in zh_template
-        assert "发生了什么" in zh_template
+        assert "最终世界状态如何回答原问题" in zh_template
+        assert "必须一眼回答原问题" in zh_template
+        assert "禁止内部术语/黑话" in zh_template
         assert "plain language" in en_template
-        assert "describe what happens" in en_template
+        assert "final world ending state that answers the original question" in en_template
+        assert "MUST answer the original question" in en_template
+        assert "Forbid insider terminology and internal jargon" in en_template
 
     def test_variant_a_examples_use_plain_modern_scenarios(self):
         zh_template = _get_fork_prompt_template("Chinese", "a")
         en_template = _get_fork_prompt_template("English", "a")
 
-        assert "先查源头再发声明" in zh_template
+        assert "人类每天点名鞠躬，被降为附庸" in zh_template
+        assert "地下复辟派起诉猫议会却败诉" in zh_template
+        assert "先查源头再发声明" not in zh_template
         assert "巩固粮道再北伐" not in zh_template
         assert "曹操集结二十万大军" not in zh_template
 
-        assert "Verify Source First" in en_template
+        assert "humans forced into daily bowing roll-call, demoted to vassals" in en_template
+        assert "underground restoration faction sues the cat council and loses" in en_template
+        assert "Verify Source First" not in en_template
         assert "Secure Supply Lines Before Northern Push" not in en_template
         assert "Cao Cao mobilizes" not in en_template
 

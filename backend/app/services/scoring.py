@@ -26,6 +26,8 @@ from app.services.llm_client import (
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
+    model_profile_provider_unresolved,
+    raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
     resolve_post_completion_llm_call_config,
 )
@@ -349,9 +351,19 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         scenario_id = pred.scenario_id
         scenario_question = scenario.question
         provider_policy = dict(scenario.parsed_context or {})
+        recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
+        if model_profile_provider_unresolved(
+            scenario,
+            recovered_profile_overrides,
+            explicit_api_key=overrides.get("api_key"),
+            explicit_base_url=overrides.get("base_url"),
+            explicit_model=overrides.get("model"),
+        ):
+            raise_unresolved_model_profile_provider()
         overrides = merge_profile_provider_overrides(
             overrides,
-            recover_profile_provider_overrides(session, scenario),
+            recovered_profile_overrides,
+            include_quota_user_id=True,
         )
         detected_lang = provider_policy.get("_language", "English")
         you_vs_oracle = _you_vs_oracle_result_for_prediction(pred, scenario.parsed_context)
@@ -393,7 +405,11 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
             "supports_native_search_override"
         ),
     )
-    quota_key = overrides.get("quota_key") or provider_policy.get("user_id")
+    quota_key = (
+        overrides.get("quota_key")
+        or overrides.get("quota_user_id")
+        or provider_policy.get("user_id")
+    )
 
     try:
         prompt_template = SCORING_PROMPTS.get(detected_lang, SCORING_PROMPTS["English"])
@@ -527,9 +543,22 @@ async def score_all_for_scenario(
             else {}
         )
         if scenario is not None:
+            recovered_profile_overrides = recover_profile_provider_overrides(
+                session,
+                scenario,
+            )
+            if model_profile_provider_unresolved(
+                scenario,
+                recovered_profile_overrides,
+                explicit_api_key=overrides.get("api_key"),
+                explicit_base_url=overrides.get("base_url"),
+                explicit_model=overrides.get("model"),
+            ):
+                raise_unresolved_model_profile_provider()
             overrides = merge_profile_provider_overrides(
                 overrides,
-                recover_profile_provider_overrides(session, scenario),
+                recovered_profile_overrides,
+                include_quota_user_id=True,
             )
         unscored = list(session.exec(
             select(Prediction).where(
