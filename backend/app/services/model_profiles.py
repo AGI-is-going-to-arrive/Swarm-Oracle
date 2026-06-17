@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 from app.api.errors import api_error
 from app.config import settings
 from app.models.model_profile import ModelProfile
-from app.services.llm_client import validate_llm_base_url
+from app.services.llm_client import normalize_native_search_upstream, validate_llm_base_url
 
 MODEL_PROFILE_STORAGE_NOTICE = (
     "API keys are stored in local plaintext SQLite for local single-user deployments."
@@ -28,6 +28,7 @@ class ResolvedProviderPolicy:
     concurrency: int | None = None
     supports_structured_outputs: bool | None = None
     supports_native_search: bool | None = None
+    native_search_upstream: str | None = None
     model_profile_id: str | None = None
 
     def llm_overrides(self) -> dict[str, Any]:
@@ -117,6 +118,7 @@ def serialize_model_profile(profile: ModelProfile) -> dict[str, Any]:
         "concurrency": profile.concurrency,
         "supports_structured_outputs": profile.supports_structured_outputs,
         "supports_native_search": profile.supports_native_search,
+        "native_search_upstream": profile.native_search_upstream,
         "storage_notice": MODEL_PROFILE_STORAGE_NOTICE,
         "created_at": profile.created_at.isoformat(),
         "updated_at": profile.updated_at.isoformat(),
@@ -186,6 +188,9 @@ def create_model_profile(session: Session, payload: dict[str, Any], user_id: str
         concurrency=_clean_limit(payload.get("concurrency"), field_name="concurrency"),
         supports_structured_outputs=payload.get("supports_structured_outputs"),
         supports_native_search=payload.get("supports_native_search"),
+        native_search_upstream=normalize_native_search_upstream(
+            payload.get("native_search_upstream")
+        ),
     )
     session.add(profile)
     session.commit()
@@ -245,6 +250,10 @@ def update_model_profile(
         profile.supports_structured_outputs = updates["supports_structured_outputs"]
     if "supports_native_search" in updates:
         profile.supports_native_search = updates["supports_native_search"]
+    if "native_search_upstream" in updates:
+        profile.native_search_upstream = normalize_native_search_upstream(
+            updates["native_search_upstream"]
+        )
 
     profile.updated_at = _now()
     session.add(profile)
@@ -322,5 +331,6 @@ def resolve_model_profile_policy(
         concurrency=profile.concurrency,
         supports_structured_outputs=profile.supports_structured_outputs,
         supports_native_search=profile.supports_native_search,
+        native_search_upstream=profile.native_search_upstream,
         model_profile_id=profile.id,
     )

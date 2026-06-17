@@ -616,6 +616,14 @@ export function ModelProfileManager() {
                   testButtonText={t('model_profiles.test_connection')}
                   testSuccessText={t('model_profiles.test_ok')}
                   testFailureText={t('model_profiles.test_failed')}
+                  includeNativeProbe
+                  supportsNativeSearch={
+                    supportsNativeSearch === 'on'
+                      ? true
+                      : supportsNativeSearch === 'off'
+                        ? false
+                        : null
+                  }
                   disabled={Boolean(isEditing && selectedProfile?.has_api_key && !keyCleared && !apiKey.trim())}
                   disabledHint={t('model_profiles.test_needs_key')}
                 />

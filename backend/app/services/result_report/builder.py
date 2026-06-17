@@ -25,6 +25,7 @@ from app.services.llm_client import (
     is_local_provider_url,
     llm_call_json,
     llm_request_scope,
+    normalize_native_search_upstream,
 )
 from app.services.result_report.reducer import TARGET_BRANCH_SORT, ReducerResult
 from app.services.result_report.reducer import reduce as reduce_report
@@ -90,6 +91,7 @@ class ReportGenerationOverrides:
     concurrency: int | None = None
     supports_structured_outputs_override: bool | None = None
     supports_native_search_override: bool | None = None
+    native_search_upstream_override: str | None = None
     temperature: float | None = None
 
 
@@ -223,6 +225,11 @@ def _report_llm_scope_kwargs(
         overrides.supports_native_search_override
         if overrides and overrides.supports_native_search_override is not None
         else _normalize_optional_bool(parsed_context.get("supports_native_search"))
+    )
+    scope_kwargs["native_search_upstream_override"] = (
+        overrides.native_search_upstream_override
+        if overrides and overrides.native_search_upstream_override is not None
+        else _normalize_native_search_upstream(parsed_context.get("native_search_upstream"))
     )
     return scope_kwargs
 
@@ -2214,12 +2221,22 @@ def _normalize_overrides(
         supports_native_search_override=_normalize_optional_bool(
             overrides.get("supports_native_search_override")
         ),
+        native_search_upstream_override=_normalize_native_search_upstream(
+            overrides.get("native_search_upstream_override")
+        ),
         temperature=normalized_temperature,
     )
 
 
 def _normalize_optional_bool(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _normalize_native_search_upstream(value: Any) -> str | None:
+    try:
+        return normalize_native_search_upstream(value)
+    except ValueError:
+        return None
 
 
 def _normalize_optional_text(value: Any) -> str | None:

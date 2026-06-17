@@ -72,9 +72,13 @@ from app.models import (
 from app.models.database import get_engine, get_session
 from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import (
+    _is_chat_completions_api,
+    _merge_provider_capability_overrides,
+    _resolve_llm_api_url,
     detect_provider,
     health_check,
     measure_provider_parallelism,
+    resolve_native_search_injection_decision,
     safe_llm_error_payload,
     validate_llm_base_url,
 )
@@ -126,6 +130,7 @@ _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
         "llm_concurrency",
         "mode",
         "model_profile_id",
+        "native_search_upstream",
         "simulation_rounds",
         "supports_native_search",
         "supports_structured_outputs",
@@ -636,6 +641,93 @@ def _build_web_search_server_hint() -> dict:
     return {**info, "method": "external", "provider": provider}
 
 
+def _build_native_search_probe_hint(
+    *,
+    llm_base_url: str | None,
+    supports_native_search_override: bool | None,
+    native_search_upstream_override: str | None,
+) -> dict[str, object]:
+    """Static native-search injection gate for /health/test; does not call a provider."""
+    target_url = _resolve_llm_api_url(llm_base_url)
+    is_chat = _is_chat_completions_api(target_url)
+    provider = detect_provider(llm_base_url or target_url)
+    merged = _merge_provider_capability_overrides(
+        provider,
+        supports_structured_outputs_override=None,
+        supports_native_search_override=supports_native_search_override,
+    )
+    decision = resolve_native_search_injection_decision(
+        provider_profile=merged,
+        is_chat=is_chat,
+        native_search_upstream_override=native_search_upstream_override,
+        native_search_domains=None,
+    )
+    return {
+        "would_inject_tools": decision.would_inject_tools,
+        "blocking_reasons": list(decision.blocking_reasons),
+        "message": _build_native_search_probe_message(
+            provider=decision.provider,
+            is_proxy=decision.is_proxy,
+            api_form=decision.api_form,
+            supports_native_search=decision.supports_native_search,
+            adapter_name=decision.adapter_name,
+            would_inject_tools=decision.would_inject_tools,
+        ),
+        "detail": {
+            "provider": decision.provider,
+            "is_proxy": decision.is_proxy,
+            "api_form": decision.api_form,
+            "adapter": decision.adapter_name,
+            "supports_native_search": decision.supports_native_search,
+            "native_search_upstream": decision.native_search_upstream,
+        },
+    }
+
+
+def _build_native_search_probe_message(
+    *,
+    provider: str,
+    is_proxy: bool,
+    api_form: str,
+    supports_native_search: bool,
+    adapter_name: str,
+    would_inject_tools: bool,
+) -> str:
+    if would_inject_tools:
+        return (
+            f"当前 base_url 被识别为真实 provider(provider={provider}),端点为 Responses "
+            "形态,provider 能力位与 native search adapter 均满足;实际推演在选择 "
+            "Source Family 后会注入 native 搜索 tools。"
+        )
+    if is_proxy:
+        return (
+            f"当前 base_url 被识别为本地/代理 provider(provider={provider}, "
+            f"is_proxy=True),端点为 {api_form} 形态;native 搜索要求真实 provider"
+            "(如 xAI/OpenAI)且走 Responses 端点(URL 以 /responses 结尾),把控件设为"
+            "'是'也无法对本地/代理生效。"
+        )
+    if api_form == "chat":
+        return (
+            f"当前 provider={provider} 使用 chat completions 形态;native 搜索只会在 "
+            "Responses 端点注入 tools。请把 base_url 改为以 /responses 结尾。"
+        )
+    if not supports_native_search:
+        return (
+            f"当前 provider={provider} 的 native search 能力位为 False;如果你确认该模型"
+            "支持原生搜索,可把“支持原生搜索”控件设为“是”,但仍必须满足真实 provider、"
+            "非代理和 Responses 端点。"
+        )
+    if adapter_name == "null":
+        return (
+            f"当前 provider={provider} 没有可用 native search adapter;目前只有 xAI/OpenAI "
+            "Responses adapter 会生成 native 搜索 tools。"
+        )
+    return (
+        f"当前 provider={provider} 未满足 native 搜索注入门;请确认 base_url 使用真实 "
+        "provider 的 Responses 端点,并且 provider capability 与 adapter 均可用。"
+    )
+
+
 def _capability_entry(
     enabled: bool = False,
     version: str = "0.0",
@@ -917,6 +1009,13 @@ async def api_health_test(req: TestLlmRequest):
     validated_base_url = validate_llm_base_url(req.llm_base_url)
     if req.llm_base_url and validated_base_url is None:
         raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+    native_search = None
+    if req.include_native_probe:
+        native_search = _build_native_search_probe_hint(
+            llm_base_url=validated_base_url,
+            supports_native_search_override=req.supports_native_search_override,
+            native_search_upstream_override=req.native_search_upstream_override,
+        )
     llm_status = await health_check(
         api_key=req.llm_api_key or None,
         base_url=validated_base_url,
@@ -936,6 +1035,7 @@ async def api_health_test(req: TestLlmRequest):
         "llm": llm_status,
         "probe": probe,
         "web_search": _build_web_search_server_hint(),
+        "native_search": native_search,
     }
 
 
@@ -1018,6 +1118,7 @@ async def create_multi_run_scenarios(
     resolved_concurrency = None
     resolved_supports_structured_outputs = None
     resolved_supports_native_search = None
+    resolved_native_search_upstream = None
     if req.model_profile_id:
         with Session(engine) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -1040,6 +1141,7 @@ async def create_multi_run_scenarios(
             model_profile_policy.supports_structured_outputs
         )
         resolved_supports_native_search = model_profile_policy.supports_native_search
+        resolved_native_search_upstream = model_profile_policy.native_search_upstream
 
     requested_run_count, accepted_run_count = _clamp_multi_run_count(req.run_count)
     run_group_id = str(uuid.uuid4())
@@ -1142,6 +1244,7 @@ async def create_multi_run_scenarios(
                     concurrency=resolved_concurrency,
                     supports_structured_outputs=resolved_supports_structured_outputs,
                     supports_native_search=resolved_supports_native_search,
+                    native_search_upstream=resolved_native_search_upstream,
                     disable_user_quota=req.disable_user_quota,
                     custom_agent_identity_ids=req.custom_agent_identity_ids,
                     continuity_overrides=[
@@ -1365,6 +1468,7 @@ async def create_scenario(
     resolved_concurrency = None
     resolved_supports_structured_outputs = None
     resolved_supports_native_search = None
+    resolved_native_search_upstream = None
     if req.model_profile_id:
         with Session(engine) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -1387,6 +1491,7 @@ async def create_scenario(
             model_profile_policy.supports_structured_outputs
         )
         resolved_supports_native_search = model_profile_policy.supports_native_search
+        resolved_native_search_upstream = model_profile_policy.native_search_upstream
 
     if req.continuity_overrides and not effective_user_id:
         raise api_error(
@@ -1633,6 +1738,7 @@ async def create_scenario(
         concurrency=resolved_concurrency,
         supports_structured_outputs=resolved_supports_structured_outputs,
         supports_native_search=resolved_supports_native_search,
+        native_search_upstream=resolved_native_search_upstream,
         disable_user_quota=req.disable_user_quota,
         custom_agent_identity_ids=req.custom_agent_identity_ids,
         continuity_overrides=[

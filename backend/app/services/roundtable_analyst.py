@@ -493,6 +493,7 @@ async def build_roundtable_analyst_stream(
     concurrency: int | None = None,
     supports_structured_outputs_override: bool | None = None,
     supports_native_search_override: bool | None = None,
+    native_search_upstream_override: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Prepare and return the analyst SSE event stream."""
 
@@ -508,6 +509,7 @@ async def build_roundtable_analyst_stream(
             concurrency=concurrency,
             supports_structured_outputs_override=supports_structured_outputs_override,
             supports_native_search_override=supports_native_search_override,
+            native_search_upstream_override=native_search_upstream_override,
         ):
             for iteration in range(1, MAX_ANALYST_ITERATIONS + 1):
                 prompt = _build_analyst_prompt(context, normalized_question, history_blocks)

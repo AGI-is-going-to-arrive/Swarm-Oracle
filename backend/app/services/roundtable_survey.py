@@ -469,6 +469,7 @@ async def _run_single_survey_call(
     concurrency: int | None,
     supports_structured_outputs_override: bool | None,
     supports_native_search_override: bool | None,
+    native_search_upstream_override: str | None,
 ) -> dict[str, Any]:
     prompt = _build_survey_prompt(participant, question)
     started = time.monotonic()
@@ -480,6 +481,7 @@ async def _run_single_survey_call(
             concurrency=concurrency,
             supports_structured_outputs_override=supports_structured_outputs_override,
             supports_native_search_override=supports_native_search_override,
+            native_search_upstream_override=native_search_upstream_override,
         ):
             try:
                 answer = await llm_call(
@@ -559,6 +561,7 @@ async def build_roundtable_survey_stream(
     concurrency: int | None = None,
     supports_structured_outputs_override: bool | None = None,
     supports_native_search_override: bool | None = None,
+    native_search_upstream_override: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Prepare and return the survey SSE event stream."""
 
@@ -593,6 +596,7 @@ async def build_roundtable_survey_stream(
                         supports_structured_outputs_override
                     ),
                     supports_native_search_override=supports_native_search_override,
+                    native_search_upstream_override=native_search_upstream_override,
                 )
             )
             for participant in participant_contexts

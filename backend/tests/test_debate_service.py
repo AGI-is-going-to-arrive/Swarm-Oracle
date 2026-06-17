@@ -1101,6 +1101,7 @@ async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
             "concurrency": 5,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": None,
+            "native_search_upstream_override": "xai_responses",
         },
     )
 
@@ -1116,6 +1117,7 @@ async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
         "concurrency": 5,
         "supports_structured_outputs_override": False,
         "supports_native_search_override": None,
+        "native_search_upstream_override": "xai_responses",
     }]
 
 

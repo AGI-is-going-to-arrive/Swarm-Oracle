@@ -229,6 +229,9 @@ async def _enhance_roundtable_phase_insights(
                     supports_native_search_override=overrides.get(
                         "supports_native_search_override"
                     ),
+                    native_search_upstream_override=overrides.get(
+                        "native_search_upstream_override"
+                    ),
                 ):
                     raw_output = await asyncio.wait_for(
                         llm_call(
@@ -2481,6 +2484,9 @@ async def _maybe_rewrite_oracle_copy(
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
             ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             legacy_call = (
@@ -2592,6 +2598,9 @@ async def _maybe_rewrite_oracle_copy(
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
             ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             result = await asyncio.wait_for(
@@ -2651,6 +2660,9 @@ async def _maybe_rewrite_oracle_copy(
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
             ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
+            ),
         ):
             import app.services.ending_room_service as _pkg
             plain_result = await asyncio.wait_for(
@@ -2704,6 +2716,9 @@ async def _maybe_rewrite_oracle_copy(
                     ),
                     supports_native_search_override=overrides.get(
                         "supports_native_search_override"
+                    ),
+                    native_search_upstream_override=overrides.get(
+                        "native_search_upstream_override"
                     ),
                 ):
                     import app.services.ending_room_service as _pkg_r
@@ -2797,6 +2812,9 @@ async def _oracle_followup_streaming_supported(
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
             ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
+            ),
         ):
             probe = await _pkg.probe_streaming_support(
                 model=overrides.get("model") or settings.LLM_MODEL_NAME,
@@ -2862,6 +2880,9 @@ async def _stream_oracle_copy(
             ),
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
+            ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
             ),
         ):
             import app.services.ending_room_service as _pkg

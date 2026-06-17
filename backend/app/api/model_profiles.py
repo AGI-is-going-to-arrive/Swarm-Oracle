@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, ConfigDict
@@ -26,6 +26,13 @@ from app.services.model_profiles import (
     update_model_profile,
 )
 
+NativeSearchUpstreamRequest = Literal[
+    "off",
+    "auto",
+    "xai_responses",
+    "openai_responses",
+]
+
 
 class CreateModelProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -42,6 +49,7 @@ class CreateModelProfileRequest(BaseModel):
     concurrency: int | None = None
     supports_structured_outputs: bool | None = None
     supports_native_search: bool | None = None
+    native_search_upstream: NativeSearchUpstreamRequest | None = None
 
 
 class UpdateModelProfileRequest(BaseModel):
@@ -58,6 +66,7 @@ class UpdateModelProfileRequest(BaseModel):
     concurrency: int | None = None
     supports_structured_outputs: bool | None = None
     supports_native_search: bool | None = None
+    native_search_upstream: NativeSearchUpstreamRequest | None = None
 
 
 def require_feature_model_profiles() -> None:

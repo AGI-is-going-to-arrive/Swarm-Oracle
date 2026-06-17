@@ -584,6 +584,7 @@ def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypa
             "concurrency": 5,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": None,
+            "native_search_upstream_override": "xai_responses",
             "api_key": "sk-oracle-probe-profile",
             "base_url": "https://api.openai.com/v1",
             "model": "oracle-probe-model",
@@ -605,6 +606,7 @@ def test_oracle_followup_stream_probe_threads_profile_runtime_overrides(monkeypa
         "concurrency": 5,
         "supports_structured_outputs_override": False,
         "supports_native_search_override": None,
+        "native_search_upstream_override": "xai_responses",
     }]
 
 

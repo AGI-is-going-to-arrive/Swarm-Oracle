@@ -800,6 +800,11 @@ async def run_sim_background(
                 if effective_llm_overrides.get("supports_native_search_override") is not None
                 else parsed_context.get("supports_native_search")
             )
+            scope_kwargs["native_search_upstream_override"] = (
+                effective_llm_overrides.get("native_search_upstream_override")
+                if effective_llm_overrides.get("native_search_upstream_override") is not None
+                else parsed_context.get("native_search_upstream")
+            )
 
         sim_kwargs: dict = {
             "scenario_id": scenario_id,
@@ -962,6 +967,7 @@ async def parse_and_run_background(
     concurrency: int | None = None,
     supports_structured_outputs: bool | None = None,
     supports_native_search: bool | None = None,
+    native_search_upstream: str | None = None,
     custom_agent_identity_ids: list[str] | None = None,
     continuity_overrides: list[dict] | None = None,
     web_search_families: list[str] | None = None,
@@ -1035,6 +1041,7 @@ async def parse_and_run_background(
             concurrency=concurrency,
             supports_structured_outputs_override=supports_structured_outputs,
             supports_native_search_override=supports_native_search,
+            native_search_upstream_override=native_search_upstream,
         ):
             parsed = await parse_question(
                 question,
@@ -1148,6 +1155,8 @@ async def parse_and_run_background(
         parsed["supports_structured_outputs"] = supports_structured_outputs
     if supports_native_search is not None:
         parsed["supports_native_search"] = supports_native_search
+    if native_search_upstream is not None:
+        parsed["native_search_upstream"] = native_search_upstream
     parsed["agents"] = [
         _strip_untrusted_agent_provenance(agent_data)
         for agent_data in parsed.get("agents", [])
@@ -1433,6 +1442,7 @@ async def parse_and_run_background(
         concurrency=concurrency,
         supports_structured_outputs_override=supports_structured_outputs,
         supports_native_search_override=supports_native_search,
+        native_search_upstream_override=native_search_upstream,
     ):
         await run_sim_background(
             scenario_id,

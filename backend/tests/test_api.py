@@ -719,6 +719,7 @@ class TestIdentityPreflightEndpoint:
                 concurrency=4,
                 supports_structured_outputs=False,
                 supports_native_search=None,
+                native_search_upstream="xai_responses",
             )
             session.add(profile)
             session.commit()
@@ -788,6 +789,7 @@ class TestIdentityPreflightEndpoint:
             "concurrency": 4,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": None,
+            "native_search_upstream_override": "xai_responses",
         }
 
     def test_preflight_parse_timeout_returns_launch_safe_status(self, client, monkeypatch):
@@ -1330,6 +1332,7 @@ class TestByokValidation:
                 concurrency=5,
                 supports_structured_outputs=False,
                 supports_native_search=True,
+                native_search_upstream="xai_responses",
             )
             session.add(profile)
             session.commit()
@@ -1385,6 +1388,7 @@ class TestByokValidation:
             "concurrency": 5,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": True,
+            "native_search_upstream_override": "xai_responses",
             "model_profile_id": profile_id,
             "quota_user_id": "runtime-owner",
         }
@@ -1396,6 +1400,7 @@ class TestByokValidation:
             "concurrency": 5,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": True,
+            "native_search_upstream_override": "xai_responses",
         }
 
     def test_scenario_docker_host_accepted(self, client):

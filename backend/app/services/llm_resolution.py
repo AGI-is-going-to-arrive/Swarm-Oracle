@@ -12,7 +12,7 @@ from sqlmodel import select
 
 from app.api.errors import api_error
 from app.config import settings
-from app.services.llm_client import is_local_provider_url
+from app.services.llm_client import is_local_provider_url, normalize_native_search_upstream
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ class ResolvedLlmCallConfig:
     concurrency: int | None
     supports_structured_outputs_override: bool | None
     supports_native_search_override: bool | None
+    native_search_upstream_override: str | None
 
 
 def _clean_optional_text(value: object) -> str | None:
@@ -38,6 +39,13 @@ def _clean_optional_text(value: object) -> str | None:
 
 def _optional_bool(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
+
+
+def _optional_native_search_upstream(value: object) -> str | None:
+    try:
+        return normalize_native_search_upstream(value)
+    except ValueError:
+        return None
 
 
 def _has_single_model_profile_owner(session: Any) -> bool:
@@ -184,6 +192,7 @@ def recover_profile_provider_overrides(
         "concurrency": profile.concurrency,
         "supports_structured_outputs_override": profile.supports_structured_outputs,
         "supports_native_search_override": profile.supports_native_search,
+        "native_search_upstream_override": profile.native_search_upstream,
         "model_profile_id": profile.id,
         "quota_user_id": quota_user_id,
     }
@@ -214,6 +223,7 @@ def merge_profile_provider_overrides(
         "concurrency",
         "supports_structured_outputs_override",
         "supports_native_search_override",
+        "native_search_upstream_override",
     ):
         if merged.get(key) is None and recovered.get(key) is not None:
             merged[key] = recovered[key]
@@ -231,6 +241,7 @@ def resolve_post_completion_llm_call_config(
     request_concurrency: int | None = None,
     request_supports_structured_outputs_override: bool | None = None,
     request_supports_native_search_override: bool | None = None,
+    request_native_search_upstream_override: str | None = None,
 ) -> ResolvedLlmCallConfig:
     context = parsed_context or {}
     explicit_api_key = _clean_optional_text(request_api_key)
@@ -251,6 +262,11 @@ def resolve_post_completion_llm_call_config(
         request_supports_native_search_override
         if request_supports_native_search_override is not None
         else _optional_bool(context.get("supports_native_search"))
+    )
+    effective_native_search_upstream = (
+        _optional_native_search_upstream(request_native_search_upstream_override)
+        if request_native_search_upstream_override is not None
+        else _optional_native_search_upstream(context.get("native_search_upstream"))
     )
 
     if explicit_base_url and not explicit_api_key:
@@ -282,6 +298,7 @@ def resolve_post_completion_llm_call_config(
             concurrency=effective_concurrency,
             supports_structured_outputs_override=effective_supports_structured_outputs,
             supports_native_search_override=effective_supports_native_search,
+            native_search_upstream_override=effective_native_search_upstream,
         )
 
     return ResolvedLlmCallConfig(
@@ -301,4 +318,5 @@ def resolve_post_completion_llm_call_config(
         concurrency=effective_concurrency,
         supports_structured_outputs_override=effective_supports_structured_outputs,
         supports_native_search_override=effective_supports_native_search,
+        native_search_upstream_override=effective_native_search_upstream,
     )

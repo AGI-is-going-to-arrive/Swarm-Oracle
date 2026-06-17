@@ -609,6 +609,9 @@ async def _generate_headline_cards(
             request_supports_native_search_override=request_overrides.get(
                 "supports_native_search_override"
             ),
+            request_native_search_upstream_override=request_overrides.get(
+                "native_search_upstream_override"
+            ),
         )
         quota_user_id = request_overrides.get("quota_user_id") or provider_policy.get(
             "user_id"
@@ -623,6 +626,7 @@ async def _generate_headline_cards(
                 effective_llm.supports_structured_outputs_override
             ),
             supports_native_search_override=effective_llm.supports_native_search_override,
+            native_search_upstream_override=effective_llm.native_search_upstream_override,
         ):
             raw = await llm_call(
                 prompt,
@@ -764,6 +768,7 @@ async def _generate_social_copy(
             model_profile_policy.supports_structured_outputs
         )
         effective_supports_native_search = model_profile_policy.supports_native_search
+        effective_native_search_upstream = model_profile_policy.native_search_upstream
     else:
         request_overrides = merge_profile_provider_overrides(
             {
@@ -799,6 +804,9 @@ async def _generate_social_copy(
             request_supports_native_search_override=request_overrides.get(
                 "supports_native_search_override"
             ),
+            request_native_search_upstream_override=request_overrides.get(
+                "native_search_upstream_override"
+            ),
         )
         effective_api_key = effective_llm.api_key
         effective_base_url = effective_llm.base_url
@@ -810,6 +818,7 @@ async def _generate_social_copy(
             effective_llm.supports_structured_outputs_override
         )
         effective_supports_native_search = effective_llm.supports_native_search_override
+        effective_native_search_upstream = effective_llm.native_search_upstream_override
     quota_key = resolve_authenticated_user_id(req.user_id, principal)
     if quota_key is None:
         quota_key = owner_user_id
@@ -857,6 +866,7 @@ async def _generate_social_copy(
             concurrency=effective_concurrency,
             supports_structured_outputs_override=effective_supports_structured_outputs,
             supports_native_search_override=effective_supports_native_search,
+            native_search_upstream_override=effective_native_search_upstream,
         ):
             copy = await llm_call(
                 prompt,

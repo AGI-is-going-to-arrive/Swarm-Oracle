@@ -239,6 +239,7 @@ async def test_roundtable_survey_sanitizes_prompt_leak_answer(monkeypatch):
         concurrency=None,
         supports_structured_outputs_override=None,
         supports_native_search_override=None,
+        native_search_upstream_override=None,
     )
 
     assert result["answer"] == "（林默 沉默了）"
@@ -731,6 +732,7 @@ class TestRunSimulation:
                 concurrency=7,
                 supports_structured_outputs=True,
                 supports_native_search=None,
+                native_search_upstream="xai_responses",
             )
             session.add(profile)
             session.flush()
@@ -822,6 +824,7 @@ class TestRunSimulation:
             "concurrency": 7,
             "supports_structured_outputs_override": True,
             "supports_native_search_override": False,
+            "native_search_upstream_override": "xai_responses",
         }
         with Session(engine) as session:
             scenario = session.get(Scenario, scenario_id)

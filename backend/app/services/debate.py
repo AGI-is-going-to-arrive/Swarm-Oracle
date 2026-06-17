@@ -965,6 +965,9 @@ async def _enhance_insights_with_llm(
                 supports_native_search_override=overrides.get(
                     "supports_native_search_override"
                 ),
+                native_search_upstream_override=overrides.get(
+                    "native_search_upstream_override"
+                ),
             ):
                 raw = await llm_call_json_with_stream_fallback(
                     prompt,
@@ -1413,6 +1416,9 @@ async def _generate_judge_analysis(
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
             ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
+            ),
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
@@ -1573,6 +1579,9 @@ async def _generate_turn_content(
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
             ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
+            ),
         ):
             raw_text = await llm_call(
                 combined_prompt,
@@ -1615,6 +1624,9 @@ async def _generate_turn_content(
             ),
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
+            ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
             ),
         ):
             raw_text = await llm_call(
@@ -1943,6 +1955,9 @@ async def run_debate_background(
                     ),
                     supports_native_search_override=persona_overrides.get(
                         "supports_native_search_override"
+                    ),
+                    native_search_upstream_override=persona_overrides.get(
+                        "native_search_upstream_override"
                     ),
                 ):
                     cast = await build_cast_async(
@@ -3220,6 +3235,9 @@ async def _generate_supporting_turn_reason(
             ),
             supports_native_search_override=overrides.get(
                 "supports_native_search_override"
+            ),
+            native_search_upstream_override=overrides.get(
+                "native_search_upstream_override"
             ),
         ):
             raw = await llm_call(

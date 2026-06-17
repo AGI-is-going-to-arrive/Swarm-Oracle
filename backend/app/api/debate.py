@@ -733,6 +733,7 @@ def _debate_policy_to_overrides(
         "concurrency": policy.concurrency,
         "supports_structured_outputs_override": policy.supports_structured_outputs,
         "supports_native_search_override": policy.supports_native_search,
+        "native_search_upstream_override": policy.native_search_upstream,
     }
 
 

@@ -45,6 +45,7 @@ def _seed_model_profile(
     concurrency: int | None = 2,
     supports_structured_outputs: bool | None = True,
     supports_native_search: bool | None = False,
+    native_search_upstream: str | None = None,
 ) -> str:
     from app.models.model_profile import ModelProfile
 
@@ -61,6 +62,7 @@ def _seed_model_profile(
             concurrency=concurrency,
             supports_structured_outputs=supports_structured_outputs,
             supports_native_search=supports_native_search,
+            native_search_upstream=native_search_upstream,
         )
         session.add(profile)
         session.commit()
@@ -293,6 +295,7 @@ class TestDocumentModelProfileEndpoints:
             concurrency=4,
             supports_structured_outputs=False,
             supports_native_search=True,
+            native_search_upstream="xai_responses",
         )
         captured: dict = {}
         original_scope = agents_api.llm_request_scope
@@ -348,6 +351,7 @@ class TestDocumentModelProfileEndpoints:
             "concurrency": 4,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": True,
+            "native_search_upstream_override": "xai_responses",
         }
 
     async def test_document_seed_model_profile_threads_provider_to_llm(
@@ -418,6 +422,7 @@ class TestDocumentModelProfileEndpoints:
             concurrency=3,
             supports_structured_outputs=True,
             supports_native_search=False,
+            native_search_upstream="openai_responses",
         )
         captured: dict = {}
         original_scope = agents_api.llm_request_scope
@@ -477,6 +482,7 @@ class TestDocumentModelProfileEndpoints:
             "concurrency": 3,
             "supports_structured_outputs_override": True,
             "supports_native_search_override": False,
+            "native_search_upstream_override": "openai_responses",
         }
 
     async def test_from_document_model_profile_threads_provider_to_llm(

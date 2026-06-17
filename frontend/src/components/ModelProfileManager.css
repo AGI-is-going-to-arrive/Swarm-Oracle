@@ -352,3 +352,71 @@
   cursor: pointer;
   user-select: none;
 }
+
+/* Native-search static probe block (connection tester, model-profiles page).
+   Self-contained: .tester__* base styles live in SetupWizardView.css which is
+   NOT loaded on this route, so this block does not rely on them. */
+.tester__native {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid #d8b4cf;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #faf3f8;
+  font-size: var(--text-sm);
+}
+.tester__native--ok {
+  border-color: #8ed0ad;
+  border-left-color: #2e9e63;
+  border-left-color: oklch(62% 0.13 155);
+  background: #f0faf4;
+  background: oklch(97% 0.02 155);
+}
+.tester__native--blocked {
+  border-color: #e6bd8a;
+  border-left-color: #c8761f;
+  border-left-color: oklch(64% 0.15 60);
+  background: #fdf6ec;
+  background: oklch(97% 0.02 70);
+}
+.tester__native-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.tester__native-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.tester__native-badge {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary);
+}
+.tester__native--ok .tester__native-badge {
+  background: #2e9e63;
+  background: oklch(62% 0.13 155);
+  color: #fff;
+}
+.tester__native--blocked .tester__native-badge {
+  background: #c8761f;
+  background: oklch(64% 0.15 60);
+  color: #fff;
+}
+.tester__native-msg {
+  margin: 0.3rem 0 0;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.tester__native-detail {
+  margin: 0.4rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  color: var(--text-secondary, #6b6b6b);
+  word-break: break-all;
+}

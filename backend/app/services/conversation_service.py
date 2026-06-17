@@ -149,6 +149,7 @@ class LLMOverrides:
     concurrency: int | None = None
     supports_structured_outputs_override: bool | None = None
     supports_native_search_override: bool | None = None
+    native_search_upstream_override: str | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +357,9 @@ def _recover_thread_profile_overrides(
             "supports_native_search_override": (
                 overrides.supports_native_search_override
             ),
+            "native_search_upstream_override": (
+                overrides.native_search_upstream_override
+            ),
         },
         recovered,
     )
@@ -372,6 +376,9 @@ def _recover_thread_profile_overrides(
         ),
         supports_native_search_override=merged.get(
             "supports_native_search_override"
+        ),
+        native_search_upstream_override=merged.get(
+            "native_search_upstream_override"
         ),
     )
 
@@ -1961,6 +1968,9 @@ async def stream_assistant_turn(
                     ),
                     supports_native_search_override=(
                         active_overrides.supports_native_search_override
+                    ),
+                    native_search_upstream_override=(
+                        active_overrides.native_search_upstream_override
                     ),
                 ):
                     # Pluggable for tests — if a factory is given we skip real LLM.

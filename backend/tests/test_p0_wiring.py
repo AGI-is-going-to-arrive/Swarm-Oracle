@@ -698,6 +698,7 @@ class TestCustomAgentOwnership:
             concurrency=2,
             supports_structured_outputs=False,
             supports_native_search=True,
+            native_search_upstream="xai_responses",
             disable_user_quota=None,
             custom_agent_identity_ids=None,
         )
@@ -709,6 +710,7 @@ class TestCustomAgentOwnership:
             assert by_purpose[purpose]["concurrency"] == 2
             assert by_purpose[purpose]["supports_structured_outputs_override"] is False
             assert by_purpose[purpose]["supports_native_search_override"] is True
+            assert by_purpose[purpose]["native_search_upstream_override"] == "xai_responses"
 
         with Session(engine) as session:
             scenario = session.get(Scenario, scenario_id)
@@ -719,6 +721,7 @@ class TestCustomAgentOwnership:
         assert parsed_context["llm_concurrency"] == 2
         assert parsed_context["supports_structured_outputs"] is False
         assert parsed_context["supports_native_search"] is True
+        assert parsed_context["native_search_upstream"] == "xai_responses"
         assert "model_profile_id" not in parsed_context
 
     async def test_run_sim_background_rehydrates_profile_runtime_scope_fields(
@@ -753,6 +756,7 @@ class TestCustomAgentOwnership:
                 "llm_concurrency": 2,
                 "supports_structured_outputs": False,
                 "supports_native_search": True,
+                "native_search_upstream": "xai_responses",
             }
             session.add(scenario)
             session.commit()
@@ -767,6 +771,7 @@ class TestCustomAgentOwnership:
         assert runtime_scope["concurrency"] == 2
         assert runtime_scope["supports_structured_outputs_override"] is False
         assert runtime_scope["supports_native_search_override"] is True
+        assert runtime_scope["native_search_upstream_override"] == "xai_responses"
 
     @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", False)
     def test_custom_agents_feature_disabled_ignores_ids(self):

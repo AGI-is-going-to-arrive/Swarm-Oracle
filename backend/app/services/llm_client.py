@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -53,6 +53,20 @@ _LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
 }) | _LOCAL_LLM_HOSTS
 
 _ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+
+NativeSearchUpstream = Literal[
+    "off",
+    "auto",
+    "xai_responses",
+    "openai_responses",
+]
+NATIVE_SEARCH_UPSTREAM_VALUES: frozenset[str] = frozenset(
+    {"off", "auto", "xai_responses", "openai_responses"}
+)
+_DECLARED_NATIVE_SEARCH_ADAPTERS: dict[str, str] = {
+    "xai_responses": "xai",
+    "openai_responses": "openai",
+}
 _LLM_SAFE_ERROR_MESSAGES: dict[str, str] = {
     "LLM_UNREACHABLE": "LLM provider is unreachable. Check the provider URL and network.",
     "LLM_AUTH_FAILED": "LLM authentication failed. Check the configured API key.",
@@ -261,6 +275,24 @@ class LLMProviderProfile:
     ] = "none"
 
 
+@dataclass(frozen=True)
+class NativeSearchInjectionDecision:
+    provider: str
+    is_proxy: bool
+    api_form: Literal["chat", "responses"]
+    supports_native_search: bool
+    adapter_name: str
+    tools: list[dict[str, Any]]
+    blocking_reasons: tuple[str, ...]
+    native_search_upstream: NativeSearchUpstream | None
+    declared_upstream: bool
+    adapter: Any
+
+    @property
+    def would_inject_tools(self) -> bool:
+        return not self.blocking_reasons and bool(self.tools)
+
+
 _KNOWN_LLM_PROVIDERS: dict[str, LLMProviderProfile] = {
     "api.x.ai": LLMProviderProfile(
         name="xai", supports_native_search=True,
@@ -384,6 +416,84 @@ def _merge_provider_capability_overrides(
         is_proxy=provider_profile.is_proxy,
         supports_structured_outputs=supports_structured_outputs,
         structured_output_api=structured_output_api,
+    )
+
+
+def normalize_native_search_upstream(value: object) -> NativeSearchUpstream | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            "native_search_upstream must be one of off, auto, "
+            "xai_responses, openai_responses, or null"
+        )
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in NATIVE_SEARCH_UPSTREAM_VALUES:
+        raise ValueError(
+            "native_search_upstream must be one of off, auto, "
+            "xai_responses, openai_responses, or null"
+        )
+    return cast(NativeSearchUpstream, normalized)
+
+
+def resolve_native_search_injection_decision(
+    *,
+    provider_profile: LLMProviderProfile,
+    is_chat: bool,
+    native_search_upstream_override: object,
+    native_search_domains: list[str] | None,
+) -> NativeSearchInjectionDecision:
+    """Resolve native-search gates shared by live injection and static probe."""
+
+    upstream = normalize_native_search_upstream(native_search_upstream_override)
+    declared_adapter_provider = _DECLARED_NATIVE_SEARCH_ADAPTERS.get(upstream or "")
+    api_form: Literal["chat", "responses"] = "chat" if is_chat else "responses"
+
+    if declared_adapter_provider:
+        provider_name = declared_adapter_provider
+        # Security boundary: only an explicit upstream declaration releases the
+        # proxy gate; auto/null/off keep detected provider proxy protections.
+        effective_is_proxy = False
+        supports_native_search = True
+        adapter_provider = declared_adapter_provider
+    else:
+        provider_name = provider_profile.name
+        effective_is_proxy = provider_profile.is_proxy
+        supports_native_search = (
+            False if upstream == "off" else provider_profile.supports_native_search
+        )
+        adapter_provider = provider_profile.name
+
+    from app.services.native_search_adapters import get_adapter
+
+    adapter = get_adapter(adapter_provider)
+    adapter_has_tools = bool(adapter.build_search_tools(domains=None))
+    adapter_name = adapter_provider if adapter_has_tools else "null"
+    tools = adapter.build_search_tools(domains=native_search_domains)
+
+    blocking_reasons: list[str] = []
+    if is_chat:
+        blocking_reasons.append("is_chat")
+    if effective_is_proxy:
+        blocking_reasons.append("is_proxy")
+    if not supports_native_search:
+        blocking_reasons.append("capability_off")
+    if not adapter_has_tools:
+        blocking_reasons.append("no_adapter")
+
+    return NativeSearchInjectionDecision(
+        provider=provider_name,
+        is_proxy=effective_is_proxy,
+        api_form=api_form,
+        supports_native_search=supports_native_search,
+        adapter_name=adapter_name,
+        tools=tools,
+        blocking_reasons=tuple(blocking_reasons),
+        native_search_upstream=upstream,
+        declared_upstream=declared_adapter_provider is not None,
+        adapter=adapter,
     )
 
 
@@ -563,6 +673,7 @@ class LLMRequestContext:
     concurrency_semaphore: asyncio.Semaphore | None = None
     supports_structured_outputs_override: bool | None = None
     supports_native_search_override: bool | None = None
+    native_search_upstream_override: NativeSearchUpstream | None = None
 
 
 @dataclass(frozen=True)
@@ -620,6 +731,7 @@ def llm_request_scope(
     concurrency: int | None | object = _REQUEST_SCOPE_UNSET,
     supports_structured_outputs_override: bool | None | object = _REQUEST_SCOPE_UNSET,
     supports_native_search_override: bool | None | object = _REQUEST_SCOPE_UNSET,
+    native_search_upstream_override: str | None | object = _REQUEST_SCOPE_UNSET,
 ):
     """Attach request-scoped quota metadata to downstream LLM calls."""
     current = _REQUEST_CONTEXT.get()
@@ -649,6 +761,11 @@ def llm_request_scope(
                 current.supports_native_search_override
                 if supports_native_search_override is _REQUEST_SCOPE_UNSET
                 else _coerce_optional_bool_override(supports_native_search_override)
+            ),
+            native_search_upstream_override=(
+                current.native_search_upstream_override
+                if native_search_upstream_override is _REQUEST_SCOPE_UNSET
+                else normalize_native_search_upstream(native_search_upstream_override)
             ),
         )
     )
@@ -2181,18 +2298,25 @@ async def llm_call(
             is_chat=is_chat,
         )
         payload.update(structured_output_params)
-    native_search_force_on = request_context.supports_native_search_override is True
+    native_search_force_on = (
+        request_context.supports_native_search_override is True
+        or request_context.native_search_upstream_override
+        in {"xai_responses", "openai_responses"}
+    )
     native_search_tools_injected_by_force = False
-    if native_search_domains is not None and not is_chat:
-        if (provider_profile.supports_native_search
-                and not provider_profile.is_proxy):
-            from app.services.native_search_adapters import get_adapter
-            adapter = get_adapter(provider_profile.name)
-            tools = adapter.build_search_tools(domains=native_search_domains)
-            if tools:
-                _native_adapter = adapter
-                payload["tools"] = tools
-                native_search_tools_injected_by_force = native_search_force_on
+    if native_search_domains is not None:
+        native_decision = resolve_native_search_injection_decision(
+            provider_profile=provider_profile,
+            is_chat=is_chat,
+            native_search_upstream_override=(
+                request_context.native_search_upstream_override
+            ),
+            native_search_domains=native_search_domains,
+        )
+        if native_decision.would_inject_tools:
+            _native_adapter = native_decision.adapter
+            payload["tools"] = native_decision.tools
+            native_search_tools_injected_by_force = native_search_force_on
 
     logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
                  payload["model"],

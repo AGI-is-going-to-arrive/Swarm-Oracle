@@ -404,6 +404,9 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
         request_supports_native_search_override=overrides.get(
             "supports_native_search_override"
         ),
+        request_native_search_upstream_override=overrides.get(
+            "native_search_upstream_override"
+        ),
     )
     quota_key = (
         overrides.get("quota_key")
@@ -442,6 +445,7 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
                 effective_llm.supports_structured_outputs_override
             ),
             supports_native_search_override=effective_llm.supports_native_search_override,
+            native_search_upstream_override=effective_llm.native_search_upstream_override,
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
@@ -589,6 +593,9 @@ async def score_all_for_scenario(
         ),
         request_supports_native_search_override=overrides.get(
             "supports_native_search_override"
+        ),
+        request_native_search_upstream_override=overrides.get(
+            "native_search_upstream_override"
         ),
     )
 

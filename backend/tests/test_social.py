@@ -81,6 +81,7 @@ def _seed_model_profile(
     concurrency: int | None = 3,
     supports_structured_outputs: bool | None = True,
     supports_native_search: bool | None = False,
+    native_search_upstream: str | None = None,
 ) -> str:
     from app.models.model_profile import ModelProfile
 
@@ -97,6 +98,7 @@ def _seed_model_profile(
             concurrency=concurrency,
             supports_structured_outputs=supports_structured_outputs,
             supports_native_search=supports_native_search,
+            native_search_upstream=native_search_upstream,
         )
         session.add(profile)
         session.commit()
@@ -277,6 +279,7 @@ def test_social_copy_model_profile_threads_scope_and_provider(
         concurrency=5,
         supports_structured_outputs=False,
         supports_native_search=True,
+        native_search_upstream="xai_responses",
     )
     captured: dict = {}
     original_scope = social_api.llm_request_scope
@@ -312,6 +315,7 @@ def test_social_copy_model_profile_threads_scope_and_provider(
         "concurrency": 5,
         "supports_structured_outputs_override": False,
         "supports_native_search_override": True,
+        "native_search_upstream_override": "xai_responses",
     }
 
 
@@ -330,6 +334,7 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
         concurrency=6,
         supports_structured_outputs=False,
         supports_native_search=True,
+        native_search_upstream="xai_responses",
     )
     scenario_id = _seed_social_scenario(
         user_id="social-owner",
@@ -370,6 +375,7 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
         "concurrency": 6,
         "supports_structured_outputs_override": False,
         "supports_native_search_override": True,
+        "native_search_upstream_override": "xai_responses",
     }
 
 
@@ -451,6 +457,7 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
             "llm_concurrency": 4,
             "supports_structured_outputs": False,
             "supports_native_search": None,
+            "native_search_upstream": "openai_responses",
         },
     )
     events = [{
@@ -499,6 +506,7 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
         "concurrency": 4,
         "supports_structured_outputs_override": False,
         "supports_native_search_override": None,
+        "native_search_upstream_override": "openai_responses",
     }
 
 
@@ -513,6 +521,7 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
         concurrency=8,
         supports_structured_outputs=True,
         supports_native_search=False,
+        native_search_upstream="xai_responses",
     )
     scenario = Scenario(
         id="scenario-social-headlines-stored-profile",
@@ -573,6 +582,7 @@ def test_social_headline_cards_rehydrates_profile_from_parsed_context(monkeypatc
         "concurrency": 8,
         "supports_structured_outputs_override": True,
         "supports_native_search_override": False,
+        "native_search_upstream_override": "xai_responses",
     }
 
 

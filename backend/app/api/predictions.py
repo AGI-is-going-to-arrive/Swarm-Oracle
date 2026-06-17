@@ -351,6 +351,9 @@ async def trigger_scoring(
     resolved_supports_native_search = (
         model_profile_policy.supports_native_search if model_profile_policy else None
     )
+    resolved_native_search_upstream = (
+        model_profile_policy.native_search_upstream if model_profile_policy else None
+    )
     quota_user_id = resolve_authenticated_user_id(req.user_id, principal)
     if quota_user_id is None and model_profile_policy is not None:
         quota_user_id = owner_user_id
@@ -372,6 +375,7 @@ async def trigger_scoring(
             "concurrency": resolved_concurrency,
             "supports_structured_outputs_override": resolved_supports_structured_outputs,
             "supports_native_search_override": resolved_supports_native_search,
+            "native_search_upstream_override": resolved_native_search_upstream,
             "model_profile_id": (
                 model_profile_policy.model_profile_id if model_profile_policy else None
             ),

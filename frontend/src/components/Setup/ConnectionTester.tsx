@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { testLlmConnection, isApiError } from '../../api/client';
+import type { NativeSearchProbe } from '../../api/client';
 
 export interface ConnectionTesterProps {
   baseUrl: string;
@@ -32,6 +33,10 @@ export interface ConnectionTesterProps {
    *  key isn't available client-side); disabledHint explains why in the status line. */
   disabled?: boolean;
   disabledHint?: string;
+  /** When true, also request a native-search static probe (model-profiles page). */
+  includeNativeProbe?: boolean;
+  /** Tri-state native-search override from the profile control (null = auto). */
+  supportsNativeSearch?: boolean | null;
 }
 
 export type TesterStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -50,6 +55,7 @@ interface TestResultPayload {
   latency_ms?: number | null;
   server?: string;
   llm?: BackendLlmResult | null;
+  native_search?: NativeSearchProbe | null;
   [key: string]: unknown;
 }
 
@@ -126,6 +132,8 @@ export function ConnectionTester({
   hideLogText,
   disabled,
   disabledHint,
+  includeNativeProbe,
+  supportsNativeSearch,
 }: ConnectionTesterProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<TesterStatus>('idle');
@@ -148,6 +156,8 @@ export function ConnectionTester({
         requestsPerMinute,
         tokensPerMinute,
         false,
+        includeNativeProbe,
+        supportsNativeSearch,
       );
       const result = normalizeTestResult(
         payload as TestResultPayload,
@@ -212,6 +222,34 @@ export function ConnectionTester({
             : ''}
         </span>
       </div>
+
+      {rawPayload?.native_search ? (
+        <div
+          className={`tester__native tester__native--${
+            rawPayload.native_search.would_inject_tools ? 'ok' : 'blocked'
+          }`}
+          aria-live="polite"
+        >
+          <div className="tester__native-head">
+            <span className="tester__native-title">{t('setup.native_probe_title')}</span>
+            <span className="tester__native-badge">
+              {rawPayload.native_search.would_inject_tools
+                ? t('setup.native_probe_supported')
+                : t('setup.native_probe_unsupported')}
+            </span>
+          </div>
+          {rawPayload.native_search.message ? (
+            <p className="tester__native-msg">{rawPayload.native_search.message}</p>
+          ) : null}
+          {rawPayload.native_search.detail ? (
+            <p className="tester__native-detail">
+              {`provider=${rawPayload.native_search.detail.provider} · ${rawPayload.native_search.detail.api_form} · is_proxy=${String(
+                rawPayload.native_search.detail.is_proxy,
+              )} · adapter=${rawPayload.native_search.detail.adapter}`}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {rawPayload ? (
         <div className="tester__log-wrap">

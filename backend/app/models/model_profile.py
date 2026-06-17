@@ -33,6 +33,7 @@ class ModelProfile(SQLModel, table=True):
     concurrency: int | None = Field(default=None)
     supports_structured_outputs: bool | None = Field(default=None)
     supports_native_search: bool | None = Field(default=None)
+    native_search_upstream: str | None = Field(default=None, max_length=32)
     name: str = Field(max_length=100)
     description: str | None = Field(default=None, max_length=500)
     created_at: datetime = Field(default_factory=_now)

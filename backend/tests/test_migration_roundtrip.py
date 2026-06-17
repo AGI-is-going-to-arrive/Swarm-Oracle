@@ -254,7 +254,7 @@ def test_035_model_profile_runtime_fields_migration_roundtrip(tmp_path, monkeypa
         finally:
             engine.dispose()
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(alembic_config, "035_model_profile_runtime_fields")
         assert _current_revision(db_url) == "035_model_profile_runtime_fields"
         assert _column_nullable(db_url, "model_profile", "supports_structured_outputs")
         assert _column_nullable(db_url, "model_profile", "supports_native_search")
@@ -307,5 +307,106 @@ def test_035_model_profile_runtime_fields_migration_roundtrip(tmp_path, monkeypa
         assert downgraded["profile-035-false"].supports_native_search == 0
         assert downgraded["profile-035-true"].supports_structured_outputs == 1
         assert downgraded["profile-035-true"].supports_native_search == 1
+    finally:
+        database_module.dispose_engine()
+
+
+def test_036_model_profile_native_search_upstream_migration_roundtrip(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, _ScriptDirectory = alembic_runtime
+
+    db_url = f"sqlite:///{tmp_path / '036-model-profile-native-upstream.db'}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setattr(settings, "DATABASE_URL", db_url)
+    database_module.dispose_engine()
+    alembic_config = _build_alembic_config(database_module, Config, db_url)
+
+    try:
+        command.upgrade(alembic_config, "035_model_profile_runtime_fields")
+        assert _current_revision(db_url) == "035_model_profile_runtime_fields"
+        assert "native_search_upstream" not in _column_names(db_url, "model_profile")
+
+        engine = create_engine(db_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO model_profile (
+                            id, user_id, provider, base_url, model, api_key,
+                            rpm, tpm, concurrency, supports_structured_outputs,
+                            supports_native_search, name, description,
+                            created_at, updated_at
+                        )
+                        VALUES (
+                            'profile-036-old', 'owner-036', 'openai',
+                            'https://api.openai.com/v1', 'gpt-4o-mini',
+                            'sk-roundtrip-secret', 10, 10000, 2, NULL, NULL,
+                            'Profile 036 old', 'roundtrip',
+                            '2026-06-17 00:00:00', '2026-06-17 00:00:00'
+                        )
+                        """
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(alembic_config, "head")
+        assert _current_revision(db_url) == "036_model_profile_native_search_upstream"
+        assert _column_nullable(db_url, "model_profile", "native_search_upstream")
+
+        engine = create_engine(db_url)
+        try:
+            with engine.begin() as conn:
+                old_value = conn.execute(
+                    text(
+                        """
+                        SELECT native_search_upstream
+                        FROM model_profile
+                        WHERE id = 'profile-036-old'
+                        """
+                    )
+                ).scalar_one()
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO model_profile (
+                            id, user_id, provider, base_url, model, api_key,
+                            rpm, tpm, concurrency, supports_structured_outputs,
+                            supports_native_search, native_search_upstream,
+                            name, description, created_at, updated_at
+                        )
+                        VALUES (
+                            'profile-036-xai', 'owner-036', 'openai',
+                            'https://api.openai.com/v1', 'gpt-4o-mini',
+                            'sk-roundtrip-secret', 10, 10000, 2, NULL, NULL,
+                            'xai_responses', 'Profile 036 xai', 'roundtrip',
+                            '2026-06-17 00:00:00', '2026-06-17 00:00:00'
+                        )
+                        """
+                    )
+                )
+                xai_value = conn.execute(
+                    text(
+                        """
+                        SELECT native_search_upstream
+                        FROM model_profile
+                        WHERE id = 'profile-036-xai'
+                        """
+                    )
+                ).scalar_one()
+        finally:
+            engine.dispose()
+        assert old_value is None
+        assert xai_value == "xai_responses"
+
+        command.downgrade(alembic_config, "-1")
+        assert _current_revision(db_url) == "035_model_profile_runtime_fields"
+        assert "native_search_upstream" not in _column_names(db_url, "model_profile")
     finally:
         database_module.dispose_engine()

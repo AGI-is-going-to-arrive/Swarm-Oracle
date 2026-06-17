@@ -264,6 +264,16 @@ class TestHealthTestWebSearchServerHint:
         monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
         monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _fake_probe)
 
+    def _patch_health_only(self, monkeypatch):
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "test-model", "response": "OK"}
+
+        async def _unexpected_probe(**kwargs):
+            raise AssertionError("native search probe must not run parallelism probe")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _unexpected_probe)
+
     def test_scope_is_always_server(self, client, monkeypatch):
         """All responses must include scope='server' to prevent misinterpretation."""
         self._patch_llm(monkeypatch)
@@ -433,6 +443,125 @@ class TestHealthTestWebSearchServerHint:
         assert ws["scope"] == "server"
         assert ws["server_enabled"] is True
         assert ws["provider"] == "tavily"
+
+    def test_native_probe_defaults_to_none(self, client, monkeypatch):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            **self._TEST_PAYLOAD,
+            "include_probe": False,
+        }).json()
+
+        assert data["native_search"] is None
+
+    def test_native_probe_blocks_local_proxy(self, client, monkeypatch):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://127.0.0.1:8317/v1",
+            "llm_model": "test-model",
+            "include_probe": False,
+            "include_native_probe": True,
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is False
+        assert native["blocking_reasons"][:2] == ["is_chat", "is_proxy"]
+        assert "is_proxy" in native["blocking_reasons"]
+        assert native["detail"]["provider"] == "local"
+        assert native["detail"]["is_proxy"] is True
+        assert native["detail"]["api_form"] == "chat"
+
+    def test_native_probe_override_true_does_not_bypass_local_proxy(self, client, monkeypatch):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://127.0.0.1:8317/v1",
+            "llm_model": "test-model",
+            "include_probe": False,
+            "include_native_probe": True,
+            "supports_native_search_override": True,
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is False
+        assert "is_proxy" in native["blocking_reasons"]
+        assert "capability_off" not in native["blocking_reasons"]
+        assert native["detail"]["provider"] == "local"
+        assert native["detail"]["supports_native_search"] is True
+
+    def test_native_probe_xai_responses_endpoint_with_override(self, client, monkeypatch):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "https://api.x.ai/v1/responses",
+            "llm_model": "grok-test",
+            "include_probe": False,
+            "include_native_probe": True,
+            "supports_native_search_override": True,
+        }).json()
+
+        native = data["native_search"]
+        assert native["detail"]["provider"] == "xai"
+        assert native["detail"]["api_form"] == "responses"
+        assert native["detail"]["is_proxy"] is False
+        assert native["detail"]["adapter"] == "xai"
+        assert native["detail"]["supports_native_search"] is True
+        assert native["would_inject_tools"] is True
+        assert native["blocking_reasons"] == []
+
+    def test_native_probe_declared_xai_upstream_local_responses_injects(
+        self,
+        client,
+        monkeypatch,
+    ):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://127.0.0.1:8317/v1/responses",
+            "llm_model": "grok-test",
+            "include_probe": False,
+            "include_native_probe": True,
+            "native_search_upstream_override": "xai_responses",
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is True
+        assert native["blocking_reasons"] == []
+        assert native["detail"]["provider"] == "xai"
+        assert native["detail"]["adapter"] == "xai"
+        assert native["detail"]["supports_native_search"] is True
+        assert "is_proxy" not in native["blocking_reasons"]
+        assert "no_adapter" not in native["blocking_reasons"]
+
+    def test_native_probe_declared_xai_upstream_chat_endpoint_blocks_is_chat(
+        self,
+        client,
+        monkeypatch,
+    ):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://127.0.0.1:8317/v1",
+            "llm_model": "grok-test",
+            "include_probe": False,
+            "include_native_probe": True,
+            "native_search_upstream_override": "xai_responses",
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is False
+        assert native["blocking_reasons"] == ["is_chat"]
+        assert native["detail"]["provider"] == "xai"
+        assert native["detail"]["adapter"] == "xai"
+        assert "is_proxy" not in native["blocking_reasons"]
+        assert "no_adapter" not in native["blocking_reasons"]
+        assert "/responses" in native["message"]
 
 
 # ── Response Serialization Tests ────────────────────────

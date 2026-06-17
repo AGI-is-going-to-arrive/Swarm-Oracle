@@ -270,6 +270,60 @@ def test_model_profile_supports_fields_preserve_tristate_create_update_resolve()
             assert patched.json()["supports_native_search"] is native
 
 
+def test_model_profile_native_search_upstream_store_load_update_resolve():
+    from app.models.model_profile import ModelProfile
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    client = TestClient(app)
+    allowed_values = ("off", "auto", "xai_responses", "openai_responses")
+
+    for upstream in allowed_values:
+        created = client.post(
+            "/api/model-profiles",
+            json=_profile_payload(
+                user_id="upstream-owner",
+                name=f"native-upstream-{upstream}",
+                native_search_upstream=upstream,
+            ),
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["native_search_upstream"] == upstream
+
+        with Session(get_engine()) as session:
+            stored = session.get(ModelProfile, body["id"])
+            assert stored is not None
+            assert stored.native_search_upstream == upstream
+            policy = resolve_model_profile_policy(
+                session,
+                user_id="upstream-owner",
+                model_profile_id=body["id"],
+            )
+            assert policy is not None
+            assert policy.native_search_upstream == upstream
+
+    default_created = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(
+            user_id="upstream-default-owner",
+            name="native-upstream-default",
+        ),
+    )
+    assert default_created.status_code == 201
+    default_body = default_created.json()
+    assert default_body["native_search_upstream"] is None
+
+    profile_id = default_body["id"]
+    for upstream in (None, *allowed_values):
+        patched = client.patch(
+            f"/api/model-profiles/{profile_id}",
+            params={"user_id": "upstream-default-owner"},
+            json={"native_search_upstream": upstream},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["native_search_upstream"] == upstream
+
+
 def test_model_profile_feature_gate_and_byok_base_url_rules(monkeypatch):
     import app.api.model_profiles as model_profiles_api
 

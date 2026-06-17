@@ -14,6 +14,12 @@ _CAMPAIGN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _CAMPAIGN_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CAMPAIGN_WEEK_PATTERN = re.compile(r"^\d{4}-W\d{2}$")
 _ORIGIN_NODE_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9_:-]+$")
+NativeSearchUpstreamOverride = Literal[
+    "off",
+    "auto",
+    "xai_responses",
+    "openai_responses",
+]
 
 # ── Request schemas ──────────────────────────────────────
 
@@ -489,6 +495,9 @@ class TestLlmRequest(BaseModel):
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
     include_probe: bool = True
+    include_native_probe: bool = False
+    supports_native_search_override: bool | None = None
+    native_search_upstream_override: NativeSearchUpstreamOverride | None = None
 
     @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
     @classmethod

@@ -193,6 +193,9 @@ def _llm_scope_kwargs(
         "supports_native_search_override": overrides.get(
             "supports_native_search_override"
         ),
+        "native_search_upstream_override": overrides.get(
+            "native_search_upstream_override"
+        ),
     }
 
 
@@ -2506,6 +2509,13 @@ async def _run_simulation_impl(
             llm_overrides["supports_native_search_override"] = ctx.get(
                 "supports_native_search"
             )
+        if (
+            llm_overrides.get("native_search_upstream_override") is None
+            and isinstance(ctx.get("native_search_upstream"), str)
+        ):
+            llm_overrides["native_search_upstream_override"] = ctx.get(
+                "native_search_upstream"
+            )
 
         # Load agents
         db_agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
@@ -3237,6 +3247,7 @@ async def _run_simulation_impl(
                     "concurrency",
                     "supports_structured_outputs_override",
                     "supports_native_search_override",
+                    "native_search_upstream_override",
                 }
                 report_overrides = {
                     key: (

@@ -804,6 +804,9 @@ async def enrich_argument_units_for_turn(
         supports_native_search_override=overrides.get(
             "supports_native_search_override"
         ),
+        native_search_upstream_override=overrides.get(
+            "native_search_upstream_override"
+        ),
     ):
         result = await llm_call_json_with_stream_fallback(
             prompt,

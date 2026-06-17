@@ -354,6 +354,7 @@ def _profile_scope_kwargs(policy: ResolvedProviderPolicy | None) -> dict[str, ob
         "concurrency": policy.concurrency,
         "supports_structured_outputs_override": policy.supports_structured_outputs,
         "supports_native_search_override": policy.supports_native_search,
+        "native_search_upstream_override": policy.native_search_upstream,
     }
 
 
@@ -696,6 +697,7 @@ async def preflight_identity_continuity(
     resolved_concurrency = None
     resolved_supports_structured_outputs = None
     resolved_supports_native_search = None
+    resolved_native_search_upstream = None
     if req.model_profile_id:
         with Session(get_engine()) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -718,6 +720,7 @@ async def preflight_identity_continuity(
             model_profile_policy.supports_structured_outputs
         )
         resolved_supports_native_search = model_profile_policy.supports_native_search
+        resolved_native_search_upstream = model_profile_policy.native_search_upstream
 
     num_agents = req.num_agents or settings.DEFAULT_NUM_AGENTS
     use_hierarchical = req.hierarchical
@@ -747,6 +750,7 @@ async def preflight_identity_continuity(
             concurrency=resolved_concurrency,
             supports_structured_outputs_override=resolved_supports_structured_outputs,
             supports_native_search_override=resolved_supports_native_search,
+            native_search_upstream_override=resolved_native_search_upstream,
         ):
             parsed = await asyncio.wait_for(
                 parse_question(

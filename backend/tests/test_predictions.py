@@ -73,6 +73,7 @@ def _seed_model_profile(
     concurrency: int | None = 2,
     supports_structured_outputs: bool | None = True,
     supports_native_search: bool | None = False,
+    native_search_upstream: str | None = None,
 ) -> str:
     from app.models.database import get_engine
     from app.models.model_profile import ModelProfile
@@ -90,6 +91,7 @@ def _seed_model_profile(
             concurrency=concurrency,
             supports_structured_outputs=supports_structured_outputs,
             supports_native_search=supports_native_search,
+            native_search_upstream=native_search_upstream,
         )
         session.add(profile)
         session.commit()
@@ -548,6 +550,7 @@ class TestPredictionAPIValidation(unittest.TestCase):
             concurrency=4,
             supports_structured_outputs=False,
             supports_native_search=True,
+            native_search_upstream="xai_responses",
         )
         captured: dict = {}
 
@@ -584,6 +587,7 @@ class TestPredictionAPIValidation(unittest.TestCase):
                 "concurrency": 4,
                 "supports_structured_outputs_override": False,
                 "supports_native_search_override": True,
+                "native_search_upstream_override": "xai_responses",
                 "model_profile_id": profile_id,
                 "quota_key": "prediction-owner",
             },
@@ -1301,6 +1305,7 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
         concurrency=4,
         supports_structured_outputs=False,
         supports_native_search=True,
+        native_search_upstream="xai_responses",
     )
     scenario_id = _seed_done_scenario_with_prediction(
         parsed_context={
@@ -1348,6 +1353,7 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
         "concurrency": 4,
         "supports_structured_outputs_override": False,
         "supports_native_search_override": True,
+        "native_search_upstream_override": "xai_responses",
     }
 
 

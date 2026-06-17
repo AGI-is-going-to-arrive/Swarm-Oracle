@@ -3018,6 +3018,159 @@ class TestLlmCallNativeSearch:
         assert "tools" not in captured_payload
 
     @pytest.mark.asyncio
+    async def test_native_search_declared_xai_upstream_local_responses_injects_tools(
+        self,
+        monkeypatch,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "proxy answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(native_search_upstream_override="xai_responses"):
+            result = await llm_call(
+                "test prompt",
+                base_url="http://127.0.0.1:8317/v1/responses",
+                api_key="proxy-key",
+                native_search_domains=["arxiv.org", "nature.com", "example.com"],
+            )
+
+        assert result == "proxy answer"
+        assert captured_payload["tools"][0]["type"] == "web_search"
+        assert captured_payload["tools"][0]["filters"]["allowed_domains"] == [
+            "arxiv.org",
+            "nature.com",
+            "example.com",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_native_search_declared_xai_upstream_chat_endpoint_does_not_inject(
+        self,
+        monkeypatch,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "chat answer"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(native_search_upstream_override="xai_responses"):
+            result = await llm_call(
+                "test prompt",
+                base_url="http://127.0.0.1:8317/v1",
+                api_key="proxy-key",
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert result == "chat answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_native_search_upstream_off_disables_detected_provider_support(
+        self,
+        monkeypatch,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "plain answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(native_search_upstream_override="off"):
+            result = await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert result == "plain answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_native_search_upstream_auto_keeps_local_proxy_blocked(
+        self,
+        monkeypatch,
+    ):
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "proxy answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with llm_client.llm_request_scope(native_search_upstream_override="auto"):
+            result = await llm_call(
+                "test prompt",
+                base_url="http://127.0.0.1:8317/v1/responses",
+                api_key="proxy-key",
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert result == "proxy answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
     async def test_native_search_force_on_retries_once_without_tools_and_clears_citations(
         self,
         monkeypatch,

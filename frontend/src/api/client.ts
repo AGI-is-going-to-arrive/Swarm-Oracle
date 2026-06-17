@@ -663,6 +663,21 @@ export async function importScenarioSnapshot(
   );
 }
 
+/** Native-search static probe result for a model profile's base_url + override.
+ *  Distinct from `web_search` (which is a server-level external-search hint). */
+export interface NativeSearchProbe {
+  would_inject_tools: boolean;
+  blocking_reasons: string[];
+  message: string;
+  detail: {
+    provider: string;
+    is_proxy: boolean;
+    api_form: 'chat' | 'responses';
+    adapter: string;
+    supports_native_search: boolean;
+  };
+}
+
 /** POST /api/health/test — test LLM connectivity with optional BYOK credentials */
 export async function testLlmConnection(
   apiKey?: string,
@@ -671,6 +686,8 @@ export async function testLlmConnection(
   requestsPerMinute?: number,
   tokensPerMinute?: number,
   includeProbe?: boolean,
+  includeNativeProbe?: boolean,
+  supportsNativeSearch?: boolean | null,
 ): Promise<{
   server: string;
   llm: { status: string; model: string; response?: string; error?: string };
@@ -682,6 +699,8 @@ export async function testLlmConnection(
     method: string;
     provider: string | null;
   } | null;
+  /** Per-profile native-search static probe (present only when includeNativeProbe). */
+  native_search?: NativeSearchProbe | null;
 }> {
   return request('/health/test', {
     method: 'POST',
@@ -692,6 +711,8 @@ export async function testLlmConnection(
       ...(requestsPerMinute != null && { llm_requests_per_minute: requestsPerMinute }),
       ...(tokensPerMinute != null && { llm_tokens_per_minute: tokensPerMinute }),
       ...(includeProbe === false ? { include_probe: false } : {}),
+      ...(includeNativeProbe ? { include_native_probe: true } : {}),
+      ...(supportsNativeSearch != null && { supports_native_search_override: supportsNativeSearch }),
     }),
   });
 }

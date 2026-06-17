@@ -60,6 +60,8 @@ describe('ConnectionTester', () => {
       undefined,
       undefined,
       false,
+      undefined,
+      undefined,
     );
   });
 
@@ -108,5 +110,107 @@ describe('ConnectionTester', () => {
     await waitFor(() => {
       expect(container.querySelector('.status-dot--success')).toBeInTheDocument();
     });
+  });
+
+  it('renders a blocked native-search probe block with backend message + detail', async () => {
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+      native_search: {
+        would_inject_tools: false,
+        blocking_reasons: ['is_proxy', 'is_chat'],
+        message: 'local proxy cannot use native search',
+        detail: {
+          provider: 'local',
+          is_proxy: true,
+          api_form: 'chat',
+          adapter: 'null',
+          supports_native_search: false,
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <ConnectionTester
+        baseUrl="http://127.0.0.1:8317/v1"
+        apiKey="key"
+        includeNativeProbe
+        supportsNativeSearch={null}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    await waitFor(() => {
+      expect(container.querySelector('.tester__native--blocked')).toBeInTheDocument();
+    });
+    expect(screen.getByText('setup.native_probe_unsupported')).toBeInTheDocument();
+    expect(screen.getByText('local proxy cannot use native search')).toBeInTheDocument();
+    expect(container.querySelector('.tester__native-detail')).toHaveTextContent('provider=local');
+
+    // includeNativeProbe (7th) + supportsNativeSearch=null (8th) forwarded to the API
+    expect(testLlmConnection).toHaveBeenCalledWith(
+      'key',
+      'http://127.0.0.1:8317/v1',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      true,
+      null,
+    );
+  });
+
+  it('renders a supported native-search probe block', async () => {
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+      native_search: {
+        would_inject_tools: true,
+        blocking_reasons: [],
+        message: 'native search available',
+        detail: {
+          provider: 'xai',
+          is_proxy: false,
+          api_form: 'responses',
+          adapter: 'xai',
+          supports_native_search: true,
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        supportsNativeSearch
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    await waitFor(() => {
+      expect(container.querySelector('.tester__native--ok')).toBeInTheDocument();
+    });
+    expect(screen.getByText('setup.native_probe_supported')).toBeInTheDocument();
+  });
+
+  it('omits the native-search block when backend returns no native_search', async () => {
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'gpt-test', response: 'ok' },
+    });
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <ConnectionTester baseUrl="https://api.example.com/v1" apiKey="key" />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    await screen.findByRole('status');
+    expect(container.querySelector('.tester__native')).not.toBeInTheDocument();
   });
 });

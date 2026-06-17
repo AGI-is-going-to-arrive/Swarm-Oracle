@@ -122,6 +122,7 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("scenario_campaign_log", "weekly_bonus_delta", "INTEGER DEFAULT 0"),
     ("scenario_campaign_log", "streak_after", "INTEGER"),
     ("scenario_campaign_log", "campaign_context_source", "TEXT"),
+    ("model_profile", "native_search_upstream", "TEXT"),
 )
 
 
