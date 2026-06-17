@@ -1010,6 +1010,19 @@ async def api_health_test(req: TestLlmRequest):
     validated_base_url = validate_llm_base_url(req.llm_base_url)
     if req.llm_base_url and validated_base_url is None:
         raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+    if req.native_probe_only:
+        native_search = _build_native_search_probe_hint(
+            llm_base_url=validated_base_url,
+            supports_native_search_override=req.supports_native_search_override,
+            native_search_upstream_override=req.native_search_upstream_override,
+        )
+        return {
+            "server": "ok",
+            "llm": None,
+            "probe": None,
+            "web_search": _build_web_search_server_hint(),
+            "native_search": native_search,
+        }
     native_search = None
     if req.include_native_probe:
         native_search = _build_native_search_probe_hint(

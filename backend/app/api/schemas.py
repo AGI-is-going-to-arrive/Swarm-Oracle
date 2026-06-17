@@ -496,6 +496,7 @@ class TestLlmRequest(BaseModel):
     llm_tokens_per_minute: int | None = None
     include_probe: bool = True
     include_native_probe: bool = False
+    native_probe_only: bool = False
     supports_native_search_override: bool | None = None
     native_search_upstream_override: NativeSearchUpstreamOverride | None = None
 

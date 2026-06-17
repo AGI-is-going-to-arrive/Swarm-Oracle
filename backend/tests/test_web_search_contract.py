@@ -454,6 +454,91 @@ class TestHealthTestWebSearchServerHint:
 
         assert data["native_search"] is None
 
+    def test_native_probe_only_skips_llm_health_and_parallelism_probe(self, client, monkeypatch):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("native_probe_only must not call health_check")
+
+        async def _unexpected_probe(**kwargs):
+            raise AssertionError("native_probe_only must not run parallelism probe")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _unexpected_probe)
+
+        response = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "https://api.x.ai/v1/responses",
+            "llm_model": "grok-test",
+            "native_probe_only": True,
+            "native_search_upstream_override": "xai_responses",
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["server"] == "ok"
+        assert data["llm"] is None
+        assert data["probe"] is None
+        assert data["native_search"]["would_inject_tools"] is True
+
+    def test_native_probe_only_declared_xai_upstream_responses_injects(self, client, monkeypatch):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("native_probe_only must not call health_check")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "https://api.x.ai/v1/responses",
+            "llm_model": "grok-test",
+            "native_probe_only": True,
+            "native_search_upstream_override": "xai_responses",
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is True
+        assert native["detail"]["adapter"] == "xai"
+        assert native["detail"]["is_proxy"] is False
+
+    def test_native_probe_only_keeps_base_url_allowlist_enforced(self, client, monkeypatch):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("invalid base_url must fail before health_check")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+
+        response = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "http://evil.example.com/v1",
+            "llm_model": "grok-test",
+            "native_probe_only": True,
+            "native_search_upstream_override": "xai_responses",
+        })
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+    def test_native_probe_only_respects_supports_native_search_false_override(
+        self,
+        client,
+        monkeypatch,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("native_probe_only must not call health_check")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "https://api.x.ai/v1/responses",
+            "llm_model": "grok-test",
+            "native_probe_only": True,
+            "supports_native_search_override": False,
+            "native_search_upstream_override": "xai_responses",
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is False
+        assert "capability_off" in native["blocking_reasons"]
+        assert native["detail"]["supports_native_search"] is False
+
     def test_native_probe_blocks_local_proxy(self, client, monkeypatch):
         self._patch_health_only(monkeypatch)
 
