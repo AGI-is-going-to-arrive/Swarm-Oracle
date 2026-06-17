@@ -18,6 +18,7 @@ import './ModelProfileManager.css';
 
 const DEFAULT_PROVIDER_ID = 'openai';
 const PROVIDER_PRESET_BASE_URLS = LLM_PROVIDER_PRESETS.map((preset) => preset.baseUrl);
+type NativeSearchUpstream = 'off' | 'auto' | 'xai_responses' | 'openai_responses';
 // Concurrency must stay a positive, safe integer: the backend coerces <=0 to "no cap"
 // (a silent no-op), and values past Number.MAX_SAFE_INTEGER lose precision via parseInt
 // before they are sent (silent data corruption). 1024 is a generous upper bound — real
@@ -26,6 +27,29 @@ const MAX_CONCURRENCY = 1024;
 
 function getProviderBaseUrl(providerId: string): string {
   return LLM_PROVIDER_PRESETS.find((preset) => preset.id === providerId)?.baseUrl ?? '';
+}
+
+function normalizeNativeSearchUpstreamState(value: string | null | undefined): NativeSearchUpstream {
+  return value === 'off'
+    || value === 'auto'
+    || value === 'xai_responses'
+    || value === 'openai_responses'
+    ? value
+    : 'auto';
+}
+
+function nativeSearchSupportForUpstream(
+  upstream: NativeSearchUpstream,
+  existingProfile?: ModelProfile | null,
+): boolean | null {
+  if (
+    upstream !== 'off'
+    && existingProfile?.supports_native_search === true
+    && upstream === normalizeNativeSearchUpstreamState(existingProfile.native_search_upstream)
+  ) {
+    return true;
+  }
+  return upstream === 'off' ? false : null;
 }
 
 export function ModelProfileManager() {
@@ -55,7 +79,7 @@ export function ModelProfileManager() {
   const [tpm, setTpm] = useState<string>('');
   const [concurrency, setConcurrency] = useState<string>('');
   const [supportsStructuredOutputs, setSupportsStructuredOutputs] = useState<'auto' | 'on' | 'off'>('auto');
-  const [nativeSearchUpstream, setNativeSearchUpstream] = useState<'off' | 'auto' | 'xai_responses' | 'openai_responses'>('auto');
+  const [nativeSearchUpstream, setNativeSearchUpstream] = useState<NativeSearchUpstream>('auto');
 
   // Feedback states
   const [formErrors, setFormErrors] = useState<string[]>([]);
@@ -140,7 +164,7 @@ export function ModelProfileManager() {
       return 'auto';
     };
     setSupportsStructuredOutputs(mapApiToState(profile.supports_structured_outputs));
-    setNativeSearchUpstream((profile.native_search_upstream as 'off' | 'auto' | 'xai_responses' | 'openai_responses') || 'auto');
+    setNativeSearchUpstream(normalizeNativeSearchUpstreamState(profile.native_search_upstream));
   };
 
   // Cancel edit/create
@@ -240,6 +264,7 @@ export function ModelProfileManager() {
           tpm: parseOptionalNumber(tpm),
           concurrency: parseOptionalNumber(concurrency),
           supports_structured_outputs: mapStateToApi(supportsStructuredOutputs),
+          supports_native_search: nativeSearchSupportForUpstream(nativeSearchUpstream),
           native_search_upstream: nativeSearchUpstream,
         };
         await createModelProfile(payload);
@@ -254,6 +279,7 @@ export function ModelProfileManager() {
           tpm: parseOptionalNumber(tpm),
           concurrency: parseOptionalNumber(concurrency),
           supports_structured_outputs: mapStateToApi(supportsStructuredOutputs),
+          supports_native_search: nativeSearchSupportForUpstream(nativeSearchUpstream, selectedProfile),
           native_search_upstream: nativeSearchUpstream,
         };
 
@@ -597,7 +623,7 @@ export function ModelProfileManager() {
                   id="mp-native-search"
                   className="form-control"
                   value={nativeSearchUpstream}
-                  onChange={(e) => setNativeSearchUpstream(e.target.value as 'off' | 'auto' | 'xai_responses' | 'openai_responses')}
+                  onChange={(e) => setNativeSearchUpstream(normalizeNativeSearchUpstreamState(e.target.value))}
                   disabled={isSaving}
                 >
                   <option value="off">{t('model_profiles.option_upstream_off')}</option>
@@ -619,6 +645,10 @@ export function ModelProfileManager() {
                   testFailureText={t('model_profiles.test_failed')}
                   includeNativeProbe
                   nativeSearchUpstream={nativeSearchUpstream}
+                  supportsNativeSearchOverride={nativeSearchSupportForUpstream(
+                    nativeSearchUpstream,
+                    isEditing ? selectedProfile : null,
+                  )}
                   disabled={Boolean(isEditing && selectedProfile?.has_api_key && !keyCleared && !apiKey.trim())}
                   disabledHint={t('model_profiles.test_needs_key')}
                 />

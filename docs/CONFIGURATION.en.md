@@ -45,6 +45,8 @@ Server defaults and request-level BYOK use different trust boundaries:
 
 Model profiles can also store RPM/TPM, a concurrency cap, and tri-state capability overrides for structured outputs / native search: auto-detect, force on, or force off. Auto-detect stores the field as `null` and follows the provider capability at runtime; only force on / force off stores an explicit boolean. These fields flow into LLM calls for main simulations, multi-run, prediction scoring, social copy, generated headline cards, and report generation. Profile concurrency only tightens the effective cap; global concurrency, global pending, user pending, and purpose lanes still apply.
 
+Test connection runs ordinary LLM connectivity and a faster native-search probe side by side. The native-search probe only answers whether the tested model / upstream would enter the native web-search tool injection path. It is not the same as the server-default `web_search` hint from `/api/capabilities`, and it does not echo the Base URL or API key. Local or custom Responses proxies still stay behind the proxy guard by default; only an explicit `xai_responses` or `openai_responses` upstream declaration lets the system use the matching official native-search adapter. `auto`, `off`, or an unset declaration do not release the proxy guard, and force-off native search still vetoes tool injection.
+
 Scenarios that saved a `model_profile_id` try to recover the same profile for later LLM calls such as reports, replay / branch reruns, fork-title rewriting, social copy, and scoring. Recovery is limited to the current user's own profile; when user ownership is missing, id-only recovery is allowed only for a local single-user profile database. If the profile was deleted, belongs to another user, or cannot be verified safely, the backend fails closed and asks you to reselect the profile, or to provide API key, Base URL, and model together for this request. Social headline cards fall back to deterministic cards when safe profile recovery is unavailable, instead of calling the wrong provider.
 
 Static config still follows the previous rule: `llm_static_configured=false` when the runtime still uses a placeholder URL (`http://127.0.0.1:8317/v1`, `http://localhost:8317/v1`, or `http://host.docker.internal:8317/v1`) and `LLM_API_KEY` is empty or still a placeholder such as `sk-12345678` / `your-api-key-here`. It is `true` when a real key is configured, or when the operator explicitly changes to another endpoint.
@@ -90,7 +92,7 @@ Other failures keep the existing generic error path.
 | `FEATURE_SOCIAL_HEADLINES` | On | Result-page social feeds generate headline cards that can be downloaded or copied. |
 | `FEATURE_DOCUMENT_SEED` | On | The home page can turn uploaded documents into scenario seed context. |
 | `FEATURE_LOCAL_PACKS` | On | The home page can load local scenario packs and carry pack materials into simulations. |
-| `FEATURE_MODEL_PROFILES` | On | The model profile page and `/admin/setup` can manage local profiles; profiles with a key make the home page treat LLM access as configured and can be selected at launch. Profiles can store rate limits, concurrency, and structured-output / native-search capability overrides. |
+| `FEATURE_MODEL_PROFILES` | On | The model profile page and `/admin/setup` can manage local profiles; profiles with a key make the home page treat LLM access as configured and can be selected at launch. Profiles can store rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declarations. |
 | `FEATURE_EDUCATION_TEMPLATES` | On | The home page shows education templates for classroom-style prompts. |
 | `FEATURE_PERSONA_EXPORT` | On | Agent Library can export persona backups and create Agents from backups. |
 
@@ -108,6 +110,8 @@ These backend-internal or experimental flags remain off by default and are not o
 
 The following features stay off by default because they require an external search service. Hosted providers usually need `WEB_SEARCH_PROVIDER` and `WEB_SEARCH_API_KEY`. If you use `searxng`, provide a reachable `SEARXNG_URL`; SearXNG itself does not require an API key.
 
+This search enhancement is app-layer external retrieval: the system calls Tavily / Exa / Firecrawl / xAI / SearXNG first, then injects the results into the prompt. Model-native search is a separate LLM native path controlled by model profiles and runtime source-family domains. It is not enabled through `WEB_SEARCH_PROVIDER=native`.
+
 | Flag | Default | When to enable it |
 |------|---------|-------------------|
 | `ENABLE_WEB_SEARCH` | Off | Enable this when you want the app to search the web before simulation. A working search provider is required. |
@@ -116,7 +120,7 @@ The following features stay off by default because they require an external sear
 
 ---
 
-## 3. Search-Enhanced Simulation (Optional)
+## 3. Search-Augmented Simulation (Optional)
 
 When enabled, the app searches the web before simulation and injects context into Agent prompts so the run can reflect current information.
 

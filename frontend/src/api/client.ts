@@ -689,6 +689,7 @@ export async function testLlmConnection(
   includeProbe?: boolean,
   includeNativeProbe?: boolean,
   nativeSearchUpstream?: string,
+  supportsNativeSearchOverride?: boolean | null,
 ): Promise<{
   server: string;
   llm: { status: string; model: string; response?: string; error?: string };
@@ -714,6 +715,7 @@ export async function testLlmConnection(
       ...(includeProbe === false ? { include_probe: false } : {}),
       ...(includeNativeProbe ? { include_native_probe: true } : {}),
       ...(nativeSearchUpstream && { native_search_upstream_override: nativeSearchUpstream }),
+      ...(supportsNativeSearchOverride !== undefined ? { supports_native_search_override: supportsNativeSearchOverride } : {}),
     }),
   });
 }
@@ -724,6 +726,7 @@ export async function probeNativeSearch(
   baseUrl?: string,
   model?: string,
   nativeSearchUpstream?: string,
+  supportsNativeSearchOverride?: boolean | null,
 ): Promise<NativeSearchProbe | null> {
   const payload = await request<{ native_search?: NativeSearchProbe | null }>('/health/test', {
     method: 'POST',
@@ -734,6 +737,7 @@ export async function probeNativeSearch(
       ...(baseUrl && { llm_base_url: baseUrl }),
       ...(model && { llm_model: model }),
       ...(nativeSearchUpstream && { native_search_upstream_override: nativeSearchUpstream }),
+      ...(supportsNativeSearchOverride !== undefined ? { supports_native_search_override: supportsNativeSearchOverride } : {}),
     }),
   });
   return payload?.native_search ?? null;

@@ -8,7 +8,7 @@
    - JSON pre log is collapsible-by-default to keep the UI quiet
 */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { testLlmConnection, probeNativeSearch, isApiError } from '../../api/client';
 import type { NativeSearchProbe } from '../../api/client';
@@ -37,9 +37,12 @@ export interface ConnectionTesterProps {
   includeNativeProbe?: boolean;
   /** Native search upstream override. */
   nativeSearchUpstream?: string;
+  /** Explicit native-search capability override for the tested profile. */
+  supportsNativeSearchOverride?: boolean | null;
 }
 
 export type TesterStatus = 'idle' | 'testing' | 'success' | 'error';
+type NativeProbeStatus = 'idle' | 'probing' | 'success' | 'blocked' | 'error';
 
 interface BackendLlmResult {
   status?: 'ok' | 'error' | string;
@@ -115,6 +118,12 @@ function normalizeTestResult(
   };
 }
 
+function signatureValueForSupportOverride(value: boolean | null | undefined) {
+  return value === undefined
+    ? { kind: 'omitted' }
+    : { kind: 'value', value };
+}
+
 export function ConnectionTester({
   baseUrl,
   apiKey,
@@ -134,21 +143,49 @@ export function ConnectionTester({
   disabledHint,
   includeNativeProbe,
   nativeSearchUpstream,
+  supportsNativeSearchOverride,
 }: ConnectionTesterProps) {
   const { t } = useTranslation();
+  const requestSignature = JSON.stringify([
+    baseUrl,
+    apiKey,
+    model ?? null,
+    requestsPerMinute ?? null,
+    tokensPerMinute ?? null,
+    nativeSearchUpstream ?? null,
+    signatureValueForSupportOverride(supportsNativeSearchOverride),
+  ]);
+  const runIdRef = useRef(0);
+  const requestSignatureRef = useRef(requestSignature);
   const [status, setStatus] = useState<TesterStatus>('idle');
+  const [activeRunSignature, setActiveRunSignature] = useState<string | null>(null);
   const [message, setMessage] = useState<string>('');
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [rawPayload, setRawPayload] = useState<TestResultPayload | null>(null);
   const [showLog, setShowLog] = useState<boolean>(false);
-  const [nativeStatus, setNativeStatus] = useState<'idle' | 'probing' | 'success' | 'error'>('idle');
+  const [nativeStatus, setNativeStatus] = useState<NativeProbeStatus>('idle');
   const [nativeResult, setNativeResult] = useState<NativeSearchProbe | null>(null);
+  const [nativeErrorMessage, setNativeErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    requestSignatureRef.current = requestSignature;
+  }, [requestSignature]);
 
   const runTest = async () => {
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
+    const runSignature = requestSignatureRef.current;
+    setActiveRunSignature(runSignature);
+    const isCurrentRun = () => (
+      runIdRef.current === runId
+      && requestSignatureRef.current === runSignature
+    );
+
     setStatus('testing');
     setMessage(testingText || t('setup.testing'));
     setLatencyMs(null);
     setRawPayload(null);
+    setNativeErrorMessage(null);
 
     if (includeNativeProbe) {
       setNativeStatus('probing');
@@ -168,18 +205,33 @@ export function ConnectionTester({
             baseUrl || undefined,
             model || undefined,
             nativeSearchUpstream,
+            supportsNativeSearchOverride,
           );
+          if (!isCurrentRun()) return;
           setNativeResult(nativeData);
-          setNativeStatus(nativeData ? 'success' : 'error');
+          setNativeStatus(nativeData
+            ? (nativeData.would_inject_tools ? 'success' : 'blocked')
+            : 'error');
+          setNativeErrorMessage(nativeData ? null : t('setup.native_probe_failed'));
           setRawPayload((prev) => ({
             ...prev,
             native_search: nativeData,
+            ...(nativeData ? {} : { native_search_error: t('setup.native_probe_failed') }),
           }));
-        } catch {
+        } catch (err) {
+          if (!isCurrentRun()) return;
+          const errorMessage = isApiError(err)
+            ? err.message
+            : (err instanceof Error && err.message
+              ? err.message
+              : t('setup.native_probe_failed'));
+          setNativeResult(null);
           setNativeStatus('error');
+          setNativeErrorMessage(errorMessage);
           setRawPayload((prev) => ({
             ...prev,
             native_search: null,
+            native_search_error: errorMessage,
           }));
         }
       })());
@@ -196,7 +248,9 @@ export function ConnectionTester({
           false,
           false,
           nativeSearchUpstream,
+          supportsNativeSearchOverride,
         );
+        if (!isCurrentRun()) return;
         const result = normalizeTestResult(
           payload as TestResultPayload,
           testSuccessText || t('setup.test_success'),
@@ -215,6 +269,7 @@ export function ConnectionTester({
         setMessage(result.message);
         setLatencyMs(result.latencyMs);
       } catch (err) {
+        if (!isCurrentRun()) return;
         // ApiError (HTTP-level failure) vs network/parse failures.
         let errorMessage = '';
         if (isApiError(err)) {
@@ -232,6 +287,11 @@ export function ConnectionTester({
           errorMessage = isTimeout
             ? (testTimeoutText || t('setup.test_failure_timeout'))
             : (testFailureNetworkText || t('setup.test_failure_network'));
+          setRawPayload((prev) => ({
+            ...prev,
+            status: 'error',
+            message: errorMessage,
+          }));
           setMessage(errorMessage);
         }
       }
@@ -240,8 +300,31 @@ export function ConnectionTester({
     await Promise.all(promises);
   };
 
-  const dotClass = `status-dot status-dot--${status}`;
-  const canTest = baseUrl.trim().length > 0 && status !== 'testing' && !disabled;
+  const displayCurrentRun = activeRunSignature === requestSignature;
+  const displayStatus = displayCurrentRun ? status : 'idle';
+  const displayLatencyMs = displayCurrentRun ? latencyMs : null;
+  const displayRawPayload = displayCurrentRun ? rawPayload : null;
+  const displayNativeStatus: NativeProbeStatus = displayCurrentRun ? nativeStatus : 'idle';
+  const displayNativeResult = displayCurrentRun ? nativeResult : null;
+  const displayNativeErrorMessage = displayCurrentRun ? nativeErrorMessage : null;
+
+  const dotClass = `status-dot status-dot--${displayStatus}`;
+  const canTest = baseUrl.trim().length > 0
+    && displayStatus !== 'testing'
+    && displayNativeStatus !== 'probing'
+    && !disabled;
+  const nativeClass = displayNativeStatus === 'probing'
+    ? 'probing'
+    : (displayNativeStatus === 'success'
+      ? 'ok'
+      : (displayNativeStatus === 'error' ? 'error' : 'blocked'));
+  const nativeBadgeText = displayNativeStatus === 'probing'
+    ? t('setup.native_probe_probing')
+    : (displayNativeStatus === 'success'
+      ? t('setup.native_probe_supported')
+      : (displayNativeStatus === 'error'
+        ? t('setup.native_probe_failed')
+        : t('setup.native_probe_unsupported')));
 
   return (
     <div className="tester">
@@ -253,7 +336,7 @@ export function ConnectionTester({
           disabled={!canTest}
           aria-label={testButtonText || t('setup.test_button')}
         >
-          {status === 'testing' ? (testingText || t('setup.testing')) : (testButtonText || t('setup.test_button'))}
+          {displayStatus === 'testing' ? (testingText || t('setup.testing')) : (testButtonText || t('setup.test_button'))}
         </button>
         <span className={dotClass} aria-hidden="true" />
         <span
@@ -261,44 +344,41 @@ export function ConnectionTester({
           aria-live="polite"
           role="status"
         >
-          {status === 'idle'
+          {displayStatus === 'idle'
             ? (disabled && disabledHint ? disabledHint : (testIdleText || t('setup.test_idle')))
             : message}
-          {status === 'success' && latencyMs != null
-            ? ` · ${latencyMs} ms`
+          {displayStatus === 'success' && displayLatencyMs != null
+            ? ` · ${displayLatencyMs} ms`
             : ''}
         </span>
       </div>
 
-      {includeNativeProbe && nativeStatus !== 'idle' ? (
+      {includeNativeProbe && displayNativeStatus !== 'idle' ? (
         <div
-          className={`tester__native tester__native--${
-            nativeStatus === 'probing' ? 'probing' : (nativeResult?.would_inject_tools ? 'ok' : 'blocked')
-          }`}
+          className={`tester__native tester__native--${nativeClass}`}
           aria-live="polite"
         >
           <div className="tester__native-head">
             <span className="tester__native-title">{t('setup.native_probe_title')}</span>
             <span className="tester__native-badge">
-              {nativeStatus === 'probing'
-                ? t('setup.native_probe_probing')
-                : (nativeResult?.would_inject_tools
-                  ? t('setup.native_probe_supported')
-                  : t('setup.native_probe_unsupported'))}
+              {nativeBadgeText}
             </span>
           </div>
-          {nativeStatus !== 'probing' && nativeResult ? (
+          {displayNativeStatus === 'error' && displayNativeErrorMessage ? (
+            <p className="tester__native-msg">{displayNativeErrorMessage}</p>
+          ) : null}
+          {displayNativeStatus !== 'probing' && displayNativeResult ? (
             <>
-              {nativeResult.message ? (
-                <p className="tester__native-msg">{nativeResult.message}</p>
+              {displayNativeResult.message ? (
+                <p className="tester__native-msg">{displayNativeResult.message}</p>
               ) : null}
-              {nativeResult.detail ? (
+              {displayNativeResult.detail ? (
                 <p className="tester__native-detail">
-                  {`provider=${nativeResult.detail.provider} · ${nativeResult.detail.api_form} · is_proxy=${String(
-                    nativeResult.detail.is_proxy,
-                  )} · adapter=${nativeResult.detail.adapter}${
-                    nativeResult.detail.native_search_upstream
-                      ? ` · native_search_upstream=${nativeResult.detail.native_search_upstream}`
+                  {`provider=${displayNativeResult.detail.provider} · ${displayNativeResult.detail.api_form} · is_proxy=${String(
+                    displayNativeResult.detail.is_proxy,
+                  )} · adapter=${displayNativeResult.detail.adapter}${
+                    displayNativeResult.detail.native_search_upstream
+                      ? ` · native_search_upstream=${displayNativeResult.detail.native_search_upstream}`
                       : ''
                   }`}
                 </p>
@@ -308,7 +388,7 @@ export function ConnectionTester({
         </div>
       ) : null}
 
-      {rawPayload ? (
+      {displayRawPayload ? (
         <div className="tester__log-wrap">
           <button
             type="button"
@@ -320,7 +400,7 @@ export function ConnectionTester({
           </button>
           {showLog ? (
             <pre className="tester__log">
-              {JSON.stringify(rawPayload, null, 2)}
+              {JSON.stringify(displayRawPayload, null, 2)}
             </pre>
           ) : null}
         </div>

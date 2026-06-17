@@ -2,7 +2,7 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, and structured-output / native-search capability overrides. The home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
+This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. The home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
 
 For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 
@@ -92,9 +92,9 @@ Select **View Causal Graph** to see which events caused later events. Select **G
 
 ---
 
-## Search-Enhanced Simulation (Optional)
+## Search-Augmented Simulation (Optional)
 
-The home page has a **Search-enhanced simulation** switch. When enabled, the app searches the web before simulation and injects relevant context into Agent prompts. This requires `ENABLE_WEB_SEARCH` and a configured search provider. See [CONFIGURATION.en.md](./CONFIGURATION.en.md). The recommended path does not require you to understand provider internals; follow the prompts and fill in the provider settings.
+The home page has a **Search-Augmented Simulation** switch. When enabled, the app searches the web before simulation and injects relevant context into Agent prompts. This requires `ENABLE_WEB_SEARCH` and a configured search provider. See [CONFIGURATION.en.md](./CONFIGURATION.en.md). The recommended path reuses the server search configuration; the advanced path can provide a search provider, key, or base URL for the current run. This is still app-layer external search, not the native-search probe from Model Profiles.
 
 ---
 

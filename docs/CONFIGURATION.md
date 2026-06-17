@@ -45,6 +45,8 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 模型 profile 还可以保存 RPM/TPM、并发上限，以及结构化输出 / 原生搜索的三态能力覆盖（自动检测、强制开启、强制关闭）。自动检测会把字段保存为 `null`，运行时跟随 provider capability；只有强制开启 / 关闭才写入明确布尔值。这些字段会进入主推演、multi-run、预测评分、社交文案、可生成式头条卡和报告生成等 LLM 调用链；profile 并发只会收紧有效上限，最终仍受全局并发、全局 pending、用户 pending 和用途 lane 限制。
 
+「测试连接」会同时跑普通 LLM 连通性和一个更快的原生搜索探测。原生搜索探测只回答被测模型 / 上游是否会进入 native web-search tool 注入路径，不等同于 `/api/capabilities` 里的服务端默认 `web_search` hint，也不回显 Base URL 或 API key。本地或自定义 Responses 代理默认仍按 proxy 保护处理；只有显式声明 `xai_responses` 或 `openai_responses` 上游时，才会按对应官方 native-search adapter 放行。`auto`、`off` 或未设置不会释放 proxy 保护；强制关闭原生搜索仍会一票否决工具注入。
+
 保存过 `model_profile_id` 的 scenario 在报告、续跑 / 重放分支、分支标题重写、社交文案和评分等后续 LLM 调用里会尝试恢复同一个 profile。恢复只允许当前用户自己的 profile；缺少用户归属时只在本地单用户 profile 库里按 id 恢复。若 profile 已删除、归属不匹配或无法安全确认，后端会 fail closed，要求重新选择 profile，或在本次请求里同时提供 API key、Base URL 和模型。社交头条卡不满足安全恢复条件时会退回确定性卡片，而不是调用错误的 provider。
 
 静态配置仍按原规则判断：当运行时仍是占位 URL（`http://127.0.0.1:8317/v1`、`http://localhost:8317/v1` 或 `http://host.docker.internal:8317/v1`），且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时，`llm_static_configured=false`；配置了真实 key，或显式改到其它 endpoint 时为 `true`。
@@ -90,7 +92,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
 | `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
 | `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包，并把包内素材带入推演。 |
-| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页视为已配置 LLM，并可在启动推演时选择。Profile 可保存限速、并发和结构化输出 / 原生搜索能力覆盖。 |
+| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页视为已配置 LLM，并可在启动推演时选择。Profile 可保存限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
 
@@ -107,6 +109,8 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 ### 需要额外配置的搜索功能
 
 下面三个功能默认关闭，因为它们需要外部搜索服务。托管搜索服务通常要配置 `WEB_SEARCH_PROVIDER` 和 `WEB_SEARCH_API_KEY`；如果你用 `searxng`，则需要提供可访问的 `SEARXNG_URL`，它本身不需要 API key。
+
+这里的搜索增强是 app-layer 外部检索：系统先调用 Tavily / Exa / Firecrawl / xAI / SearXNG，再把结果注入 prompt。模型原生搜索是另一条 LLM native path，由模型 profile 和运行时 source family domains 决定，不通过 `WEB_SEARCH_PROVIDER=native` 开启。
 
 | 开关 | 默认 | 什么时候打开 |
 |------|------|--------------|

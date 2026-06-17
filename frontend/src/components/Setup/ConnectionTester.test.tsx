@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -62,6 +62,7 @@ describe('ConnectionTester', () => {
       undefined,
       false,
       false, // decoupled
+      undefined,
       undefined,
     );
     expect(probeNativeSearch).not.toHaveBeenCalled();
@@ -156,6 +157,7 @@ describe('ConnectionTester', () => {
       'http://127.0.0.1:8317/v1',
       undefined,
       'auto',
+      undefined,
     );
     expect(testLlmConnection).toHaveBeenCalledWith(
       'key',
@@ -166,6 +168,7 @@ describe('ConnectionTester', () => {
       false,
       false, // decoupled
       'auto',
+      undefined,
     );
   });
 
@@ -203,6 +206,191 @@ describe('ConnectionTester', () => {
       expect(container.querySelector('.tester__native--ok')).toBeInTheDocument();
     });
     expect(screen.getByText('setup.native_probe_supported')).toBeInTheDocument();
+  });
+
+  it('passes the native-search support override to both probe paths', async () => {
+    vi.mocked(probeNativeSearch).mockResolvedValue({
+      would_inject_tools: false,
+      blocking_reasons: ['capability_off'],
+      message: 'capability disabled',
+      detail: {
+        provider: 'xai',
+        is_proxy: false,
+        api_form: 'responses',
+        adapter: 'xai',
+        supports_native_search: false,
+      },
+    });
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="xai_responses"
+        supportsNativeSearchOverride={false}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    await waitFor(() => {
+      expect(probeNativeSearch).toHaveBeenCalledWith(
+        'key',
+        'https://api.x.ai/v1/responses',
+        undefined,
+        'xai_responses',
+        false,
+      );
+    });
+    expect(testLlmConnection).toHaveBeenCalledWith(
+      'key',
+      'https://api.x.ai/v1/responses',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      'xai_responses',
+      false,
+    );
+  });
+
+  it('passes a null native-search support override instead of dropping it', async () => {
+    vi.mocked(probeNativeSearch).mockResolvedValue({
+      would_inject_tools: true,
+      blocking_reasons: [],
+      message: 'native search available',
+      detail: {
+        provider: 'xai',
+        is_proxy: false,
+        api_form: 'responses',
+        adapter: 'xai',
+        supports_native_search: true,
+      },
+    });
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="xai_responses"
+        supportsNativeSearchOverride={null}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    await waitFor(() => {
+      expect(probeNativeSearch).toHaveBeenCalledWith(
+        'key',
+        'https://api.x.ai/v1/responses',
+        undefined,
+        'xai_responses',
+        null,
+      );
+    });
+    expect(testLlmConnection).toHaveBeenCalledWith(
+      'key',
+      'https://api.x.ai/v1/responses',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      'xai_responses',
+      null,
+    );
+  });
+
+  it('passes a true native-search support override to both probe and full test', async () => {
+    vi.mocked(probeNativeSearch).mockResolvedValue({
+      would_inject_tools: true,
+      blocking_reasons: [],
+      message: 'native search available',
+      detail: {
+        provider: 'xai',
+        is_proxy: false,
+        api_form: 'responses',
+        adapter: 'xai',
+        supports_native_search: true,
+      },
+    });
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="auto"
+        supportsNativeSearchOverride={true}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    await waitFor(() => {
+      expect(probeNativeSearch).toHaveBeenCalledWith(
+        'key',
+        'https://api.x.ai/v1/responses',
+        undefined,
+        'auto',
+        true,
+      );
+    });
+    expect(testLlmConnection).toHaveBeenCalledWith(
+      'key',
+      'https://api.x.ai/v1/responses',
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      'auto',
+      true,
+    );
+  });
+
+  it('renders probe request failures separately from unsupported native search', async () => {
+    vi.mocked(probeNativeSearch).mockRejectedValue(new Error('probe exploded'));
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="xai_responses"
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    await waitFor(() => {
+      expect(container.querySelector('.tester__native--error')).toBeInTheDocument();
+    });
+    expect(screen.getByText('setup.native_probe_failed')).toBeInTheDocument();
+    expect(screen.queryByText('setup.native_probe_unsupported')).not.toBeInTheDocument();
   });
 
   it('omits the native-search block when backend returns no native_search', async () => {
@@ -270,5 +458,164 @@ describe('ConnectionTester', () => {
 
     // Wait for the full test state update to settle to prevent act() warnings
     expect(await screen.findByRole('status')).toHaveTextContent('OK.');
+  });
+
+  it('keeps the button disabled while the native probe is still pending', async () => {
+    let resolveNativeProbe: (value: unknown) => void = () => {};
+    vi.mocked(probeNativeSearch).mockReturnValue(new Promise((resolve) => {
+      resolveNativeProbe = resolve;
+    }) as unknown as ReturnType<typeof probeNativeSearch>);
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="xai_responses"
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'setup.test_button' });
+    await user.click(button);
+    expect(await screen.findByRole('status')).toHaveTextContent('OK.');
+    expect(button).toBeDisabled();
+
+    resolveNativeProbe({
+      would_inject_tools: true,
+      blocking_reasons: [],
+      message: 'native search available',
+      detail: {
+        provider: 'xai',
+        is_proxy: false,
+        api_form: 'responses',
+        adapter: 'xai',
+        supports_native_search: true,
+      },
+    });
+
+    await waitFor(() => {
+      expect(button).not.toBeDisabled();
+    });
+  });
+
+  it('ignores a pending native probe after the tested inputs change', async () => {
+    let resolveNativeProbe: (value: unknown) => void = () => {};
+    vi.mocked(probeNativeSearch).mockReturnValue(new Promise((resolve) => {
+      resolveNativeProbe = resolve;
+    }) as unknown as ReturnType<typeof probeNativeSearch>);
+    vi.mocked(testLlmConnection).mockReturnValue(new Promise(() => {}) as unknown as ReturnType<typeof testLlmConnection>);
+
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="xai_responses"
+        supportsNativeSearchOverride={null}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    expect(screen.getByText('setup.native_probe_probing')).toBeInTheDocument();
+
+    rerender(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="off"
+        supportsNativeSearchOverride={false}
+      />,
+    );
+
+    await act(async () => {
+      resolveNativeProbe({
+        would_inject_tools: true,
+        blocking_reasons: [],
+        message: 'native search available',
+        detail: {
+          provider: 'xai',
+          is_proxy: false,
+          api_form: 'responses',
+          adapter: 'xai',
+          supports_native_search: true,
+        },
+      });
+    });
+
+    expect(screen.queryByText('setup.native_probe_supported')).not.toBeInTheDocument();
+    expect(screen.queryByText('native search available')).not.toBeInTheDocument();
+  });
+
+  it('treats omitted and null native-search support overrides as different tested inputs', async () => {
+    let resolveNativeProbe: (value: unknown) => void = () => {};
+    vi.mocked(probeNativeSearch).mockReturnValue(new Promise((resolve) => {
+      resolveNativeProbe = resolve;
+    }) as unknown as ReturnType<typeof probeNativeSearch>);
+    vi.mocked(testLlmConnection).mockReturnValue(new Promise(() => {}) as unknown as ReturnType<typeof testLlmConnection>);
+
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="auto"
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    expect(screen.getByText('setup.native_probe_probing')).toBeInTheDocument();
+
+    rerender(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1/responses"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="auto"
+        supportsNativeSearchOverride={null}
+      />,
+    );
+
+    await act(async () => {
+      resolveNativeProbe({
+        would_inject_tools: true,
+        blocking_reasons: [],
+        message: 'native search available',
+        detail: {
+          provider: 'xai',
+          is_proxy: false,
+          api_form: 'responses',
+          adapter: 'xai',
+          supports_native_search: true,
+        },
+      });
+    });
+
+    expect(screen.queryByText('setup.native_probe_supported')).not.toBeInTheDocument();
+    expect(screen.queryByText('native search available')).not.toBeInTheDocument();
+  });
+
+  it('records raw payload for non-ApiError connection failures', async () => {
+    vi.mocked(testLlmConnection).mockRejectedValue(new Error('network down'));
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <ConnectionTester baseUrl="https://api.example.com/v1" apiKey="key" />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('setup.test_failure_network');
+    await user.click(screen.getByRole('button', { name: 'setup.show_log' }));
+    expect(container.querySelector('.tester__log')).toHaveTextContent(
+      '"message": "setup.test_failure_network"',
+    );
   });
 });

@@ -167,6 +167,7 @@ describe('ModelProfileManager', () => {
         tpm: null,
         concurrency: null,
         supports_structured_outputs: null,
+        supports_native_search: null,
         native_search_upstream: 'auto',
       });
     });
@@ -205,6 +206,7 @@ describe('ModelProfileManager', () => {
     await waitFor(() => {
       expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
         supports_structured_outputs: true,
+        supports_native_search: false,
         native_search_upstream: 'off',
       }));
     });
@@ -237,6 +239,7 @@ describe('ModelProfileManager', () => {
 
     await waitFor(() => {
       expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+        supports_native_search: null,
         native_search_upstream: 'xai_responses',
       }));
     });
@@ -452,6 +455,117 @@ describe('ModelProfileManager', () => {
 
     await waitFor(() => {
       expect(patchModelProfileMock).toHaveBeenCalledWith('profile-xai', expect.objectContaining({
+        supports_native_search: null,
+        native_search_upstream: 'xai_responses',
+      }));
+    });
+  });
+
+  it('clears a hidden legacy supports_native_search=false when editing to an explicit native upstream', async () => {
+    const legacyBlockedProfile: ModelProfile = {
+      ...mockProfiles[0],
+      id: 'profile-legacy-blocked',
+      name: 'Legacy Blocked Proxy',
+      supports_native_search: false,
+      native_search_upstream: 'off',
+    };
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [legacyBlockedProfile], count: 1 });
+    patchModelProfileMock.mockResolvedValue({ ...legacyBlockedProfile, native_search_upstream: 'xai_responses' });
+
+    render(<ModelProfileManager />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Legacy Blocked Proxy')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Edit/ })[0]);
+    fireEvent.change(screen.getByLabelText('model_profiles.supports_native_search'), {
+      target: { value: 'xai_responses' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(patchModelProfileMock).toHaveBeenCalledWith('profile-legacy-blocked', expect.objectContaining({
+        supports_native_search: null,
+        native_search_upstream: 'xai_responses',
+      }));
+    });
+  });
+
+  it('preserves an existing supports_native_search=true override when editing without changing upstream', async () => {
+    const forceEnabledProfile: ModelProfile = {
+      ...mockProfiles[0],
+      id: 'profile-force-native',
+      name: 'Force Native Auto',
+      supports_native_search: true,
+      native_search_upstream: 'auto',
+    };
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [forceEnabledProfile], count: 1 });
+    patchModelProfileMock.mockResolvedValue({ ...forceEnabledProfile });
+
+    render(<ModelProfileManager />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Force Native Auto')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Edit/ })[0]);
+    expect(screen.getByLabelText('model_profiles.supports_native_search')).toHaveValue('auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(patchModelProfileMock).toHaveBeenCalledWith('profile-force-native', expect.objectContaining({
+        supports_native_search: true,
+        native_search_upstream: 'auto',
+      }));
+    });
+  });
+
+  it('clears an existing supports_native_search=true override when editing to a different upstream', async () => {
+    const forceEnabledProfile: ModelProfile = {
+      ...mockProfiles[0],
+      id: 'profile-force-native-switch',
+      name: 'Force Native Switch',
+      supports_native_search: true,
+      native_search_upstream: 'auto',
+    };
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [forceEnabledProfile], count: 1 });
+    patchModelProfileMock.mockResolvedValue({ ...forceEnabledProfile, native_search_upstream: 'xai_responses' });
+
+    render(<ModelProfileManager />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Force Native Switch')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Edit/ })[0]);
+    fireEvent.change(screen.getByLabelText('model_profiles.supports_native_search'), {
+      target: { value: 'xai_responses' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(patchModelProfileMock).toHaveBeenCalledWith('profile-force-native-switch', expect.objectContaining({
+        supports_native_search: null,
         native_search_upstream: 'xai_responses',
       }));
     });
