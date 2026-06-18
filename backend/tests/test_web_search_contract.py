@@ -479,6 +479,49 @@ class TestHealthTestWebSearchServerHint:
         assert data["probe"] is None
         assert data["native_search"]["would_inject_tools"] is True
 
+    def test_live_native_probe_uses_same_native_scope_as_static_gate(
+        self,
+        client,
+        monkeypatch,
+    ):
+        captured: dict[str, object] = {}
+
+        async def _fake_llm_call(*_args, **kwargs):
+            from app.services import llm_client as llm_client_module
+
+            context = llm_client_module._REQUEST_CONTEXT.get()
+            captured["call"] = dict(kwargs)
+            captured["scope"] = {
+                "supports_native_search_override": context.supports_native_search_override,
+                "native_search_upstream_override": context.native_search_upstream_override,
+            }
+            return "Native probe response"
+
+        monkeypatch.setattr(scenarios_api, "llm_call", _fake_llm_call)
+        monkeypatch.setattr(scenarios_api, "get_last_native_citations", lambda: [])
+
+        response = client.post("/api/health/test", json={
+            "llm_api_key": "sk-live-probe",
+            "llm_base_url": "http://127.0.0.1:8317/v1/responses",
+            "llm_model": "grok-live",
+            "native_probe_only": True,
+            "live_native_test": True,
+            "supports_native_search_override": True,
+            "native_search_upstream_override": "xai_responses",
+        })
+
+        assert response.status_code == 200
+        native = response.json()["native_search"]
+        assert native["would_inject_tools"] is True
+        assert native["live_result"]["status"] == "ok"
+        assert captured["call"]["api_key"] == "sk-live-probe"
+        assert captured["call"]["base_url"] == "http://127.0.0.1:8317/v1/responses"
+        assert captured["call"]["model"] == "grok-live"
+        assert captured["scope"] == {
+            "supports_native_search_override": True,
+            "native_search_upstream_override": "xai_responses",
+        }
+
     def test_native_probe_only_declared_xai_upstream_responses_injects(self, client, monkeypatch):
         async def _unexpected_health_check(**kwargs):
             raise AssertionError("native_probe_only must not call health_check")

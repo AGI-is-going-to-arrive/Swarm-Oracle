@@ -42,6 +42,7 @@ from app.services.llm_client import (
     llm_call_json,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
+    normalize_native_search_upstream,
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
@@ -182,6 +183,12 @@ def _llm_scope_kwargs(
     purpose: str,
 ) -> dict[str, Any]:
     overrides = overrides or {}
+    try:
+        native_search_upstream_override = normalize_native_search_upstream(
+            overrides.get("native_search_upstream_override")
+        )
+    except ValueError:
+        native_search_upstream_override = None
     return {
         "purpose": purpose,
         "requests_per_minute": overrides.get("requests_per_minute"),
@@ -193,9 +200,7 @@ def _llm_scope_kwargs(
         "supports_native_search_override": overrides.get(
             "supports_native_search_override"
         ),
-        "native_search_upstream_override": overrides.get(
-            "native_search_upstream_override"
-        ),
+        "native_search_upstream_override": native_search_upstream_override,
     }
 
 

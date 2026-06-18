@@ -79,6 +79,7 @@ from app.services.llm_client import (
     get_last_native_citations,
     health_check,
     llm_call,
+    llm_request_scope,
     measure_provider_parallelism,
     resolve_native_search_injection_decision,
     safe_llm_error_payload,
@@ -648,17 +649,23 @@ async def _live_native_search_probe(
     api_key: str | None,
     base_url: str | None,
     model: str | None,
+    supports_native_search_override: bool | None,
+    native_search_upstream_override: str | None,
 ) -> dict[str, object]:
     """Make a real LLM call with native search tools to verify they work."""
     try:
-        result = await llm_call(
-            "Search the web: what year is it right now? Reply in one sentence.",
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            native_search_domains=["en.wikipedia.org"],
-            timeout=30.0,
-        )
+        with llm_request_scope(
+            supports_native_search_override=supports_native_search_override,
+            native_search_upstream_override=native_search_upstream_override,
+        ):
+            result = await llm_call(
+                "Search the web: what year is it right now? Reply in one sentence.",
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                native_search_domains=["en.wikipedia.org"],
+                timeout=30.0,
+            )
         citations = get_last_native_citations()
         return {
             "status": "ok",
@@ -1068,6 +1075,8 @@ async def api_health_test(req: TestLlmRequest):
                 api_key=req.llm_api_key or None,
                 base_url=validated_base_url,
                 model=req.llm_model or None,
+                supports_native_search_override=req.supports_native_search_override,
+                native_search_upstream_override=req.native_search_upstream_override,
             )
             native_search["live_result"] = live_result
         return {

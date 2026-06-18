@@ -51,12 +51,12 @@ def test_list_models_enumerates_openai_compatible_models(monkeypatch):
     assert "api_key" not in httpx.URL(str(seen["url"])).query.decode()
 
 
-def test_list_models_returns_unsupported_without_admin_token_for_divergent_provider(
+def test_list_models_requires_admin_token_before_enumerating_models(
     monkeypatch,
 ):
     class _UnexpectedAsyncClient:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("divergent providers should not call /models")
+            raise AssertionError("admin token rejection must happen before outbound requests")
 
     monkeypatch.setattr(httpx, "AsyncClient", _UnexpectedAsyncClient)
     monkeypatch.setattr(settings, "ADMIN_TOKEN", "super-secret-token")
@@ -67,11 +67,8 @@ def test_list_models_returns_unsupported_without_admin_token_for_divergent_provi
         json={"base_url": "https://api.anthropic.com/v1", "api_key": "sk-test"},
     )
 
-    assert response.status_code == 200
-    assert response.json()["models"] == []
-    assert response.json()["provider"] == "anthropic"
-    assert response.json()["supported"] is False
-    assert "does not support" in response.json()["reason"]
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ADMIN_TOKEN_REQUIRED"
 
 
 def test_list_models_rejects_disallowed_base_url():

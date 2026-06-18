@@ -1910,6 +1910,36 @@ class TestBuildSnapshot:
             }
         ]
 
+    def test_completed_branch_without_title_returns_structured_outcome_i18n(self):
+        with Session(get_engine()) as session:
+            session.add(Scenario(id="sc_outcome_i18n", question="What happens?"))
+            session.add(
+                Branch(
+                    id="br_outcome_i18n",
+                    scenario_id="sc_outcome_i18n",
+                    title="",
+                    story="The branch reaches a final state.",
+                    insight="The ending is stable.",
+                    status=BranchStatus.COMPLETED,
+                )
+            )
+            session.commit()
+
+        append_round_nodes(
+            "sc_outcome_i18n",
+            "br_outcome_i18n",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_outcome_i18n")],
+        )
+        result = build_snapshot("sc_outcome_i18n")
+
+        outcome = next(node for node in result["nodes"] if node["type"] == "outcome")
+        assert outcome["label"] == "Outcome"
+        assert outcome["payload"]["label_i18n"] == {
+            "key": "causal.node.outcome",
+            "params": {},
+        }
+
     def test_branch_filter_returns_only_matching_outcome_node(self):
         with Session(get_engine()) as session:
             session.add(Scenario(id="sc_filtered_outcome", question="Which ending?"))
@@ -2638,6 +2668,22 @@ class TestStanceShift:
         assert "new_score" in p
         assert "delta" in p
         assert p["delta"] >= 0.4
+
+    def test_payload_contains_structured_stance_shift_i18n(self):
+        """Stance shift label should expose translation key and params."""
+        m1 = [MockMessage(emotion="confident", agent_id="a1", id="m_ss_i18n1")]
+        m2 = [MockMessage(emotion="angry", agent_id="a1", id="m_ss_i18n2")]
+        append_round_nodes("sc_ss_i18n", "br1", 1, m1)
+        append_round_nodes("sc_ss_i18n", "br1", 2, m2)
+
+        result = build_snapshot("sc_ss_i18n")
+        shift = next(node for node in result["nodes"] if node["type"] == "stance_shift")
+
+        assert shift["label"] == "a1 stance shifted"
+        assert shift["payload"]["label_i18n"] == {
+            "key": "causal.node.stance_shift",
+            "params": {"agent_name": "a1"},
+        }
 
     def test_replaying_round_removes_stale_shift_and_refreshes_prev_frame(self):
         """Replaying the same round should drop obsolete shift nodes and refresh stored state."""

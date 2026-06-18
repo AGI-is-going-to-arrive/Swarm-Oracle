@@ -78,6 +78,17 @@ from app.visualization.mapper import VisualizationMapper
 # ── Module-level fake for the new Pass-1 natural-text call ────
 
 
+def test_llm_scope_kwargs_drops_invalid_native_search_upstream_override():
+    kwargs = simulator_module._llm_scope_kwargs(
+        {"native_search_upstream_override": "invalid-upstream"},
+        purpose="scenario_turn_generation",
+    )
+
+    assert kwargs["native_search_upstream_override"] is None
+    with llm_request_scope(**kwargs):
+        pass
+
+
 async def _fake_llm_call(*_args, **_kwargs):
     return "This is a simulated agent response for testing."
 

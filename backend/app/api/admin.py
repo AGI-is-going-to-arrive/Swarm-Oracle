@@ -156,7 +156,7 @@ async def api_preflight():
     return [asdict(result) for result in await run_preflight()]
 
 
-@router.post("/list-models")
+@router.post("/list-models", dependencies=[Depends(verify_admin_token)])
 async def api_list_models(request: ListModelsRequest):
     """List models from an OpenAI-compatible provider without hard-failing callers."""
     normalized_base_url = request.base_url.strip()

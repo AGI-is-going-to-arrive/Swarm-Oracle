@@ -43,6 +43,10 @@ _DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
 _FORK_REASON_QUOTE_RE = re.compile(r"[“\"']([^”\"']+)[”\"']")
 
 
+def _node_label_i18n(key: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"key": f"causal.node.{key}", "params": params or {}}
+
+
 @dataclass
 class GraphDelta:
     """Delta emitted by causal graph append operations."""
@@ -1261,6 +1265,10 @@ def append_round_nodes(
                             "prev_score": prev_frame.stance_score,
                             "new_score": current_stance,
                             "delta": delta,
+                            "label_i18n": _node_label_i18n(
+                                "stance_shift",
+                                {"agent_name": shift_agent_name},
+                            ),
                         }),
                     }
 
@@ -1700,22 +1708,26 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
         for branch in visible_outcome_branches:
             outcome_id = f"outcome:{branch.id}"
             source_node = _latest_source_node_for_outcome(nodes, branch.id)
+            outcome_label = branch.title or "Outcome"
+            outcome_payload: dict[str, Any] = {
+                "branch_id": branch.id,
+                "title": branch.title,
+                "probability": branch.probability,
+                "status": branch.status.value,
+                "story_excerpt": _story_excerpt(branch.story),
+                "insight": branch.insight,
+                "parent_branch_id": branch.parent_branch_id,
+            }
+            if not branch.title:
+                outcome_payload["label_i18n"] = _node_label_i18n("outcome")
             outcome_nodes.append(
                 {
                     "id": outcome_id,
                     "key": f"outcome_{branch.id}",
                     "type": "outcome",
-                    "label": branch.title or "Outcome",
+                    "label": outcome_label,
                     "round": source_node.round_number if source_node is not None else None,
-                    "payload": {
-                        "branch_id": branch.id,
-                        "title": branch.title,
-                        "probability": branch.probability,
-                        "status": branch.status.value,
-                        "story_excerpt": _story_excerpt(branch.story),
-                        "insight": branch.insight,
-                        "parent_branch_id": branch.parent_branch_id,
-                    },
+                    "payload": outcome_payload,
                 }
             )
             if source_node is not None:
