@@ -3806,3 +3806,185 @@ class TestLlmCallNativeSearch:
             )
 
         assert get_last_native_citations() == []
+
+
+class TestInferUpstreamFromModelName:
+    """Tests for _infer_upstream_from_model_name model-name → provider inference."""
+
+    def test_xai_grok_models(self):
+        from app.services.llm_client import _infer_upstream_from_model_name
+        assert _infer_upstream_from_model_name("grok-composer-2.5-fast") == "xai"
+        assert _infer_upstream_from_model_name("grok-2-1212") == "xai"
+        assert _infer_upstream_from_model_name("grok_beta") == "xai"
+        assert _infer_upstream_from_model_name("GROK-3") == "xai"
+
+    def test_openai_gpt_models(self):
+        from app.services.llm_client import _infer_upstream_from_model_name
+        assert _infer_upstream_from_model_name("gpt-4o") == "openai"
+        assert _infer_upstream_from_model_name("gpt4o") == "openai"
+        assert _infer_upstream_from_model_name("chatgpt-4o-latest") == "openai"
+
+    def test_openai_o_series(self):
+        from app.services.llm_client import _infer_upstream_from_model_name
+        assert _infer_upstream_from_model_name("o1") == "openai"
+        assert _infer_upstream_from_model_name("o1-mini") == "openai"
+        assert _infer_upstream_from_model_name("o3") == "openai"
+        assert _infer_upstream_from_model_name("o3-mini") == "openai"
+        assert _infer_upstream_from_model_name("o4-mini") == "openai"
+
+    def test_no_false_positives(self):
+        from app.services.llm_client import _infer_upstream_from_model_name
+        assert _infer_upstream_from_model_name("o100-custom") is None
+        assert _infer_upstream_from_model_name("o3p-local") is None
+        assert _infer_upstream_from_model_name("grokai-custom") is None
+
+    def test_other_providers_not_matched(self):
+        from app.services.llm_client import _infer_upstream_from_model_name
+        assert _infer_upstream_from_model_name("deepseek-v3") is None
+        assert _infer_upstream_from_model_name("qwen-max") is None
+        assert _infer_upstream_from_model_name("claude-3-opus") is None
+        assert _infer_upstream_from_model_name("llama-3.1-70b") is None
+
+    def test_none_and_empty(self):
+        from app.services.llm_client import _infer_upstream_from_model_name
+        assert _infer_upstream_from_model_name(None) is None
+        assert _infer_upstream_from_model_name("") is None
+        assert _infer_upstream_from_model_name("  ") is None
+
+
+class TestResolveNativeSearchModelInference:
+    """Tests for model-name inference in resolve_native_search_injection_decision."""
+
+    def test_proxy_auto_grok_releases_gate(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=None,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+            model="grok-composer-2.5-fast",
+        )
+        assert decision.would_inject_tools
+        assert decision.inferred_upstream is True
+        assert decision.provider == "xai"
+        assert not decision.is_proxy
+        assert "is_proxy" not in decision.blocking_reasons
+
+    def test_proxy_auto_gpt_releases_gate(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=None,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+            model="gpt-4o",
+        )
+        assert decision.would_inject_tools
+        assert decision.inferred_upstream is True
+        assert decision.provider == "openai"
+
+    def test_proxy_auto_unknown_model_stays_blocked(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=None,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+            model="deepseek-v3",
+        )
+        assert not decision.would_inject_tools
+        assert "is_proxy" in decision.blocking_reasons
+        assert decision.inferred_upstream is False
+
+    def test_proxy_off_grok_respects_off(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=None,
+            native_search_upstream_override="off",
+            native_search_domains=None,
+            model="grok-composer-2.5-fast",
+        )
+        assert not decision.would_inject_tools
+        assert decision.inferred_upstream is False
+
+    def test_no_model_backward_compat(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=None,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+        )
+        assert not decision.would_inject_tools
+        assert "is_proxy" in decision.blocking_reasons
+
+    def test_explicit_upstream_takes_precedence_over_inference(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=None,
+            native_search_upstream_override="xai_responses",
+            native_search_domains=None,
+            model="gpt-4o",
+        )
+        assert decision.would_inject_tools
+        assert decision.declared_upstream is True
+        assert decision.inferred_upstream is False
+        assert decision.provider == "xai"
+
+    def test_chat_endpoint_still_blocks_with_inference(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=True,
+            supports_native_search_override=None,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+            model="grok-2",
+        )
+        assert not decision.would_inject_tools
+        assert "is_chat" in decision.blocking_reasons
+
+    def test_supports_native_search_false_veto_with_inference(self):
+        from app.services.llm_client import (
+            resolve_native_search_injection_decision,
+            _LOCAL_PROXY_PROFILE,
+        )
+        decision = resolve_native_search_injection_decision(
+            provider_profile=_LOCAL_PROXY_PROFILE,
+            is_chat=False,
+            supports_native_search_override=False,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+            model="grok-2",
+        )
+        assert not decision.would_inject_tools
+        assert "capability_off" in decision.blocking_reasons

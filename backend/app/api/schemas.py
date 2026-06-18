@@ -499,6 +499,7 @@ class TestLlmRequest(BaseModel):
     native_probe_only: bool = False
     supports_native_search_override: bool | None = None
     native_search_upstream_override: NativeSearchUpstreamOverride | None = None
+    live_native_test: bool = False
 
     @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
     @classmethod

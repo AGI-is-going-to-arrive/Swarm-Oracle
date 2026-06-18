@@ -76,7 +76,9 @@ from app.services.llm_client import (
     _merge_provider_capability_overrides,
     _resolve_llm_api_url,
     detect_provider,
+    get_last_native_citations,
     health_check,
+    llm_call,
     measure_provider_parallelism,
     resolve_native_search_injection_decision,
     safe_llm_error_payload,
@@ -641,11 +643,41 @@ def _build_web_search_server_hint() -> dict:
     return {**info, "method": "external", "provider": provider}
 
 
+async def _live_native_search_probe(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+) -> dict[str, object]:
+    """Make a real LLM call with native search tools to verify they work."""
+    try:
+        result = await llm_call(
+            "Search the web: what year is it right now? Reply in one sentence.",
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            native_search_domains=["en.wikipedia.org"],
+            timeout=30.0,
+        )
+        citations = get_last_native_citations()
+        return {
+            "status": "ok",
+            "citations_found": len(citations),
+            "response_preview": (result or "")[:120],
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": str(exc)[:200],
+        }
+
+
 def _build_native_search_probe_hint(
     *,
     llm_base_url: str | None,
     supports_native_search_override: bool | None,
     native_search_upstream_override: str | None,
+    model: str | None = None,
 ) -> dict[str, object]:
     """Static native-search injection gate for /health/test; does not call a provider."""
     target_url = _resolve_llm_api_url(llm_base_url)
@@ -662,6 +694,7 @@ def _build_native_search_probe_hint(
         supports_native_search_override=supports_native_search_override,
         native_search_upstream_override=native_search_upstream_override,
         native_search_domains=None,
+        model=model,
     )
     return {
         "would_inject_tools": decision.would_inject_tools,
@@ -673,6 +706,7 @@ def _build_native_search_probe_hint(
             supports_native_search=decision.supports_native_search,
             adapter_name=decision.adapter_name,
             would_inject_tools=decision.would_inject_tools,
+            inferred_upstream=decision.inferred_upstream,
         ),
         "detail": {
             "provider": decision.provider,
@@ -681,6 +715,7 @@ def _build_native_search_probe_hint(
             "adapter": decision.adapter_name,
             "supports_native_search": decision.supports_native_search,
             "native_search_upstream": decision.native_search_upstream,
+            "inferred_upstream": decision.inferred_upstream,
         },
     }
 
@@ -693,10 +728,12 @@ def _build_native_search_probe_message(
     supports_native_search: bool,
     adapter_name: str,
     would_inject_tools: bool,
+    inferred_upstream: bool = False,
 ) -> str:
     if would_inject_tools:
+        source = "通过模型名称推断" if inferred_upstream else "被识别为真实"
         return (
-            f"当前 base_url 被识别为真实 provider(provider={provider}),端点为 Responses "
+            f"当前 base_url {source} provider(provider={provider}),端点为 Responses "
             "形态,provider 能力位与 native search adapter 均满足;实际推演在选择 "
             "Source Family 后会注入 native 搜索 tools。"
         )
@@ -1015,7 +1052,15 @@ async def api_health_test(req: TestLlmRequest):
             llm_base_url=validated_base_url,
             supports_native_search_override=req.supports_native_search_override,
             native_search_upstream_override=req.native_search_upstream_override,
+            model=req.llm_model,
         )
+        if req.live_native_test and native_search.get("would_inject_tools"):
+            live_result = await _live_native_search_probe(
+                api_key=req.llm_api_key or None,
+                base_url=validated_base_url,
+                model=req.llm_model or None,
+            )
+            native_search["live_result"] = live_result
         return {
             "server": "ok",
             "llm": None,
@@ -1029,6 +1074,7 @@ async def api_health_test(req: TestLlmRequest):
             llm_base_url=validated_base_url,
             supports_native_search_override=req.supports_native_search_override,
             native_search_upstream_override=req.native_search_upstream_override,
+            model=req.llm_model,
         )
     llm_status = await health_check(
         api_key=req.llm_api_key or None,

@@ -67,6 +67,20 @@ _DECLARED_NATIVE_SEARCH_ADAPTERS: dict[str, str] = {
     "xai_responses": "xai",
     "openai_responses": "openai",
 }
+
+
+def _infer_upstream_from_model_name(model: str | None) -> str | None:
+    """Best-effort upstream provider inference from model name for proxy endpoints."""
+    if not model:
+        return None
+    m = model.strip().lower()
+    if m.startswith(("grok-", "grok_")):
+        return "xai"
+    if m in ("o1", "o3", "o4") or m.startswith((
+        "gpt-", "gpt4", "chatgpt-", "o1-", "o1_", "o3-", "o3_", "o4-",
+    )):
+        return "openai"
+    return None
 _LLM_SAFE_ERROR_MESSAGES: dict[str, str] = {
     "LLM_UNREACHABLE": "LLM provider is unreachable. Check the provider URL and network.",
     "LLM_AUTH_FAILED": "LLM authentication failed. Check the configured API key.",
@@ -286,6 +300,7 @@ class NativeSearchInjectionDecision:
     blocking_reasons: tuple[str, ...]
     native_search_upstream: NativeSearchUpstream | None
     declared_upstream: bool
+    inferred_upstream: bool
     adapter: Any
 
     @property
@@ -445,12 +460,14 @@ def resolve_native_search_injection_decision(
     supports_native_search_override: bool | None,
     native_search_upstream_override: object,
     native_search_domains: list[str] | None,
+    model: str | None = None,
 ) -> NativeSearchInjectionDecision:
     """Resolve native-search gates shared by live injection and static probe."""
 
     upstream = normalize_native_search_upstream(native_search_upstream_override)
     declared_adapter_provider = _DECLARED_NATIVE_SEARCH_ADAPTERS.get(upstream or "")
     api_form: Literal["chat", "responses"] = "chat" if is_chat else "responses"
+    inferred_upstream = False
 
     if declared_adapter_provider:
         provider_name = declared_adapter_provider
@@ -466,6 +483,15 @@ def resolve_native_search_injection_decision(
             False if upstream == "off" else provider_profile.supports_native_search
         )
         adapter_provider = provider_profile.name
+
+        if effective_is_proxy and upstream in (None, "auto"):
+            inferred = _infer_upstream_from_model_name(model)
+            if inferred:
+                provider_name = inferred
+                effective_is_proxy = False
+                supports_native_search = supports_native_search_override is not False
+                adapter_provider = inferred
+                inferred_upstream = True
 
     from app.services.native_search_adapters import get_adapter
 
@@ -494,6 +520,7 @@ def resolve_native_search_injection_decision(
         blocking_reasons=tuple(blocking_reasons),
         native_search_upstream=upstream,
         declared_upstream=declared_adapter_provider is not None,
+        inferred_upstream=inferred_upstream,
         adapter=adapter,
     )
 
@@ -2316,6 +2343,7 @@ async def llm_call(
                 request_context.native_search_upstream_override
             ),
             native_search_domains=native_search_domains,
+            model=model,
         )
         if native_decision.would_inject_tools:
             _native_adapter = native_decision.adapter

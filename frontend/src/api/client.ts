@@ -676,6 +676,13 @@ export interface NativeSearchProbe {
     adapter: string;
     supports_native_search: boolean;
     native_search_upstream?: string;
+    inferred_upstream?: boolean;
+  };
+  live_result?: {
+    status: 'ok' | 'error';
+    citations_found?: number;
+    response_preview?: string;
+    error?: string;
   };
 }
 
@@ -727,6 +734,7 @@ export async function probeNativeSearch(
   model?: string,
   nativeSearchUpstream?: string,
   supportsNativeSearchOverride?: boolean | null,
+  liveTest?: boolean,
 ): Promise<NativeSearchProbe | null> {
   const payload = await request<{ native_search?: NativeSearchProbe | null }>('/health/test', {
     method: 'POST',
@@ -738,6 +746,7 @@ export async function probeNativeSearch(
       ...(model && { llm_model: model }),
       ...(nativeSearchUpstream && { native_search_upstream_override: nativeSearchUpstream }),
       ...(supportsNativeSearchOverride !== undefined ? { supports_native_search_override: supportsNativeSearchOverride } : {}),
+      ...(liveTest && { live_native_test: true }),
     }),
   });
   return payload?.native_search ?? null;

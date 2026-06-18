@@ -298,6 +298,42 @@ export function ConnectionTester({
     })());
 
     await Promise.all(promises);
+
+    if (!isCurrentRun()) return;
+    // After static probe + LLM test both complete, fire live native search test
+    // if the static probe indicated support.
+    if (
+      includeNativeProbe
+      && runIdRef.current === runId
+    ) {
+      // Read latest state via refs/callbacks since setState is async
+      setNativeResult((prev) => {
+        if (prev?.would_inject_tools) {
+          // Fire live test asynchronously and update state when done
+          setNativeStatus('probing');
+          probeNativeSearch(
+            apiKey || undefined,
+            baseUrl || undefined,
+            model || undefined,
+            nativeSearchUpstream,
+            supportsNativeSearchOverride,
+            true, // liveTest
+          ).then((liveData) => {
+            if (runIdRef.current !== runId) return;
+            if (liveData) {
+              setNativeResult(liveData);
+              setNativeStatus(liveData.would_inject_tools ? 'success' : 'blocked');
+              setRawPayload((p) => ({ ...p, native_search: liveData }));
+            }
+          }).catch(() => {
+            // Live test failure is non-fatal; keep static result
+            if (runIdRef.current !== runId) return;
+            setNativeStatus('success');
+          });
+        }
+        return prev;
+      });
+    }
   };
 
   const displayCurrentRun = activeRunSignature === requestSignature;
@@ -318,10 +354,13 @@ export function ConnectionTester({
     : (displayNativeStatus === 'success'
       ? 'ok'
       : (displayNativeStatus === 'error' ? 'error' : 'blocked'));
+  const hasLiveResult = displayNativeResult?.live_result != null;
   const nativeBadgeText = displayNativeStatus === 'probing'
     ? t('setup.native_probe_probing')
     : (displayNativeStatus === 'success'
-      ? t('setup.native_probe_supported')
+      ? (hasLiveResult
+        ? t('setup.native_probe_live_supported')
+        : t('setup.native_probe_supported'))
       : (displayNativeStatus === 'error'
         ? t('setup.native_probe_failed')
         : t('setup.native_probe_unsupported')));
@@ -359,7 +398,7 @@ export function ConnectionTester({
           aria-live="polite"
         >
           <div className="tester__native-head">
-            <span className="tester__native-title">{t('setup.native_probe_title')}</span>
+            <span className="tester__native-title">{hasLiveResult ? t('setup.native_probe_live_title') : t('setup.native_probe_title')}</span>
             <span className="tester__native-badge">
               {nativeBadgeText}
             </span>
@@ -379,6 +418,10 @@ export function ConnectionTester({
                   )} · adapter=${displayNativeResult.detail.adapter}${
                     displayNativeResult.detail.native_search_upstream
                       ? ` · native_search_upstream=${displayNativeResult.detail.native_search_upstream}`
+                      : ''
+                  }${
+                    displayNativeResult.detail.inferred_upstream
+                      ? ' · inferred_from_model'
                       : ''
                   }`}
                 </p>
