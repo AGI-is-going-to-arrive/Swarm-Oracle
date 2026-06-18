@@ -450,6 +450,28 @@ function getCausalEdgeRelationLabel(
   return getCausalEdgeBaseRelationLabel(edge, t);
 }
 
+// Backend-generated causal node labels carry an optional structured `label_i18n`
+// payload ({ key, params }) so the frontend can localize them. Fall back to the
+// raw backend `label` when absent or malformed (backward compatible).
+function resolveCausalNodeLabel(node: GraphNodeData, t: CausalTranslate): string {
+  const fallback = node.label || node.key;
+  const payload = node.payload;
+  if (payload && typeof payload === 'object') {
+    const labelI18n = (payload as Record<string, unknown>).label_i18n;
+    if (labelI18n && typeof labelI18n === 'object') {
+      const record = labelI18n as Record<string, unknown>;
+      if (typeof record.key === 'string') {
+        const params =
+          record.params && typeof record.params === 'object'
+            ? (record.params as Record<string, unknown>)
+            : {};
+        return t(record.key, { ...params, defaultValue: fallback });
+      }
+    }
+  }
+  return fallback;
+}
+
 function getEvidenceTierContextLabel(
   tier: 'low' | 'medium' | 'high',
   t: CausalTranslate,
@@ -763,7 +785,7 @@ function layoutDagre(
 
   const flowNodes: Node[] = nodes.map(n => {
     const pos = g.node(n.id);
-    const fullLabel = n.label || n.key;
+    const fullLabel = resolveCausalNodeLabel(n, t);
     const label = fullLabel.length > 50 ? fullLabel.slice(0, 50) + '\u2026' : fullLabel;
     const typeLabel = getCausalTypeLabel(n.type, t);
     const roundLabel = t('causal.round_label', 'Round');

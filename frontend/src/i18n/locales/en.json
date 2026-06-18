@@ -2350,6 +2350,10 @@
         "server": "The server could not load the causal graph right now.",
         "load_failed": "Unable to load the causal graph right now. Please retry."
       },
+      "node": {
+        "stance_shift": "{{agent_name}} stance shifted",
+        "outcome": "Outcome"
+      },
       "open_details": "Open details",
       "type_event": "Event",
       "type_intervention": "Intervention",

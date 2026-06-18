@@ -2350,6 +2350,10 @@
         "server": "服务器暂时无法加载因果图谱。",
         "load_failed": "因果图谱暂时无法加载，请稍后重试。"
       },
+      "node": {
+        "stance_shift": "{{agent_name}} 立场转变",
+        "outcome": "结局"
+      },
       "open_details": "打开详情",
       "type_event": "事件",
       "type_intervention": "干预",
