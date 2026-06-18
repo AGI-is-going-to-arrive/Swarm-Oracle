@@ -72,7 +72,8 @@ export function ConversationHistoryPicker({
   toggleLabel,
   alwaysOpen = false,
 }: ConversationHistoryPickerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n?.language === 'zh' ? 'zh-CN' : 'en';
   const [open, setOpen] = useState<boolean>(alwaysOpen);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState<ListPageState | null>(null);
@@ -285,7 +286,7 @@ export function ConversationHistoryPicker({
                           {labelFor(item, t)}
                         </span>
                         <span className="conversation-history-picker__row-meta">
-                          <span>{formatDate(item.created_at)}</span>
+                          <span>{formatDate(item.created_at, locale)}</span>
                           <span>
                             {t('conversation.history.thread_count', {
                               count: item.last_turn_sequence,
@@ -358,12 +359,12 @@ function labelFor(
   return t('conversation.history.untitled_thread');
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string, locale: string): string {
   if (!iso) return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   try {
-    return date.toLocaleString();
+    return date.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en');
   } catch {
     return iso;
   }

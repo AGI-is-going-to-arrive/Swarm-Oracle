@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useState, type Dispatch, type SetStateAction } from 'react';
+import { lazy, Suspense, useCallback, useState, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EndingRoomParticipant, EndingRoomResult } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
@@ -57,6 +57,13 @@ export default function PostVerdictPanel({
     reload: reloadSurveyCapability,
   } = useCapabilityCheck('roundtable_survey');
 
+  const tabRefs = useRef<Record<PostVerdictTab, HTMLButtonElement | null>>({
+    agent_chat: null,
+    analyst: null,
+    survey: null,
+  });
+  const pendingFocusTabRef = useRef<PostVerdictTab | null>(null);
+
   const [mountedTabs, setMountedTabs] = useState<Set<PostVerdictTab>>(() => new Set(['agent_chat', activeTab]));
 
   const handleTabChange = useCallback((tab: PostVerdictTab) => {
@@ -66,8 +73,6 @@ export default function PostVerdictPanel({
     });
     onTabChange(tab);
   }, [onTabChange]);
-
-  if (!effectiveResult) return null;
 
   const tabs: { id: PostVerdictTab; label: string; desc: string; disabled: boolean }[] = [
     {
@@ -93,8 +98,38 @@ export default function PostVerdictPanel({
     ? activeTab
     : (tabs.find((tab) => !tab.disabled)?.id ?? 'agent_chat');
 
+  useEffect(() => {
+    if (pendingFocusTabRef.current && pendingFocusTabRef.current === effectiveActiveTab) {
+      tabRefs.current[effectiveActiveTab]?.focus();
+      pendingFocusTabRef.current = null;
+    }
+  }, [effectiveActiveTab]);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, tabId: PostVerdictTab) => {
+    const enabledTabs = tabs.filter((t) => !t.disabled || t.id === effectiveActiveTab);
+    const currentIndex = enabledTabs.findIndex((t) => t.id === tabId);
+    if (currentIndex === -1) return;
+
+    let nextTab: PostVerdictTab | null = null;
+    if (event.key === 'ArrowRight') {
+      nextTab = enabledTabs[(currentIndex + 1) % enabledTabs.length]?.id ?? null;
+    } else if (event.key === 'ArrowLeft') {
+      nextTab = enabledTabs[(currentIndex - 1 + enabledTabs.length) % enabledTabs.length]?.id ?? null;
+    } else if (event.key === 'Home') {
+      nextTab = enabledTabs[0]?.id ?? null;
+    } else if (event.key === 'End') {
+      nextTab = enabledTabs[enabledTabs.length - 1]?.id ?? null;
+    }
+
+    if (nextTab && nextTab !== tabId) {
+      event.preventDefault();
+      pendingFocusTabRef.current = nextTab;
+      handleTabChange(nextTab);
+    }
+  };
+
   const capabilityErrorPlaceholder = (reload?: () => Promise<void>) => (
-    <div className="roundtable-post-verdict__placeholder" role="alert" aria-live="polite">
+    <div className="roundtable-post-verdict__placeholder" role="status">
       <strong>{t('common.capability_error_title', 'Cannot verify feature')}</strong>
       <span>{t('common.capability_error', 'Unable to verify feature availability. Please try again.')}</span>
       <button type="button" className="btn btn--sm" onClick={() => void reload?.()}>
@@ -109,6 +144,8 @@ export default function PostVerdictPanel({
     </div>
   );
 
+  if (!effectiveResult) return null;
+
   return (
     <section className="roundtable-post-verdict" aria-label={t('roundtable.explore_tab')}>
       <div className="roundtable-post-verdict__tabs" role="tablist">
@@ -117,14 +154,17 @@ export default function PostVerdictPanel({
           return (
             <button
               key={tab.id}
+              ref={(el) => { tabRefs.current[tab.id] = el; }}
               type="button"
               role="tab"
               id={`pvp-tab-${tab.id}`}
               aria-selected={isSelected}
               aria-disabled={tab.disabled || undefined}
               aria-controls={`pvp-panel-${tab.id}`}
+              tabIndex={isSelected ? 0 : -1}
               className={`roundtable-post-verdict__tab ${isSelected ? 'is-active' : ''}`}
               onClick={() => handleTabChange(tab.id)}
+              onKeyDown={(e) => handleKeyDown(e, tab.id)}
               disabled={tab.disabled && !isSelected}
             >
               <span className="roundtable-post-verdict__tab-label">{tab.label}</span>

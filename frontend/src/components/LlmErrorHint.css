@@ -1,5 +1,7 @@
 .llm-error-hint {
+  background-color: #f9f3f3;
   background-color: oklch(96% 0.02 25); /* Premium soft rose background */
+  border: 1px solid #ecd8d8;
   border: 1px solid oklch(88% 0.06 25);
   border-radius: var(--radius-lg, 8px);
   padding: 16px;
@@ -25,12 +27,14 @@
 .llm-error-title {
   font-weight: 700;
   font-size: 1rem;
+  color: #734444;
   color: oklch(35% 0.08 25); /* Deep readable red-brown */
 }
 
 .llm-error-body {
   font-size: 0.9rem;
   line-height: 1.5;
+  color: var(--text-primary, #181611);
   color: var(--text-primary, oklch(20% 0.01 80));
 }
 
@@ -40,6 +44,7 @@
 
 .llm-error-fix {
   margin: 0;
+  color: var(--text-secondary, #58554f);
   color: var(--text-secondary, oklch(45% 0.01 80));
 }
 
@@ -54,18 +59,24 @@
   font-weight: 600;
   border-radius: var(--radius-md, 4px);
   cursor: pointer;
+  background-color: #eadfdf;
   background-color: oklch(90% 0.03 25);
+  border: 1px solid #d4c0c0;
   border: 1px solid oklch(80% 0.05 25);
+  color: #633838;
   color: oklch(30% 0.08 25);
   transition: background-color 0.15s, color 0.15s;
 }
 
 .llm-error-diagnose-btn:hover {
+  background-color: #decbcb;
   background-color: oklch(85% 0.04 25);
+  color: #562c2c;
   color: oklch(25% 0.09 25);
 }
 
 .llm-error-diagnose-btn:focus-visible {
+  outline: 2px solid var(--color-ring, #c61583);
   outline: 2px solid var(--color-ring, oklch(55% 0.22 350));
   outline-offset: 2px;
 }

@@ -118,7 +118,8 @@ function parseKnowledgeDomains(raw: string | null | undefined): KnowledgeDomain[
 }
 
 export function AgentProfileModal({ identity, open, onClose }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n?.language === 'zh' ? 'zh-CN' : 'en';
   const { loading: capLoading, enabled: identityEnabled } = useCapabilityCheck('agent_identity');
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<Element | null>(null);
@@ -379,7 +380,7 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
         {/* Meta */}
         <section className="agent-profile-modal__meta">
           <span>ID: {identity.continuity_key}</span>
-          <span>{t('agent_profile.created', 'Created')}: {new Date(identity.created_at).toLocaleDateString()}</span>
+          <span>{t('agent_profile.created', 'Created')}: {new Date(identity.created_at).toLocaleDateString(locale)}</span>
         </section>
 
         {/* Divider */}

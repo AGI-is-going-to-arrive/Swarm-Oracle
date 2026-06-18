@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -320,7 +320,7 @@ describe('CompareDigestView', () => {
       expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('a:2');
     });
 
-    await user.click(screen.getByRole('button', { name: 'Archive B' }));
+    await user.click(screen.getByRole('tab', { name: 'Archive B' }));
     await waitFor(() => {
       expect(screen.getByTestId('compare-pane-b')).toHaveClass('is-active');
     });
@@ -466,4 +466,56 @@ describe('CompareDigestView', () => {
     expect(screen.queryByText('Replacement')).not.toBeInTheDocument();
     expect(screen.getByText('Intervention Point')).toBeInTheDocument();
   });
+
+  it('supports ArrowLeft and ArrowRight keyboard navigation on tabs', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id',
+      question: 'What if the archive split in two directions?',
+      status: 'done',
+      total_rounds: 4,
+      agents: [],
+      branches: [
+        { id: 'a', title: 'Archive A', probability: 0.62, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+        { id: 'b', title: 'Archive B', probability: 0.38, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+      ],
+      messages: [],
+    });
+
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id',
+      branch_a: 'a',
+      branch_b: 'b',
+      rounds: [
+        { round: 1, branch_a_summary: 'A round 1', branch_b_summary: 'B round 1', divergence_score: 0.33 },
+        { round: 2, branch_a_summary: 'A round 2', branch_b_summary: 'B round 2', divergence_score: 0.74 },
+      ],
+    });
+
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+
+    const tabA = await screen.findByRole('tab', { name: 'Archive A' });
+    const tabB = screen.getByRole('tab', { name: 'Archive B' });
+
+    expect(tabA).toHaveAttribute('aria-selected', 'true');
+    expect(tabB).toHaveAttribute('aria-selected', 'false');
+
+    // Focus tab A and press ArrowRight
+    tabA.focus();
+    fireEvent.keyDown(tabA, { key: 'ArrowRight' });
+
+    await waitFor(() => {
+      expect(tabA).toHaveAttribute('aria-selected', 'false');
+      expect(tabB).toHaveAttribute('aria-selected', 'true');
+    });
+
+    // Focus tab B and press ArrowLeft
+    tabB.focus();
+    fireEvent.keyDown(tabB, { key: 'ArrowLeft' });
+
+    await waitFor(() => {
+      expect(tabA).toHaveAttribute('aria-selected', 'true');
+      expect(tabB).toHaveAttribute('aria-selected', 'false');
+    });
+  });
 });
+

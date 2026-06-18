@@ -171,6 +171,7 @@
 
 .share-modal__hint {
   text-align: center;
+  color: #8c8c8c;
   color: oklch(55% 0 0);
   font-size: 0.95rem;
   padding: 48px 0;
@@ -179,6 +180,7 @@
 .share-modal__subtle {
   margin: 0;
   font-size: 0.82rem;
+  color: #9d8e8b;
   color: oklch(58% 0.02 25);
   text-align: center;
 }
@@ -190,6 +192,7 @@
   align-items: center;
   gap: 16px;
   padding: 48px 0;
+  color: #808080;
   color: oklch(50% 0 0);
 }
 
@@ -264,16 +267,22 @@
   align-items: center;
   padding: 4px 10px;
   border-radius: 999px;
+  background: #faf5f4;
   background: oklch(96% 0.02 25);
+  border: 1px solid #dfd8d7;
   border: 1px solid oklch(85% 0.03 25);
+  color: #7d5e59;
   color: oklch(40% 0.06 25);
   font-size: 0.74rem;
   font-weight: 600;
 }
 
 .share-context__chip--primary {
+  background: #fdf0eb;
   background: oklch(95% 0.06 25);
+  border-color: #dfbdb5;
   border-color: oklch(78% 0.08 25);
+  color: #8c4232;
   color: oklch(38% 0.16 25);
 }
 
@@ -287,6 +296,7 @@
 .share-result-platform {
   font-size: 0.85rem;
   font-weight: 600;
+  color: #a04f3b;
   color: oklch(45% 0.15 25);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -300,13 +310,17 @@
 }
 
 .share-copy-btn--copied {
+  background: #4ab771;
   background: oklch(55% 0.18 145);
   color: #fff;
+  border-color: #4ab771;
   border-color: oklch(55% 0.18 145);
 }
 
 .share-result-text {
+  background: #f7f7f7;
   background: oklch(97% 0 0);
+  border: 1px solid #e6e6e6;
   border: 1px solid oklch(90% 0 0);
   border-radius: 12px;
   padding: 20px;
@@ -315,6 +329,7 @@
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
+  color: #404040;
   color: oklch(25% 0 0);
   max-height: 400px;
   overflow-y: auto;
@@ -325,6 +340,7 @@
 }
 
 .share-result-text::-webkit-scrollbar-thumb {
+  background: #cccccc;
   background: oklch(80% 0 0);
   border-radius: 3px;
 }

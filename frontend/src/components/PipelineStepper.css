@@ -33,6 +33,7 @@
 }
 
 .pipeline-stepper--error {
+  border-top-color: rgba(199, 87, 81, 0.6);
   border-top-color: oklch(0.55 0.2 25 / 0.6);
 }
 
@@ -44,21 +45,25 @@
   padding: 4px 10px;
   font-size: 0.75rem;
   font-weight: 500;
+  color: #84858e;
   color: oklch(0.55 0.01 260);
   white-space: nowrap;
   transition: color 0.3s ease;
 }
 
 .pipeline-stepper__step--active {
+  color: #92dbf8;
   color: oklch(0.85 0.12 200);
   font-weight: 600;
 }
 
 .pipeline-stepper__step--completed {
+  color: #6ccc9f;
   color: oklch(0.72 0.14 155);
 }
 
 .pipeline-stepper__step--error {
+  color: #ff7f74;
   color: oklch(0.7 0.2 25);
   font-weight: 600;
 }
@@ -68,23 +73,29 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  background: #60606b;
   background: oklch(0.4 0.01 260);
   flex-shrink: 0;
   transition: background 0.3s ease, box-shadow 0.3s ease;
 }
 
 .pipeline-stepper__step--active .pipeline-stepper__dot {
+  background: #76c0e6;
   background: oklch(0.75 0.14 200);
+  box-shadow: 0 0 6px rgba(118, 192, 230, 0.5);
   box-shadow: 0 0 6px oklch(0.75 0.14 200 / 0.5);
   animation: pipeline-pulse 1.5s ease-in-out infinite;
 }
 
 .pipeline-stepper__step--completed .pipeline-stepper__dot {
+  background: #5ab188;
   background: oklch(0.65 0.16 155);
 }
 
 .pipeline-stepper__step--error .pipeline-stepper__dot {
+  background: #db6159;
   background: oklch(0.6 0.22 25);
+  box-shadow: 0 0 6px rgba(219, 97, 89, 0.5);
   box-shadow: 0 0 6px oklch(0.6 0.22 25 / 0.5);
 }
 
@@ -92,12 +103,14 @@
 .pipeline-stepper__connector {
   width: 24px;
   height: 2px;
+  background: #53545b;
   background: oklch(0.35 0.01 260);
   flex-shrink: 0;
   transition: background 0.3s ease;
 }
 
 .pipeline-stepper__connector--completed {
+  background: #429770;
   background: oklch(0.55 0.12 155);
 }
 

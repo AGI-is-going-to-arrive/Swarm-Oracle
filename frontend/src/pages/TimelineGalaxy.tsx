@@ -144,7 +144,7 @@ export default function TimelineGalaxy() {
   }
   if (capError) {
     return (
-      <div data-testid="timeline-galaxy-root" className="p-6 text-sm" role="alert" aria-live="polite">
+      <div data-testid="timeline-galaxy-root" className="p-6 text-sm" role="alert">
         <h1>{t('common.capability_error_title', 'Cannot verify feature')}</h1>
         <p>{t('common.capability_error', 'Unable to verify feature availability. Please try again.')}</p>
         <button type="button" onClick={() => void reloadCapability?.()}>

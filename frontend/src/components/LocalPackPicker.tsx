@@ -19,6 +19,7 @@ import type {
   LocalizedText,
   SuggestedSettings,
 } from '../types';
+import { copyText } from '../lib/copyText';
 import './LocalPackPicker.css';
 
 export interface LocalPackPickerProps {
@@ -139,7 +140,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
   };
 
   const handleCopyText = (text: string, type: 'prompt' | 'json', templateId?: string) => {
-    navigator.clipboard.writeText(text)
+    copyText(text)
       .then(() => {
         setCopySuccess({ type, templateId, active: true });
         setTimeout(() => setCopySuccess(null), 2000);

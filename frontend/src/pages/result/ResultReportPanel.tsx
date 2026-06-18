@@ -221,9 +221,12 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   }, [storyData]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -240,11 +243,14 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
     const poll = async () => {
       if (Date.now() - startTime >= maxPollTime) {
-        setLocalGenerating(false);
+        if (isMountedRef.current) {
+          setLocalGenerating(false);
+        }
         return;
       }
       try {
         const updatedStory = await getStory(activeScenarioId);
+        if (!isMountedRef.current) return;
         const newReport = updatedStory?.full_report;
         if (newReport && newReport.status !== 'generating') {
           setLocalStoryData(updatedStory);
@@ -257,7 +263,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         }
       } catch (err) {
         console.error('Error polling report status', err);
-        timerId = window.setTimeout(poll, 15000);
+        if (isMountedRef.current) {
+          timerId = window.setTimeout(poll, 15000);
+        }
       }
     };
 
@@ -344,8 +352,13 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(
         res,
         controller.signal,
-        (newTrace) => setToolTrace((prev) => [...prev, ...newTrace])
+        (newTrace) => {
+          if (isMountedRef.current) {
+            setToolTrace((prev) => [...prev, ...newTrace]);
+          }
+        }
       );
+      if (!isMountedRef.current) return;
       if (isAlreadyRunning) {
         setLocalGenerating(true);
       } else {
@@ -356,18 +369,22 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         }
       }
     } catch (err) {
-      const error = err as { code?: string; message?: string } | null;
-      if (error && (error.code === 'REPORT_ALREADY_RUNNING' || error.message?.includes('REPORT_ALREADY_RUNNING'))) {
-        setLocalGenerating(true);
-      } else {
-        setRetryError(true);
+      const error = err as { code?: string; message?: string; name?: string } | null;
+      if (isMountedRef.current) {
+        if (error && (error.code === 'REPORT_ALREADY_RUNNING' || error.message?.includes('REPORT_ALREADY_RUNNING'))) {
+          setLocalGenerating(true);
+        } else {
+          setRetryError(true);
+        }
       }
     } finally {
       clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
-      setRetrying(false);
+      if (isMountedRef.current) {
+        setRetrying(false);
+      }
     }
   }, [activeScenarioId, retrying, onRefresh, isReplayMode, t]);
 

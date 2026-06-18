@@ -8,7 +8,6 @@ export interface ModelSelectProps {
   apiKey?: string;
   value: string;
   onChange: (model: string) => void;
-  provider?: string;
   disabled?: boolean;
   /** Applies this id to the rendered <input>/<select> so an external <label htmlFor> can associate with it. */
   inputId?: string;
