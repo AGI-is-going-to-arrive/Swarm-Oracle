@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -39,7 +40,7 @@ test("mobile Firefox surface omits unsupported isMobile context option", () => {
 });
 
 test("explicit output directory is still partitioned by surface and browser", () => {
-  const outputRoot = path.resolve("/tmp/native-search-output");
+  const outputRoot = path.join(os.tmpdir(), "native-search-output");
 
   assert.equal(
     __test__.resolveSurfaceOutputDir({

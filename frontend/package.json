@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "generate:ui-assets": "node scripts/generate-ui-assets.mjs",
+    "fonts": "node scripts/download-fonts.mjs",
     "assets:provenance:backfill": "node scripts/backfill-asset-provenance.mjs",
     "assets:provenance:check": "node scripts/check-asset-provenance.mjs",
     "perf:budgets:check": "node scripts/check-performance-budgets.mjs",

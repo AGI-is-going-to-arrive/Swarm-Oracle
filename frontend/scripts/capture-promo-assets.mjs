@@ -309,6 +309,12 @@ function runFfmpeg(args) {
     cwd: REPO_ROOT,
     stdio: "inherit",
   });
+  if (result.error?.code === "ENOENT") {
+    throw new Error(
+      "ffmpeg not found on PATH. Install it first — macOS: `brew install ffmpeg`; " +
+        "Windows: `choco install ffmpeg` or `scoop install ffmpeg`; Linux: `apt install ffmpeg`.",
+    );
+  }
   if (result.status !== 0) {
     throw new Error(`ffmpeg failed: ${args.join(" ")}`);
   }

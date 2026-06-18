@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -18,7 +19,7 @@ test("full mode keeps the legacy desktop and mobile Chromium surfaces", () => {
 });
 
 test("explicit output directory is partitioned by surface", () => {
-  const outputRoot = path.resolve("/tmp/source-ingestion-output");
+  const outputRoot = path.join(os.tmpdir(), "source-ingestion-output");
 
   assert.equal(
     __test__.resolveSurfaceOutputDir({
