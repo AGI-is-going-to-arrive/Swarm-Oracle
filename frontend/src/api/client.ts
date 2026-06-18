@@ -673,6 +673,7 @@ export interface NativeSearchProbe {
     provider: string;
     is_proxy: boolean;
     api_form: 'chat' | 'responses';
+    effective_api_form?: 'chat' | 'responses';
     adapter: string;
     supports_native_search: boolean;
     native_search_upstream?: string;

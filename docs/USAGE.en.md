@@ -2,7 +2,7 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. The home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
+This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. Known official providers with bare `/v1` are probed as the Responses form, while proxy forwarding still needs an explicit upstream declaration. The home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
 
 For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 

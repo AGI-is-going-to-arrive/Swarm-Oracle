@@ -208,6 +208,46 @@ describe('ConnectionTester', () => {
     expect(screen.getByText('setup.native_probe_supported')).toBeInTheDocument();
   });
 
+  it('renders the effective API form when the backend derives Responses from a chat base URL', async () => {
+    vi.mocked(probeNativeSearch).mockResolvedValue({
+      would_inject_tools: true,
+      blocking_reasons: [],
+      message: 'native search available',
+      detail: {
+        provider: 'xai',
+        is_proxy: false,
+        api_form: 'chat',
+        effective_api_form: 'responses',
+        adapter: 'xai',
+        supports_native_search: true,
+      },
+    });
+    vi.mocked(testLlmConnection).mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'grok', response: 'OK.' },
+    } as unknown as Awaited<ReturnType<typeof testLlmConnection>>);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <ConnectionTester
+        baseUrl="https://api.x.ai/v1"
+        apiKey="key"
+        includeNativeProbe
+        nativeSearchUpstream="auto"
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+
+    const detail = await waitFor(() => {
+      const node = container.querySelector('.tester__native-detail');
+      expect(node).toBeInTheDocument();
+      return node;
+    });
+    expect(detail).toHaveTextContent('responses');
+    expect(detail).not.toHaveTextContent('chat');
+  });
+
   it('passes the native-search support override to both probe paths', async () => {
     vi.mocked(probeNativeSearch).mockResolvedValue({
       would_inject_tools: false,

@@ -623,6 +623,30 @@ class TestHealthTestWebSearchServerHint:
         assert "is_proxy" not in native["blocking_reasons"]
         assert "no_adapter" not in native["blocking_reasons"]
 
+    def test_native_probe_bare_v1_known_provider_reports_derived_responses_mode_without_url(
+        self,
+        client,
+        monkeypatch,
+    ):
+        self._patch_health_only(monkeypatch)
+
+        data = client.post("/api/health/test", json={
+            "llm_api_key": "sk-test",
+            "llm_base_url": "https://api.x.ai/v1",
+            "llm_model": "grok-test",
+            "native_probe_only": True,
+        }).json()
+
+        native = data["native_search"]
+        assert native["would_inject_tools"] is True
+        assert native["blocking_reasons"] == []
+        assert native["detail"]["effective_api_form"] == "responses"
+        assert "derived_responses_url" not in native["detail"]
+        assert "已自动识别可派生 /v1/responses 端点形态" in native["message"]
+        assert "尝试注入原生搜索工具" in native["message"]
+        assert "https://api.x.ai" not in native["message"]
+        assert "请把 base_url 改为" not in native["message"]
+
     def test_native_probe_declared_xai_upstream_chat_endpoint_blocks_is_chat(
         self,
         client,
@@ -632,7 +656,7 @@ class TestHealthTestWebSearchServerHint:
 
         data = client.post("/api/health/test", json={
             "llm_api_key": "sk-test",
-            "llm_base_url": "http://127.0.0.1:8317/v1",
+            "llm_base_url": "http://127.0.0.1:8317/v1/chat/completions",
             "llm_model": "grok-test",
             "include_probe": False,
             "include_native_probe": True,

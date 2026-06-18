@@ -695,6 +695,7 @@ def _build_native_search_probe_hint(
         native_search_upstream_override=native_search_upstream_override,
         native_search_domains=None,
         model=model,
+        raw_base_url=llm_base_url,
     )
     return {
         "would_inject_tools": decision.would_inject_tools,
@@ -707,11 +708,13 @@ def _build_native_search_probe_hint(
             adapter_name=decision.adapter_name,
             would_inject_tools=decision.would_inject_tools,
             inferred_upstream=decision.inferred_upstream,
+            derived_responses_available=decision.derived_responses_url is not None,
         ),
         "detail": {
             "provider": decision.provider,
             "is_proxy": decision.is_proxy,
             "api_form": decision.api_form,
+            "effective_api_form": decision.effective_api_form,
             "adapter": decision.adapter_name,
             "supports_native_search": decision.supports_native_search,
             "native_search_upstream": decision.native_search_upstream,
@@ -729,8 +732,14 @@ def _build_native_search_probe_message(
     adapter_name: str,
     would_inject_tools: bool,
     inferred_upstream: bool = False,
+    derived_responses_available: bool = False,
 ) -> str:
     if would_inject_tools:
+        if derived_responses_available:
+            return (
+                "已自动识别可派生 /v1/responses 端点形态，推演时将通过 "
+                "Responses API 尝试注入原生搜索工具。"
+            )
         source = "通过模型名称推断" if inferred_upstream else "被识别为真实"
         return (
             f"当前 base_url {source} provider(provider={provider}),端点为 Responses "

@@ -412,19 +412,29 @@ export function ConnectionTester({
                 <p className="tester__native-msg">{displayNativeResult.message}</p>
               ) : null}
               {displayNativeResult.detail ? (
-                <p className="tester__native-detail">
-                  {`provider=${displayNativeResult.detail.provider} · ${displayNativeResult.detail.api_form} · is_proxy=${String(
-                    displayNativeResult.detail.is_proxy,
-                  )} · adapter=${displayNativeResult.detail.adapter}${
-                    displayNativeResult.detail.native_search_upstream
-                      ? ` · native_search_upstream=${displayNativeResult.detail.native_search_upstream}`
-                      : ''
-                  }${
-                    displayNativeResult.detail.inferred_upstream
-                      ? ' · inferred_from_model'
-                      : ''
-                  }`}
-                </p>
+                <div className="tester__native-detail">
+                  {([
+                    ['provider', displayNativeResult.detail.provider],
+                    [displayNativeResult.detail.effective_api_form ?? displayNativeResult.detail.api_form, null],
+                    ['is_proxy', String(displayNativeResult.detail.is_proxy)],
+                    ['adapter', displayNativeResult.detail.adapter],
+                    ...(displayNativeResult.detail.native_search_upstream
+                      ? [['native_search_upstream', displayNativeResult.detail.native_search_upstream]]
+                      : []),
+                    ...(displayNativeResult.detail.inferred_upstream
+                      ? [['inferred_from_model', null]]
+                      : []),
+                  ] as Array<[string, string | null]>).map(([k, v], i) => (
+                    <span key={i} className="tester__native-pill">
+                      {v != null ? (
+                        <>
+                          <span className="tester__native-pill-key">{k}</span>
+                          ={v}
+                        </>
+                      ) : k}
+                    </span>
+                  ))}
+                </div>
               ) : null}
             </>
           ) : null}

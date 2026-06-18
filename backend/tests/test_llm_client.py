@@ -2742,6 +2742,49 @@ class TestDetectProvider:
         assert p.supports_native_search is False
 
 
+class TestNativeResponsesUrlDerivation:
+    @pytest.mark.parametrize(
+        ("raw_base_url", "expected"),
+        [
+            ("https://api.x.ai/v1", "https://api.x.ai/v1/responses"),
+            ("https://api.openai.com/v1/", "https://api.openai.com/v1/responses"),
+            ("http://127.0.0.1:8317/v1", "http://127.0.0.1:8317/v1/responses"),
+            ("https://api.x.ai/v1/chat/completions", None),
+            ("https://api.x.ai/v1/responses", None),
+            (None, None),
+            ("https://example.com/custom/path", None),
+            ("https://example.com/custom/v1", None),
+        ],
+    )
+    def test_derive_native_responses_url_only_for_bare_v1(self, raw_base_url, expected):
+        assert llm_client._derive_native_responses_url(raw_base_url) == expected
+
+    @pytest.mark.parametrize(
+        ("status_code", "body", "expected"),
+        [
+            (400, "unknown parameter: tools", True),
+            (404, "responses endpoint not found", True),
+            (405, "method not allowed", True),
+            (400, "invalid api key", False),
+            (429, "rate limit", False),
+            (500, "server error", False),
+        ],
+    )
+    def test_derived_endpoint_fallback_excludes_auth_and_rate_limit_errors(
+        self,
+        status_code,
+        body,
+        expected,
+    ):
+        assert (
+            llm_client._is_derived_native_responses_endpoint_fallback_error(
+                status_code,
+                body,
+            )
+            is expected
+        )
+
+
 # ── P3-1: llm_call native search integration ──────────
 
 
@@ -2900,6 +2943,98 @@ class TestLlmCallNativeSearch:
         )
         assert result == "chat answer"
         assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_bare_v1_xai_derives_responses_endpoint_for_native_search(
+        self,
+        monkeypatch,
+    ):
+        captured: dict[str, object] = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured["url"] = url
+            captured["payload"] = dict(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        result = await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1",
+            api_key="xai-key",
+            native_search_domains=["arxiv.org"],
+        )
+
+        payload = captured["payload"]
+        assert result == "answer"
+        assert captured["url"] == "https://api.x.ai/v1/responses"
+        assert "input" in payload
+        assert "messages" not in payload
+        assert payload["tools"][0]["type"] == "web_search"
+
+    @pytest.mark.asyncio
+    async def test_bare_v1_derived_404_falls_back_to_original_chat_without_tools(
+        self,
+        monkeypatch,
+    ):
+        calls: list[tuple[str, dict]] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payload = dict(json or {})
+            calls.append((url, payload))
+            request = httpx.Request("POST", url)
+            if len(calls) == 1:
+                return httpx.Response(
+                    404,
+                    json={"error": {"message": "responses endpoint not found"}},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "chat fallback"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        result = await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1",
+            api_key="xai-key",
+            native_search_domains=["arxiv.org"],
+        )
+
+        assert result == "chat fallback"
+        assert [url for url, _payload in calls] == [
+            "https://api.x.ai/v1/responses",
+            "https://api.x.ai/v1/chat/completions",
+        ]
+        assert "tools" in calls[0][1]
+        assert "input" in calls[0][1]
+        assert "tools" not in calls[1][1]
+        assert "messages" in calls[1][1]
 
     @pytest.mark.asyncio
     async def test_proxy_no_tools(self, monkeypatch):
@@ -3138,7 +3273,7 @@ class TestLlmCallNativeSearch:
         with llm_client.llm_request_scope(native_search_upstream_override="xai_responses"):
             result = await llm_call(
                 "test prompt",
-                base_url="http://127.0.0.1:8317/v1",
+                base_url="http://127.0.0.1:8317/v1/chat/completions",
                 api_key="proxy-key",
                 native_search_domains=["arxiv.org"],
             )
@@ -3857,8 +3992,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_proxy_auto_grok_releases_gate(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3876,8 +4011,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_proxy_auto_gpt_releases_gate(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3893,8 +4028,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_proxy_auto_unknown_model_stays_blocked(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3910,8 +4045,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_proxy_off_grok_respects_off(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3926,8 +4061,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_no_model_backward_compat(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3941,8 +4076,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_explicit_upstream_takes_precedence_over_inference(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3959,8 +4094,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_chat_endpoint_still_blocks_with_inference(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3975,8 +4110,8 @@ class TestResolveNativeSearchModelInference:
 
     def test_supports_native_search_false_veto_with_inference(self):
         from app.services.llm_client import (
-            resolve_native_search_injection_decision,
             _LOCAL_PROXY_PROFILE,
+            resolve_native_search_injection_decision,
         )
         decision = resolve_native_search_injection_decision(
             provider_profile=_LOCAL_PROXY_PROFILE,
@@ -3987,4 +4122,67 @@ class TestResolveNativeSearchModelInference:
             model="grok-2",
         )
         assert not decision.would_inject_tools
+        assert "capability_off" in decision.blocking_reasons
+
+
+class TestResolveNativeSearchEndpointDerivation:
+    def _decision(self, raw_base_url: str, *, override=None, model="grok-2"):
+        resolved_url = llm_client._resolve_llm_api_url(raw_base_url)
+        return llm_client.resolve_native_search_injection_decision(
+            provider_profile=llm_client.detect_provider(raw_base_url),
+            is_chat=llm_client._is_chat_completions_api(resolved_url),
+            supports_native_search_override=override,
+            native_search_upstream_override="auto",
+            native_search_domains=None,
+            model=model,
+            raw_base_url=raw_base_url,
+        )
+
+    def test_bare_v1_xai_derives_responses_and_injects(self):
+        decision = self._decision("https://api.x.ai/v1", model="grok-4")
+
+        assert decision.would_inject_tools is True
+        assert decision.derived_responses_url == "https://api.x.ai/v1/responses"
+        assert decision.effective_api_form == "responses"
+        assert "is_chat" not in decision.blocking_reasons
+
+    def test_bare_v1_openai_derives_responses_and_injects(self):
+        decision = self._decision("https://api.openai.com/v1", model="gpt-4o")
+
+        assert decision.would_inject_tools is True
+        assert decision.derived_responses_url == "https://api.openai.com/v1/responses"
+        assert decision.effective_api_form == "responses"
+        assert decision.adapter_name == "openai"
+
+    def test_bare_v1_unknown_provider_still_blocks_as_chat(self):
+        decision = self._decision("https://example.com/v1", model="custom-model")
+
+        assert decision.would_inject_tools is False
+        assert decision.derived_responses_url is None
+        assert decision.effective_api_form == "chat"
+        assert "is_chat" in decision.blocking_reasons
+
+    def test_explicit_chat_endpoint_still_blocks(self):
+        decision = self._decision("https://api.x.ai/v1/chat/completions", model="grok-4")
+
+        assert decision.would_inject_tools is False
+        assert decision.derived_responses_url is None
+        assert decision.effective_api_form == "chat"
+        assert "is_chat" in decision.blocking_reasons
+
+    def test_explicit_responses_endpoint_does_not_set_derived_url(self):
+        decision = self._decision("https://api.x.ai/v1/responses", model="grok-4")
+
+        assert decision.would_inject_tools is True
+        assert decision.derived_responses_url is None
+        assert decision.effective_api_form == "responses"
+
+    def test_supports_native_search_false_veto_blocks_bare_v1_derivation(self):
+        decision = self._decision(
+            "https://api.x.ai/v1",
+            override=False,
+            model="grok-4",
+        )
+
+        assert decision.would_inject_tools is False
         assert "capability_off" in decision.blocking_reasons

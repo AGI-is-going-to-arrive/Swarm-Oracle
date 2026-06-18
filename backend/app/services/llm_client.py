@@ -270,6 +270,28 @@ def _resolve_llm_api_url(url: str | None = None) -> str:
     )
 
 
+def _derive_native_responses_url(raw_base_url: str | None) -> str | None:
+    """For bare /v1 URLs, derive a /v1/responses variant for native search.
+
+    Returns None for explicit /chat/completions, /responses, or non-standard paths.
+    """
+    if not raw_base_url:
+        return None
+    try:
+        parsed = urlparse(raw_base_url.strip())
+        _ = parsed.port
+    except ValueError:
+        return None
+    path = parsed.path.rstrip("/")
+    if path != "/v1":
+        return None
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return urlunparse(
+        parsed._replace(path="/v1/responses", params="", query="", fragment="")
+    )
+
+
 def _is_chat_completions_api(url: str | None = None) -> bool:
     """Detect API mode at call time (not module load) for test flexibility."""
     target_url = _resolve_llm_api_url(url)
@@ -302,6 +324,8 @@ class NativeSearchInjectionDecision:
     declared_upstream: bool
     inferred_upstream: bool
     adapter: Any
+    derived_responses_url: str | None = None
+    effective_api_form: str | None = None
 
     @property
     def would_inject_tools(self) -> bool:
@@ -461,13 +485,16 @@ def resolve_native_search_injection_decision(
     native_search_upstream_override: object,
     native_search_domains: list[str] | None,
     model: str | None = None,
+    raw_base_url: str | None = None,
 ) -> NativeSearchInjectionDecision:
     """Resolve native-search gates shared by live injection and static probe."""
 
     upstream = normalize_native_search_upstream(native_search_upstream_override)
     declared_adapter_provider = _DECLARED_NATIVE_SEARCH_ADAPTERS.get(upstream or "")
     api_form: Literal["chat", "responses"] = "chat" if is_chat else "responses"
+    effective_api_form: Literal["chat", "responses"] = api_form
     inferred_upstream = False
+    derived_responses_url: str | None = None
 
     if declared_adapter_provider:
         provider_name = declared_adapter_provider
@@ -480,7 +507,13 @@ def resolve_native_search_injection_decision(
         provider_name = provider_profile.name
         effective_is_proxy = provider_profile.is_proxy
         supports_native_search = (
-            False if upstream == "off" else provider_profile.supports_native_search
+            False
+            if upstream == "off"
+            else (
+                provider_profile.supports_native_search
+                if supports_native_search_override is None
+                else supports_native_search_override
+            )
         )
         adapter_provider = provider_profile.name
 
@@ -499,9 +532,20 @@ def resolve_native_search_injection_decision(
     adapter_has_tools = bool(adapter.build_search_tools(domains=None))
     adapter_name = adapter_provider if adapter_has_tools else "null"
     tools = adapter.build_search_tools(domains=native_search_domains)
+    candidate_responses_url = (
+        _derive_native_responses_url(raw_base_url) if is_chat else None
+    )
+    if (
+        candidate_responses_url
+        and adapter_has_tools
+        and supports_native_search
+        and not effective_is_proxy
+    ):
+        derived_responses_url = candidate_responses_url
+        effective_api_form = "responses"
 
     blocking_reasons: list[str] = []
-    if is_chat:
+    if is_chat and derived_responses_url is None:
         blocking_reasons.append("is_chat")
     if effective_is_proxy:
         blocking_reasons.append("is_proxy")
@@ -522,6 +566,8 @@ def resolve_native_search_injection_decision(
         declared_upstream=declared_adapter_provider is not None,
         inferred_upstream=inferred_upstream,
         adapter=adapter,
+        derived_responses_url=derived_responses_url,
+        effective_api_form=effective_api_form,
     )
 
 
@@ -1255,6 +1301,15 @@ def _is_native_search_rejection(status_code: int, body: str) -> bool:
     if _is_non_retryable_optional_param_error(status_code, body):
         return False
     return _body_mentions_native_search_rejection(body)
+
+
+def _is_derived_native_responses_endpoint_fallback_error(
+    status_code: int,
+    body: str,
+) -> bool:
+    if status_code not in {400, 404, 405}:
+        return False
+    return not _is_non_retryable_optional_param_error(status_code, body)
 
 
 def _drop_native_search_tools(payload: dict[str, Any], param_keys: set[str]) -> None:
@@ -2275,7 +2330,10 @@ async def llm_call(
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
     purpose = request_context.purpose
+    raw_base_url = base_url or settings.LLM_RESPONSES_URL
     target_url = _resolve_llm_api_url(base_url)
+    original_target_url = target_url
+    original_is_chat = _is_chat_completions_api(original_target_url)
     # SSRF + key-exfil guard: when the caller provides a custom base_url
     # (BYOK mode), they MUST also supply their own api_key. Never send the
     # server's default LLM_API_KEY to an arbitrary third-party URL.
@@ -2284,38 +2342,58 @@ async def llm_call(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )
     target_key = api_key or settings.LLM_API_KEY
-    is_chat = _is_chat_completions_api(target_url)
-    provider_key = _provider_key(target_url)
+    is_chat = original_is_chat
     estimated_tokens = _estimate_tokens(input_text)
-
-    payload: dict[str, Any] = {
-        "model": model or settings.LLM_MODEL_NAME,
-    }
 
     effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
 
-    if is_chat:
-        # ── Chat Completions API ──
-        payload["messages"] = [{"role": "user", "content": input_text}]
-        if effort:
-            payload["reasoning_effort"] = effort
-        if temperature is not None:
-            payload["temperature"] = temperature
-    else:
-        # ── Responses API ──
-        payload["input"] = input_text
-        if effort:
-            payload["reasoning"] = {"effort": effort}
+    def _build_call_payload(*, chat_api: bool) -> dict[str, Any]:
+        call_payload: dict[str, Any] = {
+            "model": model or settings.LLM_MODEL_NAME,
+        }
+        if chat_api:
+            call_payload["messages"] = [{"role": "user", "content": input_text}]
+            if effort:
+                call_payload["reasoning_effort"] = effort
+            if temperature is not None:
+                call_payload["temperature"] = temperature
+        else:
+            call_payload["input"] = input_text
+            if effort:
+                call_payload["reasoning"] = {"effort": effort}
+        return call_payload
 
     # ── Native search tools injection (Responses API only) ──
     _native_adapter = None
     provider_profile = _merge_provider_capability_overrides(
-        detect_provider(base_url or target_url),
+        detect_provider(raw_base_url or target_url),
         supports_structured_outputs_override=(
             request_context.supports_structured_outputs_override
         ),
         supports_native_search_override=request_context.supports_native_search_override,
     )
+    native_decision: NativeSearchInjectionDecision | None = None
+    if native_search_domains:
+        native_decision = resolve_native_search_injection_decision(
+            provider_profile=provider_profile,
+            is_chat=is_chat,
+            supports_native_search_override=(
+                request_context.supports_native_search_override
+            ),
+            native_search_upstream_override=(
+                request_context.native_search_upstream_override
+            ),
+            native_search_domains=native_search_domains,
+            model=model,
+            raw_base_url=raw_base_url,
+        )
+        if native_decision.would_inject_tools and native_decision.derived_responses_url:
+            target_url = native_decision.derived_responses_url
+            is_chat = False
+
+    provider_key = _provider_key(target_url)
+    reservation_provider_key = provider_key
+    payload = _build_call_payload(chat_api=is_chat)
     structured_output_params: dict[str, Any] = {}
     structured_output_keys: frozenset[str] = frozenset()
     if structured_output_schema is not None:
@@ -2332,23 +2410,10 @@ async def llm_call(
         in {"xai_responses", "openai_responses"}
     )
     native_search_tools_injected_by_force = False
-    if native_search_domains:
-        native_decision = resolve_native_search_injection_decision(
-            provider_profile=provider_profile,
-            is_chat=is_chat,
-            supports_native_search_override=(
-                request_context.supports_native_search_override
-            ),
-            native_search_upstream_override=(
-                request_context.native_search_upstream_override
-            ),
-            native_search_domains=native_search_domains,
-            model=model,
-        )
-        if native_decision.would_inject_tools:
-            _native_adapter = native_decision.adapter
-            payload["tools"] = native_decision.tools
-            native_search_tools_injected_by_force = native_search_force_on
+    if native_decision is not None and native_decision.would_inject_tools:
+        _native_adapter = native_decision.adapter
+        payload["tools"] = native_decision.tools
+        native_search_tools_injected_by_force = native_search_force_on
 
     logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
                  payload["model"],
@@ -2376,15 +2441,34 @@ async def llm_call(
         )
         native_fallback_used = False
 
-        async def _request_without_native_tools_once() -> dict[str, Any]:
-            nonlocal native_fallback_used
+        def _build_original_chat_fallback_payload() -> dict[str, Any]:
+            fallback_payload = _build_call_payload(chat_api=original_is_chat)
+            if structured_output_schema is not None:
+                fallback_structured_params, _ = _build_structured_output_params(
+                    provider_profile=provider_profile,
+                    schema=structured_output_schema,
+                    name=structured_output_name,
+                    is_chat=original_is_chat,
+                )
+                fallback_payload.update(fallback_structured_params)
+            return fallback_payload
+
+        async def _request_without_native_tools_once(
+            *,
+            fallback_url: str | None = None,
+            fallback_payload: dict[str, Any] | None = None,
+            fallback_is_chat: bool | None = None,
+        ) -> dict[str, Any]:
+            nonlocal native_fallback_used, is_chat
             if native_fallback_used:
                 raise LLMError("Native search no-tools fallback already used")
             native_fallback_used = True
+            request_url = fallback_url or target_url
+            request_payload = fallback_payload if fallback_payload is not None else attempt_payload
             try:
                 fallback_resp = await client.post(
-                    target_url,
-                    json=attempt_payload,
+                    request_url,
+                    json=request_payload,
                     headers={
                         "Authorization": f"Bearer {target_key}",
                         "Content-Type": "application/json",
@@ -2392,6 +2476,8 @@ async def llm_call(
                     timeout=timeout,
                 )
                 fallback_resp.raise_for_status()
+                if fallback_is_chat is not None:
+                    is_chat = fallback_is_chat
                 return fallback_resp.json()
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
@@ -2465,6 +2551,31 @@ async def llm_call(
                         active_structured_output_keys,
                     )
                     continue
+                if (
+                    native_decision is not None
+                    and native_decision.derived_responses_url
+                    and target_url == native_decision.derived_responses_url
+                    and _is_derived_native_responses_endpoint_fallback_error(
+                        status_code,
+                        exc.response.text,
+                    )
+                ):
+                    logger.warning(
+                        "Derived native Responses endpoint unavailable (%s); "
+                        "falling back to original chat endpoint without native tools",
+                        status_code,
+                    )
+                    _native_adapter = None
+                    active_native_search_keys.clear()
+                    _last_native_citations.set([])
+                    target_url = original_target_url
+                    provider_key = _provider_key(original_target_url)
+                    data = await _request_without_native_tools_once(
+                        fallback_url=original_target_url,
+                        fallback_payload=_build_original_chat_fallback_payload(),
+                        fallback_is_chat=original_is_chat,
+                    )
+                    break
                 if active_native_search_keys and _is_native_search_rejection(
                     status_code,
                     exc.response.text,
@@ -2519,7 +2630,7 @@ async def llm_call(
                 await _record_provider_failure(provider_key)
                 raise LLMError(f"Native search response error: {body_error}")
         await _reconcile_rate_limit_usage(
-            provider_key=provider_key,
+            provider_key=reservation_provider_key,
             reservation_id=reservation.reservation_id if reservation is not None else None,
             estimated_tokens=estimated_tokens,
             actual_tokens=_extract_total_usage_tokens(data),
