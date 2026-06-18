@@ -122,6 +122,7 @@ export default function RoundtableAgentChat({
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const inputRef = useRef('');
+  const isComposingRef = useRef(false);
   const activeStreamRef = useRef<ActiveStreamState | null>(null);
   const [, forceRender] = useState(0);
 
@@ -472,11 +473,16 @@ export default function RoundtableAgentChat({
               disabled={streaming}
               rows={2}
               onKeyDown={(e) => {
+                if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   void handleSend();
                 }
               }}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={() => { isComposingRef.current = false; }}
             />
             <button
               type="button"

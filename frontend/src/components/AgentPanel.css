@@ -61,10 +61,12 @@
 
 .agent-card--active {
   border-color: var(--color-primary);
+  background: rgba(198, 21, 131, 0.06);
   background: oklch(55% 0.22 350 / 0.06);
 }
 
 .agent-card--active:hover {
+  background: rgba(198, 21, 131, 0.1);
   background: oklch(55% 0.22 350 / 0.1);
 }
 
@@ -74,9 +76,9 @@
 }
 
 @keyframes highlightPulse {
-  0%   { background: oklch(75% 0.20 200 / 0.30); box-shadow: 0 0 0 3px oklch(75% 0.20 200 / 0.35); }
+  0%   { background: rgba(118, 192, 230, 0.30); background: oklch(75% 0.20 200 / 0.30); box-shadow: 0 0 0 3px rgba(118, 192, 230, 0.35); box-shadow: 0 0 0 3px oklch(75% 0.20 200 / 0.35); }
   25%  { background: transparent; box-shadow: none; }
-  50%  { background: oklch(75% 0.20 200 / 0.25); box-shadow: 0 0 0 3px oklch(75% 0.20 200 / 0.30); }
+  50%  { background: rgba(118, 192, 230, 0.25); background: oklch(75% 0.20 200 / 0.25); box-shadow: 0 0 0 3px rgba(118, 192, 230, 0.30); box-shadow: 0 0 0 3px oklch(75% 0.20 200 / 0.30); }
   75%  { background: transparent; box-shadow: none; }
   100% { background: transparent; box-shadow: none; }
 }
@@ -87,7 +89,9 @@
   padding: 1px 7px;
   margin: 0 2px;
   border-radius: 10px;
+  background: rgba(197, 132, 197, 0.18);
   background: oklch(65% 0.18 300 / 0.18);
+  color: #eabde9;
   color: oklch(80% 0.16 300);
   font-size: 0.88em;
   font-weight: 600;
@@ -97,7 +101,9 @@
 }
 
 .agent-mention:hover {
+  background: rgba(197, 132, 197, 0.35);
   background: oklch(65% 0.18 300 / 0.35);
+  color: #fce2fc;
   color: oklch(92% 0.10 300);
 }
 
@@ -152,16 +158,19 @@
 }
 
 .tier-core {
+  background: rgba(198, 21, 131, 0.12);
   background: oklch(55% 0.22 350 / 0.12);
   color: var(--color-primary);
 }
 
 .tier-important {
+  background: rgba(58, 168, 91, 0.12);
   background: oklch(65% 0.15 150 / 0.12);
   color: var(--color-accent);
 }
 
 .tier-crowd {
+  background: rgba(192, 192, 189, 0.15);
   background: oklch(75% 0.01 80 / 0.15);
   color: var(--text-secondary);
 }
@@ -183,6 +192,7 @@
   gap: 4px;
   margin-left: auto;
   padding: 2px 8px 2px 10px;
+  background: rgba(198, 21, 131, 0.10);
   background: oklch(55% 0.22 350 / 0.1);
   border-radius: var(--radius-full);
   font-size: 10px;
@@ -304,6 +314,7 @@
   font-family: var(--font-mono);
   font-size: 9px;
   color: var(--color-accent);
+  background: rgba(58, 168, 91, 0.10);
   background: oklch(65% 0.15 150 / 0.1);
   padding: 1px 6px;
   border-radius: var(--radius-full);

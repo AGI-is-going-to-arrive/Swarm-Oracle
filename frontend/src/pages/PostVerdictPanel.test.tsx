@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PostVerdictPanel, { type PostVerdictTab } from './PostVerdictPanel';
@@ -151,5 +151,45 @@ describe('PostVerdictPanel defensive capability gates', () => {
     expect(panel).not.toHaveTextContent('roundtable.explore_survey_disabled');
     panel?.querySelector('button')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('supports roving tabindex and ArrowLeft/Right keyboard navigation on tabs', () => {
+    capabilityValues.set('agent_conversation', true);
+    capabilityValues.set('roundtable_analyst', true);
+    capabilityValues.set('roundtable_survey', true);
+
+    const onTabChangeMock = vi.fn();
+    const { container } = render(
+      <PostVerdictPanel
+        scenarioId="scenario-123"
+        participants={[]}
+        effectiveResult={{
+          room_id: 'room-1',
+          consensus_pct: 75,
+          prosperity_index: 0.8,
+          verdict_status: 'committed',
+          verdict_narrative: 'Narrative',
+        } as unknown as EndingRoomResult}
+        activeTab="agent_chat"
+        onTabChange={onTabChangeMock}
+        analystCache={createInitialAnalystCache()}
+        setAnalystCache={vi.fn()}
+        surveyCache={createInitialSurveyCache()}
+        setSurveyCache={vi.fn()}
+        contextVersion={1}
+      />
+    );
+
+    const tabChat = container.querySelector('#pvp-tab-agent_chat') as HTMLButtonElement;
+    const tabAnalyst = container.querySelector('#pvp-tab-analyst') as HTMLButtonElement;
+    const tabSurvey = container.querySelector('#pvp-tab-survey') as HTMLButtonElement;
+
+    expect(tabChat).toHaveAttribute('tabIndex', '0');
+    expect(tabAnalyst).toHaveAttribute('tabIndex', '-1');
+    expect(tabSurvey).toHaveAttribute('tabIndex', '-1');
+
+    tabChat.focus();
+    fireEvent.keyDown(tabChat, { key: 'ArrowRight' });
+    expect(onTabChangeMock).toHaveBeenCalledWith('analyst');
   });
 });

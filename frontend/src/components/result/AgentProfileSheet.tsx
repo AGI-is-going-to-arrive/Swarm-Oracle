@@ -32,12 +32,12 @@ function nameInitial(name?: string | null): string {
   return Array.from(name.trim())[0]?.toUpperCase() ?? '?';
 }
 
-function formatDate(value: string | null | undefined): string {
+function formatDate(value: string | null | undefined, locale: string): string {
   if (!value) return '';
   try {
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString();
+    return d.toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en');
   } catch {
     return '';
   }
@@ -49,7 +49,8 @@ export function AgentProfileSheet({
   onClose,
   onStartConversation,
 }: AgentProfileSheetProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n?.language || 'en';
   const requestSeqRef = useRef(0);
   const [profile, setProfile] = useState<AgentIdentityProfile | null>(null);
   const [memories, setMemories] = useState<AgentMemoryEntry[]>([]);
@@ -217,7 +218,7 @@ export function AgentProfileSheet({
                     {memories.map((entry, idx) => (
                       <li key={`mem-${idx}`}>
                         <span className="agent-profile-sheet__date">
-                          {formatDate(entry.created_at)}
+                          {formatDate(entry.created_at, locale)}
                         </span>
                         <span>{entry.summary}</span>
                       </li>
@@ -233,7 +234,7 @@ export function AgentProfileSheet({
                     {events.map((event) => (
                       <li key={event.id}>
                         <span className="agent-profile-sheet__date">
-                          {formatDate(event.created_at)}
+                          {formatDate(event.created_at, locale)}
                         </span>
                         <span>{event.summary}</span>
                       </li>

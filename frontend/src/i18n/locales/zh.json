@@ -546,6 +546,7 @@
       "step_deep_dive": "深入探索"
     },
     "result": {
+      "confidence_label": "置信度",
       "report": {
         "title": "完整报告",
         "summary_label": "核心结论",
@@ -1199,6 +1200,8 @@
     },
     "language": "中",
     "game": {
+      "visualization_unavailable": "可视化组件不可用，模拟正在后台继续",
+      "webgl_lost_reload": "图形上下文丢失。刷新页面",
       "loading": "正在加载像素剧场...",
       "title_press_start": "按任意键继续",
       "ending_prosperity": "繁荣黄金时代",
@@ -2768,6 +2771,8 @@
       "checkpoint_load_error": "无法加载此分支的检查点；你仍可手动输入回合继续。"
     },
     "common": {
+      "branches": "时间线",
+      "empty": "无",
       "unknown": "未知",
       "loading": "加载中…",
       "back": "返回",

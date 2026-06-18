@@ -293,4 +293,39 @@ describe('RoundtableAgentChat', () => {
       expect(screen.getByRole('option', { name: /Representative B/i })).not.toBeDisabled();
     });
   });
+
+  it('does not send message when Enter is pressed during IME composition', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ thread_id: 'thread-a' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderChat();
+
+    fireEvent.click(screen.getByRole('option', { name: /Representative A/i }));
+
+    const textarea = screen.getByPlaceholderText('roundtable.chat_input_placeholder') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'Test message' } });
+
+    // 1. Simulate compositionstart
+    fireEvent.compositionStart(textarea);
+    // 2. Press Enter with isComposing: true
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true });
+    // 3. Press Enter with keyCode 229
+    fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 });
+
+    // Verify handleSend wasn't triggered
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // 4. Simulate compositionend
+    fireEvent.compositionEnd(textarea);
+    // 5. Press Enter without composition
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+  });
 });
+

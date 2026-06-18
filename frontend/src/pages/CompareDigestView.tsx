@@ -134,6 +134,8 @@ export function CompareDigestView() {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const loadRequestIdRef = useRef(0);
+  const tabARef = useRef<HTMLButtonElement>(null);
+  const tabBRef = useRef<HTMLButtonElement>(null);
 
   const toggleMessage = useCallback((key: string) => {
     setExpandedMessages((prev) => {
@@ -329,6 +331,21 @@ export function CompareDigestView() {
     setTheaterMountKey((value) => value + 1);
   }, [activePane, captureActivePaneSnapshot]);
 
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, targetPane: 'a' | 'b') => {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      const nextPane = targetPane === 'a' ? 'b' : 'a';
+      void activatePane(nextPane);
+      setTimeout(() => {
+        if (nextPane === 'a') {
+          tabARef.current?.focus();
+        } else {
+          tabBRef.current?.focus();
+        }
+      }, 0);
+    }
+  };
+
   const handleRoundSelect = useCallback((round: number) => {
     setSelectedRound(round);
     setPlaybackMode('skip');
@@ -521,16 +538,30 @@ export function CompareDigestView() {
 
       <div className="compare-digest-view__branch-switch" role="tablist" aria-label={t('compare.title', 'Compare branches')}>
         <button
+          ref={tabARef}
           type="button"
+          id="tab-branch-a"
+          role="tab"
+          aria-selected={activePane === 'a'}
+          aria-controls="panel-branch-a"
+          tabIndex={activePane === 'a' ? 0 : -1}
           className={`compare-digest-view__branch-tab ${activePane === 'a' ? 'is-active' : ''}`}
           onClick={() => void activatePane('a')}
+          onKeyDown={(e) => handleTabKeyDown(e, 'a')}
         >
           {branchPanels.a.title}
         </button>
         <button
+          ref={tabBRef}
           type="button"
+          id="tab-branch-b"
+          role="tab"
+          aria-selected={activePane === 'b'}
+          aria-controls="panel-branch-b"
+          tabIndex={activePane === 'b' ? 0 : -1}
           className={`compare-digest-view__branch-tab ${activePane === 'b' ? 'is-active' : ''}`}
           onClick={() => void activatePane('b')}
+          onKeyDown={(e) => handleTabKeyDown(e, 'b')}
         >
           {branchPanels.b.title}
         </button>
@@ -634,6 +665,9 @@ export function CompareDigestView() {
           return (
             <article
               key={pane}
+              id={`panel-branch-${pane}`}
+              role="tabpanel"
+              aria-labelledby={`tab-branch-${pane}`}
               className={`compare-theater-pane ${isActive ? 'is-active' : 'is-inactive'}`}
               data-testid={`compare-pane-${pane}`}
             >

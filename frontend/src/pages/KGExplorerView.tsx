@@ -389,8 +389,7 @@ export default function KGExplorerView() {
       <div
         data-testid="kg-explorer-root"
         className="p-6 text-sm"
-        role="alert"
-        aria-live="polite"
+        role="status"
       >
         <h1 className="text-lg font-semibold mb-2">
           {t('kg_explorer.error_title', 'Knowledge Graph is unavailable')}
@@ -407,8 +406,7 @@ export default function KGExplorerView() {
       <div
         data-testid="kg-explorer-root"
         className="p-6 text-sm"
-        role="alert"
-        aria-live="polite"
+        role="status"
       >
         <h1 className="text-lg font-semibold mb-2">
           {t('kg_explorer.feature_disabled_title', 'Feature unavailable')}
@@ -425,8 +423,7 @@ export default function KGExplorerView() {
       <div
         data-testid="kg-explorer-root"
         className="p-6 text-sm"
-        role="alert"
-        aria-live="polite"
+        role="status"
       >
         <h1 className="text-lg font-semibold mb-2">
           {t('kg_explorer.error_title', 'Knowledge Graph is unavailable')}

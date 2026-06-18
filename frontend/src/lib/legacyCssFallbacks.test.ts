@@ -65,4 +65,31 @@ describe('legacy CSS color fallbacks', () => {
     expect(css).toMatch(/\.intervention-receipt-card\s*\{[\s\S]*?border-left:\s*3px solid #3a6cd6;[\s\S]*?@supports \(border-left-color: oklch\(58% 0\.16 250\)\)/);
     expect(css).toMatch(/\.intervention-receipt-card__affected-line\s*\{[\s\S]*?overflow-wrap:\s*anywhere;[\s\S]*?word-break:\s*break-word;/);
   });
+
+  it('keeps LLM configuration banner and hint surfaces readable without OKLCH support', () => {
+    const bannerCss = readCss('src/components/LlmNotConfiguredBanner.css');
+    expect(bannerCss).toMatch(/\.llm-not-configured-banner\s*\{[\s\S]*?background-color:\s*#faf6f0;[\s\S]*?background-color:\s*oklch\(96% 0\.02 85\);/);
+
+    const hintCss = readCss('src/components/LlmErrorHint.css');
+    expect(hintCss).toMatch(/\.llm-error-hint\s*\{[\s\S]*?background-color:\s*#f9f3f3;[\s\S]*?background-color:\s*oklch\(96% 0\.02 25\);/);
+  });
+
+  it('keeps pipeline stepper dots readable without OKLCH support', () => {
+    const css = readCss('src/components/PipelineStepper.css');
+    expect(css).toMatch(/\.pipeline-stepper__dot\s*\{[\s\S]*?background:\s*#60606b;[\s\S]*?background:\s*oklch\(0\.4 0\.01 260\);/);
+    expect(css).toMatch(/\.pipeline-stepper__step--active \.pipeline-stepper__dot\s*\{[\s\S]*?background:\s*#76c0e6;[\s\S]*?background:\s*oklch\(0\.75 0\.14 200\);/);
+  });
+
+  it('keeps share modal platforms and context chips readable without OKLCH support', () => {
+    const css = readCss('src/components/ShareModal.css');
+    expect(css).toMatch(/\.share-modal__hint\s*\{[\s\S]*?color:\s*#8c8c8c;[\s\S]*?color:\s*oklch\(55% 0 0\);/);
+    expect(css).toMatch(/\.share-context__chip\s*\{[\s\S]*?background:\s*#faf5f4;[\s\S]*?background:\s*oklch\(96% 0\.02 25\);/);
+  });
+
+  it('keeps agent panel cards and mention badges readable without OKLCH support', () => {
+    const css = readCss('src/components/AgentPanel.css');
+    expect(css).toMatch(/\.agent-card--active\s*\{[\s\S]*?background:\s*rgba\(198, 21, 131, 0\.06\);[\s\S]*?background:\s*oklch\(55% 0\.22 350 \/ 0\.06\);/);
+    expect(css).toMatch(/\.agent-mention\s*\{[\s\S]*?background:\s*rgba\(197, 132, 197, 0\.18\);[\s\S]*?background:\s*oklch\(65% 0\.18 300 \/ 0\.18\);/);
+  });
 });
+

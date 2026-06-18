@@ -26,7 +26,8 @@ const STATUS_BADGE_MAP: Record<string, string> = {
 
 export default function HistoryView() {
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n?.language === 'zh' ? 'zh-CN' : 'en';
 
   const [scenarios, setScenarios] = useState<ScenarioListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -227,7 +228,7 @@ export default function HistoryView() {
                   <span>{t('history.agents_count', { count: s.agent_count ?? 0 })}</span>
                   <span>
                     {s.created_at
-                      ? new Date(s.created_at).toLocaleDateString()
+                      ? new Date(s.created_at).toLocaleDateString(locale)
                       : '—'}
                   </span>
                 </div>

@@ -546,6 +546,7 @@
       "step_deep_dive": "Deep Dive"
     },
     "result": {
+      "confidence_label": "Confidence",
       "report": {
         "title": "Full report",
         "summary_label": "Bottom line",
@@ -1199,6 +1200,8 @@
     },
     "language": "EN",
     "game": {
+      "visualization_unavailable": "Visualization unavailable, simulation continues",
+      "webgl_lost_reload": "Graphics context lost. Reload page",
       "loading": "Loading Pixel Theater...",
       "title_press_start": "Press any key to continue",
       "ending_prosperity": "Golden Age of Prosperity",
@@ -2768,6 +2771,8 @@
       "checkpoint_load_error": "Could not load checkpoints for this branch. You can still enter a round manually."
     },
     "common": {
+      "branches": "Timelines",
+      "empty": "None",
       "unknown": "Unknown",
       "loading": "Loading…",
       "back": "Back",

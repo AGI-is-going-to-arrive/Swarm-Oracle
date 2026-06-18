@@ -107,7 +107,7 @@ export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaiting
   const backToResult = firstRunId ? `/result/${firstRunId}` : undefined;
 
   return (
-    <div className="multi-run-waiting" role="status" aria-live="polite">
+    <div className="multi-run-waiting">
       <div className="multi-run-waiting__spinner" aria-hidden="true" />
       <h2 className="multi-run-waiting__title">
         {total > 0
@@ -126,7 +126,7 @@ export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaiting
         >
           <div className="multi-run-waiting__bar-fill" style={{ width: `${pct}%` }} />
         </div>
-        <div className="multi-run-waiting__count">
+        <div className="multi-run-waiting__count" role="status">
           {t('multi_run.waiting_progress', { finished, total: total || '…' })}
           {failed > 0 && (
             <span className="multi-run-waiting__failed">

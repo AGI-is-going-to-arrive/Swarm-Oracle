@@ -209,7 +209,7 @@ describe('KGExplorerView capability gate', () => {
     });
     renderAt();
     expect(await screen.findByTestId('kg-explorer-root')).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument();
     // Fetch must NOT happen when capability is disabled.
     expect(fetchMock).not.toHaveBeenCalled();
   });

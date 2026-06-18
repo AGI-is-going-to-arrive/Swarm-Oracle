@@ -42,12 +42,12 @@ const EVENT_LABEL_I18N: Record<string, [string, string]> = {
 };
 
 
-function formatTimeMarker(iso: string | null): string {
+function formatTimeMarker(iso: string | null, locale: string): string {
   if (!iso) return '';
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleDateString();
+    return d.toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en');
   } catch {
     return '';
   }
@@ -62,7 +62,8 @@ interface TimelineEntry {
 }
 
 export function MemoryTimeline({ events, memories }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n?.language || 'en';
 
   const entries = useMemo(() => {
     const all: TimelineEntry[] = [];
@@ -113,7 +114,7 @@ export function MemoryTimeline({ events, memories }: Props) {
       {groups.map(([scenarioId, items]) => {
         // Earliest timestamp in this group as the visual time marker
         const firstTs = items.find(it => it.timestamp)?.timestamp ?? null;
-        const timeMarker = formatTimeMarker(firstTs);
+        const timeMarker = formatTimeMarker(firstTs, locale);
         return (
           <div key={scenarioId} className="memory-timeline__group">
             {/* Scenario segment header */}

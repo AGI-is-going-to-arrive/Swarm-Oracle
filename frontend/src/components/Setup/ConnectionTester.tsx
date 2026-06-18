@@ -165,6 +165,7 @@ export function ConnectionTester({
   const [showLog, setShowLog] = useState<boolean>(false);
   const [nativeStatus, setNativeStatus] = useState<NativeProbeStatus>('idle');
   const [nativeResult, setNativeResult] = useState<NativeSearchProbe | null>(null);
+  const nativeResultRef = useRef<NativeSearchProbe | null>(null);
   const [nativeErrorMessage, setNativeErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -190,9 +191,11 @@ export function ConnectionTester({
     if (includeNativeProbe) {
       setNativeStatus('probing');
       setNativeResult(null);
+      nativeResultRef.current = null;
     } else {
       setNativeStatus('idle');
       setNativeResult(null);
+      nativeResultRef.current = null;
     }
 
     const promises: Promise<void>[] = [];
@@ -209,6 +212,7 @@ export function ConnectionTester({
           );
           if (!isCurrentRun()) return;
           setNativeResult(nativeData);
+          nativeResultRef.current = nativeData;
           setNativeStatus(nativeData
             ? (nativeData.would_inject_tools ? 'success' : 'blocked')
             : 'error');
@@ -226,6 +230,7 @@ export function ConnectionTester({
               ? err.message
               : t('setup.native_probe_failed'));
           setNativeResult(null);
+          nativeResultRef.current = null;
           setNativeStatus('error');
           setNativeErrorMessage(errorMessage);
           setRawPayload((prev) => ({
@@ -307,32 +312,31 @@ export function ConnectionTester({
       && runIdRef.current === runId
     ) {
       // Read latest state via refs/callbacks since setState is async
-      setNativeResult((prev) => {
-        if (prev?.would_inject_tools) {
-          // Fire live test asynchronously and update state when done
-          setNativeStatus('probing');
-          probeNativeSearch(
-            apiKey || undefined,
-            baseUrl || undefined,
-            model || undefined,
-            nativeSearchUpstream,
-            supportsNativeSearchOverride,
-            true, // liveTest
-          ).then((liveData) => {
-            if (runIdRef.current !== runId) return;
-            if (liveData) {
-              setNativeResult(liveData);
-              setNativeStatus(liveData.would_inject_tools ? 'success' : 'blocked');
-              setRawPayload((p) => ({ ...p, native_search: liveData }));
-            }
-          }).catch(() => {
-            // Live test failure is non-fatal; keep static result
-            if (runIdRef.current !== runId) return;
-            setNativeStatus('success');
-          });
-        }
-        return prev;
-      });
+      const currentResult = nativeResultRef.current as NativeSearchProbe | null;
+      if (currentResult?.would_inject_tools) {
+        // Fire live test asynchronously and update state when done
+        setNativeStatus('probing');
+        probeNativeSearch(
+          apiKey || undefined,
+          baseUrl || undefined,
+          model || undefined,
+          nativeSearchUpstream,
+          supportsNativeSearchOverride,
+          true, // liveTest
+        ).then((liveData) => {
+          if (runIdRef.current !== runId) return;
+          if (liveData) {
+            setNativeResult(liveData);
+            nativeResultRef.current = liveData;
+            setNativeStatus(liveData.would_inject_tools ? 'success' : 'blocked');
+            setRawPayload((p) => ({ ...p, native_search: liveData }));
+          }
+        }).catch(() => {
+          // Live test failure is non-fatal; keep static result
+          if (runIdRef.current !== runId) return;
+          setNativeStatus('success');
+        });
+      }
     }
   };
 
@@ -380,7 +384,6 @@ export function ConnectionTester({
         <span className={dotClass} aria-hidden="true" />
         <span
           className="tester__status-text"
-          aria-live="polite"
           role="status"
         >
           {displayStatus === 'idle'
