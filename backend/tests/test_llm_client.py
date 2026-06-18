@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import os
 import sqlite3
 import threading
+import warnings
 from urllib.parse import urlparse
 
 import httpx
@@ -26,9 +28,22 @@ from app.services.llm_client import (
     validate_llm_base_url,
 )
 
+warnings.filterwarnings(
+    "ignore",
+    message="Unknown pytest.mark.integration",
+    category=pytest.PytestUnknownMarkWarning,
+)
+
 
 async def _noop_async_none(*_args, **_kwargs):
     return None
+
+
+RUN_REAL_LLM_TESTS = os.getenv("RUN_REAL_LLM_TESTS") == "1"
+real_llm_integration = pytest.mark.skipif(
+    not RUN_REAL_LLM_TESTS,
+    reason="integration test requires RUN_REAL_LLM_TESTS=1",
+)
 
 
 class _FakeStreamResponse:
@@ -78,29 +93,6 @@ async def reset_shared_async_client():
     await llm_client.close_shared_async_client()
     yield
     await llm_client.close_shared_async_client()
-
-
-def _llm_returns_content() -> bool:
-    """Probe whether the LLM proxy returns non-null content in non-streaming mode."""
-    try:
-        from app.config import settings
-        resp = httpx.post(
-            f"{settings.LLM_RESPONSES_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.LLM_API_KEY}"},
-            json={"model": settings.LLM_MODEL_NAME,
-                  "messages": [{"role": "user", "content": "hi"}],
-                  "max_tokens": 10},
-            timeout=10,
-        )
-        data = resp.json()
-        content = data["choices"][0]["message"].get("content")
-        return content is not None and len(str(content).strip()) > 0
-    except Exception:
-        return False
-
-
-_LLM_CONTENT_OK = _llm_returns_content()
-_SKIP_REASON = "LLM proxy returns null content (reasoning-only model in non-streaming mode)"
 
 
 class TestValidateLlmBaseUrl:
@@ -1121,7 +1113,8 @@ class TestLLMCall:
             )
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not _LLM_CONTENT_OK, reason=_SKIP_REASON)
+    @pytest.mark.integration
+    @real_llm_integration
     async def test_basic_call(self):
         """llm_call should return a non-empty string."""
         result = await llm_call("Say hello in one word.", reasoning_effort="low")
@@ -1129,7 +1122,8 @@ class TestLLMCall:
         assert len(result) > 0
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not _LLM_CONTENT_OK, reason=_SKIP_REASON)
+    @pytest.mark.integration
+    @real_llm_integration
     async def test_reasoning_effort_levels(self):
         """All reasoning effort levels should work."""
         for effort in ("low", "medium", "high"):
@@ -1141,7 +1135,8 @@ class TestLLMCall:
             assert len(result) > 0
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not _LLM_CONTENT_OK, reason=_SKIP_REASON)
+    @pytest.mark.integration
+    @real_llm_integration
     async def test_call_with_chinese(self):
         """LLM should handle Chinese input/output."""
         result = await llm_call("用一个词回答：天空是什么颜色？", reasoning_effort="low")
@@ -1403,6 +1398,197 @@ class TestLLMCall:
             )
 
     @pytest.mark.asyncio
+    async def test_llm_call_falls_back_to_reasoning_content_for_empty_chat_content(
+        self,
+        monkeypatch,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "reasoning_content": "Reasoning-only answer",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with one sentence.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/chat/completions",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "Reasoning-only answer"
+
+    @pytest.mark.asyncio
+    async def test_llm_call_prefers_content_over_reasoning_content(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "Visible answer",
+                                "reasoning_content": "Fallback answer",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with one sentence.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/chat/completions",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "Visible answer"
+
+    @pytest.mark.asyncio
+    async def test_llm_call_rejects_tool_calls_only_chat_completion(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {"name": "noop", "arguments": "{}"},
+                                    }
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+    @pytest.mark.asyncio
+    async def test_llm_call_rejects_reasoning_content_after_strip_is_empty(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "reasoning_content": "<think>only hidden reasoning</think>",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+    @pytest.mark.asyncio
+    async def test_llm_call_rejects_unclosed_think_reasoning_content(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "reasoning_content": "<think>only hidden reasoning",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+    @pytest.mark.asyncio
     async def test_unexpected_response_structure_log_sanitizes_body(self, monkeypatch, caplog):
         class _FakeResponse:
             def raise_for_status(self):
@@ -1535,6 +1721,124 @@ class TestLLMCall:
                 api_key="sk-test",
                 model="gpt-test",
             )
+
+    @pytest.mark.asyncio
+    async def test_llm_call_allows_responses_tool_only_completed_output(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output": [
+                        {
+                            "type": "web_search_call",
+                            "status": "completed",
+                            "id": "ws_1",
+                        },
+                        {
+                            "type": "reasoning",
+                            "status": "completed",
+                            "summary": [],
+                        },
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Search and answer.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/responses",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool_item",
+        [
+            {"type": "web_search_call"},
+            {"type": "web_search_call", "status": "in_progress"},
+            {"type": "web_search_call", "status": "failed"},
+        ],
+    )
+    async def test_llm_call_rejects_responses_tool_only_non_completed_output(
+        self,
+        monkeypatch,
+        tool_item,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output": [tool_item],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(
+            llm_client.LLMError,
+            match="Empty non-stream content|Unexpected response structure",
+        ):
+            await llm_call(
+                "Search and answer.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/responses",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+    @pytest.mark.asyncio
+    async def test_llm_call_uses_responses_message_when_tool_output_is_empty(
+        self,
+        monkeypatch,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output": [
+                        {"type": "web_search_call", "status": "completed"},
+                        {"type": "message", "content": [{"text": "Visible message"}]},
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Search and answer.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/responses",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "Visible message"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1683,6 +1987,98 @@ class TestLLMCall:
         assert fake_client.calls == 2
         assert sleep_calls == [1.0]
 
+    @pytest.mark.asyncio
+    async def test_llm_call_stream_omits_reasoning_content_by_default(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_lines(self):
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [
+                                {"delta": {"reasoning_content": "hidden reasoning"}}
+                            ]
+                        }
+                    )
+                )
+                yield "data: [DONE]"
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeClient:
+            def stream(self, *args, **kwargs):
+                return _FakeStream()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        chunks = [
+            chunk
+            async for chunk in llm_client.llm_call_stream(
+                "stream me",
+                reasoning_effort="low",
+            )
+        ]
+
+        assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_llm_call_stream_can_opt_into_reasoning_content_fallback(self, monkeypatch):
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_lines(self):
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "content": None,
+                                        "reasoning_content": "Fallback visible text",
+                                    }
+                                }
+                            ]
+                        }
+                    )
+                )
+                yield "data: [DONE]"
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeClient:
+            def stream(self, *args, **kwargs):
+                return _FakeStream()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        chunks = [
+            chunk
+            async for chunk in llm_client.llm_call_stream(
+                "stream me",
+                reasoning_effort="low",
+                include_reasoning_content=True,
+            )
+        ]
+
+        assert chunks == ["Fallback visible text"]
+
 
 class TestLLMCallJSON:
     def test_sanitize_error_masks_generic_secret_patterns(self):
@@ -1737,7 +2133,8 @@ class TestLLMCallJSON:
         assert json.loads(cleaned) == {"answer": "hello"}
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not _LLM_CONTENT_OK, reason=_SKIP_REASON)
+    @pytest.mark.integration
+    @real_llm_integration
     async def test_json_output(self):
         """llm_call_json should parse valid JSON responses."""
         result = await llm_call_json(
@@ -1748,7 +2145,8 @@ class TestLLMCallJSON:
         assert "answer" in result or "number" in result
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(not _LLM_CONTENT_OK, reason=_SKIP_REASON)
+    @pytest.mark.integration
+    @real_llm_integration
     async def test_json_with_code_fences(self):
         """llm_call_json should strip markdown code fences."""
         result = await llm_call_json(
@@ -1756,6 +2154,59 @@ class TestLLMCallJSON:
             reasoning_effort="low",
         )
         assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_llm_call_json_raises_predictable_error_for_empty_raw_text(
+        self,
+        monkeypatch,
+    ):
+        async def _empty_llm_call(*_args, **_kwargs):
+            return ""
+
+        monkeypatch.setattr(llm_client, "llm_call", _empty_llm_call)
+
+        with pytest.raises(llm_client.LLMError, match="Invalid JSON from LLM"):
+            await llm_call_json("ignored", reasoning_effort="low")
+
+    @pytest.mark.asyncio
+    async def test_family_query_reformulation_uses_reasoning_content_fallback(
+        self,
+        monkeypatch,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "reasoning_content": '{"query": "fallback query"}',
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"total_tokens": 12},
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_client.llm_call_json_for_family_query_reformulation(
+            "Return a JSON query object.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/chat/completions",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == {"query": "fallback query"}
 
     @pytest.mark.asyncio
     async def test_json_keyed_fallback_for_malformed_agent_payload(self, monkeypatch):
@@ -1822,7 +2273,10 @@ class TestHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_ok(self, monkeypatch):
         """health_check should return status=ok when LLM is reachable."""
+        captured = {}
+
         async def _fake_llm_call(*_args, **_kwargs):
+            captured.update(_kwargs)
             return "OK"
 
         monkeypatch.setattr(llm_client, "llm_call", _fake_llm_call)
@@ -1830,6 +2284,8 @@ class TestHealthCheck:
         result = await health_check()
         assert result["status"] == "ok"
         assert result["model"] == "gpt-5.4-mini"
+        assert captured["reasoning_effort"] == "low"
+        assert captured["max_tokens"] == 64
 
     @pytest.mark.asyncio
     async def test_health_check_error_on_bad_url(self, monkeypatch):
@@ -1970,6 +2426,9 @@ class TestStripReasoningBlocks:
 
     def test_strips_case_insensitive(self):
         assert _strip_reasoning_blocks("<THINK>loud</THINK>ok") == "ok"
+
+    def test_strips_leading_unclosed_think_block_to_empty(self):
+        assert _strip_reasoning_blocks("<think>hidden reasoning") == ""
 
 
 # ── P0-1: _resolve_llm_api_url table-driven tests ────────

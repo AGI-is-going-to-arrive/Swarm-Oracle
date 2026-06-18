@@ -350,6 +350,33 @@ class TestTavilyProvider:
         assert len(snippets) == 1
         assert mock_instance.post.call_args.kwargs["json"]["max_results"] == 10
 
+    @pytest.mark.asyncio
+    async def test_json_parse_failure_returns_provider_body_error(self, monkeypatch):
+        """Non-JSON 200 response should surface as a provider body failure."""
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            content=b"<html>NOT JSON</html>",
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            outcome = await wc._search_with_provider("tavily", "test")
+
+        assert outcome.state == "failed"
+        assert outcome.snippets == []
+        assert outcome.status_reason == "tavily body error"
+        assert outcome.status_reason_code == "provider_body_error"
+
 
 # ── Provider type-guard regression ──────────────────────
 

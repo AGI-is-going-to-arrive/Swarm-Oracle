@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel import Session
 
-from app.models.agent_conversation import AgentConversationThread
+from app.models.agent_conversation import AgentConversationThread, AgentConversationTurn
 from app.models.database import (
     Agent,
     AgentMessage,
@@ -521,3 +521,145 @@ async def test_stream_assistant_turn_rehydrates_profile_from_scenario_context(mo
         "turn_completed",
     ]
     assert events[0]["data"]["model"] == "conversation-profile-model"
+
+
+@pytest.mark.asyncio
+async def test_stream_assistant_turn_errors_on_empty_stream(monkeypatch):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Will an empty stream be rejected?",
+            status=ScenarioStatus.DONE,
+            user_id="conv-owner",
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id,
+        owner_user_id="conv-owner",
+        agent_identity_id=None,
+        origin_branch_id=None,
+        origin_round_number=None,
+        origin_node_id=None,
+        origin_node_type=None,
+        first_user_content="hello",
+    )
+
+    async def _empty_stream(_prompt: str, **_kwargs):
+        if False:
+            yield "unreachable"
+
+    async def _empty_fallback(_prompt: str, **_kwargs):
+        return ""
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.llm_call",
+        _empty_fallback,
+    )
+
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id,
+        assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello",
+        assistant_turn_preclaimed=False,
+        owner_user_id="conv-owner",
+        overrides=resolve_byok_overrides(
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            disable_user_quota=False,
+        ),
+        request_id="req-empty-stream",
+        cancel_event=asyncio.Event(),
+        _llm_stream_factory=_empty_stream,
+    )
+    events = [event async for event in stream]
+
+    assert [event["event"] for event in events] == ["turn_started", "turn_error"]
+    assert events[-1]["data"]["code"] == "LLM_EMPTY"
+    assert events[-1]["data"]["message"] == "LLM returned no visible content."
+
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+
+    assert turn is not None
+    assert turn.status == "error"
+    assert turn.error_code == "LLM_EMPTY"
+    assert turn.content == ""
+
+
+@pytest.mark.asyncio
+async def test_stream_assistant_turn_non_stream_fallback_after_empty_stream(monkeypatch):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Will reasoning-only streaming fall back to non-stream text?",
+            status=ScenarioStatus.DONE,
+            user_id="conv-owner",
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id,
+        owner_user_id="conv-owner",
+        agent_identity_id=None,
+        origin_branch_id=None,
+        origin_round_number=None,
+        origin_node_id=None,
+        origin_node_type=None,
+        first_user_content="hello",
+    )
+
+    async def _empty_stream(_prompt: str, **_kwargs):
+        if False:
+            yield "hidden reasoning should not stream"
+
+    fallback_calls: list[dict[str, object]] = []
+
+    async def _fallback_call(_prompt: str, **kwargs):
+        fallback_calls.append(kwargs)
+        return "fallback visible answer"
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.llm_call",
+        _fallback_call,
+        raising=False,
+    )
+
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id,
+        assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello",
+        assistant_turn_preclaimed=False,
+        owner_user_id="conv-owner",
+        overrides=resolve_byok_overrides(
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            disable_user_quota=False,
+        ),
+        request_id="req-empty-stream-fallback",
+        cancel_event=asyncio.Event(),
+        _llm_stream_factory=_empty_stream,
+    )
+    events = [event async for event in stream]
+
+    assert [event["event"] for event in events] == [
+        "turn_started",
+        "turn_token_delta",
+        "turn_completed",
+    ]
+    assert events[1]["data"]["delta"] == "fallback visible answer"
+    assert fallback_calls
+
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+
+    assert turn is not None
+    assert turn.status == "done"
+    assert turn.error_code is None
+    assert turn.content == "fallback visible answer"

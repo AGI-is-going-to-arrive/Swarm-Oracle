@@ -63,6 +63,7 @@ from app.services.llm_client import (
     LLMError,
     format_untrusted_text_block,
     is_local_provider_url,
+    llm_call,
     llm_call_stream,
     llm_request_scope,
     validate_llm_base_url,
@@ -84,13 +85,14 @@ _ALLOWED_TERMINAL_STATES: tuple[str, ...] = (
 )
 _CAS_EXPECTED_FROM_DEFAULT: tuple[str, ...] = ("pending", "streaming")
 
-# HC-36: 6-code whitelist — only these error codes may surface a mapped
+# HC-36: mapped-code whitelist — only these error codes may surface a mapped
 # user-visible ``error_message`` back to the client.  Anything else collapses
 # to a redacted placeholder before the row is persisted.
 _ERROR_MESSAGE_MAP: dict[str, str] = {
     "USER_ABORTED": "Turn aborted by user.",
     "LLM_5XX": "LLM provider returned a server error.",
     "LLM_4XX": "LLM provider rejected the request.",
+    "LLM_EMPTY": "LLM returned no visible content.",
     "STREAM_TIMEOUT": "Streaming response timed out.",
     "BYOK_DENIED": "BYOK configuration was rejected.",
     "SCENARIO_DELETED": "Scenario was deleted while streaming.",
@@ -2005,6 +2007,27 @@ async def stream_assistant_turn(
                                 or settings.LLM_MODEL_NAME,
                             },
                         }
+                    if not "".join(accumulated).strip() and not stream_cancel_event.is_set():
+                        fallback_text = await llm_call(
+                            prompt,
+                            api_key=active_overrides.api_key,
+                            base_url=active_overrides.base_url,
+                            model=active_overrides.model,
+                            reasoning_effort="medium",
+                            temperature=0.7,
+                        )
+                        if fallback_text.strip():
+                            accumulated[:] = [fallback_text]
+                            yield {
+                                "event": "turn_token_delta",
+                                "data": {
+                                    "turn_id": assistant_turn_id,
+                                    "sequence": assistant_turn.sequence,
+                                    "delta": fallback_text,
+                                    "model": active_overrides.model
+                                    or settings.LLM_MODEL_NAME,
+                                },
+                            }
             except asyncio.CancelledError:
                 cancel_reason = _get_turn_cancel_reason(assistant_turn_id)
                 with Session(engine) as session:
@@ -2063,6 +2086,8 @@ async def stream_assistant_turn(
                 )
 
             full_text = "".join(accumulated)
+            if error_code is None and not full_text.strip():
+                error_code = "LLM_EMPTY"
 
             # Terminal transition: commit or error.  CAS determines whether the
             # WS commit event is allowed to fire (HC-32).

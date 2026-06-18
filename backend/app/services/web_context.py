@@ -1340,7 +1340,11 @@ async def _search_tavily(
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(endpoint, json=body)
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Tavily returned non-JSON response")
+            raise ProviderBodyError("tavily body error")
         _raise_for_provider_body_error("tavily", data)
 
     snippets: list[WebSearchSnippet] = []

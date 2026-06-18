@@ -717,6 +717,8 @@ def _strip_reasoning_blocks(text: str | None) -> str:
         if next_cleaned == cleaned:
             break
         cleaned = next_cleaned
+    if re.match(r"^\s*<think>[\s\S]*$", cleaned, flags=re.IGNORECASE):
+        return ""
     return cleaned.lstrip()
 
 
@@ -2308,6 +2310,7 @@ async def llm_call(
     timeout: float = 120.0,
     api_key: str | None = None,
     base_url: str | None = None,
+    max_tokens: int | None = None,
     native_search_domains: list[str] | None = None,
     structured_output_schema: dict[str, Any] | None = None,
     structured_output_name: str = "swarmoracle_json_response",
@@ -2322,6 +2325,7 @@ async def llm_call(
         timeout: Request timeout in seconds.
         api_key: BYOK — override API key for this call.
         base_url: BYOK — override base URL for this call.
+        max_tokens: Optional Chat Completions output cap for narrow probes.
         native_search_domains: When set, inject native search tools for
             supported providers (Responses API only). Domains are passed to
             the adapter's build_search_tools().
@@ -2367,6 +2371,8 @@ async def llm_call(
                 call_payload["reasoning_effort"] = effort
             if temperature is not None:
                 call_payload["temperature"] = temperature
+            if max_tokens is not None and max_tokens > 0:
+                call_payload["max_tokens"] = int(max_tokens)
         else:
             call_payload["input"] = input_text
             if effort:
@@ -2663,8 +2669,9 @@ async def llm_call(
 
     try:
         if is_chat:
-            # choices[0].message.content (may be None for reasoning-only models)
-            text = data["choices"][0]["message"]["content"] or ""
+            choice = data["choices"][0]
+            message = choice["message"]
+            text = _extract_chat_message_text(message)
         else:
             text = ""
             outputs = data.get("output", [])
@@ -2691,7 +2698,10 @@ async def llm_call(
             if not text:
                 text = data.get("output_text") or ""
             if not text and msg is None:
-                raise KeyError("No message block in output")
+                if _is_benign_empty_responses_output(data):
+                    text = ""
+                else:
+                    raise KeyError("No message block in output")
     except (KeyError, IndexError, TypeError, StopIteration) as exc:
         logger.error("Unexpected LLM response structure: %s",
                      _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]))
@@ -2702,6 +2712,12 @@ async def llm_call(
     tok_out = usage.get("completion_tokens") or usage.get("output_tokens", "?")
     text = _strip_reasoning_blocks(text)
     if not text.strip():
+        if is_chat and _is_benign_empty_chat_completion(data):
+            logger.debug("LLM returned benign empty chat completion with tool/reasoning payload")
+            return ""
+        if not is_chat and _is_benign_empty_responses_output(data):
+            logger.debug("LLM returned benign empty Responses tool/reasoning output")
+            return ""
         logger.error(
             "LLM returned empty non-stream content despite success response: %s",
             _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]),
@@ -2903,9 +2919,49 @@ def _drop_next_optional_llm_param(payload: dict[str, Any], body: str) -> bool:
     return False
 
 
+def _extract_chat_message_text(message: dict[str, Any]) -> str:
+    if not isinstance(message, dict):
+        raise TypeError("Chat message must be an object")
+    text = message.get("content") or ""
+    visible_text = _strip_reasoning_blocks(str(text))
+    if visible_text.strip():
+        return visible_text
+    reasoning_text = message.get("reasoning_content") or ""
+    return _strip_reasoning_blocks(str(reasoning_text))
+
+
+def _is_benign_empty_chat_completion(data: dict[str, Any]) -> bool:
+    choice = data["choices"][0]
+    if choice.get("finish_reason") not in {"stop", "tool_calls", None}:
+        return False
+    message = choice.get("message") or {}
+    if not isinstance(message, dict):
+        return False
+    reasoning_text = message.get("reasoning_content") or ""
+    return bool(_strip_reasoning_blocks(str(reasoning_text)).strip())
+
+
+def _is_benign_empty_responses_output(data: dict[str, Any]) -> bool:
+    outputs = data.get("output", [])
+    if not isinstance(outputs, list) or not outputs:
+        return False
+    has_completed_non_message = False
+    for item in outputs:
+        if not isinstance(item, dict):
+            return False
+        item_type = item.get("type")
+        if item_type == "message" or "content" in item:
+            return False
+        if item_type in {"web_search_call", "reasoning"} and item.get("status") == "completed":
+            has_completed_non_message = True
+            continue
+        return False
+    return has_completed_non_message
+
+
 def _extract_llm_response_text(data: dict[str, Any], *, is_chat: bool) -> str:
     if is_chat:
-        text = data["choices"][0]["message"]["content"] or ""
+        text = _extract_chat_message_text(data["choices"][0]["message"])
     else:
         text = ""
         outputs = data.get("output", [])
@@ -3257,10 +3313,12 @@ async def llm_call_stream(
     base_url: str | None = None,
     structured_output_schema: dict[str, Any] | None = None,
     structured_output_name: str = "swarmoracle_json_response",
+    include_reasoning_content: bool = False,
 ):
     """Stream LLM response token by token (async generator).
 
-    Yields delta text chunks as they arrive via SSE.
+    Yields delta text chunks as they arrive via SSE. Reasoning deltas are only
+    yielded when include_reasoning_content is explicitly enabled.
     Only supports Chat Completions API with stream=true.
     """
     request_context = _REQUEST_CONTEXT.get()
@@ -3368,6 +3426,10 @@ async def llm_call_stream(
                             if is_chat:
                                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                                 content = delta.get("content")
+                                if not content and include_reasoning_content:
+                                    content = _strip_reasoning_blocks(
+                                        str(delta.get("reasoning_content") or "")
+                                    )
                             else:
                                 # Responses API streaming format
                                 content = chunk.get("delta", "")
@@ -3558,6 +3620,7 @@ async def health_check(
             reasoning_effort="low",
             api_key=api_key,
             base_url=base_url,
+            max_tokens=64,
             model=model,
         )
         return {"status": "ok", "model": effective_model, "response": result.strip()}
