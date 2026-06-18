@@ -4,6 +4,7 @@ import asyncio
 import json
 import sqlite3
 import threading
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -2757,7 +2758,42 @@ class TestNativeResponsesUrlDerivation:
         ],
     )
     def test_derive_native_responses_url_only_for_bare_v1(self, raw_base_url, expected):
-        assert llm_client._derive_native_responses_url(raw_base_url) == expected
+        derived = llm_client._derive_native_responses_url(raw_base_url)
+        assert derived == expected
+        # SSRF invariant: when a URL is derived, it must only change the path —
+        # scheme + netloc (host[:port]) are preserved verbatim, never pivoted.
+        if derived is not None:
+            original = urlparse(raw_base_url)
+            result = urlparse(derived)
+            assert result.scheme == original.scheme
+            assert result.netloc == original.netloc
+
+    @pytest.mark.parametrize(
+        "raw_base_url",
+        [
+            "http://127.0.0.1:8317/v1",
+            "http://localhost:9000/v1",
+            "https://my-llm-proxy.internal.example:8443/v1",
+            "https://third-party-gateway.example.org/v1",
+        ],
+    )
+    def test_derive_native_responses_url_never_pivots_host(self, raw_base_url):
+        """Derivation must stay on the caller's own host — it must never rewrite
+        a custom/proxy host into an official provider host (api.x.ai /
+        api.openai.com). This locks the SSRF-relevant host-preservation
+        invariant against future refactors of the path-replace logic."""
+        derived = llm_client._derive_native_responses_url(raw_base_url)
+        assert derived is not None
+        original = urlparse(raw_base_url)
+        result = urlparse(derived)
+        # Same scheme + host[:port], path advanced to the responses route only.
+        assert result.scheme == original.scheme
+        assert result.netloc == original.netloc
+        assert result.hostname == original.hostname
+        assert result.port == original.port
+        assert result.path == "/v1/responses"
+        # Defensively assert no pivot to an official upstream host.
+        assert result.hostname not in {"api.x.ai", "api.openai.com"}
 
     @pytest.mark.parametrize(
         ("status_code", "body", "expected"),

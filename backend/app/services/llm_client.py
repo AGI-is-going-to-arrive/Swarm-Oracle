@@ -1307,6 +1307,16 @@ def _is_derived_native_responses_endpoint_fallback_error(
     status_code: int,
     body: str,
 ) -> bool:
+    # Intentionally fail-soft. This predicate ONLY gates fallback for a
+    # /v1/responses endpoint the system *derived* optimistically from a bare
+    # /v1 Base URL on a known official host (see _derive_native_responses_url);
+    # the user never declared that the endpoint speaks the Responses API. When
+    # such a derived endpoint rejects the request we'd rather burn one extra
+    # round-trip back to the user's original chat endpoint than fail their run.
+    # 400 is included on purpose: some proxies/gateways reject an unknown
+    # /v1/responses route with a generic 400 rather than 404/405. We still
+    # exclude genuine auth/quota/param errors via the guard below so a real 400
+    # (bad key, malformed param) is NOT masked by a wasteful chat retry.
     if status_code not in {400, 404, 405}:
         return False
     return not _is_non_retryable_optional_param_error(status_code, body)
@@ -2570,6 +2580,14 @@ async def llm_call(
                     _last_native_citations.set([])
                     target_url = original_target_url
                     provider_key = _provider_key(original_target_url)
+                    # The runtime slot was reserved under the derived responses
+                    # provider_key, but the real, successful traffic now lands on
+                    # the original chat endpoint. Re-point reconciliation so the
+                    # token usage adjustment is recorded against the bucket that
+                    # actually served the request. Slot *release* is keyed by the
+                    # reservation object (its own quota_key), so this is safe and
+                    # keeps reserve/release symmetric.
+                    reservation_provider_key = provider_key
                     data = await _request_without_native_tools_once(
                         fallback_url=original_target_url,
                         fallback_payload=_build_original_chat_fallback_payload(),

@@ -88,7 +88,7 @@ docker compose up --build
 - InputView toggle 默认可见，推演前自动搜索注入 Agent 提示词（CORE/IMPORTANT/CROWD 三层）
 - Source family 受 `FEATURE_NEW_SOURCES` + provider capability 双重门控；`detect_provider(base_url)` hostname 检测 15 个 provider + proxy/local 分类
 - 域名过滤：Tavily/Exa API、SearXNG `site:`、xAI Responses `filters.allowed_domains`，均做 URL 后过滤
-- Native search adapter 框架（`native_search_adapters.py`：xAI/OpenAI Responses + null adapter）；`llm_call(native_search_domains=...)` 按 capability 注入 `tools`，citation 经 ContextVar 暴露
+- Native search adapter 框架（`native_search_adapters.py`：xAI/OpenAI Responses + null adapter）；`llm_call(native_search_domains=...)` 按 capability 注入 `tools`，citation 经 ContextVar 暴露；派生官方 responses 端点只换 path 不换 host（SSRF 不变量，测试锁定）
 - 代理/本地端点模型推断：`resolve_native_search_injection_decision(model=...)` 在 `auto` 模式下根据模型名前缀（`grok-*`→xAI / `gpt-*`·`o1`·`o3`→OpenAI）推断上游 provider，释放 `is_proxy` 门控；前端设置页 live native probe 验证实际可用性
 - 预算 fail-closed：`NATIVE_SEARCH_MAX_TOOL_CALLS=5` / `NATIVE_SEARCH_MAX_CITATIONS=50`
 - `native_citations` 后端+前端双层 sanitize（过滤非 http(s)）；`WebSourcesSection` 展示 native citations；`SourceCategoryCard` 的 `status_reason` 对普通用户可见，屏幕阅读器经 `aria-describedby` → sr-only span 获取
