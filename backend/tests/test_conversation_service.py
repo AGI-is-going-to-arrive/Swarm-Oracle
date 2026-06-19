@@ -697,13 +697,22 @@ async def test_stream_assistant_turn_abort_during_fallback_does_not_commit_done(
         if False:
             yield ""
 
+    fallback_entered = asyncio.Event()
+    fallback_cancelled = asyncio.Event()
+
     async def _fallback_call(_prompt: str, **_kwargs):
         # fallback 执行期间用户 abort：只 set cancel event（不 cancel task）
+        fallback_entered.set()
         abort_turn(
             thread_id=outcome.thread.id,
             turn_id=outcome.assistant_turn.id,
             owner_user_id="conv-owner",
         )
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            fallback_cancelled.set()
+            raise
         return "fallback answer that must be discarded"
 
     monkeypatch.setattr(
@@ -732,6 +741,9 @@ async def test_stream_assistant_turn_abort_during_fallback_does_not_commit_done(
     with pytest.raises(asyncio.CancelledError):
         _ = [event async for event in stream]
 
+    assert fallback_entered.is_set()
+    assert fallback_cancelled.is_set()
+
     with Session(get_engine()) as session:
         turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
 
@@ -739,3 +751,77 @@ async def test_stream_assistant_turn_abort_during_fallback_does_not_commit_done(
     # 已中止的 turn 不能被 fallback 文本救成 done
     assert turn.status == "aborted"
     assert turn.content != "fallback answer that must be discarded"
+
+
+async def test_stream_assistant_turn_abort_before_fallback_skips_provider(monkeypatch):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Does a pre-fallback abort skip the fallback provider call?",
+            status=ScenarioStatus.DONE,
+            user_id="conv-owner",
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id,
+        owner_user_id="conv-owner",
+        agent_identity_id=None,
+        origin_branch_id=None,
+        origin_round_number=None,
+        origin_node_id=None,
+        origin_node_type=None,
+        first_user_content="hello",
+    )
+
+    async def _empty_stream(_prompt: str, **_kwargs):
+        abort_turn(
+            thread_id=outcome.thread.id,
+            turn_id=outcome.assistant_turn.id,
+            owner_user_id="conv-owner",
+        )
+        if False:
+            yield ""
+
+    fallback_calls: list[dict[str, object]] = []
+
+    async def _fallback_call(_prompt: str, **kwargs):
+        fallback_calls.append(kwargs)
+        return "fallback answer that must not be requested"
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.llm_call",
+        _fallback_call,
+        raising=False,
+    )
+
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id,
+        assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello",
+        assistant_turn_preclaimed=False,
+        owner_user_id="conv-owner",
+        overrides=resolve_byok_overrides(
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            disable_user_quota=False,
+        ),
+        request_id="req-abort-before-fallback",
+        cancel_event=asyncio.Event(),
+        _llm_stream_factory=_empty_stream,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        _ = [event async for event in stream]
+
+    assert fallback_calls == []
+
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+
+    assert turn is not None
+    assert turn.status == "aborted"
+    assert turn.content != "fallback answer that must not be requested"

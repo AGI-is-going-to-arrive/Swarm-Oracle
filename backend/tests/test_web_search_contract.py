@@ -502,7 +502,7 @@ class TestHealthTestWebSearchServerHint:
 
         response = client.post("/api/health/test", json={
             "llm_api_key": "sk-live-probe",
-            "llm_base_url": "http://127.0.0.1:8317/v1/responses",
+            "llm_base_url": "https://api.x.ai/v1/responses",
             "llm_model": "grok-live",
             "native_probe_only": True,
             "live_native_test": True,
@@ -515,7 +515,7 @@ class TestHealthTestWebSearchServerHint:
         assert native["would_inject_tools"] is True
         assert native["live_result"]["status"] == "ok"
         assert captured["call"]["api_key"] == "sk-live-probe"
-        assert captured["call"]["base_url"] == "http://127.0.0.1:8317/v1/responses"
+        assert captured["call"]["base_url"] == "https://api.x.ai/v1/responses"
         assert captured["call"]["model"] == "grok-live"
         assert captured["scope"] == {
             "supports_native_search_override": True,

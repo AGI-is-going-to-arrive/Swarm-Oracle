@@ -96,10 +96,6 @@ jobs:
 
   cross-platform-frontend-smoke:
     runs-on: ${{ matrix.os }}
-    # 引入观察期：新增 Windows/macOS smoke 首次上线，暂以 allow-failure 运行，避免新环境
-    # 抖动阻塞主发布；待稳定性数据积累后移除 continue-on-error 改为强制门禁
-    # （codex 终审 Medium：当前跨平台回归不阻断 release，列为 fast-follow 收紧项）。
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

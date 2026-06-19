@@ -1378,9 +1378,10 @@ export function CausalReviewView() {
         enrichedPayload = { ...p, agent_name: agentNameMap.get(p.agent_id) };
       }
     }
+    const localizedNodeLabel = resolveCausalNodeLabel(raw, t);
     setSelectedNode({
       id: raw.id,
-      label: raw.label || raw.key,
+      label: localizedNodeLabel,
       type: raw.type,
       round: raw.round,
       payload: enrichedPayload,
@@ -1426,7 +1427,7 @@ export function CausalReviewView() {
         branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : (branchId ?? null),
         roundNumber: raw.round,
         agentName: enrichedAgentName,
-        nodeLabel: raw.label || raw.key,
+        nodeLabel: localizedNodeLabel,
         typeColor: NODE_TYPE_COLORS_HEX[raw.type] ?? NODE_TYPE_COLORS_HEX.event,
         targetLabel,
         targetDescription,

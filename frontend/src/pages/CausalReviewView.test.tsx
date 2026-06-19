@@ -84,6 +84,8 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.node_card_summary_event_with_relations': 'Causes {{causeCount}} · effects {{effectCount}} · links {{relationCount}}',
     'causal.node_card_summary_fork': 'Fork point · {{effectCount}} follow-ups',
     'causal.node_card_summary_outcome': 'Endpoint · {{causeCount}} sources',
+    'causal.node.stance_shift': '{{agent_name}} stance shifted',
+    'causal.node.outcome': 'Outcome',
     'causal.type_outcome': 'Outcome',
     'node_context_banner.meaning_event_title': 'Event card',
     'node_context_banner.meaning_event_description': 'This records one important move. The links explain why it matters and what it changes next.',
@@ -151,6 +153,8 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.node_card_summary_event_with_relations': '前因 {{causeCount}} · 后续 {{effectCount}} · 关系 {{relationCount}}',
     'causal.node_card_summary_fork': '分岔点 · {{effectCount}} 条去向',
     'causal.node_card_summary_outcome': '结局 · {{causeCount}} 个来源',
+    'causal.node.stance_shift': '{{agent_name}} 立场转变',
+    'causal.node.outcome': '结局',
     'causal.type_outcome': '结局',
     'node_context_banner.meaning_event_title': '事件卡',
     'node_context_banner.meaning_event_description': '它记录一次关键发言或行动。下面会说明它为什么重要，以及它把局面推向哪里。',
@@ -2283,6 +2287,58 @@ describe('CausalReviewView', () => {
       expect(screen.queryByTestId('node-detail-panel')).toBeNull();
       expect(screen.getByTestId('node-context-banner')).toBeInTheDocument();
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses label_i18n for the selected causal node and conversation sheet origin', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      applyTestLocale('zh');
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet-label-i18n',
+          available_branches: ['br1'],
+          nodes: [
+            {
+              id: 'n1',
+              key: 'stance_r2_alpha',
+              type: 'event',
+              label: 'Agent Alpha stance shifted',
+              round: 2,
+              payload: {
+                branch_id: 'br1',
+                label_i18n: {
+                  key: 'causal.node.stance_shift',
+                  params: { agent_name: '甲方' },
+                },
+              },
+            },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+
+      await user.click(await screen.findByTestId('rf-node-n1'));
+
+      const label = await screen.findByTestId('node-context-banner-label');
+      expect(label).toHaveTextContent('甲方 立场转变');
+    } finally {
+      applyTestLocale('en');
       vi.unstubAllGlobals();
     }
   });

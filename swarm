@@ -1,0 +1,363 @@
+SwarmOracle 27-bug 修复对抗审查报告
+
+范围
+
+- 基线：834b3d94（origin/main / 上一批已 push 终点）
+- 原始终点：a0dd065e（本次 7 commits）
+- 审查主范围：git diff 834b3d94..HEAD，54 files，+1822 / -310
+- Reviewer 修复：13 个 tracked 文件的工作树修改
+  - .github/workflows/ci.yml
+  - backend/app/services/conversation_service.py
+  - backend/tests/test_conversation_service.py
+  - backend/tests/test_infra_config.py
+  - backend/tests/test_web_search_contract.py
+  - docs/FEATURES.md
+  - docs/FEATURES.en.md
+  - frontend/scripts/download-fonts.mjs
+  - frontend/scripts/e2e-native-search-suite.test.mjs
+  - frontend/src/pages/CausalReviewView.tsx
+  - frontend/src/pages/CausalReviewView.test.tsx
+  - site/app.js
+  - site/index.html
+- 另有 ignored local docs 已按同口径本地同步，但未强制纳入 Git：
+  - llmdoc/overview/backend.md
+  - llmdoc/overview/frontend.md
+  - llmdoc/overview/project.md
+  - llmdoc/guides/development.md
+  - docs/promo-linuxdo.md
+
+执行摘要
+
+- 总判定：无发布阻断（0 Critical / 0 High）。
+- 审查中发现的非误判项已全部修复：2 个 High、3 个 Medium、1 个 Low/门禁问题。
+- tracked 文档与 landing page 已同步 native-search 上游声明口径；中英 FEATURES 已保持成对更新。
+- 当前剩余已知发布阻断：无。
+
+实跑测试结果
+
+```text
+cd backend && source .venv/bin/activate && python -m pytest -q
+3981 passed, 11 skipped, 91 warnings in 999.38s (0:16:39)
+```
+
+说明：上述全量通过发生在最终把 helper 异常捕获从 `BaseException` 收窄为
+`CancelledError`/`Exception` 之前。该收窄不改变正常/取消路径语义；收窄后重跑
+同一后端全量命令时，pytest 在 session teardown / DB engine dispose 后等待线程
+退出，长时间停在尾部，被人工中断：
+
+```text
+3884 passed, 11 skipped, 95 warnings in 1356.34s (0:22:36)
+KeyboardInterrupt at threading.py:1095
+```
+
+因此最终版 backend 的精确验证以受影响 targeted 测试和 ruff 为准。
+
+```text
+cd backend && source .venv/bin/activate && ruff check app/
+All checks passed!
+```
+
+```text
+cd backend && source .venv/bin/activate && \
+  python -m pytest \
+    tests/test_conversation_service.py::test_stream_assistant_turn_abort_during_fallback_does_not_commit_done \
+    tests/test_conversation_service.py::test_stream_assistant_turn_abort_before_fallback_skips_provider \
+    tests/test_infra_config.py -q
+5 passed in 1.40s
+```
+
+```text
+cd frontend && npm test -- --run
+Test Files 235 passed (235)
+Tests 2652 passed (2652)
+```
+
+```text
+cd frontend && npm test -- --run src/pages/CausalReviewView.test.tsx
+Test Files 1 passed (1)
+Tests 82 passed (82)
+```
+
+```text
+cd frontend && npm run lint && npx tsc -b && npm run build
+PASS
+vite build completed
+perf budgets: status=ok, violations=[]
+```
+
+```text
+cd frontend && node --test scripts/e2e-native-search-suite.test.mjs
+4 tests passed
+```
+
+```text
+git diff --check
+PASS
+
+node --check site/app.js
+PASS
+
+rg 旧 native-search auto-infer 口径
+no matches
+
+git diff 834b3d94 -- . ':(exclude)backend/tests/test_llm_client.py' | rg '127\.0\.0\.1:8317|8317'
+no matches
+```
+
+```text
+cd frontend && node --check scripts/download-fonts.mjs
+PASS
+
+cd frontend && node --check scripts/capture-promo-assets.mjs \
+  && node --check scripts/capture-v2-series-assets.mjs
+PASS
+```
+
+```text
+frontend i18n parity script
+en=3281, zh=3281, missing_en=0, missing_zh=0, placeholder_mismatch=0
+```
+
+```text
+git diff --check
+PASS（无输出）
+
+git diff 834b3d94 -- . ':(exclude)backend/tests/test_llm_client.py' \
+  | rg '127\.0\.0\.1:8317|8317'
+PASS（无输出；本轮新增 dev-only endpoint 已清理）
+```
+
+发现与处理
+
+High 1（已修复）- frontend/scripts/download-fonts.mjs:43
+
+问题：
+原始 Node 版 download-fonts.mjs 把 CJK chunk counter 写成：
+
+```js
+chunkCounters[key] = (chunkCounters[key] || 0) + 0;
+chunkCounters[key] = (chunkCounters[key] || -1) + 1;
+```
+
+当计数为 0 时，`0 || -1` 会再次回到 -1，因此同一 family/style/weight
+下所有 CJK chunk 都生成 `cjk-000`。这会在重新生成字体时反复覆盖同名
+woff2，导致 Noto Sans SC / Noto Serif SC 的 CJK unicode-range 文件缺失或错配。
+
+复现/影响：
+用 3 个 Noto Sans SC 400 CJK block 复现，旧逻辑会得到重复 localName。
+影响 `npm run fonts`，属于跨平台脚本迁移后新增的真实功能破坏；Windows/macOS/Linux
+都会受影响。
+
+修复：
+在 frontend/scripts/download-fonts.mjs:43-66 抽出 `assignLocalFontNames()`，
+使用 `idx = chunkCounters[key] ?? 0` 后递增，保证同 key 下生成
+`cjk-000/001/002...`。
+
+回归测试：
+frontend/scripts/e2e-native-search-suite.test.mjs:64-110 新增测试，锁定：
+
+```text
+noto-sans-sc-400-cjk-000.woff2
+noto-sans-sc-400-cjk-001.woff2
+noto-sans-sc-400-cjk-002.woff2
+instrument-sans-400-700.woff2
+```
+
+验证：
+`node --test scripts/e2e-native-search-suite.test.mjs` 通过。
+
+High 2（已修复）- backend/tests/test_web_search_contract.py:505
+
+问题：
+原始 834b3d94..HEAD diff 新增了两处 `http://127.0.0.1:8317/v1/responses`
+测试夹具。虽然只在测试里使用，但违反本轮纪律：“dev-only LLM 端点
+（127.0.0.1:8317）永不提交”。
+
+复现/影响：
+
+```text
+git diff 834b3d94..HEAD | rg '127\.0\.0\.1:8317|8317'
+```
+
+可看到本轮新增的 live native probe 测试夹具。影响不是运行时 SSRF，但会把
+本地开发端点继续固化进新提交，违背 release hygiene。
+
+修复：
+backend/tests/test_web_search_contract.py:505 和 :518 改为
+`https://api.x.ai/v1/responses`，仍覆盖同一条 xAI Responses URL 传递路径。
+
+验证：
+`python -m pytest tests/test_web_search_contract.py -q`：
+`72 passed in 27.19s`。
+最终工作树扫描 `git diff 834b3d94 -- . ':(exclude)backend/tests/test_llm_client.py' | rg ...`
+无本轮新增 8317 命中。
+
+Low / 门禁（已修复）- backend/app/services/conversation_service.py:2022
+
+问题：
+新增中文注释超过 ruff E501 限制，初次 `ruff check app/` 失败。
+
+复现/影响：
+`ruff check app/` 报：
+
+```text
+E501 Line too long (103 > 100)
+app/services/conversation_service.py:2022
+```
+
+这不是运行时缺陷，但会阻塞后端 lint 门禁。
+
+修复：
+仅拆分注释行，不改变运行逻辑。
+
+验证：
+`ruff check app/ tests/test_web_search_contract.py` 通过；
+最终 `git diff --check` 通过。
+
+Medium 1（已修复）- frontend/src/pages/CausalReviewView.tsx:1383, frontend/src/pages/CausalReviewView.tsx:1429
+
+问题：
+图节点卡片已经通过 `resolveCausalNodeLabel()` 消费后端 `label_i18n`
+（frontend/src/pages/CausalReviewView.tsx:456-472、:788），但点击节点后：
+
+- selected node detail 仍用 `raw.label || raw.key`（:1383）
+- NodeConversationSheet origin 仍用 `raw.label || raw.key`（:1429）
+
+后端 raw label 仍可能是英文：
+
+- backend/app/services/causal_graph.py:1260：`"{agent} stance shifted"`
+- backend/app/services/causal_graph.py:1711：`"Outcome"`
+
+而结构化 i18n payload 位于：
+
+- backend/app/services/causal_graph.py:1268-1271
+- backend/app/services/causal_graph.py:1721-1722
+
+复现/影响：
+中文界面点击 stance_shift 或无标题 outcome 节点。画布卡片可本地化，但详情面板、
+node context banner、对话 sheet 标题仍可能露出英文 raw label。也会影响
+aria-labelledby 读屏语义一致性。
+
+修复：
+在 `openNodeDetail` 中先计算：
+
+```ts
+const localizedNodeLabel = resolveCausalNodeLabel(raw, t);
+```
+
+然后同时用于 `setSelectedNode({ label })` 和 `sheetState.origin.nodeLabel`。
+在 frontend/src/pages/CausalReviewView.test.tsx 新增中文 locale 下点击节点的回归测试，
+断言 `node-context-banner-label` 使用 `label_i18n` 的本地化文本。
+
+验证：
+`npm test -- --run src/pages/CausalReviewView.test.tsx` 通过。
+
+Medium 2（已修复）- backend/app/services/conversation_service.py:2010, backend/app/services/conversation_service.py:2011
+
+问题：
+fallback abort High 的状态污染已修复：fallback 返回后二次检查 event/reason，
+不会把 aborted turn CAS 成 done（:2025-2029）。但在发起非流式 fallback 前，
+代码只检查 `stream_cancel_event.is_set()`，没有同步检查
+`_get_turn_cancel_reason(assistant_turn_id)`；且 fallback await 期间没有与 cancel
+信号竞争。
+
+复现/影响：
+backend/tests/test_conversation_service.py:700-707 的回归测试本身证明：
+fallback 调用期间触发 abort 时，fallback provider call 已经执行，返回后才被丢弃。
+这保护了状态正确性，但仍可能产生一次不必要 LLM 调用、额外计费和延迟。
+
+修复：
+在进入 fallback 前增加 reason pre-check；更完整的做法是把 fallback 非流式调用包成 task，
+与 cancel event/reason 竞争，命中 cancel 时取消 task 并进入 aborted 路径。
+本轮已新增 `_is_turn_cancel_requested()` 和 `_await_with_turn_cancel_signal()`，fallback
+调用前先检查同步 cancel reason，fallback await 期间也与 cancel event 竞争。
+
+验证：
+新增并通过：
+
+```text
+test_stream_assistant_turn_abort_during_fallback_does_not_commit_done
+test_stream_assistant_turn_abort_before_fallback_skips_provider
+```
+
+Medium 3（已修复）- .github/workflows/ci.yml:97, .github/workflows/ci.yml:102
+
+问题：
+Windows/macOS smoke matrix 已加入，但 `continue-on-error: true`。同时
+backend/tests/test_infra_config.py:11-17 还把 allow-failure 作为预期锁定。
+
+复现/影响：
+Windows/macOS smoke 失败不会阻断发布。对于“Windows/macOS/Linux 三平台可用”的诉求，
+当前 CI 只能提供观测信号，不能提供强门禁。
+
+修复：
+移除 `continue-on-error: true` 和 allow-failure 注释，把
+`test_ci_has_allow_failure_windows_and_macos_frontend_script_coverage` 改名为
+`test_ci_has_required_windows_and_macos_frontend_script_coverage`，并改为断言
+workflow 不包含 `continue-on-error`。
+
+验证：
+`python -m pytest tests/test_infra_config.py -q` 通过。
+
+按维度结论
+
+A. 回归检测
+
+结论：无 Critical/High 剩余回归。审查中发现的跨平台字体生成 High、dev-only
+endpoint 纪律 High，以及 3 个 Medium fast-follow 均已在本轮 reviewer 工作树修复。
+
+SSRF 不变量未发现回归：
+
+- backend/app/services/llm_client.py:145-208 仍先做 scheme/userinfo/query/hostname/allowlist 校验。
+- backend/app/services/llm_client.py:273-292 的 bare `/v1` -> `/v1/responses` 只改 path，
+  保留 scheme/netloc，未派生 host。
+- backend/app/api/scenarios.py:1063-1077 在 live native probe 前使用 validated_base_url。
+- backend/app/api/scenarios.py:657-668 的 `llm_request_scope` 只注入 capability/upstream，
+  不注入 host。
+
+用户点名的兼容契约未被本次 diff 波及：`ending_room_service` re-export、
+`worldlineRoundtableStore` re-export、`ScenarioResponse` 所在文件均不在
+`git diff --name-only 834b3d94..HEAD` 命中范围。
+
+B. 正确性 + corner case
+
+结论：主要错误路径与审查发现的 corner case 均已覆盖。
+
+- Empty stream -> non-stream fallback、LLM_EMPTY、done/aborted CAS 状态路径均有后端测试覆盖。
+- fallback abort 的状态正确性和取消 provider task 已通过
+  `test_stream_assistant_turn_abort_during_fallback_does_not_commit_done` 覆盖。
+- pre-fallback abort 跳过 provider call 已通过
+  `test_stream_assistant_turn_abort_before_fallback_skips_provider` 覆盖。
+- Causal node `label_i18n` 已覆盖画布卡片、详情面板和 conversation sheet origin。
+- 跨平台脚本本身已经从 bash 迁到 Node，但 CJK chunk counter 已由本轮修复补齐。
+
+C. 是否改到位
+
+结论：27-bug 修复到位；审查发现的非误判项已全部修复。
+
+- L1 LLM 健壮性：核心空内容、reasoning fallback、benign-empty、流式空 fallback、
+  LLM_EMPTY CAS、unclosed think、Tavily ProviderBodyError 均有代码/测试覆盖；
+  abort 后 fallback provider call 仍可能已发出的 Medium 已修复。
+- L2 后端 6 bug：native probe override、simulator normalize、admin list-models 鉴权、
+  causal label_i18n、CI matrix/host-gateway 均有对应改动；未发现 SSRF host pivot。
+- L3 前端 14 bug：IME guard、clipboard fallback、OKLCH fallback、Phaser boundary、
+  lifecycle cleanup、a11y tab/status 相关改动未见发布阻断；causal node detail/sheet
+  raw label Medium 已修复。
+- L4 跨平台脚本：Node ESM 化、shell wrapper、ffmpeg ENOENT hint、os.tmpdir 已就位；
+  字体 chunk 覆盖 High 和 CI allow-failure Medium 已修复。
+- bug18：后端 label_i18n 和前端画布/详情/sheet 消费已到位。
+- audit gate：fallback abort 状态污染 High 已修复；注释 lint 门禁已修复。
+
+发布判定
+
+- Critical：0
+- High：0
+- Medium：0
+- Low：0
+
+结论：无发布阻断（0 Critical / 0 High）。
+
+文档同步说明
+
+- tracked docs / landing：`docs/FEATURES.md`、`docs/FEATURES.en.md`、`site/index.html`、`site/app.js` 已同步 native-search 官方 provider / 本地代理上游声明口径。
+- ignored local docs：`llmdoc/` 与 `docs/promo-linuxdo.md` 已按同口径本地更新；它们受 `.gitignore` 保护，本轮没有强制加入 Git。

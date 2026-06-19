@@ -21,7 +21,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -40,12 +40,37 @@ if (typeof fetch !== "function") {
   process.exit(1);
 }
 
-fs.mkdirSync(PUBLIC_FONTS_DIR, { recursive: true });
-
-console.log("[download-fonts] target dir:", PUBLIC_FONTS_DIR);
-console.log("[download-fonts] fontface css:", FONTFACE_CSS);
+export function assignLocalFontNames(blocks) {
+  const slugFamily = (f) => f.toLowerCase().replace(/\s+/g, "-");
+  const weightSlug = (w) => w.replace(/\s+/g, "-");
+  const chunkCounters = {};
+  for (const b of blocks) {
+    const styleSuffix = b.style === "italic" ? "-italic" : "";
+    if (b.subset === null) {
+      const key = b.family + "|" + b.style + "|" + b.weight;
+      const idx = chunkCounters[key] ?? 0;
+      chunkCounters[key] = idx + 1;
+      b.localName =
+        slugFamily(b.family) +
+        "-" +
+        weightSlug(b.weight) +
+        styleSuffix +
+        "-cjk-" +
+        String(idx).padStart(3, "0") +
+        ".woff2";
+    } else {
+      b.localName = slugFamily(b.family) + "-" + weightSlug(b.weight) + styleSuffix + ".woff2";
+    }
+  }
+  return blocks;
+}
 
 async function main() {
+  fs.mkdirSync(PUBLIC_FONTS_DIR, { recursive: true });
+
+  console.log("[download-fonts] target dir:", PUBLIC_FONTS_DIR);
+  console.log("[download-fonts] fontface css:", FONTFACE_CSS);
+
   // 1. Fetch the Google Fonts CSS index.
   const res = await fetch(GOOGLE_CSS_URL, { headers: { "User-Agent": USER_AGENT } });
   if (!res.ok) throw new Error("CSS fetch failed: " + res.status);
@@ -75,27 +100,7 @@ async function main() {
   );
 
   // 4. Build local filenames: {family-slug}-{weight}[-italic][-cjk-NNN].woff2
-  const slugFamily = (f) => f.toLowerCase().replace(/\s+/g, "-");
-  const weightSlug = (w) => w.replace(/\s+/g, "-");
-  const chunkCounters = {};
-  for (const b of selected) {
-    const styleSuffix = b.style === "italic" ? "-italic" : "";
-    if (b.subset === null) {
-      const key = b.family + "|" + b.style + "|" + b.weight;
-      chunkCounters[key] = (chunkCounters[key] || 0) + 0; // placeholder (preserve original semantics)
-      chunkCounters[key] = (chunkCounters[key] || -1) + 1;
-      b.localName =
-        slugFamily(b.family) +
-        "-" +
-        weightSlug(b.weight) +
-        styleSuffix +
-        "-cjk-" +
-        String(chunkCounters[key]).padStart(3, "0") +
-        ".woff2";
-    } else {
-      b.localName = slugFamily(b.family) + "-" + weightSlug(b.weight) + styleSuffix + ".woff2";
-    }
-  }
+  assignLocalFontNames(selected);
 
   console.log("[download-fonts] planning", selected.length, "files");
 
@@ -183,9 +188,11 @@ async function main() {
   console.log("[download-fonts] wrote", FONTFACE_CSS, "(", selected.length, "@font-face blocks)");
 }
 
-main()
-  .then(() => console.log("[download-fonts] done"))
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+    .then(() => console.log("[download-fonts] done"))
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}

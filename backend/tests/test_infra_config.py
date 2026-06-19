@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -8,13 +7,13 @@ def read_repo_file(relative_path: str) -> str:
     return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_ci_has_allow_failure_windows_and_macos_frontend_script_coverage():
+def test_ci_has_required_windows_and_macos_frontend_script_coverage():
     workflow = read_repo_file(".github/workflows/ci.yml")
 
     assert "cross-platform-frontend-smoke:" in workflow
     assert "windows-latest" in workflow
     assert "macos-latest" in workflow
-    assert "continue-on-error: true" in workflow
+    assert "continue-on-error" not in workflow
     assert "node scripts/release-signoff.mjs --dry-run" in workflow
     assert "--skip-backend-checks --skip-assets-check --headless" in workflow
     assert "closePlaywrightBrowser" in workflow

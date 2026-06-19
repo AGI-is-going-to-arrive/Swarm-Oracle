@@ -41,7 +41,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Callable, Literal
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal
 
 from fastapi import HTTPException
 from sqlalchemy import delete as sa_delete
@@ -1738,6 +1738,61 @@ async def _stream_with_cancel_signal(
             return
 
 
+def _is_turn_cancel_requested(turn_id: str, cancel_event: asyncio.Event | None) -> bool:
+    return (cancel_event is not None and cancel_event.is_set()) or (
+        _get_turn_cancel_reason(turn_id) is not None
+    )
+
+
+async def _await_with_turn_cancel_signal(
+    awaitable: Awaitable[str],
+    *,
+    turn_id: str,
+    cancel_event: asyncio.Event | None,
+) -> str:
+    if cancel_event is None:
+        return await awaitable
+    if _is_turn_cancel_requested(turn_id, cancel_event):
+        raise asyncio.CancelledError
+
+    task = asyncio.create_task(awaitable)
+    cancel_wait_task = asyncio.create_task(cancel_event.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {task, cancel_wait_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if cancel_wait_task in done or _get_turn_cancel_reason(turn_id) is not None:
+            if task.done():
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+            else:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            raise asyncio.CancelledError
+        return task.result()
+    finally:
+        if not cancel_wait_task.done():
+            cancel_wait_task.cancel()
+            try:
+                await cancel_wait_task
+            except asyncio.CancelledError:
+                pass
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
 def _load_turn_status(session: Session, turn_id: str) -> str | None:
     row = session.exec(
         sa_text(
@@ -2007,21 +2062,27 @@ async def stream_assistant_turn(
                                 or settings.LLM_MODEL_NAME,
                             },
                         }
-                    if not "".join(accumulated).strip() and not stream_cancel_event.is_set():
-                        fallback_text = await llm_call(
-                            prompt,
-                            api_key=active_overrides.api_key,
-                            base_url=active_overrides.base_url,
-                            model=active_overrides.model,
-                            reasoning_effort="medium",
-                            temperature=0.7,
+                    if not "".join(accumulated).strip():
+                        if _is_turn_cancel_requested(
+                            assistant_turn_id,
+                            stream_cancel_event,
+                        ):
+                            raise asyncio.CancelledError
+                        fallback_text = await _await_with_turn_cancel_signal(
+                            llm_call(
+                                prompt,
+                                api_key=active_overrides.api_key,
+                                base_url=active_overrides.base_url,
+                                model=active_overrides.model,
+                                reasoning_effort="medium",
+                                temperature=0.7,
+                            ),
+                            turn_id=assistant_turn_id,
+                            cancel_event=stream_cancel_event,
                         )
-                        # HC race (codex 终审 High): abort_turn() 只 set cancel event、不 cancel
-                        # task，且非流式 fallback 不经过 _stream_with_cancel_signal，因此 fallback
-                        # await 期间发生的 abort 不会打断它。必须二次检查，否则 fallback 文本会把
-                        # 已中止的 turn 经 done CAS 救成 "done"。注意 event.set 经 call_soon_threadsafe
-                        # 异步置位、可能尚未生效，而 cancel reason 是同步写入，故以 reason 为准
-                        # （兼顾 is_set）；命中则走 CancelledError → aborted。
+                        # HC race：abort_turn() 只 set cancel event、不 cancel 当前 task；
+                        # fallback 也必须监听 cancel，并在返回后以同步写入的 cancel
+                        # reason 再检查一次，避免已中止 turn 被 fallback 文本救成 done。
                         if (
                             stream_cancel_event.is_set()
                             or _get_turn_cancel_reason(assistant_turn_id) is not None
