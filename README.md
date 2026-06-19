@@ -94,7 +94,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
    notepad .env.docker
    ```
 
-   如果不是只在本机访问，同时设置 `SESSION_SECRET` 和 `ADMIN_TOKEN`。前者保护普通 REST / WebSocket 访问，后者保护 `/api/admin/*` 诊断端点（请求头为 `X-Admin-Token`）。
+   Docker Compose 默认只把前端和后端端口绑定到 `127.0.0.1`。如果不是只在本机访问，必须显式修改 `docker-compose.yml` 的 `ports` 绑定（例如把前端改成 `18928:80`），并在 `.env.docker` 中设置 `ENV=production`、`SESSION_SECRET` 和 `ADMIN_TOKEN`。`SESSION_SECRET` 保护普通 REST / WebSocket 访问；`ADMIN_TOKEN` 保护 `/api/admin/*`；`/metrics` 在设置 `ADMIN_TOKEN` 时接受 `X-Admin-Token`，在设置 `SESSION_SECRET` 时也接受 `X-Session-Token`。
 
 3. 启动：
 
@@ -110,7 +110,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 4. 打开浏览器访问 http://localhost:18928
 
-Docker 默认把前端映射到 `18928`，后端映射到 `18927`。GHCR 镜像发布后，Compose 会优先使用 `image:` 指向的 backend/frontend 镜像，并保留 `build:` 作为本地回退。要强制从源码构建，运行 `docker compose up --build -d`。
+Docker 默认把前端映射到 `127.0.0.1:18928`，后端映射到 `127.0.0.1:18927`。前端容器会代理 `/api` 和 `/ws` 到后端，因此公开部署时不能只暴露前端端口而继续留空鉴权密钥。GHCR 镜像发布后，Compose 会优先使用 `image:` 指向的 backend/frontend 镜像，并保留 `build:` 作为本地回退。要强制从源码构建，运行 `docker compose up --build -d`。
 
 ### 本地开发
 
@@ -173,6 +173,8 @@ npm run dev
 完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板、人物备份和完整报告在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
 
 Docker Compose 会读取 `.env.docker`（如果存在），并把数据库和 Chroma 数据放到 `/data` volume。普通本地开发读取 `backend/.env`。
+
+首页 scenario 问题、辩论题目、分享挑战和模板/场景包导入链路都按 2000 字符上限收口。前端会在可控入口截断或限制输入，后端 schema 仍会拒绝超长请求。
 
 ## 迁移策略
 

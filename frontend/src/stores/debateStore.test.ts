@@ -47,6 +47,11 @@ describe('debateStore', () => {
 
     const id = await useDebateStore.getState().startDebate('Should AI run every city?');
 
+    expect(createDebateMock).toHaveBeenCalledWith(
+      'Should AI run every city?',
+      undefined,
+      expect.objectContaining({ language: 'en' }),
+    );
     expect(id).toBe('debate-1');
     expect(useDebateStore.getState().status).toBe('live');
     expect(useDebateStore.getState().debate?.scene_theme).toBe('civic_chamber');

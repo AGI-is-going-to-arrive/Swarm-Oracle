@@ -535,9 +535,30 @@ describe('InputView campaign progress', () => {
     await waitFor(() => {
       expect(createDebateMock).toHaveBeenCalledTimes(1);
     });
+    expect(createDebateMock).toHaveBeenCalledWith(
+      'What if AI ruled every city?',
+      undefined,
+      expect.objectContaining({
+        language: 'en',
+        userId: 'default_user',
+      }),
+      undefined,
+    );
     expect(changeLanguageMock).not.toHaveBeenCalled();
     expect(getMockLanguage()).toBe('en');
     expect(await screen.findByText('debate-route')).toBeInTheDocument();
+  });
+
+  it('limits direct question input to the backend question contract length', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('5 agents × 5 rounds · about 4 min for the main simulation');
+    expect(screen.getByRole('textbox', { name: 'home.question_input_label' }))
+      .toHaveAttribute('maxlength', '2000');
   });
 
   it('shows mode-specific action hints and updates the main simulation ETA when rounds change', async () => {
@@ -653,9 +674,36 @@ describe('InputView campaign progress', () => {
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
         question: 'Shared Motion',
+        language: 'en',
         branchSensitivity: 0.7,
         forkPromptVariant: 'd',
         forkDetectorActiveBranchLimit: 1,
+      }));
+    });
+  });
+
+  it('bounds shared challenge questions to the backend length contract before launch', async () => {
+    const user = userEvent.setup();
+    const boundedQuestion = 'x'.repeat(2000);
+    const overlongQuestion = `${boundedQuestion}x`;
+
+    render(
+      <MemoryRouter initialEntries={[`/?sharedChallenge=1&question=${encodeURIComponent(overlongQuestion)}&rounds=4&agents=6&mode=raw&viz=1`]}>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    await waitFor(() => {
+      expect(input).toHaveValue(boundedQuestion);
+    });
+
+    await user.click(screen.getByRole('button', { name: /home\.submit/ }));
+    await confirmLaunchDialog(user);
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: boundedQuestion,
+        language: 'en',
       }));
     });
   });
@@ -3069,7 +3117,10 @@ describe('InputView apiUserId wiring (P1)', () => {
       expect(createDebateMock).toHaveBeenCalledWith(
         'What if debate caps custom agents?',
         undefined,
-        expect.objectContaining({ userId: 'default_user' }),
+        expect.objectContaining({
+          language: 'en',
+          userId: 'default_user',
+        }),
         { proposition: 'agent-1', opposition: undefined },
       );
     });

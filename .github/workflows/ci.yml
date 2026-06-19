@@ -39,6 +39,9 @@ jobs:
             tests/test_campaign_service.py \
             tests/test_debate_api.py \
             tests/test_debate_service.py \
+            tests/test_api.py \
+            tests/test_parser.py \
+            tests/test_contract_freeze_v2.py \
             tests/test_metrics.py \
             tests/test_config.py \
             tests/test_predictions.py \
@@ -79,10 +82,15 @@ jobs:
           npm test -- --run \
             src/lib/scenarioMeta.test.ts \
             src/lib/archiveSummary.test.ts \
+            src/lib/challengeShare.test.ts \
             src/components/gameplayCards.test.ts \
             src/components/gameplayContract.test.ts \
             src/components/InterventionModal.test.tsx \
             src/components/ShareModal.test.tsx \
+            src/api/client.test.ts \
+            src/i18n/config.test.ts \
+            src/stores/debateStore.test.ts \
+            src/pages/InputView.test.tsx \
             src/pages/SimulationView.test.tsx \
             src/pages/ResultView.test.tsx \
             src/components/GameplayCardsModal.test.tsx \
@@ -127,3 +135,4 @@ jobs:
       - name: Run frontend script unit smoke
         run: |
           node --test scripts/e2e-frontend-preflight.test.mjs
+          node --test scripts/e2eFixtureNet.test.mjs

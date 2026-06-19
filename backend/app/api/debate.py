@@ -134,7 +134,7 @@ async def _debate_authorized_principal(
 
 
 class CreateDebateRequest(BaseModel):
-    question: str
+    question: str = Field(..., min_length=1, max_length=2000)
     language: Literal["zh", "en"] | None = None
     profile_hint: str | None = None
     user_id: str | None = None
@@ -155,8 +155,6 @@ class CreateDebateRequest(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Question cannot be empty")
-        if len(cleaned) > 500:
-            raise ValueError("Question too long (max 500 chars)")
         return cleaned
 
     @field_validator("profile_hint")

@@ -125,6 +125,41 @@ def test_create_debate_explicit_language_overrides_question_detection(
     assert scheduled["count"] == 1
 
 
+def test_create_debate_accepts_wave1_question_max_length(
+    client: TestClient,
+    monkeypatch,
+):
+    scheduled = {"count": 0}
+
+    def _capture_schedule(coro):
+        scheduled["count"] += 1
+        coro.close()
+        return None
+
+    monkeypatch.setattr(debate_api, "schedule_background_task", _capture_schedule)
+
+    resp = client.post("/api/debate", json={"question": "x" * 2000})
+
+    assert resp.status_code == 200
+    assert resp.json()["question"] == "x" * 2000
+    assert scheduled["count"] == 1
+
+
+def test_create_debate_rejects_question_over_wave1_max_length(client: TestClient):
+    resp = client.post("/api/debate", json={"question": "x" * 2001})
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail[0]["loc"] == ["body", "question"]
+    assert detail[0]["type"] == "string_too_long"
+
+
+def test_create_debate_question_schema_matches_wave1_max_length():
+    schema = debate_api.CreateDebateRequest.model_json_schema()
+
+    assert schema["properties"]["question"]["maxLength"] == 2000
+
+
 def test_debate_rejects_custom_ids_when_feature_disabled(
     client: TestClient,
     monkeypatch,

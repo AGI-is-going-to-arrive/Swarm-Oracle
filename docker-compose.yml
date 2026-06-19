@@ -12,12 +12,12 @@ services:
     environment:
       - DATABASE_URL=sqlite:////data/swarmoracle.db
       - CHROMA_PERSIST_DIR=/data/chroma_data
-      # Containers must bind 0.0.0.0 internally. Default compose publishes
-      # 127.0.0.1:18927 only, so empty SESSION_SECRET/ADMIN_TOKEN are allowed
-      # in development with startup warnings.
-      # For production/public deployment, set ENV=production plus unique
-      # SESSION_SECRET and ADMIN_TOKEN in .env.docker; production fail-fast
-      # blocks empty values.
+      # Containers must bind 0.0.0.0 internally. Default compose publishes both
+      # frontend and backend on 127.0.0.1 only, so empty SESSION_SECRET/ADMIN_TOKEN
+      # are allowed in development with startup warnings.
+      # For production/public deployment, explicitly change the host publish
+      # bindings and set ENV=production plus unique SESSION_SECRET and ADMIN_TOKEN
+      # in .env.docker; production fail-fast blocks empty values.
       # Generate each secret with: openssl rand -hex 32
       # Do not reuse any example or public value.
       - HOST=0.0.0.0
@@ -29,9 +29,9 @@ services:
     volumes:
       - backend-data:/data
     ports:
-      # Host publish is local-only by default. For public deployment,
-      # explicitly publish 18927:18927 and configure ENV=production,
-      # SESSION_SECRET, and ADMIN_TOKEN in .env.docker.
+      # Host publish is local-only by default. For public deployment, only
+      # expose this port directly if you explicitly need direct backend access,
+      # and configure ENV=production, SESSION_SECRET, and ADMIN_TOKEN.
       - "127.0.0.1:18927:18927"
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:18927/'); r.raise_for_status()"]
@@ -48,7 +48,10 @@ services:
     container_name: swarmoracle-frontend
     restart: unless-stopped
     ports:
-      - "18928:80"
+      # Frontend proxies /api and /ws to the backend, so this must be local-only
+      # by default too. For public deployment, explicitly change to 18928:80 and
+      # configure ENV=production, SESSION_SECRET, and ADMIN_TOKEN in .env.docker.
+      - "127.0.0.1:18928:80"
     depends_on:
       backend:
         condition: service_healthy

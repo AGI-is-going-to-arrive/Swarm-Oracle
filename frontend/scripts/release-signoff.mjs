@@ -17,6 +17,7 @@ const IS_MAIN_MODULE = process.argv[1]
   : false;
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
+const FIXTURE_BLACKHOLE_BACKEND_URL = process.env.SWARM_E2E_FIXTURE_BACKEND_URL || "http://127.0.0.1:9";
 const VALID_DEBATE_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);
 const GRAPH_FOCUSED_VITEST_TESTS = [
   "src/lib/manualChunks.test.ts",
@@ -536,6 +537,34 @@ function buildSuiteArgs(scriptName, mode, baseUrl, outputDir, headless, scenario
   return args;
 }
 
+function buildFixtureSuiteStepSpecs(baseUrl, outputRoot, headless, scenarioId) {
+  const cornersOutput = path.join(outputRoot, "corners");
+  const mobileOutput = path.join(outputRoot, "mobile");
+  const commonEnv = {
+    SWARM_E2E_FIXTURE_MODE: "1",
+    SWARM_BACKEND_URL: FIXTURE_BLACKHOLE_BACKEND_URL,
+  };
+
+  return [
+    {
+      id: "corners",
+      commandArgs: buildSuiteArgs("scripts/e2e-suite.mjs", "corners", baseUrl, cornersOutput, headless, scenarioId),
+      artifactDir: cornersOutput,
+      resultFile: path.join(cornersOutput, "result.json"),
+      browserLaunchFile: path.join(cornersOutput, "browser-launch.json"),
+      env: commonEnv,
+    },
+    {
+      id: "mobile",
+      commandArgs: buildSuiteArgs("scripts/e2e-suite.mjs", "mobile", baseUrl, mobileOutput, headless, scenarioId),
+      artifactDir: mobileOutput,
+      resultFile: path.join(mobileOutput, "result.json"),
+      browserLaunchFile: path.join(mobileOutput, "browser-launch.json"),
+      env: commonEnv,
+    },
+  ];
+}
+
 function buildGraphPreflightPaths() {
   return [
     ...buildPhase3BatchAPreflightPaths(),
@@ -564,12 +593,14 @@ export const __test__ = {
   buildGraphPreflightPaths,
   buildGraphFocusedVitestArgs,
   buildRound7GraphLiveStepSpecs,
+  buildFixtureSuiteStepSpecs,
   buildPredictionFocusedStepSpecs,
   registerRound7GraphLiveSteps,
   registerPredictionFocusedSteps,
   graphE2EStepIds: GRAPH_E2E_STEP_IDS,
   graphFocusedVitestTests: GRAPH_FOCUSED_VITEST_TESTS,
   predictionFocusedStepIds: PREDICTION_FOCUSED_STEP_IDS,
+  fixtureBlackholeBackendUrl: FIXTURE_BLACKHOLE_BACKEND_URL,
   round7CheckStepIds: ROUND7_CHECK_STEP_IDS,
   round7GraphLiveStepIds: ROUND7_GRAPH_LIVE_STEP_IDS,
 };
@@ -580,8 +611,6 @@ async function main() {
   const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
   const nodeCommand = process.execPath;
 
-  const cornersOutput = path.join(args.outputRoot, "corners");
-  const mobileOutput = path.join(args.outputRoot, "mobile");
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
   const roundtableFirefoxOutput = path.join(args.outputRoot, "roundtable-firefox");
   const roundtableWebkitOutput = path.join(args.outputRoot, "roundtable-webkit");
@@ -695,6 +724,7 @@ async function main() {
         "scripts/e2e-new-source-ingestion-live.test.mjs",
         "scripts/e2e-capability-matrix.test.mjs",
         "scripts/e2e-native-search-suite.test.mjs",
+        "scripts/e2eFixtureNet.test.mjs",
       ],
     );
     if (args.includeBackendChecks) {
@@ -887,36 +917,14 @@ async function main() {
         },
       },
     );
-    runStep(
-      summary,
-      args,
-      "corners",
-      nodeCommand,
-      buildSuiteArgs("scripts/e2e-suite.mjs", "corners", args.baseUrl, cornersOutput, args.headless, args.scenarioId),
-      {
-        artifactDir: cornersOutput,
-        resultFile: path.join(cornersOutput, "result.json"),
-        browserLaunchFile: path.join(cornersOutput, "browser-launch.json"),
-        env: {
-          SWARM_E2E_FIXTURE_MODE: "1",
-        },
-      },
-    );
-    runStep(
-      summary,
-      args,
-      "mobile",
-      nodeCommand,
-      buildSuiteArgs("scripts/e2e-suite.mjs", "mobile", args.baseUrl, mobileOutput, args.headless, args.scenarioId),
-      {
-        artifactDir: mobileOutput,
-        resultFile: path.join(mobileOutput, "result.json"),
-        browserLaunchFile: path.join(mobileOutput, "browser-launch.json"),
-        env: {
-          SWARM_E2E_FIXTURE_MODE: "1",
-        },
-      },
-    );
+    for (const spec of buildFixtureSuiteStepSpecs(args.baseUrl, args.outputRoot, args.headless, args.scenarioId)) {
+      runStep(summary, args, spec.id, nodeCommand, spec.commandArgs, {
+        artifactDir: spec.artifactDir,
+        resultFile: spec.resultFile,
+        browserLaunchFile: spec.browserLaunchFile,
+        env: spec.env,
+      });
+    }
     runStep(
       summary,
       args,

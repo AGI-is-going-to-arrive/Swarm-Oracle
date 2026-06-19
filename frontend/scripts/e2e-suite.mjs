@@ -250,7 +250,21 @@ async function launchBrowser(headless, browserName = "chromium") {
 }
 
 async function readAutomation(page) {
-  const raw = await page.evaluate(() => window.render_game_to_text?.() ?? null);
+  let raw = null;
+  try {
+    raw = await page.evaluate(() => window.render_game_to_text?.() ?? null);
+  } catch (error) {
+    if (
+      error instanceof Error
+      && (
+        error.message.includes("Execution context was destroyed")
+        || error.message.includes("Cannot find context with specified id")
+      )
+    ) {
+      return null;
+    }
+    throw error;
+  }
   if (!raw) return null;
   if (typeof raw === "string") return JSON.parse(raw);
   return raw;
@@ -1886,6 +1900,7 @@ async function runLiveForkMarkerFixtureCase(page, {
 
   await page.addInitScript(({ fixtureScenarioId, fixtureRootBranchId, fixtureChildBranchId, fixtureRootBranchTitle, fixtureChildBranchTitle }) => {
     const NativeWebSocket = window.WebSocket;
+    const nativeIsFixtureNet = Boolean(NativeWebSocket?.__swarmFixtureNet);
 
     class FixtureWebSocket {
       static CONNECTING = 0;
@@ -1907,7 +1922,30 @@ async function runLiveForkMarkerFixtureCase(page, {
         this._listeners = new Map();
         this._timers = [];
 
+        let parsed = null;
+        try { parsed = new URL(this.url, window.location.href); } catch { parsed = null; }
+
         if (!this.url.endsWith(`/ws/scenario/${fixtureScenarioId}`)) {
+          if (parsed?.pathname?.startsWith("/ws/") && !nativeIsFixtureNet) {
+            const entry = {
+              url: this.url,
+              pathname: parsed.pathname,
+            };
+            if (!Array.isArray(window.__fixtureWsEscapes__)) {
+              window.__fixtureWsEscapes__ = [];
+            }
+            window.__fixtureWsEscapes__.push(entry);
+            const recorder = window.__recordFixtureWsEscape;
+            if (typeof recorder === "function") {
+              Promise.resolve(recorder(entry)).catch(() => {});
+            }
+            this._schedule(() => {
+              this.readyState = FixtureWebSocket.CLOSED;
+              this._emit("error", new Event("error"));
+              this._emit("close", new CloseEvent("close", { code: 1011, reason: "fixture ws escape", wasClean: false }));
+            }, 10);
+            return;
+          }
           return new NativeWebSocket(url, protocols);
         }
 
@@ -2767,6 +2805,10 @@ async function runMatrixSuite(args) {
 async function installCornersFixture(page) {
   const store = createFixtureStore();
   const nodeFixture = installNodeFetchFixture(store);
+  const wsEscapes = [];
+  await page.exposeBinding("__recordFixtureWsEscape", (_source, entry) => {
+    wsEscapes.push(entry);
+  });
   const ws = buildFixtureWsInitScript([
     { scenario: store.getScenario(FIXTURE_SCENARIO_IDS.governance), complete: true },
     { scenario: store.getScenario(FIXTURE_SCENARIO_IDS.law), complete: true },
@@ -2775,7 +2817,7 @@ async function installCornersFixture(page) {
   ]);
   await page.addInitScript(ws.fn, ws.arg);
   const { unhandled } = await installApiFixtures(page, store);
-  return { store, nodeFixture, unhandled };
+  return { store, nodeFixture, unhandled, wsEscapes };
 }
 
 /**
@@ -2792,12 +2834,15 @@ async function assertNoFixtureEscapes(page, fixture, outputDir, label) {
   await page.waitForTimeout(250);
   const browserEscapes = fixture.unhandled.slice();
   const nodeEscapes = fixture.nodeFixture.escapes.slice();
-  let wsEscapes = [];
+  let wsEscapes = Array.isArray(fixture.wsEscapes) ? fixture.wsEscapes.slice() : [];
   try {
-    wsEscapes = await page.evaluate(() => (Array.isArray(window.__fixtureWsEscapes__) ? window.__fixtureWsEscapes__ : []));
+    const currentPageWsEscapes = await page.evaluate(() => (Array.isArray(window.__fixtureWsEscapes__) ? window.__fixtureWsEscapes__ : []));
+    if (wsEscapes.length === 0) {
+      wsEscapes = currentPageWsEscapes;
+    }
   } catch {
     // Page may already be navigating/closed; treat unreadable as empty but note it.
-    wsEscapes = [];
+    wsEscapes = Array.isArray(fixture.wsEscapes) ? fixture.wsEscapes.slice() : [];
   }
   const report = {
     label,

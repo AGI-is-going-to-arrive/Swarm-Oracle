@@ -137,6 +137,8 @@ When enabled, the app searches the web before simulation and injects context int
 
 | Variable | Meaning | Default |
 |----------|---------|---------|
+| `ENV` | Runtime environment; `production` / `prod` requires security secrets | `development` |
+| `HOST` | Backend bind address | `127.0.0.1` |
 | `PORT` | Backend port | `18927` |
 | `DATABASE_URL` | SQLite database path | `sqlite:///./swarmoracle.db` |
 | `CHROMA_PERSIST_DIR` | Vector store directory for Agent memory | `./chroma_data` |
@@ -148,9 +150,17 @@ Docker Compose stores the database and Chroma data in the `/data` volume so they
 
 ## 5. Session Gate and Admin Endpoints (Optional, Advanced)
 
-`SESSION_SECRET` is empty by default, which means local development has no auth gate. When set, REST requests need an `X-Session-Token` header and WebSocket connections need first-frame authentication. This is a temporary coarse-grained demo gate, not a complete multi-user permission system.
+`SESSION_SECRET` is empty by default, which means local development has no auth gate. When set, REST requests need an `X-Session-Token` header, WebSocket connections need first-frame authentication, and `/metrics` can also be accessed with the same session token. This is a temporary coarse-grained demo gate, not a complete multi-user permission system.
 
-`ADMIN_TOKEN` is also empty by default, which leaves `/api/admin/*` diagnostics open for local development. When set, admin endpoints require the `X-Admin-Token` request header. If the Docker deployment is reachable beyond your own machine, set both `SESSION_SECRET` and `ADMIN_TOKEN`.
+`ADMIN_TOKEN` is also empty by default, which leaves `/api/admin/*` diagnostics and `/metrics` open for local development. When set, admin endpoints and `/metrics` accept the `X-Admin-Token` request header; when `SESSION_SECRET` is also set, `/metrics` also accepts a valid `X-Session-Token`. With `ENV=production` / `prod`, empty `SESSION_SECRET` or `ADMIN_TOKEN` fails startup. Docker Compose binds both frontend and backend ports to `127.0.0.1` by default; whenever you change `ports` so the app is reachable beyond your own machine, set `ENV=production`, `SESSION_SECRET`, and `ADMIN_TOKEN` together.
+
+Scenario questions and debate questions have a public 2000-character input limit. Controlled frontend entries clamp or limit input, and backend schemas still hard-reject oversized requests.
+
+---
+
+## 6. Development Test Only
+
+`SWARM_E2E_FIXTURE_MODE=1` enables the frontend offline fixture harness, mainly for release / E2E signoff. When paired with a blackhole backend such as `SWARM_BACKEND_URL=http://127.0.0.1:9`, uncovered `/api`, node-side backend calls, and same-origin `/ws/**` fail closed and fail the test. This mode validates zero fixture escape from the frontend harness; it does not validate real backend business logic.
 
 ---
 

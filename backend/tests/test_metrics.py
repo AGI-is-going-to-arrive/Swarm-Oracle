@@ -47,3 +47,25 @@ def test_metrics_accepts_admin_token_when_configured(monkeypatch):
 
     assert response.status_code == 200
     assert "# HELP" in response.text
+
+
+def test_metrics_rejects_missing_admin_token_when_configured(monkeypatch):
+    monkeypatch.setattr(settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "metrics-admin-token")
+    client = TestClient(app)
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ADMIN_TOKEN_REQUIRED"
+
+
+def test_metrics_rejects_wrong_admin_token_when_configured(monkeypatch):
+    monkeypatch.setattr(settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "metrics-admin-token")
+    client = TestClient(app)
+
+    response = client.get("/metrics", headers={"X-Admin-Token": "wrong-token"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ADMIN_TOKEN_REQUIRED"

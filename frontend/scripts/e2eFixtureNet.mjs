@@ -512,14 +512,17 @@ export function createFixtureStore() {
 export function resolveApiFixture(store, { method, pathname, search }) {
   const m = method.toUpperCase();
   const q = search ?? "";
+  const allows = (...methods) => methods.includes(m);
 
   // /api/capabilities
   if (pathname === "/api/capabilities") {
+    if (!allows("GET")) return null;
     return { status: 200, json: store.capabilitiesFixture() };
   }
 
   // /api/scenarios?... (history list)
   if (pathname === "/api/scenarios") {
+    if (!allows("GET")) return null;
     const scenarios = [...store.scenarios.values()].map((s) => ({
       id: s.id,
       question: s.question,
@@ -538,12 +541,14 @@ export function resolveApiFixture(store, { method, pathname, search }) {
 
   // /api/leaderboard
   if (pathname === "/api/leaderboard") {
+    if (!allows("GET")) return null;
     return { status: 200, json: { entries: [] } };
   }
 
   // /api/campaign/scenario/{id}/director-state  (GET/PUT)
   let match = pathname.match(/^\/api\/campaign\/scenario\/([^/]+)\/director-state$/);
   if (match) {
+    if (!allows("GET", "PUT")) return null;
     const id = decodeURIComponent(match[1]);
     const scenario = store.getScenario(id);
     if (!scenario) return { defer: true };
@@ -554,6 +559,7 @@ export function resolveApiFixture(store, { method, pathname, search }) {
   // /api/campaign/scenario/{id}/gameplay-state  (GET/PUT)
   match = pathname.match(/^\/api\/campaign\/scenario\/([^/]+)\/gameplay-state$/);
   if (match) {
+    if (!allows("GET", "PUT")) return null;
     const id = decodeURIComponent(match[1]);
     const scenario = store.getScenario(id);
     if (!scenario) return { defer: true };
@@ -564,6 +570,7 @@ export function resolveApiFixture(store, { method, pathname, search }) {
   // /api/campaign/scenario/{id}/summary
   match = pathname.match(/^\/api\/campaign\/scenario\/([^/]+)\/summary$/);
   if (match) {
+    if (!allows("GET")) return null;
     const id = decodeURIComponent(match[1]);
     const scenario = store.getScenario(id);
     if (!scenario) {
@@ -576,6 +583,7 @@ export function resolveApiFixture(store, { method, pathname, search }) {
   // /api/campaign/scenario/{id}/finalize (POST) — full CampaignFinalizeResult.
   match = pathname.match(/^\/api\/campaign\/scenario\/([^/]+)\/finalize$/);
   if (match) {
+    if (!allows("POST")) return null;
     const id = decodeURIComponent(match[1]);
     const scenario = store.getScenario(id);
     if (!scenario) {
@@ -587,6 +595,7 @@ export function resolveApiFixture(store, { method, pathname, search }) {
 
   // /api/campaign/challenges/rotation — homepage daily + weekly challenge cards
   if (pathname === "/api/campaign/challenges/rotation") {
+    if (!allows("GET")) return null;
     const params = new URLSearchParams(q.startsWith("?") ? q.slice(1) : q);
     return { status: 200, json: store.makeChallengeRotation(params.get("local_date")) };
   }
@@ -594,6 +603,7 @@ export function resolveApiFixture(store, { method, pathname, search }) {
   // /api/campaign/profile/{id}/daily-status — homepage daily challenge status
   match = pathname.match(/^\/api\/campaign\/profile\/([^/]+)\/daily-status$/);
   if (match) {
+    if (!allows("GET")) return null;
     const params = new URLSearchParams(q.startsWith("?") ? q.slice(1) : q);
     return {
       status: 200,
@@ -602,20 +612,32 @@ export function resolveApiFixture(store, { method, pathname, search }) {
   }
 
   // /api/campaign/profile/{id}/(mastery|badges|weekly-summary)
-  if (/^\/api\/campaign\/profile\/[^/]+\/mastery$/.test(pathname)) return { status: 200, json: [] };
-  if (/^\/api\/campaign\/profile\/[^/]+\/badges$/.test(pathname)) return { status: 200, json: [] };
+  if (/^\/api\/campaign\/profile\/[^/]+\/mastery$/.test(pathname)) {
+    if (!allows("GET")) return null;
+    return { status: 200, json: [] };
+  }
+  if (/^\/api\/campaign\/profile\/[^/]+\/badges$/.test(pathname)) {
+    if (!allows("GET")) return null;
+    return { status: 200, json: [] };
+  }
   if (/^\/api\/campaign\/profile\/[^/]+\/weekly-summary/.test(pathname)) {
+    if (!allows("GET")) return null;
     return { status: 200, json: { user_id: decodeURIComponent(pathname.split("/")[4]), total_runs: 3, campaign_score_delta: 0, top_profile_id: "governance" } };
   }
-  if (/^\/api\/campaign\/profile\/[^/]+$/.test(pathname)) return { status: 200, json: store.makeCampaignProfile() };
+  if (/^\/api\/campaign\/profile\/[^/]+$/.test(pathname)) {
+    if (!allows("GET")) return null;
+    return { status: 200, json: store.makeCampaignProfile() };
+  }
 
   // /api/quota/summary
   if (pathname.startsWith("/api/quota/summary")) {
+    if (!allows("GET")) return null;
     return { status: 200, json: { conversation: null, replay: null } };
   }
 
   // /api/replay-artifact (POST) — share artifact persistence
   if (pathname === "/api/replay-artifact") {
+    if (!allows("POST")) return null;
     return {
       status: 201,
       json: { id: "fx-replay-artifact", kind: "scenario_result_v1", created_at: NOW_ISO },
@@ -624,11 +646,54 @@ export function resolveApiFixture(store, { method, pathname, search }) {
 
   // /api/intervention-templates
   if (pathname === "/api/intervention-templates") {
+    if (!allows("GET")) return null;
     return { status: 200, json: [] };
   }
 
   // /api/me/* (journal etc.) — empty
   if (pathname.startsWith("/api/me/")) {
+    if (pathname === "/api/me/journal") {
+      if (m === "GET") return { status: 200, json: { items: [], limit: 50, offset: 0 } };
+      if (m === "POST") {
+        return {
+          status: 200,
+          json: {
+            id: 1,
+            user_id: "fixture-user",
+            scenario_id: null,
+            question: "Fixture forecast",
+            predicted_probability: 0.5,
+            actual_outcome: null,
+            resolved_at: null,
+            created_at: NOW_ISO,
+            brier_score: null,
+          },
+        };
+      }
+      return null;
+    }
+    if (pathname === "/api/me/calibration") {
+      if (!allows("GET")) return null;
+      return { status: 200, json: { bins: [] } };
+    }
+    if (/^\/api\/me\/journal\/[^/]+\/resolve$/.test(pathname)) {
+      if (!allows("PATCH")) return null;
+      return {
+        status: 200,
+        json: {
+          id: 1,
+          user_id: "fixture-user",
+          scenario_id: null,
+          question: "Fixture forecast",
+          predicted_probability: 0.5,
+          actual_outcome: true,
+          resolved_at: NOW_ISO,
+          created_at: NOW_ISO,
+          brier_score: 0.25,
+        },
+      };
+    }
+    if (!allows("GET")) return null;
     return { status: 200, json: [] };
   }
 
@@ -643,13 +708,24 @@ export function resolveApiFixture(store, { method, pathname, search }) {
     // for ANY scenario id (including per-case fixtures like mock-result-loading-
     // gate / fixture-live-fork-marker) so they never escape. These are harmless
     // and not stubbed by the case-owned fixtures.
-    if (sub === "predictions") return { status: 200, json: [] };
-    if (sub.startsWith("checkpoints")) return { status: 200, json: [] };
-    if (sub.startsWith("faction-timeline")) return { status: 200, json: [] };
+    if (sub === "predictions") {
+      if (!allows("GET")) return null;
+      return { status: 200, json: [] };
+    }
+    if (sub.startsWith("checkpoints")) {
+      if (!allows("GET")) return null;
+      return { status: 200, json: [] };
+    }
+    if (sub.startsWith("faction-timeline")) {
+      if (!allows("GET")) return null;
+      return { status: 200, json: [] };
+    }
     if (sub.startsWith("intervention-effects")) {
+      if (!allows("GET")) return null;
       return { status: 200, json: { scenario_id: id, effects: [], applied: [] } };
     }
     if (sub.startsWith("replay-trace")) {
+      if (!allows("GET")) return null;
       return { status: 200, json: { scenario_id: id, entries: [], timeline_markers: [], next_cursor: null } };
     }
 
@@ -658,10 +734,20 @@ export function resolveApiFixture(store, { method, pathname, search }) {
     // fail-closed catch-all records a genuine escape).
     if (!scenario) return { defer: true };
 
-    if (sub === "story") return { status: 200, json: store.makeStoryPayload(scenario) };
-    if (sub === "agents") return { status: 200, json: (scenario.agents ?? []).map((a) => ({ ...a })) };
-    if (sub.startsWith("branches")) return { status: 200, json: (scenario.branches ?? []).map((b) => ({ ...b })) };
+    if (sub === "story") {
+      if (!allows("GET")) return null;
+      return { status: 200, json: store.makeStoryPayload(scenario) };
+    }
+    if (sub === "agents") {
+      if (!allows("GET")) return null;
+      return { status: 200, json: (scenario.agents ?? []).map((a) => ({ ...a })) };
+    }
+    if (sub.startsWith("branches")) {
+      if (!allows("GET")) return null;
+      return { status: 200, json: (scenario.branches ?? []).map((b) => ({ ...b })) };
+    }
     if (sub === "predict") {
+      if (!allows("POST")) return null;
       // Default success (cases that want failure register their own override first).
       return {
         status: 200,
@@ -669,9 +755,11 @@ export function resolveApiFixture(store, { method, pathname, search }) {
       };
     }
     if (sub.startsWith("social/")) {
+      if (!allows("POST")) return null;
       return { status: 200, json: { copy: "夹具分享文案。", platform_name: "小红书" } };
     }
     if (sub === "export") {
+      if (!allows("GET")) return null;
       return { status: 200, contentType: "text/markdown", body: "# Fixture\n" };
     }
     // Unknown sub-resource on a known scenario -> escape (fail-closed).
@@ -681,6 +769,7 @@ export function resolveApiFixture(store, { method, pathname, search }) {
   // /api/scenario/{id} (bare GET) or DELETE
   match = pathname.match(/^\/api\/scenario\/([^/]+)$/);
   if (match) {
+    if (!allows("GET", "DELETE")) return null;
     const id = decodeURIComponent(match[1]);
     if (m === "DELETE") {
       if (!store.scenarios.has(id)) return { defer: true };
@@ -903,11 +992,12 @@ function scenarioToWsConfig(scenario, { complete }) {
  * FAIL-CLOSED (M-fixture High fix): a same-origin `/ws/**` connection that does
  * NOT match a fixture scenario (e.g. `/ws/debate/...`, `/ws/ending-room/...`,
  * `/ws/agent-conversation/...`, or `/ws/scenario/{unknown}`) is treated as a
- * network ESCAPE — it is recorded into `window.__fixtureWsEscapes__` and the
+ * network ESCAPE — it is recorded into the persistent suite recorder and the
  * socket is failed (async `error` + `close` 1011) WITHOUT ever opening a native
- * WebSocket to the backend. Only explicitly-allowlisted non-backend sockets
- * (cross-origin, or Vite HMR/internal) fall through to the native WebSocket so
- * dev-server live-reload keeps working.
+ * WebSocket to the backend. `/ws/**` is treated as backend surface even when
+ * constructed with an absolute cross-origin URL. Only explicitly-allowlisted
+ * non-backend sockets (e.g. Vite HMR/internal) fall through to native WebSocket
+ * so dev-server live-reload keeps working.
  *
  * @param {Array<{scenario: object, complete: boolean}>} entries
  */
@@ -927,12 +1017,21 @@ export function buildFixtureWsInitScript(entries) {
       window.__fixtureWsEscapes__ = [];
     }
 
+    function recordWsEscape(entry) {
+      window.__fixtureWsEscapes__.push(entry);
+      const recorder = window.__recordFixtureWsEscape;
+      if (typeof recorder === "function") {
+        Promise.resolve(recorder(entry)).catch(() => {});
+      }
+    }
+
     // Allowlist of NON-backend sockets that may use the native impl:
-    //  - cross-origin (host !== page host): never the proxied backend surface;
+    //  - cross-origin non-/ws sockets: never the proxied backend surface;
     //  - Vite HMR / internal dev sockets (path starts with /@vite or has the
     //    `vite-hmr` subprotocol) so dev-server live-reload is not broken.
     function isAllowlistedNativeWs(parsed, protocols) {
       try {
+        if (parsed.pathname.startsWith("/ws/")) return false;
         if (parsed.host !== window.location.host) return true;
       } catch { /* fall through */ }
       if (/^\/@vite\b|^\/@react-refresh\b|\/__vite_hmr\b/.test(parsed.pathname)) return true;
@@ -964,7 +1063,7 @@ export function buildFixtureWsInitScript(entries) {
         let parsed = null;
         try { parsed = new URL(this.url, window.location.href); } catch { parsed = null; }
 
-        // Allowlisted non-backend socket (cross-origin / Vite HMR): use native.
+        // Allowlisted non-backend socket (non-/ws cross-origin / Vite HMR): use native.
         if (parsed && isAllowlistedNativeWs(parsed, protocols)) {
           return new NativeWebSocket(url, protocols);
         }
@@ -976,7 +1075,7 @@ export function buildFixtureWsInitScript(entries) {
         if (!this._cfg) {
           // Same-origin /ws/** with no fixture: FAIL-CLOSED, record as escape,
           // never open a native socket to the (proxied) backend.
-          window.__fixtureWsEscapes__.push({
+          recordWsEscape({
             url: this.url,
             pathname: parsed ? parsed.pathname : this.url,
           });
@@ -1107,6 +1206,7 @@ export function buildFixtureWsInitScript(entries) {
       }
     }
 
+    FixtureWebSocket.__swarmFixtureNet = true;
     window.WebSocket = FixtureWebSocket;
   }
 

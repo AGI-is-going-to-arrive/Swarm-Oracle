@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendEndingRoomUserTurn,
   buildSessionHeaders,
+  createDebate,
   createReplayArtifact,
   createScenario,
   exportScenario,
@@ -321,6 +322,58 @@ describe('api client request parsing', () => {
     );
   });
 });
+
+describe('language wire-format', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubJsonWrite(): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue('{"id":"created-1"}'),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  function getRequestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string) as Record<string, unknown>;
+  }
+
+  it('sends explicit UI language when creating a scenario', async () => {
+    const fetchMock = stubJsonWrite();
+
+    await createScenario({
+      question: '如果问题是中文但 UI 是英文？',
+      language: 'en',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/scenario', expect.objectContaining({ method: 'POST' }));
+    expect(getRequestBody(fetchMock)).toEqual(expect.objectContaining({
+      question: '如果问题是中文但 UI 是英文？',
+      language: 'en',
+    }));
+  });
+
+  it('sends explicit UI language when creating a debate', async () => {
+    const fetchMock = stubJsonWrite();
+
+    await createDebate('如果辩题是中文但 UI 是英文？', undefined, { language: 'en' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/debate', expect.objectContaining({ method: 'POST' }));
+    expect(getRequestBody(fetchMock)).toEqual(expect.objectContaining({
+      question: '如果辩题是中文但 UI 是英文？',
+      language: 'en',
+    }));
+  });
+});
+
 describe('web search wire-format', () => {
   afterEach(() => {
     vi.restoreAllMocks();

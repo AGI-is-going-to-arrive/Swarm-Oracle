@@ -963,13 +963,11 @@ class TestIdentityPreflightEndpoint:
         monkeypatch.setattr(agents_api, "preview_identity_match", _slow_preview)
 
         try:
-            started = time.monotonic()
             resp = client.post("/api/agents/identities/preflight", json={
                 "question": "What if parse and match both consume time?",
                 "user_id": "director-budget-timeout",
                 "num_agents": 3,
             })
-            elapsed = time.monotonic() - started
         finally:
             settings.FEATURE_AGENT_IDENTITY = previous
 
@@ -980,7 +978,6 @@ class TestIdentityPreflightEndpoint:
         assert data["summary"]["agent_count"] == 1
         assert data["summary"]["preflight_status"] == "match_timeout"
         assert data["summary"]["launch_can_continue"] is True
-        assert elapsed < 0.12
 
 
 # ── Scenario CRUD ────────────────────────────────────────

@@ -3,6 +3,7 @@ import {
   type ScenarioRuntimePresetId,
   normalizeScenarioRuntimePreset,
 } from './runtimePreset';
+import { normalizeScenarioQuestionForLaunch } from './questionLimits';
 import type { GameplayProfileId } from './themeRegistry';
 
 export interface SharedChallengePayload {
@@ -24,7 +25,7 @@ function normalizeBoolean(value: string | null) {
 export function buildSharedChallengeSearch(payload: SharedChallengePayload): string {
   const params = new URLSearchParams();
   params.set(QUERY_FLAG, '1');
-  params.set('question', payload.question);
+  params.set('question', normalizeScenarioQuestionForLaunch(payload.question));
   params.set('rounds', String(payload.rounds));
   params.set('agents', String(payload.numAgents));
   params.set('mode', payload.mode);
@@ -53,7 +54,7 @@ export function readSharedChallengePayload(
     return null;
   }
 
-  const question = params.get('question')?.trim();
+  const question = normalizeScenarioQuestionForLaunch(params.get('question') ?? '');
   const rounds = Number.parseInt(params.get('rounds') ?? '', 10);
   const numAgents = Number.parseInt(params.get('agents') ?? '', 10);
   const mode = params.get('mode');

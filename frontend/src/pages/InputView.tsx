@@ -59,6 +59,11 @@ import {
   type ScenarioRuntimePresetId,
 } from '../lib/runtimePreset';
 import {
+  SCENARIO_QUESTION_MAX_LENGTH,
+  clampScenarioQuestion,
+  normalizeScenarioQuestionForLaunch,
+} from '../lib/questionLimits';
+import {
   useInputByokSettings,
   useInputCampaignState,
   useSharedChallengePrefill,
@@ -788,7 +793,7 @@ export function InputView() {
 
   useEffect(() => {
     if (!sharedChallenge) return;
-    setQuestion(sharedChallenge.question);
+    setQuestion(clampScenarioQuestion(sharedChallenge.question));
     setRounds(sharedChallenge.rounds);
     setNumAgents(sharedChallenge.numAgents);
     setMode(sharedChallenge.mode);
@@ -922,7 +927,7 @@ export function InputView() {
     launch: PendingSimulationLaunch,
     continuityOverrides?: ContinuityOverride[],
   ): CreateScenarioOptions => {
-    const trimmed = launch.nextQuestion.trim();
+    const trimmed = normalizeScenarioQuestionForLaunch(launch.nextQuestion);
     const serverMaxCustomAgents = customAgentsEnabled ? caps?.custom_agents?.max_custom_agents : 0;
     const capLimit =
       customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
@@ -1235,10 +1240,16 @@ export function InputView() {
   }, [isContinuityDialogOpen]);
 
   const launchSimulation = async (launch: PendingSimulationLaunch) => {
-    const trimmed = launch.nextQuestion.trim();
+    const trimmed = normalizeScenarioQuestionForLaunch(launch.nextQuestion);
     if (!trimmed || isSubmitting) return;
     if (launchInFlightRef.current) return;
     if (isSimulationBudgetBlocked) return;
+    const normalizedLaunch = launch.nextQuestion === trimmed
+      ? launch
+      : { ...launch, nextQuestion: trimmed };
+    if (launch.nextQuestion.trim() !== trimmed) {
+      setQuestion(trimmed);
+    }
     setWebSearchUrlError('');
     const isProfileSelected = Boolean(selectedProfileId);
     const byokValidation = isProfileSelected
@@ -1276,14 +1287,14 @@ export function InputView() {
       setIsSubmitting(true);
       setConfirmDialogData(null);
 
-      const blockedByContinuityDialog = await maybeRunContinuityPreflight(launch);
+      const blockedByContinuityDialog = await maybeRunContinuityPreflight(normalizedLaunch);
       if (blockedByContinuityDialog) {
         setIsSubmitting(false);
         launchInFlightRef.current = false;
         return;
       }
 
-      await executeSimulationLaunch(launch);
+      await executeSimulationLaunch(normalizedLaunch);
     } catch {
       setIsSubmitting(false);
     } finally {
@@ -1296,8 +1307,11 @@ export function InputView() {
   }: {
     nextQuestion: string;
   }) => {
-    const trimmed = nextQuestion.trim();
+    const trimmed = normalizeScenarioQuestionForLaunch(nextQuestion);
     if (!trimmed || isSubmitting) return;
+    if (nextQuestion.trim() !== trimmed) {
+      setQuestion(trimmed);
+    }
     const isProfileSelected = Boolean(propositionProfileId || oppositionProfileId || judgeProfileId);
     const byokValidation = isProfileSelected
       ? { valid: true }
@@ -1354,7 +1368,7 @@ export function InputView() {
     const localizedTitle = isZh
       ? (template.title_zh || template.title_en)
       : (template.title_en || template.title_zh);
-    setQuestion(localizedTitle || '');
+    setQuestion(clampScenarioQuestion(localizedTitle || ''));
     if (Number.isFinite(template.suggested_rounds) && template.suggested_rounds > 0) {
       setRounds(template.suggested_rounds);
     }
@@ -1368,7 +1382,7 @@ export function InputView() {
   }, [isZh]);
 
   const handleImportPack = useCallback((payload: { question: string; suggested_settings: SuggestedSettings }) => {
-    setQuestion(payload.question);
+    setQuestion(clampScenarioQuestion(payload.question));
     if (Number.isFinite(payload.suggested_settings.rounds) && payload.suggested_settings.rounds > 0) {
       setRounds(payload.suggested_settings.rounds);
     }
@@ -1387,9 +1401,10 @@ export function InputView() {
   }, [i18n]);
 
   const handleQuickStartSelect = async (preset: QuickStartPreset) => {
-    setQuestion(preset.question);
+    const nextQuestion = clampScenarioQuestion(preset.question);
+    setQuestion(nextQuestion);
     await launchSimulation({
-      nextQuestion: preset.question,
+      nextQuestion,
       nextRounds: preset.rounds ?? rounds,
       nextAgents: preset.numAgents ?? numAgents,
       nextMode: preset.mode ?? mode,
@@ -1404,13 +1419,14 @@ export function InputView() {
       return;
     }
 
-    setQuestion(todayChallengeQuestion);
+    const nextQuestion = clampScenarioQuestion(todayChallengeQuestion);
+    setQuestion(nextQuestion);
     setRounds(todayChallenge.rounds);
     setNumAgents(todayChallenge.numAgents);
     setMode(todayChallenge.mode);
     setVizEnabled(todayChallenge.visualizationEnabled);
     await launchSimulation({
-      nextQuestion: todayChallengeQuestion,
+      nextQuestion,
       nextRounds: todayChallenge.rounds,
       nextAgents: todayChallenge.numAgents,
       nextMode: todayChallenge.mode,
@@ -1435,7 +1451,7 @@ export function InputView() {
     const recommendedAgents = track.recommended_params?.num_agents ?? firstWeekly.numAgents;
     const recommendedRounds = track.recommended_params?.rounds ?? firstWeekly.rounds;
 
-    const trackQuestion = isZh ? firstWeekly.question : firstWeekly.questionEn;
+    const trackQuestion = clampScenarioQuestion(isZh ? firstWeekly.question : firstWeekly.questionEn);
 
     setQuestion(trackQuestion);
     setRounds(recommendedRounds);
@@ -1465,8 +1481,11 @@ export function InputView() {
   };
 
   const requestLaunch = (q: string) => {
-    const trimmed = q.trim();
+    const trimmed = normalizeScenarioQuestionForLaunch(q);
     if (!trimmed || isSubmitting || launchInFlightRef.current || isSimulationBudgetBlocked) return;
+    if (q.trim() !== trimmed) {
+      setQuestion(trimmed);
+    }
     setConfirmDialogData({ question: trimmed });
   };
 
@@ -1806,7 +1825,7 @@ export function InputView() {
                   ref={questionRef}
                   className="input input--hero"
                   value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
+                  onChange={(e) => setQuestion(clampScenarioQuestion(e.target.value))}
                   onKeyDown={onKeyDown}
                   onCompositionStart={() => { isComposingRef.current = true; }}
                   onCompositionEnd={() => { isComposingRef.current = false; }}
@@ -1815,7 +1834,7 @@ export function InputView() {
                   disabled={isSubmitting}
                   autoFocus
                   rows={1}
-                  maxLength={2000}
+                  maxLength={SCENARIO_QUESTION_MAX_LENGTH}
                 />
               </div>
             </div>

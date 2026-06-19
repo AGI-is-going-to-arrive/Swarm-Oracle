@@ -94,7 +94,7 @@ Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern 
    notepad .env.docker
    ```
 
-   If the deployment is reachable beyond your own machine, also set `SESSION_SECRET` and `ADMIN_TOKEN`. `SESSION_SECRET` protects normal REST / WebSocket access, and `ADMIN_TOKEN` protects `/api/admin/*` diagnostics through the `X-Admin-Token` header.
+   Docker Compose binds both frontend and backend ports to `127.0.0.1` by default. If the deployment must be reachable beyond your own machine, explicitly change the `ports` bindings in `docker-compose.yml` (for example, change the frontend publish to `18928:80`) and set `ENV=production`, `SESSION_SECRET`, and `ADMIN_TOKEN` in `.env.docker`. `SESSION_SECRET` protects normal REST / WebSocket access; `ADMIN_TOKEN` protects `/api/admin/*`; `/metrics` accepts `X-Admin-Token` when `ADMIN_TOKEN` is set and also accepts `X-Session-Token` when `SESSION_SECRET` is set.
 
 3. Start:
 
@@ -110,7 +110,7 @@ Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern 
 
 4. Open http://localhost:18928 in your browser.
 
-Docker maps the frontend to `18928` and the backend to `18927` by default. After GHCR images are published, Compose uses the backend/frontend images from `image:` first and keeps `build:` as the local fallback. To force a source build, run `docker compose up --build -d`.
+Docker maps the frontend to `127.0.0.1:18928` and the backend to `127.0.0.1:18927` by default. The frontend container proxies `/api` and `/ws` to the backend, so public deployments must not expose only the frontend port while leaving auth secrets empty. After GHCR images are published, Compose uses the backend/frontend images from `image:` first and keeps `build:` as the local fallback. To force a source build, run `docker compose up --build -d`.
 
 ### Local Development
 
@@ -173,6 +173,8 @@ Core configuration lives in `.env.example` for local development or `.env.docker
 For the full configuration list, feature flags, and search enhancement notes, see **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**. Custom Agents, cross-scenario identity, causal graph, graph analysis, faction relations, argument map, knowledge graph explorer, timeline galaxy, replay trace, Roundtable Deep Dive, snapshot, prediction journal, education templates, persona backup, and the full report are enabled by default in the template. `ENABLE_WEB_SEARCH`, `FEATURE_NEW_SOURCES`, and `FEATURE_FAMILY_QUERY_OPTIMIZATION` are disabled by default because they require a search provider and matching configuration.
 
 Docker Compose reads `.env.docker` if present and stores the database and Chroma data in the `/data` volume. Standard local development reads `backend/.env`.
+
+Home-page scenario questions, debate questions, shared challenges, and template / local-pack import paths are bounded to 2000 characters. The frontend clamps or limits controlled entries, and backend schemas still reject oversized requests.
 
 ## Migration Strategy
 

@@ -137,6 +137,8 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 | 配置项 | 说明 | 默认 |
 |--------|------|------|
+| `ENV` | 运行环境；`production` / `prod` 会要求安全密钥非空 | `development` |
+| `HOST` | 后端监听地址 | `127.0.0.1` |
 | `PORT` | 后端端口 | `18927` |
 | `DATABASE_URL` | SQLite 数据库路径 | `sqlite:///./swarmoracle.db` |
 | `CHROMA_PERSIST_DIR` | 向量库（角色记忆）目录 | `./chroma_data` |
@@ -148,9 +150,17 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 ## 5. 会话门禁与管理端点（可选，进阶）
 
-`SESSION_SECRET` 默认留空，表示本地开发不开鉴权。设置后，REST 接口需要 `X-Session-Token` 头、WebSocket 需要首帧鉴权。这是一个**临时的全局粗粒度门禁**，适合给 demo 加一道简单口令，不是完整的多用户权限系统。
+`SESSION_SECRET` 默认留空，表示本地开发不开鉴权。设置后，REST 接口需要 `X-Session-Token` 头、WebSocket 需要首帧鉴权，`/metrics` 也可以用同一个 session token 访问。这是一个**临时的全局粗粒度门禁**，适合给 demo 加一道简单口令，不是完整的多用户权限系统。
 
-`ADMIN_TOKEN` 默认也留空，此时 `/api/admin/*` 诊断端点对本地开发开放。设置后，管理端点必须携带 `X-Admin-Token` 请求头。只要把 Docker 部署暴露给本机以外的访问者，就应同时设置 `SESSION_SECRET` 和 `ADMIN_TOKEN`。
+`ADMIN_TOKEN` 默认也留空，此时 `/api/admin/*` 诊断端点和 `/metrics` 对本地开发开放。设置后，管理端点和 `/metrics` 都接受 `X-Admin-Token` 请求头；如果同时设置了 `SESSION_SECRET`，`/metrics` 也接受有效的 `X-Session-Token`。`ENV=production` / `prod` 时，`SESSION_SECRET` 和 `ADMIN_TOKEN` 留空会直接启动失败。Docker Compose 默认只把前端和后端端口绑定到 `127.0.0.1`；只要把 `ports` 改成可被本机以外访问，就必须同时设置 `ENV=production`、`SESSION_SECRET` 和 `ADMIN_TOKEN`。
+
+Scenario 问题和辩论题目的公开输入上限是 2000 字符。前端受控入口会限制或截断，后端 schema 仍按 2000 字符硬拒绝超长请求。
+
+---
+
+## 6. 开发测试专用
+
+`SWARM_E2E_FIXTURE_MODE=1` 会启用前端离线 fixture harness，主要用于 release / E2E 签收。配合 `SWARM_BACKEND_URL=http://127.0.0.1:9` 这类黑洞后端地址时，未被 fixture 覆盖的 `/api`、node-side backend 调用和同源 `/ws/**` 会 fail-closed，并让测试失败。这个模式验证前端 fixture 零逃逸，不验证真实后端业务逻辑。
 
 ---
 

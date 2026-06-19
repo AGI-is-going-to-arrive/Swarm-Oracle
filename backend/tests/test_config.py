@@ -116,6 +116,21 @@ def test_production_requires_admin_token():
         validate_secure_runtime_settings(s)
 
 
+def test_production_empty_auth_fails_during_fastapi_startup(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import settings
+    from app.main import app
+
+    monkeypatch.setattr(settings, "ENV", "production")
+    monkeypatch.setattr(settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "")
+
+    with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+        with TestClient(app):
+            pass
+
+
 def test_local_bind_allows_empty_auth_with_warning(caplog):
     from app.config import Settings, validate_secure_runtime_settings
 
