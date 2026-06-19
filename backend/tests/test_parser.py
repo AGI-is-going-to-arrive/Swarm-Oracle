@@ -102,6 +102,66 @@ class TestParseQuestion:
         assert 0.0 <= result["branch_sensitivity"] <= 1.0
         assert result["branch_sensitivity"] == 1.0
 
+    @pytest.mark.asyncio
+    async def test_explicit_language_overrides_question_text_detection(self, monkeypatch):
+        """UI language should win over question text when explicitly provided."""
+        llm_mock = AsyncMock(return_value={
+            "setting": {"time_period": "future", "location": "Earth", "background": "test"},
+            "key_variable": "governance",
+            "initial_title": "Test",
+            "agents": [
+                {
+                    "name": "Analyst",
+                    "role": "Analyst",
+                    "persona": "Careful",
+                    "stance": "neutral",
+                    "tier": "CORE",
+                },
+            ],
+            "simulation_rounds": 5,
+            "branch_sensitivity": 0.7,
+        })
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "如果问题文本是中文但界面是英文？",
+            max_agents=1,
+            target_agents=1,
+            language="en",
+        )
+
+        assert result["_language"] == "English"
+
+    @pytest.mark.asyncio
+    async def test_none_language_preserves_question_text_detection(self, monkeypatch):
+        """Omitting UI language keeps the legacy text-detection behavior."""
+        llm_mock = AsyncMock(return_value={
+            "setting": {"time_period": "未来", "location": "地球", "background": "测试"},
+            "key_variable": "治理",
+            "initial_title": "测试",
+            "agents": [
+                {
+                    "name": "观察者",
+                    "role": "观察者",
+                    "persona": "谨慎",
+                    "stance": "观望",
+                    "tier": "CORE",
+                },
+            ],
+            "simulation_rounds": 5,
+            "branch_sensitivity": 0.7,
+        })
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "如果问题文本是中文？",
+            max_agents=1,
+            target_agents=1,
+            language=None,
+        )
+
+        assert result["_language"] == "Chinese"
+
     def test_fallback_initial_title_strips_question_prefixes_before_truncating(self):
         """Fallback titles should not keep generic what-if prefixes."""
         assert _fallback_initial_title("如果诸葛亮多活十年？", "Chinese") == "诸葛亮多活十年"

@@ -377,6 +377,14 @@ def _fallback_initial_title(question: str, language: str) -> str:
     return f"{compact[:limit]}{suffix}".strip()
 
 
+def _resolve_parse_language(question: str, language: str | None) -> str:
+    if language == "zh":
+        return "Chinese"
+    if language == "en":
+        return "English"
+    return detect_language(question)
+
+
 def _build_unique_agent_name(
     base_name: str,
     *,
@@ -645,6 +653,7 @@ async def parse_question(
     temperature: float | None = None,
     model: str | None = None,
     world_context: dict | None = None,
+    language: str | None = None,
 ) -> dict:
     """Parse a what-if question into structured scenario context.
 
@@ -664,10 +673,9 @@ async def parse_question(
         dict with keys: setting, key_variable, agents, simulation_rounds, branch_sensitivity
         When hierarchical=True, also includes 'groups' key.
     """
-    # Auto-detect user input language
-    language = detect_language(question)
+    language = _resolve_parse_language(question, language)
     lang_directive = get_language_directive(language)
-    logger.info("Detected language: %s", language)
+    logger.info("Resolved language: %s", language)
     requested_agents = min(target_agents or max_agents, max_agents)
     agent_plan = _build_agent_plan(requested_agents)
     document_reference_block = _format_document_reference_block(world_context)

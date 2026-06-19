@@ -1,6 +1,7 @@
 """SwarmOracle configuration — loads from .env via pydantic-settings."""
 
 import ipaddress
+import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,6 +20,7 @@ _PLACEHOLDER_LLM_BASE_URLS = {
 }
 WEB_SEARCH_PROVIDER_CHOICES = frozenset({"tavily", "exa", "firecrawl", "xai", "searxng"})
 WEB_SEARCH_PROVIDER_CHOICES_LABEL = "tavily | exa | firecrawl | xai | searxng"
+logger = logging.getLogger(__name__)
 
 
 def is_placeholder_llm_api_key(api_key: str) -> bool:
@@ -245,7 +247,7 @@ class Settings(BaseSettings):
     ADMIN_TOKEN: str = ""
 
     # ── Server ───────────────────────────────────────────
-    HOST: str = "0.0.0.0"
+    HOST: str = "127.0.0.1"
     PORT: int = 18927
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:9528", "http://localhost:18928"]
 
@@ -444,3 +446,40 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _is_public_bind_host(host: str) -> bool:
+    normalized = (host or "").strip().lower()
+    if normalized in {"*", "::", "[::]"}:
+        return True
+    if normalized.startswith("[") and normalized.endswith("]"):
+        normalized = normalized[1:-1]
+    try:
+        return ipaddress.ip_address(normalized).is_unspecified
+    except ValueError:
+        return False
+
+
+def _has_public_deployment_signal(runtime_settings: Settings) -> bool:
+    env_name = runtime_settings.ENV.strip().lower()
+    return env_name in {"production", "prod"} or _is_public_bind_host(runtime_settings.HOST)
+
+
+def validate_secure_runtime_settings(runtime_settings: Settings) -> None:
+    """Fail closed for public deployments without auth secrets."""
+    if _has_public_deployment_signal(runtime_settings):
+        if not runtime_settings.SESSION_SECRET.strip():
+            raise RuntimeError(
+                "SESSION_SECRET must be set when HOST is public or ENV=production"
+            )
+        if not runtime_settings.ADMIN_TOKEN.strip():
+            raise RuntimeError(
+                "ADMIN_TOKEN must be set when HOST is public or ENV=production"
+            )
+        return
+
+    if not runtime_settings.SESSION_SECRET.strip():
+        logger.warning(
+            "SESSION_SECRET is empty; session authentication is disabled for local bind %s",
+            runtime_settings.HOST,
+        )

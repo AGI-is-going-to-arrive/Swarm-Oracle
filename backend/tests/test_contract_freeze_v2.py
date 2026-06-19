@@ -99,6 +99,28 @@ def test_create_scenario_custom_agent_ids_normalized_and_deduplicated():
     assert req.custom_agent_identity_ids == ["agent-a", "agent-b"]
 
 
+def test_create_scenario_question_accepts_wave1_max_length():
+    req = CreateScenarioRequest(question="x" * 2000)
+
+    assert req.question == "x" * 2000
+
+
+def test_create_scenario_question_rejects_over_wave1_max_length():
+    with pytest.raises(ValidationError) as excinfo:
+        CreateScenarioRequest(question="x" * 2001)
+
+    errs = excinfo.value.errors()
+    assert any(e["loc"] == ("question",) for e in errs), errs
+
+
+def test_create_scenario_language_contract_accepts_zh_en_only():
+    assert CreateScenarioRequest(question="test?", language="zh").language == "zh"
+    assert CreateScenarioRequest(question="test?", language="en").language == "en"
+
+    with pytest.raises(ValidationError):
+        CreateScenarioRequest(question="test?", language="fr")
+
+
 def test_create_scenario_custom_agent_ids_rejects_non_list_input():
     with pytest.raises(ValidationError) as excinfo:
         CreateScenarioRequest(

@@ -23,7 +23,7 @@
 
 - 后端 `app/`：`api / services / models / visualization` + `alembic / tests`
 - 前端 `src/`：`pages / components / game / lib / stores / hooks / api / i18n` + `scripts`
-- 测试基线：backend pytest **3415 passed / 6 skipped**；frontend vitest **213 文件 / 2397 tests**；i18n parity **2843/2843**
+- 测试基线：backend pytest **3981 passed / 11 skipped**；frontend vitest **2652 tests / 235 files**；i18n parity **3281/3281**
 
 ## 运行与开发
 
@@ -31,7 +31,7 @@
 # 后端 (端口 18927)
 cd backend && python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]" && cp ../.env.example .env   # 配置 LLM_API_KEY
-uvicorn app.main:app --host 0.0.0.0 --port 18927 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 alembic upgrade head                                  # 数据库迁移
 
 # 前端 (端口 18928)

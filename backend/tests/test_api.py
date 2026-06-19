@@ -959,6 +959,11 @@ class TestScenarioEndpoints:
         resp = client.post("/api/scenario", json={"question": 12345})
         assert resp.status_code == 422
 
+    def test_create_scenario_question_over_wave1_max_length(self, client):
+        """Scenario question longer than 2000 chars should be rejected."""
+        resp = client.post("/api/scenario", json={"question": "x" * 2001})
+        assert resp.status_code == 422
+
     def test_create_scenario_extra_fields_rejected(self, client):
         """Extra fields MUST be rejected (BE-5 R3-C2: extra='forbid')."""
         resp = client.post("/api/scenario", json={"question": "test?", "extra": "field"})
@@ -2025,6 +2030,34 @@ class TestReplayArtifactEndpoints:
         assert resp.status_code == 200
         assert scheduled["count"] == 1
         assert captured["fork_detector_active_branch_limit"] == 2
+
+    def test_create_scenario_forwards_explicit_language(self, client, monkeypatch):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            _close_scheduled_coro(coro)
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "如果问题是中文但界面是英文？",
+            "language": "en",
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["language"] == "en"
 
     def test_create_scenario_forwards_zero_detector_branch_budget(self, client, monkeypatch):
         scheduled = {"count": 0}

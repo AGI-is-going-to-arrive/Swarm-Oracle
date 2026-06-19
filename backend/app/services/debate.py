@@ -1661,8 +1661,9 @@ def create_debate_record(
     profile_hint: str | None = None,
     user_id: str = "anonymous",
     custom_agent_overrides: dict | None = None,
+    language: str | None = None,
 ) -> Debate:
-    language = resolve_debate_language(question)
+    language = language if language in {"zh", "en"} else resolve_debate_language(question)
     profile_id = profile_hint or infer_debate_profile(question)
     scene_theme = select_debate_scene(profile_id)
     cast = build_cast(language, profile_id, question=question)

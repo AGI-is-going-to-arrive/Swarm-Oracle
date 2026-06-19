@@ -18,6 +18,7 @@ os.environ.setdefault("LLM_REQUESTS_PER_MINUTE", "0")
 os.environ.setdefault("LLM_TOKENS_PER_MINUTE", "0")
 os.environ.setdefault("DEBATE_USE_LLM", "false")
 os.environ.setdefault("ORACLE_CHAMBERS_USE_LLM", "false")
+os.environ.setdefault("HOST", "127.0.0.1")
 
 
 @pytest.fixture(autouse=True)

@@ -7,7 +7,7 @@
 FastAPI 后端：LLM 编排、多代理模拟、辩论引擎、神谕密室 / 世界线圆桌、Campaign 系统、预测与排行榜。提供 REST API + WebSocket 实时推送。
 
 - 入口：`app/main.py`（注册路由，配置 CORS/Prometheus/异常处理）；`app/config.py`（pydantic-settings，从 `.env` 加载 LLM/模拟/并发/DB 参数）
-- 启动：`uvicorn app.main:app --host 0.0.0.0 --port 18927 --reload`（或 `docker compose up backend`）
+- 启动：`uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload`（或 `docker compose up backend`）
 
 ## 目录结构
 
@@ -120,7 +120,7 @@ backend/tests/    # 99+ 个 test_*.py
 ## 测试与质量
 
 - 框架 pytest + pytest-asyncio (`asyncio_mode=auto`)；Lint `ruff`（line-length=100, py311, select E/F/I/W）；运行 `cd backend && pytest`
-- 基线：full gate `3415 passed / 6 skipped`，`ruff check app/` 通过
+- 基线：full gate `3981 passed / 11 skipped`，`ruff check app/` 通过；frontend vitest `2652 tests / 235 files`；i18n parity `3281/3281`
 - 5 条 `test_llm_client` 集成测试在 LLM 代理返回 content=null 时自动 skip（probe 机制）
 - live LLM benchmark / observation 测试默认跳过，需 `RUN_REAL_LLM_TESTS=1` 显式开启；基准测试 `benchmark_compression.py` / `test_blackboard_bench.py`
 

@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -135,6 +135,7 @@ async def _debate_authorized_principal(
 
 class CreateDebateRequest(BaseModel):
     question: str
+    language: Literal["zh", "en"] | None = None
     profile_hint: str | None = None
     user_id: str | None = None
     llm_api_key: str | None = None
@@ -821,6 +822,7 @@ async def create_debate(
         profile_hint=req.profile_hint,
         user_id=effective_user_id,
         custom_agent_overrides=custom_agent_overrides,
+        language=req.language,
     )
     llm_overrides = None
     if (

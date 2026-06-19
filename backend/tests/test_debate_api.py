@@ -98,6 +98,33 @@ def test_create_debate_returns_immediately_and_schedules_background(
     assert scheduled["count"] == 1
 
 
+def test_create_debate_explicit_language_overrides_question_detection(
+    client: TestClient,
+    monkeypatch,
+):
+    scheduled = {"count": 0}
+
+    def _capture_schedule(coro):
+        scheduled["count"] += 1
+        coro.close()
+        return None
+
+    monkeypatch.setattr(debate_api, "schedule_background_task", _capture_schedule)
+
+    resp = client.post(
+        "/api/debate",
+        json={
+            "question": "如果问题是中文但界面是英文？",
+            "language": "en",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["language"] == "en"
+    assert scheduled["count"] == 1
+
+
 def test_debate_rejects_custom_ids_when_feature_disabled(
     client: TestClient,
     monkeypatch,

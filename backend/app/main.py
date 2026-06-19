@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
@@ -34,7 +35,7 @@ from app.api.replay_trace import router as replay_trace_router
 from app.api.scenarios import router as scenarios_router
 from app.api.social import router as social_router
 from app.api.ws import router as ws_router
-from app.config import settings
+from app.config import settings, validate_secure_runtime_settings
 from app.logging_utils import configure_logging
 from app.middleware.observability import ObservabilityMiddleware
 from app.models import init_db
@@ -53,6 +54,7 @@ configure_logging(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup; graceful cleanup on shutdown."""
+    validate_secure_runtime_settings(settings)
     init_db()
     logging.getLogger(__name__).info(
         "SwarmOracle started — LLM: %s @ %s",
@@ -105,6 +107,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def metrics_auth_middleware(request: Request, call_next):
+    if request.url.path != "/metrics":
+        return await call_next(request)
+
+    configured_admin_token = settings.ADMIN_TOKEN.strip()
+    provided_admin_token = request.headers.get("X-Admin-Token", "").strip()
+    if configured_admin_token and hmac.compare_digest(
+        provided_admin_token,
+        configured_admin_token,
+    ):
+        return await call_next(request)
+
+    if settings.SESSION_SECRET.strip():
+        from app.api.helpers import verify_session
+
+        try:
+            await verify_session(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return await call_next(request)
+
+    if configured_admin_token:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": {
+                    "code": "ADMIN_TOKEN_REQUIRED",
+                    "message": "Metrics require a valid X-Admin-Token header",
+                }
+            },
+        )
+
+    return await call_next(request)
 
 # Routes
 app.include_router(scenarios_router)

@@ -261,7 +261,8 @@ class WorldContext(BaseModel):
 class CreateScenarioRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    question: str
+    question: str = Field(..., min_length=1, max_length=2000)
+    language: Literal["zh", "en"] | None = None
     user_id: str | None = None
     num_agents: int | None = None  # User-specified agent count, range 3-1500
     rounds: int | None = None      # User-specified round count (overrides parsed default)
@@ -366,8 +367,6 @@ class CreateScenarioRequest(BaseModel):
         normalized = v.strip()
         if not normalized:
             raise ValueError("question cannot be empty")
-        if len(normalized) > 1000:
-            raise ValueError("question too long (max 1000 chars)")
         return normalized
 
     @field_validator(

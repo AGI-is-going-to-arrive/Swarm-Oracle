@@ -1077,6 +1077,7 @@ async def parse_and_run_background(
     branch_sensitivity: float | None,
     fork_prompt_variant: str | None,
     fork_detector_active_branch_limit: int | None,
+    language: str | None = None,
     user_id: str | None,
     llm_api_key: str | None,
     llm_base_url: str | None,
@@ -1176,6 +1177,7 @@ async def parse_and_run_background(
                 temperature=temperature,
                 model=llm_model,
                 world_context=world_context,
+                language=language,
             )
     except asyncio.CancelledError:
         # H2 fix: parse-stage cancellation funnels into the cancelled terminal state.
