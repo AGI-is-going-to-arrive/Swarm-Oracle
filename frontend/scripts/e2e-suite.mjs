@@ -4,6 +4,14 @@ import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
 import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
+import {
+  FIXTURE_MODE,
+  FIXTURE_SCENARIO_IDS,
+  createFixtureStore,
+  installNodeFetchFixture,
+  installApiFixtures,
+  buildFixtureWsInitScript,
+} from "./e2eFixtureNet.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -13,7 +21,7 @@ const DEFAULT_MATRIX_PATH = path.join(DEFAULT_OUTPUT_ROOT, "sample_matrix.json")
 const DEFAULT_SAFARI_WEBDRIVER_URL = process.env.SAFARI_WEBDRIVER_URL || "http://127.0.0.1:4444";
 const DEFAULT_DIRECTOR_STATE_SCENARIO_ID = "72ae364d-3ea1-4959-939c-8fe1dbeca1c9";
 const SAFARI_PANEL_CAPTURE_ENABLED = process.env.SWARM_SAFARI_PANEL_CAPTURE === "1";
-const FIXTURE_MODE = process.env.SWARM_E2E_FIXTURE_MODE === "1";
+// FIXTURE_MODE imported from ./e2eFixtureNet.mjs (offline network harness).
 const SHARE_COPY_WAIT_TIMEOUT_MS = 90000;
 const MATRIX_SCENARIO_FALLBACKS = {
   governance: { question: "如果人工智能统治世界并且所有国家都由算法直接治理，会发生什么？", rounds: 1, numAgents: 3 },
@@ -2554,7 +2562,9 @@ async function runHistoryDeleteLastPageCase(page, {
 
   await page.route(deleteRoutePattern, async (route) => {
     if (route.request().method() !== "DELETE") {
-      await route.continue();
+      // In fixture mode, defer to the offline harness (fail-closed) instead of
+      // letting a non-DELETE request escape to the real backend.
+      await (FIXTURE_MODE ? route.fallback() : route.continue());
       return;
     }
     const scenarioId = route.request().url().split("/").pop();
@@ -2745,20 +2755,90 @@ async function runMatrixSuite(args) {
   }
 }
 
+/**
+ * M-fixture: install the full offline harness on a page + Node runtime.
+ * - Node side: `installNodeFetchFixture` serves the suite's own fetch helpers
+ *   (createScenarioViaApi / resolveMatrixScenario / put*State) from the store.
+ * - Browser side: `installApiFixtures` registers the fail-closed catch-all +
+ *   per-endpoint fixtures; the WS init-script drives the governance scenario to
+ *   a completed state for Theater/result predicates.
+ * Returns a handle whose `escapes`/`unhandled` arrays the caller asserts empty.
+ */
+async function installCornersFixture(page) {
+  const store = createFixtureStore();
+  const nodeFixture = installNodeFetchFixture(store);
+  const ws = buildFixtureWsInitScript([
+    { scenario: store.getScenario(FIXTURE_SCENARIO_IDS.governance), complete: true },
+    { scenario: store.getScenario(FIXTURE_SCENARIO_IDS.law), complete: true },
+    // Live (in-progress) scenario for prediction / capture cases: hold open.
+    { scenario: store.getScenario(FIXTURE_SCENARIO_IDS.governanceLive), complete: false },
+  ]);
+  await page.addInitScript(ws.fn, ws.arg);
+  const { unhandled } = await installApiFixtures(page, store);
+  return { store, nodeFixture, unhandled };
+}
+
+/**
+ * Active fail-closed zero-escape assertion across ALL surfaces:
+ *   - browser /api: catch-all `unhandled` records;
+ *   - node /api: `nodeFixture.escapes`;
+ *   - browser WS: `window.__fixtureWsEscapes__` (non-fixture same-origin /ws/**
+ *     connections the FixtureWebSocket failed-closed instead of proxying).
+ * Writes a report and THROWS if anything escaped to (or would have hit) the
+ * real backend.
+ */
+async function assertNoFixtureEscapes(page, fixture, outputDir, label) {
+  // Drain any in-flight requests/sockets before reading the recorders.
+  await page.waitForTimeout(250);
+  const browserEscapes = fixture.unhandled.slice();
+  const nodeEscapes = fixture.nodeFixture.escapes.slice();
+  let wsEscapes = [];
+  try {
+    wsEscapes = await page.evaluate(() => (Array.isArray(window.__fixtureWsEscapes__) ? window.__fixtureWsEscapes__ : []));
+  } catch {
+    // Page may already be navigating/closed; treat unreadable as empty but note it.
+    wsEscapes = [];
+  }
+  const report = {
+    label,
+    browserEscapeCount: browserEscapes.length,
+    nodeEscapeCount: nodeEscapes.length,
+    wsEscapeCount: wsEscapes.length,
+    browserEscapes,
+    nodeEscapes,
+    wsEscapes,
+  };
+  writeJson(path.join(outputDir, "fixture-escapes.json"), report);
+  const total = browserEscapes.length + nodeEscapes.length + wsEscapes.length;
+  if (total > 0) {
+    throw new Error(
+      `[${label}] fixture mode network escape: ${total} request(s) were not served by fixtures `
+      + `(browser=${browserEscapes.length}, node=${nodeEscapes.length}, ws=${wsEscapes.length}). `
+      + `See fixture-escapes.json. First: ${JSON.stringify(browserEscapes[0] ?? nodeEscapes[0] ?? wsEscapes[0])}`,
+    );
+  }
+}
+
 async function runCornersSuite(args) {
   const { browser, launchProfile } = await launchBrowser(args.headless);
   writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
   const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+
+  // M-fixture: in fixture mode, stub ALL network offline (Node fetch + browser
+  // page routes + WS) so no request escapes to a real backend. Active fail-closed
+  // guard: any uncovered /api request is recorded and the suite fails at the end.
+  const fixture = FIXTURE_MODE ? await installCornersFixture(page) : null;
+
   try {
     const outputDir = args.outputDir;
     const cases = {};
     const governanceReplaySample = await resolveMatrixScenario(args.baseUrl, {
       theme: "governance",
-      scenario_id: "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
+      scenario_id: FIXTURE_MODE ? FIXTURE_SCENARIO_IDS.governance : "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
     });
     const lawShareSampleSeed = {
       theme: "law",
-      scenario_id: "ded5cdd5-251d-4606-8ee3-8e1418d31cbb",
+      scenario_id: FIXTURE_MODE ? FIXTURE_SCENARIO_IDS.law : "ded5cdd5-251d-4606-8ee3-8e1418d31cbb",
     };
     let lawShareSample = await resolveMatrixScenario(args.baseUrl, lawShareSampleSeed);
     lawShareSample = await ensureResultMatrixScenario(page, args.baseUrl, lawShareSampleSeed, lawShareSample);
@@ -2862,12 +2942,17 @@ async function runCornersSuite(args) {
       outputDir: path.join(outputDir, "history-delete-last-page"),
     });
 
+    if (fixture) {
+      await assertNoFixtureEscapes(page, fixture, args.outputDir, "corners");
+    }
+
     return {
       mode: "corners",
       launchProfile,
       cases,
     };
   } finally {
+    if (fixture) fixture.nodeFixture.restore();
     await closePlaywrightPage(page, "corners-browser:page", 10000);
     await closePlaywrightBrowser(browser, "corners-browser", 20000);
   }
@@ -2882,10 +2967,13 @@ async function runMobileSuite(args) {
     hasTouch: true,
   });
 
+  // M-fixture: same offline harness as corners (mobile now carries the flag too).
+  const fixture = FIXTURE_MODE ? await installCornersFixture(page) : null;
+
   try {
     const governanceSample = await resolveMatrixScenario(args.baseUrl, {
       theme: "governance",
-      scenario_id: "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
+      scenario_id: FIXTURE_MODE ? FIXTURE_SCENARIO_IDS.governance : "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
       question: MATRIX_SCENARIO_FALLBACKS.governance.question,
     });
 
@@ -3012,6 +3100,10 @@ async function runMobileSuite(args) {
     writeJson(path.join(args.outputDir, "mobile-result.json"), result);
     await saveScreenshot(page, path.join(args.outputDir, "mobile-result.png"));
 
+    if (fixture) {
+      await assertNoFixtureEscapes(page, fixture, args.outputDir, "mobile");
+    }
+
     return {
       mode: "mobile",
       launchProfile,
@@ -3027,6 +3119,7 @@ async function runMobileSuite(args) {
       result: result.page ?? null,
     };
   } finally {
+    if (fixture) fixture.nodeFixture.restore();
     await closePlaywrightBrowser(browser, "mobile-browser");
   }
 }

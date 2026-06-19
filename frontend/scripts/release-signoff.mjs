@@ -912,6 +912,9 @@ async function main() {
         artifactDir: mobileOutput,
         resultFile: path.join(mobileOutput, "result.json"),
         browserLaunchFile: path.join(mobileOutput, "browser-launch.json"),
+        env: {
+          SWARM_E2E_FIXTURE_MODE: "1",
+        },
       },
     );
     runStep(
