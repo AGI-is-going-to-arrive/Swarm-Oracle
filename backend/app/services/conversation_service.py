@@ -2016,6 +2016,17 @@ async def stream_assistant_turn(
                             reasoning_effort="medium",
                             temperature=0.7,
                         )
+                        # HC race (codex 终审 High): abort_turn() 只 set cancel event、不 cancel
+                        # task，且非流式 fallback 不经过 _stream_with_cancel_signal，因此 fallback
+                        # await 期间发生的 abort 不会打断它。必须二次检查，否则 fallback 文本会把
+                        # 已中止的 turn 经 done CAS 救成 "done"。注意 event.set 经 call_soon_threadsafe
+                        # 异步置位、可能尚未生效，而 cancel reason 是同步写入，故以 reason 为准
+                        # （兼顾 is_set）；命中则走 CancelledError → aborted。
+                        if (
+                            stream_cancel_event.is_set()
+                            or _get_turn_cancel_reason(assistant_turn_id) is not None
+                        ):
+                            raise asyncio.CancelledError
                         if fallback_text.strip():
                             accumulated[:] = [fallback_text]
                             yield {

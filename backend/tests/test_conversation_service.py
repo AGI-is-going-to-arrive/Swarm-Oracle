@@ -24,6 +24,7 @@ from app.models.model_profile import ModelProfile
 from app.services.conversation_service import (
     _build_prompt,
     _load_prompt_context,
+    abort_turn,
     create_thread_with_first_turn,
     resolve_byok_overrides,
     stream_assistant_turn,
@@ -663,3 +664,78 @@ async def test_stream_assistant_turn_non_stream_fallback_after_empty_stream(monk
     assert turn.status == "done"
     assert turn.error_code is None
     assert turn.content == "fallback visible answer"
+
+
+async def test_stream_assistant_turn_abort_during_fallback_does_not_commit_done(monkeypatch):
+    # 回归 codex 终审 High：空流式触发非流式 fallback，fallback 执行期间用户 abort。
+    # abort_turn() 在有 live stream 时只 set cancel event（不 CAS），依赖 stream task finalize；
+    # 非流式 fallback 不经过 _stream_with_cancel_signal，修复前 fallback 文本会把已中止的 turn
+    # 经 done CAS 救成 "done"。修复后 fallback 返回时二次检查 cancel event → 走 aborted。
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Does abort during fallback avoid a false done?",
+            status=ScenarioStatus.DONE,
+            user_id="conv-owner",
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id,
+        owner_user_id="conv-owner",
+        agent_identity_id=None,
+        origin_branch_id=None,
+        origin_round_number=None,
+        origin_node_id=None,
+        origin_node_type=None,
+        first_user_content="hello",
+    )
+
+    async def _empty_stream(_prompt: str, **_kwargs):
+        if False:
+            yield ""
+
+    async def _fallback_call(_prompt: str, **_kwargs):
+        # fallback 执行期间用户 abort：只 set cancel event（不 cancel task）
+        abort_turn(
+            thread_id=outcome.thread.id,
+            turn_id=outcome.assistant_turn.id,
+            owner_user_id="conv-owner",
+        )
+        return "fallback answer that must be discarded"
+
+    monkeypatch.setattr(
+        "app.services.conversation_service.llm_call",
+        _fallback_call,
+        raising=False,
+    )
+
+    stream = await stream_assistant_turn(
+        thread_id=outcome.thread.id,
+        assistant_turn_id=outcome.assistant_turn.id,
+        new_user_content="hello",
+        assistant_turn_preclaimed=False,
+        owner_user_id="conv-owner",
+        overrides=resolve_byok_overrides(
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            disable_user_quota=False,
+        ),
+        request_id="req-abort-during-fallback",
+        cancel_event=asyncio.Event(),
+        _llm_stream_factory=_empty_stream,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        _ = [event async for event in stream]
+
+    with Session(get_engine()) as session:
+        turn = session.get(AgentConversationTurn, outcome.assistant_turn.id)
+
+    assert turn is not None
+    # 已中止的 turn 不能被 fallback 文本救成 done
+    assert turn.status == "aborted"
+    assert turn.content != "fallback answer that must be discarded"

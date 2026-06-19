@@ -92,4 +92,3 @@ describe('legacy CSS color fallbacks', () => {
     expect(css).toMatch(/\.agent-mention\s*\{[\s\S]*?background:\s*rgba\(197, 132, 197, 0\.18\);[\s\S]*?background:\s*oklch\(65% 0\.18 300 \/ 0\.18\);/);
   });
 });
-
