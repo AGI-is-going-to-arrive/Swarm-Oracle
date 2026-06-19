@@ -82,6 +82,26 @@ def test_public_bind_requires_session_secret_and_admin_token():
         validate_secure_runtime_settings(s)
 
 
+def test_lan_bind_requires_session_secret_and_admin_token():
+    from app.config import Settings, validate_secure_runtime_settings
+
+    s = Settings(
+        _env_file=None,
+        LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
+        LLM_API_KEY="sk-12345678",
+        HOST="192.168.1.10",
+        SESSION_SECRET="",
+        ADMIN_TOKEN="",
+    )
+
+    with pytest.raises(RuntimeError, match="SESSION_SECRET"):
+        validate_secure_runtime_settings(s)
+
+    s.SESSION_SECRET = "session-secret"
+    with pytest.raises(RuntimeError, match="ADMIN_TOKEN"):
+        validate_secure_runtime_settings(s)
+
+
 def test_local_bind_allows_empty_auth_with_warning(caplog):
     from app.config import Settings, validate_secure_runtime_settings
 
@@ -97,6 +117,25 @@ def test_local_bind_allows_empty_auth_with_warning(caplog):
     validate_secure_runtime_settings(s)
 
     assert "SESSION_SECRET is empty" in caplog.text
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
+def test_loopback_and_localhost_allow_empty_auth_with_warning(host, caplog):
+    from app.config import Settings, validate_secure_runtime_settings
+
+    s = Settings(
+        _env_file=None,
+        LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
+        LLM_API_KEY="sk-12345678",
+        HOST=host,
+        SESSION_SECRET="",
+        ADMIN_TOKEN="",
+    )
+
+    validate_secure_runtime_settings(s)
+
+    assert "SESSION_SECRET is empty" in caplog.text
+    assert host in caplog.text
 
 
 def test_memory_budget_settings_from_env(monkeypatch):

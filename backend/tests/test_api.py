@@ -695,6 +695,59 @@ class TestIdentityPreflightEndpoint:
         assert resp.status_code == 200
         assert captured["world_context"] == world_context
 
+    def test_preflight_forwards_language_override_to_parser(self, client, monkeypatch):
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+        captured: dict[str, object] = {}
+
+        async def _fake_parse_question(*args, **kwargs):
+            captured["args"] = args
+            captured.update(kwargs)
+            return {
+                "setting": {},
+                "key_variable": "test",
+                "initial_title": "Test",
+                "agents": [
+                    {
+                        "name": "Language Analyst",
+                        "role": "Analyst",
+                        "persona": "Uses the requested output language.",
+                    },
+                ],
+                "groups": [],
+                "simulation_rounds": 5,
+                "branch_sensitivity": 0.7,
+            }
+
+        def _fake_preview(user_id, name, role, persona):
+            return {
+                "name": name,
+                "role": role,
+                "persona": persona,
+                "continuity_key": "ck-language",
+                "match_kind": "new",
+                "needs_confirmation": False,
+                "candidate_identity": None,
+            }
+
+        monkeypatch.setattr(agents_api, "parse_question", _fake_parse_question)
+        monkeypatch.setattr(agents_api, "preview_identity_match", _fake_preview)
+
+        try:
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "如果秦始皇拥有互联网？",
+                "language": "en",
+                "user_id": "director-language",
+                "num_agents": 3,
+            })
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        assert resp.status_code == 200
+        assert captured["language"] == "en"
+
     def test_preflight_model_profile_threads_provider_and_runtime(
         self,
         client,
@@ -2502,6 +2555,50 @@ class TestReplayArtifactEndpoints:
             assert kwargs["llm_model"] == "explicit-model"
             assert kwargs["llm_requests_per_minute"] == 7
             assert kwargs["llm_tokens_per_minute"] == 7000
+
+    def test_multi_run_forwards_language_override_to_each_run(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        scheduled: list[object] = []
+        captured: list[dict[str, object]] = []
+
+        async def _noop():
+            return None
+
+        def _fake_background(*_args, **kwargs):
+            captured.append(kwargs)
+            return _noop()
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        try:
+            resp = client.post(
+                "/api/scenario/multi-run",
+                json={
+                    "question": "如果秦始皇拥有互联网？",
+                    "language": "en",
+                    "run_count": 2,
+                    "num_agents": 3,
+                    "rounds": 1,
+                },
+            )
+
+            assert resp.status_code == 200
+            assert len(scheduled) == 2
+            for coro in scheduled:
+                asyncio.run(coro)
+        finally:
+            for coro in scheduled:
+                if getattr(coro, "cr_frame", None) is not None:
+                    _close_scheduled_coro(coro)
+
+        assert len(captured) == 2
+        assert [kwargs["language"] for kwargs in captured] == ["en", "en"]
 
     def test_get_scenario_run_group_id_defaults_none_for_single_run(self, client):
         engine = get_engine()

@@ -450,14 +450,14 @@ settings = Settings()
 
 def _is_public_bind_host(host: str) -> bool:
     normalized = (host or "").strip().lower()
-    if normalized in {"*", "::", "[::]"}:
-        return True
+    if normalized == "localhost":
+        return False
     if normalized.startswith("[") and normalized.endswith("]"):
         normalized = normalized[1:-1]
     try:
-        return ipaddress.ip_address(normalized).is_unspecified
+        return not ipaddress.ip_address(normalized).is_loopback
     except ValueError:
-        return False
+        return True
 
 
 def _has_public_deployment_signal(runtime_settings: Settings) -> bool:

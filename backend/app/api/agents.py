@@ -764,6 +764,7 @@ async def preflight_identity_continuity(
                     base_url=resolved_llm_base_url,
                     temperature=req.temperature,
                     model=resolved_llm_model,
+                    language=req.language,
                     world_context=(
                         req.world_context.model_dump()
                         if req.world_context is not None

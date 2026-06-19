@@ -1312,6 +1312,7 @@ async def create_multi_run_scenarios(
                     branch_sensitivity=req.branch_sensitivity,
                     fork_prompt_variant=req.fork_prompt_variant,
                     fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
+                    language=req.language,
                     user_id=effective_user_id,
                     llm_api_key=resolved_llm_api_key,
                     llm_base_url=resolved_llm_base_url,

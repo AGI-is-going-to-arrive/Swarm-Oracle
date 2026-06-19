@@ -12,9 +12,12 @@ services:
     environment:
       - DATABASE_URL=sqlite:////data/swarmoracle.db
       - CHROMA_PERSIST_DIR=/data/chroma_data
-      # Default compose publish is local-only. Public exposure must opt in
-      # by changing HOST and ports, and setting SESSION_SECRET/ADMIN_TOKEN.
-      - HOST=127.0.0.1
+      # Containers must bind 0.0.0.0. That is a public-bind signal to the
+      # backend, so Docker/public deployment requires SESSION_SECRET and
+      # ADMIN_TOKEN in .env.docker before startup.
+      # Generate two separate values with: openssl rand -hex 32
+      # Example format: 402558561433ee03f5b4ed1686cba7ec96558454d762831fecd688ba242955b2
+      - HOST=0.0.0.0
       - PORT=18927
       - CORS_ORIGINS=["http://localhost","http://127.0.0.1","http://localhost:18928","http://127.0.0.1:18928"]
     extra_hosts:
@@ -23,8 +26,9 @@ services:
     volumes:
       - backend-data:/data
     ports:
-      # Local-only by default. For public deployment, explicitly publish
-      # 18927:18927 and configure SESSION_SECRET/ADMIN_TOKEN.
+      # Host publish is local-only by default. For public deployment,
+      # explicitly publish 18927:18927 and configure mandatory
+      # SESSION_SECRET/ADMIN_TOKEN in .env.docker.
       - "127.0.0.1:18927:18927"
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:18927/'); r.raise_for_status()"]
