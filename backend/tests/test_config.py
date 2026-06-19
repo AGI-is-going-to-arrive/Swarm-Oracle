@@ -62,42 +62,56 @@ def test_settings_from_env(monkeypatch):
     assert s.LLM_TOKENS_PER_MINUTE == 12345
 
 
-def test_public_bind_requires_session_secret_and_admin_token():
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "api.example.com"])
+def test_development_allows_empty_auth_for_any_bind_host_with_warning(host, caplog):
     from app.config import Settings, validate_secure_runtime_settings
 
     s = Settings(
         _env_file=None,
         LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
         LLM_API_KEY="sk-12345678",
-        HOST="0.0.0.0",
+        ENV="development",
+        HOST=host,
         SESSION_SECRET="",
         ADMIN_TOKEN="",
     )
 
-    with pytest.raises(RuntimeError, match="SESSION_SECRET"):
-        validate_secure_runtime_settings(s)
+    validate_secure_runtime_settings(s)
 
-    s.SESSION_SECRET = "session-secret"
-    with pytest.raises(RuntimeError, match="ADMIN_TOKEN"):
-        validate_secure_runtime_settings(s)
+    assert "SESSION_SECRET is empty" in caplog.text
+    assert host in caplog.text
 
 
-def test_lan_bind_requires_session_secret_and_admin_token():
+def test_production_requires_session_secret():
     from app.config import Settings, validate_secure_runtime_settings
 
     s = Settings(
         _env_file=None,
         LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
         LLM_API_KEY="sk-12345678",
-        HOST="192.168.1.10",
+        ENV="production",
+        HOST="127.0.0.1",
         SESSION_SECRET="",
-        ADMIN_TOKEN="",
+        ADMIN_TOKEN="admin-token",
     )
 
     with pytest.raises(RuntimeError, match="SESSION_SECRET"):
         validate_secure_runtime_settings(s)
 
-    s.SESSION_SECRET = "session-secret"
+
+def test_production_requires_admin_token():
+    from app.config import Settings, validate_secure_runtime_settings
+
+    s = Settings(
+        _env_file=None,
+        LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
+        LLM_API_KEY="sk-12345678",
+        ENV="production",
+        HOST="127.0.0.1",
+        SESSION_SECRET="session-secret",
+        ADMIN_TOKEN="",
+    )
+
     with pytest.raises(RuntimeError, match="ADMIN_TOKEN"):
         validate_secure_runtime_settings(s)
 

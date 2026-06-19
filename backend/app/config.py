@@ -462,24 +462,36 @@ def _is_public_bind_host(host: str) -> bool:
 
 def _has_public_deployment_signal(runtime_settings: Settings) -> bool:
     env_name = runtime_settings.ENV.strip().lower()
-    return env_name in {"production", "prod"} or _is_public_bind_host(runtime_settings.HOST)
+    return env_name in {"production", "prod"}
 
 
 def validate_secure_runtime_settings(runtime_settings: Settings) -> None:
-    """Fail closed for public deployments without auth secrets."""
+    """Fail closed for production deployments without auth secrets."""
     if _has_public_deployment_signal(runtime_settings):
         if not runtime_settings.SESSION_SECRET.strip():
             raise RuntimeError(
-                "SESSION_SECRET must be set when HOST is public or ENV=production"
+                "SESSION_SECRET must be set when ENV=production or ENV=prod"
             )
         if not runtime_settings.ADMIN_TOKEN.strip():
             raise RuntimeError(
-                "ADMIN_TOKEN must be set when HOST is public or ENV=production"
+                "ADMIN_TOKEN must be set when ENV=production or ENV=prod"
             )
         return
 
     if not runtime_settings.SESSION_SECRET.strip():
+        if _is_public_bind_host(runtime_settings.HOST):
+            logger.warning(
+                "SESSION_SECRET is empty; HOST=%s binds a public interface. "
+                "Use only on trusted networks; set ENV=production with "
+                "SESSION_SECRET and ADMIN_TOKEN for production.",
+                runtime_settings.HOST,
+            )
+        else:
+            logger.warning(
+                "SESSION_SECRET is empty; session authentication is disabled for local bind %s",
+                runtime_settings.HOST,
+            )
+    if not runtime_settings.ADMIN_TOKEN.strip():
         logger.warning(
-            "SESSION_SECRET is empty; session authentication is disabled for local bind %s",
-            runtime_settings.HOST,
+            "ADMIN_TOKEN is empty; /api/admin/* endpoints are open in non-production mode",
         )
