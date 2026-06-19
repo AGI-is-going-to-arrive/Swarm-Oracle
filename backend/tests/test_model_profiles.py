@@ -627,6 +627,147 @@ def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, cap
         assert secret not in log_text
 
 
+@pytest.mark.asyncio
+async def test_profile_only_parse_handoff_uses_profile_credentials_without_static_key(
+    monkeypatch,
+):
+    import app.api.helpers as helpers_api
+    from app.models.model_profile import ModelProfile
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    monkeypatch.setattr(helpers_api.settings, "LLM_RESPONSES_URL", "http://127.0.0.1:8317/v1")
+    monkeypatch.setattr(helpers_api.settings, "LLM_API_KEY", "sk-12345678")
+    monkeypatch.setattr(helpers_api.settings, "FEATURE_AGENT_IDENTITY", False)
+    monkeypatch.setattr(helpers_api.settings, "FEATURE_MODEL_PROFILES", True)
+
+    captured_parse: dict[str, object] = {}
+    captured_runtime: dict[str, object] = {}
+
+    async def _fake_parse_question(*_args, **kwargs):
+        captured_parse.update(kwargs)
+        return {
+            "setting": {},
+            "key_variable": "profile-only path",
+            "initial_title": "Profile-only root",
+            "agents": [
+                {
+                    "name": "Profile Analyst",
+                    "role": "Analyst",
+                    "persona": "Tracks provider routing.",
+                    "tier": "CORE",
+                    "stance": "neutral",
+                },
+            ],
+            "groups": [],
+        }
+
+    async def _fake_run_sim_background(*args, **kwargs):
+        captured_runtime["scenario_id"] = args[0]
+        captured_runtime["llm_overrides"] = dict(kwargs.get("llm_overrides") or {})
+        return None
+
+    monkeypatch.setattr(helpers_api, "parse_question", _fake_parse_question)
+    monkeypatch.setattr(helpers_api, "run_sim_background", _fake_run_sim_background)
+
+    engine = get_engine()
+    with Session(engine) as session:
+        profile = ModelProfile(
+            user_id="profile-only-owner",
+            name="Profile-only backend path",
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            model="profile-only-model",
+            api_key=SECRET_KEY,
+            rpm=17,
+            tpm=17000,
+            concurrency=2,
+            supports_structured_outputs=True,
+            supports_native_search=False,
+        )
+        session.add(profile)
+        session.commit()
+        session.refresh(profile)
+        policy = resolve_model_profile_policy(
+            session,
+            user_id="profile-only-owner",
+            model_profile_id=profile.id,
+        )
+        assert policy is not None
+
+        scenario = Scenario(
+            question="Can a profile-only scenario parse and run?",
+            status=ScenarioStatus.SIMULATING,
+            user_id="profile-only-owner",
+            parsed_context={"model_profile_id": profile.id},
+        )
+        session.add(scenario)
+        session.flush()
+        session.add(
+            Branch(
+                scenario_id=scenario.id,
+                title="Initial branch",
+                probability=1.0,
+            )
+        )
+        session.commit()
+        scenario_id = scenario.id
+        profile_id = profile.id
+
+    try:
+        await helpers_api.parse_and_run_background(
+            scenario_id,
+            question="Can a profile-only scenario parse and run?",
+            num_agents=1,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id="profile-only-owner",
+            llm_api_key=policy.api_key,
+            llm_base_url=policy.base_url,
+            llm_model=policy.model,
+            model_profile_id=profile_id,
+            llm_requests_per_minute=policy.requests_per_minute,
+            llm_tokens_per_minute=policy.tokens_per_minute,
+            concurrency=policy.concurrency,
+            supports_structured_outputs=policy.supports_structured_outputs,
+            supports_native_search=policy.supports_native_search,
+            native_search_upstream=policy.native_search_upstream,
+            disable_user_quota=None,
+        )
+    finally:
+        helpers_api._running_simulations.clear()
+        helpers_api._parse_phase_simulations.clear()
+
+    assert captured_parse["api_key"] == SECRET_KEY
+    assert captured_parse["base_url"] == "https://api.openai.com/v1"
+    assert captured_parse["model"] == "profile-only-model"
+
+    llm_overrides = captured_runtime["llm_overrides"]
+    assert llm_overrides["api_key"] == SECRET_KEY
+    assert llm_overrides["base_url"] == "https://api.openai.com/v1"
+    assert llm_overrides["model"] == "profile-only-model"
+    assert captured_runtime["scenario_id"] == scenario_id
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        _assert_secret_absent(scenario.parsed_context)
+        assert scenario.parsed_context["model_profile_id"] == profile_id
+        assert scenario.parsed_context["llm_requests_per_minute"] == 17
+        assert scenario.parsed_context["llm_tokens_per_minute"] == 17000
+        assert scenario.parsed_context["llm_concurrency"] == 2
+        assert scenario.parsed_context["supports_structured_outputs"] is True
+        assert scenario.parsed_context["supports_native_search"] is False
+        assert "llm_base_url" not in scenario.parsed_context
+        assert "llm_model" not in scenario.parsed_context
+
+
 def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     monkeypatch,
     caplog,
