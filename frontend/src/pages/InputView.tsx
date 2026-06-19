@@ -14,6 +14,7 @@ import {
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
+import { normalizeLanguage } from '../i18n/config';
 import { useSimulationStore } from '../stores/simulationStore';
 import {
   createDebate,
@@ -1022,6 +1023,7 @@ export function InputView() {
       ...(campaignContext && { campaignContext }),
       ...(worldContext && { worldContext }),
       modelProfileId: selectedProfileId || undefined,
+      language: normalizeLanguage(i18n.language),
     };
   }, [
     byokRequestsPerMinute,
@@ -1049,6 +1051,7 @@ export function InputView() {
     worldContext,
     profiles,
     selectedProfileId,
+    i18n.language,
   ]);
 
   const closeContinuityDialog = useCallback(() => {
@@ -1326,6 +1329,7 @@ export function InputView() {
         propositionModelProfileId: propositionProfileId || undefined,
         oppositionModelProfileId: oppositionProfileId || undefined,
         judgeModelProfileId: judgeProfileId || undefined,
+        language: normalizeLanguage(i18n.language),
       }, propositionAgentId ? {
         proposition: propositionAgentId,
         opposition: oppositionAgentId,
@@ -1747,7 +1751,7 @@ export function InputView() {
         </div>
       )}
 
-      <div className="input-view__content">
+      <main className="input-view__content">
         <div className="input-view__form">
           <ProgressIndicator currentStep={1} />
           {/* ── STAGE 1: Hero ── */}
@@ -1762,7 +1766,7 @@ export function InputView() {
                 <h1 ref={titleRef} className="input-view__title heading-display">
                   {t('app_title')}
                 </h1>
-                <div className="input-view__nav">
+                <nav className="input-view__nav">
                   <button className="btn btn-ghost" onClick={() => navigate('/history')}>
                     {t('home.history')}
                   </button>
@@ -1792,7 +1796,7 @@ export function InputView() {
                   >
                     🏆
                   </button>
-                </div>
+                </nav>
               </div>
             </div>
 
@@ -1811,6 +1815,7 @@ export function InputView() {
                   disabled={isSubmitting}
                   autoFocus
                   rows={1}
+                  maxLength={2000}
                 />
               </div>
             </div>
@@ -3244,7 +3249,7 @@ export function InputView() {
             </div>
           )}
         </div>
-      </div>
+      </main>
       <SnapshotImportDialog
         isOpen={showSnapshotImport}
         onClose={() => setShowSnapshotImport(false)}

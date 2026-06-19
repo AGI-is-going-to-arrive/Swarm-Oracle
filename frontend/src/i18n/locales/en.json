@@ -354,6 +354,9 @@
       "continuity_preflight_error": "Identity continuity preflight failed. Please retry."
     },
     "sim": {
+      "avatar": {
+        "avatar_alt": "{{name}}'s avatar"
+      },
       "status": {
         "running": "RUNNING",
         "completed": "COMPLETED",
@@ -2775,6 +2778,7 @@
       "checkpoint_load_error": "Could not load checkpoints for this branch. You can still enter a round manually."
     },
     "common": {
+      "error_generic": "An unexpected error occurred. Please try again.",
       "branches": "Timelines",
       "empty": "None",
       "unknown": "Unknown",

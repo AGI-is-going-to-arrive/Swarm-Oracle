@@ -1027,32 +1027,34 @@ export default function ResultView() {
   );
 
   useEffect(() => {
-    if (debugEndingRoomAppliedRef.current) return;
-    if (isReplayMode) return;
-    if (!debugEndingRoomBranch) return;
-    if (!branches.some((branch) => branch.id === debugEndingRoomBranch)) return;
+    if (import.meta.env.DEV) {
+      if (debugEndingRoomAppliedRef.current) return;
+      if (isReplayMode) return;
+      if (!debugEndingRoomBranch) return;
+      if (!branches.some((branch) => branch.id === debugEndingRoomBranch)) return;
 
-    const requestedMode = debugEndingRoomMode === 'one_move_only'
-      || debugEndingRoomMode === 'crossline_gallery'
-      ? debugEndingRoomMode
-      : 'ending_chamber';
-    const requestedAgentIds = debugEndingRoomAgents
-      ? debugEndingRoomAgents.split(',').map((item) => item.trim()).filter(Boolean)
-      : [];
-    const normalizedAgentIds = requestedMode === 'crossline_gallery'
-      ? []
-      : normalizeEndingRoomSelection(
-          debugEndingRoomBranch,
-          requestedMode,
-          requestedAgentIds,
-        );
+      const requestedMode = debugEndingRoomMode === 'one_move_only'
+        || debugEndingRoomMode === 'crossline_gallery'
+        ? debugEndingRoomMode
+        : 'ending_chamber';
+      const requestedAgentIds = debugEndingRoomAgents
+        ? debugEndingRoomAgents.split(',').map((item) => item.trim()).filter(Boolean)
+        : [];
+      const normalizedAgentIds = requestedMode === 'crossline_gallery'
+        ? []
+        : normalizeEndingRoomSelection(
+            debugEndingRoomBranch,
+            requestedMode,
+            requestedAgentIds,
+          );
 
-    openEndingRoomDirect(
-      debugEndingRoomBranch,
-      requestedMode,
-      normalizedAgentIds,
-    );
-    debugEndingRoomAppliedRef.current = true;
+      openEndingRoomDirect(
+        debugEndingRoomBranch,
+        requestedMode,
+        normalizedAgentIds,
+      );
+      debugEndingRoomAppliedRef.current = true;
+    }
   }, [
     branches,
     debugEndingRoomAgents,

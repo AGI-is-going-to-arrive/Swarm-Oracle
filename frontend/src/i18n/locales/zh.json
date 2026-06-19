@@ -354,6 +354,9 @@
       "continuity_preflight_error": "身份连续性预检失败，请重试。"
     },
     "sim": {
+      "avatar": {
+        "avatar_alt": "{{name}} 的头像"
+      },
       "status": {
         "running": "推演中",
         "completed": "已完成",
@@ -2775,6 +2778,7 @@
       "checkpoint_load_error": "无法加载此分支的检查点；你仍可手动输入回合继续。"
     },
     "common": {
+      "error_generic": "发生意外错误，请稍后重试。",
       "branches": "时间线",
       "empty": "无",
       "unknown": "未知",

@@ -1,4 +1,4 @@
-import i18n from '../i18n/config';
+import i18n, { normalizeLanguage } from '../i18n/config';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { create } from 'zustand';
 
@@ -142,7 +142,9 @@ export const useDebateStore = create<DebateState>((set) => ({
   startDebate: async (question: string) => {
     set({ status: 'loading', error: null });
     try {
-      const debate = await createDebate(question);
+      const debate = await createDebate(question, undefined, {
+        language: normalizeLanguage(i18n.language),
+      });
       set({
         debate,
         pendingParticipants: null,

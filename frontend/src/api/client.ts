@@ -235,6 +235,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   campaignContext?: CampaignContext;
   worldContext?: WorldContext;
   modelProfileId?: string;
+  language?: 'zh' | 'en';
 }
 
 export interface ContinuityOverride {
@@ -324,12 +325,14 @@ function buildScenarioRequestBody(
     campaignContext,
     worldContext,
     modelProfileId,
+    language,
   } = options;
 
   const preflightMode = opts?.preflightMode === true;
 
   return {
     question,
+    ...(language && { language }),
     ...(rounds != null && { rounds }),
     ...(numAgents != null && { num_agents: numAgents }),
     ...(mode != null && { mode }),
@@ -806,13 +809,14 @@ export async function identityContinuityPreflight(
 export async function createDebate(
   question: string,
   profileHint?: string,
-  options?: LlmProviderRequestOptions,
+  options?: LlmProviderRequestOptions & { language?: 'zh' | 'en' },
   customAgentIds?: { proposition?: string; opposition?: string },
 ): Promise<DebateSnapshot> {
   return request('/debate', {
     method: 'POST',
     body: JSON.stringify({
       question,
+      ...(options?.language && { language: options.language }),
       ...(profileHint ? { profile_hint: profileHint } : {}),
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
       ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),

@@ -8,7 +8,10 @@ const getDebateMock = vi.fn();
 vi.mock('../i18n/config', () => ({
   default: {
     t: (key: string) => key,
+    language: 'en',
   },
+  normalizeLanguage: (value?: string) =>
+    value?.toLowerCase().startsWith('zh') ? 'zh' : 'en',
 }));
 
 vi.mock('../api/client', () => ({
