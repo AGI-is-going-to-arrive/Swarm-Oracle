@@ -1941,7 +1941,10 @@ export function InputView() {
 
             {/* Quick Start (moved up for first-run prominence) */}
             <div className="quick-start-section">
-              <h3 className="section-title">{t('home.quick_starts')}</h3>
+              {/* h2 (not h3) so the page heading outline stays continuous after
+                  the h1 page title — avoids an h1 -> h3 skip. Visual style is
+                  unchanged (same `section-title` class). */}
+              <h2 className="section-title">{t('home.quick_starts')}</h2>
               <p className="quick-start-section__meta">
                 {campaignProfile
                   ? t('home.campaign_quickstart_unlocks', {

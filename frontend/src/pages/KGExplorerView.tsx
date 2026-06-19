@@ -626,6 +626,7 @@ export default function KGExplorerView() {
         >
           <button
             type="button"
+            data-testid="kg-explorer-tab-graph"
             onClick={() => setMobilePane('graph')}
             aria-pressed={mobilePane === 'graph'}
             style={{ flex: 1, padding: '0.5rem' }}
@@ -634,6 +635,7 @@ export default function KGExplorerView() {
           </button>
           <button
             type="button"
+            data-testid="kg-explorer-tab-details"
             onClick={() => setMobilePane('sidebar')}
             aria-pressed={mobilePane === 'sidebar'}
             style={{ flex: 1, padding: '0.5rem' }}

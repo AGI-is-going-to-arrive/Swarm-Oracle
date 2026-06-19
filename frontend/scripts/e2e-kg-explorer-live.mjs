@@ -401,7 +401,10 @@ async function testFixtureInteractions(page, baseUrl, scenarioId) {
     const minimap = page.locator('[data-testid="kg-explorer-minimap"]');
     await minimap.waitFor({ state: "attached", timeout: 5000 });
     if (!(await minimap.isVisible())) {
-      const detailsTab = page.getByRole("button", { name: /Details|详情/i }).first();
+      // Mobile tier hides the minimap until the "Details" pane is active. Select
+      // the tab by its stable data-testid rather than by visible label so the
+      // step stays in sync with the DOM and is language-independent.
+      const detailsTab = page.locator('[data-testid="kg-explorer-tab-details"]').first();
       if (await detailsTab.count()) await detailsTab.click();
     }
     await minimap.waitFor({ state: "visible", timeout: 5000 });

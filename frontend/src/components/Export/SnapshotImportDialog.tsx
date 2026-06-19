@@ -251,6 +251,7 @@ export default function SnapshotImportDialog({
                   accept=".zip,.swarm,application/zip"
                   className="snapshot-import-dropzone__input"
                   onChange={handleFileInputChange}
+                  aria-label={t('snapshot.import_pick_file', 'Choose file…')}
                   tabIndex={-1}
                 />
               </div>

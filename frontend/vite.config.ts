@@ -71,6 +71,13 @@ export default defineConfig({
     },
   },
   server: {
+    // Bind explicitly to the IPv4 loopback so `http://127.0.0.1:18928` always
+    // works. Vite's implicit default ("localhost") can resolve to IPv6 [::1]
+    // only on some OS/DNS setups, leaving plain `127.0.0.1` connection-refused
+    // for contributors. Browsers still reach `localhost` via Happy-Eyeballs.
+    // Kept loopback-only (no 0.0.0.0 / LAN exposure); set `host: true` for LAN
+    // access or `host: '::'` if you specifically need IPv6 [::1] reachability.
+    host: '127.0.0.1',
     port: 18928,
     proxy: proxyConfig,
   },

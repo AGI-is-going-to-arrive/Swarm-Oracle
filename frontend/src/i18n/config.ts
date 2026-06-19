@@ -25,7 +25,11 @@ export function resolveInitialLanguage(): 'en' | 'zh' {
 
 function syncDocumentLanguage(language: string) {
   if (typeof document === 'undefined') return;
-  document.documentElement.lang = normalizeLanguage(language) === 'zh' ? 'zh-CN' : 'en';
+  // Keep <html lang> in sync with the actually-active language. We use the
+  // normalized base subtags ('zh' / 'en') rather than a hardcoded 'zh-CN' so the
+  // attribute always reflects the live language and stays consistent with the
+  // supported language list.
+  document.documentElement.lang = normalizeLanguage(language);
 }
 
 const initialLanguage = resolveInitialLanguage();

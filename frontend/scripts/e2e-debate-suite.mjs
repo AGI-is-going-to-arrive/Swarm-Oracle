@@ -9,7 +9,10 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
-const DEFAULT_DEBATE_RESULT_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_TIMEOUT_MS", 240000);
+// Default 8min: a single-instance local LLM serializes debate turns and routinely
+// needs ~5min to finish, so the previous 4min budget produced spurious `partial`
+// results. Override via SWARM_DEBATE_RESULT_TIMEOUT_MS for faster/multi-instance LLMs.
+const DEFAULT_DEBATE_RESULT_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_TIMEOUT_MS", 480000);
 const DEFAULT_DEBATE_STALL_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_STALL_TIMEOUT_MS", 120000);
 const DEFAULT_DEBATE_RESULT_CTA_TIMEOUT_MS = positiveIntFromEnv("SWARM_DEBATE_RESULT_CTA_TIMEOUT_MS", 120000);
 const VALID_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);

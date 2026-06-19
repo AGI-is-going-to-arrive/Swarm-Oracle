@@ -66,6 +66,8 @@ describe('i18n config storage guards', () => {
 
     expect(setItem).toHaveBeenCalledWith(LANGUAGE_STORAGE_KEY, 'zh');
     expect(i18n.language).toBe('zh');
-    expect(document.documentElement.lang).toBe('zh-CN');
+    // <html lang> follows the normalized base subtag ('zh'), not a hardcoded
+    // 'zh-CN', so the attribute always reflects the actually-active language.
+    expect(document.documentElement.lang).toBe('zh');
   });
 });
