@@ -279,7 +279,34 @@ vi.mock('../components/gameplayCards', () => ({
 }));
 
 vi.mock('../components/QuickStartCards', () => ({
-  QuickStartCards: () => <div>quick-start-cards</div>,
+  QuickStartCards: ({
+    onSelect,
+  }: {
+    onSelect: (preset: {
+      emoji: string;
+      question: string;
+      subtitle: string;
+      rounds?: number;
+      numAgents?: number;
+      mode?: 'blackboard' | 'raw';
+      visualizationEnabled?: boolean;
+    }) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() => onSelect({
+        emoji: '?',
+        question: 'Mock quick start question',
+        subtitle: 'Mock quick start subtitle',
+        rounds: 4,
+        numAgents: 4,
+        mode: 'blackboard',
+        visualizationEnabled: false,
+      })}
+    >
+      quick-start-cards
+    </button>
+  ),
 }));
 
 async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
@@ -628,6 +655,39 @@ describe('InputView campaign progress', () => {
         }),
       );
     });
+  });
+
+  it('prefills the question field when the daily challenge card body is clicked', async () => {
+    const user = userEvent.setup();
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-03-17',
+      week_key: '2026-03-16',
+      today_challenge: {
+        id: 'remote-daily-1',
+        question: 'Remote daily question zh',
+        question_en: 'Remote daily question en',
+        subtitle_zh: '远端副标题',
+        subtitle_en: 'Remote subtitle',
+        profile_id: 'law',
+        rounds: 4,
+        num_agents: 5,
+        mode: 'raw',
+        visualization_enabled: false,
+      },
+      weekly_challenges: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByText('Remote daily question en'));
+
+    expect(screen.getByRole('textbox', { name: 'home.question_input_label' }))
+      .toHaveValue('Remote daily question en');
+    expect(startSimulationMock).not.toHaveBeenCalled();
   });
 
   it('treats today challenge as completed when backend campaign data is the source of truth', async () => {
@@ -3338,8 +3398,23 @@ describe('InputView Model Profile Integration', () => {
     getCampaignWeeklySummaryMock.mockResolvedValue(null);
     listModelProfilesMock.mockReset();
     listModelProfilesMock.mockResolvedValue({ profiles: mockProfiles, count: 1 });
+    listModelsMock.mockReset();
+    listModelsMock.mockResolvedValue({ models: [], supported: false });
     startSimulationMock.mockClear();
     startSimulationMock.mockResolvedValue('scenario-1');
+    createDebateMock.mockReset();
+    createDebateMock.mockResolvedValue({ id: 'debate-1' });
+    identityPreflightMock.mockReset();
+    identityPreflightMock.mockResolvedValue({
+      needs_confirmation: false,
+      matches: [],
+      summary: {
+        agent_count: 0,
+        exact_match_count: 0,
+        candidate_count: 0,
+        new_identity_count: 0,
+      },
+    });
   });
 
   it('renders profile selector, shows overrides, and flows model_profile_id into submit', async () => {
@@ -3586,5 +3661,295 @@ describe('InputView Model Profile Integration', () => {
     expect(manageLink).toBeInTheDocument();
     expect(manageLink.getAttribute('href')).toBe('/model-profiles');
     expect(screen.getByText('model_profiles.manage_link')).toBeInTheDocument();
+  });
+
+  it('prioritizes empty-question disabled reason over profile-only LLM disabled reason', async () => {
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: 'profile-1', name: 'Profile 1', has_api_key: false, model: 'gpt-4o' },
+      ],
+      count: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('textbox', { name: 'home.question_input_label' });
+
+    expect(screen.getByRole('button', { name: 'home.submit' })).toBeDisabled();
+    expect(screen.getByText(/home\.disabled_reason_question/)).toBeInTheDocument();
+    expect(screen.queryByText('home.disabled_reason_llm')).not.toBeInTheDocument();
+  });
+
+  it('shows CTA disabled reason when profile-only capability has no usable profile credential', async () => {
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: 'profile-1', name: 'Profile 1', has_api_key: false, model: 'gpt-4o' },
+      ],
+      count: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
+
+    const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    expect(submitBtn).toBeDisabled();
+
+    expect(screen.getByText('home.disabled_reason_llm')).toBeInTheDocument();
+  });
+
+  it('does not open confirm dialog from Enter or QuickStart while profile-only LLM is unusable', async () => {
+    const user = userEvent.setup();
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: 'profile-1', name: 'Profile 1', has_api_key: false, model: 'gpt-4o' },
+      ],
+      count: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    await user.type(textarea, 'What if Mars has water?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'quick-start-cards' }));
+
+    expect(textarea).toHaveValue('Mock quick start question');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('still shows CTA disabled reason even after llm banner is dismissed', async () => {
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: 'profile-1', name: 'Profile 1', has_api_key: false, model: 'gpt-4o' },
+      ],
+      count: 1,
+    });
+
+    // Simulate banner dismissed by setting sessionStorage
+    sessionStorage.setItem('llm_banner_dismissed', 'true');
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
+
+    // Submit button should still be disabled
+    const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    expect(submitBtn).toBeDisabled();
+
+    // Disabled reason should still be rendered under CTA
+    expect(screen.getByText('home.disabled_reason_llm')).toBeInTheDocument();
+
+    sessionStorage.removeItem('llm_banner_dismissed');
+  });
+
+  it('renders localized alert message when startSimulation throws error', async () => {
+    const user = userEvent.setup();
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      model_profiles: { enabled: true },
+    });
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: 'profile-1', name: 'Profile 1', has_api_key: true, model: 'gpt-4o' },
+      ],
+      count: 1,
+    });
+
+    // Mock startSimulation to reject with a specific API error code
+    const mockError = { status: 400, code: 'BYOK_INVALID' };
+    startSimulationMock.mockRejectedValue(mockError);
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    await user.type(textarea, 'What if Mars has water?');
+
+    // Submit and confirm
+    const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    await user.click(submitBtn);
+
+    await confirmLaunchDialog(user);
+
+    // Expect the localized error message is displayed
+    const alertBox = await screen.findByRole('alert');
+    expect(alertBox).toBeInTheDocument();
+    // BYOK_INVALID -> conversation.error.byok_invalid in translation keys
+    expect(screen.getByText(/conversation\.error\.byok_invalid/i)).toBeInTheDocument();
+
+    await user.clear(textarea);
+    await user.type(textarea, 'What if Mars has ice?');
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('renders debate API failures instead of swallowing them', async () => {
+    const user = userEvent.setup();
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+    createDebateMock.mockRejectedValueOnce({ status: 500, code: 'DEBATE_RUNTIME_FAILED' });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/debate/:id" element={<div>debate-route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      await screen.findByRole('textbox', { name: 'home.question_input_label' }),
+      'What if debate fails?',
+    );
+    const debateButton = screen.getByRole('button', { name: 'debate.entry_cta' });
+    await waitFor(() => expect(debateButton).not.toBeDisabled());
+    await user.click(debateButton);
+
+    await waitFor(() => {
+      expect(createDebateMock).toHaveBeenCalledWith(
+        'What if debate fails?',
+        undefined,
+        expect.objectContaining({
+          propositionModelProfileId: 'profile-1',
+          oppositionModelProfileId: 'profile-1',
+          judgeModelProfileId: 'profile-1',
+          llmBaseUrl: undefined,
+        }),
+        undefined,
+      );
+    });
+    expect(await screen.findByText(/common\.api_errors\.debate_load_failed/)).toBeInTheDocument();
+    expect(screen.queryByText('debate-route')).not.toBeInTheDocument();
+  });
+
+  it('renders continuity-confirm launch failures instead of leaving an unhandled rejection', async () => {
+    const user = userEvent.setup();
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      agent_identity: { enabled: true },
+      llm_configured: true,
+      model_profiles: { enabled: true },
+    });
+    identityPreflightMock.mockResolvedValueOnce({
+      needs_confirmation: true,
+      matches: [
+        {
+          name: 'Sun Tzu',
+          role: 'Military Strategist',
+          persona: 'Legendary Chinese warfare tactician',
+          continuity_key: 'ck-sun-tzu',
+          match_kind: 'l2_candidate',
+          needs_confirmation: true,
+          candidate_identity: {
+            id: 'identity-1',
+            display_name: 'Sun Tzu',
+            role: 'Military Strategist',
+            persona: 'Ancient Chinese general',
+            kind: 'generated',
+            continuity_key: 'legacy-ck',
+            similarity: 0.91,
+          },
+        },
+      ],
+      summary: {
+        agent_count: 1,
+        exact_match_count: 0,
+        candidate_count: 1,
+        new_identity_count: 0,
+      },
+    });
+    startSimulationMock.mockRejectedValueOnce({ status: 500, code: 'LLM_GENERATION_FAILED' });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.type(
+      await screen.findByRole('textbox', { name: 'home.question_input_label' }),
+      'What if continuity launch fails?',
+    );
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm identity continuity' });
+    await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('common.api_errors.llm_generation_failed');
   });
 });

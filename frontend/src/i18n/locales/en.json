@@ -166,6 +166,8 @@
     },
     "app_title": "SwarmOracle",
     "home": {
+      "disabled_reason_question": "Please enter your \"What-If\" question above first",
+      "disabled_reason_llm": "LLM model configuration required",
       "placeholder_1": "What if Zhuge Liang lived 10 more years?",
       "placeholder_2": "What if we landed on Mars in 2000?",
       "placeholder_3": "What if the internet was never invented?",

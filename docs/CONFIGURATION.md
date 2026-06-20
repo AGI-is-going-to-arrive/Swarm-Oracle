@@ -41,9 +41,9 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 - `LLM_ALLOW_LOCAL_BYOK_HOSTS=true` 是为了本地开发和 Docker quickstart 默认可用；多用户、暴露公网或 LAN 部署应设为 `false`，这样请求级 BYOK 会拒绝内置本地别名及等价 loopback / unspecified IP 形态。部署级 `LLM_RESPONSES_URL` 不受这个开关影响。
 - 带 `user:pass@host`、query、fragment 或 path params 的请求级 BYOK URL 一律拒绝。
 
-`GET /api/capabilities` 会返回零成本字段 `llm_configured: boolean`。它等于服务端静态 LLM 配置或本地模型 profile 探测的合并结果：`llm_static_configured` 表示 `.env` / Docker 配置是否可用，`llm_profile_configured` 表示 `FEATURE_MODEL_PROFILES=true` 且当前用户有至少一个带 API key 的 profile。任一为 `true` 时，首页都不会再把 LLM 视为未配置。这个探测不会调用 `health_check()`，不会发起 LLM 或网络请求，也不会回显 profile 的 API key。
+`GET /api/capabilities` 会返回零成本字段 `llm_configured: boolean`。它等于服务端静态 LLM 配置或本地模型 profile 探测的合并结果：`llm_static_configured` 表示 `.env` / Docker 配置是否可用，`llm_profile_configured` 表示 `FEATURE_MODEL_PROFILES=true` 且当前用户有至少一个带 API key 的 profile。任一为 `true` 时，首页和辩论入口都不会再把 LLM 视为未配置。这个探测不会调用 `health_check()`，不会发起 LLM 或网络请求，也不会回显 profile 的 API key。
 
-模型 profile 还可以保存 RPM/TPM、并发上限，以及结构化输出 / 原生搜索的三态能力覆盖（自动检测、强制开启、强制关闭）。自动检测会把字段保存为 `null`，运行时跟随 provider capability；只有强制开启 / 关闭才写入明确布尔值。这些字段会进入主推演、multi-run、预测评分、社交文案、可生成式头条卡和报告生成等 LLM 调用链；profile 并发只会收紧有效上限，最终仍受全局并发、全局 pending、用户 pending 和用途 lane 限制。
+模型 profile 还可以保存 RPM/TPM、并发上限，以及结构化输出 / 原生搜索的三态能力覆盖（自动检测、强制开启、强制关闭）。自动检测会把字段保存为 `null`，运行时跟随 provider capability；只有强制开启 / 关闭才写入明确布尔值。这些字段会进入主推演、multi-run、辩论、预测评分、社交文案、可生成式头条卡和报告生成等 LLM 调用链；profile 并发只会收紧有效上限，最终仍受全局并发、全局 pending、用户 pending 和用途 lane 限制。
 
 「测试连接」会同时跑普通 LLM 连通性和一个更快的原生搜索探测。原生搜索探测只回答被测模型 / 上游是否会进入 native web-search tool 注入路径，不等同于 `/api/capabilities` 里的服务端默认 `web_search` hint，也不回显 Base URL 或 API key。已知官方 provider 的裸 `/v1` 入口会按 Responses 形态参与原生工具注入判断，探测只回显有效 API 形态，不回显完整派生 URL。本地或自定义 Responses 代理默认仍按 proxy 保护处理；只有显式声明 `xai_responses` 或 `openai_responses` 上游时，才会按对应官方 native-search adapter 放行。`auto`、`off` 或未设置不会释放 proxy 保护；强制关闭原生搜索仍会一票否决工具注入。
 
@@ -92,7 +92,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
 | `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
 | `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包，并把包内素材带入推演。 |
-| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页视为已配置 LLM，并可在启动推演时选择。Profile 可保存限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明。 |
+| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页和辩论入口视为已配置 LLM，并可在启动推演或辩论时选择。Profile 可保存限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
 

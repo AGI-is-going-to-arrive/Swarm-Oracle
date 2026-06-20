@@ -2,7 +2,7 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. Known official providers with bare `/v1` are probed as the Responses form, while proxy forwarding still needs an explicit upstream declaration. The home page treats profiles with a key as usable LLM access. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
+This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. Known official providers with bare `/v1` are probed as the Responses form, while proxy forwarding still needs an explicit upstream declaration. The home page treats profiles with a key as usable LLM access, and both simulations and debates can reuse them. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
 
 For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 
@@ -106,7 +106,7 @@ Use the **EN / 中文** switch in the lower-right corner. Interface text changes
 
 ## FAQ
 
-- **Start Simulation does nothing?** Make sure the question box is not empty and, in local development, that the backend is running on `18927`.
+- **Start Simulation does nothing?** The page now shows the reason below the button. Make sure the question box is not empty, an LLM is configured or a model profile with an API key is selected, and, in local development, the backend is running on `18927`.
 - **Cannot see Causal Graph / Argument Map / Deep Dive / Knowledge Graph Explorer / Timeline Galaxy / Full report?** These entries are controlled by `/api/capabilities`; the templates enable them by default. If you edited `.env`, confirm the related `FEATURE_*` values are `true`, then restart the backend.
 - **The result page says "No prediction verdict yet"?** The app could not produce a reliable single verdict for that run. The original question and worldline answers still remain visible.
 - **The run stays on "generating narrative" for a long time?** With many branches, the app generates ending stories one by one. Multi-run shows a waiting panel with per-worldline states, and completed entries can open their result page directly.

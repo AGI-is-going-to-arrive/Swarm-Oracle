@@ -45,7 +45,7 @@ import {
   markChallengeStarted,
 } from '../lib/dailyChallenge';
 import { stringifyAutomationPayload } from '../game/automation';
-import { buildAutomationErrorState } from '../lib/apiErrorMessage';
+import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   getGameplayBadgeSrc,
   getGameplayProfileLabel,
@@ -336,6 +336,10 @@ export function InputView() {
   const [continuityChoices, setContinuityChoices] = useState<Record<string, ContinuityOverride['action']>>({});
   const [continuityError, setContinuityError] = useState<string | null>(null);
   const [webSearchUrlError, setWebSearchUrlError] = useState<string>('');
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const clearLaunchError = useCallback(() => {
+    setLaunchError(null);
+  }, []);
   const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
   // FE-5: 4 new source toggles (independent state per family)
   const [newSourceTogglePolymarket, setNewSourceTogglePolymarket] = useState(false);
@@ -354,6 +358,7 @@ export function InputView() {
   const [multiRunCount, setMultiRunCount] = useState(5);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+
   const apiUserId = getSessionBoundUserId();
   const {
     capabilities: caps,
@@ -390,6 +395,7 @@ export function InputView() {
   }, [modelProfilesEnabled]);
 
   const handleProfileChange = (profileId: string) => {
+    clearLaunchError();
     setSelectedProfileId(profileId);
     const profile = profiles.find((p) => p.id === profileId);
     if (profile) {
@@ -532,6 +538,27 @@ export function InputView() {
     setLlmRequestsPerMinute,
     setLlmTokensPerMinute,
   ]);
+
+  const activeProfile = profiles.find((p) => p.id === selectedProfileId);
+  const isModelOverridden = !!activeProfile && llmModel !== activeProfile.model;
+  const isBaseUrlOverridden = !!activeProfile && llmBaseUrl !== (activeProfile.base_url || '');
+  const isRpmOverridden = !!activeProfile && llmRequestsPerMinute !== (activeProfile.rpm != null ? String(activeProfile.rpm) : '');
+  const isTpmOverridden = !!activeProfile && llmTokensPerMinute !== (activeProfile.tpm != null ? String(activeProfile.tpm) : '');
+  const isApiKeyOverridden = !!activeProfile && llmApiKey !== '';
+
+  const staticLlmConfigured = caps?.llm_static_configured === true;
+  const profileOnlyLlmConfigured =
+    caps?.llm_configured === true &&
+    caps?.llm_static_configured === false &&
+    caps?.llm_profile_configured === true;
+  const hasUsableLlmCredential =
+    staticLlmConfigured ||
+    Boolean(activeProfile?.has_api_key) ||
+    Boolean(llmApiKey.trim());
+  const llmNotConfigured =
+    !hasUsableLlmCredential &&
+    (caps?.llm_configured === false || profileOnlyLlmConfigured);
+
   const {
     campaignProfile,
     campaignBadges,
@@ -793,6 +820,7 @@ export function InputView() {
 
   useEffect(() => {
     if (!sharedChallenge) return;
+    clearLaunchError();
     setQuestion(clampScenarioQuestion(sharedChallenge.question));
     setRounds(sharedChallenge.rounds);
     setNumAgents(sharedChallenge.numAgents);
@@ -801,7 +829,7 @@ export function InputView() {
     if (sharedChallenge.runtimePreset) {
       setRuntimePreset(sharedChallenge.runtimePreset);
     }
-  }, [sharedChallenge]);
+  }, [clearLaunchError, sharedChallenge]);
 
   useEffect(() => {
     saveScenarioRuntimePreset(runtimePreset);
@@ -1136,13 +1164,17 @@ export function InputView() {
       setPendingLaunch(null);
       setContinuityMatches([]);
       setContinuityChoices({});
-    } catch {
+    } catch (err) {
+      console.error('[executeSimulationLaunch] failed:', err);
+      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
+      setLaunchError(errMsg);
       setWebSearchStatus('idle');
       setIsSubmitting(false);
       setPendingLaunch(null);
       setContinuityMatches([]);
       setContinuityChoices({});
       launchInFlightRef.current = false;
+      throw err;
     } finally {
       document.body.classList.remove('has-pipeline-launching');
     }
@@ -1155,6 +1187,7 @@ export function InputView() {
     multiRunCaps?.multi_run?.enabled,
     multiRunEnabled,
     multiRunCount,
+    t,
   ]);
 
   const maybeRunContinuityPreflight = useCallback(async (
@@ -1200,6 +1233,10 @@ export function InputView() {
     launchInFlightRef.current = true;
     try {
       await executeSimulationLaunch(pendingLaunch, overrides);
+    } catch (err) {
+      console.error('[confirmContinuityLaunch] failed:', err);
+      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
+      setLaunchError(errMsg);
     } finally {
       launchInFlightRef.current = false;
     }
@@ -1209,6 +1246,7 @@ export function InputView() {
     executeSimulationLaunch,
     isSubmitting,
     pendingLaunch,
+    t,
   ]);
 
   useEffect(() => {
@@ -1242,6 +1280,7 @@ export function InputView() {
   const launchSimulation = async (launch: PendingSimulationLaunch) => {
     const trimmed = normalizeScenarioQuestionForLaunch(launch.nextQuestion);
     if (!trimmed || isSubmitting) return;
+    if (llmNotConfigured) return;
     if (launchInFlightRef.current) return;
     if (isSimulationBudgetBlocked) return;
     const normalizedLaunch = launch.nextQuestion === trimmed
@@ -1258,6 +1297,7 @@ export function InputView() {
     if (!byokValidation.valid) {
       setTestStatus('fail');
       setTestError(t('conversation.error.byok_invalid'));
+      setIsConfigOpen(true);
       return;
     }
     if (webSearchUsesCustomOverride) {
@@ -1280,6 +1320,7 @@ export function InputView() {
       if (llmApiKey.trim() && !hasFreshProbe) {
         const probe = await handleTestConnection();
         if (!probe.ok) {
+          setIsConfigOpen(true);
           return;
         }
       }
@@ -1295,8 +1336,12 @@ export function InputView() {
       }
 
       await executeSimulationLaunch(normalizedLaunch);
-    } catch {
+    } catch (err) {
+      console.error('[launchSimulation] failed:', err);
+      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
+      setLaunchError(errMsg);
       setIsSubmitting(false);
+      throw err;
     } finally {
       launchInFlightRef.current = false;
     }
@@ -1309,16 +1354,27 @@ export function InputView() {
   }) => {
     const trimmed = normalizeScenarioQuestionForLaunch(nextQuestion);
     if (!trimmed || isSubmitting) return;
+    if (llmNotConfigured) return;
+    clearLaunchError();
     if (nextQuestion.trim() !== trimmed) {
       setQuestion(trimmed);
     }
-    const isProfileSelected = Boolean(propositionProfileId || oppositionProfileId || judgeProfileId);
+    const debateProfileFallbackId = profileOnlyLlmConfigured ? selectedProfileId : '';
+    const effectivePropositionProfileId = propositionProfileId || debateProfileFallbackId;
+    const effectiveOppositionProfileId = oppositionProfileId || debateProfileFallbackId;
+    const effectiveJudgeProfileId = judgeProfileId || debateProfileFallbackId;
+    const isProfileSelected = Boolean(
+      effectivePropositionProfileId ||
+      effectiveOppositionProfileId ||
+      effectiveJudgeProfileId,
+    );
     const byokValidation = isProfileSelected
       ? { valid: true }
       : validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
     if (!byokValidation.valid) {
       setTestStatus('fail');
       setTestError(t('conversation.error.byok_invalid'));
+      setIsConfigOpen(true);
       return;
     }
 
@@ -1332,24 +1388,34 @@ export function InputView() {
           : 2,
       );
       const [propositionAgentId, oppositionAgentId] = getClampedCustomAgentIds(debateCustomAgentLimit);
+      const resolvedLlmApiKey = llmApiKey.trim() || undefined;
+      const resolvedLlmBaseUrl = !isProfileSelected || resolvedLlmApiKey
+        ? llmBaseUrl || undefined
+        : undefined;
+      const resolvedLlmModel = activeProfile && llmModel === activeProfile.model
+        ? undefined
+        : llmModel || undefined;
       const debate = await createDebate(trimmed, undefined, {
-        llmApiKey: llmApiKey || undefined,
-        llmBaseUrl: llmBaseUrl || undefined,
-        llmModel: llmModel || undefined,
+        llmApiKey: resolvedLlmApiKey,
+        llmBaseUrl: resolvedLlmBaseUrl,
+        llmModel: resolvedLlmModel,
         llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
         llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
         reasoningEffort: reasoningEffort || undefined,
         userId: apiUserId,
-        propositionModelProfileId: propositionProfileId || undefined,
-        oppositionModelProfileId: oppositionProfileId || undefined,
-        judgeModelProfileId: judgeProfileId || undefined,
+        propositionModelProfileId: effectivePropositionProfileId || undefined,
+        oppositionModelProfileId: effectiveOppositionProfileId || undefined,
+        judgeModelProfileId: effectiveJudgeProfileId || undefined,
         language: normalizeLanguage(i18n.language),
       }, propositionAgentId ? {
         proposition: propositionAgentId,
         opposition: oppositionAgentId,
       } : undefined);
       navigate(`/debate/${debate.id}`);
-    } catch {
+    } catch (err) {
+      console.error('[launchDebate] failed:', err);
+      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
+      setLaunchError(errMsg);
       setIsSubmitting(false);
     }
   };
@@ -1368,6 +1434,7 @@ export function InputView() {
     const localizedTitle = isZh
       ? (template.title_zh || template.title_en)
       : (template.title_en || template.title_zh);
+    clearLaunchError();
     setQuestion(clampScenarioQuestion(localizedTitle || ''));
     if (Number.isFinite(template.suggested_rounds) && template.suggested_rounds > 0) {
       setRounds(template.suggested_rounds);
@@ -1379,9 +1446,10 @@ export function InputView() {
     requestAnimationFrame(() => {
       questionRef.current?.focus();
     });
-  }, [isZh]);
+  }, [clearLaunchError, isZh]);
 
   const handleImportPack = useCallback((payload: { question: string; suggested_settings: SuggestedSettings }) => {
+    clearLaunchError();
     setQuestion(clampScenarioQuestion(payload.question));
     if (Number.isFinite(payload.suggested_settings.rounds) && payload.suggested_settings.rounds > 0) {
       setRounds(payload.suggested_settings.rounds);
@@ -1398,18 +1466,23 @@ export function InputView() {
     requestAnimationFrame(() => {
       questionRef.current?.focus();
     });
-  }, [i18n]);
+  }, [clearLaunchError, i18n]);
 
   const handleQuickStartSelect = async (preset: QuickStartPreset) => {
+    clearLaunchError();
     const nextQuestion = clampScenarioQuestion(preset.question);
     setQuestion(nextQuestion);
-    await launchSimulation({
-      nextQuestion,
-      nextRounds: preset.rounds ?? rounds,
-      nextAgents: preset.numAgents ?? numAgents,
-      nextMode: preset.mode ?? mode,
-      nextVisualization: preset.visualizationEnabled ?? vizEnabled,
-    });
+    try {
+      await launchSimulation({
+        nextQuestion,
+        nextRounds: preset.rounds ?? rounds,
+        nextAgents: preset.numAgents ?? numAgents,
+        nextMode: preset.mode ?? mode,
+        nextVisualization: preset.visualizationEnabled ?? vizEnabled,
+      });
+    } catch (err) {
+      console.error('[handleQuickStartSelect] failed:', err);
+    }
   };
 
   const handleStartChallenge = async () => {
@@ -1419,20 +1492,42 @@ export function InputView() {
       return;
     }
 
+    clearLaunchError();
     const nextQuestion = clampScenarioQuestion(todayChallengeQuestion);
     setQuestion(nextQuestion);
     setRounds(todayChallenge.rounds);
     setNumAgents(todayChallenge.numAgents);
     setMode(todayChallenge.mode);
     setVizEnabled(todayChallenge.visualizationEnabled);
-    await launchSimulation({
-      nextQuestion,
-      nextRounds: todayChallenge.rounds,
-      nextAgents: todayChallenge.numAgents,
-      nextMode: todayChallenge.mode,
-      nextVisualization: todayChallenge.visualizationEnabled,
-      challengeId: todayChallenge.id,
-    });
+    try {
+      await launchSimulation({
+        nextQuestion,
+        nextRounds: todayChallenge.rounds,
+        nextAgents: todayChallenge.numAgents,
+        nextMode: todayChallenge.mode,
+        nextVisualization: todayChallenge.visualizationEnabled,
+        challengeId: todayChallenge.id,
+      });
+    } catch (err) {
+      console.error('[handleStartChallenge] failed:', err);
+    }
+  };
+
+  const handleDailyCardClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('.daily-challenge-card__action') || target.closest('a') || target.closest('button')) {
+      return;
+    }
+    if (todayChallengeQuestion) {
+      clearLaunchError();
+      setQuestion(todayChallengeQuestion);
+      if (todayChallenge) {
+        setRounds(todayChallenge.rounds);
+        setNumAgents(todayChallenge.numAgents);
+        setMode(todayChallenge.mode);
+        setVizEnabled(todayChallenge.visualizationEnabled);
+      }
+    }
   };
 
   const handleWeeklyChipClick = () => {
@@ -1453,27 +1548,32 @@ export function InputView() {
 
     const trackQuestion = clampScenarioQuestion(isZh ? firstWeekly.question : firstWeekly.questionEn);
 
+    clearLaunchError();
     setQuestion(trackQuestion);
     setRounds(recommendedRounds);
     setNumAgents(recommendedAgents);
     setMode(firstWeekly.mode);
     setVizEnabled(firstWeekly.visualizationEnabled);
 
-    await launchSimulation({
-      nextQuestion: trackQuestion,
-      nextRounds: recommendedRounds,
-      nextAgents: recommendedAgents,
-      nextMode: firstWeekly.mode,
-      nextVisualization: firstWeekly.visualizationEnabled,
-      challengeId: firstWeekly.id,
-      campaignContext: {
-        // Phase 2b: ISO YYYY-Wnn form required by backend CampaignContext.
-        week_key: campaignChallengeRotation?.iso_week_key,
-        weekly_track_id: track.id,
-        profile_id: profileId,
-        is_weekly_track: true,
-      },
-    });
+    try {
+      await launchSimulation({
+        nextQuestion: trackQuestion,
+        nextRounds: recommendedRounds,
+        nextAgents: recommendedAgents,
+        nextMode: firstWeekly.mode,
+        nextVisualization: firstWeekly.visualizationEnabled,
+        challengeId: firstWeekly.id,
+        campaignContext: {
+          // Phase 2b: ISO YYYY-Wnn form required by backend CampaignContext.
+          week_key: campaignChallengeRotation?.iso_week_key,
+          weekly_track_id: track.id,
+          profile_id: profileId,
+          is_weekly_track: true,
+        },
+      });
+    } catch (err) {
+      console.error('[handleWeeklyTrackConfirm] failed:', err);
+    }
   };
 
   const handleWeeklyTrackCancel = () => {
@@ -1481,8 +1581,9 @@ export function InputView() {
   };
 
   const requestLaunch = (q: string) => {
+    clearLaunchError();
     const trimmed = normalizeScenarioQuestionForLaunch(q);
-    if (!trimmed || isSubmitting || launchInFlightRef.current || isSimulationBudgetBlocked) return;
+    if (!trimmed || isSubmitting || launchInFlightRef.current || isSimulationBudgetBlocked || llmNotConfigured) return;
     if (q.trim() !== trimmed) {
       setQuestion(trimmed);
     }
@@ -1493,7 +1594,12 @@ export function InputView() {
     if (!confirmDialogData) return;
     const q = confirmDialogData.question;
     setConfirmDialogData(null);
-    void handleSubmit(q).catch(() => {});
+    clearLaunchError();
+    handleSubmit(q).catch((err) => {
+      console.error('[confirmLaunch] failed:', err);
+      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
+      setLaunchError(errMsg);
+    });
   };
 
   const cancelLaunch = () => {
@@ -1636,8 +1742,8 @@ export function InputView() {
           daily_profile_score_to_next_level: dailyMastery?.score_to_next_level ?? null,
         },
         controls: {
-          can_start_simulation: Boolean(question.trim()) && !isSubmitting && !isSimulationBudgetBlocked,
-          can_start_debate: Boolean(question.trim()) && !isSubmitting,
+          can_start_simulation: Boolean(question.trim()) && !isSubmitting && !isSimulationBudgetBlocked && !llmNotConfigured,
+          can_start_debate: Boolean(question.trim()) && !isSubmitting && !llmNotConfigured,
         },
       },
     );
@@ -1707,27 +1813,10 @@ export function InputView() {
     webSearchServerProvider,
     webSearchStatus,
     webSearchUsesCustomOverride,
+    llmNotConfigured,
   ]);
 
-  const activeProfile = profiles.find((p) => p.id === selectedProfileId);
-  const isModelOverridden = !!activeProfile && llmModel !== activeProfile.model;
-  const isBaseUrlOverridden = !!activeProfile && llmBaseUrl !== (activeProfile.base_url || '');
-  const isRpmOverridden = !!activeProfile && llmRequestsPerMinute !== (activeProfile.rpm != null ? String(activeProfile.rpm) : '');
-  const isTpmOverridden = !!activeProfile && llmTokensPerMinute !== (activeProfile.tpm != null ? String(activeProfile.tpm) : '');
-  const isApiKeyOverridden = !!activeProfile && llmApiKey !== '';
 
-  const staticLlmConfigured = caps?.llm_static_configured === true;
-  const profileOnlyLlmConfigured =
-    caps?.llm_configured === true &&
-    caps?.llm_static_configured === false &&
-    caps?.llm_profile_configured === true;
-  const hasUsableLlmCredential =
-    staticLlmConfigured ||
-    Boolean(activeProfile?.has_api_key) ||
-    Boolean(llmApiKey.trim());
-  const llmNotConfigured =
-    !hasUsableLlmCredential &&
-    (caps?.llm_configured === false || profileOnlyLlmConfigured);
 
   return (
     <div className="input-view">
@@ -1825,7 +1914,10 @@ export function InputView() {
                   ref={questionRef}
                   className="input input--hero"
                   value={question}
-                  onChange={(e) => setQuestion(clampScenarioQuestion(e.target.value))}
+                  onChange={(e) => {
+                    clearLaunchError();
+                    setQuestion(clampScenarioQuestion(e.target.value));
+                  }}
                   onKeyDown={onKeyDown}
                   onCompositionStart={() => { isComposingRef.current = true; }}
                   onCompositionEnd={() => { isComposingRef.current = false; }}
@@ -1841,11 +1933,6 @@ export function InputView() {
 
             <div className="iv-hero__cta">
               <div className="input-view__submit-row">
-                {isSimulationBudgetBlocked && (
-                  <p className="byok-probe-warning">
-                    {t('home.byok_budget_blocked')}
-                  </p>
-                )}
                 <button
                   className="btn btn-primary btn--submit"
                   onClick={() => requestLaunch(question)}
@@ -1882,6 +1969,48 @@ export function InputView() {
                   </button>
                 )}
               </div>
+
+              {/* 预算阻断警告：独立无条件呈现（不被输入/凭据原因抢占），恢复既有契约 */}
+              {isSimulationBudgetBlocked && !isSubmitting && (
+                <p className="byok-probe-warning" role="status" aria-live="polite" style={{ marginTop: '8px' }}>
+                  {t('home.byok_budget_blocked')}
+                </p>
+              )}
+
+              {/* 为什么现在不能开始的原因提示区（按优先级唯一显示一条；预算阻断已独立呈现） */}
+              {(() => {
+                if (isSubmitting) return null;
+                if (isSimulationBudgetBlocked) return null;
+                if (!question.trim()) {
+                  return (
+                    <div className="iv-hero__disabled-reason" role="status" aria-live="polite" style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <p className="byok-probe-warning" style={{ margin: 0 }}>
+                        💡 {t('home.disabled_reason_question')}
+                      </p>
+                    </div>
+                  );
+                }
+                if (llmNotConfigured) {
+                  return (
+                    <div className="iv-hero__disabled-reason" role="status" aria-live="polite" style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <p className="byok-probe-warning" style={{ margin: 0 }}>
+                        ⚠️ <span>{t('home.disabled_reason_llm')}</span>{' '}
+                        <Link to="/admin/setup" style={{ textDecoration: 'underline', fontWeight: 600 }}>
+                          {t('llm_banner.configure_cta')}
+                        </Link>
+                      </p>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {/* 提交错误就地呈现区 */}
+              {launchError && !isSubmitting && (
+                <div className="iv-hero__launch-error" role="alert" style={{ marginTop: '12px', padding: '0.75rem', border: '1px solid #f5c6cb', backgroundColor: '#fdf3f4', borderRadius: '6px', color: '#721c24', fontSize: '0.875rem', textAlign: 'left' }}>
+                  ⚠️ {launchError}
+                </div>
+              )}
 
               {/* Task 1d: We implement onboarding final CTA -> setup by displaying a prominent warning banner
                   (LlmNotConfiguredBanner) at the top of InputView, and the degraded warning block below,
@@ -1923,10 +2052,13 @@ export function InputView() {
                   aria-label={t('home.rounds_label')}
                   min={3}
                   max={HOME_MAX_ROUNDS}
-                  step={1}
-                  value={rounds}
-                  onChange={(e) => setRounds(Number(e.target.value))}
-                  disabled={isSubmitting}
+                    step={1}
+                    value={rounds}
+                    onChange={(e) => {
+                      clearLaunchError();
+                      setRounds(Number(e.target.value));
+                    }}
+                    disabled={isSubmitting}
                 />
               </div>
               <span className="rounds-value">{rounds}</span>
@@ -1946,10 +2078,13 @@ export function InputView() {
                   aria-label={t('home.agents_label')}
                   min={3}
                   max={HOME_MAX_AGENTS}
-                  step={1}
-                  value={numAgents}
-                  onChange={(e) => setNumAgents(Number(e.target.value))}
-                  disabled={isSubmitting}
+                    step={1}
+                    value={numAgents}
+                    onChange={(e) => {
+                      clearLaunchError();
+                      setNumAgents(Number(e.target.value));
+                    }}
+                    disabled={isSubmitting}
                 />
               </div>
               <span className="agents-value">{numAgents}</span>
@@ -1992,9 +2127,10 @@ export function InputView() {
                   <input
                     type="checkbox"
                     checked={webSearchEnabled}
-                    onChange={(e) => {
-                      const nextChecked = e.target.checked;
-                      setWebSearchEnabled(nextChecked);
+                      onChange={(e) => {
+                        clearLaunchError();
+                        const nextChecked = e.target.checked;
+                        setWebSearchEnabled(nextChecked);
                       if (nextChecked && !webSearchServerEnabled) {
                         setWebSearchMode('custom_override');
                       }
@@ -2036,11 +2172,14 @@ export function InputView() {
                       <div className="web-search-summary" role="note">
                         <strong>{t('home.web_search_mode_server')}</strong>
                         <span>{t('home.web_search_server_summary', { provider: friendlyProviderName(webSearchServerProvider, t) ?? 'server' })}</span>
-                        <button
-                          type="button"
-                          className="web-search-secondary-btn"
-                          onClick={() => setWebSearchMode('custom_override')}
-                          disabled={isSubmitting}
+                                <button
+                                  type="button"
+                                  className="web-search-secondary-btn"
+                                  onClick={() => {
+                                    clearLaunchError();
+                                    setWebSearchMode('custom_override');
+                                  }}
+                                  disabled={isSubmitting}
                         >
                           {t('home.web_search_change_provider')}
                         </button>
@@ -2050,10 +2189,13 @@ export function InputView() {
                         <div className="web-search-mode-switch" role="group" aria-label={t('home.web_search_mode_label')}>
                           <button
                             type="button"
-                            className={`web-search-mode-btn ${webSearchMode === 'server_default' ? 'web-search-mode-btn--active' : ''}`}
-                            aria-pressed={webSearchMode === 'server_default'}
-                            onClick={() => setWebSearchMode('server_default')}
-                            disabled={isSubmitting || !webSearchServerEnabled}
+                              className={`web-search-mode-btn ${webSearchMode === 'server_default' ? 'web-search-mode-btn--active' : ''}`}
+                              aria-pressed={webSearchMode === 'server_default'}
+                              onClick={() => {
+                                clearLaunchError();
+                                setWebSearchMode('server_default');
+                              }}
+                              disabled={isSubmitting || !webSearchServerEnabled}
                           >
                             <span className="web-search-mode-btn__title">{t('home.web_search_mode_server')}</span>
                             <span className="web-search-mode-btn__hint">
@@ -2064,10 +2206,13 @@ export function InputView() {
                           </button>
                           <button
                             type="button"
-                            className={`web-search-mode-btn ${webSearchMode === 'custom_override' ? 'web-search-mode-btn--active' : ''}`}
-                            aria-pressed={webSearchMode === 'custom_override'}
-                            onClick={() => setWebSearchMode('custom_override')}
-                            disabled={isSubmitting}
+                              className={`web-search-mode-btn ${webSearchMode === 'custom_override' ? 'web-search-mode-btn--active' : ''}`}
+                              aria-pressed={webSearchMode === 'custom_override'}
+                              onClick={() => {
+                                clearLaunchError();
+                                setWebSearchMode('custom_override');
+                              }}
+                              disabled={isSubmitting}
                           >
                             <span className="web-search-mode-btn__title">{t('home.web_search_mode_custom')}</span>
                             <span className="web-search-mode-btn__hint">{t('home.web_search_mode_custom_hint')}</span>
@@ -2080,10 +2225,13 @@ export function InputView() {
                             </label>
                             <select
                               id="web-search-provider"
-                              className="input byok-input web-search-select"
-                              value={webSearchProvider}
-                              onChange={(e) => handleWebSearchProviderChange(e.target.value as 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng')}
-                              disabled={isSubmitting}
+                                className="input byok-input web-search-select"
+                                value={webSearchProvider}
+                                onChange={(e) => {
+                                  clearLaunchError();
+                                  handleWebSearchProviderChange(e.target.value as 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng');
+                                }}
+                                disabled={isSubmitting}
                               aria-describedby="web-search-provider-capability-hint"
                             >
                               <option value="tavily">Tavily</option>
@@ -2127,11 +2275,14 @@ export function InputView() {
                               </label>
                               <input
                                 id="web-search-api-key"
-                                type="password"
-                                className="input byok-input"
-                                value={webSearchApiKey}
-                                onChange={(e) => setWebSearchApiKey(e.target.value)}
-                                placeholder={t('home.web_search_api_key_placeholder')}
+                                  type="password"
+                                  className="input byok-input"
+                                  value={webSearchApiKey}
+                                  onChange={(e) => {
+                                    clearLaunchError();
+                                    setWebSearchApiKey(e.target.value);
+                                  }}
+                                  placeholder={t('home.web_search_api_key_placeholder')}
                                 disabled={isSubmitting}
                               />
                               <span className="web-search-field-help">
@@ -2164,7 +2315,10 @@ export function InputView() {
                                   type="url"
                                   className="input byok-input"
                                   value={webSearchBaseUrl}
-                                  onChange={(e) => setWebSearchBaseUrl(e.target.value)}
+                                  onChange={(e) => {
+                                    clearLaunchError();
+                                    setWebSearchBaseUrl(e.target.value);
+                                  }}
                                   placeholder={webSearchBaseUrlPlaceholder}
                                   disabled={isSubmitting}
                                   aria-invalid={!!webSearchUrlError || showUnknownEndpointWarning}
@@ -2317,20 +2471,26 @@ export function InputView() {
                           <div className="mode-options">
                             <button
                               type="button"
-                              className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
-                              aria-pressed={mode === 'blackboard'}
-                              onClick={() => setMode('blackboard')}
-                              disabled={isSubmitting}
+                                className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
+                                aria-pressed={mode === 'blackboard'}
+                                onClick={() => {
+                                  clearLaunchError();
+                                  setMode('blackboard');
+                                }}
+                                disabled={isSubmitting}
                               title={t('home.mode_blackboard_title')}
                             >
                               📋 {t('home.mode_blackboard')}
                             </button>
                             <button
                               type="button"
-                              className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
-                              aria-pressed={mode === 'raw'}
-                              onClick={() => setMode('raw')}
-                              disabled={isSubmitting}
+                                className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
+                                aria-pressed={mode === 'raw'}
+                                onClick={() => {
+                                  clearLaunchError();
+                                  setMode('raw');
+                                }}
+                                disabled={isSubmitting}
                               title={t('home.mode_raw_title')}
                             >
                               📜 {t('home.mode_raw')}
@@ -2348,20 +2508,26 @@ export function InputView() {
                           <span className="mode-label">{t('home.viz_label')}</span>
                           <div className="mode-options">
                             <button
-                              type="button"
-                              className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
-                              aria-pressed={!vizEnabled}
-                              onClick={() => setVizEnabled(false)}
-                              disabled={isSubmitting}
+                                type="button"
+                                className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
+                                aria-pressed={!vizEnabled}
+                                onClick={() => {
+                                  clearLaunchError();
+                                  setVizEnabled(false);
+                                }}
+                                disabled={isSubmitting}
                             >
                               📊 {t('home.viz_classic')}
                             </button>
                             <button
-                              type="button"
-                              className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
-                              aria-pressed={vizEnabled}
-                              onClick={() => setVizEnabled(true)}
-                              disabled={isSubmitting}
+                                type="button"
+                                className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
+                                aria-pressed={vizEnabled}
+                                onClick={() => {
+                                  clearLaunchError();
+                                  setVizEnabled(true);
+                                }}
+                                disabled={isSubmitting}
                             >
                               🎬 {t('home.viz_theater')}
                             </button>
@@ -2457,12 +2623,15 @@ export function InputView() {
                               { value: 'high', label: t('home.reasoning_high') },
                             ].map((opt) => (
                               <button
-                                key={opt.value}
-                                type="button"
-                                className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
-                                aria-pressed={reasoningEffort === opt.value}
-                                onClick={() => setReasoningEffort(opt.value)}
-                                disabled={isSubmitting}
+                                  key={opt.value}
+                                  type="button"
+                                  className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
+                                  aria-pressed={reasoningEffort === opt.value}
+                                  onClick={() => {
+                                    clearLaunchError();
+                                    setReasoningEffort(opt.value);
+                                  }}
+                                  disabled={isSubmitting}
                               >
                                 {opt.label}
                               </button>
@@ -2484,7 +2653,10 @@ export function InputView() {
                                 type="button"
                                 className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
                                 aria-pressed={runtimePreset === preset}
-                                onClick={() => setRuntimePreset(preset)}
+                                onClick={() => {
+                                  clearLaunchError();
+                                  setRuntimePreset(preset);
+                                }}
                                 disabled={isSubmitting}
                                 title={t(`home.runtime_preset_${preset}_desc`)}
                               >
@@ -2537,7 +2709,7 @@ export function InputView() {
             )}
 
             {todayChallenge && (
-            <section className="daily-challenge-card">
+            <section className="daily-challenge-card" onClick={handleDailyCardClick} style={{ cursor: 'pointer' }}>
               <img
                 className="daily-challenge-card__art"
                 src="/assets/ui/generated/daily_challenge_panel.png"
@@ -2842,11 +3014,14 @@ export function InputView() {
                             <div className="byok-field">
                               <label className="byok-label" htmlFor="debate-prop-profile">{t('model_profiles.label_proposition')}</label>
                               <select
-                                id="debate-prop-profile"
-                                className="form-control"
-                                value={propositionProfileId}
-                                onChange={(e) => setPropositionProfileId(e.target.value)}
-                                disabled={isSubmitting}
+                                  id="debate-prop-profile"
+                                  className="form-control"
+                                  value={propositionProfileId}
+                                  onChange={(e) => {
+                                    clearLaunchError();
+                                    setPropositionProfileId(e.target.value);
+                                  }}
+                                  disabled={isSubmitting}
                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                               >
                                 <option value="">{t('model_profiles.byok_custom_option')}</option>
@@ -2858,11 +3033,14 @@ export function InputView() {
                             <div className="byok-field">
                               <label className="byok-label" htmlFor="debate-opp-profile">{t('model_profiles.label_opposition')}</label>
                               <select
-                                id="debate-opp-profile"
-                                className="form-control"
-                                value={oppositionProfileId}
-                                onChange={(e) => setOppositionProfileId(e.target.value)}
-                                disabled={isSubmitting}
+                                  id="debate-opp-profile"
+                                  className="form-control"
+                                  value={oppositionProfileId}
+                                  onChange={(e) => {
+                                    clearLaunchError();
+                                    setOppositionProfileId(e.target.value);
+                                  }}
+                                  disabled={isSubmitting}
                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                               >
                                 <option value="">{t('model_profiles.byok_custom_option')}</option>
@@ -2875,11 +3053,14 @@ export function InputView() {
                           <div className="byok-field">
                             <label className="byok-label" htmlFor="debate-judge-profile">{t('model_profiles.label_judge')}</label>
                             <select
-                              id="debate-judge-profile"
-                              className="form-control"
-                              value={judgeProfileId}
-                              onChange={(e) => setJudgeProfileId(e.target.value)}
-                              disabled={isSubmitting}
+                                id="debate-judge-profile"
+                                className="form-control"
+                                value={judgeProfileId}
+                                onChange={(e) => {
+                                  clearLaunchError();
+                                  setJudgeProfileId(e.target.value);
+                                }}
+                                disabled={isSubmitting}
                               style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                             >
                               <option value="">{t('model_profiles.option_none_default')}</option>
@@ -2899,11 +3080,14 @@ export function InputView() {
                         <span className="byok-field-help">{t('home.byok_api_key_help')}</span>
                         <input
                           id="byok-key"
-                          type="password"
-                          className="input byok-input"
-                          value={llmApiKey}
-                          onChange={(e) => setLlmApiKey(e.target.value)}
-                          placeholder="sk-..."
+                            type="password"
+                            className="input byok-input"
+                            value={llmApiKey}
+                            onChange={(e) => {
+                              clearLaunchError();
+                              setLlmApiKey(e.target.value);
+                            }}
+                            placeholder="sk-..."
                           disabled={isSubmitting}
                           autoComplete="off"
                         />
@@ -2916,11 +3100,14 @@ export function InputView() {
                         <span className="byok-field-help">{t('home.byok_base_url_help')}</span>
                         <input
                           id="byok-url"
-                          type="url"
-                          className="input byok-input"
-                          value={llmBaseUrl}
-                          onChange={(e) => setLlmBaseUrl(e.target.value)}
-                          placeholder="https://api.openai.com/v1/chat/completions"
+                            type="url"
+                            className="input byok-input"
+                            value={llmBaseUrl}
+                            onChange={(e) => {
+                              clearLaunchError();
+                              setLlmBaseUrl(e.target.value);
+                            }}
+                            placeholder="https://api.openai.com/v1/chat/completions"
                           disabled={isSubmitting}
                         />
                       </div>
@@ -2933,11 +3120,14 @@ export function InputView() {
                         <ModelSelect
                           inputId="byok-model"
                           inputClassName="input byok-input"
-                          baseUrl={llmBaseUrl}
-                          apiKey={llmApiKey}
-                          value={llmModel}
-                          onChange={setLlmModel}
-                          disabled={isSubmitting}
+                            baseUrl={llmBaseUrl}
+                            apiKey={llmApiKey}
+                            value={llmModel}
+                            onChange={(nextModel) => {
+                              clearLaunchError();
+                              setLlmModel(nextModel);
+                            }}
+                            disabled={isSubmitting}
                         />
                       </div>
                       <div className="byok-field">
@@ -2950,11 +3140,14 @@ export function InputView() {
                           id="byok-rpm"
                           type="number"
                           min="1"
-                          step="1"
-                          className="input byok-input"
-                          value={llmRequestsPerMinute}
-                          onChange={(e) => setLlmRequestsPerMinute(e.target.value)}
-                          placeholder="10"
+                            step="1"
+                            className="input byok-input"
+                            value={llmRequestsPerMinute}
+                            onChange={(e) => {
+                              clearLaunchError();
+                              setLlmRequestsPerMinute(e.target.value);
+                            }}
+                            placeholder="10"
                           disabled={isSubmitting}
                           inputMode="numeric"
                         />
@@ -2969,11 +3162,14 @@ export function InputView() {
                           id="byok-tpm"
                           type="number"
                           min="1"
-                          step="1"
-                          className="input byok-input"
-                          value={llmTokensPerMinute}
-                          onChange={(e) => setLlmTokensPerMinute(e.target.value)}
-                          placeholder="100000"
+                            step="1"
+                            className="input byok-input"
+                            value={llmTokensPerMinute}
+                            onChange={(e) => {
+                              clearLaunchError();
+                              setLlmTokensPerMinute(e.target.value);
+                            }}
+                            placeholder="100000"
                           disabled={isSubmitting}
                           inputMode="numeric"
                         />

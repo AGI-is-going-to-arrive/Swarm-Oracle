@@ -166,6 +166,8 @@
     },
     "app_title": "SwarmOracle",
     "home": {
+      "disabled_reason_question": "请先在上方输入你的『如果…会怎样』问题",
+      "disabled_reason_llm": "需先配置 LLM 模型",
       "placeholder_1": "如果诸葛亮多活10年？",
       "placeholder_2": "如果人类在2000年登陆火星？",
       "placeholder_3": "如果互联网从未被发明？",
