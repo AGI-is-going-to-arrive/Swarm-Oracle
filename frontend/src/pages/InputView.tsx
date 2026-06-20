@@ -1983,9 +1983,14 @@ export function InputView() {
                 if (isSimulationBudgetBlocked) return null;
                 if (!question.trim()) {
                   return (
-                    <div className="iv-hero__disabled-reason" role="status" aria-live="polite" style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      <p className="byok-probe-warning" style={{ margin: 0 }}>
-                        💡 {t('home.disabled_reason_question')}
+                    <div className="iv-hero__disabled-reason iv-hero__disabled-reason--hint" role="status" aria-live="polite">
+                      <p className="iv-hero__hint">
+                        <svg className="iv-hero__hint-icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5" />
+                          <path d="M9 18h6" />
+                          <path d="M10 22h4" />
+                        </svg>
+                        {t('home.disabled_reason_question')}
                       </p>
                     </div>
                   );

@@ -1340,6 +1340,69 @@
   line-height: 1.45;
 }
 
+/* Empty question nudge hint styled for Oracle Noir */
+.iv-hero__disabled-reason--hint {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  margin-top: 12px;
+}
+
+@keyframes ivHintFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.iv-hero__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin: 0;
+  animation: ivHintFadeIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.iv-hero__hint:hover {
+  border-color: var(--border-default);
+  background-color: var(--bg-surface);
+}
+
+.iv-hero__hint-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.iv-hero__hint:hover .iv-hero__hint-icon {
+  color: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iv-hero__hint,
+  .iv-hero__hint-icon {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* ── BYOK Test Button ── */
 .byok-actions {
   display: flex;
@@ -2208,6 +2271,11 @@
   .byok-probe-warning {
     color: LinkText;
     border-color: LinkText;
+  }
+
+  .iv-hero__hint {
+    color: CanvasText;
+    border-color: CanvasText;
   }
 
   .iv-config__trigger:focus-visible,
