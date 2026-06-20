@@ -784,9 +784,11 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('Worldline Roundtable');
 
-    expect(document.querySelector('.worldline-roundtable-question-anchor')).toBeTruthy();
-    expect(document.querySelector('.worldline-roundtable-transcript-header__question')).toBeTruthy();
-    expect(document.querySelector('.worldline-roundtable-phase-question')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.querySelector('.worldline-roundtable-question-anchor')).toBeTruthy();
+      expect(document.querySelector('.worldline-roundtable-transcript-header__question')).toBeTruthy();
+      expect(document.querySelector('.worldline-roundtable-phase-question')).toBeTruthy();
+    });
     expect(screen.getByText('Discussion Result')).toBeInTheDocument();
     expect(screen.getByText('Question discussed')).toBeInTheDocument();
     expect(screen.getAllByText('About')).toHaveLength(2);
@@ -960,7 +962,7 @@ describe('WorldlineRoundtableView', () => {
 
     await user.click(screen.getByRole('radio', { name: 'Quick Review' }));
     await user.click(screen.getByRole('radio', { name: 'Custom Cast' }));
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     await waitFor(() => {
       expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
@@ -1148,7 +1150,7 @@ describe('WorldlineRoundtableView', () => {
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     expect(changeLanguageMock).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
       language: 'en',
@@ -1260,8 +1262,8 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    expect(screen.getByTestId('roundtable-seating-board')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Hand-pick' }));
+    expect(await screen.findByTestId('roundtable-seating-board')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Hand-pick' }));
     expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
     expect(screen.getByTestId('roundtable-seat-slot-branch-a')).toBeInTheDocument();
     expect(screen.getByTestId('roundtable-seat-slot-branch-b')).toBeInTheDocument();
@@ -1269,7 +1271,7 @@ describe('WorldlineRoundtableView', () => {
     expect(screen.getByText('3 / 3 worldlines selected')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: 'Skip for now' })[2]);
     expect(screen.queryByTestId('roundtable-seat-slot-branch-c')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
@@ -2856,12 +2858,12 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Invite expert' }));
+    await user.click(await screen.findByRole('button', { name: 'Invite expert' }));
     expect(screen.getByTestId('roundtable-seat-slot-witness')).toBeInTheDocument();
     const witnessStand = screen.getByRole('heading', { name: 'Expert seat' }).closest('section');
     expect(witnessStand).not.toBeNull();
     await user.click(within(witnessStand as HTMLElement).getByRole('button', { name: /Witness A/ }));
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
@@ -2924,8 +2926,8 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Clash mix' }));
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Clash mix' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
@@ -2986,9 +2988,9 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Biggest split first' }));
+    await user.click(await screen.findByRole('button', { name: 'Biggest split first' }));
     expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
@@ -3048,9 +3050,9 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Auto-fill' }));
+    await user.click(await screen.findByRole('button', { name: 'Auto-fill' }));
     expect(screen.getByRole('heading', { name: 'Extra expert seat' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
       roomType: 'worldline_roundtable',
@@ -3110,9 +3112,9 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Invite expert' }));
-    await user.click(screen.getByRole('button', { name: 'Auto-fill' }));
-    await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
+    await user.click(await screen.findByRole('button', { name: 'Invite expert' }));
+    await user.click(await screen.findByRole('button', { name: 'Auto-fill' }));
+    await user.click(await screen.findByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
       selectionRecipe: 'witness_augmented',

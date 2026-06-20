@@ -45,7 +45,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 模型 profile 还可以保存 RPM/TPM、并发上限，以及结构化输出 / 原生搜索的三态能力覆盖（自动检测、强制开启、强制关闭）。自动检测会把字段保存为 `null`，运行时跟随 provider capability；只有强制开启 / 关闭才写入明确布尔值。这些字段会进入主推演、multi-run、辩论、预测评分、社交文案、可生成式头条卡和报告生成等 LLM 调用链；profile 并发只会收紧有效上限，最终仍受全局并发、全局 pending、用户 pending 和用途 lane 限制。
 
-「测试连接」会同时跑普通 LLM 连通性和一个更快的原生搜索探测。原生搜索探测只回答被测模型 / 上游是否会进入 native web-search tool 注入路径，不等同于 `/api/capabilities` 里的服务端默认 `web_search` hint，也不回显 Base URL 或 API key。已知官方 provider 的裸 `/v1` 入口会按 Responses 形态参与原生工具注入判断，探测只回显有效 API 形态，不回显完整派生 URL。本地或自定义 Responses 代理默认仍按 proxy 保护处理；只有显式声明 `xai_responses` 或 `openai_responses` 上游时，才会按对应官方 native-search adapter 放行。`auto`、`off` 或未设置不会释放 proxy 保护；强制关闭原生搜索仍会一票否决工具注入。
+首页自动启动预检会用轻量 LLM 连通性检查，不跑 provider 并发压测；「测试连接」仍会同时跑普通 LLM 连通性、完整 provider probe 和一个更快的原生搜索探测。原生搜索探测只回答被测模型 / 上游是否会进入 native web-search tool 注入路径，不等同于 `/api/capabilities` 里的服务端默认 `web_search` hint，也不回显 Base URL 或 API key。已知官方 provider 的裸 `/v1` 入口会按 Responses 形态参与原生工具注入判断，探测只回显有效 API 形态，不回显完整派生 URL。本地、代理或未知 provider 的并发探测会 fail closed 为 `estimated_parallelism=1`、`tested_parallelism=1`，不发起额外 fan-out 压测；本地或自定义 Responses 代理默认仍按 proxy 保护处理，只有显式声明 `xai_responses` 或 `openai_responses` 上游时，才会按对应官方 native-search adapter 放行。`auto`、`off` 或未设置不会释放 proxy 保护；强制关闭原生搜索仍会一票否决工具注入。
 
 保存过 `model_profile_id` 的 scenario 在报告、续跑 / 重放分支、分支标题重写、社交文案和评分等后续 LLM 调用里会尝试恢复同一个 profile。恢复只允许当前用户自己的 profile；缺少用户归属时只在本地单用户 profile 库里按 id 恢复。若 profile 已删除、归属不匹配或无法安全确认，后端会 fail closed，要求重新选择 profile，或在本次请求里同时提供 API key、Base URL 和模型。社交头条卡不满足安全恢复条件时会退回确定性卡片，而不是调用错误的 provider。
 

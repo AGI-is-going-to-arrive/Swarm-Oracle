@@ -14,6 +14,7 @@ const {
   importScenarioSnapshotMock,
   testLlmConnectionMock,
   startSimulationMock,
+  abortStartSimulationMock,
   getCampaignProfileMock,
   getCampaignMasteryMock,
   getCampaignBadgesMock,
@@ -149,6 +150,7 @@ const {
     importScenarioSnapshotMock: vi.fn(),
     testLlmConnectionMock: vi.fn(),
     startSimulationMock: vi.fn(async () => 'scenario-1'),
+    abortStartSimulationMock: vi.fn(),
     getCampaignProfileMock: vi.fn(),
     getCampaignMasteryMock: vi.fn(),
     getCampaignBadgesMock: vi.fn(),
@@ -197,11 +199,13 @@ const { mockSimulationStoreState } = vi.hoisted(() => ({
 vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (store: {
     startSimulation: (options: { question: string }) => Promise<string>;
+    abortStartSimulation: () => void;
     error: string;
     errorCode: string | null;
     reset: () => void;
   }) => unknown) => selector({
     startSimulation: startSimulationMock,
+    abortStartSimulation: abortStartSimulationMock,
     error: mockSimulationStoreState.error,
     errorCode: mockSimulationStoreState.errorCode,
     reset: () => {},
@@ -414,6 +418,7 @@ describe('InputView campaign progress', () => {
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();
     startSimulationMock.mockClear();
+    abortStartSimulationMock.mockClear();
     identityPreflightMock.mockReset();
     importScenarioSnapshotMock.mockReset();
     testLlmConnectionMock.mockReset();
@@ -867,6 +872,7 @@ describe('InputView campaign progress', () => {
     });
     await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
 
+    expect(testLlmConnectionMock.mock.calls[0]?.[5]).toBeUndefined();
     expect(await screen.findByText('Provider Preflight')).toBeInTheDocument();
     expect(screen.getByText('Estimated parallelism 6')).toBeInTheDocument();
     expect(screen.getByText('Recommended 3-24 agents and 3-8 rounds')).toBeInTheDocument();
@@ -929,7 +935,7 @@ describe('InputView campaign progress', () => {
     expect(screen.getByRole('button', { name: 'home.submit' })).toBeDisabled();
   });
 
-  it('runs a BYOK preflight automatically before starting a simulation and forwards the local override', async () => {
+  it('runs a lightweight BYOK preflight automatically before starting a simulation and forwards the local override', async () => {
     const user = userEvent.setup();
     testLlmConnectionMock.mockResolvedValueOnce({
       server: 'ok',
@@ -977,6 +983,11 @@ describe('InputView campaign progress', () => {
     await waitFor(() => {
       expect(testLlmConnectionMock).toHaveBeenCalledTimes(1);
     });
+    const autoPreflightCall = testLlmConnectionMock.mock.calls[0];
+    expect(autoPreflightCall?.[5]).toBe(false);
+    expect(autoPreflightCall?.[9]).toEqual(expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
         question: 'Launch with BYOK',
@@ -985,6 +996,45 @@ describe('InputView campaign progress', () => {
         disableUserQuota: true,
       }));
     });
+  });
+
+  it('shows the concrete BYOK preflight error returned by the first failed auto probe', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValueOnce({
+      server: 'ok',
+      llm: {
+        status: 'error',
+        model: 'test-model',
+        error: 'Upstream rejected this API key',
+      },
+      probe: null,
+    });
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.type(screen.getAllByRole('textbox')[0], 'Launch with a bad BYOK key');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Upstream rejected this API key');
+    expect(startSimulationMock).not.toHaveBeenCalled();
   });
 
   it('does not reopen launch confirmation while BYOK auto preflight is in flight', async () => {
@@ -1037,6 +1087,155 @@ describe('InputView campaign progress', () => {
         llm: { status: 'ok', model: 'test-model', response: 'OK' },
         probe: null,
       });
+    });
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not continue launch when the stale timer expires during BYOK auto preflight', async () => {
+    const user = userEvent.setup();
+    let resolveProbe: (value: {
+      server: string;
+      llm: { status: string; model: string; response: string };
+      probe: null;
+    }) => void = () => {};
+    testLlmConnectionMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveProbe = resolve;
+      }),
+    );
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.type(screen.getAllByRole('textbox')[0], 'Launch with stalled BYOK preflight');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    const dialog = await screen.findByRole('dialog');
+    const confirmButton = within(dialog).getByRole('button', { name: 'home.submit' });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(confirmButton);
+      await act(async () => {});
+
+      expect(testLlmConnectionMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(screen.getByRole('alert')).toHaveTextContent('home.launch_inflight_timeout');
+
+      await act(async () => {
+        resolveProbe({
+          server: 'ok',
+          llm: { status: 'ok', model: 'test-model', response: 'OK' },
+          probe: null,
+        });
+      });
+
+      expect(startSimulationMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toHaveTextContent('home.launch_inflight_timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a retry launch isolated when a timed-out BYOK preflight resolves late', async () => {
+    const user = userEvent.setup();
+    const resolveProbes: Array<(value: {
+      server: string;
+      llm: { status: string; model: string; response: string };
+      probe: null;
+    }) => void> = [];
+    const okProbe = {
+      server: 'ok',
+      llm: { status: 'ok', model: 'test-model', response: 'OK' },
+      probe: null,
+    };
+    testLlmConnectionMock.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveProbes.push(resolve);
+      }),
+    );
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.type(screen.getAllByRole('textbox')[0], 'Retry after a stale preflight');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    const firstDialog = await screen.findByRole('dialog');
+    const firstConfirmButton = within(firstDialog).getByRole('button', { name: 'home.submit' });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(firstConfirmButton);
+      await act(async () => {});
+
+      expect(testLlmConnectionMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent('home.launch_inflight_timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'home.submit' }));
+    const retryDialog = await screen.findByRole('dialog');
+    fireEvent.click(within(retryDialog).getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(testLlmConnectionMock).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      resolveProbes[0](okProbe);
+    });
+
+    expect(startSimulationMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('home.launch_in_progress');
+
+    await act(async () => {
+      resolveProbes[1](okProbe);
     });
 
     await waitFor(() => {
@@ -1977,6 +2176,60 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     expect(startSimulationMock).not.toHaveBeenCalled();
   });
 
+  it('syncs final IME text from compositionEnd before enabling launch', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    const question = '巴西队是否能夺得2026年世界杯的冠军';
+
+    fireEvent.compositionStart(textarea);
+    textarea.value = question;
+    fireEvent.compositionEnd(textarea, { data: question, target: { value: question } });
+
+    const submitButton = screen.getByRole('button', { name: 'home.submit' });
+    await waitFor(() => expect(submitButton).not.toBeDisabled());
+    expect(screen.queryByText('home.disabled_reason_ime')).not.toBeInTheDocument();
+
+    await user.click(submitButton);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(question)).toBeInTheDocument();
+  });
+
+  it('submits the same IME-finalized question shown in the confirm dialog', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    const question = '巴西队是否能夺得2026年世界杯的冠军';
+
+    fireEvent.compositionStart(textarea);
+    textarea.value = question;
+    fireEvent.compositionEnd(textarea, { data: question, target: { value: question } });
+
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(question)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question,
+        }),
+      );
+    });
+  });
+
   it('does not submit when Shift+Enter is pressed during composition', async () => {
     const user = userEvent.setup();
     render(
@@ -2142,6 +2395,43 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     await act(async () => {
       resolveSimulation('scenario-loading');
     });
+  });
+
+  it('aborts the active launch request when the stale in-flight timer expires', async () => {
+    const user = userEvent.setup();
+    startSimulationMock.mockImplementationOnce(
+      () => new Promise<string>(() => {}),
+    );
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if the launch stalls?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    const dialog = await screen.findByRole('dialog');
+    const confirmButton = within(dialog).getByRole('button', { name: 'home.submit' });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(confirmButton);
+      await act(async () => {});
+
+      expect(startSimulationMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(abortStartSimulationMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('alert')).toHaveTextContent('home.launch_inflight_timeout');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('clicking the cancel button dismisses the dialog and refocuses the textarea', async () => {
@@ -3317,7 +3607,9 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
 
     // Dialog confirm launch should open
     await screen.findByText('multi_run.reminder_runs');
-    const dialogSubmitBtn = screen.getByRole('button', { name: 'multi_run.launch_btn' });
+    const dialog = await screen.findByRole('dialog');
+    await waitForDialogDescription(dialog);
+    const dialogSubmitBtn = within(dialog).getByRole('button', { name: 'multi_run.launch_btn' });
     expect(dialogSubmitBtn).toBeInTheDocument();
     fireEvent.click(dialogSubmitBtn);
 
@@ -3689,7 +3981,9 @@ describe('InputView Model Profile Integration', () => {
     await screen.findByRole('textbox', { name: 'home.question_input_label' });
 
     expect(screen.getByRole('button', { name: 'home.submit' })).toBeDisabled();
-    expect(screen.getByText(/home\.disabled_reason_question/)).toBeInTheDocument();
+    const questionReason = screen.getByText(/home\.disabled_reason_question/);
+    expect(questionReason).toBeInTheDocument();
+    expect(questionReason.closest('.iv-hero__hint')).not.toBeNull();
     expect(screen.queryByText('home.disabled_reason_llm')).not.toBeInTheDocument();
   });
 
@@ -3722,7 +4016,11 @@ describe('InputView Model Profile Integration', () => {
     const submitBtn = screen.getByRole('button', { name: 'home.submit' });
     expect(submitBtn).toBeDisabled();
 
-    expect(screen.getByText('home.disabled_reason_llm')).toBeInTheDocument();
+    const llmReason = screen.getByText('home.disabled_reason_llm');
+    expect(llmReason).toBeInTheDocument();
+    expect(llmReason.closest('.byok-probe-warning')).not.toBeNull();
+    expect(llmReason.closest('.iv-hero__hint')).toBeNull();
+    expect(document.querySelector('.degraded-llm-warning .byok-probe-warning')).toBeNull();
   });
 
   it('does not open confirm dialog from Enter or QuickStart while profile-only LLM is unusable', async () => {
@@ -3797,7 +4095,10 @@ describe('InputView Model Profile Integration', () => {
     expect(submitBtn).toBeDisabled();
 
     // Disabled reason should still be rendered under CTA
-    expect(screen.getByText('home.disabled_reason_llm')).toBeInTheDocument();
+    const llmReason = screen.getByText('home.disabled_reason_llm');
+    expect(llmReason).toBeInTheDocument();
+    expect(llmReason.closest('.byok-probe-warning')).not.toBeNull();
+    expect(llmReason.closest('.iv-hero__hint')).toBeNull();
 
     sessionStorage.removeItem('llm_banner_dismissed');
   });

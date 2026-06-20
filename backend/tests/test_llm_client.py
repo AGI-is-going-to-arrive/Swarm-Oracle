@@ -3202,6 +3202,63 @@ class TestDetectProvider:
         assert p.supports_native_search is False
 
 
+class TestMeasureProviderParallelism:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "expected_local_provider"),
+        [
+            ("http://127.0.0.1:8317/v1", True),
+            ("https://openrouter.ai/api/v1", False),
+        ],
+    )
+    async def test_local_and_proxy_providers_skip_fanout_probe(
+        self,
+        monkeypatch,
+        base_url,
+        expected_local_provider,
+    ):
+        async def _unexpected_probe(**kwargs):
+            raise AssertionError("local/proxy provider must not run fan-out parallelism probe")
+
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _unexpected_probe)
+
+        result = await llm_client.measure_provider_parallelism(
+            api_key="sk-test",
+            base_url=base_url,
+            model="test-model",
+            max_parallelism=8,
+        )
+
+        assert result["status"] == "ok"
+        assert result["model"] == "test-model"
+        assert result["local_provider"] is expected_local_provider
+        assert result["estimated_parallelism"] == 1
+        assert result["tested_parallelism"] == 1
+        assert result["failure"] is None
+
+    @pytest.mark.asyncio
+    async def test_default_proxy_provider_skips_fanout_probe(self, monkeypatch):
+        async def _unexpected_probe(**kwargs):
+            raise AssertionError("default proxy provider must not run fan-out parallelism probe")
+
+        monkeypatch.setattr(llm_client.settings, "LLM_RESPONSES_URL", "https://openrouter.ai/api/v1")
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _unexpected_probe)
+
+        result = await llm_client.measure_provider_parallelism(
+            api_key="sk-test",
+            base_url=None,
+            model="test-model",
+            max_parallelism=8,
+        )
+
+        assert result["status"] == "ok"
+        assert result["model"] == "test-model"
+        assert result["local_provider"] is False
+        assert result["estimated_parallelism"] == 1
+        assert result["tested_parallelism"] == 1
+        assert result["failure"] is None
+
+
 class TestNativeResponsesUrlDerivation:
     @pytest.mark.parametrize(
         ("raw_base_url", "expected"),

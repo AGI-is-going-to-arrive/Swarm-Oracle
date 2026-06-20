@@ -6,7 +6,12 @@ const MAX_MESSAGES = 5000; // H-3 fix: prevent unbounded memory growth
 
 import i18n from '../i18n/config';
 import { create } from 'zustand';
-import { createScenario, getScenario, type CreateScenarioOptions } from '../api/client';
+import {
+  createScenario,
+  getScenario,
+  type CreateScenarioOptions,
+  type RequestOptions,
+} from '../api/client';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { Scenario, AgentMessage, BranchInfo, AgentInfo, GroupInfo, WSEvent } from '../types';
 
@@ -85,6 +90,7 @@ export interface SimulationState {
 
   // Actions
   startSimulation: (options: CreateScenarioOptions) => Promise<string>;
+  abortStartSimulation: () => void;
   setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => void;
   loadScenario: (id: string) => Promise<void>;
   handleWSEvent: (event: WSEvent) => void;
@@ -121,6 +127,8 @@ const initialState = {
   interventionLifecycle: new Map<string, InterventionLifecycleState>(),
   isSimulationComplete: false,
 };
+
+let activeStartSimulationController: AbortController | null = null;
 
 function appendInterventionLog(
   current: InterventionLogEntry[],
@@ -260,6 +268,11 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   ...initialState,
 
   startSimulation: async (options: CreateScenarioOptions) => {
+    activeStartSimulationController?.abort();
+    const controller = new AbortController();
+    activeStartSimulationController = controller;
+    const requestOptions: RequestOptions = { signal: controller.signal };
+    const isCurrentStart = () => activeStartSimulationController === controller && !controller.signal.aborted;
     set({
       status: 'parsing',
       error: null,
@@ -268,7 +281,10 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       isSimulationComplete: false,
     });
     try {
-      const scenario = await createScenario(options);
+      const scenario = await createScenario(options, requestOptions);
+      if (!isCurrentStart()) {
+        throw new DOMException('Start simulation request was aborted', 'AbortError');
+      }
       const resolvedVisualizationEnabled = scenario.visualization_enabled ?? options.visualizationEnabled ?? false;
       set({
         scenario,
@@ -288,6 +304,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       rebuildSeenMessageKeys((scenario.messages || []) as AgentMessage[], scenario.id);
       return scenario.id;
     } catch (err) {
+      if (!isCurrentStart()) {
+        throw err;
+      }
       set({
         status: 'error',
         errorCode: getApiErrorCode(err),
@@ -298,7 +317,16 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         ),
       });
       throw err;
+    } finally {
+      if (activeStartSimulationController === controller) {
+        activeStartSimulationController = null;
+      }
     }
+  },
+
+  abortStartSimulation: () => {
+    activeStartSimulationController?.abort();
+    activeStartSimulationController = null;
   },
 
   setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {

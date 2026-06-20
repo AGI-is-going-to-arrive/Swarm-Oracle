@@ -8,6 +8,8 @@ import {
   useEffect,
   useCallback,
   useMemo,
+  type ChangeEvent,
+  type CompositionEvent,
   type FocusEvent,
   type KeyboardEvent,
 } from 'react';
@@ -108,6 +110,7 @@ const HOME_MAX_AGENTS = 40;
 const BYOK_BUDGET_MINUTES = 3;
 const BYOK_REQUEST_BUFFER = 3;
 const BYOK_TOKEN_BUFFER = 8_000;
+const LAUNCH_IN_FLIGHT_STALE_MS = 60_000;
 const BYOK_ESTIMATED_TOKENS_PER_TURN = 1_600;
 
 function parseOptionalRuntimeLimit(value: string): number | undefined {
@@ -326,6 +329,7 @@ export function InputView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const [question, setQuestion] = useState('');
+  const [isImeComposing, setIsImeComposing] = useState(false);
   const [rounds, setRounds] = useState(HOME_DEFAULT_ROUNDS);
   const [numAgents, setNumAgents] = useState(HOME_DEFAULT_AGENTS);
   const [mode, setMode] = useState<'raw' | 'blackboard'>('blackboard');
@@ -417,6 +421,7 @@ export function InputView() {
   const agentSelectedIds = useAgentStore((s) => s.selectedIds);
   const pruneSelectionToSize = useAgentStore((s) => s.pruneSelectionToSize);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
+  const abortStartSimulation = useSimulationStore((s) => s.abortStartSimulation);
   const submitError = useSimulationStore((s) => s.error);
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
@@ -425,6 +430,9 @@ export function InputView() {
   const [campaignSheetOpen, setCampaignSheetOpen] = useState(false);
   const isComposingRef = useRef(false);
   const launchInFlightRef = useRef(false);
+  const launchInFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const launchAbortControllerRef = useRef<AbortController | null>(null);
+  const launchAbortReasonRef = useRef<WeakMap<AbortSignal, 'timeout'>>(new WeakMap());
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const continuityDialogRef = useRef<HTMLDivElement>(null);
@@ -487,6 +495,59 @@ export function InputView() {
   } = useInputByokSettings(t, {
     onWebSearchServerHint: setWebSearchServerEnabled,
   });
+
+  const resetLaunchInFlight = useCallback((signal?: AbortSignal) => {
+    if (signal && launchAbortControllerRef.current?.signal !== signal) {
+      return;
+    }
+    launchInFlightRef.current = false;
+    if (launchInFlightTimeoutRef.current) {
+      clearTimeout(launchInFlightTimeoutRef.current);
+      launchInFlightTimeoutRef.current = null;
+    }
+    launchAbortControllerRef.current = null;
+  }, []);
+
+  const markLaunchInFlight = useCallback(() => {
+    resetLaunchInFlight();
+    const controller = new AbortController();
+    launchAbortControllerRef.current = controller;
+    launchInFlightRef.current = true;
+    launchInFlightTimeoutRef.current = setTimeout(() => {
+      if (launchAbortControllerRef.current !== controller) return;
+      launchAbortReasonRef.current.set(controller.signal, 'timeout');
+      controller.abort();
+      abortStartSimulation();
+      resetLaunchInFlight(controller.signal);
+      setIsSubmitting(false);
+      setConfirmDialogData(null);
+      setPendingLaunch(null);
+      setContinuityMatches([]);
+      setContinuityChoices({});
+      setWebSearchStatus('idle');
+      document.body.classList.remove('has-pipeline-launching');
+      setLaunchError(t('home.launch_inflight_timeout'));
+    }, LAUNCH_IN_FLIGHT_STALE_MS);
+    return controller.signal;
+  }, [abortStartSimulation, resetLaunchInFlight, setWebSearchStatus, t]);
+
+  const isLaunchTimeoutAbort = useCallback((signal?: AbortSignal) => (
+    signal?.aborted === true && launchAbortReasonRef.current.get(signal) === 'timeout'
+  ), []);
+
+  useEffect(() => resetLaunchInFlight, [resetLaunchInFlight]);
+
+  const syncQuestionFromInputValue = useCallback((value: string) => {
+    const nextQuestion = clampScenarioQuestion(value);
+    setQuestion((currentQuestion) => (
+      currentQuestion === nextQuestion ? currentQuestion : nextQuestion
+    ));
+    return nextQuestion;
+  }, []);
+
+  const getCurrentQuestionInputValue = useCallback((fallback = question) => (
+    questionRef.current?.value ?? fallback
+  ), [question]);
 
   // 建档后 / 已有档案时，自动选中首个 model profile（list 按 updated_at desc，故为最近的），
   // 让首页直接用 DB 凭据推演。否则"未选档案 + sessionStorage 残留 base_url 无 key"会让
@@ -1131,6 +1192,7 @@ export function InputView() {
   const executeSimulationLaunch = useCallback(async (
     launch: PendingSimulationLaunch,
     continuityOverrides?: ContinuityOverride[],
+    launchSignal?: AbortSignal,
   ) => {
     setIsSubmitting(true);
     setContinuityError(null);
@@ -1147,7 +1209,7 @@ export function InputView() {
           ...options,
           runCount: multiRunCount,
           verdictOnlyRuns: true,
-        });
+        }, { signal: launchSignal });
         const firstScenarioId = multiRunResponse.runs[0]?.scenario_id;
         if (firstScenarioId) {
           navigate(`/result/${firstScenarioId}`);
@@ -1165,6 +1227,11 @@ export function InputView() {
       setContinuityMatches([]);
       setContinuityChoices({});
     } catch (err) {
+      if (isLaunchTimeoutAbort(launchSignal)) {
+        setWebSearchStatus('idle');
+        setIsSubmitting(false);
+        return;
+      }
       console.error('[executeSimulationLaunch] failed:', err);
       const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
       setLaunchError(errMsg);
@@ -1173,7 +1240,7 @@ export function InputView() {
       setPendingLaunch(null);
       setContinuityMatches([]);
       setContinuityChoices({});
-      launchInFlightRef.current = false;
+      resetLaunchInFlight(launchSignal);
       throw err;
     } finally {
       document.body.classList.remove('has-pipeline-launching');
@@ -1187,16 +1254,22 @@ export function InputView() {
     multiRunCaps?.multi_run?.enabled,
     multiRunEnabled,
     multiRunCount,
+    resetLaunchInFlight,
+    isLaunchTimeoutAbort,
     t,
   ]);
 
   const maybeRunContinuityPreflight = useCallback(async (
     launch: PendingSimulationLaunch,
+    launchSignal?: AbortSignal,
   ) => {
     if (!caps?.agent_identity?.enabled) return false;
     setContinuityError(null);
     try {
-      const result = await identityContinuityPreflight(buildSimulationOptions(launch));
+      const result = await identityContinuityPreflight(
+        buildSimulationOptions(launch),
+        { signal: launchSignal },
+      );
       if (!result.needs_confirmation || result.matches.length === 0) {
         return false;
       }
@@ -1210,14 +1283,26 @@ export function InputView() {
       );
       return true;
     } catch (error) {
+      if (isLaunchTimeoutAbort(launchSignal)) {
+        return true;
+      }
       console.warn('[InputView] identity continuity preflight failed', error);
       setContinuityError(continuityPreflightErrorCopy);
       return false;
     }
-  }, [buildSimulationOptions, caps?.agent_identity?.enabled, continuityPreflightErrorCopy]);
+  }, [
+    buildSimulationOptions,
+    caps?.agent_identity?.enabled,
+    continuityPreflightErrorCopy,
+    isLaunchTimeoutAbort,
+  ]);
 
   const confirmContinuityLaunch = useCallback(async () => {
-    if (!pendingLaunch || isSubmitting || launchInFlightRef.current) return;
+    if (!pendingLaunch) return;
+    if (isSubmitting || launchInFlightRef.current) {
+      setLaunchError(t('home.launch_in_progress'));
+      return;
+    }
     const overrides: ContinuityOverride[] = continuityMatches.map((match) => {
       const action = continuityChoices[match.continuity_key] ?? 'reuse_existing';
       return {
@@ -1230,22 +1315,24 @@ export function InputView() {
         agentRole: match.role,
       };
     });
-    launchInFlightRef.current = true;
+    const launchSignal = markLaunchInFlight();
     try {
-      await executeSimulationLaunch(pendingLaunch, overrides);
+      await executeSimulationLaunch(pendingLaunch, overrides, launchSignal);
     } catch (err) {
       console.error('[confirmContinuityLaunch] failed:', err);
       const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
       setLaunchError(errMsg);
     } finally {
-      launchInFlightRef.current = false;
+      resetLaunchInFlight(launchSignal);
     }
   }, [
     continuityChoices,
     continuityMatches,
     executeSimulationLaunch,
     isSubmitting,
+    markLaunchInFlight,
     pendingLaunch,
+    resetLaunchInFlight,
     t,
   ]);
 
@@ -1279,10 +1366,22 @@ export function InputView() {
 
   const launchSimulation = async (launch: PendingSimulationLaunch) => {
     const trimmed = normalizeScenarioQuestionForLaunch(launch.nextQuestion);
-    if (!trimmed || isSubmitting) return;
-    if (llmNotConfigured) return;
-    if (launchInFlightRef.current) return;
-    if (isSimulationBudgetBlocked) return;
+    if (!trimmed) {
+      setLaunchError(t('home.disabled_reason_question'));
+      return;
+    }
+    if (isSubmitting || launchInFlightRef.current) {
+      setLaunchError(t('home.launch_in_progress'));
+      return;
+    }
+    if (llmNotConfigured) {
+      setLaunchError(t('home.disabled_reason_llm'));
+      return;
+    }
+    if (isSimulationBudgetBlocked) {
+      setLaunchError(t('home.byok_budget_blocked'));
+      return;
+    }
     const normalizedLaunch = launch.nextQuestion === trimmed
       ? launch
       : { ...launch, nextQuestion: trimmed };
@@ -1310,17 +1409,22 @@ export function InputView() {
           }
         } catch {
           setWebSearchUrlError(t('home.web_search_base_url_invalid'));
+          setLaunchError(t('home.web_search_base_url_invalid'));
           return;
         }
       }
     }
 
-    launchInFlightRef.current = true;
+    const launchSignal = markLaunchInFlight();
     try {
       if (llmApiKey.trim() && !hasFreshProbe) {
-        const probe = await handleTestConnection();
+        const probe = await handleTestConnection({ includeProbe: false, signal: launchSignal });
+        if (isLaunchTimeoutAbort(launchSignal)) {
+          return;
+        }
         if (!probe.ok) {
           setIsConfigOpen(true);
+          setLaunchError(probe.error || t('home.byok_preflight_failed'));
           return;
         }
       }
@@ -1328,22 +1432,26 @@ export function InputView() {
       setIsSubmitting(true);
       setConfirmDialogData(null);
 
-      const blockedByContinuityDialog = await maybeRunContinuityPreflight(normalizedLaunch);
+      const blockedByContinuityDialog = await maybeRunContinuityPreflight(normalizedLaunch, launchSignal);
       if (blockedByContinuityDialog) {
         setIsSubmitting(false);
-        launchInFlightRef.current = false;
+        resetLaunchInFlight(launchSignal);
         return;
       }
 
-      await executeSimulationLaunch(normalizedLaunch);
+      await executeSimulationLaunch(normalizedLaunch, undefined, launchSignal);
     } catch (err) {
+      if (isLaunchTimeoutAbort(launchSignal)) {
+        setIsSubmitting(false);
+        return;
+      }
       console.error('[launchSimulation] failed:', err);
       const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
       setLaunchError(errMsg);
       setIsSubmitting(false);
       throw err;
     } finally {
-      launchInFlightRef.current = false;
+      resetLaunchInFlight(launchSignal);
     }
   };
 
@@ -1580,11 +1688,55 @@ export function InputView() {
     setWeeklyTrackDialogOpen(false);
   };
 
-  const requestLaunch = (q: string) => {
+  const handleQuestionChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     clearLaunchError();
-    const trimmed = normalizeScenarioQuestionForLaunch(q);
-    if (!trimmed || isSubmitting || launchInFlightRef.current || isSimulationBudgetBlocked || llmNotConfigured) return;
-    if (q.trim() !== trimmed) {
+    syncQuestionFromInputValue(e.target.value);
+  }, [clearLaunchError, syncQuestionFromInputValue]);
+
+  const handleQuestionCompositionStart = useCallback(() => {
+    isComposingRef.current = true;
+    setIsImeComposing(true);
+    clearLaunchError();
+  }, [clearLaunchError]);
+
+  const handleQuestionCompositionEnd = useCallback((e: CompositionEvent<HTMLTextAreaElement>) => {
+    isComposingRef.current = false;
+    setIsImeComposing(false);
+    clearLaunchError();
+    syncQuestionFromInputValue(e.currentTarget.value);
+    requestAnimationFrame(() => {
+      const currentValue = questionRef.current?.value;
+      if (currentValue !== undefined) {
+        syncQuestionFromInputValue(currentValue);
+      }
+    });
+  }, [clearLaunchError, syncQuestionFromInputValue]);
+
+  const requestLaunch = (q?: string) => {
+    clearLaunchError();
+    if (isComposingRef.current || isImeComposing) {
+      setLaunchError(t('home.disabled_reason_ime'));
+      return;
+    }
+    const sourceQuestion = q ?? getCurrentQuestionInputValue();
+    const trimmed = normalizeScenarioQuestionForLaunch(sourceQuestion);
+    if (!trimmed) {
+      setLaunchError(t('home.disabled_reason_question'));
+      return;
+    }
+    if (isSubmitting || launchInFlightRef.current) {
+      setLaunchError(t('home.launch_in_progress'));
+      return;
+    }
+    if (isSimulationBudgetBlocked) {
+      setLaunchError(t('home.byok_budget_blocked'));
+      return;
+    }
+    if (llmNotConfigured) {
+      setLaunchError(t('home.disabled_reason_llm'));
+      return;
+    }
+    if (sourceQuestion.trim() !== trimmed || question !== trimmed) {
       setQuestion(trimmed);
     }
     setConfirmDialogData({ question: trimmed });
@@ -1624,7 +1776,7 @@ export function InputView() {
         return;
       }
       e.preventDefault();
-      requestLaunch(question);
+      requestLaunch();
     }
   };
 
@@ -1742,8 +1894,8 @@ export function InputView() {
           daily_profile_score_to_next_level: dailyMastery?.score_to_next_level ?? null,
         },
         controls: {
-          can_start_simulation: Boolean(question.trim()) && !isSubmitting && !isSimulationBudgetBlocked && !llmNotConfigured,
-          can_start_debate: Boolean(question.trim()) && !isSubmitting && !llmNotConfigured,
+          can_start_simulation: Boolean(question.trim()) && !isImeComposing && !isSubmitting && !isSimulationBudgetBlocked && !llmNotConfigured,
+          can_start_debate: Boolean(question.trim()) && !isImeComposing && !isSubmitting && !llmNotConfigured,
         },
       },
     );
@@ -1757,6 +1909,7 @@ export function InputView() {
   }, [
     campaignChallengeRotation?.week_key,
     isSubmitting,
+    isImeComposing,
     isZh,
     mode,
     numAgents,
@@ -1816,7 +1969,33 @@ export function InputView() {
     llmNotConfigured,
   ]);
 
-
+  const hasQuestionText = Boolean(question.trim());
+  const mainLaunchDisabledReasonKey = !isSubmitting
+    ? isImeComposing
+      ? 'home.disabled_reason_ime'
+      : !hasQuestionText
+        ? 'home.disabled_reason_question'
+        : isSimulationBudgetBlocked
+          ? 'home.byok_budget_blocked'
+          : llmNotConfigured
+            ? 'home.disabled_reason_llm'
+            : null
+    : null;
+  const mainLaunchDisabledReasonId = mainLaunchDisabledReasonKey
+    ? 'input-main-launch-disabled-reason'
+    : undefined;
+  const mainLaunchHintReasonKey =
+    mainLaunchDisabledReasonKey === 'home.disabled_reason_question' ||
+    mainLaunchDisabledReasonKey === 'home.disabled_reason_ime'
+      ? mainLaunchDisabledReasonKey
+      : null;
+  const mainLaunchWarningReasonKey =
+    mainLaunchDisabledReasonKey === 'home.disabled_reason_llm' ||
+    mainLaunchDisabledReasonKey === 'home.byok_budget_blocked'
+      ? mainLaunchDisabledReasonKey
+      : null;
+  const mainLaunchDisabled = Boolean(mainLaunchDisabledReasonKey) || isSubmitting;
+  const debateLaunchDisabled = !hasQuestionText || isImeComposing || isSubmitting || llmNotConfigured;
 
   return (
     <div className="input-view">
@@ -1914,13 +2093,10 @@ export function InputView() {
                   ref={questionRef}
                   className="input input--hero"
                   value={question}
-                  onChange={(e) => {
-                    clearLaunchError();
-                    setQuestion(clampScenarioQuestion(e.target.value));
-                  }}
+                  onChange={handleQuestionChange}
                   onKeyDown={onKeyDown}
-                  onCompositionStart={() => { isComposingRef.current = true; }}
-                  onCompositionEnd={() => { isComposingRef.current = false; }}
+                  onCompositionStart={handleQuestionCompositionStart}
+                  onCompositionEnd={handleQuestionCompositionEnd}
                   placeholder={placeholder}
                   aria-label={t('home.question_input_label')}
                   disabled={isSubmitting}
@@ -1935,8 +2111,10 @@ export function InputView() {
               <div className="input-view__submit-row">
                 <button
                   className="btn btn-primary btn--submit"
-                  onClick={() => requestLaunch(question)}
-                  disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked || llmNotConfigured}
+                  onClick={() => requestLaunch()}
+                  disabled={mainLaunchDisabled}
+                  aria-describedby={mainLaunchDisabledReasonId}
+                  title={mainLaunchDisabledReasonKey ? t(mainLaunchDisabledReasonKey) : undefined}
                 >
                   {isSubmitting ? <span className="spinner spinner--sm" /> : null}
                   {multiRunCaps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.submit')}
@@ -1954,7 +2132,7 @@ export function InputView() {
                 <button
                   className="btn btn-ghost btn--submit"
                   onClick={() => void launchDebate({ nextQuestion: question })}
-                  disabled={!question.trim() || isSubmitting || llmNotConfigured}
+                  disabled={debateLaunchDisabled}
                 >
                   {t('debate.entry_cta')}
                 </button>
@@ -1970,66 +2148,64 @@ export function InputView() {
                 )}
               </div>
 
-              {/* 预算阻断警告：独立无条件呈现（不被输入/凭据原因抢占），恢复既有契约 */}
-              {isSimulationBudgetBlocked && !isSubmitting && (
-                <p className="byok-probe-warning" role="status" aria-live="polite" style={{ marginTop: '8px' }}>
+              {isSimulationBudgetBlocked && !isSubmitting && mainLaunchDisabledReasonKey !== 'home.byok_budget_blocked' && (
+                <p
+                  className="byok-probe-warning iv-hero__budget-warning"
+                  role="status"
+                  aria-live="polite"
+                >
                   {t('home.byok_budget_blocked')}
                 </p>
               )}
 
-              {/* 为什么现在不能开始的原因提示区（按优先级唯一显示一条；预算阻断已独立呈现） */}
-              {(() => {
-                if (isSubmitting) return null;
-                if (isSimulationBudgetBlocked) return null;
-                if (!question.trim()) {
-                  return (
-                    <div className="iv-hero__disabled-reason iv-hero__disabled-reason--hint" role="status" aria-live="polite">
-                      <p className="iv-hero__hint">
-                        <svg className="iv-hero__hint-icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5" />
-                          <path d="M9 18h6" />
-                          <path d="M10 22h4" />
-                        </svg>
-                        {t('home.disabled_reason_question')}
-                      </p>
-                    </div>
-                  );
-                }
-                if (llmNotConfigured) {
-                  return (
-                    <div className="iv-hero__disabled-reason" role="status" aria-live="polite" style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      <p className="byok-probe-warning" style={{ margin: 0 }}>
-                        ⚠️ <span>{t('home.disabled_reason_llm')}</span>{' '}
-                        <Link to="/admin/setup" style={{ textDecoration: 'underline', fontWeight: 600 }}>
-                          {t('llm_banner.configure_cta')}
-                        </Link>
-                      </p>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
-
-              {/* 提交错误就地呈现区 */}
-              {launchError && !isSubmitting && (
-                <div className="iv-hero__launch-error" role="alert" style={{ marginTop: '12px', padding: '0.75rem', border: '1px solid #f5c6cb', backgroundColor: '#fdf3f4', borderRadius: '6px', color: '#721c24', fontSize: '0.875rem', textAlign: 'left' }}>
-                  ⚠️ {launchError}
+              {mainLaunchHintReasonKey && (
+                <div
+                  id={mainLaunchDisabledReasonId}
+                  className="iv-hero__disabled-reason"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <p className="iv-hero__hint">
+                    <svg className="iv-hero__hint-icon" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5" />
+                      <path d="M9 18h6" />
+                      <path d="M10 22h4" />
+                    </svg>
+                    <span>{t(mainLaunchHintReasonKey)}</span>
+                  </p>
                 </div>
               )}
 
-              {/* Task 1d: We implement onboarding final CTA -> setup by displaying a prominent warning banner
-                  (LlmNotConfiguredBanner) at the top of InputView, and the degraded warning block below,
-                  both pointing to /admin/setup, which will be visible after onboarding completes on first run
-                  when llmNotConfigured. This avoids editing OnboardingGuide.tsx which is outside the WRITE SET. */}
+              {mainLaunchWarningReasonKey && (
+                <div
+                  id={mainLaunchDisabledReasonId}
+                  className="iv-hero__disabled-reason"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <p className="byok-probe-warning iv-hero__warning">
+                    <span aria-hidden="true">⚠️</span>
+                    <span>{t(mainLaunchWarningReasonKey)}</span>
+                    {mainLaunchWarningReasonKey === 'home.disabled_reason_llm' && (
+                      <Link to="/admin/setup" className="iv-hero__warning-link">
+                        {t('llm_banner.configure_cta')}
+                      </Link>
+                    )}
+                  </p>
+                </div>
+              )}
+
+              {/* 提交错误就地呈现区 */}
+              {launchError && !isSubmitting && (
+                <div className="iv-hero__launch-error" role="alert">
+                  <span className="iv-hero__alert-icon" aria-hidden="true">!</span>
+                  <span>{launchError}</span>
+                </div>
+              )}
+
+              {/* Degraded sample entry stays below the CTA; the LLM-required warning itself is the CTA disabled reason above. */}
               {llmNotConfigured && (
                 <div className="degraded-llm-warning" style={{ marginTop: '12px', textAlign: 'left' }}>
-                  <p className="byok-probe-warning" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                    <span>⚠️ {t('degraded_hints.llm_required')}</span>
-                    <Link to="/admin/setup" style={{ textDecoration: 'underline', fontWeight: 600 }}>
-                      {t('llm_banner.configure_cta')}
-                    </Link>
-                  </p>
-
                   <div className="degraded-demo-entry" style={{ padding: '12px', border: '1px dashed var(--color-border-default)', borderRadius: 'var(--radius-lg, 8px)', backgroundColor: 'var(--color-base, oklch(98% 0.005 80))' }}>
                     <p style={{ margin: '0 0 8px 0', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
                       💡 {t('degraded_hints.sample_hint')}
@@ -3195,7 +3371,7 @@ export function InputView() {
                         <button
                           type="button"
                           className={`mode-btn byok-test-btn ${testStatus === 'ok' ? 'byok-test-btn--ok' : testStatus === 'fail' ? 'byok-test-btn--fail' : ''}`}
-                          onClick={handleTestConnection}
+                          onClick={() => void handleTestConnection()}
                           disabled={isSubmitting || testStatus === 'testing' || !llmApiKey.trim()}
                         >
                           {testStatus === 'testing' ? t('home.byok_testing')

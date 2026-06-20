@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WeeklyTrackDialog } from './WeeklyTrackDialog';
 import type { WeeklyTrack } from '../../types';
 
@@ -25,6 +25,10 @@ const track: WeeklyTrack = {
 describe('WeeklyTrackDialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('does not render when open=false', () => {

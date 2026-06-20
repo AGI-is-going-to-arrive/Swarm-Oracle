@@ -876,9 +876,142 @@ describe("simulationStore — api error mapping", () => {
       reasoningEffort: "high",
       visualizationEnabled: true,
       userId: "director-1",
+    }, {
+      signal: expect.objectContaining({ aborted: false }),
     });
     expect(useSimulationStore.getState().interventionLifecycle.size).toBe(0);
     expect(useSimulationStore.getState().interventionLog).toEqual([]);
+  });
+
+  it("aborts the active startSimulation request", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    createScenarioMock.mockImplementationOnce(
+      (_options: unknown, requestOptions?: { signal?: AbortSignal }) => {
+        capturedSignal = requestOptions?.signal;
+        return new Promise((_resolve, reject) => {
+          capturedSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+    );
+
+    const pendingStart = useSimulationStore.getState()
+      .startSimulation({ question: "question" })
+      .catch(() => undefined);
+
+    await vi.waitFor(() => {
+      expect(capturedSignal).toBeDefined();
+    });
+    expect(capturedSignal?.aborted).toBe(false);
+
+    useSimulationStore.getState().abortStartSimulation();
+
+    expect(capturedSignal?.aborted).toBe(true);
+    await pendingStart;
+  });
+
+  it("ignores a stale aborted start after a newer start succeeds", async () => {
+    let firstSignal: AbortSignal | undefined;
+    let rejectFirstStart: (error: Error) => void = () => {};
+    createScenarioMock
+      .mockImplementationOnce(
+        (_options: unknown, requestOptions?: { signal?: AbortSignal }) => {
+          firstSignal = requestOptions?.signal;
+          return new Promise((_resolve, reject) => {
+            rejectFirstStart = reject;
+          });
+        },
+      )
+      .mockResolvedValueOnce({
+        id: "scenario-new",
+        question: "new question",
+        status: "parsing",
+        created_at: new Date().toISOString(),
+        total_rounds: 5,
+        mode: "blackboard",
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        messages: [],
+      });
+
+    const staleStart = useSimulationStore.getState()
+      .startSimulation({ question: "old question" })
+      .catch(() => undefined);
+
+    await vi.waitFor(() => {
+      expect(firstSignal).toBeDefined();
+    });
+
+    const newScenarioId = await useSimulationStore.getState()
+      .startSimulation({ question: "new question" });
+    expect(newScenarioId).toBe("scenario-new");
+    expect(firstSignal?.aborted).toBe(true);
+
+    rejectFirstStart(new Error("aborted"));
+    await staleStart;
+
+    expect(useSimulationStore.getState().status).toBe("parsing");
+    expect(useSimulationStore.getState().scenario?.id).toBe("scenario-new");
+    expect(useSimulationStore.getState().error).toBeNull();
+  });
+
+  it("ignores a stale successful start after a newer start succeeds", async () => {
+    let firstSignal: AbortSignal | undefined;
+    let resolveFirstStart: (scenario: unknown) => void = () => {};
+    createScenarioMock
+      .mockImplementationOnce(
+        (_options: unknown, requestOptions?: { signal?: AbortSignal }) => {
+          firstSignal = requestOptions?.signal;
+          return new Promise((resolve) => {
+            resolveFirstStart = resolve;
+          });
+        },
+      )
+      .mockResolvedValueOnce({
+        id: "scenario-new",
+        question: "new question",
+        status: "parsing",
+        created_at: new Date().toISOString(),
+        total_rounds: 5,
+        mode: "blackboard",
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        messages: [],
+      });
+
+    const staleStart = useSimulationStore.getState()
+      .startSimulation({ question: "old question" })
+      .catch(() => undefined);
+
+    await vi.waitFor(() => {
+      expect(firstSignal).toBeDefined();
+    });
+
+    const newScenarioId = await useSimulationStore.getState()
+      .startSimulation({ question: "new question" });
+    expect(newScenarioId).toBe("scenario-new");
+    expect(firstSignal?.aborted).toBe(true);
+
+    resolveFirstStart({
+      id: "scenario-old",
+      question: "old question",
+      status: "parsing",
+      created_at: new Date().toISOString(),
+      total_rounds: 5,
+      mode: "blackboard",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+    await staleStart;
+
+    expect(useSimulationStore.getState().scenario?.id).toBe("scenario-new");
+    expect(useSimulationStore.getState().error).toBeNull();
   });
 
   it("maps structured start errors to localized keys", async () => {

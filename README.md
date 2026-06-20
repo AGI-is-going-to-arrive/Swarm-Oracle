@@ -60,7 +60,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ### Tier 3：BYOK 完整运行
 
-配置你自己的 OpenAI-compatible LLM 服务后运行完整推演。Docker 和本地开发都使用同一组核心配置项；也可以在 `/admin/setup` 保存模型 profile，记录 Base URL、模型、key、限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明，之后首页会把带 key 的 profile 当作已配置 LLM 来使用，并可复用到主推演和辩论。开始或辩论按钮不可用时会在按钮下方说明原因，例如缺少问题、未配置 LLM 或本轮预算被 RPM/TPM 挡住。测试连接会把普通连通性和模型原生搜索探测分开显示；已知官方 provider 的裸 `/v1` Base URL 会在运行时按 Responses 形态尝试原生工具注入，但不会回显完整派生 URL。如果本地代理实际转发到 xAI / OpenAI Responses 上游，仍需要在 profile 里显式声明对应上游，系统才会按官方 native-search adapter 注入工具。若后续需要 LLM 的路径无法恢复原 profile，会要求重新选择或提供完整的 key / Base URL / 模型，不会静默换到其它凭据。
+配置你自己的 OpenAI-compatible LLM 服务后运行完整推演。Docker 和本地开发都使用同一组核心配置项；也可以在 `/admin/setup` 保存模型 profile，记录 Base URL、模型、key、限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明，之后首页会把带 key 的 profile 当作已配置 LLM 来使用，并可复用到主推演和辩论。开始或辩论按钮不可用时会在按钮下方说明原因，例如缺少问题、未配置 LLM 或本轮预算被 RPM/TPM 挡住；首页启动确认会使用输入框当前已提交文本，中文等输入法组词未确认时不会误触发。自动启动前只做轻量 LLM 预检，不跑 provider 并发压测；测试连接会把普通连通性、完整 provider probe 和模型原生搜索探测分开显示。已知官方 provider 的裸 `/v1` Base URL 会在运行时按 Responses 形态尝试原生工具注入，但不会回显完整派生 URL。如果本地代理实际转发到 xAI / OpenAI Responses 上游，仍需要在 profile 里显式声明对应上游，系统才会按官方 native-search adapter 注入工具。若后续需要 LLM 的路径无法恢复原 profile，会要求重新选择或提供完整的 key / Base URL / 模型，不会静默换到其它凭据。
 
 ## 快速开始
 

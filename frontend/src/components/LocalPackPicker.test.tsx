@@ -269,7 +269,7 @@ describe('LocalPackPicker', () => {
     });
 
     // Verify pack list render
-    expect(screen.getByText('Pack One')).toBeInTheDocument();
+    expect(await screen.findByText('Pack One')).toBeInTheDocument();
     expect(screen.getByText('Pack Two')).toBeInTheDocument();
     expect(screen.getByText('society')).toBeInTheDocument();
     expect(screen.getByText('historical what-if')).toBeInTheDocument();

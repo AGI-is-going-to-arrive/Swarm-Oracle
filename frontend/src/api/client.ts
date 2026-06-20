@@ -701,6 +701,7 @@ export async function testLlmConnection(
   includeNativeProbe?: boolean,
   nativeSearchUpstream?: string,
   supportsNativeSearchOverride?: boolean | null,
+  requestOptions?: RequestOptions,
 ): Promise<{
   server: string;
   llm: { status: string; model: string; response?: string; error?: string };
@@ -717,6 +718,7 @@ export async function testLlmConnection(
 }> {
   return request('/health/test', {
     method: 'POST',
+    signal: requestOptions?.signal,
     body: JSON.stringify({
       ...(apiKey && { llm_api_key: apiKey }),
       ...(baseUrl && { llm_base_url: baseUrl }),
@@ -760,10 +762,12 @@ export async function probeNativeSearch(
 /** POST /api/scenario — create a new "What If…" scenario */
 export async function createScenario(
   options: CreateScenarioOptions,
+  requestOptions?: RequestOptions,
 ): Promise<Scenario> {
   return request('/scenario', {
     method: 'POST',
     body: JSON.stringify(buildScenarioRequestBody(options)),
+    signal: requestOptions?.signal,
   });
 }
 
@@ -775,6 +779,7 @@ export interface MultiRunRequest extends CreateScenarioOptions {
 /** POST /api/scenario/multi-run — create a new multi-run scenario group */
 export async function createMultiRun(
   options: MultiRunRequest,
+  requestOptions?: RequestOptions,
 ): Promise<MultiRunResponse> {
   const { runCount, verdictOnlyRuns, ...scenarioOptions } = options;
   const baseBody = buildScenarioRequestBody(scenarioOptions);
@@ -785,6 +790,7 @@ export async function createMultiRun(
       ...(runCount != null && { run_count: runCount }),
       ...(verdictOnlyRuns != null && { verdict_only_runs: verdictOnlyRuns }),
     }),
+    signal: requestOptions?.signal,
   });
 }
 
@@ -798,10 +804,12 @@ export async function getRunGroupDistribution(
 
 export async function identityContinuityPreflight(
   options: CreateScenarioOptions,
+  requestOptions?: RequestOptions,
 ): Promise<IdentityContinuityPreflightResponse> {
   return request('/agents/identities/preflight', {
     method: 'POST',
     body: JSON.stringify(buildScenarioRequestBody(options, { preflightMode: true })),
+    signal: requestOptions?.signal,
   });
 }
 

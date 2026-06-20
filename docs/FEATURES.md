@@ -7,7 +7,7 @@
 ## 核心推演
 
 ### F01 首页提问框与开始推演
-在首页输入一个「如果……会怎样？」的问题，然后启动主推演。你会先确认问题和本局设置，再进入多 Agent 推演。问题为空、LLM 未配置或本轮预算被挡住时，开始按钮下方会显示原因。
+在首页输入一个「如果……会怎样？」的问题，然后启动主推演。你会先确认问题和本局设置，再进入多 Agent 推演。输入法组词期间不会误开确认弹窗；慢请求或重复点击会保持单一启动，并在启动链路超时后解除锁定。问题为空、LLM 未配置或本轮预算被挡住时，开始按钮下方会显示原因。
 入口：`/` 首页 -> 输入问题 -> `开始推演`
 ![首页提问框](screenshots/01-home.png)
 
@@ -224,7 +224,7 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 ## 更多玩法
 
 ### F42 模型配置
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 在「模型配置」页可以保存多套 LLM 接入信息（名称、服务商、Base URL、模型、API 密钥、限速、并发、provider 能力覆盖和原生搜索上游声明），推演或辩论开始前直接挑一套用，不用每次手填。结构化输出和原生搜索是三态设置：自动检测、强制开启、强制关闭；自动检测会跟随 provider 能力，并发值只会收紧本次 profile 的 LLM 调用，不会放大全局上限。测试连接会把普通 LLM 连通性和模型原生搜索探测分开显示；这个探测看的是被测模型 / 上游能否进入 native web-search tool 注入路径，不是服务端全局 Tavily / Exa 等 app-layer 搜索配置。已知官方 provider 的裸 `/v1` Base URL 会按 Responses 形态处理，但探测不会回显完整派生 URL；使用本地或自定义 Responses 代理转发到 xAI / OpenAI 时，仍要显式声明 `xai_responses` 或 `openai_responses` 上游，系统才会按对应官方 native-search adapter 处理；强制关闭原生搜索仍会阻止注入。`/admin/setup` 保存并测试成功的 profile 也会进入同一套选择逻辑：只要 profile 带有 key，首页就会把 LLM 视为已配置，并自动选中可用 profile；只有 profile 凭据可用时，辩论会复用当前选中的 profile 作为三方默认配置。服务商下拉与 `/admin/setup` 配置向导使用同一组 preset，当前包括 OpenAI、Anthropic、DeepSeek、Google Gemini、Ollama、本地 LM Studio 和自定义端点；切换 preset 会在 Base URL 为空或仍是旧 preset URL 时自动带出默认地址。密钥只存在本地：列表和编辑表单都不会把它显示出来（编辑时密钥框是空的，只标「密钥已设置」），页面也写明本地单用户部署时密钥以明文存在本地 SQLite。依赖已保存 profile 的报告、续跑 / 重放、分支标题重写、社交文案或评分如果无法恢复同一个 profile，会要求重新选择或提供完整 provider 信息；社交头条卡会退回确定性卡片。
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 在「模型配置」页可以保存多套 LLM 接入信息（名称、服务商、Base URL、模型、API 密钥、限速、并发、provider 能力覆盖和原生搜索上游声明），推演或辩论开始前直接挑一套用，不用每次手填。结构化输出和原生搜索是三态设置：自动检测、强制开启、强制关闭；自动检测会跟随 provider 能力，并发值只会收紧本次 profile 的 LLM 调用，不会放大全局上限。首页自动启动预检只做轻量 LLM 连通性检查；测试连接会把普通 LLM 连通性、完整 provider probe 和模型原生搜索探测分开显示。这个探测看的是被测模型 / 上游能否进入 native web-search tool 注入路径，不是服务端全局 Tavily / Exa 等 app-layer 搜索配置。已知官方 provider 的裸 `/v1` Base URL 会按 Responses 形态处理，但探测不会回显完整派生 URL；本地、代理或未知 provider 的并发建议会保守收口为 1，不做额外 fan-out 压测。使用本地或自定义 Responses 代理转发到 xAI / OpenAI 时，仍要显式声明 `xai_responses` 或 `openai_responses` 上游，系统才会按对应官方 native-search adapter 处理；强制关闭原生搜索仍会阻止注入。`/admin/setup` 保存并测试成功的 profile 也会进入同一套选择逻辑：只要 profile 带有 key，首页就会把 LLM 视为已配置，并自动选中可用 profile；只有 profile 凭据可用时，辩论会复用当前选中的 profile 作为三方默认配置。服务商下拉与 `/admin/setup` 配置向导使用同一组 preset，当前包括 OpenAI、Anthropic、DeepSeek、Google Gemini、Ollama、本地 LM Studio 和自定义端点；切换 preset 会在 Base URL 为空或仍是旧 preset URL 时自动带出默认地址。密钥只存在本地：列表和编辑表单都不会把它显示出来（编辑时密钥框是空的，只标「密钥已设置」），页面也写明本地单用户部署时密钥以明文存在本地 SQLite。依赖已保存 profile 的报告、续跑 / 重放、分支标题重写、社交文案或评分如果无法恢复同一个 profile，会要求重新选择或提供完整 provider 信息；社交头条卡会退回确定性卡片。
 入口：`/model-profiles`；首页和辩论设置里也能直接选已存的配置
 
 ### F43 公开分享与画廊

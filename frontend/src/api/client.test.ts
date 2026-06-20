@@ -4,6 +4,7 @@ import {
   appendEndingRoomUserTurn,
   buildSessionHeaders,
   createDebate,
+  createMultiRun,
   createReplayArtifact,
   createScenario,
   exportScenario,
@@ -20,6 +21,7 @@ import {
   importScenarioSnapshot,
   normalizeScenarioAgentSource,
   pinIdentityMemory,
+  testLlmConnection,
   unpinIdentityMemory,
   createModelProfile,
 } from './client';
@@ -371,6 +373,63 @@ describe('language wire-format', () => {
       question: '如果辩题是中文但 UI 是英文？',
       language: 'en',
     }));
+  });
+
+  it('passes AbortSignal through launch-related write requests', async () => {
+    const scenarioController = new AbortController();
+    const multiRunController = new AbortController();
+    const preflightController = new AbortController();
+    const testController = new AbortController();
+    const resolveFetches: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      resolveFetches.push(resolve);
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const requests = [
+      createScenario({ question: 'signal scenario' }, { signal: scenarioController.signal }),
+      createMultiRun({ question: 'signal multi-run' }, { signal: multiRunController.signal }),
+      identityContinuityPreflight(
+      { question: 'signal preflight' },
+      { signal: preflightController.signal },
+      ),
+      testLlmConnection(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { signal: testController.signal },
+      ),
+    ];
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    const requestSignals = fetchMock.mock.calls.map(
+      (call) => (call as unknown as [string, RequestInit])[1].signal as AbortSignal,
+    );
+    expect(requestSignals.map((signal) => signal.aborted)).toEqual([false, false, false, false]);
+
+    scenarioController.abort();
+    multiRunController.abort();
+    preflightController.abort();
+    testController.abort();
+
+    expect(requestSignals.map((signal) => signal.aborted)).toEqual([true, true, true, true]);
+
+    const response = () => ({
+      ok: true,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue('{"id":"created-1"}'),
+    }) as unknown as Response;
+    resolveFetches.forEach((resolve) => resolve(response()));
+    await Promise.all(requests);
   });
 });
 

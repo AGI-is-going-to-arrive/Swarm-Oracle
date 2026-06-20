@@ -1412,8 +1412,22 @@ async def measure_provider_parallelism(
     configured_tpm = _coerce_optional_non_negative_int(tokens_per_minute)
     tested_parallelism = max(1, min(max_parallelism, 12))
     local_provider = is_local_provider_url(base_url)
+    provider_profile = detect_provider(base_url or settings.LLM_RESPONSES_URL)
     estimated_parallelism = 0
     failure_reason: str | None = None
+
+    if local_provider or provider_profile.is_proxy:
+        estimated_parallelism = 1
+        return {
+            "status": "ok",
+            "model": effective_model,
+            "local_provider": local_provider,
+            "allow_disable_user_quota": local_provider,
+            "estimated_parallelism": estimated_parallelism,
+            "tested_parallelism": 1,
+            "recommended": _estimate_probe_recommendations(estimated_parallelism),
+            "failure": None,
+        }
 
     # When the caller explicitly asks for a low request budget, probing with
     # 1..N concurrent requests burns the provider quota before the real run

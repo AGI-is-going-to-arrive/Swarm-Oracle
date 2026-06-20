@@ -1340,8 +1340,12 @@
   line-height: 1.45;
 }
 
-/* Empty question nudge hint styled for Oracle Noir */
-.iv-hero__disabled-reason--hint {
+.iv-hero__budget-warning {
+  margin-top: 8px;
+  text-align: center;
+}
+
+.iv-hero__disabled-reason {
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1361,19 +1365,24 @@
 }
 
 .iv-hero__hint {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: min(640px, 100%);
   background-color: var(--bg-hover);
   border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  padding: 4px 12px;
+  border-radius: 12px;
+  padding: 8px 12px;
   font-family: var(--font-body);
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 500;
   color: var(--text-secondary);
   line-height: 1.4;
   margin: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
   animation: ivHintFadeIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
   transition: border-color 0.2s ease, background-color 0.2s ease;
 }
@@ -1386,9 +1395,62 @@
 .iv-hero__hint-icon {
   width: 14px;
   height: 14px;
+  margin-top: 1px;
   color: var(--text-muted);
   flex-shrink: 0;
   transition: color 0.2s ease;
+}
+
+.iv-hero__launch-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(640px, 100%);
+  margin: 12px auto 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(192, 57, 43, 0.28);
+  border-radius: 12px;
+  background: rgba(253, 243, 244, 0.95);
+  color: #721c24;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.iv-hero__alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(192, 57, 43, 0.14);
+  color: #9f1f15;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.iv-hero__warning {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(640px, 100%);
+  margin: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.iv-hero__warning-link {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .iv-hero__hint:hover .iv-hero__hint-icon {
@@ -1509,6 +1571,18 @@
   padding: 0 40px;
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.btn--submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  filter: grayscale(0.25);
+}
+
+.btn-primary.btn--submit:disabled {
+  border-color: rgba(64, 48, 40, 0.24);
+  background: rgba(64, 48, 40, 0.12);
+  color: rgba(64, 48, 40, 0.72);
 }
 
 .spinner--sm {
@@ -2236,6 +2310,9 @@
   .weekly-growth-list__item,
   .iv-no-provider-warning,
   .iv-provider-hint,
+  .iv-hero__disabled-reason,
+  .iv-hero__hint,
+  .iv-hero__launch-error,
   .confirm-launch,
   .confirm-launch__question,
   .continuity-dialog,

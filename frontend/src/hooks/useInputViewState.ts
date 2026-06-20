@@ -90,6 +90,11 @@ export interface UseInputByokSettingsOptions {
   onWebSearchServerHint?: (serverEnabled: boolean) => void;
 }
 
+interface TestConnectionOptions {
+  signal?: AbortSignal;
+  includeProbe?: boolean;
+}
+
 export function useInputByokSettings(
   t: TranslateFn,
   options: UseInputByokSettingsOptions = {},
@@ -161,9 +166,14 @@ export function useInputByokSettings(
   const visibleTestError = hasStaleProbe ? '' : testError;
   const visibleProbeResult = hasStaleProbe ? null : probeResult;
 
-  const handleTestConnection = useCallback(async () => {
+  const handleTestConnection = useCallback(async (options: TestConnectionOptions = {}) => {
+    const { includeProbe, signal } = options;
     setTestStatus('testing');
     setTestError('');
+    const finishAbortedProbe = () => {
+      setTestStatus('idle');
+      return { ok: false as const, probe: null, error: t('home.launch_inflight_timeout') };
+    };
     try {
       const res = await testLlmConnection(
         llmApiKey || undefined,
@@ -171,7 +181,15 @@ export function useInputByokSettings(
         llmModel || undefined,
         parseOptionalIntegerInput(llmRequestsPerMinute) ?? undefined,
         parseOptionalIntegerInput(llmTokensPerMinute) ?? undefined,
+        includeProbe,
+        undefined,
+        undefined,
+        undefined,
+        { signal },
       );
+      if (signal?.aborted) {
+        return finishAbortedProbe();
+      }
       // Capture server-level web search hint (scope: server, NOT per-provider)
       onWebSearchServerHintRef.current?.(res.web_search?.server_enabled === true);
 
@@ -181,25 +199,30 @@ export function useInputByokSettings(
         setTestedConfigKey(currentConfigKey);
         return { ok: true as const, probe: res.probe ?? null };
       } else {
+        const error = res.llm.error || 'Unknown error';
         setTestStatus('fail');
-        setTestError(res.llm.error || 'Unknown error');
+        setTestError(error);
+        window.setTimeout(() => setTestStatus('idle'), 5000);
+        return { ok: false as const, probe: null, error };
       }
     } catch (err) {
-      setTestStatus('fail');
-      setTestError(
-        getLocalizedApiErrorMessage(
-          err,
-          t,
-          t('common.api_errors.llm_unavailable'),
-          {
-            LLM_TEMPORARILY_UNAVAILABLE: 'common.api_errors.llm_unavailable',
-            LLM_GENERATION_FAILED: 'common.api_errors.llm_generation_failed',
-          },
-        ),
+      if (signal?.aborted) {
+        return finishAbortedProbe();
+      }
+      const error = getLocalizedApiErrorMessage(
+        err,
+        t,
+        t('common.api_errors.llm_unavailable'),
+        {
+          LLM_TEMPORARILY_UNAVAILABLE: 'common.api_errors.llm_unavailable',
+          LLM_GENERATION_FAILED: 'common.api_errors.llm_generation_failed',
+        },
       );
+      setTestStatus('fail');
+      setTestError(error);
+      window.setTimeout(() => setTestStatus('idle'), 5000);
+      return { ok: false as const, probe: null, error };
     }
-    window.setTimeout(() => setTestStatus('idle'), 5000);
-    return { ok: false as const, probe: null };
   }, [currentConfigKey, llmApiKey, llmBaseUrl, llmModel, llmRequestsPerMinute, llmTokensPerMinute, t]);
 
   return {

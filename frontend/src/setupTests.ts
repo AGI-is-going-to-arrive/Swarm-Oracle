@@ -1,6 +1,10 @@
+/* eslint-disable react-hooks/refs */
 import "@testing-library/jest-dom";
-import { beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
 import React from 'react';
+import { createPortal } from 'react-dom';
+
+process.env.RTL_SKIP_AUTO_CLEANUP = 'true';
 
 const LOCIZE_BANNER = 'i18next is made possible by our own product, Locize';
 const originalConsoleLog = console.log.bind(console);
@@ -83,6 +87,328 @@ vi.mock('motion/react', async () => {
 });
 vi.mock('framer-motion', async () => {
   return await vi.importMock('motion');
+});
+
+type DialogOpenContextValue = {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  titleId: string;
+  descriptionId: string;
+};
+
+type PrimitiveProps = React.HTMLAttributes<HTMLElement> & {
+  asChild?: boolean;
+  children?: React.ReactNode;
+};
+
+function renderPrimitiveElement(
+  tag: keyof React.JSX.IntrinsicElements,
+  asChild: boolean | undefined,
+  children: React.ReactNode,
+  props: Record<string, unknown>,
+  ref?: React.Ref<HTMLElement>,
+) {
+  const mergedProps: Record<string, unknown> = { ...props, ref };
+  if (asChild && React.isValidElement(children)) {
+    const childProps = children.props as Record<string, unknown>;
+    for (const [key, value] of Object.entries(props)) {
+      const childValue = childProps[key];
+      if (
+        key.startsWith('on')
+        && typeof childValue === 'function'
+        && typeof value === 'function'
+      ) {
+        mergedProps[key] = (...args: unknown[]) => {
+          childValue(...args);
+          value(...args);
+        };
+      }
+    }
+    return React.cloneElement(
+      children as React.ReactElement<Record<string, unknown>>,
+      mergedProps,
+    );
+  }
+  return React.createElement(tag, mergedProps, children);
+}
+
+function createDialogPrimitiveMock(kind: 'Dialog' | 'AlertDialog') {
+  const OpenContext = React.createContext<DialogOpenContextValue | null>(null);
+  const useOpenContext = () => React.useContext(OpenContext);
+
+  function Root({
+    open,
+    defaultOpen = false,
+    onOpenChange,
+    children,
+  }: React.PropsWithChildren<{
+    open?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }>) {
+    const [internalOpen, setInternalOpen] = React.useState(defaultOpen);
+    const isControlled = open !== undefined;
+    const currentOpen = isControlled ? open : internalOpen;
+    const generatedId = React.useId();
+    const titleId = `${generatedId}-title`;
+    const descriptionId = `${generatedId}-description`;
+    const setOpen = React.useCallback((nextOpen: boolean) => {
+      if (!isControlled) {
+        setInternalOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    }, [isControlled, onOpenChange]);
+
+    React.useEffect(() => {
+      if (!currentOpen || typeof document === 'undefined') return undefined;
+      const handleDocumentKeyDown = (event: KeyboardEvent) => {
+        if (!event.defaultPrevented && event.key === 'Escape') {
+          setOpen(false);
+        }
+      };
+      document.addEventListener('keydown', handleDocumentKeyDown);
+      return () => document.removeEventListener('keydown', handleDocumentKeyDown);
+    }, [currentOpen, setOpen]);
+
+    return React.createElement(
+      OpenContext.Provider,
+      { value: { open: currentOpen, setOpen, titleId, descriptionId } },
+      children,
+    );
+  }
+  Root.displayName = `${kind}.Root`;
+
+  const Portal = ({ children, container }: React.PropsWithChildren<{ container?: Element | DocumentFragment | null }>) => {
+    const target = container ?? (typeof document === 'undefined' ? null : document.body);
+    return target ? createPortal(children, target) : React.createElement(React.Fragment, null, children);
+  };
+  Portal.displayName = `${kind}.Portal`;
+
+  const Trigger = React.forwardRef<HTMLElement, PrimitiveProps>(
+    ({ asChild, children, onClick, ...props }, ref) => {
+      const context = useOpenContext();
+      const handleClick: React.MouseEventHandler<HTMLElement> = (event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) {
+          context?.setOpen(true);
+        }
+      };
+      return renderPrimitiveElement(
+        'button',
+        asChild,
+        children,
+        { type: 'button', ...props, onClick: handleClick },
+        ref,
+      );
+    },
+  );
+  Trigger.displayName = `${kind}.Trigger`;
+
+  const Overlay = React.forwardRef<HTMLElement, PrimitiveProps>(
+    ({ onClick, ...props }, ref) => {
+      const context = useOpenContext();
+      if (context && !context.open) return null;
+      return React.createElement(
+        'div',
+        {
+          'data-state': context?.open === false ? 'closed' : 'open',
+          ...props,
+          ref,
+          onClick,
+        },
+      );
+    },
+  );
+  Overlay.displayName = `${kind}.Overlay`;
+
+  const Content = React.forwardRef<HTMLElement, PrimitiveProps>(
+    ({ asChild, children, onKeyDown, ...props }, ref) => {
+      const domProps: Record<string, unknown> = { ...props };
+      const onEscapeKeyDown = domProps.onEscapeKeyDown;
+      delete domProps.onEscapeKeyDown;
+      delete domProps.onInteractOutside;
+      delete domProps.onOpenAutoFocus;
+      delete domProps.onCloseAutoFocus;
+      const context = useOpenContext();
+      const hasOpenedRef = React.useRef(context?.open ?? false);
+      if (context?.open) {
+        hasOpenedRef.current = true;
+      }
+      if (context && !context.open && !hasOpenedRef.current) return null;
+      const isClosed = context?.open === false;
+      const handleKeyDown: React.KeyboardEventHandler<HTMLElement> = (event) => {
+        onKeyDown?.(event);
+        if (event.key === 'Escape' && typeof onEscapeKeyDown === 'function') {
+          onEscapeKeyDown(event.nativeEvent);
+        }
+        if (!event.defaultPrevented && event.key === 'Escape') {
+          event.preventDefault();
+          context?.setOpen(false);
+        }
+      };
+      return renderPrimitiveElement('div', asChild, children, {
+        role: kind === 'AlertDialog' ? 'alertdialog' : 'dialog',
+        'aria-modal': true,
+        'aria-labelledby': context?.titleId,
+        'aria-describedby': context?.descriptionId,
+        'data-state': context?.open === false ? 'closed' : 'open',
+        ...domProps,
+        hidden: isClosed || domProps.hidden,
+        'aria-hidden': isClosed ? true : domProps['aria-hidden'],
+        onKeyDown: handleKeyDown,
+      }, ref);
+    },
+  );
+  Content.displayName = `${kind}.Content`;
+
+  function createClosingButton(displayName: string) {
+    const Button = React.forwardRef<HTMLElement, PrimitiveProps>(
+      ({ asChild, children, onClick, ...props }, ref) => {
+        const context = useOpenContext();
+        const handleClick: React.MouseEventHandler<HTMLElement> = (event) => {
+          onClick?.(event);
+          if (!event.defaultPrevented) {
+            const activeElement = typeof document === 'undefined' ? null : document.activeElement;
+            if (activeElement instanceof HTMLElement && activeElement !== document.body) {
+              activeElement.blur();
+            }
+            context?.setOpen(false);
+          }
+        };
+        return renderPrimitiveElement(
+          'button',
+          asChild,
+          children,
+          { type: 'button', ...props, onClick: handleClick },
+          ref,
+        );
+      },
+    );
+    Button.displayName = displayName;
+    return Button;
+  }
+
+  const Title = React.forwardRef<HTMLElement, PrimitiveProps>(
+    ({ asChild, children, id, ...props }, ref) => {
+      const context = useOpenContext();
+      return renderPrimitiveElement(
+        'h2',
+        asChild,
+        children,
+        { id: id ?? context?.titleId, ...props },
+        ref,
+      );
+    },
+  );
+  Title.displayName = `${kind}.Title`;
+
+  const Description = React.forwardRef<HTMLElement, PrimitiveProps>(
+    ({ asChild, children, id, ...props }, ref) => {
+      const context = useOpenContext();
+      return renderPrimitiveElement(
+        'p',
+        asChild,
+        children,
+        { id: id ?? context?.descriptionId, ...props },
+        ref,
+      );
+    },
+  );
+  Description.displayName = `${kind}.Description`;
+
+  return {
+    Root,
+    Trigger,
+    Portal,
+    Overlay,
+    Content,
+    Title,
+    Description,
+    Action: createClosingButton(`${kind}.Action`),
+    Cancel: createClosingButton(`${kind}.Cancel`),
+    Close: createClosingButton(`${kind}.Close`),
+  };
+}
+
+vi.mock('@radix-ui/react-alert-dialog', () => createDialogPrimitiveMock('AlertDialog'));
+vi.mock('@radix-ui/react-dialog', () => createDialogPrimitiveMock('Dialog'));
+
+vi.mock('@radix-ui/react-slider', () => {
+  const SliderContext = React.createContext<{ disabled?: boolean; value?: number[] }>({});
+
+  const Root = React.forwardRef<
+    HTMLDivElement,
+    React.HTMLAttributes<HTMLDivElement> & {
+      disabled?: boolean;
+      value?: number[];
+      defaultValue?: number[];
+      onValueChange?: (value: number[]) => void;
+    }
+  >(({ children, disabled, value, defaultValue, onValueChange, onKeyDown, ...props }, ref) => {
+    const currentValue = value ?? defaultValue;
+    const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+      onKeyDown?.(event);
+      if (disabled || !onValueChange || !currentValue?.length) return;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+        onValueChange([currentValue[0] + 1]);
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+        onValueChange([currentValue[0] - 1]);
+      }
+    };
+    return React.createElement(
+      SliderContext.Provider,
+      { value: { disabled, value: currentValue } },
+      React.createElement(
+        'div',
+        {
+          ...props,
+          ref,
+          'data-disabled': disabled ? '' : undefined,
+          onKeyDown: handleKeyDown,
+        },
+        children,
+      ),
+    );
+  });
+  Root.displayName = 'Slider.Root';
+
+  const Track = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+    ({ children, ...props }, ref) => {
+      const { disabled } = React.useContext(SliderContext);
+      return React.createElement('div', {
+        ...props,
+        ref,
+        'data-disabled': disabled ? '' : undefined,
+      }, children);
+    },
+  );
+  Track.displayName = 'Slider.Track';
+
+  const Range = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+    (props, ref) => React.createElement('div', { ...props, ref }),
+  );
+  Range.displayName = 'Slider.Range';
+
+  const Thumb = React.forwardRef<HTMLSpanElement, React.HTMLAttributes<HTMLSpanElement>>(
+    (props, ref) => {
+      const { disabled, value } = React.useContext(SliderContext);
+      return React.createElement(
+        'span',
+        {
+          role: 'slider',
+          'aria-valuenow': value?.[0],
+          'aria-disabled': disabled || undefined,
+          tabIndex: disabled ? -1 : 0,
+          ...props,
+          ref,
+          'data-disabled': disabled ? '' : undefined,
+        },
+      );
+    },
+  );
+  Thumb.displayName = 'Slider.Thumb';
+
+  return { Root, Track, Range, Thumb };
 });
 
 // ── matchMedia mock ──────────────────────────────────────────
@@ -233,6 +559,7 @@ if (typeof window !== 'undefined') {
 }
 
 const { default: i18n, LANGUAGE_STORAGE_KEY } = await import('./i18n/config');
+const { act, cleanup } = await import('@testing-library/react');
 const defaultTestLanguage =
   typeof window !== 'undefined' && window.navigator.language.toLowerCase().startsWith('zh')
     ? 'zh'
@@ -245,4 +572,12 @@ beforeEach(async () => {
   await i18n.changeLanguage(defaultTestLanguage);
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
   window.sessionStorage.clear();
+});
+
+afterEach(async () => {
+  await act(async () => {
+    await Promise.resolve();
+    cleanup();
+    await Promise.resolve();
+  });
 });

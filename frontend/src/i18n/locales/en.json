@@ -160,7 +160,6 @@
       }
     },
     "degraded_hints": {
-      "llm_required": "Configure an LLM provider first.",
       "view_sample_result": "View sample result (If Zheng He discovered the Americas before Columbus)",
       "sample_hint": "Bundled demo snapshot files live under the samples/snapshots/ directory. You can use the Import Snapshot flow to load and view read-only results without an API key."
     },
@@ -168,6 +167,10 @@
     "home": {
       "disabled_reason_question": "Please enter your \"What-If\" question above first",
       "disabled_reason_llm": "LLM model configuration required",
+      "disabled_reason_ime": "IME composition is still active. Confirm the candidate text to start.",
+      "launch_in_progress": "Simulation launch is already in progress. Please wait for the current request to finish.",
+      "launch_inflight_timeout": "The launch request waited too long, so the lock was released. Check your network and try again.",
+      "byok_preflight_failed": "Model provider preflight did not pass. Check the configuration and retry.",
       "placeholder_1": "What if Zhuge Liang lived 10 more years?",
       "placeholder_2": "What if we landed on Mars in 2000?",
       "placeholder_3": "What if the internet was never invented?",

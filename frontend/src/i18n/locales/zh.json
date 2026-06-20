@@ -160,7 +160,6 @@
       }
     },
     "degraded_hints": {
-      "llm_required": "需要先配置 LLM。",
       "view_sample_result": "看示例结果（如果郑和比哥伦布先发现了美洲大陆）",
       "sample_hint": "内置的演示快照文件存放在 samples/snapshots/ 目录下，您可以通过导入快照功能来免密钥导入并查看只读推演结果。"
     },
@@ -168,6 +167,10 @@
     "home": {
       "disabled_reason_question": "请先在上方输入你的『如果…会怎样』问题",
       "disabled_reason_llm": "需先配置 LLM 模型",
+      "disabled_reason_ime": "输入法正在组合文本，确认候选词后即可开始推演",
+      "launch_in_progress": "推演启动中，请等待当前请求完成。",
+      "launch_inflight_timeout": "启动请求等待过久，已解除锁定。请检查网络后重试。",
+      "byok_preflight_failed": "模型服务预检未通过，请检查配置后重试。",
       "placeholder_1": "如果诸葛亮多活10年？",
       "placeholder_2": "如果人类在2000年登陆火星？",
       "placeholder_3": "如果互联网从未被发明？",
