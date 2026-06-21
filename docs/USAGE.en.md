@@ -27,7 +27,7 @@ After a simulation finishes, the result page shows:
 - **Prediction verdict**: a direct answer to your original question, with confidence and uncertainty notes when available.
 - **Worldline cards**: each ending has a title, probability, story, and answer to the original question.
 - **Next-step entries**: depending on the data and server settings, the page shows Oracle Chambers, Roundtable, branch comparison, graph workbench, Knowledge Graph Explorer, Timeline Galaxy, Agent follow-up, and sharing entries.
-- **Full report**: the result page shows a report entry with key conclusions, evidence, and uncertainty notes. The evidence drawer can jump back to the cited replay message; you can also open the report at `/result/:id/report` or retry generation there. Report body content supports safe table-friendly Markdown, and the disclaimer follows the current interface language.
+- **Full report**: when a full report completes, the result page first shows confidence, real-field-derived takeaways, section links, and a link to open the full report. `/result/:id/report` shows every section, evidence item, and uncertainty note. The evidence drawer can jump back to the cited replay message. Report body content supports safe tables, strikethrough, and available probability / faction charts, and the disclaimer follows the current interface language.
 
 Common buttons under an ending card:
 
@@ -79,7 +79,7 @@ Select **View Causal Graph** to see which events caused later events. Select **G
 - **Prediction Journal**: open `/me/journal` to record your probability forecast, mark the outcome later, and review calibration.
 - **Snapshot import / export**: import a scenario snapshot ZIP from the home page, or export the current scenario snapshot from the result page.
 - **Replay Trace**: open `/replay/:id` to inspect where counterfactual and continuation branches came from.
-- **Full report**: available by default on the result page and at `/result/:id/report`; generating, partial, failed, and oversized reports show explicit states. Retry generation uses the BYOK settings from the current tab; if the original profile cannot be recovered, reselect the profile or fill in a complete provider. If the server disables `FEATURE_RESULT_REPORT`, the entry is hidden or shown as unavailable.
+- **Full report**: available by default on live result pages and at `/result/:id/report`; generating, partial, failed, and oversized reports show explicit states. A partial report with sections shows those sections instead of being summarized as complete. Retry generation uses the BYOK settings from the current tab; if the original profile cannot be recovered, reselect the profile or fill in a complete provider. Replay is read-only for an existing `full_report`; replay payloads without a report do not offer live generation or retry. If the server disables `FEATURE_RESULT_REPORT`, the entry is hidden or shown as unavailable.
 
 ---
 

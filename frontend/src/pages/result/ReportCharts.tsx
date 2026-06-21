@@ -18,7 +18,7 @@ export const ProbabilityBarChart = React.memo(function ProbabilityBarChart({ dat
 
   if (data.status === 'missing' || !data.branches || data.branches.length === 0) {
     return (
-      <div className="text-sm text-[color:var(--text-muted)] italic my-2">
+      <div className="report-chart-empty text-sm text-[color:var(--text-muted)] italic">
         {resolveChartEmptyReason(data.reason, t)}
       </div>
     );
@@ -37,23 +37,23 @@ export const ProbabilityBarChart = React.memo(function ProbabilityBarChart({ dat
   });
 
   return (
-    <div className="my-4 p-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] probability-bar-chart" role="region" aria-label={t('result.report.probabilityChartTitle')}>
-      <h4 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">
+    <div className="rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] probability-bar-chart" role="region" aria-label={t('result.report.probabilityChartTitle')}>
+      <h4 className="text-sm font-semibold text-[color:var(--text-primary)]">
         {t('result.report.probabilityChartTitle')}
       </h4>
-      <div className="space-y-3">
+      <div className="report-chart__rows">
         {sortedBranches.map((branch) => {
           const pct = Math.round(branch.probability * 100);
           const isDominant = branch.dominant;
 
           return (
-            <div key={branch.branch_id} className="flex flex-col gap-1">
+            <div key={branch.branch_id} className="report-chart__row">
               <div className="flex justify-between items-center text-xs text-[color:var(--text-secondary)]">
                 <span className="font-medium break-words [overflow-wrap:anywhere] max-w-[80%] flex items-center">
                   {branch.label}
                   {isDominant && (
                     <span
-                      className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold dominant-badge"
+                      className="inline-flex items-center rounded text-[10px] font-bold dominant-badge"
                       title={t('result.report.dominantBranch')}
                     >
                       <span className="sr-only">{t('result.report.dominantBranch')}</span>
@@ -94,22 +94,22 @@ export const FactionShareChart = React.memo(function FactionShareChart({ data }:
 
   if (data.status === 'missing' || !data.factions || data.factions.length === 0) {
     return (
-      <div className="text-sm text-[color:var(--text-muted)] italic my-2">
+      <div className="report-chart-empty text-sm text-[color:var(--text-muted)] italic">
         {resolveChartEmptyReason(data.reason, t)}
       </div>
     );
   }
 
   return (
-    <div className="my-4 p-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] faction-share-chart" role="region" aria-label={t('result.report.factionChartTitle')}>
-      <h4 className="text-sm font-semibold text-[color:var(--text-primary)] mb-3">
+    <div className="rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] faction-share-chart" role="region" aria-label={t('result.report.factionChartTitle')}>
+      <h4 className="text-sm font-semibold text-[color:var(--text-primary)]">
         {t('result.report.factionChartTitle')}
       </h4>
-      <div className="space-y-3">
+      <div className="report-chart__rows">
         {data.factions.map((faction) => {
           const pct = Math.round(faction.share * 100);
           return (
-            <div key={faction.faction_key} className="flex flex-col gap-1">
+            <div key={faction.faction_key} className="report-chart__row">
               <div className="flex justify-between items-center text-xs text-[color:var(--text-secondary)]">
                 <span className="font-medium break-words [overflow-wrap:anywhere] max-w-[60%]">
                   {faction.label}
@@ -134,7 +134,7 @@ export const FactionShareChart = React.memo(function FactionShareChart({ data }:
       </div>
 
       {/* Footnote */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--text-muted)] mt-3 pt-3 border-t border-[color:var(--border-subtle)]">
+      <div className="report-chart__footnote">
         <span>
           {t('result.report.factionRelations', { count: data.relation_edge_count })}
         </span>
@@ -191,7 +191,7 @@ export const ReportChartRenderer = React.memo(function ReportChartRenderer({ cha
   }
 
   return (
-    <div className="mt-4 p-4 bg-[color:var(--bg-hover)] rounded border border-[color:var(--border-subtle)] text-sm text-[color:var(--text-muted)] italic chart-unavailable">
+    <div className="bg-[color:var(--bg-hover)] rounded border border-[color:var(--border-subtle)] text-sm text-[color:var(--text-muted)] italic chart-unavailable">
       {t('result.report.chartUnavailable')}
     </div>
   );

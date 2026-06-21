@@ -111,10 +111,10 @@ export default function ExploreDeeperBridge() {
       titleDefault: 'Full Report',
       descKey: 'result.bridge_full_report_desc',
       descDefault: 'Read the comprehensive scenario report',
-      enabled: capabilities?.result_report?.enabled ?? false,
+      enabled: (capabilities?.result_report?.enabled ?? false) && !isReplayMode,
       href: `/result/${scenarioId}/report`,
-      disabledKey: 'result.bridge_not_enabled',
-      disabledDefault: 'Not enabled on this server.',
+      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
     },
     {
       key: 'causal',

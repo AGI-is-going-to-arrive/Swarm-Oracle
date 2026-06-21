@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { generateReport, getStory } from '../../api/client';
@@ -11,6 +11,10 @@ import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
 import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData, ToolTraceSummary, InterviewEvidenceEntry } from '../../types';
+// The .report-doc editorial skin lives in ResultReportView.css. Import it here (not only in
+// the standalone /report page) so the inline embed on /result/:id is fully styled too —
+// otherwise the panel renders unskinned (+ zeroed padding) on a direct /result/:id load.
+import '../ResultReportView.css';
 
 interface Props {
   /** `inline` is rendered inside ResultView (page already has an <h1>); `standalone`
@@ -34,6 +38,116 @@ function isFullReport(
   report: FullReport | FullReportTruncatedMarker | null | undefined,
 ): report is FullReport {
   return Boolean(report && 'verdict' in report && report.verdict);
+}
+
+function splitSentencesDecimalSafe(text: string): string[] {
+  const sentences: string[] = [];
+  let start = 0;
+  const len = text.length;
+
+  const isAsciiLetter = (char: string | undefined) => Boolean(char && /[A-Za-z]/.test(char));
+  const isAbbreviationPeriod = (index: number) => {
+    const prev = text[index - 1];
+    const prevPrev = text[index - 2];
+    return isAsciiLetter(prev) && prevPrev === '.';
+  };
+
+  for (let i = 0; i < len; i++) {
+    const char = text[i];
+
+    // CJK termination characters: 。 ！？
+    if (char === '。' || char === '！' || char === '？') {
+      const sentence = text.slice(start, i + 1).trim();
+      if (sentence) {
+        sentences.push(sentence);
+      }
+      start = i + 1;
+      continue;
+    }
+
+    // Latin punctuation: . ! ?
+    if (char === '.' || char === '!' || char === '?') {
+      const isDigitPrev = i > 0 && text[i - 1] >= '0' && text[i - 1] <= '9';
+      const isDigitNext = i < len - 1 && text[i + 1] >= '0' && text[i + 1] <= '9';
+      const isDecimal = isDigitPrev && isDigitNext;
+
+      if (!isDecimal && !isAbbreviationPeriod(i)) {
+        const isFollowedByWhitespaceOrEnd =
+          i === len - 1 ||
+          /\s/.test(text[i + 1]);
+
+        if (isFollowedByWhitespaceOrEnd) {
+          const sentence = text.slice(start, i + 1).trim();
+          if (sentence) {
+            sentences.push(sentence);
+          }
+          start = i + 1;
+        }
+      }
+    }
+  }
+
+  if (start < len) {
+    const sentence = text.slice(start).trim();
+    if (sentence) {
+      sentences.push(sentence);
+    }
+  }
+
+  return sentences;
+}
+
+function deriveTakeaways(report: FullReport, lang: 'zh' | 'en'): string[] {
+  const items: string[] = [];
+
+  // 1. verdict.headline_answer
+  const headline = report.verdict?.headline_answer?.trim() ?? '';
+  if (headline) {
+    items.push(headline);
+  }
+
+  // 2. summary_i18n[lang] 首 1-2 句(按小数安全切句)
+  const summaryText = (
+    report.summary_i18n?.[lang] ||
+    report.summary_i18n?.en ||
+    report.summary_i18n?.zh ||
+    ''
+  ).trim();
+  if (summaryText) {
+    const sentences = splitSentencesDecimalSafe(summaryText);
+    const summarySentences = sentences.slice(0, 2);
+    for (const sent of summarySentences) {
+      items.push(sent);
+    }
+  }
+
+  // 3. follow_ups[] 取 1-2
+  const followUps = report.follow_ups || [];
+  for (const fu of followUps.slice(0, 2)) {
+    const trimmed = fu?.trim() ?? '';
+    if (trimmed) {
+      items.push(trimmed);
+    }
+  }
+
+  // 4. indicators_to_watch[].signal 取 1-2
+  const indicators = report.indicators_to_watch || [];
+  for (const ind of indicators.slice(0, 2)) {
+    const signal = ind?.signal?.trim() ?? '';
+    if (signal) {
+      items.push(signal);
+    }
+  }
+
+  // 去重且最多3条
+  const uniqueItems: string[] = [];
+  for (const item of items) {
+    if (!uniqueItems.includes(item)) {
+      uniqueItems.push(item);
+    }
+  }
+
+  return uniqueItems.slice(0, 3);
 }
 
 const ALLOWED_SECTION_IDS = ['timeline', 'factions', 'conflicts', 'premortem', 'indicators', 'sources'];
@@ -123,7 +237,7 @@ export const ToolTraceChip = React.memo(function ToolTraceChip({ trace }: ToolTr
   }
 
   return (
-    <div className="flex flex-col items-start gap-2 max-w-full tool-trace-container">
+    <div className="report-tool-trace">
       <button
         type="button"
         id="report-tool-trace-trigger"
@@ -131,11 +245,11 @@ export const ToolTraceChip = React.memo(function ToolTraceChip({ trace }: ToolTr
         aria-controls={expanded ? regionId : undefined}
         aria-label={expanded ? t('result.report.toolTraceCollapse') : t('result.report.toolTraceExpand')}
         onClick={() => setExpanded(!expanded)}
-        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-[color:var(--bg-hover)] text-[color:var(--text-secondary)] border border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-deep)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] focus:ring-offset-2 transition-colors duration-200"
+        className="report-tool-trace__trigger"
       >
         <span>🛠️ {t('result.report.toolTraceLabel', { count: trace.length })}</span>
         <svg
-          className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+          className={`report-tool-trace__chevron${expanded ? ' is-open' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -148,24 +262,24 @@ export const ToolTraceChip = React.memo(function ToolTraceChip({ trace }: ToolTr
       {expanded && (
         <div
           id={regionId}
-          className="w-full max-w-md bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] rounded-lg p-3 space-y-2 mt-1 shadow-sm text-xs focus:outline-none"
+          className="report-tool-trace__details"
           role="region"
           aria-labelledby="report-tool-trace-trigger"
         >
-          <ul className="divide-y divide-[color:var(--border-subtle)] space-y-2">
+          <ul className="report-tool-trace__list">
             {trace.map((item, index) => (
-              <li key={index} className="pt-2 first:pt-0 flex flex-col gap-1 text-[color:var(--text-secondary)]">
-                <div className="flex justify-between items-start gap-2">
-                  <span className="font-semibold text-[color:var(--text-primary)] break-all">{item.tool}</span>
-                  <span className="text-[color:var(--text-muted)] shrink-0 tabular-nums">
+              <li key={index} className="report-tool-trace__item">
+                <div className="report-tool-trace__row">
+                  <span className="report-tool-trace__tool">{item.tool}</span>
+                  <span className="report-tool-trace__elapsed">
                     {t('result.report.toolTraceElapsed', { ms: item.elapsed_ms })}
                   </span>
                 </div>
-                <div className="flex justify-between items-center text-[10px] text-[color:var(--text-muted)] gap-4">
-                  <span className="truncate italic max-w-[70%]" title={item.query || undefined}>
+                <div className="report-tool-trace__row report-tool-trace__row--meta">
+                  <span className="report-tool-trace__query" title={item.query || undefined}>
                     {item.query ? item.query : t('result.report.toolTraceEmptyQuery')}
                   </span>
-                  <span className="shrink-0 font-medium bg-[color:var(--bg-deep)] px-1.5 py-0.5 rounded border border-[color:var(--border-subtle)]">
+                  <span className="report-tool-trace__count">
                     {t('result.report.toolTraceItemCount', { count: item.item_count })}
                   </span>
                 </div>
@@ -188,7 +302,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   isZh,
   isReplayMode,
 }: Props & { isZh: boolean; isReplayMode: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const {
     capabilities,
@@ -277,6 +391,13 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       }
     };
   }, [isGenerating, activeScenarioId, isReplayMode, onRefresh]);
+
+  const takeaways = useMemo(() => {
+    if (!report) return [];
+    const rawLang = i18n.language || 'en';
+    const lang = rawLang.startsWith('zh') ? 'zh' : 'en';
+    return deriveTakeaways(report, lang);
+  }, [report, i18n.language]);
 
   const sections = useMemo(() => report?.sections || [], [report]);
   const evidenceDict = useMemo(() => {
@@ -399,24 +520,24 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       return null;
     }
     return (
-      <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] animate-pulse motion-reduce:animate-none forced-colors:border">
-        <div className="h-6 w-1/4 bg-[color:var(--bg-hover)] rounded mb-4" />
-        <div className="h-4 w-1/2 bg-[color:var(--bg-hover)] rounded mb-2" />
-        <div className="h-4 w-3/4 bg-[color:var(--bg-hover)] rounded" />
+      <div className="report-panel-container report-state-card report-state-card--loading animate-pulse motion-reduce:animate-none">
+        <div className="report-state-skeleton report-state-skeleton--title" />
+        <div className="report-state-skeleton report-state-skeleton--medium" />
+        <div className="report-state-skeleton report-state-skeleton--wide" />
       </div>
     );
   }
 
   if (capError) {
     return (
-      <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center text-center forced-colors:border">
-        <p className="text-sm text-[color:var(--text-secondary)] mb-4">
+      <div className="report-panel-container report-state-card">
+        <p className="report-state-card__desc">
           {t('result.report.couldNotConfirmAvailability')}
         </p>
         <button
           type="button"
           onClick={() => void reload?.()}
-          className="px-5 py-2 rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-hover)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] forced-colors:border transition-colors motion-reduce:transition-none"
+          className="report-state-card__button"
         >
           {t('result.report.retry')}
         </button>
@@ -435,9 +556,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   if (isGenerating) {
     return (
-      <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
+      <div className="report-panel-container report-state-card">
         <div
-          className="w-12 h-12 rounded-full bg-[color:var(--bg-hover)] text-[color:var(--color-primary)] flex items-center justify-center mb-4 forced-colors:border"
+          className="report-state-card__icon report-state-card__icon--primary"
           aria-hidden="true"
         >
           <svg className="animate-spin h-6 w-6 text-[color:var(--color-primary)]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -445,10 +566,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
+        <h2 className="report-state-card__title">
           {t('result.report.generatingTitle')}
         </h2>
-        <p className="text-sm text-[color:var(--text-secondary)] max-w-md">
+        <p className="report-state-card__desc">
           {t('result.report.generatingDesc')}
         </p>
       </div>
@@ -457,9 +578,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   if (isTruncatedReport) {
     return (
-      <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
+      <div className="report-panel-container report-state-card">
         <div
-          className="w-12 h-12 rounded-full bg-[color:var(--bg-hover)] text-[color:var(--color-warning,var(--color-primary))] flex items-center justify-center mb-4 forced-colors:border"
+          className="report-state-card__icon report-state-card__icon--warning"
           aria-hidden="true"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -468,14 +589,14 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
+        <h2 className="report-state-card__title">
           {t('result.report.reportTruncated')}
         </h2>
-        <p className="text-sm text-[color:var(--text-secondary)] mb-6 max-w-md">
+        <p className="report-state-card__desc">
           {t('result.report.reportTruncatedDesc')}
         </p>
         {retryError && (
-          <p className="text-sm text-[color:var(--color-danger)] mb-3" role="alert">
+          <p className="report-state-card__error" role="alert">
             {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
           </p>
         )}
@@ -485,7 +606,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             onClick={() => void handleRetry()}
             disabled={retrying}
             aria-busy={retrying}
-            className="px-6 py-2 bg-[color:var(--color-primary)] text-white font-medium rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
+            className="report-state-card__button report-state-card__button--primary"
           >
             {retrying ? t('result.report.generating') : t('result.report.retryGeneration')}
           </button>
@@ -496,9 +617,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   if (incomplete || (missing && variant === 'standalone')) {
     return (
-      <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
+      <div className="report-panel-container report-state-card">
         <div
-          className="w-12 h-12 rounded-full bg-[color:var(--bg-hover)] text-[color:var(--color-danger)] flex items-center justify-center mb-4 forced-colors:border"
+          className="report-state-card__icon report-state-card__icon--danger"
           aria-hidden="true"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -507,18 +628,18 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
+        <h2 className="report-state-card__title">
           {missing
             ? t('result.report.reportNotGenerated')
             : t('result.report.reportIncomplete')}
         </h2>
-        <p className="text-sm text-[color:var(--text-secondary)] mb-6 max-w-md">
+        <p className="report-state-card__desc">
           {missing
             ? t('result.report.generateReportDesc')
             : t('result.report.reportIncompleteDesc')}
         </p>
         {retryError && (
-          <p className="text-sm text-[color:var(--color-danger)] mb-3" role="alert">
+          <p className="report-state-card__error" role="alert">
             {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
           </p>
         )}
@@ -528,7 +649,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             onClick={() => void handleRetry()}
             disabled={retrying}
             aria-busy={retrying}
-            className="px-6 py-2 bg-[color:var(--color-primary)] text-white font-medium rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
+            className="report-state-card__button report-state-card__button--primary"
           >
             {retrying
               ? t('result.report.generating')
@@ -543,8 +664,11 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   if (missing) {
     if (variant === 'inline') {
+      if (isReplayMode) {
+        return null;
+      }
       return (
-        <div className="report-panel-container my-8 p-5 bg-[color:var(--bg-hover)] rounded-xl border border-dashed border-[color:var(--border-default)] flex justify-between items-center flex-wrap gap-3">
+        <div className="report-panel-container report-missing-inline-card">
           <div>
             <p className="text-sm font-semibold text-[color:var(--text-primary)]">📊 {t('result.report.fullReport')}</p>
             <p className="text-xs text-[color:var(--text-secondary)]">{t('result.report.generateReportDesc')}</p>
@@ -552,7 +676,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           <button
             type="button"
             onClick={() => navigate(`/result/${activeScenarioId}/report`)}
-            className="px-4 py-1.5 text-xs bg-[color:var(--color-primary)] hover:bg-[color:var(--color-primary-dim)] text-white rounded font-medium transition-colors"
+            className="report-missing-inline-card__button"
           >
             {t('result.report.generateReport')}
           </button>
@@ -565,29 +689,29 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const title = isZh ? report.title_i18n.zh || report.title : report.title_i18n.en || report.title;
 
   return (
-    <div className="report-panel-container my-8 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] shadow-sm overflow-hidden forced-colors:border">
+    <div className="report-doc report-panel-container report-panel-container--rendered">
       {partialButRenderable && (
         <div
-          className="report-partial-banner flex flex-wrap items-center justify-between gap-3 px-6 py-3 bg-[color:var(--bg-hover)] border-b border-[color:var(--border-subtle)] forced-colors:border"
+          className="report-partial-banner"
           role="status"
         >
-          <div className="flex items-start gap-2 min-w-0">
-            <span className="mt-0.5 text-[color:var(--color-warning,var(--color-primary))]" aria-hidden="true">
+          <div className="report-partial-banner__content">
+            <span className="report-partial-banner__icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
                 <line x1="12" y1="9" x2="12" y2="13" />
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
             </span>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-[color:var(--text-primary)]">
+            <div className="report-partial-banner__copy">
+              <p className="report-partial-banner__title">
                 {t('result.report.reportPartiallyGenerated')}
               </p>
-              <p className="text-xs text-[color:var(--text-secondary)]">
+              <p className="report-partial-banner__desc">
                 {t('result.report.reportPartiallyGeneratedDesc')}
               </p>
               {retryError && (
-                <p className="text-xs text-[color:var(--color-danger)] mt-1" role="alert">
+                <p className="report-partial-banner__error" role="alert">
                   {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
                 </p>
               )}
@@ -599,7 +723,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
               onClick={() => void handleRetry()}
               disabled={retrying}
               aria-busy={retrying}
-              className="shrink-0 px-4 py-1.5 text-sm rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-elevated)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
+              className="report-partial-banner__retry"
             >
               {retrying
                 ? t('result.report.generating')
@@ -608,170 +732,230 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           )}
         </div>
       )}
-      <div className="p-4 sm:p-6 md:p-8">
-        <header className="mb-8 border-b border-[color:var(--border-subtle)] pb-6">
-          <h2 className="text-2xl md:text-3xl font-bold text-[color:var(--text-primary)] mb-4 leading-snug break-words [overflow-wrap:anywhere]">
-            {title}
-          </h2>
-          <div className="flex flex-col gap-4">
+      <div className="report-panel-body">
+        {variant === 'inline' ? (
+          <>
             <ReportConfidenceBadge verdict={report.verdict} />
-            <ToolTraceChip trace={toolTrace} />
-          </div>
-        </header>
 
-        <ReportToc sections={sections} />
+            {report.status === 'complete' && takeaways.length > 0 && (
+              <div className="report-digest">
+                <h3 className="report-digest__title">{t('result.report.takeawaysLabel')}</h3>
+                <ul className="report-digest__list">
+                  {takeaways.map((item, idx) => (
+                    <li key={idx} className="report-digest__item">
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
-        <div className="report-content">
-          {sections.map((section, idx) => (
-            <ReportSection
-              key={section.id}
-              section={section}
-              index={idx}
-              onOpenEvidence={handleOpenEvidence}
-            />
-          ))}
-          {retrying &&
-            missingSections.map((id) => (
-              <section
-                key={`skeleton-${id}`}
-                className="report-section mb-10 pb-6 border-b border-[color:var(--border-subtle)] last:border-b-0 animate-pulse motion-reduce:animate-none"
+            {report.status === 'complete' && (
+              <ReportToc sections={sections} hrefBase={`/result/${activeScenarioId}/report`} />
+            )}
+
+            <div className="report-cta">
+              <p className="report-cta__lead">{t('result.report.readFullReportLead')}</p>
+              <Link
+                to={`/result/${activeScenarioId}/report`}
+                className="report-cta__btn"
               >
-                <div className="flex justify-between items-end mb-4">
-                  <div className="h-6 bg-[color:var(--bg-hover)] rounded w-1/3" />
-                  <div className="h-8 bg-[color:var(--bg-hover)] rounded w-24" />
-                </div>
-                <div className="space-y-3">
-                  <div className="h-4 bg-[color:var(--bg-hover)] rounded w-full" />
-                  <div className="h-4 bg-[color:var(--bg-hover)] rounded w-5/6" />
-                  <div className="h-4 bg-[color:var(--bg-hover)] rounded w-3/4" />
-                </div>
-              </section>
-            ))}
-        </div>
-
-        {hasInterviews && (
-          <section
-            className="report-interviews mt-6 pt-6 border-t border-[color:var(--border-subtle)]"
-            aria-label={t('result.report.interviewsTitle')}
-          >
-            <h3 className="text-lg font-bold text-[color:var(--text-primary)] mb-4">
-              {t('result.report.interviewsTitle')}
-            </h3>
-
-            {/* Interview Status Message */}
-            {interviewStatus && interviewStatus.status !== 'complete' && (
-              <div className="p-4 mb-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] text-sm text-[color:var(--text-secondary)]">
-                {interviewStatus.status === 'skipped' && (
-                  <p>{t('result.report.interviewStatus_skipped', { message: interviewStatus.message || '' })}</p>
-                )}
-                {interviewStatus.status === 'failed' && (
-                  <p>
-                    {t('result.report.interviewStatus_failed', {
-                      message: interviewStatus.message || '',
-                      error_code: interviewStatus.error_code || 'UNKNOWN',
-                    })}
-                  </p>
-                )}
-                {interviewStatus.status === 'partial' && (
-                  <p>
-                    {t('result.report.interviewStatus_partial', {
-                      message: interviewStatus.message || '',
-                      completed: interviewStatus.completed_agents ?? 0,
-                      requested: interviewStatus.requested_agents ?? 0,
-                      truncated: interviewStatus.truncated_agents ?? 0,
-                    })}
-                  </p>
-                )}
-              </div>
+                {t('result.report.readFullReport')}
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* MASTHEAD — serif title + deck rule. Standalone /report only: the inline
+                /result/:id embed already renders the page header + verdict card, so the
+                report headline here would read as a duplicate stacked serif title (D1). */}
+            {variant === 'standalone' && (
+              <header className="report-masthead report-reveal">
+                <h2 className="report-masthead__title">{title}</h2>
+                <p className="report-masthead__deck">{t('result.report.deck')}</p>
+                <hr className="report-masthead__rule" />
+              </header>
             )}
 
-            {/* Interview Cards */}
-            {interviewEvidence.length > 0 && (
-              <div className="grid grid-cols-1 gap-4">
-                {interviewEvidence.map((rawEntry, i) => {
-                  if (!rawEntry) return null;
-                  const entry = rawEntry as Partial<InterviewEvidenceEntry>;
-                  const agentName = entry.agent_name || t('result.report.evidenceKind.default', 'Agent');
-                  const branchIndex = entry.branch_index ?? 0;
-                  const round = entry.round ?? 0;
-                  const excerpt = entry.excerpt || '';
+            {/* HERO STAT BAND — probability / confidence / consensus / disclaimer band */}
+            <ReportConfidenceBadge verdict={report.verdict} />
 
-                  return (
-                    <div
-                      key={i}
-                      className="p-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] flex flex-col space-y-2"
-                    >
-                      <div className="flex justify-between items-center flex-wrap gap-2">
-                        <span className="font-semibold text-sm text-[color:var(--text-primary)]">
-                          {agentName}
-                        </span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-[color:var(--bg-deep)] border border-[color:var(--border-subtle)] text-[color:var(--text-muted)] font-medium">
-                          {t('result.report.interviewCoordinate', {
-                            branch_index: branchIndex,
-                            round: round,
-                          })}
-                        </span>
-                      </div>
-                      {excerpt && (
-                        <blockquote className="text-sm text-[color:var(--text-secondary)] italic border-l-2 border-[color:var(--color-primary)] pl-3 my-1 break-words [overflow-wrap:anywhere]">
-                          {excerpt}
-                        </blockquote>
-                      )}
+            <ReportToc sections={sections} />
+
+            <div className="report-content">
+              {sections.map((section, idx) => (
+                <ReportSection
+                  key={section.id}
+                  section={section}
+                  index={idx}
+                  onOpenEvidence={handleOpenEvidence}
+                />
+              ))}
+              {retrying &&
+                missingSections.map((id) => (
+                  <section
+                    key={`skeleton-${id}`}
+                    className="report-section report-section--skeleton animate-pulse motion-reduce:animate-none"
+                  >
+                    <div className="report-section-skeleton__head">
+                      <div className="h-6 bg-[color:var(--bg-hover)] rounded w-1/3" />
+                      <div className="h-8 bg-[color:var(--bg-hover)] rounded w-24" />
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        )}
+                    <div className="report-section-skeleton__body">
+                      <div className="h-4 bg-[color:var(--bg-hover)] rounded w-full" />
+                      <div className="h-4 bg-[color:var(--bg-hover)] rounded w-5/6" />
+                      <div className="h-4 bg-[color:var(--bg-hover)] rounded w-3/4" />
+                    </div>
+                  </section>
+                ))}
+            </div>
 
-        {(report.indicators_to_watch?.length ?? 0) > 0 && (
-          <section
-            className="report-indicators mt-2 pt-6 border-t border-[color:var(--border-subtle)]"
-            aria-label={t('result.report.indicatorsToWatch')}
-          >
-            <h3 className="text-lg font-bold text-[color:var(--text-primary)] mb-4">
-              {t('result.report.indicatorsToWatch')}
-            </h3>
-            <ul className="space-y-4">
-              {report.indicators_to_watch.map((ind, i) => (
-                <li
-                  key={i}
-                  className="p-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] forced-colors:border"
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="mt-0.5 text-sm font-bold text-[color:var(--color-primary)]" aria-hidden="true">
-                      {ind.direction === 'up' ? '↑' : '↓'}
+            {hasInterviews && (
+              <section
+                className="report-personas"
+                aria-label={t('result.report.interviewsTitle')}
+              >
+                <div className="report-block-head">
+                  <span className="report-block-head__bid" aria-hidden="true">A</span>
+                  <h3 className="report-block-head__title">
+                    {t('result.report.interviewsTitle')}
+                  </h3>
+                  {interviewEvidence.length > 0 && (
+                    <span className="report-block-head__meta">
+                      {t('result.report.sourcesCount', { count: interviewEvidence.length })}
                     </span>
-                    <span className="sr-only">
-                      {ind.direction === 'up' ? t('result.report.rising') : t('result.report.falling')}
-                    </span>
-                    <div className="flex-1">
-                      <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                        <span className="font-semibold text-[color:var(--text-primary)] break-words [overflow-wrap:anywhere]">{ind.signal}</span>
-                        {ind.time_horizon && (
-                          <span className="text-xs text-[color:var(--text-muted)] break-words [overflow-wrap:anywhere]">{ind.time_horizon}</span>
+                  )}
+                </div>
+
+                {/* §F: honesty intro — these are AI-played roles, not real persons */}
+                <p className="report-personas__intro">{t('result.report.personas_intro')}</p>
+
+                {/* Interview Status Message */}
+                {interviewStatus && interviewStatus.status !== 'complete' && (
+                  <div className="report-personas__notice">
+                    {interviewStatus.status === 'skipped' && (
+                      <p>{t('result.report.interviewStatus_skipped', { message: interviewStatus.message || '' })}</p>
+                    )}
+                    {interviewStatus.status === 'failed' && (
+                      <p>
+                        {t('result.report.interviewStatus_failed', {
+                          message: interviewStatus.message || '',
+                          error_code: interviewStatus.error_code || 'UNKNOWN',
+                        })}
+                      </p>
+                    )}
+                    {interviewStatus.status === 'partial' && (
+                      <p>
+                        {t('result.report.interviewStatus_partial', {
+                          message: interviewStatus.message || '',
+                          completed: interviewStatus.completed_agents ?? 0,
+                          requested: interviewStatus.requested_agents ?? 0,
+                          truncated: interviewStatus.truncated_agents ?? 0,
+                        })}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Persona Cards */}
+                {interviewEvidence.length > 0 && (
+                  <div className="report-personas__grid">
+                    {interviewEvidence.map((rawEntry, i) => {
+                      if (!rawEntry) return null;
+                      const entry = rawEntry as Partial<InterviewEvidenceEntry>;
+                      const agentName = entry.agent_name || t('result.report.evidenceKind.default', 'Agent');
+                      const branchIndex = entry.branch_index ?? 0;
+                      const round = entry.round ?? 0;
+                      const excerpt = entry.excerpt || '';
+
+                      return (
+                        <article key={i} className="report-persona-card">
+                          <div className="report-persona-card__top">
+                            <span className="report-persona-card__name">{agentName}</span>
+                            <span className="report-persona-card__coord">
+                              {t('result.report.interviewCoordinate', {
+                                branch_index: branchIndex,
+                                round: round,
+                              })}
+                            </span>
+                          </div>
+                          {excerpt && (
+                            <blockquote className="report-persona-card__quote">{excerpt}</blockquote>
+                          )}
+                          <span className="report-persona-card__badge">
+                            {t('result.report.persona_badge')}
+                          </span>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {(report.indicators_to_watch?.length ?? 0) > 0 && (
+              <section
+                className="report-indicators"
+                aria-label={t('result.report.indicatorsToWatch')}
+              >
+                <div className="report-block-head">
+                  <span className="report-block-head__bid" aria-hidden="true">B</span>
+                  <h3 className="report-block-head__title">
+                    {t('result.report.indicatorsToWatch')}
+                  </h3>
+                  <span className="report-block-head__meta">
+                    {t('result.report.watchlistCount', { count: report.indicators_to_watch.length })}
+                  </span>
+                </div>
+                <div className="report-watch">
+                  {report.indicators_to_watch.map((ind, i) => (
+                    <div key={i} className="report-watch__row">
+                      <div className="report-watch__signal">
+                        {ind.signal}
+                        {ind.observation && (
+                          <span className="report-watch__signal-note">{ind.observation}</span>
+                        )}
+                        {ind.note && (
+                          <span className="report-watch__signal-note">{ind.note}</span>
+                        )}
+                        {ind.rationale && (
+                          <span className="report-watch__signal-rationale">{ind.rationale}</span>
                         )}
                       </div>
-                      {ind.observation && (
-                        <p className="text-sm text-[color:var(--text-secondary)] mt-1 break-words [overflow-wrap:anywhere]">{ind.observation}</p>
-                      )}
-                      {ind.threshold && (
-                        <p className="text-sm text-[color:var(--text-secondary)] mt-1 break-words [overflow-wrap:anywhere]">
-                          <span className="text-[color:var(--text-muted)]">{t('result.report.threshold')}</span>
-                          {ind.threshold}
-                        </p>
-                      )}
-                      {ind.note && <p className="text-sm text-[color:var(--text-secondary)] mt-1 break-words [overflow-wrap:anywhere]">{ind.note}</p>}
-                      {ind.rationale && (
-                        <p className="text-xs italic text-[color:var(--text-muted)] mt-1 break-words [overflow-wrap:anywhere]">{ind.rationale}</p>
-                      )}
+                      <div>
+                        <span
+                          className={`report-watch__dir ${ind.direction === 'up' ? 'is-up' : 'is-down'}`}
+                        >
+                          <span aria-hidden="true">{ind.direction === 'up' ? '↑' : '↓'}</span>
+                          {ind.direction === 'up' ? t('result.report.rising') : t('result.report.falling')}
+                        </span>
+                      </div>
+                      <div className="report-watch__horizon">
+                        {ind.time_horizon ? ind.time_horizon : ''}
+                      </div>
+                      <div className="report-watch__threshold">
+                        {ind.threshold && (
+                          <>
+                            <span className="report-watch__threshold-lbl">{t('result.report.threshold')}</span>
+                            {ind.threshold}
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* CONSOLE — real tool-trace summary; collapses to nothing when empty */}
+            <ToolTraceChip trace={toolTrace} />
+
+            {/* FOOTER */}
+            <footer className="report-footer">
+              <span>{t('result.report.footerBrand')}</span>
+              <span>{t('result.report.footerTagline')}</span>
+            </footer>
+          </>
         )}
       </div>
 

@@ -20,19 +20,19 @@ interface ReportStatePanelProps {
 
 function ReportStatePanel({ title, desc, actionLabel, onAction, isPrimary = false }: ReportStatePanelProps) {
   return (
-    <div className="my-8">
+    <div className="report-state-panel-shell">
       <div className="report-panel-container flat-card">
-        <div className="flex flex-col items-center text-center">
+        <div className="report-state-panel">
           {title && (
-            <h1 className="text-xl font-semibold text-[color:var(--text-primary)] mb-2">
+            <h1 className="report-state-panel__title">
               {title}
             </h1>
           )}
-          <p className="text-sm text-[color:var(--text-secondary)] mb-5 max-w-md">
+          <p className="report-state-panel__desc">
             {desc}
           </p>
           {actionLabel && onAction && (
-            <div>
+            <div className="report-state-panel__action">
               <button
                 type="button"
                 onClick={onAction}
@@ -95,9 +95,9 @@ export default function ResultReportView() {
 
   if (capLoading) {
     return (
-      <div className="result-report-view">
+      <div className="result-report-view report-doc">
         <ProgressIndicator currentStep={4} />
-        <div className="mt-8 animate-pulse motion-reduce:animate-none space-y-4">
+        <div className="report-route-skeleton animate-pulse motion-reduce:animate-none">
           <div className="h-8 bg-[color:var(--bg-hover)] rounded w-1/3" />
           <div className="h-4 bg-[color:var(--bg-hover)] rounded w-1/2" />
           <div className="h-64 bg-[color:var(--bg-hover)] rounded w-full" />
@@ -108,7 +108,7 @@ export default function ResultReportView() {
 
   if (capError) {
     return (
-      <div className="result-report-view">
+      <div className="result-report-view report-doc">
         <button
           type="button"
           onClick={() => navigate(`/result/${id}`)}
@@ -129,7 +129,7 @@ export default function ResultReportView() {
   // F4: Render friendly "Feature Not Enabled" panel with return button if disabled.
   if (!isReportEnabled) {
     return (
-      <div className="result-report-view">
+      <div className="result-report-view report-doc">
         <button
           type="button"
           onClick={() => navigate(`/result/${id}`)}
@@ -151,9 +151,9 @@ export default function ResultReportView() {
 
   if (loading) {
     return (
-      <div className="result-report-view">
+      <div className="result-report-view report-doc">
         <ProgressIndicator currentStep={4} />
-        <div className="mt-8 animate-pulse motion-reduce:animate-none space-y-4">
+        <div className="report-route-skeleton animate-pulse motion-reduce:animate-none">
           <div className="h-8 bg-[color:var(--bg-hover)] rounded w-1/3" />
           <div className="h-4 bg-[color:var(--bg-hover)] rounded w-1/2" />
           <div className="h-64 bg-[color:var(--bg-hover)] rounded w-full" />
@@ -164,7 +164,7 @@ export default function ResultReportView() {
 
   if (loadError) {
     return (
-      <div className="result-report-view">
+      <div className="result-report-view report-doc">
         <button
           type="button"
           onClick={() => navigate(`/result/${id}`)}
@@ -200,7 +200,7 @@ export default function ResultReportView() {
 
   return (
     <ResultContextProvider value={contextValue}>
-      <div className="result-report-view">
+      <div className="result-report-view report-doc">
         <button
           type="button"
           onClick={() => navigate(`/result/${id}`)}

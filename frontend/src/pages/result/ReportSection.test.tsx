@@ -59,7 +59,8 @@ describe('ReportSection', () => {
 
   it('renders section title and markdown body', () => {
     render(<ReportSection section={baseSection} onOpenEvidence={mockOnOpenEvidence} index={0} />);
-    expect(screen.getByText('1.')).toBeInTheDocument();
+    // Editorial skin renders a zero-padded hanging section number.
+    expect(screen.getByText('01')).toBeInTheDocument();
     expect(screen.getByText('Test Section')).toBeInTheDocument();
     expect(screen.getByText('This is content')).toBeInTheDocument();
   });
@@ -251,5 +252,28 @@ describe('ReportSection', () => {
     const section2 = { ...baseSection, charts: [malformedFactionChart] };
     render(<ReportSection section={section2} onOpenEvidence={mockOnOpenEvidence} index={0} />);
     expect(screen.getByText('[L10N chartUnavailable]')).toBeInTheDocument();
+  });
+
+  it('strips a leading body heading that duplicates the section title', () => {
+    const section = {
+      ...baseSection,
+      body_md_i18n: { zh: '## 测试章节\n\n正文内容。', en: '## Test Section\n\nActual body text.' },
+    };
+    render(<ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+    // The section title <h3> is the ONLY "Test Section" — the redundant leading
+    // markdown heading in the body is stripped so it does not render a duplicate.
+    expect(screen.getAllByText('Test Section')).toHaveLength(1);
+    expect(screen.getByText('Actual body text.')).toBeInTheDocument();
+  });
+
+  it('keeps a leading body heading that does not match the section title', () => {
+    const section = {
+      ...baseSection,
+      body_md_i18n: { zh: '## 别的标题\n\n正文。', en: '## Different Heading\n\nBody copy.' },
+    };
+    render(<ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+    expect(screen.getByText('Test Section')).toBeInTheDocument(); // the section title
+    expect(screen.getByText('Different Heading')).toBeInTheDocument(); // a genuine heading is preserved
+    expect(screen.getByText('Body copy.')).toBeInTheDocument();
   });
 });

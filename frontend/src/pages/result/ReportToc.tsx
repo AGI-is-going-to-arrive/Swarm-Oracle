@@ -4,9 +4,10 @@ import type { ReportSection } from '../../types';
 
 interface Props {
   sections: ReportSection[];
+  hrefBase?: string;
 }
 
-export const ReportToc = React.memo(function ReportToc({ sections }: Props) {
+export const ReportToc = React.memo(function ReportToc({ sections, hrefBase }: Props) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
@@ -14,25 +15,29 @@ export const ReportToc = React.memo(function ReportToc({ sections }: Props) {
 
   return (
     <nav
-      className="report-toc mb-8 p-4 bg-[color:var(--bg-hover)] rounded-lg border border-[color:var(--border-subtle)] forced-colors:border"
+      className="report-toc report-reveal report-d2"
       aria-label={t('result.report.toc')}
     >
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-[color:var(--text-secondary)] mb-3">
-        {t('result.report.tocTitle')}
-      </h3>
-      <ul className="space-y-2">
+      <div className="report-toc__head">
+        <span>{t('result.report.tocTitle')}</span>
+        <span className="report-toc__count">
+          {t('result.report.tocCount', { count: sections.length })}
+        </span>
+      </div>
+      <div className="report-toc__grid">
         {sections.map((section, index) => (
-          <li key={section.id}>
-            <a
-              href={`#report-section-${section.id}`}
-              className="text-[color:var(--color-primary)] hover:text-[color:var(--color-primary-dim)] hover:underline flex items-center focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] rounded"
-            >
-              <span className="w-6 text-[color:var(--text-muted)] font-mono text-sm">{index + 1}.</span>
-              <span>{isZh ? section.title_i18n.zh || section.title : section.title_i18n.en || section.title}</span>
-            </a>
-          </li>
+          <a
+            key={section.id}
+            href={hrefBase ? `${hrefBase}#report-section-${section.id}` : `#report-section-${section.id}`}
+            className="report-toc__item"
+          >
+            <span className="report-toc__num" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+            <span className="report-toc__title">
+              {isZh ? section.title_i18n.zh || section.title : section.title_i18n.en || section.title}
+            </span>
+          </a>
         ))}
-      </ul>
+      </div>
     </nav>
   );
 });

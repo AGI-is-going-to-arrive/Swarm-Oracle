@@ -1,10 +1,13 @@
 """Regression tests for Alembic-backed init_db bootstrap."""
 
+import json
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlmodel import SQLModel
+
+from tests.test_result_report_contract import _legal_full_report
 
 
 def _build_alembic_config(database_module, Config, db_url: str):
@@ -433,6 +436,25 @@ def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     assert "alembic_version" not in bootstrap_inspector.get_table_names()
     with bootstrap_engine.begin() as conn:
         conn.execute(text("DROP TABLE prediction_journal_entries"))
+        report = _legal_full_report()
+        report["verdict"]["likelihood"]["probability"] = 1.95
+        report["verdict"]["likelihood"]["interval"] = [1.95, 1.0]
+        conn.execute(
+            text(
+                """
+                INSERT INTO scenario (
+                    id, question, parsed_context, director_state_json,
+                    gameplay_state_json, status, created_at, user_id,
+                    visualization_enabled, scene_theme, web_context_json
+                )
+                VALUES (
+                    'scn-037-bootstrap', 'q', :parsed_context, NULL, NULL,
+                    'PARSING', '2026-06-21 00:00:00', 'owner-037', 0, NULL, NULL
+                )
+                """
+            ),
+            {"parsed_context": json.dumps({"full_report": report}, ensure_ascii=False)},
+        )
     bootstrap_inspector = inspect(bootstrap_engine)
     assert "prediction_journal_entries" not in bootstrap_inspector.get_table_names()
     bootstrap_engine.dispose()
@@ -455,6 +477,16 @@ def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
 
     assert revision == expected_head
+    with database_module.get_engine().connect() as conn:
+        parsed_context = conn.execute(
+            text("SELECT parsed_context FROM scenario WHERE id = 'scn-037-bootstrap'")
+        ).scalar_one()
+    normalized_report = json.loads(parsed_context)["full_report"]
+    assert normalized_report["verdict"]["likelihood"] == {
+        "probability": 1.0,
+        "interval": [1.0, 1.0],
+        "wep": "likely",
+    }
     with database_module.get_engine().connect() as conn:
         index_rows = conn.execute(
             text(

@@ -456,6 +456,7 @@ _CORE_BOOTSTRAP_TABLES = frozenset({
     "scenario", "agent", "branch", "round", "agent_message",
     "debate", "ending_room", "agent_identity", "graph_node", "graph_edge",
 })
+_SQLITE_BOOTSTRAP_SCHEMA_EQUIVALENT_REVISION = "036_model_profile_native_search_upstream"
 
 
 def _has_bootstrap_sqlmodel_schema(connection) -> bool:
@@ -503,6 +504,8 @@ def _bootstrap_alembic_revision_for_sqlite(
             current_revision = _current_alembic_revision(connection)
             if current_revision is None:
                 if _has_bootstrap_sqlmodel_schema(connection):
+                    if head_revision == "037_clean_result_report_likelihood":
+                        return _SQLITE_BOOTSTRAP_SCHEMA_EQUIVALENT_REVISION
                     return head_revision
                 return None
             if (

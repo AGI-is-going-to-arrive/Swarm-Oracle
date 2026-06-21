@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 from fastapi.testclient import TestClient
@@ -236,6 +237,58 @@ def test_full_report_schema_accepts_generating_status():
     report = validate_full_report_payload(payload)
 
     assert report.status == "generating"
+
+
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [
+        ([1.95, 1.0], (1.0, 1.0)),
+        ([0.8, 0.3], (0.3, 0.8)),
+        ([1.2, 1.5], (1.0, 1.0)),
+        ([math.nan, 0.7], (0.7, 0.7)),
+        (["not-a-number"], (0.0, 1.0)),
+    ],
+)
+def test_likelihood_schema_normalizes_dirty_intervals(interval, expected):
+    from app.services.result_report.schema import Likelihood
+
+    likelihood = Likelihood.model_validate(
+        {"probability": 0.42, "interval": interval, "wep": "about_even"}
+    )
+
+    assert likelihood.interval == expected
+
+
+@pytest.mark.parametrize(
+    ("probability", "expected"),
+    [
+        (1.95, 1.0),
+        (-0.25, 0.0),
+        (math.nan, 0.0),
+        (math.inf, 0.0),
+    ],
+)
+def test_likelihood_schema_normalizes_dirty_probability(probability, expected):
+    from app.services.result_report.schema import Likelihood
+
+    likelihood = Likelihood.model_validate(
+        {"probability": probability, "interval": [0.2, 0.4], "wep": "about_even"}
+    )
+
+    assert likelihood.probability == expected
+
+
+def test_full_report_schema_preserves_stale_report_after_likelihood_normalization():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["verdict"]["likelihood"]["probability"] = 1.95
+    payload["verdict"]["likelihood"]["interval"] = [1.95, 1.0]
+
+    report = validate_full_report_payload(payload)
+
+    assert report.verdict.likelihood.probability == 1.0
+    assert report.verdict.likelihood.interval == (1.0, 1.0)
 
 
 def test_chart_schema_freezes_known_payload_shapes_and_unknown_passthrough():

@@ -356,7 +356,7 @@ def test_036_model_profile_native_search_upstream_migration_roundtrip(tmp_path, 
         finally:
             engine.dispose()
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(alembic_config, "036_model_profile_native_search_upstream")
         assert _current_revision(db_url) == "036_model_profile_native_search_upstream"
         assert _column_nullable(db_url, "model_profile", "native_search_upstream")
 

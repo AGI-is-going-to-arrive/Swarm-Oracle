@@ -86,7 +86,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `FEATURE_PUBLIC_ARTIFACTS` | ✅ 开 | 分享弹窗可以导出脱敏 public artifact JSON 或单文件 HTML gallery。 |
 | `FEATURE_PREDICTION_JOURNAL` | ✅ 开 | `/me/journal` 可以记录预测、标记结果，并查看校准曲线。 |
 | `FEATURE_RESULT_VERDICT` | ✅ 开 | 结果页会尽量给出一句话结论、置信度和每条世界线对原问题的回答。 |
-| `FEATURE_RESULT_REPORT` | ✅ 开 | 结果页会显示完整报告入口，也可以在 `/result/:id/report` 单独查看或重试生成。 |
+| `FEATURE_RESULT_REPORT` | ✅ 开 | 结果页会显示深读摘要入口，也可以在 `/result/:id/report` 单独查看完整报告或重试生成。 |
 | `FEATURE_MULTI_RUN` | ✅ 开 | 首页可以发起多次推演；等待面板会列出每条世界线，结果页会显示 run group 分布和终局直方图。 |
 | `FEATURE_YOU_VS_ORACLE` | ✅ 开 | 结果页可以把用户预测和 Oracle 结果做并排对比。 |
 | `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
@@ -102,7 +102,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 还有几个后端内部/实验开关默认保持关闭，不作为普通用户入口介绍：`FEATURE_ROUNDTABLE_INSIGHT_LLM`、`FEATURE_HALLUCINATION_GATE`、`FEATURE_IDENTITY_COMPACTION`。
 
-`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现完整报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。报告正文使用安全 Markdown 渲染，支持 GFM 表格和删除线，不放行图片。重试会沿用当前标签页的 BYOK provider policy；`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
+`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现深读摘要入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。完成态 inline 只展示置信度、真实字段派生的摘要、章节目录和独立报告链接；完整章节在 `/result/:id/report` 展开，replay 下没有 live 生成 / 重试入口。报告正文使用安全 Markdown 渲染，支持 GFM 表格和删除线，不放行图片；报告提供 `probability_bar` / `faction_share` 数据时会显示概率与阵营图表。概率和区间只展示合法可渲染值，异常值会被后端规范化或在前端降级为定性文案。重试会沿用当前标签页的 BYOK provider policy；`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
 
 > 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
 

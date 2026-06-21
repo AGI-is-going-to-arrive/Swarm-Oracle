@@ -217,8 +217,8 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 该功能是后台检索行为，没有独立 UI 或单独截图。
 
 ### F41 结果完整报告
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 结果页会显示完整报告入口，按章节汇总关键结论、证据出处和不确定性。证据侧栏可以跳回 replay 里的对应发言；报告也可以在 `/result/:id/report` 独立查看。生成失败、只完成一部分或报告过长时，页面都会给出可读的提示，不影响原本的结果页。报告正文支持表格和删除线等安全 Markdown 展示；有可用 transcript / Agent 数据时，`interview_evidence` 会尝试补充访谈式证据。访谈生成失败时只降级该证据块；主报告走静态 / 失败兜底时，会留下空证据和状态说明。
-入口：`/result/:id` -> 完整报告；独立页 `/result/:id/report`
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 结果页会显示完整报告入口；完成态先给深读摘要、章节目录和独立页 CTA，避免把整份报告塞进结果页。`/result/:id/report` 会按章节汇总关键结论、证据出处和不确定性。证据侧栏可以跳回 replay 里的对应发言；replay 只读已有报告，没有报告时不提供 live 生成 CTA。生成失败、只完成一部分或报告过长时，页面都会给出可读的提示，不影响原本的结果页。报告正文支持表格和删除线等安全 Markdown 展示；有可用 transcript / Agent 数据时，独立页会展示 AI 扮演角色的访谈证据，访谈生成失败只降级该区块。报告提供 `probability_bar` / `faction_share` 数据时会渲染概率与阵营图表，数据缺失或 malformed 时只显示不可用状态，不伪造结论。
+入口：`/result/:id` -> 深读摘要 / 打开完整报告；独立页 `/result/:id/report`
 ![结果完整报告](screenshots/23-full-report.png)
 
 ## 更多玩法

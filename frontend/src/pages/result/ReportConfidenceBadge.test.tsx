@@ -18,6 +18,11 @@ const I18N: Record<string, string> = {
   'result.report.wep.roughly_even': '[L10N wep roughly_even]',
   'result.report.wep.missing': '[L10N wep missing]',
   'result.report.confidence_basis_recomposed': 'Recomposed: {{branchCount}} branches, {{evidenceCount}} evidence, {{agentConsensus}} consensus',
+  'result.report.intervalLabel': '[L10N intervalLabel]',
+  'result.report.interval_unavailable': '[L10N interval unavailable]',
+  'result.report.hedge_branch_single': '[L10N single-branch]',
+  'result.report.hedge_branch_multi': '[L10N {{count}}-branch]',
+  'result.report.hedge_agents_aligned': '[L10N agents-aligned]',
 };
 
 vi.mock('react-i18next', () => ({
@@ -61,8 +66,8 @@ describe('ReportConfidenceBadge', () => {
 
     expect(screen.getByText(/\[L10N likelihood\]/)).toBeInTheDocument();
     expect(screen.getByText(/\[L10N analytic confidence\]/)).toBeInTheDocument();
-    // Localized level word is shown; the raw enum value "high" must NOT leak verbatim.
-    expect(screen.getByText('[L10N high]')).toBeInTheDocument();
+    // Localized level word is shown (meter value + tick scale); the raw enum "high" must NOT leak.
+    expect(screen.getAllByText('[L10N high]').length).toBeGreaterThan(0);
     expect(screen.queryByText('high')).toBeNull();
   });
 
@@ -91,8 +96,8 @@ describe('ReportConfidenceBadge', () => {
       <ReportConfidenceBadge verdict={makeVerdict({ likelihood: { probability: 0.5, interval: [0.4, 0.6], wep: '' } })} />,
     );
     expect(screen.queryByText('[L10N wep missing]')).toBeNull();
-    // The likelihood row still renders, just without a WEP chip.
-    expect(container.querySelector('.report-confidence-badge')).not.toBeNull();
+    // The likelihood row still renders (hero stat band), just without a WEP chip.
+    expect(container.querySelector('.report-hero')).not.toBeNull();
   });
 
   it('shows a localized safe fallback for an unknown confidence level (never the raw value)', () => {
@@ -121,7 +126,8 @@ describe('ReportConfidenceBadge', () => {
 
   it('localizes the low confidence level', () => {
     render(<ReportConfidenceBadge verdict={makeVerdict({ analytic_confidence: { level: 'low', basis: 'b' } })} />);
-    expect(screen.getByText('[L10N low]')).toBeInTheDocument();
+    // Appears in the meter value and the tick scale; raw enum "low" must NOT leak.
+    expect(screen.getAllByText('[L10N low]').length).toBeGreaterThan(0);
     expect(screen.queryByText('low')).toBeNull();
   });
 
@@ -167,5 +173,143 @@ describe('ReportConfidenceBadge', () => {
       />,
     );
     expect(screen.getByText('Arbitrary custom explanation')).toBeInTheDocument();
+  });
+
+  // ── §E display guard: honest degradation, never silent clamp ──────────────
+  it('renders a legal interval as a numeric range (extremes like [0.9, 1.0] are valid)', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({ likelihood: { probability: 1.0, interval: [0.9, 1.0], wep: 'almost_certain' } })}
+      />,
+    );
+    // The legal range renders verbatim; the qualitative fallback must NOT appear.
+    expect(screen.getByText(/\(90\.0%, 100\.0%\)/)).toBeInTheDocument();
+    expect(screen.queryByText('[L10N interval unavailable]')).toBeNull();
+  });
+
+  it('renders probability=1.0 (a legal extreme) as a number, never an em-dash', () => {
+    const { container } = render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({ likelihood: { probability: 1.0, interval: [0.9, 1.0], wep: 'almost_certain' } })}
+      />,
+    );
+    const pct = container.querySelector('.report-hero__pct');
+    expect(pct?.textContent).toContain('100.0');
+    expect(pct?.textContent).not.toContain('—');
+  });
+
+  it('degrades a reversed/out-of-range interval (the 195% bug) to a qualitative band, never clamps', () => {
+    render(
+      <ReportConfidenceBadge
+        // The stale-data shape behind the "(195%, 100%)" screenshot: reversed + out of range.
+        verdict={makeVerdict({ likelihood: { probability: 1.0, interval: [1.95, 1.0], wep: 'almost_certain' } })}
+      />,
+    );
+    // No fabricated numeric range; the honest qualitative band is shown instead.
+    expect(screen.getByText('[L10N interval unavailable]')).toBeInTheDocument();
+    expect(screen.queryByText(/195/)).toBeNull();
+    expect(screen.queryByText(/\(195\.0%, 100\.0%\)/)).toBeNull();
+  });
+
+  it('degrades a non-finite interval bound to the qualitative band', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({ likelihood: { probability: 0.5, interval: [Number.NaN, 0.6], wep: 'roughly_even' } })}
+      />,
+    );
+    expect(screen.getByText('[L10N interval unavailable]')).toBeInTheDocument();
+  });
+
+  it('renders an em-dash for a non-finite / out-of-range probability', () => {
+    const { container } = render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({ likelihood: { probability: 1.95, interval: [0.9, 1.0], wep: 'almost_certain' } })}
+      />,
+    );
+    const pct = container.querySelector('.report-hero__pct');
+    expect(pct?.textContent).toContain('—');
+    expect(pct?.textContent).not.toContain('195');
+  });
+
+  // ── §F honest hedge: derived from real basis, never a fabricated "single-branch" claim ──
+  it('derives a multi-branch hedge from basis (never falsely claims single-branch)', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'high',
+            basis: 'branch_count=12; evidence_count=5; agent_consensus=1.0000 (available)',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\[L10N 12-branch\]/)).toBeInTheDocument();
+    expect(screen.getByText(/\[L10N agents-aligned\]/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[L10N single-branch\]/)).toBeNull();
+  });
+
+  it('shows the single-branch hedge only when basis reports exactly one branch', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'high',
+            basis: 'branch_count=1; evidence_count=2; agent_consensus=1.0000',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\[L10N single-branch\]/)).toBeInTheDocument();
+  });
+
+  it('omits the "agents aligned" claim when consensus is low', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'low',
+            basis: 'branch_count=3; evidence_count=2; agent_consensus=0.2000',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\[L10N 3-branch\]/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[L10N agents-aligned\]/)).toBeNull();
+  });
+
+  it('does not round a sub-60% consensus up to "agents aligned" (59.5% stays unaligned)', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'medium',
+            basis: 'branch_count=3; evidence_count=2; agent_consensus=0.5950 (available)',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\[L10N 3-branch\]/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[L10N agents-aligned\]/)).toBeNull();
+  });
+
+  it('claims "agents aligned" at exactly 60% raw consensus', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'high',
+            basis: 'branch_count=3; evidence_count=2; agent_consensus=0.6000 (available)',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/\[L10N agents-aligned\]/)).toBeInTheDocument();
+  });
+
+  it('renders no hedge when the basis has no parseable branch count', () => {
+    const { container } = render(
+      <ReportConfidenceBadge verdict={makeVerdict({ analytic_confidence: { level: 'medium', basis: 'Freeform note.' } })} />,
+    );
+    expect(container.querySelector('.report-hero__hedge')).toBeNull();
   });
 });

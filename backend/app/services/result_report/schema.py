@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Literal
 
@@ -98,10 +99,65 @@ class LanguageStatus(_StrictModel):
     en: LanguageAvailability
 
 
+def _finite_float_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return number
+
+
+def _clamp01(value: float) -> float:
+    return min(1.0, max(0.0, value))
+
+
+def _normalize_likelihood_probability(value: Any) -> float:
+    number = _finite_float_or_none(value)
+    if number is None:
+        return 0.0
+    return _clamp01(number)
+
+
+def _normalize_likelihood_interval(value: Any) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return (0.0, 1.0)
+
+    first = _finite_float_or_none(value[0])
+    second = _finite_float_or_none(value[1])
+    if first is None and second is None:
+        return (0.0, 1.0)
+    if first is None:
+        first = second
+    if second is None:
+        second = first
+
+    low = _clamp01(first if first is not None else 0.0)
+    high = _clamp01(second if second is not None else 1.0)
+    return (low, high) if low <= high else (high, low)
+
+
 class Likelihood(_StrictModel):
     probability: float = Field(ge=0.0, le=1.0)
     interval: tuple[float, float]
     wep: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_probability_and_interval(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "probability" in normalized:
+            normalized["probability"] = _normalize_likelihood_probability(
+                normalized.get("probability"),
+            )
+        if "interval" in normalized:
+            normalized["interval"] = _normalize_likelihood_interval(
+                normalized.get("interval"),
+            )
+        return normalized
 
     @model_validator(mode="after")
     def validate_interval(self) -> "Likelihood":

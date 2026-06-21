@@ -13,8 +13,12 @@ vi.mock('../../hooks/useCapabilityCheck', () => ({
 vi.mock('../../api/client', () => ({
   generateReport: vi.fn(),
 }));
+const mockNavigate = vi.fn();
 vi.mock('react-router-dom', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
+  Link: ({ to, children, className }: { to: string; children: React.ReactNode; className?: string }) => (
+    <a href={to} className={className}>{children}</a>
+  ),
 }));
 // Keep child components light; assert the panel's own gating/render decisions only.
 vi.mock('./ReportConfidenceBadge', () => ({
@@ -118,6 +122,7 @@ function setCap(over: Partial<ReturnType<typeof useCapabilityCheck>>) {
 const originalReload = window.location.reload;
 
 beforeEach(() => {
+  mockNavigate.mockClear();
   mockedCtx.mockReset();
   mockedCap.mockReset();
   mockedGenerateReport.mockReset();
@@ -262,7 +267,7 @@ describe('ResultReportPanel — manual retry stream handling', () => {
       },
     } as unknown as Response);
 
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
 
     // Click Retry Generation to trigger stream reading
     await act(async () => {
@@ -327,7 +332,7 @@ describe('ResultReportPanel — partial report rendering', () => {
   it('renders the full report + a non-blocking retry banner when partial WITH sections', () => {
     setCtx({ full_report: makeReport({ status: 'partial' }) });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
 
     // Sections + indicators surface (the full report renders).
     expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
@@ -371,13 +376,39 @@ describe('ResultReportPanel — partial report rendering', () => {
     expect(screen.queryByText(/Deep-read/i)).toBeNull();
   });
 
+  it('does not show a live report generation CTA for replay payloads without full_report', () => {
+    setCtx({ full_report: null });
+    setCap({});
+
+    const { container } = render(<ResultReportPanel variant="inline" isReplayMode />);
+
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByRole('button', { name: /Generate Report/i })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Read full report/i })).toBeNull();
+  });
+
   it('renders a complete report with no retry banner', () => {
     setCtx({ full_report: makeReport({ status: 'complete' }) });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
 
     expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
     expect(screen.queryByText(/partially generated/i)).toBeNull();
+  });
+
+  it('omits the report masthead for the inline embed but keeps it standalone', () => {
+    // Inline (/result/:id) already shows the page header + verdict card, so the
+    // panel masthead would duplicate it — it must be suppressed for inline only.
+    setCtx({ full_report: makeReport({ status: 'complete' }) });
+    setCap({});
+    const { container, unmount } = render(<ResultReportPanel variant="inline" />);
+    expect(container.querySelector('.report-masthead')).toBeNull();
+    unmount();
+
+    setCtx({ full_report: makeReport({ status: 'complete' }) });
+    setCap({});
+    const { container: standaloneContainer } = render(<ResultReportPanel variant="standalone" />);
+    expect(standaloneContainer.querySelector('.report-masthead')).not.toBeNull();
   });
 });
 
@@ -396,9 +427,9 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     });
     setCtx({ full_report: report });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
 
-    expect(screen.getByText('Agent Interviews')).toBeInTheDocument();
+    expect(screen.getByText('Simulated personas')).toBeInTheDocument();
     expect(screen.getByText('Privacy Advocate')).toBeInTheDocument();
     expect(screen.getByText('Branch 2 · Round 4')).toBeInTheDocument();
     expect(screen.getByText('Privacy safeguards are essential.')).toBeInTheDocument();
@@ -411,8 +442,8 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     });
     setCtx({ full_report: report });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
-    expect(screen.queryByText('Agent Interviews')).toBeNull();
+    render(<ResultReportPanel variant="standalone" />);
+    expect(screen.queryByText('Simulated personas')).toBeNull();
   });
 
   it('renders nothing for interviews block when interview_evidence is missing entirely', () => {
@@ -420,8 +451,8 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     delete (report as Partial<FullReport>).interview_evidence;
     setCtx({ full_report: report });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
-    expect(screen.queryByText('Agent Interviews')).toBeNull();
+    render(<ResultReportPanel variant="standalone" />);
+    expect(screen.queryByText('Simulated personas')).toBeNull();
   });
 
   it('renders failed interview status message', () => {
@@ -439,9 +470,9 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     });
     setCtx({ full_report: report });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
 
-    expect(screen.getByText('Agent Interviews')).toBeInTheDocument();
+    expect(screen.getByText('Simulated personas')).toBeInTheDocument();
     expect(screen.getByText(/Interview generation failed: LLM failed to respond. \(error code: INTERVIEW_LLM_FAILED\)/i)).toBeInTheDocument();
   });
 
@@ -460,7 +491,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     });
     setCtx({ full_report: report });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
     expect(screen.getByText(/Interview generation skipped: No agents matching criteria./i)).toBeInTheDocument();
   });
 
@@ -479,7 +510,155 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     });
     setCtx({ full_report: report });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
     expect(screen.getByText(/Interview partially complete \(completed 2 out of 4, 1 truncated\): Completed with truncation./i)).toBeInTheDocument();
+  });
+
+  describe('ResultReportPanel — Teaser + Digest Redesign', () => {
+    it('renders CTA and no ReportSection when variant is inline and report is complete, rendering takeaways if headline_answer is present', () => {
+      const report = makeReport({
+        status: 'complete',
+        verdict: {
+          headline_answer: 'My specific headline takeaway',
+          likelihood: { probability: 1.0, interval: [1.0, 1.0], wep: 'Almost Certain' },
+          analytic_confidence: { level: 'high', basis: 'basis' },
+          disclaimer: null
+        }
+      });
+      setCtx({ full_report: report });
+      setCap({});
+
+      render(<ResultReportPanel variant="inline" />);
+
+      // CTA check
+      expect(screen.getByRole('link', { name: /Read full report/i })).toBeInTheDocument();
+      expect(screen.getByText(/Want the full reasoning?/i)).toBeInTheDocument();
+
+      // No ReportSection check
+      expect(screen.queryByTestId('report-section-s1')).toBeNull();
+      expect(screen.queryByTestId('report-section-s2')).toBeNull();
+
+      // Takeaway check
+      expect(screen.getByText('My specific headline takeaway')).toBeInTheDocument();
+    });
+
+    it('renders no takeaways block when all takeaways fields are empty', () => {
+      const report = makeReport({
+        status: 'complete',
+        verdict: {
+          headline_answer: '',
+          likelihood: { probability: 1.0, interval: [1.0, 1.0], wep: 'Almost Certain' },
+          analytic_confidence: { level: 'high', basis: 'basis' },
+          disclaimer: null
+        },
+        summary_i18n: { zh: '', en: '' },
+        follow_ups: [],
+        indicators_to_watch: []
+      });
+      setCtx({ full_report: report });
+      setCap({});
+
+      render(<ResultReportPanel variant="inline" />);
+
+      // Key takeaways title should not be rendered
+      expect(screen.queryByText(/Key takeaways/i)).toBeNull();
+    });
+
+    it('calls navigate to full report path when CTA button is clicked', () => {
+      const report = makeReport({ status: 'complete' });
+      setCtx({ full_report: report });
+      setCap({});
+
+      render(<ResultReportPanel variant="inline" />);
+
+      const link = screen.getByRole('link', { name: /Read full report/i });
+      expect(link).toHaveAttribute('href', '/result/sc-1/report');
+    });
+
+    it('handles decimal numbers without splitting them in takeaways', () => {
+      const report = makeReport({
+        status: 'complete',
+        verdict: {
+          headline_answer: 'Headline',
+          likelihood: { probability: 1.0, interval: [1.0, 1.0], wep: 'Almost Certain' },
+          analytic_confidence: { level: 'high', basis: 'basis' },
+          disclaimer: null
+        },
+        summary_i18n: {
+          en: 'The value increased by 3.5. This is 0.65 higher than before.',
+          zh: '数值增长了 3.5。这比以前高出 0.65。'
+        }
+      });
+      setCtx({ full_report: report });
+      setCap({});
+
+      render(<ResultReportPanel variant="inline" />);
+
+      expect(screen.getByText('The value increased by 3.5.')).toBeInTheDocument();
+      expect(screen.getByText('This is 0.65 higher than before.')).toBeInTheDocument();
+    });
+
+    it('does not split U.S. abbreviations when deriving summary takeaways', () => {
+      const report = makeReport({
+        status: 'complete',
+        verdict: {
+          headline_answer: '',
+          likelihood: { probability: 1.0, interval: [1.0, 1.0], wep: 'Almost Certain' },
+          analytic_confidence: { level: 'high', basis: 'basis' },
+          disclaimer: null
+        },
+        summary_i18n: {
+          en: 'U.S. policy changed. The value increased by 3.5.',
+          zh: ''
+        },
+        follow_ups: [],
+        indicators_to_watch: []
+      });
+      setCtx({ full_report: report });
+      setCap({});
+
+      render(<ResultReportPanel variant="inline" />);
+
+      expect(screen.getByText('U.S. policy changed.')).toBeInTheDocument();
+      expect(screen.queryByText('U.S.')).toBeNull();
+    });
+
+    it('filters whitespace-only digest sources before rendering bullets', () => {
+      const report = makeReport({
+        status: 'complete',
+        verdict: {
+          headline_answer: '   ',
+          likelihood: { probability: 1.0, interval: [1.0, 1.0], wep: 'Almost Certain' },
+          analytic_confidence: { level: 'high', basis: 'basis' },
+          disclaimer: null
+        },
+        summary_i18n: { zh: '  ', en: '  ' },
+        follow_ups: ['  ', 'Follow this real signal.'],
+        indicators_to_watch: [
+          { signal: '   ', direction: 'up', time_horizon: '', threshold: '', note: '' },
+          { signal: 'Watch this real indicator.', direction: 'down', time_horizon: '', threshold: '', note: '' }
+        ]
+      });
+      setCtx({ full_report: report });
+      setCap({});
+
+      const { container } = render(<ResultReportPanel variant="inline" />);
+
+      const bullets = Array.from(container.querySelectorAll('.report-digest__item')).map((node) => node.textContent);
+      expect(bullets).toEqual(['Follow this real signal.', 'Watch this real indicator.']);
+    });
+
+    it('renders inline partial report showing retry banner and no digest takeaways', () => {
+      const report = makeReport({ status: 'partial' });
+      setCtx({ full_report: report });
+      setCap({});
+
+      const { container } = render(<ResultReportPanel variant="inline" />);
+
+      expect(screen.getByText(/partially generated/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Retry Generation/i })).toBeInTheDocument();
+      expect(screen.queryByText(/Key takeaways/i)).toBeNull();
+      expect(container.querySelector('.report-digest')).toBeNull();
+    });
   });
 });

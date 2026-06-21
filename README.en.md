@@ -33,7 +33,7 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 - **Custom Agents**: Create, import, and export your own characters in the Agent Workshop.
 - **Prediction journal and leaderboard**: Record predictions, review calibration, and view the global leaderboard.
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
-- **Full report and evidence replay**: Generate a standalone report from the result page, jump evidence back to replay, and render table-friendly Markdown.
+- **Full report and evidence replay**: The result page shows a digest and section links first; the standalone report renders evidence, probability bands, charts, and replay jump-backs.
 - **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API, with saved profiles carrying rate limits, concurrency, capability overrides, and native-search upstream declarations selectable from the home page and Debate Arena.
 
 > For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
