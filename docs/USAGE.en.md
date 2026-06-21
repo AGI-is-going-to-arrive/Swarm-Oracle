@@ -2,7 +2,7 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. Known official providers with bare `/v1` are probed as the Responses form, while proxy forwarding still needs an explicit upstream declaration. The home page treats profiles with a key as usable LLM access, and both simulations and debates can reuse them. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
+This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. Known official providers with bare `/v1` are probed as the Responses form, while proxy forwarding still needs an explicit upstream declaration. The home page treats profiles with a key as usable LLM access, and simulations, debates, and result-page chambers can reuse them. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
 
 For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 
@@ -32,7 +32,7 @@ After a simulation finishes, the result page shows:
 Common buttons under an ending card:
 
 - **Read Full Story**: expand the full narrative for that worldline.
-- **Enter Chamber**: pick 1-3 participants from the current worldline and ask follow-up questions.
+- **Enter Chamber**: pick 1-3 participants from the current worldline and ask follow-up questions; when model profiles are enabled, open Advanced settings to choose a profile for this chamber.
 - **One Move Only**: focus on one turning point without rerunning the main simulation.
 - **Other Worldline**: compare against another ending when multiple endings exist.
 
@@ -54,7 +54,7 @@ After typing a question, select **Enter Debate Arena**. The app creates affirmat
 
 ### 3. Oracle Chambers
 
-On a result card, select **Enter Chamber** and choose participants from that worldline. They answer using what already happened in that worldline, which works well for "Why did this happen?" and "What were you thinking then?"
+On a result card, select **Enter Chamber** and choose participants from that worldline. They answer using what already happened in that worldline, which works well for "Why did this happen?" and "What were you thinking then?" If model profiles are enabled, open the collapsed-by-default **Advanced settings** to choose a profile for this chamber; leave it blank to use the global default.
 
 ### 4. Worldline Roundtable
 

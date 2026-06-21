@@ -17,7 +17,7 @@ import { NodeConversationSheet } from '../../components/kg/NodeConversationSheet
 import { MobileSourceSheet } from '../../components/result/MobileSourceSheet';
 import { UnifiedSourceFeed } from '../../components/result/UnifiedSourceFeed';
 import { getEndingRoomCandidateAvatar } from '../resultHelpers';
-import { useResultContext } from './ResultContext';
+import { useResultContext, type ResultViewContextValue } from './ResultContext';
 
 type SourceFamilyContext = NonNullable<WebSearchContext['family_context']>;
 
@@ -65,6 +65,248 @@ interface ResultModalsProps {
     comparisonTitles: string[];
   } | null;
   activeEndingRoomModelProfileId?: string;
+}
+
+interface EndingRoomPickerDialogProps {
+  t: ResultViewContextValue['t'];
+  pendingEndingRoomPicker: PendingEndingRoomPicker;
+  setPendingEndingRoomPicker: Dispatch<SetStateAction<PendingEndingRoomPicker | null>>;
+  pendingEndingRoomBranch: StoryData['branches'][number];
+  pendingEndingRoomCandidates: EndingRoomCandidate[];
+  endingRoomPickerDialogRef: RefObject<HTMLDivElement | null>;
+  endingRoomPickerCloseRef: RefObject<HTMLButtonElement | null>;
+  modelProfilesEnabled: boolean;
+  openEndingRoomDirect: ResultModalsProps['openEndingRoomDirect'];
+}
+
+function EndingRoomPickerDialog({
+  t,
+  pendingEndingRoomPicker,
+  setPendingEndingRoomPicker,
+  pendingEndingRoomBranch,
+  pendingEndingRoomCandidates,
+  endingRoomPickerDialogRef,
+  endingRoomPickerCloseRef,
+  modelProfilesEnabled,
+  openEndingRoomDirect,
+}: EndingRoomPickerDialogProps) {
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [endingRoomProfileId, setEndingRoomProfileId] = useState<string>('');
+  const [endingRoomAdvancedOpen, setEndingRoomAdvancedOpen] = useState(false);
+
+  useEffect(() => {
+    if (!modelProfilesEnabled) return;
+
+    let cancelled = false;
+
+    listModelProfiles()
+      .then((res) => {
+        if (!cancelled) {
+          setProfiles(res.profiles || []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProfiles([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [modelProfilesEnabled]);
+
+  const validEndingRoomProfileId =
+    modelProfilesEnabled
+    && endingRoomProfileId !== ''
+    && profiles.some((profile) => profile.id === endingRoomProfileId)
+      ? endingRoomProfileId
+      : '';
+
+  return (
+    <div className="ending-room-picker-overlay" onClick={() => setPendingEndingRoomPicker(null)}>
+      <div
+        ref={endingRoomPickerDialogRef}
+        className="ending-room-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ending-room-picker-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="ending-room-picker__header">
+          <div>
+            <p className="ending-room-picker__kicker">
+              {pendingEndingRoomPicker.roomType === 'one_move_only'
+                ? t('ending_room.one_move_cta')
+                : t('ending_room.entry_cta')}
+            </p>
+            <h3 id="ending-room-picker-title">
+              {t('result.ending_room_picker_title')}
+            </h3>
+            <p>
+              {pendingEndingRoomBranch.title}
+              {' · '}
+              {t('result.ending_room_picker_limit', { count: pendingEndingRoomPicker.maxSelectable })}
+            </p>
+          </div>
+          <button
+            type="button"
+            ref={endingRoomPickerCloseRef}
+            className="ending-room-picker__close"
+            onClick={() => setPendingEndingRoomPicker(null)}
+            aria-label={t('common.close')}
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="ending-room-picker__body">
+          {pendingEndingRoomCandidates.length === 0 ? (
+            <p className="ending-room-picker__empty">
+              {t('result.ending_room_picker_empty')}
+            </p>
+          ) : (
+            pendingEndingRoomCandidates.map((candidate) => {
+              const selected = pendingEndingRoomPicker.selectedAgentIds.includes(candidate.id);
+              return (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  className={`ending-room-picker__card ${selected ? 'is-selected' : ''}`}
+                  aria-pressed={selected}
+                  onClick={() => {
+                    setPendingEndingRoomPicker((current) => {
+                      if (!current || current.branchId !== pendingEndingRoomBranch.id) {
+                        return current;
+                      }
+                      const alreadySelected = current.selectedAgentIds.includes(candidate.id);
+                      if (alreadySelected) {
+                        return {
+                          ...current,
+                          selectedAgentIds: current.selectedAgentIds.filter((item) => item !== candidate.id),
+                        };
+                      }
+                      if (current.maxSelectable === 1) {
+                        return { ...current, selectedAgentIds: [candidate.id] };
+                      }
+                      if (current.selectedAgentIds.length >= current.maxSelectable) {
+                        return current;
+                      }
+                      return {
+                        ...current,
+                        selectedAgentIds: [...current.selectedAgentIds, candidate.id],
+                      };
+                    });
+                  }}
+                >
+                  <img
+                    className="ending-room-picker__avatar"
+                    src={getEndingRoomCandidateAvatar(candidate.role, candidate.name)}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                  <div className="ending-room-picker__card-copy">
+                    <strong>{candidate.name}</strong>
+                    <span>{candidate.role}</span>
+                    {candidate.persona && <small>{candidate.persona}</small>}
+                    <em>
+                      {candidate.contributionCount > 0
+                        ? t('result.ending_room_picker_impact', {
+                            impact: Math.round(candidate.impactScore * 100),
+                            turns: candidate.contributionCount,
+                            hinges: candidate.keyMomentHits,
+                            round: candidate.lastRound,
+                          })
+                        : t('result.ending_room_picker_fallback_roster')}
+                    </em>
+                    {candidate.fallbackCast && (
+                      <em className="ending-room-picker__fallback">
+                        {t('result.ending_room_picker_fallback_lineup')}
+                      </em>
+                    )}
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {modelProfilesEnabled && (
+          <div className="ending-room-picker__advanced">
+            <button
+              type="button"
+              className="ending-room-picker__advanced-trigger"
+              onClick={() => setEndingRoomAdvancedOpen((p) => !p)}
+              aria-expanded={endingRoomAdvancedOpen}
+              aria-controls="ending-room-advanced-body"
+              aria-label={endingRoomAdvancedOpen ? t('result.ending_room_advanced_collapse_aria') : t('result.ending_room_advanced_expand_aria')}
+            >
+              <span className="ending-room-picker__advanced-label">
+                {t('result.ending_room_advanced_label')}
+                <span className="ending-room-picker__advanced-hint">
+                  {t('result.ending_room_advanced_hint')}
+                </span>
+              </span>
+              <span className="ending-room-picker__advanced-arrow" aria-hidden="true">
+                {endingRoomAdvancedOpen ? '▲' : '▼'}
+              </span>
+            </button>
+            <div
+              id="ending-room-advanced-body"
+              className={`ending-room-picker__advanced-body ${endingRoomAdvancedOpen ? 'is-open' : ''}`}
+              aria-hidden={!endingRoomAdvancedOpen}
+              inert={!endingRoomAdvancedOpen || undefined}
+            >
+              <div className="ending-room-picker__advanced-inner">
+                <label htmlFor="ending-room-profile-select" className="ending-room-picker__advanced-field-label">
+                  {t('model_profiles.placeholder_select')}
+                </label>
+                <select
+                  id="ending-room-profile-select"
+                  className="form-control ending-room-picker__advanced-select"
+                  value={validEndingRoomProfileId}
+                  disabled={!endingRoomAdvancedOpen}
+                  tabIndex={endingRoomAdvancedOpen ? undefined : -1}
+                  onChange={(e) => setEndingRoomProfileId(e.target.value)}
+                >
+                  <option value="">{t('model_profiles.byok_custom_option')}</option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <footer className="ending-room-picker__footer">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setPendingEndingRoomPicker(null)}
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => openEndingRoomDirect(
+              pendingEndingRoomPicker.branchId,
+              pendingEndingRoomPicker.roomType,
+              pendingEndingRoomPicker.selectedAgentIds,
+              validEndingRoomProfileId || undefined,
+            )}
+            disabled={
+              pendingEndingRoomCandidates.length > 0
+              && pendingEndingRoomPicker.selectedAgentIds.length === 0
+            }
+          >
+            {t('result.ending_room_picker_enter')}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
 }
 
 export default function ResultModals(props: ResultModalsProps) {
@@ -117,20 +359,6 @@ export default function ResultModals(props: ResultModalsProps) {
     analysisBranch,
   } = useResultContext();
   const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
-  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
-  const [endingRoomProfileId, setEndingRoomProfileId] = useState<string>('');
-
-  useEffect(() => {
-    if (modelProfilesEnabled && pendingEndingRoomPicker) {
-      listModelProfiles()
-        .then((res) => setProfiles(res.profiles || []))
-        .catch(() => {});
-    }
-  }, [modelProfilesEnabled, pendingEndingRoomPicker]);
-
-  if (!pendingEndingRoomPicker && endingRoomProfileId !== '') {
-    setEndingRoomProfileId('');
-  }
   const ctx = scenario?.web_search_context;
   const showFeed = Boolean(ctx);
 
@@ -158,160 +386,18 @@ export default function ResultModals(props: ResultModalsProps) {
         />
       )}
       {pendingEndingRoomPicker && pendingEndingRoomBranch && (
-        <div className="ending-room-picker-overlay" onClick={() => setPendingEndingRoomPicker(null)}>
-          <div
-            ref={endingRoomPickerDialogRef}
-            className="ending-room-picker"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ending-room-picker-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="ending-room-picker__header">
-              <div>
-                <p className="ending-room-picker__kicker">
-                  {pendingEndingRoomPicker.roomType === 'one_move_only'
-                    ? t('ending_room.one_move_cta')
-                    : t('ending_room.entry_cta')}
-                </p>
-                <h3 id="ending-room-picker-title">
-                  {t('result.ending_room_picker_title')}
-                </h3>
-                <p>
-                  {pendingEndingRoomBranch.title}
-                  {' · '}
-                  {t('result.ending_room_picker_limit', { count: pendingEndingRoomPicker.maxSelectable })}
-                </p>
-              </div>
-              <button
-                type="button"
-                ref={endingRoomPickerCloseRef}
-                className="ending-room-picker__close"
-                onClick={() => setPendingEndingRoomPicker(null)}
-                aria-label={t('common.close')}
-              >
-                ×
-              </button>
-            </header>
-
-            <div className="ending-room-picker__body">
-              {pendingEndingRoomCandidates.length === 0 ? (
-                <p className="ending-room-picker__empty">
-                  {t('result.ending_room_picker_empty')}
-                </p>
-              ) : (
-                pendingEndingRoomCandidates.map((candidate) => {
-                  const selected = pendingEndingRoomPicker.selectedAgentIds.includes(candidate.id);
-                  return (
-                    <button
-                      key={candidate.id}
-                      type="button"
-                      className={`ending-room-picker__card ${selected ? 'is-selected' : ''}`}
-                      aria-pressed={selected}
-                      onClick={() => {
-                        setPendingEndingRoomPicker((current) => {
-                          if (!current || current.branchId !== pendingEndingRoomBranch.id) {
-                            return current;
-                          }
-                          const alreadySelected = current.selectedAgentIds.includes(candidate.id);
-                          if (alreadySelected) {
-                            return {
-                              ...current,
-                              selectedAgentIds: current.selectedAgentIds.filter((item) => item !== candidate.id),
-                            };
-                          }
-                          if (current.maxSelectable === 1) {
-                            return { ...current, selectedAgentIds: [candidate.id] };
-                          }
-                          if (current.selectedAgentIds.length >= current.maxSelectable) {
-                            return current;
-                          }
-                          return {
-                            ...current,
-                            selectedAgentIds: [...current.selectedAgentIds, candidate.id],
-                          };
-                        });
-                      }}
-                    >
-                      <img
-                        className="ending-room-picker__avatar"
-                        src={getEndingRoomCandidateAvatar(candidate.role, candidate.name)}
-                        alt=""
-                        aria-hidden="true"
-                      />
-                      <div className="ending-room-picker__card-copy">
-                        <strong>{candidate.name}</strong>
-                        <span>{candidate.role}</span>
-                        {candidate.persona && <small>{candidate.persona}</small>}
-                        <em>
-                          {candidate.contributionCount > 0
-                            ? t('result.ending_room_picker_impact', {
-                                impact: Math.round(candidate.impactScore * 100),
-                                turns: candidate.contributionCount,
-                                hinges: candidate.keyMomentHits,
-                                round: candidate.lastRound,
-                              })
-                            : t('result.ending_room_picker_fallback_roster')}
-                        </em>
-                        {candidate.fallbackCast && (
-                          <em className="ending-room-picker__fallback">
-                            {t('result.ending_room_picker_fallback_lineup')}
-                          </em>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-
-            {modelProfilesEnabled && (
-              <div className="ending-room-picker__profile-selector" style={{ marginBottom: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <label htmlFor="ending-room-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-color)' }}>
-                  {t('model_profiles.placeholder_select')}
-                </label>
-                <select
-                  id="ending-room-profile-select"
-                  className="form-control"
-                  value={endingRoomProfileId}
-                  onChange={(e) => setEndingRoomProfileId(e.target.value)}
-                  style={{ width: '100%', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
-                >
-                  <option value="">{t('model_profiles.byok_custom_option')}</option>
-                  {profiles.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <footer className="ending-room-picker__footer">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setPendingEndingRoomPicker(null)}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => openEndingRoomDirect(
-                  pendingEndingRoomPicker.branchId,
-                  pendingEndingRoomPicker.roomType,
-                  pendingEndingRoomPicker.selectedAgentIds,
-                  endingRoomProfileId || undefined,
-                )}
-                disabled={
-                  pendingEndingRoomCandidates.length > 0
-                  && pendingEndingRoomPicker.selectedAgentIds.length === 0
-                }
-              >
-                {t('result.ending_room_picker_enter')}
-              </button>
-            </footer>
-          </div>
-        </div>
+        <EndingRoomPickerDialog
+          key={`${pendingEndingRoomPicker.branchId}:${pendingEndingRoomPicker.roomType}:${modelProfilesEnabled ? 'profiles-on' : 'profiles-off'}`}
+          t={t}
+          pendingEndingRoomPicker={pendingEndingRoomPicker}
+          setPendingEndingRoomPicker={setPendingEndingRoomPicker}
+          pendingEndingRoomBranch={pendingEndingRoomBranch}
+          pendingEndingRoomCandidates={pendingEndingRoomCandidates}
+          endingRoomPickerDialogRef={endingRoomPickerDialogRef}
+          endingRoomPickerCloseRef={endingRoomPickerCloseRef}
+          modelProfilesEnabled={modelProfilesEnabled}
+          openEndingRoomDirect={openEndingRoomDirect}
+        />
       )}
       {activeEndingRoomBranch && scenario && (
         <EndingChatModal

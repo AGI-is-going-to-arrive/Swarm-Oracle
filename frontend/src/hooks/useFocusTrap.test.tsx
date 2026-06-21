@@ -14,6 +14,22 @@ function TrapComponent({ active, id }: { active: boolean; id: string }) {
   );
 }
 
+function TrapWithHiddenDescendant({ active }: { active: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useFocusTrap(ref, active);
+  return (
+    <div ref={ref}>
+      <button data-testid="visible-first">First</button>
+      <button data-testid="visible-last">Last</button>
+      <div aria-hidden="true" inert={true}>
+        <select data-testid="hidden-select">
+          <option value="hidden">Hidden</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
 describe('useFocusTrap', () => {
   it('traps focus inside the active container and wraps around', () => {
     render(<TrapComponent active={true} id="single" />);
@@ -90,5 +106,17 @@ describe('useFocusTrap', () => {
     parentBtn2.focus();
     fireEvent(parentBtn2, tabEvent);
     expect(document.activeElement).toBe(parentBtn1);
+  });
+
+  it('ignores focusable descendants inside aria-hidden or inert ancestors', () => {
+    render(<TrapWithHiddenDescendant active={true} />);
+
+    const first = screen.getByTestId('visible-first');
+    const last = screen.getByTestId('visible-last');
+
+    last.focus();
+    fireEvent(last, new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+
+    expect(document.activeElement).toBe(first);
   });
 });

@@ -4084,3 +4084,336 @@
     outline-offset: 2px;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Ending Room Picker - Advanced Settings & Polish (Anti-Slop) - moved from index.css; overrides base picker rules above (single source of truth)
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* 1. Disclosure CSS (Advanced Settings) */
+.ending-room-picker__advanced {
+  margin-bottom: 1.25rem;
+  width: 100%;
+}
+
+.ending-room-picker__advanced-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(64, 48, 40, 0.08));
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast, 0.15s), background-color var(--transition-fast, 0.15s);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+}
+
+.ending-room-picker__advanced-trigger:hover {
+  border-color: var(--border-default, #d1cdc7);
+  background-color: var(--bg-hover, rgba(0, 0, 0, 0.02));
+}
+
+.ending-room-picker__advanced-trigger:focus-visible {
+  outline: 2px solid var(--color-ring, #c61583);
+  outline-offset: 2px;
+}
+
+.ending-room-picker__advanced-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 2px;
+}
+
+.ending-room-picker__advanced-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted, #928f88);
+  font-weight: normal;
+}
+
+.ending-room-picker__advanced-arrow {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #58554f);
+  margin-left: 8px;
+  user-select: none;
+}
+
+.ending-room-picker__advanced-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  transition: grid-template-rows 0.3s ease;
+}
+
+.ending-room-picker__advanced-body.is-open {
+  grid-template-rows: 1fr;
+}
+
+.ending-room-picker__advanced-body:not(.is-open) {
+  pointer-events: none;
+}
+
+.ending-room-picker__advanced-inner {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem 0.25rem 0.25rem;
+}
+
+.ending-room-picker__advanced-field-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ending-room-picker__advanced-select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-default, #d1cdc7);
+  background-color: var(--bg-surface, #fcfcfa);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color var(--transition-fast, 0.15s);
+}
+
+.ending-room-picker__advanced-select:focus-visible {
+  border-color: var(--color-primary, #c61583);
+  outline: 2px solid var(--color-ring, #c61583);
+  outline-offset: 1px;
+}
+
+/* 2. Dialog Spacing, Layout Rhythm & Anti-Slop Polish */
+
+/* Dialog & overlay entry transition (pure CSS) */
+.ending-room-picker-overlay {
+  animation: ending-picker-fade-in 0.25s ease-out forwards;
+}
+
+.ending-room-picker {
+  animation: ending-picker-scale-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  /* Ensure a tight, intentional container padding and rhythm */
+  padding: 0;
+}
+
+@keyframes ending-picker-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ending-picker-scale-up {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Header typography scaling & rhythm */
+.ending-room-picker__header {
+  padding: 24px 28px 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.ending-room-picker__kicker {
+  color: var(--color-primary, #c61583);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.ending-room-picker__header h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+  line-height: 1.25;
+}
+
+.ending-room-picker__header p {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* Close button hover/focus visible */
+.ending-room-picker__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast, 0.15s), color var(--transition-fast, 0.15s);
+}
+
+.ending-room-picker__close:hover {
+  background-color: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  color: var(--color-primary, #c61583);
+}
+
+.ending-room-picker__close:focus-visible {
+  outline: 2px solid var(--color-ring, #c61583);
+  outline-offset: 2px;
+}
+
+/* Card list density and styling */
+.ending-room-picker__body {
+  padding: 20px 28px;
+  gap: 12px;
+}
+
+.ending-room-picker__card {
+  border: 1px solid var(--border-subtle, #e1ddd7);
+  border-radius: 14px;
+  background: var(--bg-surface, #fcfcfa);
+  transition: border-color 0.2s, background-color 0.2s, transform 0.2s;
+}
+
+.ending-room-picker__card:hover {
+  border-color: var(--border-default, #d1cdc7);
+  background-color: var(--bg-hover, #f2eee7);
+  transform: translateY(-1px);
+}
+
+.ending-room-picker__card:focus-visible {
+  outline: 2px solid var(--color-ring, #c61583);
+  outline-offset: 2px;
+}
+
+/* Card selected state - warm, high contrast, avoiding generic gray */
+.ending-room-picker__card.is-selected {
+  border-color: var(--color-primary, #c61583);
+  background-color: #faf3f6; /* sRGB fallback: Safari <16.2 / Firefox <113 */
+  background-color: color-mix(in oklab, var(--color-primary) 6%, var(--bg-surface));
+}
+
+.ending-room-picker__card.is-selected:hover {
+  background-color: #f4e8ef; /* sRGB fallback: Safari <16.2 / Firefox <113 */
+  background-color: color-mix(in oklab, var(--color-primary) 10%, var(--bg-surface));
+}
+
+/* Card copy metadata typography structure */
+.ending-room-picker__card-copy strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.ending-room-picker__card-copy span {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.ending-room-picker__card-copy small {
+  font-size: 0.775rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.ending-room-picker__card-copy em {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Footer layout rhythm and button click targets */
+.ending-room-picker__footer {
+  padding: 20px 28px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.ending-room-picker__footer .btn {
+  min-height: 44px; /* Ensure proper mobile touch targets */
+  padding: 10px 24px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast, 0.15s), border-color var(--transition-fast, 0.15s);
+}
+
+.ending-room-picker__footer .btn:focus-visible {
+  outline: 2px solid var(--color-ring, #c61583);
+  outline-offset: 2px;
+}
+
+/* 3. A11y & Device Adaptation (prefers-reduced-motion & forced-colors) */
+@media (prefers-reduced-motion: reduce) {
+  .ending-room-picker-overlay,
+  .ending-room-picker,
+  .ending-room-picker__advanced-body,
+  .ending-room-picker__card,
+  .ending-room-picker__close,
+  .ending-room-picker__footer .btn {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .ending-room-picker__advanced-trigger:focus-visible,
+  .ending-room-picker__advanced-select:focus-visible,
+  .ending-room-picker__card:focus-visible,
+  .ending-room-picker__close:focus-visible,
+  .ending-room-picker__footer .btn:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+/* Mobile responsive layout */
+@media (max-width: 640px) {
+  .ending-room-picker-overlay {
+    padding: 12px;
+  }
+
+  .ending-room-picker {
+    border-radius: 20px;
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .ending-room-picker__close {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .ending-room-picker__header,
+  .ending-room-picker__footer {
+    padding: 16px 20px;
+  }
+
+  .ending-room-picker__body {
+    padding: 12px 20px;
+    max-height: 45vh;
+  }
+
+  .ending-room-picker__footer {
+    flex-direction: column-reverse;
+    gap: 8px;
+  }
+
+  .ending-room-picker__footer .btn {
+    width: 100%;
+    min-height: 46px;
+  }
+}

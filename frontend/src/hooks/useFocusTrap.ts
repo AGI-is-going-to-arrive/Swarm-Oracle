@@ -14,6 +14,7 @@ function getFocusable(container: HTMLElement): HTMLElement[] {
   return nodes.filter((node) => {
     if (node.hasAttribute('disabled')) return false;
     if (node.getAttribute('aria-hidden') === 'true') return false;
+    if (node.closest('[aria-hidden="true"], [inert]')) return false;
     const style = node.ownerDocument?.defaultView?.getComputedStyle(node);
     if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
     return true;
