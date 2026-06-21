@@ -3923,7 +3923,7 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
-      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
+      // 区块默认展开,内容无需点击即可见
       expect(await screen.findByText('AI models now forecast weather.')).toBeInTheDocument();
       expect(screen.getByText('Deep learning improves accuracy.')).toBeInTheDocument();
       const links = screen.getAllByRole('link').filter(
@@ -3968,7 +3968,7 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
-      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
+      // 区块默认展开,内容无需点击即可见
       expect(await screen.findByText('Safe snippet')).toBeInTheDocument();
       const allLinks = screen.getAllByRole('link');
       const jsLinks = allLinks.filter(el => el.getAttribute('href')?.startsWith('javascript'));
@@ -4012,8 +4012,7 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
-      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
-
+      // 区块默认展开,内容无需点击即可见
       expect(await screen.findByText('result.native_citations_title')).toBeInTheDocument();
       expect(screen.getByText('Safe native source')).toBeInTheDocument();
       expect(screen.queryByText('JS native source')).not.toBeInTheDocument();
@@ -4061,8 +4060,10 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
-      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
-
+      // 区块默认展开;等待 feed 挂载后再断言(否则未加载时 queryByText 会 vacuous 通过)。
+      // 全不安全的 citation 应被过滤,native 区不渲染。
+      const desktopFeed = await screen.findByTestId('result-unified-feed-desktop');
+      expect(within(desktopFeed).getByRole('button', { name: 'source.feed.title' })).toBeInTheDocument();
       expect(screen.queryByText('result.native_citations_title')).not.toBeInTheDocument();
       expect(screen.queryByText('JS native source')).not.toBeInTheDocument();
       expect(screen.queryByText('FTP native source')).not.toBeInTheDocument();
@@ -4078,11 +4079,10 @@ describe('ResultView campaign summary', () => {
       );
 
       expect(await screen.findByText('result.title')).toBeInTheDocument();
-      expect(screen.queryByText('result.web_sources_title')).not.toBeInTheDocument();
+      expect(screen.queryByText('source.feed.title')).not.toBeInTheDocument();
     });
 
     it('keeps web source metadata visible when snippets are empty', async () => {
-      const user = userEvent.setup();
       vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
         id: 'scenario-1',
         question: 'Empty source scenario',
@@ -4113,15 +4113,96 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
-      await user.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
+      // 区块默认展开;等待 feed 挂载后断言 meta 可见(无需点击)
+      const desktopFeed = await screen.findByTestId('result-unified-feed-desktop');
+      expect(within(desktopFeed).getByRole('button', { name: 'source.feed.title' })).toBeInTheDocument();
       expect(screen.getByText((content) => content.includes('result.web_sources_query') && content.includes('no hits'))).toBeInTheDocument();
       expect(screen.getByText((content) => content.includes('result.web_sources_provider') && content.includes('news_deep'))).toBeInTheDocument();
       expect(screen.getByText('result.web_sources_cached')).toBeInTheDocument();
-      expect(screen.getByText('result.web_sources_empty')).toBeInTheDocument();
+      expect(screen.getByText('source.web_snippets.empty')).toBeInTheDocument();
+    });
+
+    it('renders web sources expanded by default and collapses on toggle', async () => {
+      const user = userEvent.setup();
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'Default open scenario',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'default open',
+          snippets: [
+            { text: 'Source visible by default.', source_url: 'https://example.com/default' },
+          ],
+          provider: 'tavily',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      // 默认展开:trigger aria-expanded=true,body 可见(aria-hidden=false 且无 inert),
+      // 来源内容无需任何交互即可见 —— 直接回归"在结果页看不到这一块"的用户主诉。
+      const desktopFeed = await screen.findByTestId('result-unified-feed-desktop');
+      const trigger = within(desktopFeed).getByRole('button', { name: 'source.feed.title' });
+      expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByText('Source visible by default.')).toBeInTheDocument();
+      const body = document.getElementById('result-web-sources-body');
+      expect(body).not.toBeNull();
+      expect(body).toHaveAttribute('aria-hidden', 'false');
+      expect(body).not.toHaveAttribute('inert');
+
+      // 用户仍可手动收起:点击后折叠(aria-expanded=false,body aria-hidden=true + inert)。
+      await user.click(trigger);
+      expect(trigger).toHaveAttribute('aria-expanded', 'false');
+      expect(body).toHaveAttribute('aria-hidden', 'true');
+      expect(body).toHaveAttribute('inert');
     });
 
     it('opens mobile sources from a dedicated trigger even when agent conversation is disabled', async () => {
       const user = userEvent.setup();
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'Mobile sources scenario',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'mobile',
+          snippets: [],
+          provider: 'tavily',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          family_context: {
+            finance: {
+              state: 'ready',
+              items: [{ id: 'f1', title: 'Finance hit', summary: 's', source: 'src', url: 'https://f.com' }],
+            },
+          },
+        },
+      } as Scenario);
       setMockCapabilities({
         agent_conversation: { enabled: false },
         agent_identity: { enabled: false },
@@ -4212,8 +4293,8 @@ describe('ResultView campaign summary', () => {
       );
 
       const grid = await screen.findByTestId('result-source-grid-desktop');
-      expect(await within(grid).findByTestId('result-source-polymarket-geo-gated')).toBeInTheDocument();
-      expect(within(grid).queryByTestId('result-sources-polymarket')).not.toBeInTheDocument();
+      const polymarketGroup = await within(grid).findByTestId('result-sources-polymarket');
+      expect(polymarketGroup).toHaveAttribute('data-state', 'geo_gated');
     });
   });
 });

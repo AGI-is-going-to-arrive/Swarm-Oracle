@@ -909,12 +909,9 @@
       "director_debrief_counterplay_hint": "Pressure is high or resources are low; inspect the hinge, then spend the next move on a counter card.",
       "director_debrief_stable_hint": "Pressure is under control; inspect the hinge, then push the signature arc instead of defending first.",
       "runtime_preset_title": "Current Mode",
-      "web_sources_title": "Real-World Sources",
       "web_sources_query": "Query",
       "web_sources_provider": "Provider",
       "web_sources_cached": "Cached",
-      "web_sources_visit": "Visit source",
-      "web_sources_empty": "No live web sources matched this query.",
       "native_citations_title": "AI-Discovered Sources",
       "bridge_title": "Explore Deeper",
       "bridge_causal_title": "Causal Graph",
@@ -3087,11 +3084,33 @@
       }
     },
     "source": {
+      "feed": {
+        "title": "Real-World Sources",
+        "filter_all": "All",
+        "load_more": "Load more",
+        "show_less": "Show less",
+        "source_tag": "Source",
+        "untitled": "Untitled source",
+        "open": "Open",
+        "open_item": "Open {{title}}",
+        "filters_label": "Filter sources",
+        "remaining": "{{count}} more",
+        "type": {
+          "polymarket": "Prediction Markets",
+          "finance": "Finance",
+          "academic": "Academic",
+          "news_deep": "News",
+          "snippet": "Web Snippets",
+          "citation": "Citations"
+        }
+      },
+      "web_snippets": {
+        "empty": "No matching web snippets found."
+      },
       "searched_with": "Searched: \"{{query}}\"",
       "searched_with_raw_fallback": "Searched with the original question",
       "broadened_search": "Broadened search",
       "broadened_search_sr": "These results came from the second broadened-domain search pass",
-      "section_title": "Live Sources",
       "reason": {
         "provider_no_domain_filter": "This search provider cannot keep this source category scoped to its domain list.",
         "provider_timeout": "The search provider timed out for this source category.",

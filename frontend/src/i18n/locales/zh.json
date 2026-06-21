@@ -909,12 +909,9 @@
       "director_debrief_counterplay_hint": "压力偏高或资源偏低；先复看关键分叉，下局优先用反制牌止损。",
       "director_debrief_stable_hint": "压力仍可控；先复看关键分叉，下局优先推进题材连锁而不是防守。",
       "runtime_preset_title": "当前推演模式",
-      "web_sources_title": "真实世界来源",
       "web_sources_query": "搜索词",
       "web_sources_provider": "来源",
       "web_sources_cached": "缓存",
-      "web_sources_visit": "访问来源",
-      "web_sources_empty": "没有匹配这个问题的实时来源。",
       "native_citations_title": "AI 发现的来源",
       "bridge_title": "深入探索",
       "bridge_causal_title": "因果图谱",
@@ -3087,11 +3084,33 @@
       }
     },
     "source": {
+      "feed": {
+        "title": "真实世界来源",
+        "filter_all": "全部",
+        "load_more": "加载更多",
+        "show_less": "收起",
+        "source_tag": "来源",
+        "untitled": "未命名来源",
+        "open": "打开",
+        "open_item": "打开:{{title}}",
+        "filters_label": "筛选来源",
+        "remaining": "还有 {{count}} 条",
+        "type": {
+          "polymarket": "预测市场",
+          "finance": "综合搜索",
+          "academic": "学术研究",
+          "news_deep": "深度新闻",
+          "snippet": "网页片段",
+          "citation": "引用文献"
+        }
+      },
+      "web_snippets": {
+        "empty": "未找到匹配的网页片段。"
+      },
       "searched_with": "搜索词：\"{{query}}\"",
       "searched_with_raw_fallback": "已使用原始问题检索",
       "broadened_search": "已扩展搜索范围",
       "broadened_search_sr": "这些结果来自第二轮扩展域名检索",
-      "section_title": "真实世界来源",
       "reason": {
         "provider_no_domain_filter": "当前搜索服务无法把此类来源限制在指定域名内。",
         "provider_timeout": "此类来源检索超时。",

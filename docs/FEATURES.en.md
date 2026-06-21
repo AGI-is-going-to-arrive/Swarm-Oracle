@@ -202,12 +202,12 @@ Entry: `/result/:id` -> sharing entry
 ## Advanced Optional
 
 ### F38 Search-Augmented Simulation
-**Requires configuration, see [CONFIGURATION](CONFIGURATION.en.md).** When enabled, the app searches before simulation and injects relevant snippets into Agent prompts. The recommended path uses configured server search first; the advanced path lets you use your own provider for one run.
+**Requires configuration, see [CONFIGURATION](CONFIGURATION.en.md).** When enabled, the app searches before simulation and injects relevant snippets into Agent prompts. The recommended path uses configured server search first; the advanced path lets you use your own provider for one run. The result page gathers web snippets, source-family results, and model-native citations into one real-world source feed.
 Entry: `/` home -> `Search-Augmented Simulation`
 ![Search-Augmented Simulation](screenshots-en/01-home.png)
 
 ### F39 Source Family Checkboxes
-**Requires configuration, see [CONFIGURATION](CONFIGURATION.en.md).** With `FEATURE_NEW_SOURCES` enabled, advanced settings show four source families: prediction markets, finance, academic, and investigative. They only take effect when search is enabled and the provider supports domain filtering.
+**Requires configuration, see [CONFIGURATION](CONFIGURATION.en.md).** With `FEATURE_NEW_SOURCES` enabled, advanced settings show four source families: prediction markets, finance, academic, and investigative. They only take effect when search is enabled and the provider supports domain filtering; the result page folds the four families into filterable rows in the unified source feed while preserving probabilities, citation counts, publish times, historical markers, and explainable states.
 Entry: `/` home -> search settings -> source checkboxes
 The screenshot package's home image shows the main search-enhancement entry. Source checkboxes appear only after configuration and expanding advanced settings.
 

@@ -2,7 +2,7 @@
 /**
  * Native Search Citations — Fixture-mode E2E suite
  *
- * Validates the `WebSourcesSection` native-citations sub-region rendered on
+ * Validates the `UnifiedSourceFeed` native-citations sub-region rendered on
  * `/result/:id` when `scenario.web_search_context.native_citations` is set:
  *
  * 1. native_citations_render          — legal https citations appear (count = 2)
@@ -343,11 +343,19 @@ async function installFixtures(page, scenarioFixture, capabilities = CAPABILITIE
   // Playwright page.route uses LIFO priority: register catch-all guards FIRST
   // (lowest priority), then specific routes LAST (highest priority).
   await page.route(/\/api\/.*/, (route) => {
+    // 仅拦截后端 API 端点（http://host/api/...）。前端源码模块路径如
+    // /src/api/client.ts 也含 `/api/`，但不是 API 请求；若一并 fulfill 500 会让
+    // Vite 模块被 abort、整个 app 加载失败，导致 desktop 断言全部连锁超时。
+    const reqUrl = route.request().url();
+    if (!/^https?:\/\/[^/]+\/api\//.test(reqUrl)) {
+      route.continue().catch(() => {});
+      return;
+    }
     route.fulfill({
       status: 500,
       contentType: "application/json",
       headers: { "x-e2e-unhandled-route": "true" },
-      body: JSON.stringify({ error: "Unhandled fixture API route", url: route.request().url() }),
+      body: JSON.stringify({ error: "Unhandled fixture API route", url: reqUrl }),
     }).catch(() => {});
   });
   await page.route(new RegExp(`/api/scenario/${FIXTURE_SCENARIO_ID}/[^/]+`), (route) => {
@@ -447,6 +455,19 @@ async function openNativeSection(page) {
   return trigger;
 }
 
+async function openSourceSurface(page, args) {
+  if (args.mode === "mobile") {
+    const trigger = page.getByTestId("result-mobile-sources-trigger");
+    await trigger.waitFor({ state: "visible", timeout: 20_000 });
+    await trigger.click();
+    const sheet = page.getByTestId("mobile-source-sheet");
+    await sheet.waitFor({ state: "visible", timeout: 10_000 });
+    return { root: sheet, trigger, surface: "mobile-sheet" };
+  }
+  const trigger = await openNativeSection(page);
+  return { root: page, trigger, surface: "desktop-panel" };
+}
+
 async function testNativeCitationsRender(page, args, outputDir) {
   const result = createTestResult();
   try {
@@ -456,20 +477,20 @@ async function testNativeCitationsRender(page, args, outputDir) {
       timeout: 15_000,
     });
 
-    await openNativeSection(page);
+    const { root } = await openSourceSurface(page, args);
 
-    const nativeRegion = page.locator(".result-web-sources__native");
+    const nativeRegion = root.locator(".result-web-sources__native");
     await nativeRegion.waitFor({ state: "visible", timeout: 10_000 });
     pushStep(result, "native-region-visible", await isVisible(nativeRegion));
 
-    const heading = page.locator(".result-web-sources__native-heading");
+    const heading = root.locator(".result-web-sources__native-heading");
     pushStep(result, "native-heading-visible", await isVisible(heading));
     const headingText = (await heading.textContent())?.trim() ?? "";
     pushStep(result, "native-heading-non-empty", headingText.length > 0, {
       headingText,
     });
 
-    const safeItems = nativeRegion.locator(".result-web-sources__item--native");
+    const safeItems = nativeRegion.locator(".usf-row--native");
     const safeCount = await safeItems.count();
     pushStep(result, "native-citation-count-equals-2", safeCount === 2, {
       observed: safeCount,
@@ -477,25 +498,27 @@ async function testNativeCitationsRender(page, args, outputDir) {
 
     // Verify both expected citation texts and URLs are present
     const aText = await isVisible(
-      nativeRegion.locator(".result-web-sources__item-text", { hasText: SAFE_CITATION_A.text }),
+      nativeRegion.locator(".usf-row__title", { hasText: SAFE_CITATION_A.text }),
     );
     pushStep(result, "native-citation-a-text-visible", aText);
     const bText = await isVisible(
-      nativeRegion.locator(".result-web-sources__item-text", { hasText: SAFE_CITATION_B.text }),
+      nativeRegion.locator(".usf-row__title", { hasText: SAFE_CITATION_B.text }),
     );
     pushStep(result, "native-citation-b-text-visible", bText);
 
+    // 新 unified feed 的链接可见文本是「打开 →」，URL 在 href，故按 href 精确匹配
+    // （getSafeHttpUrl 返回原始 trim 字符串、无 URL 规范化，精确匹配安全）。
     const aUrl = await isVisible(
-      nativeRegion.locator(".result-web-sources__item-url", { hasText: SAFE_CITATION_A.source_url }),
+      nativeRegion.locator(`a.usf-row__lnk[href="${SAFE_CITATION_A.source_url}"]`).first(),
     );
     pushStep(result, "native-citation-a-url-visible", aUrl);
     const bUrl = await isVisible(
-      nativeRegion.locator(".result-web-sources__item-url", { hasText: SAFE_CITATION_B.source_url }),
+      nativeRegion.locator(`a.usf-row__lnk[href="${SAFE_CITATION_B.source_url}"]`).first(),
     );
     pushStep(result, "native-citation-b-url-visible", bUrl);
 
     // rel="noopener noreferrer" + target="_blank" sanity
-    const firstLink = nativeRegion.locator(".result-web-sources__item-url").first();
+    const firstLink = nativeRegion.locator("a.usf-row__lnk").first();
     const rel = await firstLink.getAttribute("rel");
     const target = await firstLink.getAttribute("target");
     pushStep(result, "native-citation-link-rel", rel === "noopener noreferrer", { rel });
@@ -522,25 +545,25 @@ async function testNativeCitationsFilterUnsafe(page, args, outputDir) {
       timeout: 15_000,
     });
 
-    await openNativeSection(page);
+    const { root } = await openSourceSurface(page, args);
 
-    const nativeRegion = page.locator(".result-web-sources__native");
+    const nativeRegion = root.locator(".result-web-sources__native");
     await nativeRegion.waitFor({ state: "visible", timeout: 10_000 });
 
     // Citation text bodies for unsafe URLs must NOT be rendered (filtered by getSafeHttpUrl).
     const jsTextVisible = await isVisible(
-      nativeRegion.locator(".result-web-sources__item-text", { hasText: UNSAFE_JS_CITATION.text }),
+      nativeRegion.locator(".usf-row__title", { hasText: UNSAFE_JS_CITATION.text }),
     );
     pushStep(result, "javascript-citation-text-not-rendered", !jsTextVisible);
 
     const ftpTextVisible = await isVisible(
-      nativeRegion.locator(".result-web-sources__item-text", { hasText: UNSAFE_FTP_CITATION.text }),
+      nativeRegion.locator(".usf-row__title", { hasText: UNSAFE_FTP_CITATION.text }),
     );
     pushStep(result, "ftp-citation-text-not-rendered", !ftpTextVisible);
 
     // No anchor inside native region may have a non-http(s) href.
     const linkHrefs = await nativeRegion
-      .locator(".result-web-sources__item-url")
+      .locator("a.usf-row__lnk")
       .evaluateAll((nodes) => nodes.map((n) => n.getAttribute("href") || ""));
     const unsafeFound = linkHrefs.find((h) => !/^https?:\/\//i.test(h));
     pushStep(result, "no-unsafe-scheme-link-in-native-region", !unsafeFound, {
@@ -548,7 +571,7 @@ async function testNativeCitationsFilterUnsafe(page, args, outputDir) {
     });
 
     // Total rendered native citations must be exactly 2 (drop js+ftp from 4 input items).
-    const count = await nativeRegion.locator(".result-web-sources__item--native").count();
+    const count = await nativeRegion.locator(".usf-row--native").count();
     pushStep(result, "filtered-citation-count-equals-2", count === 2, { observed: count });
 
     await page.screenshot({
@@ -572,27 +595,32 @@ async function testNativeCitationsA11y(page, args, outputDir) {
       timeout: 15_000,
     });
 
-    const trigger = await openNativeSection(page);
+    const { root, trigger, surface } = await openSourceSurface(page, args);
 
-    // Trigger must wire aria-controls -> body id.
+    // Trigger must wire an expanded source surface. Desktop uses aria-controls;
+    // mobile uses the sheet trigger + dialog content.
     const ariaControls = await trigger.getAttribute("aria-controls");
     pushStep(
       result,
-      "trigger-has-aria-controls",
-      typeof ariaControls === "string" && ariaControls.length > 0,
-      { aria_controls: ariaControls },
+      surface === "desktop-panel" ? "trigger-has-aria-controls" : "mobile-trigger-opened-sheet",
+      surface === "desktop-panel"
+        ? typeof ariaControls === "string" && ariaControls.length > 0
+        : await isVisible(root),
+      { aria_controls: ariaControls, surface },
     );
     const ariaExpanded = await trigger.getAttribute("aria-expanded");
     pushStep(result, "trigger-aria-expanded-true", ariaExpanded === "true");
 
     // Controlled body should exist with matching id (check DOM presence, not visibility,
     // because grid-template-rows animation timing varies across browsers).
-    if (ariaControls) {
+    if (surface === "desktop-panel" && ariaControls) {
       const bodyCount = await page.locator(`#${ariaControls}`).count();
       pushStep(result, "aria-controls-target-exists", bodyCount > 0);
+    } else if (surface === "mobile-sheet") {
+      pushStep(result, "mobile-sheet-visible", await isVisible(root));
     }
 
-    const nativeRegion = page.locator(".result-web-sources__native");
+    const nativeRegion = root.locator(".result-web-sources__native");
     await nativeRegion.waitFor({ state: "visible", timeout: 10_000 });
 
     const role = await nativeRegion.getAttribute("role");
@@ -627,33 +655,39 @@ async function testNativeCitationsFocusVisible(page, args, outputDir) {
       timeout: 15_000,
     });
 
-    await openNativeSection(page);
+    const { root, trigger, surface } = await openSourceSurface(page, args);
 
-    const nativeRegion = page.locator(".result-web-sources__native");
+    const nativeRegion = root.locator(".result-web-sources__native");
     await nativeRegion.waitFor({ state: "visible", timeout: 10_000 });
 
-    const firstLink = nativeRegion.locator(".result-web-sources__item-url").first();
+    const firstLink = nativeRegion.locator("a.usf-row__lnk").first();
     await firstLink.waitFor({ state: "visible", timeout: 5_000 });
 
     let focusReachedLink = false;
 
-    if (args.browser === "webkit") {
+    if (args.browser === "webkit" || surface === "mobile-sheet") {
       await firstLink.focus();
       focusReachedLink = await page.evaluate(() => {
         const el = document.activeElement;
         return (
           el?.tagName?.toLowerCase() === "a" &&
-          el.classList.contains("result-web-sources__item-url") &&
-          el.closest(".result-web-sources__item--native") !== null
+          el.classList.contains("usf-row__lnk") &&
+          el.closest(".usf-row--native") !== null
         );
       });
-      pushStep(result, "programmatic-focus-reaches-native-link", focusReachedLink);
-      pushStep(result, "webkit-tab-to-links-limitation-recorded", true, {
-        note: "WebKit does not reliably Tab to links unless system Full Keyboard Access is enabled.",
-      });
+      pushStep(result, "programmatic-focus-reaches-native-link", focusReachedLink, { surface });
+      pushStep(
+        result,
+        surface === "mobile-sheet" ? "mobile-sheet-link-focusability-recorded" : "webkit-tab-to-links-limitation-recorded",
+        true,
+        {
+          note: surface === "mobile-sheet"
+            ? "Mobile source coverage opens the sheet and verifies the native citation link can receive focus."
+            : "WebKit does not reliably Tab to links unless system Full Keyboard Access is enabled.",
+        },
+      );
     } else {
       // Use keyboard Tab to reach the link (triggers :focus-visible, unlike .focus()).
-      const trigger = page.locator("button.result-web-sources__trigger");
       await trigger.focus();
       for (let tabAttempt = 0; tabAttempt < 15; tabAttempt += 1) {
         await page.keyboard.press("Tab");
@@ -661,8 +695,8 @@ async function testNativeCitationsFocusVisible(page, args, outputDir) {
           const el = document.activeElement;
           return (
             el?.tagName?.toLowerCase() === "a" &&
-            el.classList.contains("result-web-sources__item-url") &&
-            el.closest(".result-web-sources__item--native") !== null
+            el.classList.contains("usf-row__lnk") &&
+            el.closest(".usf-row--native") !== null
           );
         });
         if (isOnNativeLink) {
@@ -698,8 +732,15 @@ async function testNativeCitationsFocusVisible(page, args, outputDir) {
         })
       : { outlineStyle: "none", outlineWidth: "0px" };
 
-    if (args.browser === "webkit") {
-      pushStep(result, "webkit-programmatic-focus-indicator-not-required", true, outlineInfo);
+    if (args.browser === "webkit" || surface === "mobile-sheet") {
+      pushStep(
+        result,
+        surface === "mobile-sheet"
+          ? "mobile-programmatic-focus-indicator-not-required"
+          : "webkit-programmatic-focus-indicator-not-required",
+        true,
+        outlineInfo,
+      );
     } else {
       const hasOutline =
         outlineInfo.outlineStyle !== "none" &&
@@ -757,16 +798,16 @@ async function testNativeCitationsEmpty(page, args, outputDir) {
       timeout: 15_000,
     });
 
-    // Open the web sources panel — the proxy section should still render.
-    await openNativeSection(page);
+    // Open the web sources surface — the proxy section should still render.
+    const { root } = await openSourceSurface(page, args);
 
     // Allow time for any race; the native sub-region must remain absent.
-    const nativeRegion = page.locator(".result-web-sources__native");
+    const nativeRegion = root.locator(".result-web-sources__native");
     const exists = (await nativeRegion.count()) > 0;
     pushStep(result, "native-region-not-rendered-when-empty", !exists);
 
     // Sanity: the proxy snippet is still visible (panel itself rendered).
-    const proxySnippet = page.locator(".result-web-sources__item-text", {
+    const proxySnippet = root.locator(".usf-row__title", {
       hasText: "Proxy snippet without any native citations",
     });
     pushStep(result, "proxy-snippet-still-visible", await isVisible(proxySnippet));
@@ -792,19 +833,19 @@ async function testNativeCitationsAllUnsafe(page, args, outputDir) {
       timeout: 15_000,
     });
 
-    await openNativeSection(page);
+    const { root } = await openSourceSurface(page, args);
 
-    const nativeRegion = page.locator(".result-web-sources__native");
+    const nativeRegion = root.locator(".result-web-sources__native");
     const exists = (await nativeRegion.count()) > 0;
     pushStep(result, "native-region-not-rendered-when-all-citations-unsafe", !exists);
 
     const jsTextVisible = await isVisible(
-      page.locator(".result-web-sources__item-text", { hasText: UNSAFE_JS_CITATION.text }),
+      root.locator(".usf-row__title", { hasText: UNSAFE_JS_CITATION.text }),
     );
     pushStep(result, "unsafe-javascript-text-not-rendered", !jsTextVisible);
 
     const ftpTextVisible = await isVisible(
-      page.locator(".result-web-sources__item-text", { hasText: UNSAFE_FTP_CITATION.text }),
+      root.locator(".usf-row__title", { hasText: UNSAFE_FTP_CITATION.text }),
     );
     pushStep(result, "unsafe-ftp-text-not-rendered", !ftpTextVisible);
 
@@ -854,7 +895,7 @@ async function runSurface(mode, contextOptions, args) {
       const page = await context.newPage();
       try {
         const issues = attachPageIssueMonitor(page);
-        allResults.tests[name] = await runner(page, args, outputDir);
+        allResults.tests[name] = await runner(page, { ...args, mode }, outputDir);
         await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => {});
         appendBrowserIssueStep(allResults.tests[name], issues);
         finalize(allResults.tests[name]);

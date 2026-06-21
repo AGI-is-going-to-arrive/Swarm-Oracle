@@ -1,13 +1,12 @@
 /* ═══════════════════════════════════════════════════════════
-   SwarmOracle — Result modals + source family cards + conversation widget
+   SwarmOracle — Result modals + unified source feed + conversation widget
    ═══════════════════════════════════════════════════════════ */
 
 import { type Dispatch, type ReactNode, type RefObject, type SetStateAction, useState, useEffect } from 'react';
 import type { OracleReplayPayload } from '../../lib/oracleReplay';
 import type { ShareFlavorContext } from '../../lib/shareEnvelope';
 import type { EndingRoomCandidate } from '../../lib/endingRoomCandidates';
-import type { WebSearchProviderEntry } from '../../api/client';
-import type { StoryData, WebSearchContext, WebSearchFamily, ModelProfile } from '../../types';
+import type { StoryData, WebSearchContext, ModelProfile } from '../../types';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { listModelProfiles } from '../../api/client';
 import ShareModal from '../../components/ShareModal';
@@ -15,22 +14,12 @@ import SnapshotExportWizard from '../../components/Export/SnapshotExportWizard';
 import EndingChatModal from '../../components/EndingChatModal';
 import { ResultConversationWidget } from '../../components/ResultConversationWidget';
 import { NodeConversationSheet } from '../../components/kg/NodeConversationSheet';
-import { PolymarketCard } from '../../components/result/PolymarketCard';
-import { SemanticScholarCard } from '../../components/result/SemanticScholarCard';
-import { NewsApiCard } from '../../components/result/NewsApiCard';
 import { MobileSourceSheet } from '../../components/result/MobileSourceSheet';
-import { FinanceSourceCard } from '../../components/result/FinanceSourceCard';
-import { type SourceCategoryState } from '../../components/result/SourceCategoryCard';
+import { UnifiedSourceFeed } from '../../components/result/UnifiedSourceFeed';
 import { getEndingRoomCandidateAvatar } from '../resultHelpers';
 import { useResultContext } from './ResultContext';
 
 type SourceFamilyContext = NonNullable<WebSearchContext['family_context']>;
-type SourceFamilyEntry = NonNullable<SourceFamilyContext[WebSearchFamily]>;
-type SourceCardTarget = 'desktop' | 'mobile';
-
-const EXPLAINABLE_SOURCE_STATES: ReadonlySet<string> = new Set([
-  'failed', 'unsupported_provider', 'search_skipped', 'fallback_unconstrained',
-]);
 
 interface PendingEndingRoomPicker {
   branchId: string;
@@ -65,12 +54,8 @@ interface ResultModalsProps {
   handleCloseEndingRoom: () => void;
   // Source family contexts
   sourceFamilyContext: SourceFamilyContext;
-  polymarketCapability: WebSearchProviderEntry | undefined;
   mobileSourceSheetOpen: boolean;
   setMobileSourceSheetOpen: (next: boolean) => void;
-  resolveSourceCategoryState: (
-    entry: { state?: SourceCategoryState; items?: unknown[] } | null | undefined,
-  ) => SourceCategoryState;
   resultConversationContext: {
     branchId: string;
     title: string;
@@ -102,11 +87,8 @@ export default function ResultModals(props: ResultModalsProps) {
     setEndingRoomAutomation,
     handleEndingRoomModeChange,
     handleCloseEndingRoom,
-    sourceFamilyContext,
-    polymarketCapability,
     mobileSourceSheetOpen,
     setMobileSourceSheetOpen,
-    resolveSourceCategoryState,
     resultConversationContext,
     activeEndingRoomModelProfileId,
   } = props;
@@ -149,145 +131,8 @@ export default function ResultModals(props: ResultModalsProps) {
   if (!pendingEndingRoomPicker && endingRoomProfileId !== '') {
     setEndingRoomProfileId('');
   }
-  const polymarketContext = sourceFamilyContext.polymarket;
-  const financeContext = sourceFamilyContext.finance;
-  const academicContext = sourceFamilyContext.academic;
-  const newsDeepContext = sourceFamilyContext.news_deep;
-
-  const providers = capabilities?.web_search?.providers;
-  const hasItems = (entry: { items?: unknown[] } | null | undefined): boolean =>
-    Boolean(entry && Array.isArray(entry.items) && entry.items.length > 0);
-  const hasExplainableEntry = (entry: SourceFamilyEntry | null | undefined): boolean =>
-    Boolean(entry && typeof entry.state === 'string' && EXPLAINABLE_SOURCE_STATES.has(entry.state));
-  const hasPolymarketData = hasItems(polymarketContext);
-  const hasFinanceData = hasItems(financeContext);
-  const hasAcademicData = hasItems(academicContext);
-  const hasNewsDeepData = hasItems(newsDeepContext);
-  const polymarketLive = Boolean(providers?.polymarket?.enabled);
-  const financeLive = Boolean(providers?.finance?.enabled);
-  const academicLive = Boolean(providers?.academic?.enabled);
-  const newsDeepLive = Boolean(providers?.news_deep?.enabled);
-  const showPolymarket = polymarketLive || hasPolymarketData || hasExplainableEntry(polymarketContext);
-  const showFinance = financeLive || hasFinanceData || hasExplainableEntry(financeContext);
-  const showAcademic = academicLive || hasAcademicData || hasExplainableEntry(academicContext);
-  const showNewsDeep = newsDeepLive || hasNewsDeepData || hasExplainableEntry(newsDeepContext);
-
-  const polymarketHistorical = !polymarketLive && (hasPolymarketData || hasExplainableEntry(polymarketContext));
-  const financeHistorical = !financeLive && (hasFinanceData || hasExplainableEntry(financeContext));
-  const academicHistorical = !academicLive && (hasAcademicData || hasExplainableEntry(academicContext));
-  const newsDeepHistorical = !newsDeepLive && (hasNewsDeepData || hasExplainableEntry(newsDeepContext));
-  const historicalLabel = t('result.source_historical', { defaultValue: 'Recorded' });
-  const historicalTooltip = t('result.source_historical_tooltip', {
-    defaultValue: 'This data was recorded when the scenario was created',
-  });
-  const getSourceCardTestId = (target: SourceCardTarget, family: WebSearchFamily) =>
-    target === 'desktop' ? `result-sources-${family}` : `result-sources-mobile-${family}`;
-  const getSourceReason = (entry: SourceFamilyEntry | null | undefined) => {
-    if (entry?.status_reason_code) {
-      const fallback = entry.status_reason ?? entry.disabled_reason;
-      return t(`source.reason.${entry.status_reason_code}`, {
-        defaultValue: typeof fallback === 'string' && fallback.trim()
-          ? fallback
-          : 'Source search failed for this category.',
-      });
-    }
-    const raw = entry?.status_reason ?? entry?.disabled_reason;
-    return typeof raw === 'string' && raw.trim() ? raw : undefined;
-  };
-  const renderHistoricalBadge = (target: SourceCardTarget, family: WebSearchFamily) => (
-    <span
-      className="result-source-card__historical-badge"
-      data-testid={`${getSourceCardTestId(target, family)}-historical-badge`}
-      title={historicalTooltip}
-      aria-label={`${historicalLabel}: ${historicalTooltip}`}
-    >
-      {historicalLabel}
-    </span>
-  );
-  const wrapHistorical = (
-    target: SourceCardTarget,
-    family: WebSearchFamily,
-    isHistorical: boolean,
-    node: ReactNode,
-  ) =>
-    isHistorical ? (
-      <div
-        key={family}
-        className="result-source-card-wrapper result-source-card-wrapper--historical"
-        data-historical="true"
-        data-source-family={family}
-      >
-        {renderHistoricalBadge(target, family)}
-        {node}
-      </div>
-    ) : (
-      <div
-        key={family}
-        className="result-source-card-wrapper"
-        data-source-family={family}
-      >
-        {node}
-      </div>
-    );
-
-  const showSourceCards = showPolymarket || showFinance || showAcademic || showNewsDeep;
-  const renderSourceCards = (target: SourceCardTarget) => showSourceCards ? (
-    <>
-      {showPolymarket && wrapHistorical(
-        target,
-        'polymarket',
-        polymarketHistorical,
-        <PolymarketCard
-          capability={polymarketCapability}
-          state={resolveSourceCategoryState(polymarketContext)}
-          reason={getSourceReason(polymarketContext)}
-          testIdOverride={getSourceCardTestId(target, 'polymarket')}
-          items={(polymarketContext?.items ?? []) as Parameters<typeof PolymarketCard>[0]['items']}
-          optimizedQuery={polymarketContext?.optimized_query}
-          searchPass={polymarketContext?.search_pass}
-        />,
-      )}
-      {showFinance && wrapHistorical(
-        target,
-        'finance',
-        financeHistorical,
-        <FinanceSourceCard
-          state={resolveSourceCategoryState(financeContext)}
-          reason={getSourceReason(financeContext)}
-          testIdOverride={getSourceCardTestId(target, 'finance')}
-          items={(financeContext?.items ?? []) as Parameters<typeof FinanceSourceCard>[0]['items']}
-          optimizedQuery={financeContext?.optimized_query}
-          searchPass={financeContext?.search_pass}
-        />,
-      )}
-      {showAcademic && wrapHistorical(
-        target,
-        'academic',
-        academicHistorical,
-        <SemanticScholarCard
-          state={resolveSourceCategoryState(academicContext)}
-          reason={getSourceReason(academicContext)}
-          testIdOverride={getSourceCardTestId(target, 'academic')}
-          items={(academicContext?.items ?? []) as Parameters<typeof SemanticScholarCard>[0]['items']}
-          optimizedQuery={academicContext?.optimized_query}
-          searchPass={academicContext?.search_pass}
-        />,
-      )}
-      {showNewsDeep && wrapHistorical(
-        target,
-        'news_deep',
-        newsDeepHistorical,
-        <NewsApiCard
-          state={resolveSourceCategoryState(newsDeepContext)}
-          reason={getSourceReason(newsDeepContext)}
-          testIdOverride={getSourceCardTestId(target, 'news_deep')}
-          items={(newsDeepContext?.items ?? []) as Parameters<typeof NewsApiCard>[0]['items']}
-          optimizedQuery={newsDeepContext?.optimized_query}
-          searchPass={newsDeepContext?.search_pass}
-        />,
-      )}
-    </>
-  ) : null;
+  const ctx = scenario?.web_search_context;
+  const showFeed = Boolean(ctx);
 
   return (
     <>
@@ -500,12 +345,7 @@ export default function ResultModals(props: ResultModalsProps) {
           onClose={handleCloseEndingRoom}
         />
       )}
-      {/* FE-5 + P1-5: 4 source category grid (desktop) + mobile Sheet + Action Card.
-          P1-5: render based on scenario payload presence (historical data) OR
-          current capability state (live), so that completed scenarios remain
-          viewable when feature flags are toggled off. Historical-only cards
-          show a "recorded" badge to distinguish from live data. */}
-      {showSourceCards && (
+      {showFeed && (
         <>
           <button
             type="button"
@@ -515,24 +355,13 @@ export default function ResultModals(props: ResultModalsProps) {
             aria-controls={mobileSourceSheetOpen ? "mobile-source-sheet" : undefined}
             className="result-mobile-sources-trigger"
           >
-            {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
+            {t('source.feed.title', { defaultValue: 'Real-World Sources' })}
           </button>
-          <section className="result-sources">
-            <h3 className="result-sources__heading">
-              {t('source.section_title', { defaultValue: 'Live Sources' })}
-            </h3>
-            <div
-              className="result-sources__grid"
-              data-testid="result-source-grid-desktop"
-            >
-              {renderSourceCards('desktop')}
-            </div>
-          </section>
           <MobileSourceSheet
             open={mobileSourceSheetOpen}
             onOpenChange={setMobileSourceSheetOpen}
           >
-            {renderSourceCards('mobile')}
+            <UnifiedSourceFeed target="mobile" />
           </MobileSourceSheet>
         </>
       )}

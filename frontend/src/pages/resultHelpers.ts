@@ -3,7 +3,6 @@ import { isApiError } from '../api/client';
 import {
   getGameplayCardDefinition,
 } from '../components/gameplayCards';
-import type { SourceCategoryState } from '../components/result/SourceCategoryCard';
 import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import { parseScenarioMoment } from '../lib/scenarioMeta';
 import type {
@@ -12,6 +11,7 @@ import type {
   CampaignMastery,
   CampaignProfileSummary,
   CampaignScenarioSummary,
+  SourceCategoryState,
   StoryData,
 } from '../types';
 

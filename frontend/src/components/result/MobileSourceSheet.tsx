@@ -38,7 +38,7 @@ export function MobileSourceSheet({
       >
         <SheetHeader>
           <SheetTitle>
-            {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
+            {t('source.feed.title', { defaultValue: 'Real-World Sources' })}
           </SheetTitle>
           <SheetDescription>
             {t('source.mobile_sheet.subtitle', {

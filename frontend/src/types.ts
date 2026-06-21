@@ -15,6 +15,8 @@ export type WebSearchFamilyState =
   | 'fallback_unconstrained'
   | 'search_skipped';
 
+export type SourceCategoryState = WebSearchFamilyState;
+
 export type WebSearchFamilyDomainFilterMode = 'api' | 'query' | 'prompt' | 'none';
 export type WebSearchFamilyDomainCoverage = 'full' | 'partial' | 'none';
 export type WebSearchFamilyStatusReasonCode =
@@ -86,6 +88,57 @@ export interface WebSearchContext {
   } | null;
   native_citations?: Array<{ text: string; source_url: string }>;
 }
+
+export type UnifiedSourceRow =
+  | {
+      type: 'polymarket';
+      id: string;
+      question: string;
+      probability?: number;
+      url?: string;
+      isHistorical?: boolean;
+    }
+  | {
+      type: 'finance';
+      id: string;
+      title: string;
+      summary?: string;
+      source?: string;
+      url?: string;
+      isHistorical?: boolean;
+    }
+  | {
+      type: 'academic';
+      id: string;
+      title: string;
+      authors?: string[];
+      citationCount?: number;
+      abstract?: string;
+      url?: string;
+      isHistorical?: boolean;
+    }
+  | {
+      type: 'news_deep';
+      id: string;
+      title: string;
+      source?: string;
+      publishedAt?: string;
+      description?: string;
+      url?: string;
+      isHistorical?: boolean;
+    }
+  | {
+      type: 'snippet';
+      id: string;
+      text: string;
+      source_url: string;
+    }
+  | {
+      type: 'citation';
+      id: string;
+      text: string;
+      source_url: string;
+    };
 
 export interface Scenario {
   id: string;

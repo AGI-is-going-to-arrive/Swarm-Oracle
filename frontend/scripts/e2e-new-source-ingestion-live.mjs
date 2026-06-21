@@ -536,6 +536,10 @@ function sourceCardSelector(family, mode) {
   return `[data-testid="${sourceCardTestId(family, mode)}"]`;
 }
 
+function sourceFamilyRows(card, family) {
+  return card.locator(`article.usf-row[data-fam="${family}"]`);
+}
+
 async function assertSourceCardsVisible(container, result, mode, expectGeoGatedPolymarket = false) {
   const selectors = SOURCE_FAMILIES.map((family) => sourceCardSelector(family, mode));
   for (const selector of selectors) {
@@ -546,10 +550,14 @@ async function assertSourceCardsVisible(container, result, mode, expectGeoGatedP
     pushStep(result, `visible:${selector}`, await isVisible(locator));
   }
   if (expectGeoGatedPolymarket) {
+    // Unified feed 契约:geo-gated 时 polymarket 组仍渲染(不再隐藏成独立 placeholder),
+    // 通过组的 data-state="geo_gated" 标记(见 UnifiedSourceFeed.tsx renderFamilyGroup)。
+    const polymarketGroup = container.getByTestId(sourceCardTestId("polymarket", mode));
+    pushStep(result, "polymarket-group-visible-when-geo-gated", await isVisible(polymarketGroup));
     pushStep(
       result,
-      "visible:[data-testid=\"result-source-polymarket-geo-gated\"]",
-      await isVisible(container.getByTestId("result-source-polymarket-geo-gated")),
+      "polymarket-geo-gated-state",
+      (await polymarketGroup.getAttribute("data-state")) === "geo_gated",
     );
   }
 }
@@ -559,12 +567,12 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
     const state = await card.getAttribute("data-state");
     pushStep(result, `${family}-live-state-known`, ACCEPTED_LIVE_SOURCE_STATES.has(state));
     if (state === "ready") {
-      pushStep(result, `${family}-live-item-visible`, await isVisible(card.locator("li").first()));
+      pushStep(result, `${family}-live-item-visible`, await isVisible(sourceFamilyRows(card, family).first()));
       if (!LIVE_MODE && family === "finance") {
         pushStep(
           result,
           "finance-broadened-search-badge-visible",
-          await isVisible(card.locator(".result-source-card__broadened-badge")),
+          await isVisible(card.getByTestId(`${sourceCardTestId("finance", mode)}-broadened-badge`)),
         );
       }
     } else {
@@ -572,7 +580,7 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
         state,
       });
       if (state === "empty") {
-        const queryLocator = card.locator(".result-source-card__search-query");
+        const queryLocator = card.getByTestId(`${sourceCardTestId(family, mode)}-search-query`);
         pushStep(result, `${family}-empty-search-query-visible`, await isVisible(queryLocator));
         if (!LIVE_MODE && family === "academic") {
           pushStep(
@@ -586,16 +594,17 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
   }
 
   if (expectGeoGatedPolymarket) {
-    const placeholder = container.getByTestId("result-source-polymarket-geo-gated");
+    // Unified feed 契约:geo-gated → polymarket 组 data-state="geo_gated"(组仍渲染,不再隐藏)。
+    const polymarketGroup = container.getByTestId(sourceCardTestId("polymarket", mode));
     pushStep(
       result,
-      "polymarket-geo-gated-placeholder-visible",
-      await isVisible(placeholder),
+      "polymarket-geo-gated-group-visible",
+      await isVisible(polymarketGroup),
     );
     pushStep(
       result,
-      "polymarket-card-hidden-when-geo-gated",
-      !(await isVisible(container.getByTestId(sourceCardTestId("polymarket", mode)))),
+      "polymarket-geo-gated-state",
+      (await polymarketGroup.getAttribute("data-state")) === "geo_gated",
     );
   } else {
     const polymarketCard = container.getByTestId(sourceCardTestId("polymarket", mode));
@@ -610,7 +619,7 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
       pushStep(
         result,
         "polymarket-live-item-visible",
-        await isVisible(polymarketCard.locator("li").first()),
+        await isVisible(sourceFamilyRows(polymarketCard, "polymarket").first()),
       );
     }
   }
@@ -759,31 +768,43 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       await page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
     }
 
-    const webSourcesTrigger = page.locator("button.result-web-sources__trigger");
-    await webSourcesTrigger.waitFor({ state: "visible", timeout: LIVE_MODE ? 90_000 : 10_000 });
-    await webSourcesTrigger.click();
-    if (LIVE_MODE) {
-      const snippet = page.locator(".result-web-sources__item-text").first();
-      await snippet.waitFor({ state: "visible", timeout: 10_000 });
-      pushStep(result, "web-search-snippet-visible", await isVisible(snippet));
-      const sourceUrl = page.locator(".result-web-sources__item-url").first();
-      pushStep(result, "web-search-url-visible", await isVisible(sourceUrl));
-      const queryMeta = page.locator(".result-web-sources__meta", { hasText: FIXTURE_QUESTION });
-      pushStep(result, "web-search-query-visible", await isVisible(queryMeta));
-      if (liveWebSearchConfig?.expectedProvider) {
-        const providerMeta = page.locator(".result-web-sources__meta", {
-          hasText: liveWebSearchConfig.expectedProvider,
-        });
-        pushStep(result, "web-search-provider-visible", await isVisible(providerMeta));
+    // Desktop unified feed 的折叠 trigger 是 `hidden md:block`,mobile 视口下不可见;
+    // mobile 的来源内容由下方 `result-mobile-sources-trigger` + sheet 承载(见 mode 分支)。
+    // 故 desktop trigger 的等待/展开 + 页面级 `.result-web-sources__*` 断言仅在非 mobile 执行,
+    // 否则 mobile run 会卡在等待隐藏的 desktop trigger 上超时。
+    if (mode !== "mobile") {
+      const webSourcesTrigger = page.locator("button.result-web-sources__trigger");
+      await webSourcesTrigger.waitFor({ state: "visible", timeout: LIVE_MODE ? 90_000 : 10_000 });
+      // 区块默认展开;仅在(用户/历史状态导致的)收起态才点击展开,避免把已展开的区块反向收起。
+      const webSourcesExpanded = await webSourcesTrigger.getAttribute("aria-expanded");
+      if (webSourcesExpanded !== "true") {
+        await webSourcesTrigger.click();
       }
-    } else {
-      const snippet = page.locator(".result-web-sources__item-text", { hasText: WEB_SNIPPET_TEXT });
-      pushStep(result, "web-search-snippet-visible", await isVisible(snippet));
-      pushStep(
-        result,
-        "web-search-url-visible",
-        await isVisible(page.locator(".result-web-sources__item-url", { hasText: WEB_SNIPPET_URL })),
-      );
+      if (LIVE_MODE) {
+        const snippet = page.locator(".usf-row__title").first();
+        await snippet.waitFor({ state: "visible", timeout: 10_000 });
+        pushStep(result, "web-search-snippet-visible", await isVisible(snippet));
+        const sourceUrl = page.locator("a.usf-row__lnk").first();
+        pushStep(result, "web-search-url-visible", await isVisible(sourceUrl));
+        const queryMeta = page.locator(".result-web-sources__meta", { hasText: FIXTURE_QUESTION });
+        pushStep(result, "web-search-query-visible", await isVisible(queryMeta));
+        if (liveWebSearchConfig?.expectedProvider) {
+          const providerMeta = page.locator(".result-web-sources__meta", {
+            hasText: liveWebSearchConfig.expectedProvider,
+          });
+          pushStep(result, "web-search-provider-visible", await isVisible(providerMeta));
+        }
+      } else {
+        const snippet = page.locator('article.usf-row[data-fam="snippet"] .usf-row__title', {
+          hasText: WEB_SNIPPET_TEXT,
+        });
+        pushStep(result, "web-search-snippet-visible", await isVisible(snippet));
+        pushStep(
+          result,
+          "web-search-url-visible",
+          await isVisible(page.locator(`a.usf-row__lnk[href="${WEB_SNIPPET_URL}"]`).first()),
+        );
+      }
     }
 
     if (mode === "mobile") {
@@ -876,13 +897,14 @@ async function testGeoGatedContract(context, baseUrl, mode, scenarioId = FIXTURE
     await container.waitFor({ state: "visible", timeout: 10_000 });
 
     if (expectGeoGated) {
-      const placeholder = container.getByTestId("result-source-polymarket-geo-gated");
-      await placeholder.waitFor({ state: "visible", timeout: 10_000 });
-      pushStep(result, "polymarket-geo-gated-placeholder-visible", await isVisible(placeholder));
+      // Unified feed 契约:geo-gated → polymarket 组 data-state="geo_gated"(组仍渲染,不隐藏)。
+      const polymarketGroup = container.getByTestId(sourceCardTestId("polymarket", mode));
+      await polymarketGroup.waitFor({ state: "visible", timeout: 10_000 });
+      pushStep(result, "polymarket-geo-gated-group-visible", await isVisible(polymarketGroup));
       pushStep(
         result,
-        "polymarket-card-hidden-when-geo-gated",
-        !(await isVisible(container.getByTestId(sourceCardTestId("polymarket", mode)))),
+        "polymarket-geo-gated-state",
+        (await polymarketGroup.getAttribute("data-state")) === "geo_gated",
       );
     } else {
       const card = container.getByTestId(sourceCardTestId("polymarket", mode));
@@ -892,10 +914,10 @@ async function testGeoGatedContract(context, baseUrl, mode, scenarioId = FIXTURE
       if (LIVE_MODE) {
         pushStep(result, "polymarket-live-state-known-when-not-geo-gated", ACCEPTED_LIVE_SOURCE_STATES.has(state));
         if (state === "ready") {
-          pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(card.locator("li").first()));
+          pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(sourceFamilyRows(card, "polymarket").first()));
         }
       } else {
-        pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(card.locator("li").first()));
+        pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(sourceFamilyRows(card, "polymarket").first()));
       }
     }
   } catch (err) {

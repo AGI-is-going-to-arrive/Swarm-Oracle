@@ -128,7 +128,7 @@ import ResultVerdictPanel from './result/ResultVerdictPanel';
 import { ResultReportPanel } from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
 import ExploreDeeperBridge from './result/ExploreDeeperBridge';
-import WebSourcesSection from './result/WebSourcesSection';
+import UnifiedSourceFeed from '../components/result/UnifiedSourceFeed';
 import PredictionsSection from './result/PredictionsSection';
 import DirectorNotebook from './result/DirectorNotebook';
 import AgentRoster from './result/AgentRoster';
@@ -141,7 +141,6 @@ const EMPTY_SOURCE_FAMILY_CONTEXT = {};
 
 type SourceFamilyContext = NonNullable<NonNullable<Scenario['web_search_context']>['family_context']>;
 
-import { resolveSourceCategoryState } from './resultHelpers';
 
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
@@ -169,7 +168,9 @@ export default function ResultView() {
   const [cfInitialRound, setCfInitialRound] = useState<number | undefined>(undefined);
   const [notebookOpen, setNotebookOpen] = useState(false);
   const [debriefOpen, setDebriefOpen] = useState(false);
-  const [webSourcesOpen, setWebSourcesOpen] = useState(false);
+  // 默认展开:来源是可信度凭证,应当默认可见(对齐 visual-plan.html 方案 C 内联流);
+  // 长度由 feed 内部 cap(默认 6 条 + 加载更多)控制,用户仍可手动收起。
+  const [webSourcesOpen, setWebSourcesOpen] = useState(true);
   const blurCollapsedPanelFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
     event.preventDefault();
     (event.target as HTMLElement | null)?.blur?.();
@@ -1492,15 +1493,6 @@ export default function ResultView() {
       .map(([family]) => family);
     return families.length > 0 ? families : undefined;
   }, [sourceFamilyContext]);
-  const polymarketContext = sourceFamilyContext.polymarket;
-  const polymarketCapability = capabilities?.web_search?.providers?.polymarket
-    ? {
-      ...capabilities.web_search.providers.polymarket,
-      configured_host:
-        polymarketContext?.configured_host
-        ?? capabilities.web_search.providers.polymarket.configured_host,
-    }
-    : undefined;
   const handleOpenRoundtable = useCallback(() => {
     if (!scenario?.id || isReplayMode || branches.length < 2) {
       return;
@@ -2014,7 +2006,7 @@ export default function ResultView() {
         />
       )}
 
-      <WebSourcesSection />
+      <UnifiedSourceFeed target="desktop" />
 
       <PredictionsSection betOutcomeContext={betOutcomeContext} />
 
@@ -2146,10 +2138,8 @@ export default function ResultView() {
         handleEndingRoomModeChange={handleEndingRoomModeChange}
         handleCloseEndingRoom={handleCloseEndingRoom}
         sourceFamilyContext={sourceFamilyContext}
-        polymarketCapability={polymarketCapability}
         mobileSourceSheetOpen={mobileSourceSheetOpen}
         setMobileSourceSheetOpen={setMobileSourceSheetOpen}
-        resolveSourceCategoryState={resolveSourceCategoryState}
         resultConversationContext={resultConversationContext}
         activeEndingRoomModelProfileId={activeEndingRoomModelProfileId}
       />
