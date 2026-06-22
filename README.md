@@ -31,6 +31,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 - **反事实对比**："如果那句话说得不同，世界线会怎么变？"
 - **因果图谱 + 知识图谱**：从结果页进入图谱工作台、知识图谱浏览器和时间线星系
 - **自定义 Agent**：在 Agent 工坊里创建、导入、导出你自己的角色
+- **教学模板与本地主题包**：用课堂模板或仓库内 `packs/` 预设快速填入问题和推荐设置，本地包支持类型分段、搜索、预览和一键导入
 - **预测日志与排行榜**：记录预测、复盘校准，也能看全局排行榜
 - **Snapshot 导入 / 导出**：把一次推演打包保存，之后再导入继续查看
 - **完整报告与证据回放**：结果页先给深读摘要和章节入口，独立报告页展示证据、概率区间和图表，证据能跳回 replay
@@ -170,7 +171,7 @@ npm run dev
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
 | `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
-完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板、人物备份和完整报告在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
+完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板、本地主题包、人物备份和完整报告在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
 
 Docker Compose 会读取 `.env.docker`（如果存在），并把数据库和 Chroma 数据放到 `/data` volume。普通本地开发读取 `backend/.env`。
 

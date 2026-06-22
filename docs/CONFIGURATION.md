@@ -91,7 +91,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `FEATURE_YOU_VS_ORACLE` | ✅ 开 | 结果页可以把用户预测和 Oracle 结果做并排对比。 |
 | `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
 | `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
-| `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包，并把包内素材带入推演。 |
+| `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包；选择器按类型分段和单一搜索框筛选，标签文本并入搜索，选中后可预览并把问题 / 推荐设置带入推演。 |
 | `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页和辩论入口视为已配置 LLM，并可在启动推演、辩论或结果页会客厅时选择。会客厅入口把选择器放在默认折叠的高级设置里，不选走全局默认。Profile 可保存限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |

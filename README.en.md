@@ -31,6 +31,7 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 - **Counterfactual comparison**: "If that sentence had been said differently, how would the worldline change?"
 - **Causal graph + knowledge graph**: Enter the graph workbench, knowledge graph explorer, and timeline galaxy from the result page.
 - **Custom Agents**: Create, import, and export your own characters in the Agent Workshop.
+- **Education templates and Local Packs**: Start from classroom templates or repo-local `packs/` presets; Local Packs support genre segments, search, preview, and one-click import.
 - **Prediction journal and leaderboard**: Record predictions, review calibration, and view the global leaderboard.
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
 - **Full report and evidence replay**: The result page shows a digest and section links first; the standalone report renders evidence, probability bands, charts, and replay jump-backs.
@@ -170,7 +171,7 @@ Core configuration lives in `.env.example` for local development or `.env.docker
 | `ENABLE_WEB_SEARCH` | Search enhancement (optional) | `false` |
 | `WEB_SEARCH_PROVIDER` | Search provider (when search is enabled) | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
-For the full configuration list, feature flags, and search enhancement notes, see **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**. Custom Agents, cross-scenario identity, causal graph, graph analysis, faction relations, argument map, knowledge graph explorer, timeline galaxy, replay trace, Roundtable Deep Dive, snapshot, prediction journal, education templates, persona backup, and the full report are enabled by default in the template. `ENABLE_WEB_SEARCH`, `FEATURE_NEW_SOURCES`, and `FEATURE_FAMILY_QUERY_OPTIMIZATION` are disabled by default because they require a search provider and matching configuration.
+For the full configuration list, feature flags, and search enhancement notes, see **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**. Custom Agents, cross-scenario identity, causal graph, graph analysis, faction relations, argument map, knowledge graph explorer, timeline galaxy, replay trace, Roundtable Deep Dive, snapshot, prediction journal, education templates, Local Packs, persona backup, and the full report are enabled by default in the template. `ENABLE_WEB_SEARCH`, `FEATURE_NEW_SOURCES`, and `FEATURE_FAMILY_QUERY_OPTIMIZATION` are disabled by default because they require a search provider and matching configuration.
 
 Docker Compose reads `.env.docker` if present and stores the database and Chroma data in the `/data` volume. Standard local development reads `backend/.env`.
 

@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type CSSProperties,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
@@ -22,6 +23,35 @@ import type {
 import { copyText } from '../lib/copyText';
 import './LocalPackPicker.css';
 
+interface GenreMeta {
+  key: string;
+  raw: string;
+  color: string;
+}
+
+// 统一 5 类 genre 暖色色点（paper/ink 调性，禁紫/禁霓虹）；按 pack.genre 原始串匹配（注意 'historical what-if' 含空格）
+const GENRE_META: GenreMeta[] = [
+  { key: 'society', raw: 'society', color: '#b5703f' },
+  { key: 'business', raw: 'business', color: '#b8863a' },
+  { key: 'culture', raw: 'culture', color: '#a8625e' },
+  { key: 'technology', raw: 'technology', color: '#5f7a63' },
+  { key: 'historical_whatif', raw: 'historical what-if', color: '#8a5a3c' },
+];
+const GENRE_FALLBACK_COLOR = '#8a7e74';
+// 未知/扩展 genre 的合并 sentinel，确保筛选区最多只出现一个「其他」分段（不暴露内部枚举）
+const OTHER_GENRE = '__other__';
+
+const normalizeGenre = (genre: string | undefined | null): string =>
+  (genre || '').toLowerCase().trim();
+
+const genreMetaOf = (genre: string | undefined | null): GenreMeta | undefined => {
+  const raw = normalizeGenre(genre);
+  return GENRE_META.find((g) => g.raw === raw);
+};
+
+const genreColorOf = (genre: string | undefined | null): string =>
+  genreMetaOf(genre)?.color ?? GENRE_FALLBACK_COLOR;
+
 export interface LocalPackPickerProps {
   onImport: (payload: {
     question: string;
@@ -40,7 +70,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
 
   const [, setIsLoadingPacks] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -62,6 +92,14 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
     }
     return en || zh || '';
   }, []);
+
+  const genreLabel = useCallback((genre: string | undefined | null): string => {
+    const raw = normalizeGenre(genre);
+    const meta = genreMetaOf(raw);
+    if (meta) return t(`local_packs.genre.${meta.key}`, raw);
+    // 未知/空 genre 一律归并为「其他」，不把内部英文枚举泄漏给用户（原始串经 title 暴露）
+    return t('local_packs.genre_other', 'Other');
+  }, [t]);
 
   const fetchPacksData = useCallback(async () => {
     setIsLoadingPacks(true);
@@ -148,47 +186,84 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
       .catch(() => {});
   };
 
-  const handleTagToggle = (tag: string) => {
-    setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
-    );
-  };
-
-  const allTags = useMemo(() => {
-    const tagsSet = new Set<string>();
+  const genreCounts = useMemo(() => {
+    const counts = new Map<string, number>();
     packs.forEach((pack) => {
-      const tags = pack.tags || [];
-      tags.forEach((tag) => {
-        const localized = getLocalized(tag, i18n.language);
-        if (localized) tagsSet.add(localized);
-      });
+      const raw = normalizeGenre(pack.genre);
+      // 空/未知 genre 全部并入单一 OTHER_GENRE 桶，避免显示为「其他」却无法按「其他」筛选
+      const key = genreMetaOf(raw) ? raw : OTHER_GENRE;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     });
-    return Array.from(tagsSet).sort();
-  }, [packs, getLocalized, i18n.language]);
+    return counts;
+  }, [packs]);
+
+  const orderedGenres = useMemo(() => {
+    const known = GENRE_META.map((g) => g.raw).filter((raw) => genreCounts.has(raw));
+    return genreCounts.has(OTHER_GENRE) ? [...known, OTHER_GENRE] : known;
+  }, [genreCounts]);
+
+  // 防止 refresh 后 packs 变化导致 selectedGenre 指向已不存在的类型，使筛选卡在空态且分段隐藏无法复位
+  useEffect(() => {
+    if (!selectedGenre) return;
+    const stillPresent =
+      selectedGenre === OTHER_GENRE
+        ? packs.some((pack) => {
+            const raw = normalizeGenre(pack.genre);
+            return !genreMetaOf(raw);
+          })
+        : packs.some((pack) => normalizeGenre(pack.genre) === selectedGenre);
+    if (!stillPresent) setSelectedGenre(null);
+  }, [packs, selectedGenre]);
 
   const filteredPacks = useMemo(() => {
     return packs.filter((pack) => {
-      if (selectedTags.length > 0) {
-        const packTagStrings = (pack.tags || []).map((t) => getLocalized(t, i18n.language));
-        const matchesAllSelectedTags = selectedTags.every((selectedTag) =>
-          packTagStrings.includes(selectedTag),
-        );
-        if (!matchesAllSelectedTags) return false;
+      if (selectedGenre) {
+        const packGenre = normalizeGenre(pack.genre);
+        const excluded =
+          selectedGenre === OTHER_GENRE
+            ? Boolean(genreMetaOf(packGenre)) // 空/未知 genre 都属于「其他」
+            : packGenre !== selectedGenre;
+        if (excluded) return false;
       }
 
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const title = getLocalized(pack.title, i18n.language).toLowerCase();
         const desc = getLocalized(pack.description, i18n.language).toLowerCase();
-        const genre = (pack.genre || '').toLowerCase();
-        if (!title.includes(q) && !desc.includes(q) && !genre.includes(q)) {
+        const genre = normalizeGenre(pack.genre);
+        const genreLabelText = genreLabel(pack.genre).toLowerCase();
+        // 标签退化为搜索单通道（27 个 tag 零重叠，独立 chip 墙已删，tag 文本并入搜索）
+        const tagText = (pack.tags || [])
+          .map((tag) => getLocalized(tag, i18n.language).toLowerCase())
+          .join(' ');
+        if (
+          !title.includes(q) &&
+          !desc.includes(q) &&
+          !genre.includes(q) &&
+          !genreLabelText.includes(q) &&
+          !tagText.includes(q)
+        ) {
           return false;
         }
       }
 
       return true;
     });
-  }, [packs, searchQuery, selectedTags, getLocalized, i18n.language]);
+  }, [packs, searchQuery, selectedGenre, getLocalized, genreLabel, i18n.language]);
+
+  // P0-3：master-detail 软选中——当前选中失效（初始 null 或被筛选移除）时回落到首个结果，消除「左实右空」
+  useEffect(() => {
+    if (!enabled) return;
+    if (selectedPackId && filteredPacks.some((pack) => pack.id === selectedPackId)) return;
+    setSelectedPackId(filteredPacks[0]?.id ?? null);
+  }, [enabled, filteredPacks, selectedPackId]);
+
+  // 活动筛选数（类型 + 搜索），驱动「清除筛选 (N)」与结果计数状态条
+  const activeFilterCount = (selectedGenre ? 1 : 0) + (searchQuery.trim() ? 1 : 0);
+  const clearAllFilters = useCallback(() => {
+    setSelectedGenre(null);
+    setSearchQuery('');
+  }, []);
 
   const getDiagnosticExplanation = (diag: PackDiagnostic) => {
     const translationKey = `local_packs.diagnostics_code.${diag.code}`;
@@ -232,7 +307,11 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
   }
 
   return (
-    <div className="local-pack-picker" data-testid="local-pack-picker">
+    <div
+      className="local-pack-picker"
+      data-testid="local-pack-picker"
+      lang={i18n.language.startsWith('zh') ? 'zh' : 'en'}
+    >
       <div className="local-pack-picker__header">
         <h3 className="local-pack-picker__title">{t('local_packs.panel_title', 'Local Packs')}</h3>
         <button
@@ -280,80 +359,142 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
       )}
 
       <div className="local-pack-picker__filters">
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={t('local_packs.search_placeholder', 'Search title, description, or genre...')}
-          className="local-pack-picker__search-input"
-          aria-label={t('local_packs.search_placeholder', 'Search title, description, or genre...')}
-        />
-
-        {allTags.length > 0 && (
-          <div className="local-pack-picker__tags-filter" role="group" aria-label={t('local_packs.tags_label', 'Tags')}>
-            {allTags.map((tag) => {
-              const isSelected = selectedTags.includes(tag);
+        {orderedGenres.length > 1 && (
+          <div
+            className="local-pack-picker__genre-filter"
+            role="group"
+            aria-label={t('local_packs.genres_label', 'Genre')}
+          >
+            <button
+              type="button"
+              onClick={() => setSelectedGenre(null)}
+              aria-pressed={selectedGenre === null}
+              className={`local-pack-picker__genre-chip ${
+                selectedGenre === null ? 'local-pack-picker__genre-chip--active' : ''
+              }`}
+            >
+              <span className="local-pack-picker__genre-label">{t('local_packs.genre_all', 'All')}</span>
+              {packs.length > 12 && (
+                <span className="local-pack-picker__genre-count">{packs.length}</span>
+              )}
+            </button>
+            {orderedGenres.map((raw) => {
+              const isActive = selectedGenre === raw;
               return (
                 <button
-                  key={tag}
+                  key={raw}
                   type="button"
-                  onClick={() => handleTagToggle(tag)}
-                  aria-pressed={isSelected}
-                  className={`local-pack-picker__tag-chip ${
-                    isSelected ? 'local-pack-picker__tag-chip--active' : ''
+                  onClick={() => setSelectedGenre(isActive ? null : raw)}
+                  aria-pressed={isActive}
+                  title={raw === OTHER_GENRE ? undefined : raw}
+                  className={`local-pack-picker__genre-chip ${
+                    isActive ? 'local-pack-picker__genre-chip--active' : ''
                   }`}
                 >
-                  {tag}
+                  <span
+                    className="local-pack-picker__genre-dot"
+                    style={{ backgroundColor: genreColorOf(raw) }}
+                    aria-hidden="true"
+                  />
+                  <span className="local-pack-picker__genre-label">{genreLabel(raw)}</span>
+                  {packs.length > 12 && (
+                    <span className="local-pack-picker__genre-count">{genreCounts.get(raw) ?? 0}</span>
+                  )}
                 </button>
               );
             })}
+          </div>
+        )}
+
+        <div
+          className={`local-pack-picker__search-wrap${
+            searchQuery ? ' local-pack-picker__search-wrap--has-clear' : ''
+          }`}
+        >
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t('local_packs.search_placeholder', 'Search title, description, or genre...')}
+            className="local-pack-picker__search-input"
+            aria-label={t('local_packs.search_placeholder', 'Search title, description, or genre...')}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="local-pack-picker__search-clear"
+              aria-label={t('local_packs.clear_search', 'Clear search')}
+              onClick={() => setSearchQuery('')}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {activeFilterCount > 0 && (
+          <div className="local-pack-picker__filter-status">
+            <span className="local-pack-picker__result-count" aria-live="polite">
+              {t('local_packs.result_count', 'Showing {{count}} of {{total}}', {
+                count: filteredPacks.length,
+                total: packs.length,
+              })}
+            </span>
+            <button
+              type="button"
+              className="local-pack-picker__clear-filters"
+              onClick={clearAllFilters}
+            >
+              {t('local_packs.clear_filters', 'Clear filters')} ({activeFilterCount})
+            </button>
           </div>
         )}
       </div>
 
       <div className="local-pack-picker__content">
         <div className="local-pack-picker__list-column">
-          <ul className="local-pack-picker__pack-list" aria-label={t('local_packs.panel_title', 'Local Packs')}>
-            {filteredPacks.map((pack) => {
-              const isSelected = selectedPackId === pack.id;
-              const title = getLocalized(pack.title, i18n.language);
-              const desc = getLocalized(pack.description, i18n.language);
-              const tags = pack.tags || [];
+          {filteredPacks.length === 0 ? (
+            <p className="local-pack-picker__empty" role="status">
+              {t('local_packs.no_results', 'No matching packs found.')}
+            </p>
+          ) : (
+            <ul className="local-pack-picker__pack-list" aria-label={t('local_packs.panel_title', 'Local Packs')}>
+              {filteredPacks.map((pack) => {
+                const isSelected = selectedPackId === pack.id;
+                const title = getLocalized(pack.title, i18n.language);
+                const genreColor = genreColorOf(pack.genre);
+                // 瓷砖副标题用 description 首句（LocalPackSummary 无 per-template question），比孤立 tag 信息量更高
+                const teaser =
+                  getLocalized(pack.description, i18n.language).split(/[。.!?！？\n]/)[0]?.trim() ?? '';
 
-              return (
-                <li key={pack.id} className="local-pack-picker__pack-item">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPackId(isSelected ? null : pack.id)}
-                    aria-pressed={isSelected}
-                    className={`local-pack-picker__pack-card ${
-                      isSelected ? 'local-pack-picker__pack-card--active' : ''
-                    }`}
-                  >
-                    <div className="local-pack-picker__pack-card-header">
-                      <span className="local-pack-picker__pack-genre">{pack.genre}</span>
-                      <h4 className="local-pack-picker__pack-title">{title}</h4>
-                    </div>
-                    <p className="local-pack-picker__pack-desc">{desc}</p>
-                    <div className="local-pack-picker__pack-tags">
-                      {tags.map((tag, tIdx) => (
-                        <span key={tIdx} className="local-pack-picker__pack-tag-badge">
-                          {getLocalized(tag, i18n.language)}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="local-pack-picker__pack-meta">
-                      {t('local_packs.pack_info', '{{scenarios}} scenarios · {{casts}} casts · {{snapshots}} snapshots', {
-                        scenarios: pack.scenario_count || 0,
-                        casts: pack.agent_cast_count || 0,
-                        snapshots: pack.demo_snapshot_count || 0,
-                      })}
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+                return (
+                  <li key={pack.id} className="local-pack-picker__pack-item">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPackId(pack.id)}
+                      aria-pressed={isSelected}
+                      style={{ '--pack-genre-color': genreColor } as CSSProperties}
+                      className={`local-pack-picker__pack-card ${
+                        isSelected ? 'local-pack-picker__pack-card--active' : ''
+                      }`}
+                    >
+                      <span className="local-pack-picker__pack-genre">
+                        <span
+                          className="local-pack-picker__genre-dot"
+                          style={{ backgroundColor: genreColor }}
+                          aria-hidden="true"
+                        />
+                        {genreLabel(pack.genre)}
+                      </span>
+                      <h4 className="local-pack-picker__pack-title" title={title}>{title}</h4>
+                      {teaser && (
+                        <p className="local-pack-picker__pack-teaser" title={teaser}>{teaser}</p>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
 
         <div className="local-pack-picker__preview-column">
@@ -367,7 +508,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
               ) : selectedPackDetail ? (
                 <div className="local-pack-picker__preview-details">
                   <div className="local-pack-picker__preview-header">
-                    <span className="local-pack-picker__preview-genre">{selectedPackDetail.genre}</span>
+                    <span className="local-pack-picker__preview-genre">{genreLabel(selectedPackDetail.genre)}</span>
                     <h4 className="local-pack-picker__preview-title">
                       {getLocalized(selectedPackDetail.title, i18n.language)}
                     </h4>
@@ -530,6 +671,14 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
             </div>
           ) : (
             <div className="local-pack-picker__preview-placeholder">
+              <svg
+                className="local-pack-picker__preview-placeholder-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
               <p>{t('local_packs.select_pack_hint', 'Select a pack from the list to view scenario templates and preview details.')}</p>
             </div>
           )}

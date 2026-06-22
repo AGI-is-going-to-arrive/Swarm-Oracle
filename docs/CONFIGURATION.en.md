@@ -91,7 +91,7 @@ Other failures keep the existing generic error path.
 | `FEATURE_YOU_VS_ORACLE` | On | The result page can compare the user's forecast against the Oracle result. |
 | `FEATURE_SOCIAL_HEADLINES` | On | Result-page social feeds generate headline cards that can be downloaded or copied. |
 | `FEATURE_DOCUMENT_SEED` | On | The home page can turn uploaded documents into scenario seed context. |
-| `FEATURE_LOCAL_PACKS` | On | The home page can load local scenario packs and carry pack materials into simulations. |
+| `FEATURE_LOCAL_PACKS` | On | The home page can load local scenario packs; the picker filters by genre segments plus one search box, folds tags into search, previews the selection, and carries the question / suggested settings into simulations. |
 | `FEATURE_MODEL_PROFILES` | On | The model profile page and `/admin/setup` can manage local profiles; profiles with a key make the home page and debate entry treat LLM access as configured and can be selected when launching a simulation, debate, or result-page chamber. Chambers keep the selector inside collapsed-by-default Advanced settings, and leaving it blank uses the global default. Profiles can store rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declarations. |
 | `FEATURE_EDUCATION_TEMPLATES` | On | The home page shows education templates for classroom-style prompts. |
 | `FEATURE_PERSONA_EXPORT` | On | Agent Library can export persona backups and create Agents from backups. |

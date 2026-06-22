@@ -76,6 +76,7 @@ Select **View Causal Graph** to see which events caused later events. Select **G
 
 - **Custom Agent Workshop**: select **Agents** on the home page to create, edit, favorite, export, or import Agents. Custom Agents can join simulations and debates.
 - **Education templates**: select **Use template** on the home page to fill in a classroom-style question with suggested settings.
+- **Local Packs**: under home-page **Advanced settings**, Local Packs can be filtered by genre segments or by one search box for title, description, genre, and tags; the current result previews automatically, active filters show count and clear state, and choosing a template fills the question and suggested settings.
 - **Prediction Journal**: open `/me/journal` to record your probability forecast, mark the outcome later, and review calibration.
 - **Snapshot import / export**: import a scenario snapshot ZIP from the home page, or export the current scenario snapshot from the result page.
 - **Replay Trace**: open `/replay/:id` to inspect where counterfactual and continuation branches came from.

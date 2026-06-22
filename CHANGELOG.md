@@ -29,6 +29,9 @@ file; use `Unreleased` until maintainers cut a release tag.
   owner. FastAPI lifespan remains responsible for stamp/upgrade to head.
   Entrypoint Alembic is frozen; image entrypoints and Compose commands must not
   add `alembic upgrade head` unless a future migration-owner decision changes.
+- Refined the Local Packs picker into genre segments plus one search channel,
+  with auto-selected previews, filter status, clearer focus states, and updated
+  public docs / landing copy.
 
 ### Fixed
 

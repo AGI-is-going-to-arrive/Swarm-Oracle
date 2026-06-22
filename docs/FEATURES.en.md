@@ -248,5 +248,5 @@ Entry: `/result/:id` -> "Social Feed"
 Entry: `/` home -> upload a document as background
 
 ### F48 Local Packs
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs" on the home page bundle preset scenarios (bilingual, with prompts, stakes, and materials you can preview after picking a pack); one click fills the question box with the pack's question and suggested settings, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs" on the home page bundle preset scenarios (bilingual, with prompts, stakes, and materials). The picker now filters with genre segments and a single search box, with tag text folded into search; the current result auto-selects and previews on the right, while active filters show the result count and a clear action. One template click fills the question box with the pack's question and suggested settings, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
 Entry: `/` home -> Local Packs -> pick a pack / Manage all

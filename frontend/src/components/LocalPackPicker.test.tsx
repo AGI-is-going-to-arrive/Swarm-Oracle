@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalPackPicker } from './LocalPackPicker';
@@ -249,7 +249,7 @@ describe('LocalPackPicker', () => {
     expect(reloadMock).toHaveBeenCalledTimes(1);
   });
 
-  it('loads packs and renders pack list, tags, and filters packs correctly', async () => {
+  it('loads packs, renders compact tiles + genre segments, and filters by search incl. tag text', async () => {
     useCapabilityCheckMock.mockReturnValue({
       loading: false,
       enabled: true,
@@ -260,6 +260,8 @@ describe('LocalPackPicker', () => {
 
     listLocalPacksMock.mockResolvedValue({ packs: mockPacksSummaryList, count: 2 });
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    // P0-3 soft-select fetches the first pack's detail on mount
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
     render(<LocalPackPicker onImport={vi.fn()} />);
 
@@ -268,32 +270,106 @@ describe('LocalPackPicker', () => {
       expect(getLocalPackDiagnosticsMock).toHaveBeenCalledTimes(1);
     });
 
-    // Verify pack list render
-    expect(await screen.findByText('Pack One')).toBeInTheDocument();
-    expect(screen.getByText('Pack Two')).toBeInTheDocument();
-    expect(screen.getByText('society')).toBeInTheDocument();
-    expect(screen.getByText('historical what-if')).toBeInTheDocument();
+    // Compact tiles render (query the tile button so the auto-selected preview title does not collide)
+    expect(await screen.findByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pack Two/ })).toBeInTheDocument();
 
-    // Verify tag chips render
-    expect(screen.getByRole('button', { name: 'Society' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Tech' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
+    // Genre filter segments render (All + 2 genres = 3 buttons)
+    const genreGroup = screen.getByRole('group', { name: 'Genre' });
+    expect(within(genreGroup).getAllByRole('button')).toHaveLength(3);
 
-    // Test text search
+    // P0-1: the 27-chip tag wall is removed, so there is no standalone Tags group
+    expect(screen.queryByRole('group', { name: 'Tags' })).not.toBeInTheDocument();
+
+    // Text search by title
     const searchInput = screen.getByPlaceholderText('Search title, description, or genre...');
     fireEvent.change(searchInput, { target: { value: 'One' } });
-    expect(screen.getByText('Pack One')).toBeInTheDocument();
-    expect(screen.queryByText('Pack Two')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pack Two/ })).not.toBeInTheDocument();
 
     // Reset search
     fireEvent.change(searchInput, { target: { value: '' } });
-    expect(screen.getByText('Pack Two')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pack Two/ })).toBeInTheDocument();
 
-    // Test tag filter
-    const societyTagBtn = screen.getByRole('button', { name: 'Society' });
-    fireEvent.click(societyTagBtn);
-    expect(screen.getByText('Pack One')).toBeInTheDocument();
-    expect(screen.queryByText('Pack Two')).not.toBeInTheDocument();
+    // P0-1: tag text is now folded into the single search channel
+    fireEvent.change(searchInput, { target: { value: 'Tech' } });
+    expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pack Two/ })).not.toBeInTheDocument();
+  });
+
+  it('filters packs by genre segment and toggles back to all', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    listLocalPacksMock.mockResolvedValue({ packs: mockPacksSummaryList, count: 2 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+
+    render(<LocalPackPicker onImport={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    });
+
+    // Genre segments: [0]=All, [1]=society, [2]=historical what-if (GENRE_META order)
+    const genreGroup = screen.getByRole('group', { name: 'Genre' });
+    fireEvent.click(within(genreGroup).getAllByRole('button')[1]);
+    expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Pack Two/ })).not.toBeInTheDocument();
+
+    // Clicking the active segment again clears the filter (back to all)
+    const genreGroupAfter = screen.getByRole('group', { name: 'Genre' });
+    fireEvent.click(within(genreGroupAfter).getAllByRole('button')[1]);
+    expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pack Two/ })).toBeInTheDocument();
+  });
+
+  it('clears a stale genre filter when refresh removes that genre', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    listLocalPacksMock.mockResolvedValue({ packs: mockPacksSummaryList, count: 2 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockImplementation((id: string) =>
+      Promise.resolve(id === 'pack-two' ? mockPackDetailTwo : mockPackDetailOne),
+    );
+    // Refresh returns only the historical pack — the previously selected 'society' genre disappears
+    refreshLocalPacksMock.mockResolvedValue({
+      packs: [mockPacksSummaryList[1]],
+      count: 1,
+      diagnostics: [],
+      diagnostic_count: 0,
+    });
+
+    render(<LocalPackPicker onImport={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
+    });
+
+    // Select the society segment → only Pack One remains
+    const genreGroup = screen.getByRole('group', { name: 'Genre' });
+    fireEvent.click(within(genreGroup).getAllByRole('button')[1]);
+    expect(screen.queryByRole('button', { name: /Pack Two/ })).not.toBeInTheDocument();
+
+    // Refresh to a pack set that no longer contains 'society'
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Packs' }));
+
+    // The stale genre filter must clear so the remaining pack shows instead of an empty state
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Pack Two/ })).toBeInTheDocument();
+    });
+    expect(screen.queryByText('No matching packs found.')).not.toBeInTheDocument();
   });
 
   it('selects and previews a pack, showing templates, suggested settings, metadata, and handles fallbacks', async () => {
@@ -312,7 +388,7 @@ describe('LocalPackPicker', () => {
     render(<LocalPackPicker onImport={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Pack One')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
     });
 
     // Click on Pack One to preview
@@ -349,7 +425,7 @@ describe('LocalPackPicker', () => {
     render(<LocalPackPicker onImport={onImportMock} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Pack One')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
     });
 
     // Click on Pack One
@@ -385,7 +461,7 @@ describe('LocalPackPicker', () => {
     render(<LocalPackPicker onImport={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Pack One')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Pack One/ }));
@@ -414,6 +490,7 @@ describe('LocalPackPicker', () => {
 
     listLocalPacksMock.mockResolvedValue({ packs: mockPacksSummaryList, count: 2 });
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
     refreshLocalPacksMock.mockResolvedValue({
       packs: mockPacksSummaryList,
       count: 2,
@@ -468,7 +545,7 @@ describe('LocalPackPicker', () => {
     render(<LocalPackPicker onImport={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Pack Two')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Pack Two/ })).toBeInTheDocument();
     });
 
     // Click on Pack Two
@@ -481,5 +558,74 @@ describe('LocalPackPicker', () => {
     // Confirm that the component rendered without crashing even with missing casts/snapshots/stakes
     expect(screen.queryByText('Agent Casts')).not.toBeInTheDocument();
     expect(screen.queryByText('Demo Snapshots')).not.toBeInTheDocument();
+  });
+
+  it('switches preview to a newly clicked pack after the first is auto-selected (P0-3)', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    listLocalPacksMock.mockResolvedValue({ packs: mockPacksSummaryList, count: 2 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockImplementation((id: string) =>
+      Promise.resolve(id === 'pack-two' ? mockPackDetailTwo : mockPackDetailOne),
+    );
+
+    render(<LocalPackPicker onImport={vi.fn()} />);
+
+    // pack-one is auto-selected on mount (P0-3) and its detail loads first
+    await waitFor(() => {
+      expect(getLocalPackMock).toHaveBeenCalledWith('pack-one');
+    });
+
+    // Clicking the not-yet-selected pack-two must switch the preview to it (proves the click path, not auto-select)
+    fireEvent.click(screen.getByRole('button', { name: /Pack Two/ }));
+
+    await waitFor(() => {
+      expect(getLocalPackMock).toHaveBeenCalledWith('pack-two');
+      expect(screen.getAllByText('What if Zheng He reached America first?').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('collapses unknown genres into a single "Other" segment and filters by it', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+
+    const packsWithUnknown: LocalPackSummary[] = [
+      { ...mockPacksSummaryList[0], id: 'p-society', genre: 'society', title: { zh: '', en: 'Society Pack' } },
+      { ...mockPacksSummaryList[0], id: 'p-sports', genre: 'sports', title: { zh: '', en: 'Sports Pack' } },
+      { ...mockPacksSummaryList[0], id: 'p-esports', genre: 'esports', title: { zh: '', en: 'Esports Pack' } },
+      { ...mockPacksSummaryList[0], id: 'p-empty', genre: '', title: { zh: '', en: 'Empty Genre Pack' } },
+    ];
+    listLocalPacksMock.mockResolvedValue({ packs: packsWithUnknown, count: 4 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+
+    render(<LocalPackPicker onImport={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Society Pack/ })).toBeInTheDocument();
+    });
+
+    // Unknown and empty genres collapse to ONE "Other" segment → All + society + Other = 3
+    const genreGroup = screen.getByRole('group', { name: 'Genre' });
+    const segs = within(genreGroup).getAllByRole('button');
+    expect(segs).toHaveLength(3);
+
+    // Clicking the "Other" segment (last) keeps unknown and empty-genre packs
+    fireEvent.click(segs[segs.length - 1]);
+    expect(screen.getByRole('button', { name: /Sports Pack/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Esports Pack/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Empty Genre Pack/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Society Pack/ })).not.toBeInTheDocument();
   });
 });
