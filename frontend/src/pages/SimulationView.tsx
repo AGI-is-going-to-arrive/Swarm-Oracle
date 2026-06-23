@@ -261,7 +261,30 @@ export function SimulationView() {
     isSimulationComplete,
     navigate,
   });
-  // S1-1: cancel-button gating depends on isReplayMode (from replay state) and live status
+  // Interventions are live-only actions: replay, terminal, parsing, and narrating views are read-only.
+  const canIntervene = status === 'simulating' && !isReplayMode && !isSimulationComplete;
+  const canInterveneOnBranch = useCallback(
+    (branch: BranchInfo) => canIntervene && branch.status === 'ACTIVE',
+    [canIntervene],
+  );
+  const totalRounds = useMemo(() => {
+    const value = scenario?.total_rounds;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    const normalized = Math.floor(value);
+    return normalized > 0 ? normalized : null;
+  }, [scenario?.total_rounds]);
+  const displayStatus = useMemo(() => {
+    if (
+      status === 'simulating'
+      && totalRounds !== null
+      && currentRound >= totalRounds
+      && messages.length > 0
+    ) {
+      return 'narrating';
+    }
+    return status;
+  }, [currentRound, messages.length, status, totalRounds]);
+  const isSimulatingOrNarrating = displayStatus === 'simulating' || displayStatus === 'narrating';
   const cancelledStatus = status === 'cancelled';
   const canCancelSimulation =
     !isReplayMode
@@ -645,9 +668,22 @@ export function SimulationView() {
   }, [id, isTailStatusSyncPhase, loadScenario]);
 
   const handleIntervene = useCallback((branchId: string, branchTitle: string) => {
-    if (isReplayMode) return;
+    const branch = branches.find((candidate) => candidate.id === branchId);
+    if (!branch || !canInterveneOnBranch(branch)) return;
     setInterventionTarget({ branchId, branchTitle });
-  }, [isReplayMode]);
+  }, [branches, canInterveneOnBranch]);
+
+  useEffect(() => {
+    if (!interventionTarget) return;
+    if (!canIntervene) {
+      setInterventionTarget(null);
+      return;
+    }
+    const branch = branches.find((candidate) => candidate.id === interventionTarget.branchId);
+    if (branch && !canInterveneOnBranch(branch)) {
+      setInterventionTarget(null);
+    }
+  }, [branches, canIntervene, canInterveneOnBranch, interventionTarget]);
 
   const handleDetail = useCallback((branchId: string) => {
     const branch = branches.find((b) => b.id === branchId);
@@ -777,7 +813,7 @@ export function SimulationView() {
           status: branch.status,
           probability: branch.probability,
           can_view_detail: true,
-          can_intervene: !isReplayMode && !isSimulationComplete && branch.status === 'ACTIVE',
+          can_intervene: canInterveneOnBranch(branch),
         })),
       },
     );
@@ -793,6 +829,7 @@ export function SimulationView() {
     archiveKeyMoments.length,
     branches,
     canCopyReplayLink,
+    canInterveneOnBranch,
     captureStatus,
     captureMode,
     completedObjectiveCount,
@@ -1196,7 +1233,7 @@ export function SimulationView() {
           status: branch.status,
           probability: branch.probability,
           can_view_detail: true,
-          can_intervene: !isReplayMode && !isSimulationComplete && branch.status === 'ACTIVE',
+          can_intervene: canInterveneOnBranch(branch),
         })),
       },
     );
@@ -1212,6 +1249,7 @@ export function SimulationView() {
     branches,
     captureStatus,
     captureMode,
+    canInterveneOnBranch,
     completedObjectiveCount,
     currentRound,
     detailBranch,
@@ -1376,6 +1414,12 @@ export function SimulationView() {
           <span className="sim-header__logo">{t('app_title')}</span>
         </div>
       </header>
+
+      {isSimulatingOrNarrating && (
+        <Suspense fallback={null}>
+          <LazyTimelineBar stickyBanner />
+        </Suspense>
+      )}
 
       {/* Error state */}
       {error && (
@@ -1622,7 +1666,7 @@ export function SimulationView() {
           /* Classic BranchTree view */
           <div className="sim-content__tree">
             <Suspense fallback={<SimulationSlotFallback label={t('sim.tree.waiting')} />}>
-              <LazyClassicBranchTree onIntervene={handleIntervene} onDetail={handleDetail} />
+              <LazyClassicBranchTree onIntervene={handleIntervene} onDetail={handleDetail} canIntervene={canIntervene} />
             </Suspense>
           </div>
         )}
@@ -1651,7 +1695,7 @@ export function SimulationView() {
       </div>
 
       {/* Timeline Bar */}
-      {!(viewMode === 'theater' && canUseReplayControls) && (
+      {!(viewMode === 'theater' && canUseReplayControls) && !isSimulatingOrNarrating && (
       <Suspense fallback={<SimulationSlotFallback label={t('sim.timeline.preparing')} />}>
         <LazyTimelineBar
           interactive={canUseReplayControls}
@@ -1678,7 +1722,7 @@ export function SimulationView() {
       )}
 
       {/* Intervention Modal */}
-      {interventionTarget && id && !isReplayMode && (
+      {interventionTarget && id && canIntervene && (
         <Suspense fallback={null}>
           <LazyInterventionModal
             scenarioId={id}

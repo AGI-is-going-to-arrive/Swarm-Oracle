@@ -32,8 +32,8 @@ const edgeTypes = { branchEdge: BranchEdge };
 // ── Dagre auto-layout ───────────────────────────────────────
 const LAYOUT_CONFIG = {
   rankdir: 'TB' as const,
-  nodesep: 120,
-  ranksep: 160,
+  nodesep: 90,
+  ranksep: 120,
   marginx: 60,
   marginy: 60,
 };
@@ -74,6 +74,7 @@ function buildBranchNodeData(
   isZh: boolean,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
+  canIntervene?: boolean,
 ) {
   const rawTitle = branch.title || '';
   return {
@@ -93,6 +94,7 @@ function buildBranchNodeData(
     branchId: branch.id,
     thinkingCount: branchActivity.thinking,
     recentMessageCount: branchActivity.recent,
+    canIntervene,
     onIntervene,
     onDetail,
   };
@@ -105,6 +107,7 @@ function layoutBranchesToFlow(
   isZh: boolean,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
+  canIntervene?: boolean,
 ): {
   nodes: Node[];
   edges: Edge[];
@@ -119,7 +122,7 @@ function layoutBranchesToFlow(
       id: b.id,
       type: 'branchNode',
       position: { x: 0, y: 0 },
-      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, isZh, onIntervene, onDetail),
+      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, isZh, onIntervene, onDetail, canIntervene),
     };
   });
 
@@ -144,6 +147,7 @@ function applyBranchActivityToNodes(
   isZh: boolean,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
+  canIntervene?: boolean,
 ): Node[] {
   const agentNames = agents.slice(0, 6).map((agent) => agent.name);
   const branchById = new Map(branches.map((branch) => [branch.id, branch]));
@@ -154,13 +158,21 @@ function applyBranchActivityToNodes(
     const activity = branchActivity[branch.id] || { thinking: 0, recent: 0 };
     return {
       ...node,
-      data: buildBranchNodeData(branch, agentNames, activity, isZh, onIntervene, onDetail),
+      data: buildBranchNodeData(branch, agentNames, activity, isZh, onIntervene, onDetail, canIntervene),
     };
   });
 }
 
 // ── Component ───────────────────────────────────────────────
-export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId: string, title: string) => void; onDetail?: (branchId: string) => void }) {
+export function BranchTree({
+  onIntervene,
+  onDetail,
+  canIntervene,
+}: {
+  onIntervene?: (branchId: string, title: string) => void;
+  onDetail?: (branchId: string) => void;
+  canIntervene?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const branches = useSimulationStore((s) => s.branches);
   const agents = useSimulationStore((s) => s.agents);
@@ -191,13 +203,13 @@ export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId:
   }, [thinkingAgents, messages]);
 
   const { nodes: structuralNodes, edges: structuralEdges } = useMemo(
-    () => layoutBranchesToFlow(branches, agents, isZh, onIntervene, onDetail),
-    [branches, agents, isZh, onIntervene, onDetail],
+    () => layoutBranchesToFlow(branches, agents, isZh, onIntervene, onDetail, canIntervene),
+    [branches, agents, isZh, onIntervene, onDetail, canIntervene],
   );
 
   const layoutedNodes = useMemo(
-    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, isZh, onIntervene, onDetail),
-    [agents, branchActivity, branches, isZh, onDetail, onIntervene, structuralNodes],
+    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, isZh, onIntervene, onDetail, canIntervene),
+    [agents, branchActivity, branches, isZh, onDetail, onIntervene, structuralNodes, canIntervene],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
@@ -221,16 +233,20 @@ export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId:
     return `${nodeIds}::${edgeIds}`;
   }, [structuralNodes, structuralEdges]);
 
+  // Tighten padding when only a couple of nodes exist so a lone branch
+  // is not blown up into a sea of empty canvas; cap zoom-in via maxZoom.
+  const nodeCount = structuralNodes.length;
   useEffect(() => {
     // Delay fitView to let all fork-related nodes settle
+    const pad = nodeCount <= 2 ? 0.18 : 0.3;
     const timer = setTimeout(() => {
-      fitView({ padding: 0.4, duration: 400, includeHiddenNodes: true });
+      fitView({ padding: pad, maxZoom: 1.1, duration: 400, includeHiddenNodes: true });
     }, 500);
     return () => clearTimeout(timer);
-  }, [fitView, topologySignature]);
+  }, [fitView, topologySignature, nodeCount]);
 
   const onInit = useCallback(() => {
-    fitView({ padding: 0.3, duration: 800 });
+    fitView({ padding: 0.2, maxZoom: 1.1, duration: 800 });
   }, [fitView]);
 
   return (
@@ -250,14 +266,14 @@ export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId:
         defaultEdgeOptions={{ animated: false }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="rgba(255,255,255,0.03)" gap={20} />
+        <Background color="rgba(198,21,131,0.05)" gap={28} />
         <Controls showInteractive={false} />
         <MiniMap
           nodeColor={(n) => {
             const s = n.data?.status;
-            if (s === 'ACTIVE') return '#444';
-            if (s === 'COMPLETED') return '#888';
-            return '#ccc';
+            if (s === 'ACTIVE') return '#c61583';
+            if (s === 'COMPLETED') return '#e2a000';
+            return '#928f88';
           }}
           maskColor="rgba(250, 248, 245, 0.85)"
         />

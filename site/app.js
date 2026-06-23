@@ -12,7 +12,7 @@
     { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
       zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
     { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",
-      zd: "结果页先显示深读摘要和章节目录，完整报告在独立页展开；报告按真实字段渲染证据、概率/阵营图表和不确定性，证据侧栏可跳回 replay。", ed: "The result page first shows a digest and section links, then opens the full report on its own page; the report renders evidence, probability/faction charts and uncertainty from real fields, with evidence jump-backs to replay." },
+      zd: "结果页先显示深读摘要和章节目录，完整报告在独立页展开；报告按真实字段渲染证据、终局概率/阵营图表和不确定性，证据侧栏可跳回 replay。", ed: "The result page first shows a digest and section links, then opens the full report on its own page; the report renders evidence, terminal probability/faction charts and uncertainty from real fields, with evidence jump-backs to replay." },
     { id: "F02", img: "20-debate-arena.png", hero: false, zt: "辩论竞技场", et: "Debate Arena",
       zd: "从首页直接进入辩论竞技场，创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；无可用 LLM 或启动失败时，页面会显示原因。", ed: "Jump straight into the Debate Arena, create affirmative, opposing and judge roles, and run a shorter staged adversarial debate; if no LLM is usable or launch fails, the page shows the reason." },
     { id: "F13", img: "14-roundtable.png", hero: false, zt: "世界线圆桌", et: "Worldline Roundtable",
@@ -51,7 +51,7 @@
 
   var MODES = [
     { n: "01", img: ["21-simulation.png", "02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
-      zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线，结果页用一句话回答原问题并给出置信度，每条世界线带标题、概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the result page answers the original question in one line with a confidence, and every worldline carries a title, probability, story summary and a direct answer." },
+      zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线；推演页显示当前轮次、进度和 ETA，结果页用一句话回答原问题并给出置信度，每条终局世界线带标题、归一化概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the simulation page shows current round, progress and ETA, and the result page answers the original question in one line with a confidence. Each terminal worldline carries a title, normalized probability, story summary and a direct answer." },
     { n: "02", img: ["20-debate-arena.png", "15-debate.png"], zt: "辩论竞技场", et: "Debate Arena",
       zd: "辩论竞技场创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；辩论结果页展示比分、角色和裁判结论，可加载论点地图。", ed: "The Debate Arena creates affirmative, opposing and judge roles and runs a shorter staged debate; the result page shows the score, roles and the judge’s verdict, and can load the argument map." },
     { n: "03", img: ["17-ending-chamber.png"], zt: "神谕密室 / 结局会客厅", et: "Oracle Chambers / Ending Chamber",

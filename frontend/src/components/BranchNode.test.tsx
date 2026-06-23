@@ -77,6 +77,40 @@ describe('BranchNode status presentation', () => {
   });
 });
 
+describe('BranchNode intervention button lifecycle', () => {
+  it('does not render the intervention button when status is ACTIVE but canIntervene is false (done state)', () => {
+    const onIntervene = vi.fn();
+    render(
+      <BranchNode
+        data={{
+          ...baseData,
+          status: 'ACTIVE',
+          canIntervene: false,
+          onIntervene,
+        }}
+      />
+    );
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('renders the intervention button when status is ACTIVE and canIntervene is true', () => {
+    const onIntervene = vi.fn();
+    render(
+      <BranchNode
+        data={{
+          ...baseData,
+          status: 'ACTIVE',
+          canIntervene: true,
+          onIntervene,
+        }}
+      />
+    );
+    const button = screen.getByRole('button');
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('branch-node__intervene');
+  });
+});
+
 describe('BranchNode CSS contract', () => {
   const css = readFileSync('src/components/BranchNode.css', 'utf8');
 

@@ -141,6 +141,23 @@ _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
 )
 
 
+def _terminal_completed_branches(
+    branches: list[Branch],
+    all_branches: list[Branch] | None = None,
+) -> list[Branch]:
+    """Return completed leaf branches for final-outcome APIs, with legacy fallback."""
+    completed = [branch for branch in branches if branch.status == BranchStatus.COMPLETED]
+    if not completed:
+        return []
+    parent_ids = {
+        branch.parent_branch_id
+        for branch in (all_branches or branches)
+        if branch.parent_branch_id
+    }
+    terminal = [branch for branch in completed if branch.id not in parent_ids]
+    return terminal or completed
+
+
 class MultiRunScenarioRequest(CreateScenarioRequest):
     run_count: int | None = None
     verdict_only_runs: bool = True
@@ -2323,25 +2340,19 @@ async def get_story(
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
 
-        branches = session.exec(
+        all_branches = list(session.exec(
             select(Branch).where(
                 Branch.scenario_id == scenario_id,
-                Branch.status == BranchStatus.COMPLETED,
             ).order_by(
                 Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc(),
             )
-        ).all()
+        ).all())
+        branches = _terminal_completed_branches(all_branches, all_branches)
         using_fallback_branches = False
 
         if not branches:
             using_fallback_branches = True
-            branches = session.exec(
-                select(Branch).where(
-                    Branch.scenario_id == scenario_id,
-                ).order_by(
-                    Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc(),
-                )
-            ).all()
+            branches = all_branches
 
         parsed_context = (
             scenario.parsed_context
@@ -2467,14 +2478,15 @@ async def generate_result_report(
                 "REPORT_SCENARIO_NOT_COMPLETE",
                 "Scenario must be completed before report generation",
             )
-        dominant_branch = session.exec(
+        all_branches = list(session.exec(
             select(Branch)
             .where(
                 Branch.scenario_id == scenario_id,
-                Branch.status == BranchStatus.COMPLETED,
             )
             .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
-        ).first()
+        ).all())
+        terminal_branches = _terminal_completed_branches(all_branches, all_branches)
+        dominant_branch = terminal_branches[0] if terminal_branches else None
         dominant_branch_id = dominant_branch.id if dominant_branch is not None else None
         parsed_context = (
             scenario.parsed_context

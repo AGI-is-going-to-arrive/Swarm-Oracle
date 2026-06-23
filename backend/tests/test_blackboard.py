@@ -16,6 +16,7 @@ class TestBlackboardInit:
         assert bb.global_summary == ""
         assert bb.active_debates == []
         assert bb.tension_points == []
+        assert bb.key_quotes == []
         assert bb.agent_positions == {}
         assert bb.activity_log == []
         assert bb._max_activity_entries == _DEFAULT_MAX_ACTIVITY
@@ -67,14 +68,14 @@ class TestBlackboardPost:
         assert "diverge" not in bb.activity_log[0]
 
     def test_content_truncation_in_position(self):
-        """Position summary truncates content to 60 chars."""
+        """Position summary keeps substantially more verbatim text before truncating."""
         bb = Blackboard()
-        long_content = "这" * 100
+        long_content = "这" * 300
         bb.post("曹操", long_content, "冷静")
         pos = bb.agent_positions["曹操"]
-        # Should contain truncated content (60 chars) + "…"
         assert "…" in pos
         assert len(pos) < len(long_content)
+        assert "这" * 200 in pos
 
     def test_short_content_no_truncation(self):
         bb = Blackboard()
@@ -109,6 +110,7 @@ class TestUpdateGlobalSummary:
         compressed = {
             "situation": "北方局势紧张",
             "active_debates": ["是否攻打荆州", "联盟还是独立"],
+            "key_quotes": ["[曹操]: 粮草线一断，南下就不是选择题。"],
             "tension_points": ["军事对峙", "粮草短缺"],
             "consensus": "各方暂时休战",
         }
@@ -116,6 +118,7 @@ class TestUpdateGlobalSummary:
         assert bb.global_summary == "北方局势紧张"
         assert bb.consensus == "各方暂时休战"
         assert len(bb.active_debates) == 2
+        assert bb.key_quotes == ["[曹操]: 粮草线一断，南下就不是选择题。"]
         assert len(bb.tension_points) == 2
 
     def test_empty_consensus(self):
@@ -129,6 +132,7 @@ class TestUpdateGlobalSummary:
         bb.update_global_summary({})
         assert bb.global_summary == ""
         assert bb.active_debates == []
+        assert bb.key_quotes == []
         assert bb.tension_points == []
 
     def test_overwrite_previous(self):
@@ -154,6 +158,7 @@ class TestGetSharedBriefing:
         assert briefing["positions"] == {}
         assert briefing["tensions"] == []
         assert briefing["debates"] == []
+        assert briefing["key_quotes"] == []
 
     def test_populated_board(self):
         bb = Blackboard()
@@ -161,6 +166,7 @@ class TestGetSharedBriefing:
         bb.post("刘备", "仁义治国", "坚定")
         bb.update_global_summary({
             "situation": "三方对峙",
+            "key_quotes": ["[曹操]: 统一北方后才有余力南下。"],
             "tension_points": ["军事冲突"],
         })
 
@@ -169,6 +175,7 @@ class TestGetSharedBriefing:
         assert len(briefing["recent"]) == 2
         assert "曹操" in briefing["positions"]
         assert "刘备" in briefing["positions"]
+        assert briefing["key_quotes"] == ["[曹操]: 统一北方后才有余力南下。"]
         assert briefing["tensions"] == ["军事冲突"]
 
     def test_max_entries(self):
@@ -243,15 +250,44 @@ class TestBlackboardFork:
         parent = Blackboard()
         parent.update_global_summary({
             "active_debates": ["A"],
+            "key_quotes": ["[曹操]: A"],
             "tension_points": ["T"],
         })
         child = parent.fork()
         child.active_debates.append("B")
+        child.key_quotes.append("[刘备]: B")
         child.tension_points.append("U")
 
         assert parent.active_debates == ["A"]
+        assert parent.key_quotes == ["[曹操]: A"]
         assert parent.tension_points == ["T"]
         assert child.active_debates == ["A", "B"]
+
+    def test_fork_preserves_key_quotes_independently(self):
+        parent = Blackboard()
+        parent.update_global_summary({"key_quotes": ["[曹操]: 原话一"]})
+
+        child = parent.fork()
+        child.key_quotes.append("[刘备]: 原话二")
+
+        assert parent.key_quotes == ["[曹操]: 原话一"]
+        assert child.key_quotes == ["[曹操]: 原话一", "[刘备]: 原话二"]
+
+
+class TestBlackboardSnapshot:
+    def test_key_quotes_round_trip_through_snapshot(self):
+        original = Blackboard()
+        original.update_global_summary({"key_quotes": ["[曹操]: 这句必须保留。"]})
+
+        restored = Blackboard.from_snapshot(original.export_snapshot())
+
+        assert restored.key_quotes == ["[曹操]: 这句必须保留。"]
+
+    def test_snapshot_without_key_quotes_uses_backward_compatible_default(self):
+        restored = Blackboard.from_snapshot({"global_summary": "旧快照"})
+
+        assert restored.global_summary == "旧快照"
+        assert restored.key_quotes == []
 
 
 # ── TestFormatBriefingForContext ──────────────────────────
@@ -276,6 +312,7 @@ class TestFormatBriefingForContext:
             "summary": "三方对峙",
             "consensus": "暂时停火",
             "debates": ["攻打荆州", "联盟"],
+            "key_quotes": ["[曹操]: 粮草线一断，南下就不是选择题。"],
             "tensions": ["军事冲突"],
             "positions": {"曹操": "主战 (冷静)"},
             "recent": [{"agent": "曹操", "emotion": "冷静", "summary": "统一北方"}],
@@ -286,6 +323,8 @@ class TestFormatBriefingForContext:
         assert "攻打荆州" in result
         assert "【紧张点】军事冲突" in result
         assert "共识: 暂时停火" in result
+        assert "关键原话" in result
+        assert "[曹操]: 粮草线一断，南下就不是选择题。" in result
         assert "【各方立场】" in result
         assert "曹操" in result
         assert "【最近发言】" in result

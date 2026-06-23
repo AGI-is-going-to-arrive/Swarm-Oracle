@@ -164,4 +164,4 @@ Scenario questions and debate questions have a public 2000-character input limit
 
 ---
 
-For additional tuning options such as simulation limits and memory compaction budgets, read the comments in `.env.example`.
+For additional tuning options such as simulation limits and memory compaction budgets, read the comments in `.env.example`. The effective memory compaction cadence still comes from `MEMORY_COMPRESS_INTERVAL`; short-branch fields are kept as compatibility settings.

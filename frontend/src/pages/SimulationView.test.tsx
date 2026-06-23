@@ -41,6 +41,7 @@ const {
 	  getReplayArtifactMock,
 	  gameplayCardsModalRenderMock,
 	  interventionReceiptCardRenderMock,
+	  interventionModalRenderMock,
 	} = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
@@ -88,6 +89,7 @@ const {
 	  getReplayArtifactMock: vi.fn(async (): Promise<ReplayArtifactMock | null> => null),
 	  gameplayCardsModalRenderMock: vi.fn(),
 	  interventionReceiptCardRenderMock: vi.fn(),
+	  interventionModalRenderMock: vi.fn(),
 	}));
 
 const emptyDirectorState: ScenarioDirectorState = {
@@ -156,7 +158,7 @@ const mockStore = {
     { agent: '奥勒留斯', agent_id: 'a1', message: '稳定秩序。', emotion: 'calm', branch: 'b1', round: 1 },
   ],
   thinkingAgents: [] as Array<{ agent: string; agent_id: string; branch: string; round: number }>,
-  status: 'done' as 'done' | 'simulating',
+  status: 'done' as Scenario['status'],
   error: null,
   errorCode: null as string | null,
   loadScenario: vi.fn(),
@@ -239,7 +241,21 @@ vi.mock('../components/BranchTree', () => ({
 }));
 
 vi.mock('../components/ClassicBranchTree', () => ({
-  ClassicBranchTree: () => <div>branch-tree</div>,
+  ClassicBranchTree: ({
+    onIntervene,
+    canIntervene,
+  }: {
+    onIntervene: (branchId: string, branchTitle: string) => void;
+    canIntervene?: boolean;
+  }) => (
+    <div>
+      <div>branch-tree</div>
+      <div data-testid="classic-can-intervene">{String(Boolean(canIntervene))}</div>
+      <button type="button" onClick={() => onIntervene('b1', '永世帝国')}>
+        mock-intervene
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('../components/AgentPanel', () => ({
@@ -263,9 +279,12 @@ vi.mock('../components/TimelineBar', () => ({
   ),
 }));
 
-	vi.mock('../components/InterventionModal', () => ({
-	  default: () => null,
-	}));
+			vi.mock('../components/InterventionModal', () => ({
+			  default: (props: { branchId: string }) => {
+			    interventionModalRenderMock(props);
+			    return <div data-testid="intervention-modal">{props.branchId}</div>;
+			  },
+			}));
 
 	vi.mock('../components/InterventionReceiptCard', () => ({
 	  InterventionReceiptCard: (props: {
@@ -381,6 +400,7 @@ describe('SimulationView replay automation output', () => {
     getReplayArtifactMock.mockResolvedValue(null);
 	    gameplayCardsModalRenderMock.mockClear();
 	    interventionReceiptCardRenderMock.mockClear();
+	    interventionModalRenderMock.mockClear();
     mockStore.loadScenario.mockReset();
     mockStore.setScenario.mockClear();
     mockStore.scenario = { ...baseScenario };
@@ -619,6 +639,88 @@ describe('SimulationView replay automation output', () => {
       refreshKey: 'int-1:queued',
       interventionLifecycle: mockStore.interventionLifecycle,
     }));
+  });
+
+  it('only allows interventions while the live scenario is simulating', async () => {
+    const user = userEvent.setup();
+    mockStore.viewMode = 'classic';
+    mockStore.status = 'parsing';
+    mockStore.isSimulationComplete = false;
+    mockStore.branches = [
+      {
+        ...mockStore.branches[0],
+        status: 'ACTIVE',
+      },
+    ];
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('classic-can-intervene')).toHaveTextContent('false');
+    await user.click(screen.getByRole('button', { name: 'mock-intervene' }));
+    expect(screen.queryByTestId('intervention-modal')).not.toBeInTheDocument();
+
+    let raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    expect(raw ? JSON.parse(raw).page.branches[0].can_intervene : null).toBe(false);
+
+    mockStore.status = 'simulating';
+    rerender(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('classic-can-intervene')).toHaveTextContent('true');
+    raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+    expect(raw ? JSON.parse(raw).page.branches[0].can_intervene : null).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'mock-intervene' }));
+    expect(await screen.findByTestId('intervention-modal')).toHaveTextContent('b1');
+  });
+
+  it('closes an open intervention modal when the live status stops being intervenable', async () => {
+    const user = userEvent.setup();
+    mockStore.viewMode = 'classic';
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.branches = [
+      {
+        ...mockStore.branches[0],
+        status: 'ACTIVE',
+      },
+    ];
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'mock-intervene' }));
+    expect(await screen.findByTestId('intervention-modal')).toBeInTheDocument();
+
+    mockStore.status = 'narrating';
+    rerender(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('intervention-modal')).not.toBeInTheDocument();
+    });
+    expect(await screen.findByTestId('classic-can-intervene')).toHaveTextContent('false');
   });
 
   it('re-collapses the agent panel when the page switches into theater mode', async () => {
@@ -1422,12 +1524,13 @@ describe('SimulationView replay automation output', () => {
   });
 
   it('maps fork markers to the child branch fork round in timeline summaries', async () => {
-    mockStore.isSimulationComplete = false;
-    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = true;
+    mockStore.status = 'done';
     mockStore.currentRound = 1;
+    mockStore.viewMode = 'classic';
     mockStore.scenario = {
       ...baseScenario,
-      status: 'simulating',
+      status: 'done',
       total_rounds: 2,
     };
     mockStore.branches = [

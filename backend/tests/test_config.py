@@ -31,6 +31,18 @@ def test_settings_defaults():
     assert s.PORT > 0
 
 
+@pytest.mark.parametrize("sim_rounds", [3, 4])
+def test_short_branch_compression_keeps_default_cadence(monkeypatch, sim_rounds):
+    """Short simulations should not trigger extra LLM compression calls by default."""
+    from app.config import effective_memory_compress_interval, settings
+
+    monkeypatch.setattr(settings, "MEMORY_COMPRESS_INTERVAL", 5)
+    monkeypatch.setattr(settings, "MEMORY_COMPRESS_SHORT_BRANCH_INTERVAL", 2)
+    monkeypatch.setattr(settings, "MEMORY_COMPRESS_SHORT_BRANCH_MAX_ROUNDS", 4)
+
+    assert effective_memory_compress_interval(sim_rounds) == 5
+
+
 def test_result_report_feature_is_enabled_by_default(monkeypatch):
     """Result Report is a default user-visible result feature."""
     monkeypatch.delenv("FEATURE_RESULT_REPORT", raising=False)

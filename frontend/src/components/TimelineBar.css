@@ -68,7 +68,7 @@
 
 .stage--pending {
   color: var(--text-muted);
-  opacity: 0.5;
+  filter: saturate(0.6);
 }
 
 .stage__icon {
@@ -81,14 +81,14 @@
 
 .stage__connector {
   width: 32px;
-  height: 2px;
+  height: 3px;
   background: var(--border-subtle);
   margin: 0 4px;
-  border-radius: 1px;
+  border-radius: var(--radius-full);
 }
 
 .connector--done {
-  background: var(--color-primary-dim);
+  background: linear-gradient(90deg, var(--color-primary-dim), var(--color-primary));
 }
 
 .timeline-progress {
@@ -102,8 +102,8 @@
 
 .progress-bar-track {
   width: 100%;
-  height: 6px;
-  border-radius: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
   background: var(--bg-elevated);
   overflow: hidden;
 }
@@ -111,27 +111,8 @@
 .progress-bar-fill {
   height: 100%;
   border-radius: 3px;
-  background: linear-gradient(90deg, var(--color-primary), var(--color-accent, #4caf50));
+  background: var(--color-primary);
   transition: width 0.5s ease-out;
-  position: relative;
-}
-
-.progress-bar-fill::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.15) 50%,
-    transparent 100%
-  );
-  animation: shimmer 2s linear infinite;
-}
-
-@keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
 }
 
 .progress-info {
@@ -140,6 +121,7 @@
   gap: 10px;
   font-size: 0.7rem;
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .progress-round {
@@ -181,6 +163,7 @@
   padding: 5px 8px;
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.84);
   background: color-mix(in oklab, var(--bg-surface) 84%, transparent);
   color: var(--text-muted);
   font-size: 0.76rem;
@@ -209,9 +192,12 @@ button.timeline-round:hover {
 }
 
 .timeline-round--selected {
+  border-color: rgba(198, 21, 131, 0.72);
   border-color: color-mix(in oklab, var(--color-primary) 72%, white 10%);
+  background: rgba(246, 218, 235, 0.76);
   background: color-mix(in oklab, var(--color-primary-glow) 76%, var(--bg-surface) 24%);
   color: var(--color-primary);
+  box-shadow: 0 0 0 1px rgba(198, 21, 131, 0.32);
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-primary) 32%, transparent);
 }
 
@@ -273,6 +259,7 @@ button.timeline-round:focus-visible .timeline-round__tooltip,
   font-size: 0.66rem;
   font-weight: 700;
   letter-spacing: 0.03em;
+  background: rgba(18, 16, 38, 0.76);
   background: color-mix(in oklab, var(--bg-deep) 76%, transparent);
 }
 
@@ -303,6 +290,8 @@ button.timeline-round:focus-visible .timeline-round__tooltip,
   display: flex;
   gap: 10px;
   flex-shrink: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .stat {
@@ -377,5 +366,121 @@ button.timeline-round:focus-visible .timeline-round__tooltip,
   .timeline-round__marker-icon {
     width: 11px;
     height: 11px;
+  }
+}
+
+/* ── Sim Progress Ledger (editorial console; replaces sticky banner) ── */
+.sim-progress-ledger {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 24px;
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sim-progress-ledger__steps {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 200px;
+  min-width: 96px;
+  max-width: 220px;
+}
+
+.sim-progress-ledger__tick {
+  flex: 1 1 auto;
+  min-width: 6px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+  transition: background 0.4s ease-out;
+}
+
+.sim-progress-ledger__tick.is-done {
+  background: var(--color-primary);
+}
+
+.sim-progress-ledger__tick.is-current {
+  background: var(--color-primary);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+.sim-progress-ledger__pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+.sim-progress-ledger__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sim-progress-ledger__round {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.sim-progress-ledger__sep {
+  color: var(--text-muted);
+}
+
+.sim-progress-ledger__pct {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.sim-progress-ledger__eta {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+@media (max-width: 900px) {
+  .sim-progress-ledger {
+    padding: 8px 16px;
+    gap: 8px;
+  }
+
+  .sim-progress-ledger__steps {
+    flex: 0 1 140px;
+  }
+}
+
+@media (max-width: 520px) {
+  .sim-progress-ledger {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+
+  .sim-progress-ledger__steps {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .sim-progress-ledger__label {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage--active,
+  .sim-progress-ledger__tick.is-current,
+  .sim-progress-ledger__pulse-dot {
+    animation: none !important;
   }
 }

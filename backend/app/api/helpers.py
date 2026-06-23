@@ -1750,6 +1750,31 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
         return None
 
 
+def _coerce_positive_int(value) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _scenario_total_rounds(parsed_context: dict | None, branches) -> int | None:
+    if isinstance(parsed_context, dict):
+        configured_rounds = _coerce_positive_int(parsed_context.get("simulation_rounds"))
+        if configured_rounds is not None:
+            return configured_rounds
+
+    max_round = 0
+    for branch in branches:
+        for round_obj in branch.rounds:
+            round_number = _coerce_positive_int(round_obj.round_number)
+            if round_number is not None and round_number > max_round:
+                max_round = round_number
+    return max_round if max_round > 0 else None
+
+
 def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
     """Load scenario data from DB and return a ScenarioResponse.
 
@@ -1799,7 +1824,8 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                 continue
             fork_groups.setdefault(parent_id, []).append(branch)
 
-        ctx = s.parsed_context or {}
+        ctx = s.parsed_context if isinstance(s.parsed_context, dict) else {}
+        total_rounds = _scenario_total_rounds(ctx, branches)
         raw_fork_debug_trace = ctx.get("fork_debug_trace") if isinstance(ctx, dict) else None
         fork_round_checks: list[dict] = []
         if isinstance(raw_fork_debug_trace, list):
@@ -1845,7 +1871,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             status=s.status.value,
             run_group_id=s.run_group_id,
             created_at=s.created_at.isoformat(),
-            total_rounds=ctx.get("simulation_rounds"),
+            total_rounds=total_rounds,
             agents=[
                 {
                     "id": a.id,

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import unicodedata
 import uuid
@@ -18,7 +19,7 @@ from sqlalchemy import case, func, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
-from app.config import settings
+from app.config import effective_memory_compress_interval, settings
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
@@ -408,22 +409,47 @@ def _coerce_turn_temperature(value: Any, default: float) -> float:
         return default
 
 
+def _effective_compress_interval(sim_rounds: int | None) -> int:
+    try:
+        return effective_memory_compress_interval(sim_rounds)
+    except Exception:
+        logger.debug("Failed to resolve adaptive memory compression interval", exc_info=True)
+        try:
+            return max(1, int(settings.MEMORY_COMPRESS_INTERVAL))
+        except (TypeError, ValueError):
+            return 1
+
+
 def _prepend_agent_turn_prompt_prefix(
     prompt: str,
     *,
     agent_name: str,
     topic: str,
+    scenario_question: str = "",
+    branch_question: str = "",
     worldline_context: str,
     language: str,
     retry: bool = False,
 ) -> str:
-    if _AGENT_TURN_PROMPT_PREFIX_MARKER in prompt:
+    if prompt.lstrip().startswith(f"[{_AGENT_TURN_PROMPT_PREFIX_MARKER}]"):
         return prompt
 
     is_chinese = _is_chinese_language(language)
-    question_label = "当前 what-if 问题" if is_chinese else "Current what-if question"
+    original_question_label = "原始 what-if 问题" if is_chinese else "Original what-if question"
+    branch_question_label = "分支假设锚点" if is_chinese else "Branch hypothesis anchor"
     worldline_label = "当前世界线/分叉锚点" if is_chinese else "Current worldline/fork anchor"
-    question_block = format_untrusted_text_block(question_label, topic, max_chars=600)
+    original_question = str(scenario_question or topic or "").strip()
+    effective_branch_question = str(branch_question or topic or original_question).strip()
+    original_question_block = format_untrusted_text_block(
+        original_question_label,
+        original_question,
+        max_chars=600,
+    )
+    branch_question_block = format_untrusted_text_block(
+        branch_question_label,
+        effective_branch_question,
+        max_chars=600,
+    )
     worldline_block = format_untrusted_text_block(
         worldline_label,
         worldline_context or ("无" if is_chinese else "None"),
@@ -434,8 +460,12 @@ def _prepend_agent_turn_prompt_prefix(
         lines = [
             f"[{_AGENT_TURN_PROMPT_PREFIX_MARKER}]",
             f"你现在只作为角色「{agent_name}」发言。",
-            question_block,
+            original_question_block,
+            branch_question_block,
             worldline_block,
+            "因果链脚手架：先想清楚 (1) 改了哪个核心变量；"
+            "(2) 牵动了谁的利益；(3) 各方会怎样理性反应；"
+            "(4) 你的结论如何回扣这条因果链。",
             "只输出角色第一人称纯文本发言；不要调用工具；不要输出元信息、代码、"
             "类型定义、文件路径、prompt 模板或 role 标签。",
         ]
@@ -448,8 +478,12 @@ def _prepend_agent_turn_prompt_prefix(
         lines = [
             f"[{_AGENT_TURN_PROMPT_PREFIX_MARKER}]",
             f"You are speaking only as the character named {agent_name}.",
-            question_block,
+            original_question_block,
+            branch_question_block,
             worldline_block,
+            "Causal-chain scaffold: first reason through (1) which core variable changed; "
+            "(2) whose interests it affects; (3) how each party would rationally react; "
+            "(4) how your result ties back to that causal chain.",
             "Output only first-person plain-text character speech. Do not call tools. "
             "Do not output metadata, code, type definitions, file paths, prompt templates, "
             "or role labels.",
@@ -947,6 +981,8 @@ def _pick_theater_ending_payload(
             if item.get("id") == branch_id:
                 return item
 
+    candidate_branches = _terminal_branch_candidates(narrated_branches, narrated_branches)
+
     def _sort_key(item: dict[str, Any]) -> tuple[float, int, str]:
         try:
             probability = float(item.get("probability") or 0)
@@ -958,7 +994,36 @@ def _pick_theater_ending_payload(
             fork_round = 0
         return (-probability, fork_round, str(item.get("id") or ""))
 
-    return min(narrated_branches, key=_sort_key)
+    return min(candidate_branches, key=_sort_key)
+
+
+def _branch_id_value(branch: dict[str, Any]) -> str:
+    return str(branch.get("id") or "").strip()
+
+
+def _parent_branch_id_value(branch: dict[str, Any]) -> str:
+    return str(branch.get("parent_branch_id") or "").strip()
+
+
+def _terminal_branch_candidates(
+    branches: list[dict[str, Any]],
+    all_branches: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return leaf branches for final outcome semantics, with fail-soft fallback."""
+    if not branches:
+        return []
+
+    parent_ids = {
+        parent_id
+        for branch in (all_branches or branches)
+        if (parent_id := _parent_branch_id_value(branch))
+    }
+    terminal = [
+        branch
+        for branch in branches
+        if _branch_id_value(branch) and _branch_id_value(branch) not in parent_ids
+    ]
+    return terminal or branches
 
 
 def reconcile_scenario_done_if_complete(
@@ -2450,7 +2515,7 @@ async def _run_simulation_impl(
                 if fork_detector_active_branch_limit == 0
                 else fork_detector_active_branch_limit
             )
-        key_variable = ctx.get("key_variable", scenario.question)
+        key_variable = str(ctx.get("key_variable") or scenario.question or "").strip()
 
         # V2: Initialize visualization mapper if enabled
         viz_enabled = getattr(scenario, "visualization_enabled", False)
@@ -2618,7 +2683,13 @@ async def _run_simulation_impl(
     if branch_id is None:
         root_title = ctx.get("initial_title", "问题起点")
         active_branch_id = _get_or_create_root_branch(engine, scenario_id, title=root_title)
-        all_branches = [{"id": active_branch_id, "status": "ACTIVE", "probability": 1.0}]
+        all_branches = [{
+            "id": active_branch_id,
+            "parent_branch_id": None,
+            "fork_round": 0,
+            "status": "ACTIVE",
+            "probability": 1.0,
+        }]
 
         # Push root branch to frontend so tree renders before agent_speak events
         await push({
@@ -2651,6 +2722,8 @@ async def _run_simulation_impl(
             _resume_replay_kind = target_branch.replay_kind  # str | None
             all_branches = [{
                 "id": active_branch_id,
+                "parent_branch_id": target_branch.parent_branch_id,
+                "fork_round": target_branch.fork_round,
                 "status": BranchStatus.ACTIVE.value,
                 "probability": target_branch.probability,
             }]
@@ -2983,12 +3056,14 @@ async def _run_simulation_impl(
                     logger.info("V2 Card event triggered: %s at round %d", triggered_card, round_num)  # noqa: E501
 
             # 3) Compress memory every N rounds
-            if round_num % settings.MEMORY_COMPRESS_INTERVAL == 0:
+            compress_interval = _effective_compress_interval(sim_rounds)
+            if round_num % compress_interval == 0:
                 compress_bb = blackboards.get(current_branch_id)  # None in RAW mode
                 await _compress_round_memory(
                     engine,
                     current_branch_id,
                     round_num,
+                    compress_interval=compress_interval,
                     blackboard=compress_bb,
                     language=detected_language,
                     llm_overrides=llm_overrides,
@@ -3076,8 +3151,11 @@ async def _run_simulation_impl(
                                 probability=fb["probability"],
                             )
                             all_branches.append({
-                                "id": new_id, "status": "ACTIVE",
-                                "probability": fb["probability"]
+                                "id": new_id,
+                                "parent_branch_id": current_branch_id,
+                                "fork_round": round_num,
+                                "status": "ACTIVE",
+                                "probability": fb["probability"],
                             })
                             # Fork blackboard for the new branch (only in blackboard mode)
                             if current_branch_id in blackboards:
@@ -3172,16 +3250,44 @@ async def _run_simulation_impl(
         # 7) Re-normalize survivors after pruning so active branches still sum to 1.0.
         _apply_normalized_active_branch_probabilities(engine, scenario_id, all_branches)
 
+    # Before narration/verdict, normalize the final displayed outcome set.
+    # During the loop we keep active-only normalization so pruning semantics do
+    # not include already-completed fork parents.
+    if branch_id is None:
+        _apply_normalized_active_branch_probabilities(
+            engine,
+            scenario_id,
+            all_branches,
+            include_completed=True,
+        )
+
     # ── Stage 3: Narrate ─────────────────────────────
     if branch_id is None:
         _update_scenario_status(engine, scenario_id, ScenarioStatus.NARRATING)
         await push({"type": "status", "data": {"status": "narrating"}})
 
+    final_narration_statuses = {BranchStatus.ACTIVE.value, BranchStatus.COMPLETED.value}
+    branch_payloads_for_narration = (
+        _terminal_branch_candidates(
+            [
+                branch
+                for branch in all_branches
+                if _branch_status_value(branch) in final_narration_statuses
+            ],
+            all_branches,
+        )
+        if branch_id is None
+        else all_branches
+    )
+
     narrated_branch_payloads: list[dict[str, Any]] = []
     if verdict_only_multi_run and branch_id is None:
-        narrated_branch_payloads = _build_verdict_only_branch_payloads(engine, all_branches)
+        narrated_branch_payloads = _build_verdict_only_branch_payloads(
+            engine,
+            branch_payloads_for_narration,
+        )
     else:
-        for b in all_branches:
+        for b in branch_payloads_for_narration:
             _check_cancelled(scenario_id)
             if b["status"] in ("ACTIVE", "COMPLETED"):
                 _check_cancelled(scenario_id)
@@ -3207,6 +3313,8 @@ async def _run_simulation_impl(
                 })
                 narrated_branch_payloads.append({
                     "id": b["id"],
+                    "parent_branch_id": b.get("parent_branch_id"),
+                    "status": BranchStatus.COMPLETED.value,
                     "fork_round": b.get("fork_round"),
                     "probability": b.get("probability", 0),
                     "title": narration.get("title", ""),
@@ -3222,10 +3330,16 @@ async def _run_simulation_impl(
         llm_overrides=llm_overrides,
     )
 
+    final_branch_payloads = (
+        _terminal_branch_candidates(narrated_branch_payloads, narrated_branch_payloads)
+        if branch_id is None
+        else narrated_branch_payloads
+    )
+
     if branch_id is None and settings.FEATURE_RESULT_VERDICT:
         verdict = await _generate_verdict(
             scenario.question or "",
-            narrated_branch_payloads,
+            final_branch_payloads,
             web_context_block,
             detected_language,
             llm_overrides=llm_overrides,
@@ -3235,7 +3349,7 @@ async def _run_simulation_impl(
 
     if branch_id is None and settings.FEATURE_RESULT_REPORT and not verdict_only_multi_run:
         try:
-            chosen_report_branch = _pick_theater_ending_payload(narrated_branch_payloads)
+            chosen_report_branch = _pick_theater_ending_payload(final_branch_payloads)
             report_branch_id = (
                 str(chosen_report_branch.get("id") or "")
                 if chosen_report_branch
@@ -3296,7 +3410,7 @@ async def _run_simulation_impl(
     )
     if scenario_finished and viz_mapper is not None:
         chosen_ending = _pick_theater_ending_payload(
-            narrated_branch_payloads,
+            final_branch_payloads,
             branch_id=branch_id,
         )
         if chosen_ending is not None:
@@ -3480,7 +3594,7 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
 
     status = getattr(branch.status, "value", branch.status)
     is_root_branch = _is_canonical_root_branch(branch, parsed_context)
-    key_variable = str(parsed_context.get("key_variable") or "").strip()
+    key_variable = str(parsed_context.get("key_variable") or scenario_question).strip()
     setting_data = parsed_context.get("setting") if isinstance(parsed_context, dict) else None
     setting_hook = (
         _format_setting(setting_data, language=language)
@@ -3496,10 +3610,11 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
         ]
         if is_root_branch:
             lines.append("根世界线锚点: 这是原始 what-if 的起点，不是分叉后的派生线")
-            if scenario_question:
-                lines.append(f"原始问题: {scenario_question}")
-            if key_variable:
-                lines.append(f"关键变量: {key_variable}")
+        if scenario_question:
+            lines.append(f"原始问题: {scenario_question}")
+        if key_variable:
+            lines.append(f"关键变量: {key_variable}")
+        if is_root_branch:
             if setting_hook:
                 lines.append(f"场景钩子:\n{setting_hook}")
         if branch.fork_reason:
@@ -3517,10 +3632,11 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
     ]
     if is_root_branch:
         lines.append("Root worldline anchor: this is the original what-if starting point")
-        if scenario_question:
-            lines.append(f"Original question: {scenario_question}")
-        if key_variable:
-            lines.append(f"Key variable: {key_variable}")
+    if scenario_question:
+        lines.append(f"Original question: {scenario_question}")
+    if key_variable:
+        lines.append(f"Key variable: {key_variable}")
+    if is_root_branch:
         if setting_hook:
             lines.append(f"Setting hook:\n{setting_hook}")
     if branch.fork_reason:
@@ -3638,6 +3754,14 @@ async def _gather_agent_messages(
         shared_text = format_briefing_for_context(briefing, language=language)
     else:
         shared_text = ""
+    try:
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            scenario_question = str(getattr(scenario, "question", "") or "").strip()
+    except Exception:
+        logger.debug("Failed to load scenario question for agent turn prompt", exc_info=True)
+        scenario_question = ""
+    effective_topic = str(topic or scenario_question or "").strip()
 
     empty_shared_briefings = {"(尚无共享信息)", "(no shared briefing yet)"}
     has_usable_shared_briefing = bool(shared_text) and shared_text not in empty_shared_briefings
@@ -3661,7 +3785,7 @@ async def _gather_agent_messages(
             # L2 vector memory: retrieve relevant memories for CORE/IMPORTANT
             l2_memories = ""
             if agent_tier in ("CORE", "IMPORTANT") and not has_usable_shared_briefing:
-                query = f"{topic} {agent.get('name', '')} {agent.get('role', '')}"
+                query = f"{effective_topic} {agent.get('name', '')} {agent.get('role', '')}"
                 l2_memories = retrieve_relevant_memories(
                     scenario_id,
                     query,
@@ -3685,7 +3809,7 @@ async def _gather_agent_messages(
                         retrieve_identity_memories,
                         user_id=scenario_user_id,
                         identity_id=agent["agent_identity_id"],
-                        query_text=topic,
+                        query_text=effective_topic,
                         n_results=3,
                     )
                     _check_cancelled(scenario_id)
@@ -3711,7 +3835,7 @@ async def _gather_agent_messages(
                 ctx = build_agent_context(
                     agent=agent,
                     setting_background=setting_bg,
-                    current_topic=topic,
+                    current_topic=effective_topic,
                     recent_messages="",
                     retrieved_memories=l2_memories,
                     tier=agent_tier,
@@ -3732,7 +3856,7 @@ async def _gather_agent_messages(
                 ctx = build_agent_context(
                     agent=agent,
                     setting_background=setting_bg,
-                    current_topic=topic,
+                    current_topic=effective_topic,
                     recent_messages=recent_text,
                     retrieved_memories=l2_memories,
                     tier=agent_tier,
@@ -3799,7 +3923,9 @@ async def _gather_agent_messages(
                     turn_prompt = _prepend_agent_turn_prompt_prefix(
                         ctx,
                         agent_name=agent["name"],
-                        topic=topic,
+                        topic=effective_topic,
+                        scenario_question=scenario_question,
+                        branch_question=effective_topic,
                         worldline_context=worldline_context,
                         language=language,
                         retry=attempt > 0,
@@ -4537,6 +4663,8 @@ def _build_verdict_only_branch_payloads(
             payloads.append(
                 {
                     "id": branch.id,
+                    "parent_branch_id": branch.parent_branch_id,
+                    "status": branch.status.value,
                     "fork_round": branch_data.get("fork_round"),
                     "probability": branch.probability,
                     "title": branch.title,
@@ -4730,6 +4858,7 @@ async def _compress_round_memory(
     branch_id,
     current_round,
     *,
+    compress_interval: int | None = None,
     blackboard: Blackboard | None = None,
     language: str = "Chinese",
     llm_overrides: dict | None = None,
@@ -4739,7 +4868,11 @@ async def _compress_round_memory(
     When blackboard is provided, also updates its global summary
     so subsequent rounds benefit from the compressed context.
     """
-    start_round = max(1, current_round - settings.MEMORY_COMPRESS_INTERVAL + 1)
+    try:
+        window = max(1, int(compress_interval or settings.MEMORY_COMPRESS_INTERVAL))
+    except (TypeError, ValueError):
+        window = 1
+    start_round = max(1, current_round - window + 1)
     msgs = _get_messages_in_range(engine, branch_id, start_round, current_round)
     if not msgs:
         return
@@ -4968,29 +5101,63 @@ def _normalized_active_branch_probabilities(
     if not active_branches:
         return None, False
 
-    prob_sum = sum(float(branch.get("probability", 0.0) or 0.0) for branch in active_branches)
+    weights = [_normalization_probability_weight(branch) for branch in active_branches]
+    prob_sum = sum(weights)
     if prob_sum <= 0:
         fallback = [round(1.0 / len(active_branches), 4) for _ in active_branches]
         fallback[-1] = round(1.0 - sum(fallback[:-1]), 4)
         return fallback, True
 
-    if abs(prob_sum - 1.0) <= 0.01:
+    rounded_current = [round(weight, 4) for weight in weights]
+    already_four_decimal = all(
+        abs(weight - rounded) <= 1e-9
+        for weight, rounded in zip(weights, rounded_current)
+    )
+    if already_four_decimal and abs(sum(rounded_current) - 1.0) <= 1e-9:
         return None, False
 
-    normalized = [
-        round(float(branch.get("probability", 0.0) or 0.0) / prob_sum, 4)
-        for branch in active_branches
-    ]
-    normalized[-1] = round(1.0 - sum(normalized[:-1]), 4)
+    normalized = [round(weight / prob_sum, 4) for weight in weights]
+    residual = round(1.0 - sum(normalized), 4)
+    if residual:
+        dominant_index = max(range(len(weights)), key=lambda idx: weights[idx])
+        normalized[dominant_index] = round(normalized[dominant_index] + residual, 4)
     return normalized, False
+
+
+def _branch_status_value(branch: dict[str, Any]) -> str:
+    status = branch.get("status")
+    if isinstance(status, BranchStatus):
+        return status.value
+    return str(status or "").strip()
+
+
+def _normalization_probability_weight(branch: dict[str, Any]) -> float:
+    try:
+        number = float(branch.get("probability", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(number) or math.isinf(number):
+        return 0.0
+    return min(1.0, max(0.0, number))
 
 
 def _apply_normalized_active_branch_probabilities(
     engine,
     scenario_id: str,
     all_branches: list[dict[str, Any]],
+    *,
+    include_completed: bool = False,
 ) -> None:
-    active_branches = [branch for branch in all_branches if branch["status"] == "ACTIVE"]
+    normalizable_statuses = {BranchStatus.ACTIVE.value}
+    if include_completed:
+        normalizable_statuses.add(BranchStatus.COMPLETED.value)
+    active_branches = [
+        branch
+        for branch in all_branches
+        if _branch_status_value(branch) in normalizable_statuses
+    ]
+    if include_completed:
+        active_branches = _terminal_branch_candidates(active_branches, all_branches)
     normalized_probabilities, used_uniform_fallback = _normalized_active_branch_probabilities(
         active_branches,
     )
@@ -4998,8 +5165,10 @@ def _apply_normalized_active_branch_probabilities(
         return
 
     if used_uniform_fallback:
+        branch_scope = "Active/completed" if include_completed else "Active"
         logger.warning(
-            "Active branches for scenario %s summed to <= 0; falling back to uniform probabilities",
+            "%s branches for scenario %s summed to <= 0; falling back to uniform probabilities",
+            branch_scope,
             scenario_id,
         )
 

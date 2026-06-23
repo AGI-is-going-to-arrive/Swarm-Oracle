@@ -24,6 +24,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_ACTIVITY = 20
+_POSITION_QUOTE_MAX_CHARS = 240
 
 # Context window safety constants (validated by benchmark: 192 bytes/agent ≈ 64 tokens/agent)
 _CONTEXT_WINDOW_TOKENS = 200_000       # GPT 5.2 context limit
@@ -33,7 +34,14 @@ _TOKENS_PER_AGENT_POSITION = 64        # ~192 bytes / 2.99 bytes-per-token
 _POSITION_THRESHOLD = int(
     (_CONTEXT_WINDOW_TOKENS * _SAFETY_MARGIN - _BASE_TOKENS_PER_CALL)
     / _TOKENS_PER_AGENT_POSITION
-)  # ≈ 2,474 agents
+    )  # ≈ 2,474 agents
+
+
+def _truncate_position_text(content: str, max_chars: int = _POSITION_QUOTE_MAX_CHARS) -> str:
+    text = str(content or "")
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
 
 
 class Blackboard:
@@ -53,6 +61,7 @@ class Blackboard:
         self.global_summary: str = ""
         self.consensus: str = ""
         self.active_debates: list[str] = []
+        self.key_quotes: list[str] = []
         self.tension_points: list[str] = []
         self.agent_positions: dict[str, str] = {}   # {agent_name: "立场(情绪)"}
         self.activity_log: list[dict[str, Any]] = []
@@ -77,7 +86,7 @@ class Blackboard:
         concurrent closures.
         """
         # Update agent position
-        brief = content[:60] + ("…" if len(content) > 60 else "")
+        brief = _truncate_position_text(content)
         self.agent_positions[agent_name] = f"{brief} ({emotion})"
 
         # Append to activity log
@@ -114,11 +123,12 @@ class Blackboard:
     def update_global_summary(self, compressed: dict) -> None:
         """Ingest structured output from compress_rounds().
 
-        Expected keys: situation, active_debates, tension_points, consensus.
+        Expected keys: situation, active_debates, key_quotes, tension_points, consensus.
         """
         self.global_summary = compressed.get("situation", "")
         self.consensus = compressed.get("consensus", "")
         self.active_debates = list(compressed.get("active_debates", []))
+        self.key_quotes = list(compressed.get("key_quotes", []))
         self.tension_points = list(compressed.get("tension_points", []))
 
     # ── Read API ─────────────────────────────────────────
@@ -151,6 +161,7 @@ class Blackboard:
             "consensus": self.consensus,
             "recent": self.activity_log[-max_entries:],
             "positions": positions,
+            "key_quotes": list(self.key_quotes),
             "tensions": list(self.tension_points),
             "debates": list(self.active_debates),
         }
@@ -186,6 +197,7 @@ class Blackboard:
             "consensus": self.consensus,
             "recent": group_activity,
             "positions": group_positions,
+            "key_quotes": list(self.key_quotes),
             "tensions": list(self.tension_points),
             "debates": list(self.active_debates),
             "group_name": group_name,
@@ -212,6 +224,7 @@ class Blackboard:
             "consensus": self.consensus,
             "recent": self.activity_log[-max_entries:],
             "positions": group_summaries,
+            "key_quotes": list(self.key_quotes),
             "tensions": list(self.tension_points),
             "debates": list(self.active_debates),
         }
@@ -279,6 +292,7 @@ class Blackboard:
             "global_summary": self.global_summary,
             "consensus": self.consensus,
             "active_debates": list(self.active_debates),
+            "key_quotes": list(self.key_quotes),
             "tension_points": list(self.tension_points),
             "agent_positions": dict(self.agent_positions),
             "activity_log": copy.deepcopy(self.activity_log),
@@ -293,6 +307,7 @@ class Blackboard:
         bb.global_summary = data.get("global_summary", "")
         bb.consensus = data.get("consensus", "")
         bb.active_debates = list(data.get("active_debates", []))
+        bb.key_quotes = list(data.get("key_quotes", []))
         bb.tension_points = list(data.get("tension_points", []))
         bb.agent_positions = dict(data.get("agent_positions", {}))
         bb.activity_log = list(data.get("activity_log", []))
@@ -312,6 +327,7 @@ class Blackboard:
         child.global_summary = self.global_summary
         child.consensus = self.consensus
         child.active_debates = list(self.active_debates)
+        child.key_quotes = list(self.key_quotes)
         child.tension_points = list(self.tension_points)
         child.agent_positions = dict(self.agent_positions)
         child.activity_log = copy.deepcopy(self.activity_log)

@@ -33,6 +33,26 @@ describe('legacy CSS color fallbacks', () => {
     expect(css).not.toContain('color-mix(');
   });
 
+  it('keeps timeline round chips readable without color-mix support', () => {
+    const css = readCss('src/components/TimelineBar.css');
+
+    expect(css).toMatch(/\.timeline-round\s*\{[\s\S]*?background:\s*rgba\(255, 255, 255, 0\.84\);[\s\S]*?background:\s*color-mix\(in oklab, var\(--bg-surface\) 84%, transparent\);/);
+    expect(css).toMatch(/\.timeline-round--selected\s*\{[\s\S]*?border-color:\s*rgba\(198, 21, 131, 0\.72\);[\s\S]*?border-color:\s*color-mix\(in oklab, var\(--color-primary\) 72%, white 10%\);/);
+    expect(css).toMatch(/\.timeline-round--selected\s*\{[\s\S]*?background:\s*rgba\(246, 218, 235, 0\.76\);[\s\S]*?background:\s*color-mix\(in oklab, var\(--color-primary-glow\) 76%, var\(--bg-surface\) 24%\);/);
+    expect(css).toMatch(/\.timeline-round--selected\s*\{[\s\S]*?box-shadow:\s*0 0 0 1px rgba\(198, 21, 131, 0\.32\);[\s\S]*?box-shadow:\s*0 0 0 1px color-mix\(in oklab, var\(--color-primary\) 32%, transparent\);/);
+    expect(css).toMatch(/\.timeline-round__marker\s*\{[\s\S]*?background:\s*rgba\(18, 16, 38, 0\.76\);[\s\S]*?background:\s*color-mix\(in oklab, var\(--bg-deep\) 76%, transparent\);/);
+  });
+
+  it('keeps timeline rounds and live ledger usable without color-mix or wide screens', () => {
+    const css = readCss('src/components/TimelineBar.css');
+
+    expect(css).toMatch(/\.timeline-round\s*\{[\s\S]*?background:\s*rgba\(255, 255, 255, 0\.84\);[\s\S]*?background:\s*color-mix\(in oklab, var\(--bg-surface\) 84%, transparent\);/);
+    expect(css).toMatch(/\.timeline-round--selected\s*\{[\s\S]*?border-color:\s*rgba\(198, 21, 131, 0\.72\);[\s\S]*?border-color:\s*color-mix\(in oklab, var\(--color-primary\) 72%, white 10%\);[\s\S]*?background:\s*rgba\(246, 218, 235, 0\.76\);[\s\S]*?background:\s*color-mix\(in oklab, var\(--color-primary-glow\) 76%, var\(--bg-surface\) 24%\);[\s\S]*?box-shadow:\s*0 0 0 1px rgba\(198, 21, 131, 0\.32\);[\s\S]*?box-shadow:\s*0 0 0 1px color-mix\(in oklab, var\(--color-primary\) 32%, transparent\);/);
+    expect(css).toMatch(/\.timeline-round__marker\s*\{[\s\S]*?background:\s*rgba\(18, 16, 38, 0\.76\);[\s\S]*?background:\s*color-mix\(in oklab, var\(--bg-deep\) 76%, transparent\);/);
+    expect(css).toMatch(/\.sim-progress-ledger\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*100%;/);
+    expect(css).toMatch(/@media \(max-width: 520px\)\s*\{[\s\S]*?\.sim-progress-ledger\s*\{[\s\S]*?flex-wrap:\s*wrap;[\s\S]*?\.sim-progress-ledger__label\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
+  });
+
   it('declares worldline oracle skin fallbacks before OKLCH overrides', () => {
     const css = readCss('src/pages/WorldlineRoundtable.css');
 

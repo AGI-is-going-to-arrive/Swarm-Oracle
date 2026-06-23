@@ -22,12 +22,12 @@ Entry: `/` home -> `Use Template`
 ![Education template entry](screenshots-en/01-home.png)
 
 ### F04 Simulation Mode, Pixel Theater, and Director/Gameplay Cards
-Simulation Mode offers Conservative, Balanced, and Exploratory settings for main-simulation branching. Advanced settings can also switch the display between Classic and Pixel Theater; Pixel Theater presents the run as a pixel-stage view with character dialogue, branches, and the director toolbar. The director/gameplay cards come from the shared contract and currently include 14 cards: Civilization Debate, Spy Infiltration, Backchannel Pact, Human Takeover, Space-Time Rift, Mandate Surge, Evacuation Order, Public Hearing, Resource Triage, Forbidden Ritual, Audit Reckoning, Intel Blowback, Mandate Snapback, and Ceasefire Committee. Debate Arena uses its own phase rules and does not follow this setting.
+Simulation Mode offers Conservative, Balanced, and Exploratory settings for main-simulation branching. Advanced settings can also switch the display between Classic and Pixel Theater; Pixel Theater presents the run as a pixel-stage view with character dialogue, branches, and the director toolbar. The simulation page uses a segmented progress ledger for current round, progress, and ETA; intervention entries are available only during a live run and disappear during narration, completion, or replay. The director/gameplay cards come from the shared contract and currently include 14 cards: Civilization Debate, Spy Infiltration, Backchannel Pact, Human Takeover, Space-Time Rift, Mandate Surge, Evacuation Order, Public Hearing, Resource Triage, Forbidden Ritual, Audit Reckoning, Intel Blowback, Mandate Snapback, and Ceasefire Committee. Debate Arena uses its own phase rules and does not follow this setting.
 Entry: `/` home -> `Simulation Mode` / display mode; live `/sim/:id` -> Pixel Theater toolbar -> gameplay cards
 ![Simulation Mode](screenshots-en/01-home.png)
 
 ### F05 Simulation Rounds and Agent Count
-The two sliders control run length and how many Agents join the main simulation. The page estimates runtime as you adjust them.
+The two sliders control run length and how many Agents join the main simulation. The page estimates runtime as you adjust them; once the run starts, the top progress ledger continues to show current round, overall progress, ETA, and the narration stage.
 Entry: `/` home -> `Simulation Rounds` / `Agent Count`
 ![Rounds and Agent sliders](screenshots-en/01-home.png)
 
@@ -42,7 +42,7 @@ Entry: `/result/:id` -> page header
 ![Prediction verdict](screenshots-en/02-result.png)
 
 ### F08 Worldline Cards
-Each ending has a title, probability, story summary, and answer to the original question. Expanding a card opens the full story and follow-up entries.
+Each ending has a title, probability, story summary, and answer to the original question. Probabilities are normalized across terminal leaf worldlines, so fork parents are not treated as final endings; a valid single-ending run can still show 100%. Expanding a card opens the full story and follow-up entries.
 Entry: `/result/:id` -> worldline cards
 ![Worldline cards](screenshots-en/02-result.png)
 

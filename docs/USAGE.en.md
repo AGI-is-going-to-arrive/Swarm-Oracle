@@ -13,10 +13,10 @@ For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 ## First Simulation: 3 Steps
 
 1. On the home page, type a "What if...?" question, for example, "What if Zhuge Liang had lived 10 more years?" You can also choose a Quick Start template, which fills in a question and suggested characters.
-2. Optional: adjust **simulation rounds** and **Agent count**. More rounds and more characters produce richer endings, but also take longer. The home page estimates runtime as you adjust them.
+2. Optional: adjust **simulation rounds** and **Agent count**. More rounds and more characters produce richer endings, but also take longer. The home page estimates runtime as you adjust them, and the simulation page continues to show current round, progress, and ETA.
 3. Select **Start Simulation**, confirm the question and run settings in the dialog, wait for the run to finish, then select **View Results**. If you are using a Chinese, Japanese, or similar IME, commit the candidate text before launch.
 
-During the run you will see the **Agent list** on the left, the **branch tree** in the middle, and **live dialogue** on the right. Agents speak round by round and respond to each other. If the model returns an empty turn or something shaped like a prompt template / source snippet, the page shows a safe placeholder instead of exposing internal prompt content.
+During the run you will see the top **progress ledger** with current round, progress, and ETA, the **Agent list** on the left, the **branch tree** in the middle, and **live dialogue** on the right. Agents speak round by round and respond to each other. Intervention entries are available only during a live run; they disappear during narrative generation, completion, and replay. If the model returns an empty turn or something shaped like a prompt template / source snippet, the page shows a safe placeholder instead of exposing internal prompt content.
 
 ---
 
@@ -25,7 +25,7 @@ During the run you will see the **Agent list** on the left, the **branch tree** 
 After a simulation finishes, the result page shows:
 
 - **Prediction verdict**: a direct answer to your original question, with confidence and uncertainty notes when available.
-- **Worldline cards**: each ending has a title, probability, story, and answer to the original question.
+- **Worldline cards**: each ending has a title, probability, story, and answer to the original question; probabilities are normalized across terminal leaf worldlines, so fork parents do not rank as final endings.
 - **Next-step entries**: depending on the data and server settings, the page shows Oracle Chambers, Roundtable, branch comparison, graph workbench, Knowledge Graph Explorer, Timeline Galaxy, Agent follow-up, and sharing entries.
 - **Full report**: when a full report completes, the result page first shows confidence, real-field-derived takeaways, section links, and a link to open the full report. `/result/:id/report` shows every section, evidence item, and uncertainty note. The evidence drawer can jump back to the cited replay message. Report body content supports safe tables, strikethrough, and available probability / faction charts, and the disclaimer follows the current interface language.
 
@@ -44,7 +44,7 @@ The result page also lets you export Markdown, generate sharing copy, copy a per
 
 ### 1. Multi-Branch Simulation
 
-Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. Advanced settings can change input cleanup mode (Blackboard / Raw), display mode (Classic / Pixel Theater), reasoning effort, and simulation mode (Conservative / Balanced / Exploratory).
+Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. The simulation page shows segmented progress, current round, and ETA; after completion, only terminal worldlines form the result probability distribution. Advanced settings can change input cleanup mode (Blackboard / Raw), display mode (Classic / Pixel Theater), reasoning effort, and simulation mode (Conservative / Balanced / Exploratory).
 
 If you choose multi-run on the home page, the app opens a waiting panel first: the first worldline is the full simulation and has **Watch simulation** for live `/sim`, while later worldlines use quick verdicts and show **View results** after they finish. After all runs finish, the result page shows the run-group outcome distribution and histogram.
 
@@ -110,5 +110,5 @@ Use the **EN / 中文** switch in the lower-right corner. Interface text changes
 - **Start Simulation does nothing?** The page now shows the reason below the button. Make sure the question box is not empty, any IME candidate text is committed, an LLM is configured or a model profile with an API key is selected, and, in local development, the backend is running on `18927`. If the launch request stalls or the network fails, the page releases the launch lock and shows a retryable error.
 - **Cannot see Causal Graph / Argument Map / Deep Dive / Knowledge Graph Explorer / Timeline Galaxy / Full report?** These entries are controlled by `/api/capabilities`; the templates enable them by default. If you edited `.env`, confirm the related `FEATURE_*` values are `true`, then restart the backend.
 - **The result page says "No prediction verdict yet"?** The app could not produce a reliable single verdict for that run. The original question and worldline answers still remain visible.
-- **The run stays on "generating narrative" for a long time?** With many branches, the app generates ending stories one by one. Multi-run shows a waiting panel with per-worldline states, and completed entries can open their result page directly.
+- **The run stays on "generating narrative" for a long time?** With many branches, the app generates ending stories one by one, and the progress ledger switches into the narration stage. Multi-run shows a waiting panel with per-worldline states, and completed entries can open their result page directly.
 - **Can I rely on the AI prediction?** No. SwarmOracle is for entertainment and exploration only. Do not use it for financial, medical, legal, or other real-world decisions.

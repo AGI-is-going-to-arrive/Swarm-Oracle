@@ -116,6 +116,8 @@ class Settings(BaseSettings):
     MAX_ROUNDS: int = 40
     MAX_BRANCHES: int = 8
     MEMORY_COMPRESS_INTERVAL: int = 5
+    MEMORY_COMPRESS_SHORT_BRANCH_INTERVAL: int = 2
+    MEMORY_COMPRESS_SHORT_BRANCH_MAX_ROUNDS: int = 4
     MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS: int = 20_000
     MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS: int = 12_000
     MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS: int = 12_000
@@ -377,6 +379,8 @@ class Settings(BaseSettings):
             "MAX_ROUNDS": self.MAX_ROUNDS,
             "MAX_BRANCHES": self.MAX_BRANCHES,
             "MEMORY_COMPRESS_INTERVAL": self.MEMORY_COMPRESS_INTERVAL,
+            "MEMORY_COMPRESS_SHORT_BRANCH_INTERVAL": self.MEMORY_COMPRESS_SHORT_BRANCH_INTERVAL,
+            "MEMORY_COMPRESS_SHORT_BRANCH_MAX_ROUNDS": self.MEMORY_COMPRESS_SHORT_BRANCH_MAX_ROUNDS,
             "MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS": self.MEMORY_COMPRESS_MAX_RAW_WINDOW_CHARS,
             "MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS": self.MEMORY_COMPRESS_RECENT_RAW_WINDOW_CHARS,
             "MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS": self.MEMORY_COMPRESS_OVERFLOW_SUMMARY_SOURCE_CHARS,  # noqa: E501
@@ -446,6 +450,16 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def effective_memory_compress_interval(sim_rounds: int | None) -> int:
+    """Return the memory compression cadence for this branch length."""
+    del sim_rounds
+    try:
+        base_interval = max(1, int(settings.MEMORY_COMPRESS_INTERVAL))
+    except (TypeError, ValueError):
+        return 1
+    return base_interval
 
 
 def _is_public_bind_host(host: str) -> bool:

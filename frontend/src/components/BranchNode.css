@@ -6,12 +6,11 @@
   min-width: 300px;
   max-width: 380px;
   padding: 20px 24px;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  background: var(--bg-elevated);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  box-shadow: 0 2px 12px color-mix(in oklab, var(--color-primary) 6%, rgba(0, 0, 0, 0.06));
   transition: all var(--transition-base);
   cursor: pointer;
 }
@@ -25,6 +24,7 @@
 .branch-node--active {
   border-color: hsla(347, 67%, 42%, 0.2);
   border-color: oklch(55% 0.22 350 / 0.2);
+  border-left: 3px solid var(--color-primary);
   box-shadow: var(--glow-primary);
 }
 .branch-node--completed {
@@ -130,6 +130,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Reduced motion ──────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .branch-node {
+    transition: none;
+  }
+
+  .status-dot--active,
+  .branch-node--talking,
+  .branch-node--talking .agent-mini,
+  .branch-node__activity,
+  .activity-pulse {
+    animation: none;
+  }
 }
 
 /* ── Probability bar ─────────────────────────────────────── */

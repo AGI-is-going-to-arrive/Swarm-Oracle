@@ -395,6 +395,8 @@
         "total": "TOTAL",
         "preparing": "Preparing...",
         "eta": "⏱ ETA",
+        "eta_remaining": "ETA",
+        "narrating_progress": "Narrating…",
         "per_round": "s/round",
         "messages_count": "Messages",
         "mode_label": "MODE",

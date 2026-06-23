@@ -429,6 +429,36 @@ class TestPickTheaterEndingPayload:
         assert payload is not None
         assert payload["id"] == "b-a"
 
+    def test_ignores_non_terminal_fork_parent_when_picking_final_ending(self):
+        payload = _pick_theater_ending_payload(
+            [
+                {
+                    "id": "root",
+                    "parent_branch_id": None,
+                    "fork_round": 0,
+                    "probability": 1.0,
+                    "title": "Parent",
+                },
+                {
+                    "id": "leaf-a",
+                    "parent_branch_id": "root",
+                    "fork_round": 1,
+                    "probability": 0.45,
+                    "title": "Leaf A",
+                },
+                {
+                    "id": "leaf-b",
+                    "parent_branch_id": "root",
+                    "fork_round": 1,
+                    "probability": 0.55,
+                    "title": "Leaf B",
+                },
+            ],
+        )
+
+        assert payload is not None
+        assert payload["id"] == "leaf-b"
+
 
 class TestReconcileScenarioDoneIfComplete:
     def test_marks_stale_simulating_scenario_done_when_all_branches_are_final(self, monkeypatch):
@@ -544,6 +574,17 @@ class TestNormalizedActiveBranchProbabilities:
         assert normalized is None
         assert used_uniform_fallback is False
 
+    def test_rounding_residual_stays_on_raw_dominant_branch(self):
+        normalized, used_uniform_fallback = _normalized_active_branch_probabilities([
+            {"id": "dominant", "probability": 0.33334},
+            {"id": "second", "probability": 0.33333},
+            {"id": "third", "probability": 0.33333},
+        ])
+
+        assert used_uniform_fallback is False
+        assert normalized == [0.3334, 0.3333, 0.3333]
+        assert round(sum(normalized or []), 4) == 1.0
+
     def test_re_normalizes_survivors_after_pruning(self):
         engine = get_engine()
         scenario_id = _make_scenario(engine)
@@ -577,6 +618,100 @@ class TestNormalizedActiveBranchProbabilities:
             assert persisted_b is not None
             assert persisted_a.probability == 0.625
             assert persisted_b.probability == 0.375
+
+    def test_single_completed_branch_probability_one_stays_valid(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="Only outcome", probability=1.0)
+
+        with Session(engine) as session:
+            branch = session.get(Branch, branch_id)
+            assert branch is not None
+            branch.status = BranchStatus.COMPLETED
+            session.add(branch)
+            session.commit()
+
+        all_branches = [
+            {"id": branch_id, "probability": 1.0, "status": "COMPLETED"},
+        ]
+
+        _apply_normalized_active_branch_probabilities(
+            engine,
+            scenario_id,
+            all_branches,
+            include_completed=True,
+        )
+
+        assert all_branches[0]["probability"] == 1.0
+        with Session(engine) as session:
+            persisted = session.get(Branch, branch_id)
+            assert persisted is not None
+            assert persisted.probability == 1.0
+
+    def test_final_completed_branch_distribution_normalizes_only_terminal_leaves(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        root_branch = _create_branch(engine, scenario_id, title="Root", probability=1.0)
+        branch_a = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_branch,
+            fork_round=1,
+            title="A",
+            probability=0.6,
+        )
+        branch_b = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_branch,
+            fork_round=1,
+            title="B",
+            probability=0.2,
+        )
+
+        with Session(engine) as session:
+            for branch_id in (root_branch, branch_a, branch_b):
+                branch = session.get(Branch, branch_id)
+                assert branch is not None
+                branch.status = BranchStatus.COMPLETED
+                session.add(branch)
+            session.commit()
+
+        all_branches = [
+            {
+                "id": root_branch,
+                "parent_branch_id": None,
+                "probability": 1.0,
+                "status": "COMPLETED",
+            },
+            {
+                "id": branch_a,
+                "parent_branch_id": root_branch,
+                "probability": 0.6,
+                "status": "COMPLETED",
+            },
+            {
+                "id": branch_b,
+                "parent_branch_id": root_branch,
+                "probability": 0.2,
+                "status": "COMPLETED",
+            },
+        ]
+
+        _apply_normalized_active_branch_probabilities(
+            engine,
+            scenario_id,
+            all_branches,
+            include_completed=True,
+        )
+
+        assert [branch["probability"] for branch in all_branches] == [1.0, 0.75, 0.25]
+        with Session(engine) as session:
+            persisted = session.exec(
+                select(Branch).where(Branch.id.in_([root_branch, branch_a, branch_b]))
+            ).all()
+            probabilities = {branch.id: branch.probability for branch in persisted}
+        assert probabilities == {root_branch: 1.0, branch_a: 0.75, branch_b: 0.25}
 
 
 class TestNativeSearchRuntimeWiring:
@@ -1537,6 +1672,12 @@ class TestRunSimulation:
         assert fork_entry["created_branch_count"] == 2
         assert set(fork_entry["created_branch_titles"]) == {"外审夺权", "内阁守权"}
         assert len(branches) == 3
+        parent_ids = {branch.parent_branch_id for branch in branches if branch.parent_branch_id}
+        terminal_branches = [branch for branch in branches if branch.id not in parent_ids]
+        parent_branches = [branch for branch in branches if branch.id in parent_ids]
+        assert sorted(branch.probability for branch in terminal_branches) == [0.45, 0.55]
+        assert sum(branch.probability for branch in terminal_branches) == 1.0
+        assert [branch.probability for branch in parent_branches] == [1.0]
         assert {child["fork_round"] for child in branch_fork_event["data"]["children"]} == {1}
 
     @pytest.mark.asyncio
@@ -2385,7 +2526,7 @@ class TestGatherAgentMessages:
         assert "猫法庭如何处置人类上诉权" in prompt
         assert "全球法院" in prompt
 
-    def test_imported_history_branch_without_provenance_does_not_get_root_anchor(self):
+    def test_imported_history_branch_without_provenance_gets_question_but_not_root_anchor(self):
         engine = get_engine()
         sid = _make_scenario(engine)
         with Session(engine) as session:
@@ -2414,7 +2555,7 @@ class TestGatherAgentMessages:
         context = _build_worldline_context(engine, branch_id, language="Chinese")
 
         assert "根世界线锚点" not in context
-        assert "原始问题" not in context
+        assert "原始问题: Imported replay question" in context
 
     @pytest.mark.asyncio
     async def test_retries_bad_agent_turn_then_keeps_valid_tiny_content(self, monkeypatch):
@@ -3758,6 +3899,91 @@ class TestSaveNarration:
         engine = get_engine()
         # Should not raise
         _save_narration(engine, "nonexistent", {"story": "x"})
+
+
+@pytest.mark.asyncio
+async def test_get_story_uses_completed_leaf_branches_not_fork_parents(monkeypatch):
+    import app.api.scenarios as scenarios_api
+
+    engine = get_engine()
+    sid = _make_scenario(engine)
+    parent_id = _create_branch(engine, sid, title="Fork parent", probability=0.9)
+    child_id = _create_branch(
+        engine,
+        sid,
+        parent_branch_id=parent_id,
+        fork_round=2,
+        title="Leaf outcome",
+        probability=0.6,
+    )
+    with Session(engine) as session:
+        for branch_id in (parent_id, child_id):
+            branch = session.get(Branch, branch_id)
+            assert branch is not None
+            branch.status = BranchStatus.COMPLETED
+            branch.story = f"story {branch_id}"
+            branch.insight = f"insight {branch_id}"
+            session.add(branch)
+        session.commit()
+    monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", "")
+
+    payload = await scenarios_api.get_story(sid, principal=None)
+
+    assert [branch["id"] for branch in payload["branches"]] == [child_id]
+
+
+@pytest.mark.asyncio
+async def test_report_generate_uses_completed_leaf_branch_as_dominant(monkeypatch):
+    import app.api.scenarios as scenarios_api
+
+    engine = get_engine()
+    sid = _make_scenario(engine)
+    parent_id = _create_branch(engine, sid, title="Fork parent", probability=0.9)
+    child_id = _create_branch(
+        engine,
+        sid,
+        parent_branch_id=parent_id,
+        fork_round=2,
+        title="Leaf outcome",
+        probability=0.6,
+    )
+    with Session(engine) as session:
+        scenario = session.get(Scenario, sid)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.DONE
+        session.add(scenario)
+        for branch_id in (parent_id, child_id):
+            branch = session.get(Branch, branch_id)
+            assert branch is not None
+            branch.status = BranchStatus.COMPLETED
+            branch.story = f"story {branch_id}"
+            branch.insight = f"insight {branch_id}"
+            session.add(branch)
+        session.commit()
+
+    captured: dict[str, str] = {}
+
+    def fake_report_stream(scenario_id, branch_id, **_kwargs):
+        captured["scenario_id"] = scenario_id
+        captured["branch_id"] = branch_id
+
+        async def stream():
+            if False:
+                yield "unused"
+
+        return stream()
+
+    monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "build_report_sse_stream",
+        fake_report_stream,
+    )
+
+    await scenarios_api.generate_result_report(sid, req=None, principal=None)
+
+    assert captured == {"scenario_id": sid, "branch_id": child_id}
 
 
 @pytest.mark.asyncio

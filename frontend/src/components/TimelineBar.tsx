@@ -37,6 +37,7 @@ interface TimelineBarProps {
   selectedRound?: number | null;
   roundMarkers?: TimelineRoundMarker[];
   onRoundSelect?: (round: number) => void;
+  stickyBanner?: boolean;
 }
 
 const MARKER_ICONS = {
@@ -62,6 +63,12 @@ function formatETA(seconds: number): string {
 function getModeMultiplier(mode: string | null | undefined): number {
   if (mode === 'raw') return 1.0;
   return 1.3;
+}
+
+function normalizeTotalRounds(totalRounds: number | null | undefined): number | null {
+  if (typeof totalRounds !== 'number' || !Number.isFinite(totalRounds)) return null;
+  const normalized = Math.floor(totalRounds);
+  return normalized > 0 ? normalized : null;
 }
 
 function buildRoundSummary(marker: TimelineRoundMarker): string {
@@ -131,6 +138,7 @@ export function TimelineBar({
   selectedRound = null,
   roundMarkers = [],
   onRoundSelect,
+  stickyBanner = false,
 }: TimelineBarProps) {
   const { t } = useTranslation();
   const status = useSimulationStore((s) => s.status);
@@ -141,11 +149,12 @@ export function TimelineBar({
   const roundCompleteTimes = useSimulationStore((s) => s.roundCompleteTimes);
   const messages = useSimulationStore((s) => s.messages);
 
-  const totalRounds = scenario?.total_rounds ?? 10;
+  const totalRounds = normalizeTotalRounds(scenario?.total_rounds);
   const mode = scenario?.mode ?? 'blackboard';
   const displayStatus: ScenarioStatus = useMemo(() => {
     if (
       status === 'simulating'
+      && totalRounds !== null
       && currentRound >= totalRounds
       && messages.length > 0
     ) {
@@ -153,14 +162,24 @@ export function TimelineBar({
     }
     return status;
   }, [currentRound, messages.length, status, totalRounds]);
-  const isSimulating = displayStatus === 'simulating';
+  const isSimulatingOrNarrating = displayStatus === 'simulating' || displayStatus === 'narrating';
 
   const { progressPercent, eta, avgRoundTime } = useMemo(() => {
-    if (!isSimulating || currentRound === 0) {
+    if (displayStatus === 'narrating') {
+      return {
+        progressPercent: 100,
+        eta: t('sim.timeline.narrating_progress'),
+        avgRoundTime: 0,
+      };
+    }
+
+    if (displayStatus !== 'simulating' || currentRound === 0) {
       return { progressPercent: 0, eta: '', avgRoundTime: 0 };
     }
 
-    const pct = Math.min(100, Math.round((currentRound / totalRounds) * 100));
+    const pct = totalRounds === null
+      ? 0
+      : Math.min(100, Math.round((currentRound / totalRounds) * 100));
 
     let avgTime = 0;
     if (roundCompleteTimes.length >= 2) {
@@ -173,7 +192,7 @@ export function TimelineBar({
       avgTime = (roundCompleteTimes[0] - simStartTime) / 1000;
     }
 
-    const remainingRounds = Math.max(0, totalRounds - currentRound);
+    const remainingRounds = totalRounds === null ? 0 : Math.max(0, totalRounds - currentRound);
     const multiplier = roundCompleteTimes.length < 2 ? getModeMultiplier(mode) : 1.0;
     const etaSeconds = avgTime > 0 ? remainingRounds * avgTime * multiplier : 0;
 
@@ -182,7 +201,7 @@ export function TimelineBar({
       eta: formatETA(etaSeconds),
       avgRoundTime: Math.round(avgTime),
     };
-  }, [currentRound, isSimulating, mode, roundCompleteTimes, simStartTime, totalRounds]);
+  }, [currentRound, displayStatus, mode, roundCompleteTimes, simStartTime, totalRounds, t]);
 
   const stages: StageDef[] = [
     { key: 'parsing', label: t('sim.timeline.parsing'), icon: '🔍' },
@@ -196,6 +215,9 @@ export function TimelineBar({
     if (roundMarkers.length > 0) {
       return roundMarkers;
     }
+    if (totalRounds === null) {
+      return [];
+    }
     return Array.from({ length: totalRounds }, (_, index) => ({
       round: index + 1,
       isAvailable: false,
@@ -206,6 +228,83 @@ export function TimelineBar({
       resultCount: 0,
     }));
   }, [roundMarkers, selectedRound, totalRounds]);
+
+  if (stickyBanner) {
+    if (!isSimulatingOrNarrating) {
+      return null;
+    }
+
+    const isNarrating = displayStatus === 'narrating';
+    const isPreparing = displayStatus === 'simulating' && currentRound === 0;
+
+    const currentText = isNarrating && totalRounds !== null
+      ? `R${totalRounds}/${totalRounds}`
+      : currentRound > 0
+        ? totalRounds !== null
+          ? `R${currentRound}/${totalRounds}`
+          : `R${currentRound}`
+        : t('sim.timeline.preparing');
+    const showProgressPercent = isNarrating || totalRounds !== null;
+
+    const etaText = isNarrating
+      ? eta
+      : eta && eta !== '--'
+        ? `${t('sim.timeline.eta_remaining')} ${eta}`
+        : '';
+
+    const srText = isNarrating
+      ? t('sim.timeline.narrating_progress')
+      : `${currentText}${showProgressPercent ? `, ${progressPercent}%` : ''}${etaText ? `, ${etaText}` : ''}`;
+
+    return (
+      <div
+        className="sim-progress-ledger"
+        role="progressbar"
+        aria-valuenow={showProgressPercent ? progressPercent : undefined}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={isNarrating ? t('sim.timeline.narrating') : t('sim.timeline.simulating')}
+        aria-valuetext={srText}
+      >
+        {isPreparing || totalRounds === null ? (
+          <span className="sim-progress-ledger__pulse-dot" aria-hidden="true" />
+        ) : (
+          <span className="sim-progress-ledger__steps" aria-hidden="true">
+            {Array.from({ length: totalRounds }, (_, index) => {
+              const roundNo = index + 1;
+              const tickState = isNarrating || roundNo < currentRound
+                ? 'is-done'
+                : roundNo === currentRound
+                  ? 'is-current'
+                  : '';
+              return (
+                <span
+                  key={roundNo}
+                  className={`sim-progress-ledger__tick${tickState ? ` ${tickState}` : ''}`}
+                />
+              );
+            })}
+          </span>
+        )}
+        <span className="sim-progress-ledger__label">
+          <span className="sim-progress-ledger__round">{currentText}</span>
+          {!isPreparing && showProgressPercent && (
+            <>
+              <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
+              <span className="sim-progress-ledger__pct">{progressPercent}%</span>
+            </>
+          )}
+          {etaText && (
+            <>
+              <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
+              <span className="sim-progress-ledger__eta">{etaText}</span>
+            </>
+          )}
+        </span>
+        <div className="sr-only" aria-live="polite">{srText}</div>
+      </div>
+    );
+  }
 
   return (
     <div className={`timeline-bar ${compact ? 'timeline-bar--compact' : ''}`}>
@@ -227,8 +326,15 @@ export function TimelineBar({
         </div>
       )}
 
-      {isSimulating && (
-        <div className="timeline-progress">
+      {isSimulatingOrNarrating && (
+        <div
+          className="timeline-progress"
+          role="progressbar"
+          aria-valuenow={progressPercent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={displayStatus === 'narrating' ? t('sim.timeline.narrating') : t('sim.timeline.simulating')}
+        >
           <div className="progress-bar-track">
             <div
               className="progress-bar-fill"
@@ -237,12 +343,20 @@ export function TimelineBar({
           </div>
           <div className="progress-info">
             <span className="progress-round">
-              {currentRound > 0 ? `R${currentRound}/${totalRounds}` : t('sim.timeline.preparing')}
+              {displayStatus === 'narrating' && totalRounds !== null
+                ? `R${totalRounds}/${totalRounds}`
+                : currentRound > 0
+                  ? totalRounds !== null
+                    ? `R${currentRound}/${totalRounds}`
+                    : `R${currentRound}`
+                  : t('sim.timeline.preparing')}
             </span>
-            <span className="progress-pct">{progressPercent}%</span>
+            {(displayStatus === 'narrating' || totalRounds !== null) && (
+              <span className="progress-pct">{progressPercent}%</span>
+            )}
             {eta && eta !== '--' && (
               <span className="progress-eta">
-                {t('sim.timeline.eta')} {eta}
+                {displayStatus === 'narrating' ? eta : `${t('sim.timeline.eta')} ${eta}`}
               </span>
             )}
             {avgRoundTime > 0 && (
@@ -250,6 +364,15 @@ export function TimelineBar({
                 ~{avgRoundTime}{t('sim.timeline.per_round')}
               </span>
             )}
+          </div>
+          <div className="sr-only" aria-live="polite">
+            {displayStatus === 'narrating'
+              ? t('sim.timeline.narrating_progress')
+              : `${displayStatus === 'simulating' && currentRound > 0
+                ? totalRounds !== null
+                  ? `R${currentRound}/${totalRounds}`
+                  : `R${currentRound}`
+                : t('sim.timeline.preparing')}${totalRounds !== null ? `, ${progressPercent}%` : ''}`}
           </div>
         </div>
       )}
@@ -352,7 +475,13 @@ export function TimelineBar({
         <span className="stat">
           <span className="stat__label">{t('sim.timeline.round_label')}</span>
           <span className="stat__value">
-            {currentRound > 0 ? `${currentRound}/${totalRounds}` : `0/${totalRounds}`}
+            {currentRound > 0
+              ? totalRounds !== null
+                ? `${currentRound}/${totalRounds}`
+                : `R${currentRound}`
+              : totalRounds !== null
+                ? `0/${totalRounds}`
+                : '0'}
           </span>
         </span>
 
@@ -366,7 +495,7 @@ export function TimelineBar({
           <span className="stat__value">{branches.length}</span>
         </span>
 
-        {isSimulating && (
+        {isSimulatingOrNarrating && (
           <span className="stat">
             <span className="stat__label">{t('sim.timeline.messages_count')}</span>
             <span className="stat__value">{messages.length}</span>

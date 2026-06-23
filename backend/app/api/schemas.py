@@ -612,12 +612,12 @@ class ScenarioResponse(BaseModel):
     question: str
     status: str
     run_group_id: str | None = None
+    total_rounds: int | None = None
     created_at: str
     agents: list[dict] = []
     branches: list[dict] = []
     groups: list[dict] = []  # P3-A
     messages: list[dict] = []  # Historical agent messages
-    total_rounds: int | None = None
     estimated_tokens_per_round: int | None = None
     estimated_total_tokens: int | None = None
     context_safety: str | None = None

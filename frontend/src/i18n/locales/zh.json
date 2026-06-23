@@ -395,6 +395,8 @@
         "total": "总计",
         "preparing": "准备中...",
         "eta": "⏱ 预计",
+        "eta_remaining": "预计剩余",
+        "narrating_progress": "叙述中…",
         "per_round": "s/轮",
         "messages_count": "发言数",
         "mode_label": "模式",

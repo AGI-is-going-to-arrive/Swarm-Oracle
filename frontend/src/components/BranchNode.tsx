@@ -21,6 +21,7 @@ interface BranchNodeData {
   branchId?: string;
   thinkingCount?: number;
   recentMessageCount?: number;
+  canIntervene?: boolean;
   onIntervene?: (branchId: string, title: string) => void;
   onDetail?: (branchId: string) => void;
   [key: string]: unknown;
@@ -138,7 +139,7 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
       )}
 
       {/* Intervene button (Butterfly Effect) */}
-      {status === 'ACTIVE' && data.onIntervene && data.branchId && (
+      {status === 'ACTIVE' && data.canIntervene && data.onIntervene && data.branchId && (
         <button
           className="branch-node__intervene"
           onClick={(e) => {
