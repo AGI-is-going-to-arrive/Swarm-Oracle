@@ -13,6 +13,70 @@
   overflow: hidden;
 }
 
+.branch-tree .react-flow__minimap {
+  background: #f4f3f0 !important;
+  border-radius: 8px !important;
+  border: 1px solid #cac6bf !important;
+  box-shadow: 0 4px 12px rgba(28, 26, 23, 0.05), 0 1px 3px rgba(28, 26, 23, 0.03) !important;
+}
+
+@keyframes branch-tree-minimap-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* Keep the halo hidden unless the browser can scale from the circle itself. */
+.branch-tree .branch-tree-minimap-node-pulse {
+  opacity: 0;
+}
+
+@supports (transform-box: fill-box) {
+  .branch-tree .branch-tree-minimap-node-pulse {
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: branch-tree-minimap-pulse 2s cubic-bezier(0.25, 0, 0, 1) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .branch-tree .branch-tree-minimap-node-pulse {
+      animation: none !important;
+      opacity: 0.3 !important;
+      transform: scale(1.5) !important;
+    }
+  }
+}
+
+@media (forced-colors: active) {
+  .branch-tree .react-flow__minimap {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+    box-shadow: none !important;
+  }
+
+  .branch-tree .minimap-node-active circle,
+  .branch-tree .minimap-node-completed circle,
+  .branch-tree .minimap-node-pruned circle,
+  .branch-tree .minimap-node-neutral circle,
+  .branch-tree .minimap-node-dense rect {
+    stroke: CanvasText;
+  }
+
+  .branch-tree .minimap-node-core {
+    fill: CanvasText;
+  }
+
+  .branch-tree .branch-tree-minimap-node-pulse {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+}
+
 /* Empty state overlay */
 .branch-tree__empty {
   position: absolute;

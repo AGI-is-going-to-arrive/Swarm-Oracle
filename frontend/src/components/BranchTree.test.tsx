@@ -1,14 +1,27 @@
+import { readFileSync } from 'node:fs';
 import type { ReactNode } from 'react';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentInfo, BranchInfo } from '../types';
 
 const {
   fitViewMock,
+  flowState,
   layoutSpy,
   MockGraph,
 } = vi.hoisted(() => {
   const fitViewMock = vi.fn();
+  type MockFlowNode = {
+    id: string;
+    data?: Record<string, unknown>;
+    position?: { x: number; y: number };
+    selected?: boolean;
+  };
+  const flowState = {
+    lastNodes: [] as MockFlowNode[],
+    nodesById: new Map<string, MockFlowNode>(),
+    setNodes: undefined as undefined | ((value: unknown) => void),
+  };
   const layoutSpy = vi.fn((graph: { _nodes: Map<string, { width: number; height: number; x?: number; y?: number }> }) => {
     let index = 0;
     for (const [id, node] of graph._nodes.entries()) {
@@ -48,6 +61,7 @@ const {
 
   return {
     fitViewMock,
+    flowState,
     layoutSpy,
     MockGraph,
   };
@@ -98,13 +112,50 @@ vi.mock('dagre', () => ({
 
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
+  type MockFlowNode = {
+    id: string;
+    data?: Record<string, unknown>;
+    position?: { x: number; y: number };
+    selected?: boolean;
+  };
+  type MockMiniMapNodeProps = {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    selected?: boolean;
+  };
   return {
-    ReactFlow: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+    ReactFlow: ({ children, nodes }: { children: ReactNode; nodes?: MockFlowNode[] }) => {
+      flowState.lastNodes = nodes ?? [];
+      flowState.nodesById = new Map(flowState.lastNodes.map((node) => [node.id, node]));
+      return <div>{children}</div>;
+    },
     Background: () => null,
     Controls: () => null,
-    MiniMap: () => null,
+    MiniMap: ({ nodeComponent: NodeComponent }: {
+      nodeComponent?: (props: MockMiniMapNodeProps) => ReactNode;
+    }) => (
+      <svg data-testid="branch-minimap">
+        {NodeComponent
+          ? flowState.lastNodes.map((node) => (
+            <NodeComponent
+              key={node.id}
+              id={node.id}
+              x={node.position?.x ?? 0}
+              y={node.position?.y ?? 0}
+              width={340}
+              height={224}
+              selected={node.selected}
+            />
+          ))
+          : null}
+      </svg>
+    ),
     useNodesState: (initialNodes: unknown[]) => {
       const [nodes, setNodes] = React.useState(initialNodes);
+      flowState.setNodes = setNodes as (value: unknown) => void;
       return [nodes, setNodes, vi.fn()] as const;
     },
     useEdgesState: (initialEdges: unknown[]) => {
@@ -112,6 +163,7 @@ vi.mock('@xyflow/react', async () => {
       return [edges, setEdges, vi.fn()] as const;
     },
     useReactFlow: () => ({ fitView: fitViewMock }),
+    useNodesData: (id: string) => flowState.nodesById.get(id),
   };
 });
 
@@ -162,6 +214,9 @@ describe('BranchTree', () => {
   beforeEach(() => {
     layoutSpy.mockClear();
     fitViewMock.mockClear();
+    flowState.lastNodes = [];
+    flowState.nodesById = new Map();
+    flowState.setNodes = undefined;
     mockStore.branches = [
       {
         id: 'b1',
@@ -202,6 +257,91 @@ describe('BranchTree', () => {
     await waitFor(() => {
       expect(layoutSpy).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('keeps BranchTree minimap chrome out of global React Flow overrides', () => {
+    const indexCss = readFileSync('src/index.css', 'utf8');
+    const branchTreeCss = readFileSync('src/components/BranchTree.css', 'utf8');
+
+    expect(indexCss).toContain('.react-flow__minimap');
+    expect(indexCss).not.toContain('background: #f4f3f0');
+    expect(indexCss).not.toContain('branch-tree-minimap-pulse');
+    expect(branchTreeCss).toContain('.branch-tree .react-flow__minimap');
+    expect(branchTreeCss).toContain('@keyframes branch-tree-minimap-pulse');
+  });
+
+  it('preserves selected minimap state across live branch activity updates', async () => {
+    mockStore.branches = [
+      {
+        ...mockStore.branches[0],
+        status: 'ACTIVE' as const,
+      },
+    ];
+    const view = render(<BranchTree />);
+
+    await waitFor(() => {
+      expect(flowState.lastNodes).toHaveLength(1);
+    });
+
+    const setNodes = flowState.setNodes;
+    expect(setNodes).toBeTypeOf('function');
+    act(() => {
+      setNodes?.((prevNodes: Array<{ id: string }>) => (
+        prevNodes.map((node) => (node.id === 'b1' ? { ...node, selected: true } : node))
+      ));
+    });
+
+    await waitFor(() => {
+      expect(flowState.lastNodes[0]?.selected).toBe(true);
+    });
+
+    mockStore.messages = [{ branch: 'b1' }];
+    view.rerender(<BranchTree />);
+
+    await waitFor(() => {
+      expect(flowState.lastNodes[0]?.selected).toBe(true);
+    });
+    expect(view.container.querySelector('.minimap-node-selection')).not.toBeNull();
+  });
+
+  it('renders pruned branches with an explicit minimap glyph', () => {
+    mockStore.branches = [
+      {
+        ...mockStore.branches[0],
+        status: 'PRUNED' as const,
+      },
+    ];
+
+    const { container } = render(<BranchTree />);
+
+    expect(container.querySelector('.minimap-node-pruned')).not.toBeNull();
+    expect(container.querySelector('.minimap-node-neutral')).toBeNull();
+  });
+
+  it('uses dense minimap glyphs without pulse animation for large branch sets', () => {
+    mockStore.branches = Array.from({ length: 31 }, (_, index) => ({
+      ...mockStore.branches[0],
+      id: `b${index}`,
+      parent_branch_id: index === 0 ? null : `b${index - 1}`,
+      title: `Branch ${index}`,
+      status: 'ACTIVE' as const,
+    }));
+
+    const { container, rerender } = render(<BranchTree />);
+
+    expect(container.querySelector('.branch-tree-minimap-node-pulse')).toBeNull();
+    expect(container.querySelector('circle[vector-effect="non-scaling-stroke"]')).not.toBeNull();
+
+    mockStore.branches = Array.from({ length: 51 }, (_, index) => ({
+      ...mockStore.branches[0],
+      id: `c${index}`,
+      parent_branch_id: index === 0 ? null : `c${index - 1}`,
+      title: `Compact Branch ${index}`,
+      status: 'ACTIVE' as const,
+    }));
+    rerender(<BranchTree />);
+
+    expect(container.querySelector('.minimap-node-dense rect')).not.toBeNull();
   });
 
   it('reruns dagre layout when the branch graph changes', async () => {

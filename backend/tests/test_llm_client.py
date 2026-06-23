@@ -4001,6 +4001,55 @@ class TestLlmCallNativeSearch:
         assert llm_client.get_last_native_citations() == []
 
     @pytest.mark.asyncio
+    async def test_native_search_auto_inferred_proxy_generic_400_retries_without_tools(
+        self,
+        monkeypatch,
+    ):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    400,
+                    json={"detail": "Unsupported content type"},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "fallback answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+        llm_client._last_native_citations.set(["stale"])
+
+        result = await llm_call(
+            "test prompt",
+            base_url="http://127.0.0.1:8317/v1/responses",
+            api_key="proxy-key",
+            model="gpt-5.4-mini",
+            native_search_domains=["arxiv.org"],
+        )
+
+        assert result == "fallback answer"
+        assert len(payloads) == 2
+        assert "tools" in payloads[0]
+        assert "tools" not in payloads[1]
+        assert "input" in payloads[1]
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
     async def test_native_search_force_on_no_tools_fallback_failure_is_not_retried(
         self,
         monkeypatch,

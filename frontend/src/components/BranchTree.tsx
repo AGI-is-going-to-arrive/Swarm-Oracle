@@ -11,8 +11,10 @@ import {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  useNodesData,
   type Node,
   type Edge,
+  type MiniMapNodeProps,
 } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import '@xyflow/react/dist/style.css';
@@ -40,6 +42,13 @@ const LAYOUT_CONFIG = {
 
 const NODE_WIDTH = 340;
 const NODE_HEIGHT = 224;
+const MINIMAP_DENSE_NODE_COUNT = 30;
+const MINIMAP_COMPACT_NODE_COUNT = 50;
+
+type MiniMapStrokeProps = {
+  strokeWidth: number;
+  vectorEffect?: 'non-scaling-stroke';
+};
 
 function getLayoutedElements(rawNodes: Node[], rawEdges: Edge[]) {
   const g = new dagre.graphlib.Graph();
@@ -163,6 +172,183 @@ function applyBranchActivityToNodes(
   });
 }
 
+// ── Custom MiniMap Node for Data-Ink Minimal styling ──────────
+// NOTE: xyflow's MiniMap nodeComponent renders in FLOW coordinates (node body
+// is ~340×224), NOT minimap pixels. Radii/strokes must scale with node size or
+// they collapse to sub-pixel after the minimap viewBox downscale (invisible).
+function CustomMiniMapNode({
+  id,
+  x,
+  y,
+  width,
+  height,
+  selected,
+  nodeCount,
+}: MiniMapNodeProps & { nodeCount: number }) {
+  const nodeData = useNodesData(id);
+  const status = nodeData?.data?.status;
+
+  const cx = x + width / 2;
+  const cy = y + height / 2;
+  const base = Math.min(width, height);
+  const r = base * 0.22;   // ~49 in flow coords → ~3-4px after downscale
+  const sw = base * 0.05;  // ~11 stroke so it survives the downscale
+  const isDense = nodeCount > MINIMAP_DENSE_NODE_COUNT;
+  const isCompact = nodeCount > MINIMAP_COMPACT_NODE_COUNT;
+  const strokeProps = (normalWidth: number, denseWidth = 1.25): MiniMapStrokeProps => (
+    isDense
+      ? { strokeWidth: denseWidth, vectorEffect: 'non-scaling-stroke' }
+      : { strokeWidth: normalWidth }
+  );
+
+  if (isCompact) {
+    const insetX = width * 0.28;
+    const insetY = height * 0.26;
+    const statusClass = status === 'ACTIVE'
+      ? 'active'
+      : status === 'COMPLETED'
+        ? 'completed'
+        : status === 'PRUNED'
+          ? 'pruned'
+          : 'neutral';
+    const stroke = selected
+      ? '#1c1a17'
+      : status === 'ACTIVE'
+        ? '#1c1a17'
+        : status === 'COMPLETED'
+          ? '#74706a'
+          : status === 'PRUNED'
+            ? '#b8b2aa'
+            : '#a9a49c';
+
+    return (
+      <g className={`minimap-node-${statusClass} minimap-node-dense`}>
+        <rect
+          x={x + insetX}
+          y={y + insetY}
+          width={width - insetX * 2}
+          height={height - insetY * 2}
+          rx={base * 0.08}
+          fill={status === 'ACTIVE' ? '#1c1a17' : 'none'}
+          stroke={stroke}
+          strokeDasharray={status === 'PRUNED' ? '4 3' : undefined}
+          {...strokeProps(selected ? sw * 1.4 : sw, selected ? 1.8 : 1.2)}
+        />
+        {selected && (
+          <rect
+            className="minimap-node-selection"
+            x={x + insetX * 0.72}
+            y={y + insetY * 0.72}
+            width={width - insetX * 1.44}
+            height={height - insetY * 1.44}
+            rx={base * 0.1}
+            fill="none"
+            stroke="#1c1a17"
+            {...strokeProps(sw * 1.6, 2)}
+          />
+        )}
+      </g>
+    );
+  }
+
+  if (status === 'ACTIVE') {
+    return (
+      <g className="minimap-node-active">
+        {/* Pulsing halo ring (stroke, so it doesn't smother neighbours) */}
+        {!isDense && (
+          <circle
+            cx={cx}
+            cy={cy}
+            r={r}
+            fill="none"
+            stroke="#1c1a17"
+            strokeWidth={sw}
+            className="branch-tree-minimap-node-pulse"
+          />
+        )}
+        {/* Core solid dot */}
+        <circle
+          className="minimap-node-core"
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="#1c1a17"
+          stroke={isDense ? '#1c1a17' : undefined}
+          {...(isDense ? strokeProps(sw, 1.3) : {})}
+        />
+        {/* Selection ring */}
+        {selected && (
+          <circle
+            className="minimap-node-selection"
+            cx={cx}
+            cy={cy}
+            r={r * 1.7}
+            fill="none"
+            stroke="#1c1a17"
+            {...strokeProps(sw, 2)}
+          />
+        )}
+      </g>
+    );
+  }
+
+  if (status === 'COMPLETED') {
+    return (
+      <g className="minimap-node-completed">
+        {/* Outer ring */}
+        <circle
+          cx={cx}
+          cy={cy}
+          r={r * 1.15}
+          fill="none"
+          stroke={selected ? '#1c1a17' : '#74706a'}
+          {...strokeProps(selected ? sw * 1.5 : sw, selected ? 1.8 : 1.25)}
+        />
+        {/* Center dot */}
+        <circle
+          className="minimap-node-core"
+          cx={cx}
+          cy={cy}
+          r={r * 0.32}
+          fill={selected ? '#1c1a17' : '#74706a'}
+          stroke={isDense ? (selected ? '#1c1a17' : '#74706a') : undefined}
+          {...(isDense ? strokeProps(sw * 0.4, 1.05) : {})}
+        />
+      </g>
+    );
+  }
+
+  if (status === 'PRUNED') {
+    return (
+      <g className="minimap-node-pruned">
+        <circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke={selected ? '#1c1a17' : '#b8b2aa'}
+          strokeDasharray={isDense ? '4 3' : `${sw * 1.5} ${sw * 1.2}`}
+          {...strokeProps(selected ? sw * 1.4 : sw * 0.8, selected ? 1.7 : 1.15)}
+        />
+      </g>
+    );
+  }
+
+  // Neutral / catch-all covers future/unknown status.
+  return (
+    <g className="minimap-node-neutral">
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke={selected ? '#1c1a17' : '#a9a49c'}
+        {...strokeProps(selected ? sw * 1.4 : sw * 0.9, selected ? 1.7 : 1.15)}
+      />
+    </g>
+  );
+}
+
 // ── Component ───────────────────────────────────────────────
 export function BranchTree({
   onIntervene,
@@ -216,7 +402,17 @@ export function BranchTree({
   const [edges, setEdges, onEdgesChange] = useEdgesState(structuralEdges);
 
   useEffect(() => {
-    setNodes(layoutedNodes);
+    setNodes((prevNodes) => {
+      const previousById = new Map(prevNodes.map((node) => [node.id, node]));
+      return layoutedNodes.map((node) => {
+        const previous = previousById.get(node.id);
+        if (!previous) return node;
+        return {
+          ...node,
+          selected: previous.selected,
+        };
+      });
+    });
   }, [layoutedNodes, setNodes]);
 
   useEffect(() => {
@@ -236,6 +432,11 @@ export function BranchTree({
   // Tighten padding when only a couple of nodes exist so a lone branch
   // is not blown up into a sea of empty canvas; cap zoom-in via maxZoom.
   const nodeCount = structuralNodes.length;
+  const miniMapNodeComponent = useCallback(
+    (props: MiniMapNodeProps) => <CustomMiniMapNode {...props} nodeCount={nodeCount} />,
+    [nodeCount],
+  );
+
   useEffect(() => {
     // Delay fitView to let all fork-related nodes settle
     const pad = nodeCount <= 2 ? 0.18 : 0.3;
@@ -269,13 +470,11 @@ export function BranchTree({
         <Background color="rgba(198,21,131,0.05)" gap={28} />
         <Controls showInteractive={false} />
         <MiniMap
-          nodeColor={(n) => {
-            const s = n.data?.status;
-            if (s === 'ACTIVE') return '#c61583';
-            if (s === 'COMPLETED') return '#e2a000';
-            return '#928f88';
-          }}
-          maskColor="rgba(250, 248, 245, 0.85)"
+          nodeComponent={miniMapNodeComponent}
+          bgColor="#eceae6"
+          maskColor="rgba(236, 234, 230, 0.6)"
+          maskStrokeColor="#3f3c38"
+          maskStrokeWidth={1.3}
         />
       </ReactFlow>
 

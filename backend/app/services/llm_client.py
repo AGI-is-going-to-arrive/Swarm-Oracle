@@ -1294,7 +1294,7 @@ def _body_mentions_native_search_rejection(body: str) -> bool:
         )
     ):
         return False
-    return _body_mentions_native_search_param(body)
+    return _body_mentions_native_search_param(body) or "unsupported content type" in lowered
 
 
 def _is_native_search_rejection(status_code: int, body: str) -> bool:
@@ -2434,16 +2434,9 @@ async def llm_call(
             is_chat=is_chat,
         )
         payload.update(structured_output_params)
-    native_search_force_on = (
-        request_context.supports_native_search_override is True
-        or request_context.native_search_upstream_override
-        in {"xai_responses", "openai_responses"}
-    )
-    native_search_tools_injected_by_force = False
     if native_decision is not None and native_decision.would_inject_tools:
         _native_adapter = native_decision.adapter
         payload["tools"] = native_decision.tools
-        native_search_tools_injected_by_force = native_search_force_on
 
     logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
                  payload["model"],
@@ -2466,9 +2459,7 @@ async def llm_call(
         last_exc: Exception | None = None
         attempt_payload = dict(payload)
         active_structured_output_keys = set(structured_output_keys)
-        active_native_search_keys = (
-            {"tools"} if native_search_tools_injected_by_force and "tools" in payload else set()
-        )
+        active_native_search_keys = {"tools"} if "tools" in payload else set()
         native_fallback_used = False
 
         def _build_original_chat_fallback_payload() -> dict[str, Any]:
