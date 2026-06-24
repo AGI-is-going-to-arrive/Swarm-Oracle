@@ -240,6 +240,9 @@
   flex-direction: column;
   gap: 12px;
   padding-right: 4px;
+  padding-bottom: calc(var(--sim-pipeline-total-h) + 12px);
+  transition: padding-bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  scrollbar-gutter: stable;
 }
 
 .waiting-text {
@@ -375,10 +378,10 @@
 
 @media (max-width: 640px) {
   .agent-panel {
-    padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: max(calc(92px + env(safe-area-inset-bottom, 0px)), var(--sim-pipeline-total-h) + 48px);
   }
 
   .message-list {
-    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: max(calc(72px + env(safe-area-inset-bottom, 0px)), var(--sim-pipeline-total-h) + 12px);
   }
 }

@@ -51,7 +51,7 @@
 
   var MODES = [
     { n: "01", img: ["21-simulation.png", "02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
-      zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线；推演页显示当前轮次、进度和 ETA，结果页用一句话回答原问题并给出置信度，每条终局世界线带标题、归一化概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the simulation page shows current round, progress and ETA, and the result page answers the original question in one line with a confidence. Each terminal worldline carries a title, normalized probability, story summary and a direct answer." },
+      zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线；推演页显示当前轮次、进度和 ETA，底部进度与回放时间线避开消息和控件，结果页用一句话回答原问题并给出置信度，每条终局叶子世界线带标题、归一化概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the simulation page shows current round, progress and ETA, bottom progress and replay timelines stay clear of messages and controls, and the result page answers the original question in one line with a confidence. Each terminal leaf worldline carries a title, normalized probability, story summary and a direct answer." },
     { n: "02", img: ["20-debate-arena.png", "15-debate.png"], zt: "辩论竞技场", et: "Debate Arena",
       zd: "辩论竞技场创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；辩论结果页展示比分、角色和裁判结论，可加载论点地图。", ed: "The Debate Arena creates affirmative, opposing and judge roles and runs a shorter staged debate; the result page shows the score, roles and the judge’s verdict, and can load the argument map." },
     { n: "03", img: ["17-ending-chamber.png"], zt: "神谕密室 / 结局会客厅", et: "Oracle Chambers / Ending Chamber",

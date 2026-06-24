@@ -18,6 +18,15 @@
   border-radius: 8px !important;
   border: 1px solid #cac6bf !important;
   box-shadow: 0 4px 12px rgba(28, 26, 23, 0.05), 0 1px 3px rgba(28, 26, 23, 0.03) !important;
+  bottom: calc(16px + var(--sim-pipeline-total-h)) !important;
+  right: 16px !important;
+  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.branch-tree .react-flow__controls {
+  bottom: calc(16px + var(--sim-pipeline-total-h)) !important;
+  left: 16px !important;
+  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @keyframes branch-tree-minimap-pulse {

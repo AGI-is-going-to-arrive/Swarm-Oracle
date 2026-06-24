@@ -1188,6 +1188,46 @@ a:hover {
   }
 }
 
+/* ── SwarmOracle Layout Safe-area Variables ── */
+:root {
+  --sim-pipeline-core-h: 0px;
+  --sim-timeline-core-h: 0px;
+  --sim-pipeline-total-h: 0px;
+  --sim-theater-bottom-clearance: 0px;
+}
+
+body.has-visible-pipeline-stepper {
+  --sim-pipeline-core-h: 44px;
+}
+
+@media (max-width: 480px) {
+  body.has-visible-pipeline-stepper {
+    --sim-pipeline-core-h: 34px;
+  }
+}
+
+body.has-visible-theater-timeline {
+  --sim-timeline-core-h: 124px;
+}
+
+@media (max-height: 820px) {
+  body.has-visible-theater-timeline {
+    --sim-timeline-core-h: 148px;
+  }
+}
+
+body.has-visible-pipeline-stepper {
+  --sim-pipeline-total-h: calc(var(--sim-pipeline-core-h) + env(safe-area-inset-bottom, 0px));
+}
+
+body.has-visible-theater-timeline {
+  --sim-theater-bottom-clearance: calc(var(--sim-timeline-core-h) + env(safe-area-inset-bottom, 0px));
+}
+
+body.has-visible-pipeline-stepper:not(.has-visible-theater-timeline) {
+  --sim-theater-bottom-clearance: calc(var(--sim-pipeline-core-h) + env(safe-area-inset-bottom, 0px));
+}
+
 /* ── Language Switch (Pill Toggle) ──────────────────────── */
 /* Global fixed version — always visible bottom-right */
 .lang-switch--global {
@@ -1195,14 +1235,18 @@ a:hover {
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   right: calc(16px + env(safe-area-inset-right, 0px));
   z-index: 1000;         /* below modals (1050+), above normal content */
+  transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-body.has-simulation-view .lang-switch--global {
-  bottom: calc(76px + env(safe-area-inset-bottom, 0px));
-}
-
+body.has-visible-pipeline-stepper .lang-switch--global,
+body.has-simulation-view .lang-switch--global,
 body.has-simulation-theater .lang-switch--global {
-  bottom: calc(124px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(16px + var(--sim-pipeline-total-h));
+}
+
+/* Theater replay-ready hides the stepper; avoid the theater timeline instead */
+body.has-visible-theater-timeline .lang-switch--global {
+  bottom: calc(16px + var(--sim-theater-bottom-clearance));
 }
 
 body.has-causal-graph .lang-switch--global,
@@ -1236,12 +1280,6 @@ body.has-argument-map .lang-switch--global {
   flex: 0 0 auto;
 }
 
-@media (max-height: 820px) {
-  body.has-simulation-theater .lang-switch--global {
-    bottom: calc(148px + env(safe-area-inset-bottom, 0px));
-  }
-}
-
 @media (max-width: 640px) {
   .lang-switch--global {
     top: calc(12px + env(safe-area-inset-top, 0px));
@@ -1251,9 +1289,16 @@ body.has-argument-map .lang-switch--global {
     transform-origin: top right;
   }
 
+  body.has-visible-pipeline-stepper .lang-switch--global,
   body.has-simulation-view .lang-switch--global {
     top: auto;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(12px + var(--sim-pipeline-total-h));
+    transform-origin: bottom right;
+  }
+
+  body.has-visible-theater-timeline .lang-switch--global {
+    top: auto;
+    bottom: calc(12px + var(--sim-theater-bottom-clearance));
     transform-origin: bottom right;
   }
 

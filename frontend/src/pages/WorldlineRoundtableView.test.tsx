@@ -956,9 +956,9 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    expect(screen.getByText('Reseat each worldline representative')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Deep Dive' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Auto Cast' })).toBeChecked();
+    expect(await screen.findByText('Reseat each worldline representative')).toBeInTheDocument();
+    expect(await screen.findByRole('radio', { name: 'Deep Dive' })).toBeChecked();
+    expect(await screen.findByRole('radio', { name: 'Auto Cast' })).toBeChecked();
 
     await user.click(screen.getByRole('radio', { name: 'Quick Review' }));
     await user.click(screen.getByRole('radio', { name: 'Custom Cast' }));

@@ -24,6 +24,15 @@
   box-shadow: 0 -2px 12px rgba(10, 12, 18, 0.3);
   box-shadow: 0 -2px 12px oklch(0.1 0.01 260 / 0.3);
   transition: opacity 0.4s ease-out, transform 0.3s ease-out;
+  box-sizing: border-box;
+  height: calc(var(--sim-pipeline-core-h, 44px) + env(safe-area-inset-bottom, 0px));
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pipeline-stepper::-webkit-scrollbar {
+  display: none;
 }
 
 .pipeline-stepper--hidden {
@@ -126,6 +135,7 @@
     padding: 6px 10px;
     padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
     gap: 0;
+    height: calc(var(--sim-pipeline-core-h, 34px) + env(safe-area-inset-bottom, 0px));
   }
 
   .pipeline-stepper__step {
@@ -140,6 +150,17 @@
   .pipeline-stepper__dot {
     width: 6px;
     height: 6px;
+  }
+}
+
+@media (max-width: 360px) {
+  .pipeline-stepper__step {
+    font-size: 0.62rem;
+    padding: 2px 4px;
+    gap: 4px;
+  }
+  .pipeline-stepper__connector {
+    width: 8px;
   }
 }
 
@@ -161,9 +182,4 @@
   .pipeline-stepper__connector {
     transition: none;
   }
-}
-
-/* ── Spacing utility for pages that need bottom clearance ── */
-.pipeline-stepper-spacer {
-  padding-bottom: 48px;
 }

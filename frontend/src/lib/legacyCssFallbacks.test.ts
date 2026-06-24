@@ -100,6 +100,18 @@ describe('legacy CSS color fallbacks', () => {
     expect(css).toMatch(/\.pipeline-stepper__step--active \.pipeline-stepper__dot\s*\{[\s\S]*?background:\s*#76c0e6;[\s\S]*?background:\s*oklch\(0\.75 0\.14 200\);/);
   });
 
+  it('keeps the global language switcher above a visible pipeline stepper', () => {
+    const css = readCss('src/index.css');
+    const desktopPipelineRule = 'body.has-visible-pipeline-stepper .lang-switch--global';
+    const theaterTimelineRule = 'body.has-visible-theater-timeline .lang-switch--global';
+    const mobileStart = css.indexOf('@media (max-width: 640px)');
+
+    expect(css).toMatch(/body\.has-visible-pipeline-stepper \.lang-switch--global[\s\S]*?bottom:\s*calc\(16px \+ var\(--sim-pipeline-total-h\)\);/);
+    expect(css.indexOf(desktopPipelineRule)).toBeLessThan(css.indexOf(theaterTimelineRule));
+    expect(css).toMatch(/@media \(max-width: 640px\)\s*\{[\s\S]*?body\.has-visible-pipeline-stepper \.lang-switch--global[\s\S]*?bottom:\s*calc\(12px \+ var\(--sim-pipeline-total-h\)\);/);
+    expect(css.indexOf(desktopPipelineRule, mobileStart)).toBeLessThan(css.indexOf(theaterTimelineRule, mobileStart));
+  });
+
   it('keeps share modal platforms and context chips readable without OKLCH support', () => {
     const css = readCss('src/components/ShareModal.css');
     expect(css).toMatch(/\.share-modal__hint\s*\{[\s\S]*?color:\s*#8c8c8c;[\s\S]*?color:\s*oklch\(55% 0 0\);/);

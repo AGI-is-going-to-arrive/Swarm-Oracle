@@ -483,7 +483,7 @@ describe('KGExplorerView happy path', () => {
     renderAt();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
-    const firstFilter = within(screen.getByTestId('kg-explorer-filter-pills')).getAllByRole('button')[0];
+    const firstFilter = (await within(screen.getByTestId('kg-explorer-filter-pills')).findAllByRole('button'))[0];
     await user.click(firstFilter);
 
     expect(firstFilter).toHaveAttribute('aria-pressed', 'true');

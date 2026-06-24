@@ -977,6 +977,22 @@ export function SimulationView() {
   const displayedReplayRound = canUseReplayControls
     ? (selectedReplayRound ?? currentRound)
     : currentRound;
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const timelineClass = 'has-visible-theater-timeline';
+
+    if (canUseReplayControls) {
+      document.body.classList.add(timelineClass);
+    } else {
+      document.body.classList.remove(timelineClass);
+    }
+
+    return () => {
+      document.body.classList.remove(timelineClass);
+    };
+  }, [canUseReplayControls]);
+
   const showCommitmentFeedback = useCallback((tone: 'info' | 'success', message: string) => {
     if (commitmentFeedbackTimer.current) {
       window.clearTimeout(commitmentFeedbackTimer.current);

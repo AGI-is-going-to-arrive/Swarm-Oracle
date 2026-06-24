@@ -1055,9 +1055,14 @@ def reconcile_scenario_done_if_complete(
         ]
         if not completed_branches:
             return False
+        parent_ids = {branch.parent_branch_id for branch in branches if branch.parent_branch_id}
+        terminal_completed_branches = [
+            branch for branch in completed_branches if branch.id not in parent_ids
+        ]
+        branches_requiring_narration = terminal_completed_branches or completed_branches
         if any(
             not (branch.story or "").strip() or not (branch.insight or "").strip()
-            for branch in completed_branches
+            for branch in branches_requiring_narration
         ):
             return False
 

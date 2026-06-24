@@ -493,6 +493,98 @@ class TestReconcileScenarioDoneIfComplete:
             assert scenario is not None
             assert scenario.status == ScenarioStatus.DONE
 
+    def test_marks_done_when_fork_parent_lacks_narration_but_leaves_are_complete(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.NARRATING
+            session.add(scenario)
+            session.commit()
+
+        parent_id = _create_branch(engine, scenario_id, title="分叉父线")
+        leaf_a_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=parent_id,
+            fork_round=2,
+            title="终局 A",
+        )
+        leaf_b_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=parent_id,
+            fork_round=2,
+            title="终局 B",
+        )
+        with Session(engine) as session:
+            parent = session.get(Branch, parent_id)
+            assert parent is not None
+            parent.status = BranchStatus.COMPLETED
+            parent.story = ""
+            parent.insight = ""
+            session.add(parent)
+
+            for branch_id in (leaf_a_id, leaf_b_id):
+                branch = session.get(Branch, branch_id)
+                assert branch is not None
+                branch.status = BranchStatus.COMPLETED
+                branch.story = f"完整故事 {branch_id}"
+                branch.insight = f"完整启示 {branch_id}"
+                session.add(branch)
+            session.commit()
+
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: False)
+
+        assert reconcile_scenario_done_if_complete(engine, scenario_id) is True
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+
+    def test_requires_completed_leaf_narration_before_marking_done(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.NARRATING
+            session.add(scenario)
+            session.commit()
+
+        parent_id = _create_branch(engine, scenario_id, title="分叉父线")
+        leaf_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=parent_id,
+            fork_round=2,
+            title="终局",
+        )
+        with Session(engine) as session:
+            parent = session.get(Branch, parent_id)
+            assert parent is not None
+            parent.status = BranchStatus.COMPLETED
+            parent.story = ""
+            parent.insight = ""
+            session.add(parent)
+
+            leaf = session.get(Branch, leaf_id)
+            assert leaf is not None
+            leaf.status = BranchStatus.COMPLETED
+            leaf.story = ""
+            leaf.insight = "仍缺故事"
+            session.add(leaf)
+            session.commit()
+
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: False)
+
+        assert reconcile_scenario_done_if_complete(engine, scenario_id) is False
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.NARRATING
+
     def test_does_not_mark_done_while_runtime_lock_is_active(self, monkeypatch):
         engine = get_engine()
         scenario_id = _make_scenario(engine)

@@ -44,6 +44,9 @@ export function PipelineStepper() {
   const { t } = useTranslation();
   const location = useLocation();
   const status = useSimulationStore((s) => s.status);
+  const viewMode = useSimulationStore((s) => s.viewMode);
+  const isSimulationComplete = useSimulationStore((s) => s.isSimulationComplete);
+  const messages = useSimulationStore((s) => s.messages);
   const [fadedOutPath, setFadedOutPath] = useState<string | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -51,8 +54,22 @@ export function PipelineStepper() {
   const isError = status === 'error';
   const currentIndex = getStageIndex(status);
   const safeCurrentIndex = Math.max(0, currentIndex);
+  const isTheaterReplayReady =
+    routeKind === 'sim' && viewMode === 'theater' && isSimulationComplete && messages.length > 0;
   const fadedOut = routeKind === 'result' && status === 'done' && fadedOutPath === location.pathname;
-  const shouldShow = routeKind !== null && status !== 'idle' && !fadedOut;
+  const shouldShow = routeKind !== null && status !== 'idle' && !fadedOut && !isTheaterReplayReady;
+
+  useEffect(() => {
+    const bodyClass = 'has-visible-pipeline-stepper';
+    if (shouldShow) {
+      document.body.classList.add(bodyClass);
+    } else {
+      document.body.classList.remove(bodyClass);
+    }
+    return () => {
+      document.body.classList.remove(bodyClass);
+    };
+  }, [shouldShow]);
 
   // Auto-fade on result page after done
   useEffect(() => {
