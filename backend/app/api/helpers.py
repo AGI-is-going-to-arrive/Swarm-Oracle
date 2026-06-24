@@ -47,6 +47,7 @@ from app.services.runtime_lock import (
     acquire_runtime_lock,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lock_is_active,
     simulation_lock_key,
 )
 from app.services.simulation_cancel import (
@@ -55,7 +56,11 @@ from app.services.simulation_cancel import (
     is_cancelled,
     request_cancel,
 )
-from app.services.simulator import reconcile_scenario_done_if_complete, run_simulation
+from app.services.simulator import (
+    _update_scenario_status,
+    reconcile_scenario_done_if_complete,
+    run_simulation,
+)
 
 logger = logging.getLogger(__name__)
 _SESSION_AUTH_CACHE_KEY = "_session_auth_cache"
@@ -1775,12 +1780,44 @@ def _scenario_total_rounds(parsed_context: dict | None, branches) -> int | None:
     return max_round if max_round > 0 else None
 
 
-def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
+def load_scenario_response(
+    engine,
+    scenario_id: str,
+    *,
+    fail_forward_stale: bool = True,
+) -> ScenarioResponse | None:
     """Load scenario data from DB and return a ScenarioResponse.
 
     C-5 fix: Uses eager loading (selectinload) to avoid N+1 queries.
+
+    ``fail_forward_stale`` enables the GET-time orphan fail-forward below. It MUST be
+    False on the create/import response paths: those call this synchronously right
+    after ``schedule_background_task`` (an ``asyncio.create_task``) but before the
+    scheduled coroutine runs, so the brand-new run has not yet acquired its runtime
+    lock or registered in ``_running_simulations`` — finalizing it here would wrongly
+    mark every freshly-created scenario ERROR. Polling GETs (a later, separate
+    request) leave it True so a genuinely dead run self-heals.
     """
     reconcile_scenario_done_if_complete(engine, scenario_id)
+    # GET-time fail-forward: covers "task died but process still alive". If the
+    # scenario is still SIMULATING/NARRATING after reconcile but the run is NOT live
+    # (no active runtime-lock heartbeat AND not tracked in _running_simulations), the
+    # driver died mid-run and will never finalize it — move it to ERROR so the UI
+    # stops spinning. _update_scenario_status is sticky-terminal, so a genuinely
+    # complete run that reconcile just set to DONE is never clobbered.
+    if fail_forward_stale:
+        with Session(engine) as session:
+            stale = session.get(Scenario, scenario_id)
+            stale_non_terminal = stale is not None and stale.status in (
+                ScenarioStatus.SIMULATING,
+                ScenarioStatus.NARRATING,
+            )
+        if (
+            stale_non_terminal
+            and scenario_id not in _running_simulations
+            and not runtime_lock_is_active(simulation_lock_key(scenario_id))
+        ):
+            _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
     with Session(engine) as session:
         s = session.get(Scenario, scenario_id)
         if not s:

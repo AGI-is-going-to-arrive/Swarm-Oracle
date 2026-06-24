@@ -60,7 +60,12 @@ from app.services.memory import (
     store_memory,
 )
 from app.services.narrator import _strip_round_markers, narrate_branch
-from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
+from app.services.runtime_lock import (
+    acquire_runtime_lock,
+    release_runtime_lock,
+    runtime_lock_is_active,
+    simulation_lock_key,
+)
 from app.services.simulation_cancel import clear_cancel_token, get_cancel_token, is_cancelled
 
 # Phase 3 F2: Causal graph hook (non-blocking, fire-and-forget)
@@ -1070,6 +1075,62 @@ def reconcile_scenario_done_if_complete(
         session.add(scenario)
         session.commit()
         return True
+
+
+def reconcile_orphaned_running_scenarios(engine) -> int:
+    """Sweep scenarios stuck SIMULATING/NARRATING and finalize them at startup.
+
+    Every SIMULATING/NARRATING -> terminal transition normally lives inside the
+    in-process simulation driver. If the process died before those handlers ran
+    (``--reload``, SIGKILL, crash, OOM, deploy), the row is left non-terminal with
+    ACTIVE branches forever.
+
+    Each candidate is guarded by the same ``simulation:{id}`` runtime lock that live
+    workers hold. If another process still owns an active lease, this sweep skips
+    the row instead of converting a live run to ERROR during a rolling restart. Once
+    the sweep owns the lock, it first tries ``reconcile_scenario_done_if_complete``:
+    a genuinely-complete NARRATING run (all terminal leaves narrated) must become
+    DONE, not ERROR. Anything still non-terminal is a truly-interrupted run and is
+    moved to ERROR via the sticky-terminal helper.
+
+    Returns the number of scenarios transitioned to ERROR.
+    """
+    with Session(engine) as session:
+        stuck_ids = list(
+            session.exec(
+                select(Scenario.id).where(
+                    Scenario.status.in_((ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING))
+                )
+            ).all()
+        )
+
+    errored = 0
+    for scenario_id in stuck_ids:
+        sweep_lease = acquire_runtime_lock(
+            simulation_lock_key(scenario_id),
+            lease_seconds=30,
+        )
+        if sweep_lease is None:
+            continue
+        try:
+            # We own the simulation lock here; a complete NARRATING run becomes DONE.
+            if reconcile_scenario_done_if_complete(
+                engine,
+                scenario_id,
+                ignore_runtime_lock=True,
+            ):
+                continue
+            # Still non-terminal -> genuinely interrupted run. The sticky-terminal
+            # helper only writes if the row is not already DONE/ERROR/CANCELLED, and
+            # it does not broadcast over WebSocket (there are no clients at boot).
+            _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
+            with Session(engine) as session:
+                scenario = session.get(Scenario, scenario_id)
+                if scenario is not None and scenario.status == ScenarioStatus.ERROR:
+                    errored += 1
+        finally:
+            release_runtime_lock(sweep_lease)
+    return errored
 
 
 def _pending_intervention_db_path() -> str | None:

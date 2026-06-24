@@ -405,7 +405,9 @@
         "tooltip_cards": "Cards",
         "tooltip_bets": "Bets",
         "tooltip_results": "Endings",
-        "tooltip_no_events": "No extra events this round"
+        "tooltip_no_events": "No extra events this round",
+        "elapsed": "Running {{time}}",
+        "preparing_slow": "Local model is slow — still working…"
       },
       "warmup": {
         "title": "Director Warmup",
@@ -3418,7 +3420,11 @@
       "cancel_confirm_dismiss": "Continue",
       "cancel_confirm_in_progress": "Cancelling simulation...",
       "cancelled_title": "Simulation Cancelled",
-      "cancelled_desc": "The simulation was cancelled."
+      "cancelled_desc": "The simulation was cancelled.",
+      "stuck_title": "This run may be interrupted.",
+      "stuck_desc": "It hasn't made progress for a while and may have stopped. You can start over or go back home.",
+      "stuck_retry": "Start over",
+      "stuck_back": "Back home"
     },
     "counterfactual_brand": {
       "eyebrow": "Go back to a fork",

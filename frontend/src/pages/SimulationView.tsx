@@ -99,6 +99,8 @@ import {
   WARMUP_RECOVERY_INTERVAL_MS,
   WARMUP_RECOVERY_MAX_ATTEMPTS,
   TAIL_STATUS_SYNC_INTERVAL_MS,
+  STUCK_HARD_CAP_MS,
+  STUCK_STATUS_REPOLL_INTERVAL_MS,
   formatTheaterLabel,
   shouldWarmTheaterLoaderOnIntent,
 } from './simulationHelpers';
@@ -666,6 +668,87 @@ export function SimulationView() {
       window.clearInterval(timer);
     };
   }, [id, isTailStatusSyncPhase, loadScenario]);
+
+  // ── Staleness watchdog ──
+  // The backend can orphan a run (a process restart drops the in-process state-machine
+  // task) so the scenario sits in SIMULATING forever with no terminal event. We treat a
+  // run as "stuck" purely by how long `currentRound` has stopped advancing, and reset the
+  // clock every time it advances — a genuinely slow-but-progressing run is never flagged.
+  // While stuck we also re-poll the snapshot so that once the backend marks the run ERROR
+  // the UI flips to the terminal panel without a manual refresh. (The softer warmup
+  // "running for a while" reassurance lives in the shared progress banner, TimelineBar.)
+  const [simulationStuck, setSimulationStuck] = useState(false);
+  const lastProgressRoundRef = useRef(currentRound);
+  const lastProgressAtRef = useRef<number>(Date.now());
+  const stuckRepollInFlight = useRef(false);
+  const isLiveActivePhase =
+    !isReplayMode
+    && !isSimulationComplete
+    && !cancelledStatus
+    && status !== 'error'
+    && (status === 'parsing' || status === 'simulating' || status === 'narrating');
+
+  // Reset the progress clock whenever the round advances or the scenario changes.
+  useEffect(() => {
+    if (currentRound !== lastProgressRoundRef.current) {
+      lastProgressRoundRef.current = currentRound;
+      lastProgressAtRef.current = Date.now();
+      setSimulationStuck(false);
+    }
+  }, [currentRound, id]);
+
+  // Any terminal/non-live state clears the watchdog flag immediately.
+  useEffect(() => {
+    if (!isLiveActivePhase) {
+      setSimulationStuck(false);
+    }
+  }, [isLiveActivePhase]);
+
+  useEffect(() => {
+    if (!isLiveActivePhase || !id) return;
+
+    // Entering an active phase (or remounting) restarts the clock so a fresh run is
+    // judged from now, not from a stale timestamp left over by a previous scenario.
+    lastProgressRoundRef.current = currentRound;
+    lastProgressAtRef.current = Date.now();
+    setSimulationStuck(false);
+
+    let cancelled = false;
+    const repollStuckScenario = async () => {
+      if (cancelled || stuckRepollInFlight.current) return;
+      stuckRepollInFlight.current = true;
+      try {
+        await loadScenario(id);
+      } catch (err) {
+        console.warn('[Watchdog] Stuck re-poll failed:', err);
+      } finally {
+        stuckRepollInFlight.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      const elapsed = Date.now() - lastProgressAtRef.current;
+      if (elapsed >= STUCK_HARD_CAP_MS) {
+        setSimulationStuck(true);
+        // Probe the backend in case it has already reconciled the orphan to ERROR.
+        if (elapsed % STUCK_STATUS_REPOLL_INTERVAL_MS < 1000) {
+          void repollStuckScenario();
+        }
+      }
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // currentRound is intentionally omitted: the round-change reset effect above owns
+    // restarting the clock, so we must not tear down/recreate the timer on every round.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLiveActivePhase, id, loadScenario]);
+
+  const handleStuckRetry = useCallback(() => {
+    navigate('/', { state: { prefillQuestion: scenario?.question ?? '' } });
+  }, [navigate, scenario?.question]);
 
   const handleIntervene = useCallback((branchId: string, branchTitle: string) => {
     const branch = branches.find((candidate) => candidate.id === branchId);
@@ -1433,7 +1516,7 @@ export function SimulationView() {
 
       {isSimulatingOrNarrating && (
         <Suspense fallback={null}>
-          <LazyTimelineBar stickyBanner />
+          <LazyTimelineBar key={scenario?.id ?? id ?? 'live'} stickyBanner />
         </Suspense>
       )}
 
@@ -1443,6 +1526,22 @@ export function SimulationView() {
           <p>⚠️ {error}</p>
           <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
             {t('sim.status.back')}
+          </button>
+        </div>
+      )}
+
+      {/* Interrupted / stuck state — an orphaned run reconciled to ERROR by the backend
+          surfaces as status='error' with no error string on a polled snapshot; the
+          client-side watchdog also flips this on when progress stalls past the hard cap.
+          Gated on !error so it never double-renders with the error-string panel above. */}
+      {!error && !isReplayMode && (simulationStuck || status === 'error') && (
+        <div className="sim-error" role="alert" data-testid="simulation-stuck-banner">
+          <p>⚠️ {t('simulation.stuck_title')} {t('simulation.stuck_desc')}</p>
+          <button className="btn" onClick={handleStuckRetry}>
+            {t('simulation.stuck_retry')}
+          </button>
+          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
+            {t('simulation.stuck_back')}
           </button>
         </div>
       )}

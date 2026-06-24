@@ -56,6 +56,19 @@ async def lifespan(app: FastAPI):
     """Initialize database on startup; graceful cleanup on shutdown."""
     validate_secure_runtime_settings(settings)
     init_db()
+    # Startup orphan sweep: finalize scenarios left SIMULATING/NARRATING by a process
+    # that died mid-run (--reload, SIGKILL, crash, deploy). Wrapped so a sweep failure
+    # never blocks startup. Single-worker uvicorn => no single-flight lock needed.
+    try:
+        from app.models.database import get_engine
+        from app.services.simulator import reconcile_orphaned_running_scenarios
+
+        orphaned_errored = reconcile_orphaned_running_scenarios(get_engine())
+        logging.getLogger(__name__).info(
+            "Startup orphan sweep: %d stale scenario(s) marked ERROR", orphaned_errored
+        )
+    except Exception:  # noqa: BLE001 - sweep is best-effort; never block startup
+        logging.getLogger(__name__).exception("Startup orphan sweep failed (non-fatal)")
     logging.getLogger(__name__).info(
         "SwarmOracle started — LLM: %s @ %s",
         settings.LLM_MODEL_NAME, settings.LLM_RESPONSES_URL,

@@ -256,6 +256,8 @@ function applyScenarioSnapshot(
     thinkingAgents: [],
     status: mergedStatus,
     currentRound: sameScenario ? Math.max(state.currentRound, highestRound) : highestRound,
+    simStartTime: sameScenario ? state.simStartTime : null,
+    roundCompleteTimes: sameScenario ? state.roundCompleteTimes : [],
     isSimulationComplete: mergedStatus === 'done',
     interventionLog: sameScenario ? state.interventionLog : [],
     interventionLifecycle: nextLifecycle,
@@ -276,8 +278,13 @@ export const useSimulationStore = create<SimulationState>((set) => ({
     set({
       status: 'parsing',
       error: null,
+      errorCode: null,
       interventionLog: [],
       interventionLifecycle: new Map<string, InterventionLifecycleState>(),
+      thinkingAgents: [],
+      currentRound: 0,
+      simStartTime: null,
+      roundCompleteTimes: [],
       isSimulationComplete: false,
     });
     try {
@@ -297,6 +304,10 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         status: scenario.status as SimulationState['status'],
         error: null,
         errorCode: null,
+        thinkingAgents: [],
+        currentRound: Math.max(0, ...((scenario.messages || []) as AgentMessage[]).map((message) => message.round ?? 0)),
+        simStartTime: null,
+        roundCompleteTimes: [],
         interventionLog: [],
         interventionLifecycle: new Map<string, InterventionLifecycleState>(),
         isSimulationComplete: scenario.status === 'done',

@@ -32,6 +32,9 @@ file; use `Unreleased` until maintainers cut a release tag.
 - Refined the Local Packs picker into genre segments plus one search channel,
   with auto-selected previews, filter status, clearer focus states, and updated
   public docs / landing copy.
+- Documented simulation warmup feedback, interrupted-run recovery, and retry
+  behavior across the public README, usage guide, feature catalog, and landing
+  page.
 
 ### Fixed
 
@@ -44,3 +47,5 @@ file; use `Unreleased` until maintainers cut a release tag.
   (`a66e85b`, `15d5238`, `7174851`, `50a180c`, `51701c9`).
 - Recent milestone from git history: timeline-galaxy node labels were made more
   readable and the Chinese title was aligned to "星系" (`6c55484`).
+- Fixed orphaned `simulating` / `narrating` scenarios so startup and polling can
+  converge dead runs to a terminal state while live runtime locks are preserved.

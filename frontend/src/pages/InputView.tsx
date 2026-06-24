@@ -13,7 +13,7 @@ import {
   type FocusEvent,
   type KeyboardEvent,
 } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
 import { normalizeLanguage } from '../i18n/config';
@@ -112,6 +112,16 @@ const BYOK_REQUEST_BUFFER = 3;
 const BYOK_TOKEN_BUFFER = 8_000;
 const LAUNCH_IN_FLIGHT_STALE_MS = 60_000;
 const BYOK_ESTIMATED_TOKENS_PER_TURN = 1_600;
+
+type HomeLocationState = {
+  prefillQuestion?: unknown;
+};
+
+function getPrefillQuestionFromLocationState(state: unknown): string | null {
+  if (!state || typeof state !== 'object') return null;
+  const value = (state as HomeLocationState).prefillQuestion;
+  return typeof value === 'string' ? value : null;
+}
 
 function parseOptionalRuntimeLimit(value: string): number | undefined {
   const trimmed = value.trim();
@@ -361,6 +371,7 @@ export function InputView() {
   const [multiRunEnabled, setMultiRunEnabled] = useState(false);
   const [multiRunCount, setMultiRunCount] = useState(5);
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
 
   const apiUserId = getSessionBoundUserId();
@@ -878,6 +889,29 @@ export function InputView() {
   useEffect(() => {
     reset();
   }, [reset]);
+
+  useEffect(() => {
+    const prefillQuestion = getPrefillQuestionFromLocationState(location.state);
+    if (prefillQuestion === null) return;
+
+    clearLaunchError();
+    setQuestion(clampScenarioQuestion(prefillQuestion));
+    navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+        hash: location.hash,
+      },
+      { replace: true, state: null },
+    );
+  }, [
+    clearLaunchError,
+    location.hash,
+    location.pathname,
+    location.search,
+    location.state,
+    navigate,
+  ]);
 
   useEffect(() => {
     if (!sharedChallenge) return;

@@ -37,6 +37,16 @@ def _seed_scenario(engine, *, status=ScenarioStatus.SIMULATING, question="测试
         return s.id
 
 
+def _reset_scenario_status(engine, scenario_id, status):
+    """Force a scenario status, bypassing sticky-terminal guards (test setup only)."""
+    with Session(engine) as session:
+        s = session.get(Scenario, scenario_id)
+        assert s is not None
+        s.status = status
+        session.add(s)
+        session.commit()
+
+
 def _seed_branch(engine, scenario_id, *, title="主线", probability=1.0,
                  status=BranchStatus.ACTIVE, parent_branch_id=None):
     b = Branch(
@@ -386,6 +396,10 @@ class TestRetrospectiveIntervention:
         monkeypatch.setattr(helpers_module, "run_sim_background", fail_run_sim_background)
 
         with TestClient(app, raise_server_exceptions=False) as failing_client:
+            # The TestClient lifespan runs the startup orphan sweep, which marks this
+            # seeded SIMULATING scenario ERROR. Reset it so the retrospective endpoint
+            # exercises the mocked failure path (500) rather than a 409 status gate.
+            _reset_scenario_status(engine, sid, ScenarioStatus.SIMULATING)
             resp = failing_client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
                 "branch_id": bid,
                 "round_number": 2,
@@ -429,6 +443,10 @@ class TestRetrospectiveIntervention:
 
             patcher.setattr(helpers_module, "schedule_background_task", fail_schedule)
             with TestClient(app, raise_server_exceptions=False) as failing_client:
+                # The TestClient lifespan runs the startup orphan sweep, which marks
+                # this seeded SIMULATING scenario ERROR. Reset it so the endpoint
+                # exercises the mocked schedule-failure path (500), not a 409 gate.
+                _reset_scenario_status(engine, sid, ScenarioStatus.SIMULATING)
                 resp = failing_client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
                     "branch_id": bid,
                     "round_number": 2,

@@ -593,6 +593,20 @@ describe('InputView campaign progress', () => {
       .toHaveAttribute('maxlength', '2000');
   });
 
+  it('prefills the question field from retry route state', async () => {
+    render(
+      <MemoryRouter initialEntries={[{
+        pathname: '/',
+        state: { prefillQuestion: 'What if the stalled run is retried?' },
+      }]}>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('textbox', { name: 'home.question_input_label' }))
+      .toHaveValue('What if the stalled run is retried?');
+  });
+
   it('shows mode-specific action hints and updates the main simulation ETA when rounds change', async () => {
     render(
       <MemoryRouter>

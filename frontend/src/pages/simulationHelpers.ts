@@ -24,6 +24,18 @@ export const WARMUP_RECOVERY_INTERVAL_MS = 800;
 export const WARMUP_RECOVERY_MAX_ATTEMPTS = 10;
 export const TAIL_STATUS_SYNC_INTERVAL_MS = 600;
 
+// ── Staleness watchdog ──
+// A live run reports progress by advancing `currentRound`. When the round index
+// stops advancing for a long time the backend task has likely died (orphaned by a
+// process restart), leaving the scenario stuck in SIMULATING with no terminal event.
+// A run that is merely slow but still advancing must NEVER trip this — the timer
+// resets every time `currentRound` grows. (The gentle "running for a while" warmup
+// hint is handled separately by the shared progress banner in TimelineBar.)
+export const STUCK_HARD_CAP_MS = 300_000; // 5min: treat the run as interrupted
+// While stuck, re-poll the scenario snapshot so a backend that has since marked the
+// run as ERROR is reflected in the UI without requiring a manual refresh.
+export const STUCK_STATUS_REPOLL_INTERVAL_MS = 5_000;
+
 export function formatTheaterLabel(
   key: string | null | undefined,
   labels: Record<string, string>,

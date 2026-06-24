@@ -291,6 +291,61 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().currentRound).toBe(2);
   });
 
+  it("clears live timing state when switching to a different scenario snapshot", () => {
+    vi.useFakeTimers();
+    try {
+      const store = useSimulationStore;
+      store.getState().setScenario({
+        id: "scenario-a",
+        question: "A",
+        status: "simulating",
+        created_at: new Date().toISOString(),
+        total_rounds: 3,
+        mode: "blackboard",
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        messages: [],
+      });
+
+      vi.setSystemTime(1_000);
+      store.getState().handleWSEvent({
+        type: "status",
+        data: { status: "simulating" },
+      } as WSEvent);
+      vi.setSystemTime(5_000);
+      store.getState().handleWSEvent({
+        type: "round_summary",
+        data: { round: 1, branch_id: "branch-a", summary: "Round 1 done" },
+      } as WSEvent);
+
+      expect(store.getState().simStartTime).toBe(1_000);
+      expect(store.getState().roundCompleteTimes).toEqual([5_000]);
+      expect(store.getState().currentRound).toBe(1);
+
+      store.getState().setScenario({
+        id: "scenario-b",
+        question: "B",
+        status: "simulating",
+        created_at: new Date().toISOString(),
+        total_rounds: 3,
+        mode: "blackboard",
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        messages: [],
+      });
+
+      expect(store.getState().simStartTime).toBeNull();
+      expect(store.getState().roundCompleteTimes).toEqual([]);
+      expect(store.getState().currentRound).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("deduplicates repeated agent_speak events against preloaded scenario history", () => {
     const store = useSimulationStore;
     store.getState().setScenario({

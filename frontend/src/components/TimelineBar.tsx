@@ -3,7 +3,7 @@
    SwarmOracle — TimelineBar (Simulation Progress + ETA)
    ═══════════════════════════════════════════════════════════ */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import type { Scenario } from '../types';
@@ -58,6 +58,18 @@ function formatETA(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.ceil(seconds % 60);
   return secs > 0 ? `~${mins}m${secs}s` : `~${mins}m`;
+}
+
+// Warmup reassurance: once a run has spent this long without producing the first round,
+// the sticky banner swaps "Preparing…" for a "still working (slow model)" hint. A local
+// LLM can take ~1min for round 1, so this fires well before the watchdog hard cap.
+const WARMUP_SLOW_HINT_MS = 30_000;
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 function getModeMultiplier(mode: string | null | undefined): number {
@@ -164,6 +176,26 @@ export function TimelineBar({
   }, [currentRound, messages.length, status, totalRounds]);
   const isSimulatingOrNarrating = displayStatus === 'simulating' || displayStatus === 'narrating';
 
+  // Warmup elapsed ticker — drives the "running for M:SS" readout + slow hint in the
+  // sticky banner so a slow-but-working local model never looks frozen during warmup.
+  // Ticks only while a run is live; prefers the store's sim start time, falling back to
+  // this component's mount time when the snapshot path never set it.
+  // Two lazy-initialised clocks (a lazy useState initialiser is render-safe, unlike a
+  // bare Date.now() call or a ref read during render): `warmupFallbackStart` pins the
+  // mount instant as a fallback for when the store never recorded a sim start time, and
+  // `elapsedNow` ticks every second while the run is live.
+  const [warmupFallbackStart] = useState<number>(() => Date.now());
+  const [elapsedNow, setElapsedNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!isSimulatingOrNarrating) return undefined;
+    const ticker = window.setInterval(() => setElapsedNow(Date.now()), 1000);
+    return () => window.clearInterval(ticker);
+  }, [isSimulatingOrNarrating]);
+  const warmupStart = simStartTime ?? warmupFallbackStart;
+  const warmupElapsedMs = Math.max(0, elapsedNow - warmupStart);
+  const warmupElapsedLabel = formatElapsed(warmupElapsedMs);
+  const warmupIsSlow = warmupElapsedMs >= WARMUP_SLOW_HINT_MS;
+
   const { progressPercent, eta, avgRoundTime } = useMemo(() => {
     if (displayStatus === 'narrating') {
       return {
@@ -243,7 +275,9 @@ export function TimelineBar({
         ? totalRounds !== null
           ? `R${currentRound}/${totalRounds}`
           : `R${currentRound}`
-        : t('sim.timeline.preparing');
+        : warmupIsSlow
+          ? t('sim.timeline.preparing_slow')
+          : t('sim.timeline.preparing');
     const showProgressPercent = isNarrating || totalRounds !== null;
 
     const etaText = isNarrating
@@ -288,6 +322,14 @@ export function TimelineBar({
         )}
         <span className="sim-progress-ledger__label">
           <span className="sim-progress-ledger__round">{currentText}</span>
+          {isPreparing && (
+            <>
+              <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
+              <span className="sim-progress-ledger__eta">
+                {t('sim.timeline.elapsed', { time: warmupElapsedLabel })}
+              </span>
+            </>
+          )}
           {!isPreparing && showProgressPercent && (
             <>
               <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>

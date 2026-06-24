@@ -1861,8 +1861,11 @@ async def create_scenario(
     )
 
     # 3) Return the placeholder scenario immediately. Agents/branches will be
-    # populated once the background parse finishes.
-    result = load_scenario_response(engine, scenario_id)
+    # populated once the background parse finishes. fail_forward_stale=False: the
+    # scheduled parse task has not started yet (create_task runs after this returns),
+    # so it has not registered in _running_simulations / acquired its lock — without
+    # this flag the brand-new SIMULATING scenario would be wrongly marked ERROR.
+    result = load_scenario_response(engine, scenario_id, fail_forward_stale=False)
     if not result:
         raise api_error(500, "SCENARIO_CREATE_RESPONSE_MISSING", "Failed to load newly created scenario")  # noqa: E501
     result.mode = mode
@@ -2072,7 +2075,9 @@ async def import_replay_scenario(
 
         session.commit()
 
-    result = load_scenario_response(engine, scenario_id)
+    # fail_forward_stale=False: an imported replay is finalized data, not a live run
+    # awaiting an in-flight task, so it must never be coerced to ERROR here.
+    result = load_scenario_response(engine, scenario_id, fail_forward_stale=False)
     if not result:
         raise api_error(500, "REPLAY_SCENARIO_RESPONSE_MISSING", "Failed to load imported replay scenario")  # noqa: E501
     return result

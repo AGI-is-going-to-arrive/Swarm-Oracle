@@ -405,7 +405,9 @@
         "tooltip_cards": "玩法",
         "tooltip_bets": "下注",
         "tooltip_results": "结局",
-        "tooltip_no_events": "本轮暂无额外事件"
+        "tooltip_no_events": "本轮暂无额外事件",
+        "elapsed": "已运行 {{time}}",
+        "preparing_slow": "本地推理较慢，仍在进行…"
       },
       "warmup": {
         "title": "导演准备中",
@@ -3418,7 +3420,11 @@
       "cancel_confirm_dismiss": "继续推演",
       "cancel_confirm_in_progress": "正在取消推演...",
       "cancelled_title": "推演已取消",
-      "cancelled_desc": "推演已被取消。"
+      "cancelled_desc": "推演已被取消。",
+      "stuck_title": "推演似乎已中断。",
+      "stuck_desc": "这条推演长时间没有新进展，可能已停止。你可以重新发起或返回首页。",
+      "stuck_retry": "重新推演",
+      "stuck_back": "返回首页"
     },
     "counterfactual_brand": {
       "eyebrow": "回到分叉点",
