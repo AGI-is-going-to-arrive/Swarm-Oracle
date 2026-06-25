@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlmodel import Session, select
 
 from app.log_sanitize import _scrub_sensitive_text
-from app.models import Agent, AgentMessage, Branch, Round, Scenario
+from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario
 
 PUBLIC_ARTIFACT_SCHEMA_VERSION = "public_artifact.v1"
 
@@ -424,7 +424,12 @@ def build_public_artifact_for_scenario(
         session.exec(select(Agent).where(Agent.scenario_id == scenario.id)).all()
     )
     branches = list(
-        session.exec(select(Branch).where(Branch.scenario_id == scenario.id)).all()
+        session.exec(
+            select(Branch).where(
+                Branch.scenario_id == scenario.id,
+                Branch.status == BranchStatus.COMPLETED,
+            )
+        ).all()
     )
     agent_name_by_id = {agent.id: agent.name for agent in agents}
     branch_ids = [branch.id for branch in branches]

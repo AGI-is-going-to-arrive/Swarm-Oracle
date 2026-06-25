@@ -446,6 +446,7 @@
         "intervene": "⚡ Intervene",
         "status_active": "In progress",
         "status_active_tooltip": "This line is still being simulated.",
+        "status_interrupted": "Interrupted",
         "status_completed": "Concluded",
         "status_completed_tooltip": "This line has concluded, so you can review its ending.",
         "status_pruned": "Low likelihood",
@@ -3429,7 +3430,8 @@
       "stuck_title_soft": "This simulation is processing slowly.",
       "stuck_desc_soft": "It may still be running in the background, or it may have stopped. You can start over or go back home.",
       "stuck_retry": "Start over",
-      "stuck_back": "Back home"
+      "stuck_back": "Back home",
+      "runtime_failed": "The simulation was interrupted. Please try again."
     },
     "counterfactual_brand": {
       "eyebrow": "Go back to a fork",

@@ -19,6 +19,7 @@ from app.api import ws as ws_module
 from app.models import database as database_module
 from app.models.database import Branch, BranchStatus, Scenario, ScenarioStatus, get_engine
 from app.services import runtime_lock as runtime_lock_module
+from app.services import simulator as simulator_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
@@ -47,8 +48,84 @@ def test_runtime_lock_sqlite_connection_enables_busy_timeout_and_wal(tmp_path):
 
     conn = runtime_lock_module._get_sqlite_connection(str(db_path))
 
-    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    busy_timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert 1 <= busy_timeout_ms <= 100
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+
+
+def test_database_sqlite_engine_enables_wal_and_synchronous_normal():
+    with get_engine().connect() as conn:
+        assert conn.exec_driver_sql("PRAGMA journal_mode").scalar().lower() == "wal"
+        assert conn.exec_driver_sql("PRAGMA synchronous").scalar() == 1
+
+
+def test_bootstrap_sqlite_engine_enables_wal_and_synchronous_normal(tmp_path):
+    engine = database_module._make_bootstrap_engine(
+        f"sqlite:///{tmp_path / 'bootstrap-pragmas.db'}"
+    )
+    try:
+        with engine.connect() as conn:
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+            assert conn.exec_driver_sql("PRAGMA journal_mode").scalar().lower() == "wal"
+            assert conn.exec_driver_sql("PRAGMA synchronous").scalar() == 1
+    finally:
+        engine.dispose()
+
+
+def test_bootstrap_sqlite_engine_pragmas_continue_after_individual_failure(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeEngine:
+        pass
+
+    def _fake_create_engine(*_args, **_kwargs):
+        return _FakeEngine()
+
+    def _fake_listens_for(engine, event_name):
+        assert isinstance(engine, _FakeEngine)
+        assert event_name == "connect"
+
+        def _decorator(fn):
+            captured["listener"] = fn
+            return fn
+
+        return _decorator
+
+    executed: list[str] = []
+    warnings: list[tuple] = []
+
+    class _FakeCursor:
+        def execute(self, statement):
+            executed.append(statement)
+            if statement == "PRAGMA journal_mode=WAL":
+                raise RuntimeError("journal mode blocked")
+
+        def close(self):
+            executed.append("CLOSE")
+
+    class _FakeDbapiConnection:
+        def cursor(self):
+            return _FakeCursor()
+
+    monkeypatch.setattr(database_module, "create_engine", _fake_create_engine)
+    monkeypatch.setattr(database_module.event, "listens_for", _fake_listens_for)
+    monkeypatch.setattr(
+        database_module.logger,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    database_module._make_bootstrap_engine("sqlite:///restricted-bootstrap.db")
+    listener = captured["listener"]
+    listener(_FakeDbapiConnection(), object())
+
+    assert "PRAGMA foreign_keys=ON" in executed
+    assert "PRAGMA journal_mode=WAL" in executed
+    assert "PRAGMA synchronous=NORMAL" in executed
+    assert "PRAGMA busy_timeout=5000" in executed
+    assert executed[-1] == "CLOSE"
+    assert warnings
 
 
 @pytest.mark.asyncio
@@ -354,6 +431,160 @@ def test_runtime_lock_uses_percent_encoded_sqlite_uri_database(monkeypatch, tmp_
     assert lease is not None
     assert lease.db_path == str(db_path)
     assert release_runtime_lock(lease) is True
+
+
+def _hold_sqlite_write_lock(db_path, *, hold_seconds: float) -> threading.Thread:
+    ready = threading.Event()
+
+    def _worker() -> None:
+        conn = sqlite3.connect(str(db_path), timeout=1.0, isolation_level=None)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("BEGIN IMMEDIATE")
+            ready.set()
+            time.sleep(hold_seconds)
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+
+    thread = threading.Thread(target=_worker, name="sqlite-write-lock-holder", daemon=True)
+    thread.start()
+    assert ready.wait(timeout=2.0)
+    return thread
+
+
+def test_refresh_runtime_lock_retries_after_sqlite_busy_timeout(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-refresh-busy.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    lease = acquire_runtime_lock(
+        simulation_lock_key("scenario-refresh-busy"),
+        lease_seconds=30,
+    )
+    assert lease is not None
+
+    holder = _hold_sqlite_write_lock(db_path, hold_seconds=0.25)
+    try:
+        refreshed = refresh_runtime_lock(lease, lease_seconds=30)
+    finally:
+        holder.join(timeout=2.0)
+
+    assert refreshed is not None
+    assert refreshed.owner_id == lease.owner_id
+    assert refreshed.expires_at > lease.expires_at
+    assert release_runtime_lock(refreshed) is True
+
+
+def test_refresh_runtime_lock_raises_busy_signal_when_retries_exhaust(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = tmp_path / "runtime-lock-refresh-exhausted.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+    monkeypatch.setattr(runtime_lock_module, "_SQLITE_BUSY_TIMEOUT_MS", 30, raising=False)
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_RUNTIME_LOCK_WRITE_RETRY_ATTEMPTS",
+        2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_RUNTIME_LOCK_WRITE_RETRY_BASE_SECONDS",
+        0.01,
+        raising=False,
+    )
+
+    lease = acquire_runtime_lock(
+        simulation_lock_key("scenario-refresh-exhausted"),
+        lease_seconds=30,
+    )
+    assert lease is not None
+
+    holder = _hold_sqlite_write_lock(db_path, hold_seconds=0.25)
+    try:
+        with pytest.raises(runtime_lock_module.RuntimeLockBusyError):
+            refresh_runtime_lock(lease, lease_seconds=30)
+    finally:
+        holder.join(timeout=1.0)
+        release_runtime_lock(lease)
+
+
+def test_refresh_runtime_lock_uses_total_deadline_inside_lease_window(monkeypatch):
+    attempts = 0
+    slept: list[float] = []
+    monotonic_now = [500.0]
+
+    class _BusyConnection:
+        def execute(self, statement, params=()):
+            nonlocal attempts
+            normalized = " ".join(str(statement).split())
+            if normalized == "BEGIN IMMEDIATE":
+                attempts += 1
+                raise sqlite3.OperationalError("database is locked")
+            if normalized == "ROLLBACK":
+                return SimpleNamespace()
+            raise AssertionError(f"unexpected statement: {normalized}")
+
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_get_sqlite_connection",
+        lambda _db_path: _BusyConnection(),
+    )
+    monkeypatch.setattr(runtime_lock_module.time, "time", lambda: 100.0)
+    monkeypatch.setattr(runtime_lock_module.time, "monotonic", lambda: monotonic_now[0])
+    monkeypatch.setattr(runtime_lock_module.random, "uniform", lambda *_args: 0.0)
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_RUNTIME_LOCK_WRITE_RETRY_ATTEMPTS",
+        100,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_RUNTIME_LOCK_WRITE_RETRY_BASE_SECONDS",
+        0.25,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_RUNTIME_LOCK_WRITE_RETRY_MAX_DELAY_SECONDS",
+        0.25,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_lock_module,
+        "_RUNTIME_LOCK_WRITE_RETRY_MAX_SLEEP_SECONDS",
+        999.0,
+        raising=False,
+    )
+
+    def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        monotonic_now[0] += seconds
+
+    monkeypatch.setattr(runtime_lock_module.time, "sleep", _fake_sleep)
+
+    lease = runtime_lock_module.RuntimeLockLease(
+        lock_key="simulation:deadline",
+        owner_id="owner",
+        db_path="/tmp/runtime-lock-deadline.db",
+        expires_at=102.0,
+    )
+
+    with pytest.raises(runtime_lock_module.RuntimeLockBusyError):
+        refresh_runtime_lock(lease, lease_seconds=60)
+
+    assert sum(slept) <= 1.0
+    assert attempts <= 6
 
 
 def test_refresh_runtime_lock_returns_none_when_lease_is_expired(monkeypatch, tmp_path):
@@ -684,6 +915,52 @@ async def test_run_sim_background_stall_timeout_reconciles_done_before_error(mon
 
 
 @pytest.mark.asyncio
+async def test_run_sim_background_exception_reconciles_done_before_error(monkeypatch):
+    helpers_module._running_simulations.clear()
+    broadcast = AsyncMock()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="complete despite exception", status=ScenarioStatus.NARRATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+        session.add(
+            Branch(
+                scenario_id=scenario_id,
+                title="Complete branch",
+                status=BranchStatus.COMPLETED,
+                story="Story is complete.",
+                insight="Insight is complete.",
+                probability=1.0,
+            )
+        )
+        session.commit()
+
+    async def _fake_run_simulation(**_kwargs):
+        raise RuntimeError("late lock guard failure")
+
+    monkeypatch.setattr(helpers_module, "run_simulation", _fake_run_simulation)
+
+    await helpers_module.run_sim_background(scenario_id)
+
+    with Session(get_engine()) as session:
+        refreshed = session.get(Scenario, scenario_id)
+        assert refreshed is not None
+        assert refreshed.status == ScenarioStatus.DONE
+
+    event_types = [call.args[1].get("type") for call in broadcast.await_args_list]
+    assert "simulation_done" in event_types
+    assert "simulation_error" not in event_types
+    helpers_module._running_simulations.clear()
+
+
+@pytest.mark.asyncio
 async def test_run_sim_background_keeps_pre_acquired_lock_alive_until_completion(monkeypatch):
     helpers_module._running_simulations.clear()
     monkeypatch.setattr(
@@ -817,6 +1094,132 @@ async def test_watch_runtime_lock_loss_treats_expired_lease_as_lost():
             helpers_module._watch_runtime_lock_loss([expired_lease]),
             timeout=0.05,
         )
+
+
+def test_runtime_lock_heartbeat_preserves_lease_after_transient_sqlite_busy(monkeypatch):
+    initial_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key="simulation:busy-heartbeat",
+        owner_id="owner",
+        db_path="/tmp/runtime-lock-heartbeat.db",
+        expires_at=time.time() + 60,
+    )
+    refreshed_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=initial_lease.lock_key,
+        owner_id=initial_lease.owner_id,
+        db_path=initial_lease.db_path,
+        expires_at=time.time() + 90,
+    )
+    lease_holder: list[runtime_lock_module.RuntimeLockLease | None] = [initial_lease]
+    refresh_calls: list[runtime_lock_module.RuntimeLockLease | None] = []
+    refreshed_once = threading.Event()
+
+    def _fake_refresh_runtime_lock(lease, *, lease_seconds):
+        refresh_calls.append(lease)
+        if len(refresh_calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        refreshed_once.set()
+        return refreshed_lease
+
+    monkeypatch.setattr(helpers_module, "refresh_runtime_lock", _fake_refresh_runtime_lock)
+    monkeypatch.setattr(
+        helpers_module,
+        "_runtime_lock_refresh_interval",
+        lambda *_args, **_kwargs: 0.01,
+    )
+
+    stop_event, thread = helpers_module._start_runtime_lock_heartbeat(
+        lease_holder,
+        lease_seconds=60,
+        lock_label="simulation:busy-heartbeat",
+    )
+    try:
+        assert refreshed_once.wait(timeout=1.0)
+    finally:
+        helpers_module._stop_runtime_lock_heartbeat(stop_event, thread)
+
+    assert len(refresh_calls) >= 2
+    assert lease_holder[0] == refreshed_lease
+
+
+def test_runtime_lock_heartbeat_clears_expired_lease_after_busy_refresh(monkeypatch):
+    wall_now = [100.0]
+    initial_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key="simulation:expired-busy-heartbeat",
+        owner_id="owner",
+        db_path="/tmp/runtime-lock-expired-busy-heartbeat.db",
+        expires_at=100.02,
+    )
+    lease_holder: list[runtime_lock_module.RuntimeLockLease | None] = [initial_lease]
+    refresh_calls: list[runtime_lock_module.RuntimeLockLease | None] = []
+    first_refresh_seen = threading.Event()
+
+    def _fake_refresh_runtime_lock(lease, *, lease_seconds):
+        refresh_calls.append(lease)
+        wall_now[0] = 100.03
+        first_refresh_seen.set()
+        raise runtime_lock_module.RuntimeLockBusyError("still busy")
+
+    def _fake_refresh_interval(*_args, **_kwargs):
+        return 0.01 if not refresh_calls else 60.0
+
+    monkeypatch.setattr(helpers_module.time, "time", lambda: wall_now[0])
+    monkeypatch.setattr(helpers_module, "refresh_runtime_lock", _fake_refresh_runtime_lock)
+    monkeypatch.setattr(
+        helpers_module,
+        "_runtime_lock_refresh_interval",
+        _fake_refresh_interval,
+    )
+
+    stop_event, thread = helpers_module._start_runtime_lock_heartbeat(
+        lease_holder,
+        lease_seconds=60,
+        lock_label="simulation:expired-busy-heartbeat",
+    )
+    try:
+        assert first_refresh_seen.wait(timeout=1.0)
+        threading.Event().wait(0.05)
+    finally:
+        helpers_module._stop_runtime_lock_heartbeat(stop_event, thread)
+
+    assert refresh_calls == [initial_lease]
+    assert lease_holder[0] is None
+
+
+def test_pending_intervention_claim_cas_blocks_row_taken_after_select():
+    statements: list[str] = []
+
+    class _SelectResult:
+        def first(self):
+            return (123, "change the next turn", '{"source":"test"}', "visible text")
+
+    class _UpdateResult:
+        rowcount = 0
+
+    class _FakeConnection:
+        def exec_driver_sql(self, statement, params=()):
+            normalized = " ".join(str(statement).split())
+            statements.append(normalized)
+            if normalized.startswith("UPDATE pending_intervention SET status = 'pending'"):
+                return SimpleNamespace(rowcount=0)
+            if normalized.startswith("SELECT id, user_input, metadata_json, display_text"):
+                return _SelectResult()
+            if normalized.startswith("UPDATE pending_intervention SET status = 'claimed'"):
+                return _UpdateResult()
+            raise AssertionError(f"unexpected statement: {normalized}")
+
+    claimed = simulator_module._claim_pending_intervention_on_connection(
+        _FakeConnection(),
+        "scenario-claim-cas:branch-claim-cas",
+        "worker-token",
+        300,
+    )
+
+    claim_updates = [
+        statement for statement in statements if "SET status = 'claimed'" in statement
+    ]
+    assert claim_updates
+    assert "AND status = 'pending'" in claim_updates[0]
+    assert claimed is None
 
 
 @pytest.mark.asyncio

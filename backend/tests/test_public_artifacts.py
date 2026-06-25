@@ -433,6 +433,47 @@ def test_database_transcript_query_is_bounded() -> None:
     assert any(" limit " in f" {statement.lower()} " for statement in statements), statements
 
 
+def test_database_public_artifact_excludes_unfinished_pruned_branches() -> None:
+    scenario_id = _seed_public_scenario()
+    engine = get_engine()
+    with Session(engine) as session:
+        agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).first()
+        assert agent is not None
+        pruned_branch = Branch(
+            scenario_id=scenario_id,
+            title="Interrupted branch",
+            probability=0.44,
+            status=BranchStatus.PRUNED,
+            insight="This should not appear as a public outcome.",
+        )
+        session.add(pruned_branch)
+        session.commit()
+        session.refresh(pruned_branch)
+        pruned_round = Round(branch_id=pruned_branch.id, round_number=1)
+        session.add(pruned_round)
+        session.commit()
+        session.refresh(pruned_round)
+        session.add(
+            AgentMessage(
+                round_id=pruned_round.id,
+                agent_id=agent.id,
+                content="Interrupted branch transcript should not appear.",
+            ),
+        )
+        session.commit()
+
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    payload = _serialized(artifact)
+    assert "Interrupted branch" not in payload
+    assert "public outcome" not in payload
+    assert "Interrupted branch transcript" not in payload
+    assert len(artifact["branch_verdicts"]) == 1
+    assert len(artifact["probability_bars"]) == 1
+
+
 def test_secret_scan_rejects_secret_shaped_allowed_text() -> None:
     artifact = build_public_artifact_from_mapping(_dirty_mapping())
     artifact["question"] = "Leaked sk-publicartifact-secret"

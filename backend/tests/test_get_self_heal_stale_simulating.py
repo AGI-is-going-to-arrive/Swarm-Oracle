@@ -3,7 +3,9 @@
 Covers the "task died but the process is still alive" gap: a scenario left
 SIMULATING/NARRATING whose driver task is gone must be moved to ERROR when a
 client GETs it, so the UI stops spinning. A genuinely live run needs both an
-active runtime lock and fresh activity.
+    an active runtime lock. Fresh durable activity can also protect the
+    POST->first-GET window, but stale durable activity must not override a live
+    cross-process runtime lease.
 
 These tests use real SQLite test databases (conftest's autouse fixture).
 """
@@ -184,10 +186,13 @@ class TestGetTimeFailForward:
         assert response.status == ScenarioStatus.ERROR
         assert _status(engine, scenario_id) == ScenarioStatus.ERROR
 
-    def test_active_runtime_lock_with_stale_activity_is_marked_error(self, monkeypatch):
+    def test_active_runtime_lock_with_stale_activity_stays_simulating(self, monkeypatch):
         engine = get_engine()
         scenario_id = _make_simulating_scenario(engine, created_at=_old_activity_timestamp())
 
+        # A slow live worker may hold the runtime lock while no durable frame/checkpoint
+        # lands inside the stale-activity window. GET must not race the driver and
+        # force ERROR; the driver owns timeout/error finalization while its lock is live.
         monkeypatch.setattr(helpers_module, "runtime_lock_is_active", lambda _key: True)
         monkeypatch.setattr(
             helpers_module.settings,
@@ -200,8 +205,8 @@ class TestGetTimeFailForward:
         response = load_scenario_response(engine, scenario_id)
 
         assert response is not None
-        assert response.status == ScenarioStatus.ERROR
-        assert _status(engine, scenario_id) == ScenarioStatus.ERROR
+        assert response.status == ScenarioStatus.SIMULATING
+        assert _status(engine, scenario_id) == ScenarioStatus.SIMULATING
 
     def test_recently_created_simulating_without_runtime_lock_stays_simulating(
         self,

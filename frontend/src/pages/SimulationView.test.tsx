@@ -159,7 +159,7 @@ const mockStore = {
   ],
   thinkingAgents: [] as Array<{ agent: string; agent_id: string; branch: string; round: number }>,
   status: 'done' as Scenario['status'],
-  error: null,
+  error: null as string | null,
   errorCode: null as string | null,
   loadScenario: vi.fn(),
   isSimulationComplete: true,
@@ -2240,5 +2240,48 @@ describe('SimulationView replay automation output', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('renders the generic runtime fallback via i18n so it follows live language switches', () => {
+    mockStore.scenario = { ...baseScenario, status: 'error' };
+    mockStore.status = 'error';
+    mockStore.isSimulationComplete = false;
+    mockStore.currentRound = 1;
+    // The snapshot reducer freezes a translated fallback into `error` and tags it
+    // RUNTIME_ERROR; the panel must re-translate via t(), not echo the frozen string.
+    mockStore.error = '推演运行中断，请重试';
+    mockStore.errorCode = 'RUNTIME_ERROR';
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // The t mock echoes the key, proving the panel renders via i18n, not the frozen string.
+    expect(screen.getByText(/simulation\.runtime_failed/)).toBeInTheDocument();
+    expect(screen.queryByText('推演运行中断，请重试')).toBeNull();
+  });
+
+  it('keeps a concrete API error message verbatim (only RUNTIME_ERROR is re-translated)', () => {
+    mockStore.scenario = { ...baseScenario, status: 'error' };
+    mockStore.status = 'error';
+    mockStore.isSimulationComplete = false;
+    mockStore.currentRound = 1;
+    mockStore.error = 'Scenario failed to load: 503';
+    mockStore.errorCode = 'SCENARIO_LOAD_FAILED';
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/Scenario failed to load: 503/)).toBeInTheDocument();
+    expect(screen.queryByText(/simulation\.runtime_failed/)).toBeNull();
   });
 });

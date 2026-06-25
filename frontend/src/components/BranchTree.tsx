@@ -84,6 +84,7 @@ function buildBranchNodeData(
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
   canIntervene?: boolean,
+  scenarioTerminal?: boolean,
 ) {
   const rawTitle = branch.title || '';
   return {
@@ -97,6 +98,9 @@ function buildBranchNodeData(
     description: branch.description,
     probability: branch.probability,
     status: branch.status,
+    interrupted:
+      Boolean(scenarioTerminal) &&
+      (branch.status === 'ACTIVE' || branch.status === 'PRUNED'),
     forkReason: branch.fork_reason,
     story: branch.story,
     agentNames,
@@ -117,6 +121,7 @@ function layoutBranchesToFlow(
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
   canIntervene?: boolean,
+  scenarioTerminal?: boolean,
 ): {
   nodes: Node[];
   edges: Edge[];
@@ -131,7 +136,7 @@ function layoutBranchesToFlow(
       id: b.id,
       type: 'branchNode',
       position: { x: 0, y: 0 },
-      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, isZh, onIntervene, onDetail, canIntervene),
+      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, isZh, onIntervene, onDetail, canIntervene, scenarioTerminal),
     };
   });
 
@@ -157,6 +162,7 @@ function applyBranchActivityToNodes(
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
   canIntervene?: boolean,
+  scenarioTerminal?: boolean,
 ): Node[] {
   const agentNames = agents.slice(0, 6).map((agent) => agent.name);
   const branchById = new Map(branches.map((branch) => [branch.id, branch]));
@@ -167,7 +173,7 @@ function applyBranchActivityToNodes(
     const activity = branchActivity[branch.id] || { thinking: 0, recent: 0 };
     return {
       ...node,
-      data: buildBranchNodeData(branch, agentNames, activity, isZh, onIntervene, onDetail, canIntervene),
+      data: buildBranchNodeData(branch, agentNames, activity, isZh, onIntervene, onDetail, canIntervene, scenarioTerminal),
     };
   });
 }
@@ -186,7 +192,8 @@ function CustomMiniMapNode({
   nodeCount,
 }: MiniMapNodeProps & { nodeCount: number }) {
   const nodeData = useNodesData(id);
-  const status = nodeData?.data?.status;
+  const interrupted = nodeData?.data?.interrupted === true;
+  const status = interrupted ? 'INTERRUPTED' : nodeData?.data?.status;
 
   const cx = x + width / 2;
   const cy = y + height / 2;
@@ -204,22 +211,26 @@ function CustomMiniMapNode({
   if (isCompact) {
     const insetX = width * 0.28;
     const insetY = height * 0.26;
-    const statusClass = status === 'ACTIVE'
-      ? 'active'
-      : status === 'COMPLETED'
-        ? 'completed'
-        : status === 'PRUNED'
-          ? 'pruned'
-          : 'neutral';
+    const statusClass = status === 'INTERRUPTED'
+      ? 'interrupted'
+      : status === 'ACTIVE'
+        ? 'active'
+        : status === 'COMPLETED'
+          ? 'completed'
+          : status === 'PRUNED'
+            ? 'pruned'
+            : 'neutral';
     const stroke = selected
       ? '#1c1a17'
-      : status === 'ACTIVE'
-        ? '#1c1a17'
-        : status === 'COMPLETED'
-          ? '#74706a'
-          : status === 'PRUNED'
-            ? '#b8b2aa'
-            : '#a9a49c';
+      : status === 'INTERRUPTED'
+        ? '#8d8780'
+        : status === 'ACTIVE'
+          ? '#1c1a17'
+          : status === 'COMPLETED'
+            ? '#74706a'
+            : status === 'PRUNED'
+              ? '#b8b2aa'
+              : '#a9a49c';
 
     return (
       <g className={`minimap-node-${statusClass} minimap-node-dense`}>
@@ -231,7 +242,7 @@ function CustomMiniMapNode({
           rx={base * 0.08}
           fill={status === 'ACTIVE' ? '#1c1a17' : 'none'}
           stroke={stroke}
-          strokeDasharray={status === 'PRUNED' ? '4 3' : undefined}
+          strokeDasharray={status === 'PRUNED' || status === 'INTERRUPTED' ? '4 3' : undefined}
           {...strokeProps(selected ? sw * 1.4 : sw, selected ? 1.8 : 1.2)}
         />
         {selected && (
@@ -288,6 +299,22 @@ function CustomMiniMapNode({
             {...strokeProps(sw, 2)}
           />
         )}
+      </g>
+    );
+  }
+
+  if (status === 'INTERRUPTED') {
+    return (
+      <g className="minimap-node-interrupted">
+        <circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke={selected ? '#1c1a17' : '#8d8780'}
+          strokeDasharray={isDense ? '4 3' : `${sw * 1.1} ${sw * 1.35}`}
+          {...strokeProps(selected ? sw * 1.4 : sw * 0.85, selected ? 1.7 : 1.15)}
+        />
       </g>
     );
   }
@@ -367,6 +394,12 @@ export function BranchTree({
   const messages = useSimulationStore((s) => s.messages);
   const { fitView } = useReactFlow();
   const isZh = (i18n.language || '').toLowerCase().startsWith('zh');
+  // Scenario reached a terminal failure state (error/cancelled). Any unfinished
+  // branch — still flagged ACTIVE, or back-end-reconciled to PRUNED when the run
+  // failed — should render as a neutral "interrupted" state, not the misleading
+  // "in progress" pulse nor the "low probability" copy (which implies the model
+  // deliberately pruned it). Branches that genuinely COMPLETED stay COMPLETED.
+  const scenarioTerminal = status === 'error' || status === 'cancelled';
 
   // Compute per-branch activity: thinking count + recent messages (last 30s)
   const branchActivity = useMemo(() => {
@@ -389,13 +422,13 @@ export function BranchTree({
   }, [thinkingAgents, messages]);
 
   const { nodes: structuralNodes, edges: structuralEdges } = useMemo(
-    () => layoutBranchesToFlow(branches, agents, isZh, onIntervene, onDetail, canIntervene),
-    [branches, agents, isZh, onIntervene, onDetail, canIntervene],
+    () => layoutBranchesToFlow(branches, agents, isZh, onIntervene, onDetail, canIntervene, scenarioTerminal),
+    [branches, agents, isZh, onIntervene, onDetail, canIntervene, scenarioTerminal],
   );
 
   const layoutedNodes = useMemo(
-    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, isZh, onIntervene, onDetail, canIntervene),
-    [agents, branchActivity, branches, isZh, onDetail, onIntervene, structuralNodes, canIntervene],
+    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, isZh, onIntervene, onDetail, canIntervene, scenarioTerminal),
+    [agents, branchActivity, branches, isZh, onDetail, onIntervene, structuralNodes, canIntervene, scenarioTerminal],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);

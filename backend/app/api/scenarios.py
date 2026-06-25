@@ -100,6 +100,7 @@ from app.services.result_report import builder as result_report_builder
 from app.services.result_report import full_report_for_story
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
+from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
 from app.services.vector_store import get_vector_store
 from app.services.web_context import (
     resolve_web_search_intensity_config,
@@ -2295,6 +2296,7 @@ async def cancel_scenario(
             scenario.status = ScenarioStatus.CANCELLED
             session.add(scenario)
             session.commit()
+    reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
 
     get_or_create_cancel_token(scenario_id)
     request_cancel(scenario_id)

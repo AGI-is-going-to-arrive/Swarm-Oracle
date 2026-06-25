@@ -276,7 +276,10 @@ export function SimulationView() {
     const normalized = Math.floor(value);
     return normalized > 0 ? normalized : null;
   }, [scenario?.total_rounds]);
+  const isTerminal = status === 'error' || status === 'cancelled' || status === 'done';
+
   const displayStatus = useMemo(() => {
+    if (isTerminal) return status;
     if (
       status === 'simulating'
       && totalRounds !== null
@@ -286,7 +289,7 @@ export function SimulationView() {
       return 'narrating';
     }
     return status;
-  }, [currentRound, messages.length, status, totalRounds]);
+  }, [currentRound, messages.length, status, totalRounds, isTerminal]);
   const isSimulatingOrNarrating = displayStatus === 'simulating' || displayStatus === 'narrating';
   const cancelledStatus = status === 'cancelled';
   const canCancelSimulation =
@@ -1513,16 +1516,19 @@ export function SimulationView() {
         </div>
       </header>
 
-      {isSimulatingOrNarrating && (
+      {isSimulatingOrNarrating && !isTerminal && (
         <Suspense fallback={null}>
           <LazyTimelineBar key={scenario?.id ?? id ?? 'live'} stickyBanner />
         </Suspense>
       )}
 
-      {/* Error state */}
+      {/* Error state. The generic runtime fallback (errorCode RUNTIME_ERROR, set by the
+          snapshot reducer when a failed run carries no specific message) is rendered via
+          i18n so it follows live language switches; concrete API errors keep their
+          already-localized message. */}
       {error && (
         <div className="sim-error">
-          <p>⚠️ {error}</p>
+          <p>⚠️ {errorCode === 'RUNTIME_ERROR' ? t('simulation.runtime_failed') : error}</p>
           <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
             {t('sim.status.back')}
           </button>
@@ -1533,7 +1539,7 @@ export function SimulationView() {
           surfaces as status='error' with no error string on a polled snapshot; the
           client-side watchdog also flips this on when progress stalls past the hard cap.
           Gated on !error so it never double-renders with the error-string panel above. */}
-      {!error && !isReplayMode && status === 'error' && (
+      {!error && !isReplayMode && status === 'error' && !isSimulatingOrNarrating && (
         <div className="sim-error" role="alert" data-testid="simulation-stuck-banner-error">
           <p>⚠️ {t('simulation.stuck_title')} {t('simulation.stuck_desc')}</p>
           <button className="btn" onClick={handleStuckRetry}>

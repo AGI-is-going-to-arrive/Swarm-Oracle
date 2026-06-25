@@ -15,6 +15,11 @@ interface BranchNodeData {
   description?: string;
   probability: number;
   status: BranchStatus;
+  /** True when the scenario reached a terminal failure state (error/cancelled)
+   *  while this branch was still unfinished — either ACTIVE, or reconciled to
+   *  PRUNED by the backend on failure. Render a neutral "interrupted" state
+   *  instead of the misleading "in progress" pulse or "low probability" copy. */
+  interrupted?: boolean;
   forkReason?: string;
   agentNames?: string[];
   story?: string | null;
@@ -42,11 +47,12 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
     // to prevent double-animation in React StrictMode
   }, []);
 
-  const { title, probability, status, forkReason, agentNames, thinkingCount = 0 } = data;
+  const { title, probability, status, forkReason, agentNames, thinkingCount = 0, interrupted = false } = data;
   const pct = Math.round(probability * 100);
   const isTalking = thinkingCount > 0;
-  const statusKey =
-    status === 'ACTIVE' || status === 'COMPLETED' || status === 'PRUNED'
+  const statusKey = interrupted
+    ? 'interrupted'
+    : status === 'ACTIVE' || status === 'COMPLETED' || status === 'PRUNED'
       ? status.toLowerCase()
       : 'pruned';
   const statusHelpId = `branch-status-help-${data.branchId ?? reactId}`;
@@ -61,11 +67,13 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
         : 'var(--color-danger)';
 
   const statusClass =
-    statusKey === 'active'
-      ? 'branch-node--active'
-      : statusKey === 'completed'
-        ? 'branch-node--completed'
-        : 'branch-node--pruned';
+    statusKey === 'interrupted'
+      ? 'branch-node--interrupted'
+      : statusKey === 'active'
+        ? 'branch-node--active'
+        : statusKey === 'completed'
+          ? 'branch-node--completed'
+          : 'branch-node--pruned';
 
   const handleClick = () => {
     if (data.onDetail && data.branchId) {

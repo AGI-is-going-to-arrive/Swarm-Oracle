@@ -446,6 +446,7 @@
         "intervene": "⚡ 干预",
         "status_active": "推演中",
         "status_active_tooltip": "这条线还在继续推演。",
+        "status_interrupted": "已中断",
         "status_completed": "推演结束",
         "status_completed_tooltip": "这条线已经推演结束，可以查看它带来的结局。",
         "status_pruned": "可能性较低",
@@ -3429,7 +3430,8 @@
       "stuck_title_soft": "这条推演进展较慢。",
       "stuck_desc_soft": "可能仍在后台运行，也可能已停止。你可以重新发起或返回首页。",
       "stuck_retry": "重新推演",
-      "stuck_back": "返回首页"
+      "stuck_back": "返回首页",
+      "runtime_failed": "推演运行中断，请重试"
     },
     "counterfactual_brand": {
       "eyebrow": "回到分叉点",

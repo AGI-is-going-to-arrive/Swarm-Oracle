@@ -916,24 +916,82 @@ async def _rewrite_branch_titles_after_narration(
     )
 
 
+_TERMINAL_SCENARIO_STATUSES = {
+    ScenarioStatus.CANCELLED,
+    ScenarioStatus.DONE,
+    ScenarioStatus.ERROR,
+}
+_SCENARIO_BRANCH_RECONCILE_STATUSES = {
+    ScenarioStatus.CANCELLED,
+    ScenarioStatus.ERROR,
+}
+_TERMINAL_BRANCH_STATUSES = {
+    BranchStatus.COMPLETED,
+    BranchStatus.PRUNED,
+}
+
+
+def _reconcile_unfinished_branches_for_terminal_scenario_session(
+    session: Session,
+    scenario_id: str,
+) -> int:
+    updated = 0
+    branches = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
+    for branch in branches:
+        if branch.status in _TERMINAL_BRANCH_STATUSES:
+            continue
+        branch.status = BranchStatus.PRUNED
+        session.add(branch)
+        updated += 1
+    return updated
+
+
+def reconcile_unfinished_branches_for_terminal_scenario(
+    engine,
+    scenario_id: str,
+) -> int:
+    """Prune branches left unfinished under ERROR/CANCELLED scenarios."""
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if (
+            scenario is None
+            or scenario.status not in _SCENARIO_BRANCH_RECONCILE_STATUSES
+        ):
+            return 0
+        updated = _reconcile_unfinished_branches_for_terminal_scenario_session(
+            session,
+            scenario_id,
+        )
+        if updated:
+            session.commit()
+        return updated
+
+
 def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) -> None:
     """Persist scenario status so reconnects/resyncs can recover the current stage.
 
     Terminal states (CANCELLED, DONE, ERROR) are sticky and cannot be overwritten,
     preventing races where a late simulator stage transition clobbers a user cancel.
     """
-    _TERMINAL_STATUSES = {
-        ScenarioStatus.CANCELLED,
-        ScenarioStatus.DONE,
-        ScenarioStatus.ERROR,
-    }
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
-        if scenario is None or scenario.status == status:
+        if scenario is None:
             return
-        if scenario.status in _TERMINAL_STATUSES:
+        if scenario.status == status or scenario.status in _TERMINAL_SCENARIO_STATUSES:
+            if scenario.status in _SCENARIO_BRANCH_RECONCILE_STATUSES:
+                updated = _reconcile_unfinished_branches_for_terminal_scenario_session(
+                    session,
+                    scenario_id,
+                )
+                if updated:
+                    session.commit()
             return
         scenario.status = status
+        if status in _SCENARIO_BRANCH_RECONCILE_STATUSES:
+            _reconcile_unfinished_branches_for_terminal_scenario_session(
+                session,
+                scenario_id,
+            )
         session.add(scenario)
         session.commit()
 
@@ -955,9 +1013,18 @@ async def handle_simulation_cancelled(
         elif scenario.status in {ScenarioStatus.DONE, ScenarioStatus.ERROR}:
             should_broadcast = False
         elif scenario.status == ScenarioStatus.CANCELLED:
+            if _reconcile_unfinished_branches_for_terminal_scenario_session(
+                session,
+                scenario_id,
+            ):
+                session.commit()
             should_broadcast = token is not None
         else:
             scenario.status = ScenarioStatus.CANCELLED
+            _reconcile_unfinished_branches_for_terminal_scenario_session(
+                session,
+                scenario_id,
+            )
             session.add(scenario)
             session.commit()
             should_broadcast = True
@@ -1168,10 +1235,11 @@ def reconcile_orphaned_running_scenarios(engine) -> int:
     (``--reload``, SIGKILL, crash, OOM, deploy), the row is left non-terminal with
     ACTIVE branches forever.
 
-    A live run must have both the ``simulation:{id}`` runtime lock and fresh
-    activity from existing timestamped tables. An expired lock, or an active lock
-    with stale activity, is treated as dead. Complete NARRATING rows still get a
-    final reconcile pass before ERROR so terminal DONE is not blocked by cleanup.
+    A live ``simulation:{id}`` runtime lock belongs to another driver and is left
+    alone; that driver owns timeout/error finalization while its lease is active.
+    Rows without a live lock are owned by the startup sweep. Complete NARRATING
+    rows still get a final reconcile pass before ERROR so terminal DONE is not
+    blocked by cleanup.
 
     Returns the number of scenarios transitioned to ERROR.
     """
@@ -1188,21 +1256,7 @@ def reconcile_orphaned_running_scenarios(engine) -> int:
     for scenario_id in stuck_ids:
         lock_key = simulation_lock_key(scenario_id)
         lock_active = runtime_lock_is_active(lock_key)
-        activity_fresh = simulation_activity_is_fresh(engine, scenario_id)
-        if lock_active and activity_fresh:
-            continue
         if lock_active:
-            if reconcile_scenario_done_if_complete(
-                engine,
-                scenario_id,
-                ignore_runtime_lock=True,
-            ):
-                continue
-            _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
-            with Session(engine) as session:
-                scenario = session.get(Scenario, scenario_id)
-                if scenario is not None and scenario.status == ScenarioStatus.ERROR:
-                    errored += 1
             continue
 
         sweep_lease = acquire_runtime_lock(
@@ -1428,6 +1482,101 @@ def _expire_stale_claims_on_connection(
           AND lease_expires_at < ?
         """,
         (scenario_id, branch_id, now),
+    )
+
+
+def _claim_pending_intervention_on_connection(
+    conn,
+    key: str,
+    claim_token: str,
+    lease_seconds: int,
+) -> PendingInterventionItem | None:
+    scenario_id, branch_id = _split_intervention_key(key)
+    now = _pending_intervention_now()
+    lease_expires_at = now + timedelta(seconds=lease_seconds)
+    _expire_stale_claims_on_connection(conn, scenario_id, branch_id, now)
+    row = conn.exec_driver_sql(
+        """
+        SELECT id, user_input, metadata_json, display_text
+        FROM pending_intervention
+        WHERE scenario_id = ?
+          AND branch_id = ?
+          AND status = 'pending'
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (scenario_id, branch_id),
+    ).first()
+    if row is None:
+        return None
+    result = conn.exec_driver_sql(
+        """
+        UPDATE pending_intervention
+        SET status = 'claimed',
+            claim_token = ?,
+            claimed_at = ?,
+            lease_expires_at = ?
+        WHERE id = ?
+          AND scenario_id = ?
+          AND branch_id = ?
+          AND status = 'pending'
+        """,
+        (claim_token, now, lease_expires_at, row[0], scenario_id, branch_id),
+    )
+    if (result.rowcount or 0) != 1:
+        return None
+    return PendingInterventionItem(
+        text=str(row[1]),
+        metadata=_decode_intervention_metadata(row[2]),
+        id=int(row[0]),
+        display_text=str(row[3] or ""),
+    )
+
+
+def _mark_intervention_injected_on_connection(conn, key: str, item_id: int | None) -> None:
+    if item_id is None:
+        return
+    scenario_id, branch_id = _split_intervention_key(key)
+    conn.exec_driver_sql(
+        """
+        UPDATE pending_intervention
+        SET status = 'injected'
+        WHERE id = ?
+          AND scenario_id = ?
+          AND branch_id = ?
+        """,
+        (item_id, scenario_id, branch_id),
+    )
+    conn.exec_driver_sql(
+        """
+        DELETE FROM pending_intervention
+        WHERE id = ?
+          AND scenario_id = ?
+          AND branch_id = ?
+        """,
+        (item_id, scenario_id, branch_id),
+    )
+
+
+def _mark_intervention_failed_on_connection(
+    conn,
+    key: str,
+    item_id: int | None,
+    reason: str,
+) -> None:
+    if item_id is None:
+        return
+    scenario_id, branch_id = _split_intervention_key(key)
+    conn.exec_driver_sql(
+        """
+        UPDATE pending_intervention
+        SET status = 'failed',
+            failure_reason = ?
+        WHERE id = ?
+          AND scenario_id = ?
+          AND branch_id = ?
+        """,
+        (reason, item_id, scenario_id, branch_id),
     )
 
 
@@ -1853,83 +2002,29 @@ async def claim_next_pending_intervention(
     """Claim the oldest pending intervention without deleting it."""
     db_path = _pending_intervention_db_path()
     if db_path is not None:
-        scenario_id, branch_id = _split_intervention_key(key)
         if _conn is not None:
-            now = _pending_intervention_now()
-            lease_expires_at = now + timedelta(seconds=lease_seconds)
-            await expire_stale_claims(key, _conn=_conn)
-            row = _conn.exec_driver_sql(
-                """
-                SELECT id, user_input, metadata_json, display_text
-                FROM pending_intervention
-                WHERE scenario_id = ?
-                  AND branch_id = ?
-                  AND status = 'pending'
-                ORDER BY id ASC
-                LIMIT 1
-                """,
-                (scenario_id, branch_id),
-            ).first()
-            if row is None:
-                return None
-            _conn.exec_driver_sql(
-                """
-                UPDATE pending_intervention
-                SET status = 'claimed',
-                    claim_token = ?,
-                    claimed_at = ?,
-                    lease_expires_at = ?
-                WHERE id = ?
-                """,
-                (claim_token, now, lease_expires_at, row[0]),
-            )
-            return PendingInterventionItem(
-                text=str(row[1]),
-                metadata=_decode_intervention_metadata(row[2]),
-                id=int(row[0]),
-                display_text=str(row[3] or ""),
+            return _claim_pending_intervention_on_connection(
+                _conn,
+                key,
+                claim_token,
+                lease_seconds,
             )
 
         engine = get_engine()
         with engine.connect() as conn:
             try:
-                now = _pending_intervention_now()
-                lease_expires_at = now + timedelta(seconds=lease_seconds)
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
-                _expire_stale_claims_on_connection(conn, scenario_id, branch_id, now)
-                row = conn.exec_driver_sql(
-                    """
-                    SELECT id, user_input, metadata_json, display_text
-                    FROM pending_intervention
-                    WHERE scenario_id = ?
-                      AND branch_id = ?
-                      AND status = 'pending'
-                    ORDER BY id ASC
-                    LIMIT 1
-                    """,
-                    (scenario_id, branch_id),
-                ).first()
-                if row is None:
+                item = _claim_pending_intervention_on_connection(
+                    conn,
+                    key,
+                    claim_token,
+                    lease_seconds,
+                )
+                if item is None:
                     conn.commit()
                     return None
-                conn.exec_driver_sql(
-                    """
-                    UPDATE pending_intervention
-                    SET status = 'claimed',
-                        claim_token = ?,
-                        claimed_at = ?,
-                        lease_expires_at = ?
-                    WHERE id = ?
-                    """,
-                    (claim_token, now, lease_expires_at, row[0]),
-                )
                 conn.commit()
-                return PendingInterventionItem(
-                    text=str(row[1]),
-                    metadata=_decode_intervention_metadata(row[2]),
-                    id=int(row[0]),
-                    display_text=str(row[3] or ""),
-                )
+                return item
             except Exception:
                 try:
                     conn.rollback()
@@ -1954,29 +2049,11 @@ async def mark_intervention_injected(key: str, item_id: int | None, *, _conn=Non
     if db_path is not None:
         if item_id is None:
             return
-        scenario_id, branch_id = _split_intervention_key(key)
         if _conn is not None:
-            _conn.exec_driver_sql(
-                """
-                UPDATE pending_intervention
-                SET status = 'injected'
-                WHERE id = ?
-                  AND scenario_id = ?
-                  AND branch_id = ?
-                """,
-                (item_id, scenario_id, branch_id),
-            )
-            _conn.exec_driver_sql(
-                """
-                DELETE FROM pending_intervention
-                WHERE id = ?
-                  AND scenario_id = ?
-                  AND branch_id = ?
-                """,
-                (item_id, scenario_id, branch_id),
-            )
+            _mark_intervention_injected_on_connection(_conn, key, item_id)
             return
 
+        scenario_id, branch_id = _split_intervention_key(key)
         engine = get_engine()
         with engine.connect() as conn:
             try:
@@ -2024,21 +2101,11 @@ async def mark_intervention_failed(
     if db_path is not None:
         if item_id is None:
             return
-        scenario_id, branch_id = _split_intervention_key(key)
         if _conn is not None:
-            _conn.exec_driver_sql(
-                """
-                UPDATE pending_intervention
-                SET status = 'failed',
-                    failure_reason = ?
-                WHERE id = ?
-                  AND scenario_id = ?
-                  AND branch_id = ?
-                """,
-                (reason, item_id, scenario_id, branch_id),
-            )
+            _mark_intervention_failed_on_connection(_conn, key, item_id, reason)
             return
 
+        scenario_id, branch_id = _split_intervention_key(key)
         engine = get_engine()
         with engine.connect() as conn:
             try:
@@ -2075,15 +2142,16 @@ async def pop_next_pending_intervention(key: str) -> PendingInterventionItem | N
         with engine.connect() as conn:
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
-                item = await claim_next_pending_intervention(
+                item = _claim_pending_intervention_on_connection(
+                    conn,
                     key,
                     str(uuid.uuid4()),
-                    _conn=conn,
+                    300,
                 )
                 if item is None:
                     conn.commit()
                     return None
-                await mark_intervention_injected(key, item.id, _conn=conn)
+                _mark_intervention_injected_on_connection(conn, key, item.id)
                 conn.commit()
                 return item
             except Exception as exc:

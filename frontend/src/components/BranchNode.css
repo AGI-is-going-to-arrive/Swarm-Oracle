@@ -38,6 +38,11 @@
   filter: grayscale(0.5);
   border-color: var(--border-subtle);
 }
+/* Terminal-scenario interruption: neutral, no pulse, not the active pink. */
+.branch-node--interrupted {
+  border-color: var(--border-subtle);
+  border-left: 3px solid var(--text-muted);
+}
 
 /* ── Status row ──────────────────────────────────────────── */
 .branch-node__status {
@@ -60,6 +65,9 @@
   background: var(--color-warning);
 }
 .status-dot--pruned {
+  background: var(--text-muted);
+}
+.status-dot--interrupted {
   background: var(--text-muted);
 }
 

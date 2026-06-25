@@ -88,7 +88,7 @@ class TestReconcileOrphanedRunningScenarios:
         finally:
             release_runtime_lock(lease)
 
-    def test_active_runtime_lock_with_stale_activity_is_marked_error(self, monkeypatch):
+    def test_active_runtime_lock_with_stale_activity_is_not_marked_error(self, monkeypatch):
         engine = get_engine()
         scenario_id = _make_scenario(engine, ScenarioStatus.SIMULATING)
         branch_id = _create_branch(engine, scenario_id, title="静默卡死分支")
@@ -105,8 +105,8 @@ class TestReconcileOrphanedRunningScenarios:
             time.sleep(0.01)
             errored = reconcile_orphaned_running_scenarios(engine)
 
-            assert errored == 1
-            assert _status(engine, scenario_id) == ScenarioStatus.ERROR
+            assert errored == 0
+            assert _status(engine, scenario_id) == ScenarioStatus.SIMULATING
         finally:
             release_runtime_lock(lease)
 

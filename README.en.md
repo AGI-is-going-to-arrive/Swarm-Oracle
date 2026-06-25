@@ -23,7 +23,7 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 
 ## Features
 
-- **Multi-branch simulation**: One question, multiple storylines; the simulation page shows current round, in-round Agent speaking progress, overall progress, ETA, and first-round warmup elapsed time, slow models stay in the still-working state while content or progress activity continues, truly interrupted runs become retryable, and the result page reports normalized probabilities for terminal leaf worldlines only.
+- **Multi-branch simulation**: One question, multiple storylines; the simulation page shows current round, in-round Agent speaking progress, overall progress, ETA, and first-round warmup elapsed time, slow models stay in the still-working state while content, progress activity, or a live run signal continues; truly failed, cancelled, or orphaned runs show unfinished branches as interrupted instead of still in progress, and the result page reports normalized probabilities for terminal leaf worldlines only.
 - **Pixel Theater + director/gameplay cards**: Watch the run in the pixel-stage view; bottom progress and replay timeline controls stay clear of messages, zoom controls, and the language switcher while 14 director/gameplay cards can change the current worldline rhythm.
 - **Debate Arena**: AI affirmative and opposing sides debate so you can see both sides of an issue.
 - **Oracle Chambers**: Talk in depth with AI characters from the current worldline and ask follow-up questions.

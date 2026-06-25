@@ -35,6 +35,8 @@ file; use `Unreleased` until maintainers cut a release tag.
 - Documented simulation warmup feedback, interrupted-run recovery, and retry
   behavior across the public README, usage guide, feature catalog, and landing
   page.
+- Documented terminal failed-run recovery so unfinished branches are described
+  as interrupted instead of still simulating or low-probability pruned.
 
 ### Fixed
 
@@ -49,3 +51,6 @@ file; use `Unreleased` until maintainers cut a release tag.
   readable and the Chinese title was aligned to "星系" (`6c55484`).
 - Fixed orphaned `simulating` / `narrating` scenarios so startup and polling can
   converge dead runs to a terminal state while live runtime locks are preserved.
+- Fixed terminal `error` / `cancelled` scenarios so unfinished branches are
+  reconciled before clients render them, avoiding the mixed interrupted,
+  100%, in-progress, and error state on `/sim/:id`.

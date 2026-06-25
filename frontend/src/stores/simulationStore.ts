@@ -290,8 +290,8 @@ function applyScenarioSnapshot(
     isSimulationComplete: mergedStatus === 'done',
     interventionLog: sameScenario ? state.interventionLog : [],
     interventionLifecycle: nextLifecycle,
-    error: null,
-    errorCode: null,
+    error: mergedStatus === 'error' ? (state.error ?? translate('simulation.runtime_failed')) : null,
+    errorCode: mergedStatus === 'error' ? (state.errorCode ?? 'RUNTIME_ERROR') : null,
   };
 }
 

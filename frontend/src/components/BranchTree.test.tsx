@@ -70,7 +70,7 @@ const {
 const mockStore: {
   branches: BranchInfo[];
   agents: AgentInfo[];
-  status: 'done';
+  status: 'idle' | 'parsing' | 'simulating' | 'narrating' | 'done' | 'error' | 'cancelled';
   thinkingAgents: Array<{ branch: string }>;
   messages: Array<{ branch: string }>;
 } = {
@@ -370,5 +370,45 @@ describe('BranchTree', () => {
     await waitFor(() => {
       expect(layoutSpy).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('marks unfinished branches interrupted when the scenario failed (ACTIVE or reconciled PRUNED)', async () => {
+    mockStore.status = 'error';
+    mockStore.branches = [
+      { ...mockStore.branches[0], id: 'b1', parent_branch_id: null, status: 'PRUNED' as const },
+      { ...mockStore.branches[0], id: 'b2', parent_branch_id: 'b1', status: 'ACTIVE' as const },
+      { ...mockStore.branches[0], id: 'b3', parent_branch_id: 'b1', status: 'COMPLETED' as const },
+    ] as BranchInfo[];
+
+    const { container } = render(<BranchTree />);
+
+    await waitFor(() => {
+      expect(flowState.lastNodes).toHaveLength(3);
+    });
+    // Backend reconciles a failed run's unfinished branch to PRUNED; the canvas must
+    // still read it as "interrupted", not the misleading "low probability" pruned copy.
+    expect(flowState.nodesById.get('b1')?.data?.interrupted).toBe(true);
+    // A branch left ACTIVE (frontend saw it before the backend reconcile landed).
+    expect(flowState.nodesById.get('b2')?.data?.interrupted).toBe(true);
+    // A branch that genuinely finished stays COMPLETED, never interrupted.
+    expect(flowState.nodesById.get('b3')?.data?.interrupted).toBe(false);
+    expect(container.querySelectorAll('.minimap-node-interrupted')).toHaveLength(2);
+    expect(container.querySelector('.minimap-node-active')).toBeNull();
+    expect(container.querySelector('.minimap-node-pruned')).toBeNull();
+  });
+
+  it('keeps genuinely pruned branches non-interrupted when the scenario completed normally', async () => {
+    mockStore.status = 'done';
+    mockStore.branches = [
+      { ...mockStore.branches[0], id: 'b1', status: 'PRUNED' as const },
+    ] as BranchInfo[];
+
+    render(<BranchTree />);
+
+    await waitFor(() => {
+      expect(flowState.lastNodes).toHaveLength(1);
+    });
+    // A DONE scenario's PRUNED branch is a real model decision — keep "low probability".
+    expect(flowState.nodesById.get('b1')?.data?.interrupted).toBe(false);
   });
 });

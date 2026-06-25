@@ -51,6 +51,16 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
   const getInitial = (name: string) => name.charAt(0);
 
   const isSimulating = status === 'simulating';
+  const isFailureTerminal = status === 'error' || status === 'cancelled';
+  const isInterruptedBranch =
+    isFailureTerminal && (branch.status === 'ACTIVE' || branch.status === 'PRUNED');
+  const statusLabel = isSimulating
+    ? t('branch_detail.simulating')
+    : isInterruptedBranch
+      ? t('sim.tree.status_interrupted')
+      : branch.status === 'COMPLETED'
+        ? t('branch_detail.completed')
+        : branch.status;
 
   return (
     <div className="bdm-overlay" onClick={onClose}>
@@ -60,7 +70,7 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
           <div className="bdm-header-left">
             {isSimulating && <span className="bdm-live-dot" />}
             <span className="bdm-status-text">
-              {isSimulating ? t('branch_detail.simulating') : branch.status === 'COMPLETED' ? t('branch_detail.completed') : branch.status}
+              {statusLabel}
             </span>
             <span className="bdm-probability">{Math.round((branch.probability ?? 0.5) * 100)}%</span>
           </div>

@@ -166,6 +166,9 @@ export function TimelineBar({
   const totalRounds = normalizeTotalRounds(scenario?.total_rounds);
   const mode = scenario?.mode ?? 'blackboard';
   const displayStatus: ScenarioStatus = useMemo(() => {
+    if (status === 'error' || status === 'cancelled' || status === 'done') {
+      return status;
+    }
     if (
       status === 'simulating'
       && totalRounds !== null

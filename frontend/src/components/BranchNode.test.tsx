@@ -20,6 +20,7 @@ vi.mock('react-i18next', () => ({
       if (key === 'sim.tree.status_pruned_tooltip') return '这条可能性较低，系统不再继续扩展它。';
       if (key === 'sim.tree.status_active') return '推演中';
       if (key === 'sim.tree.status_completed') return '推演结束';
+      if (key === 'sim.tree.status_interrupted') return '已中断';
       return typeof fallback === 'string' ? fallback : key;
     },
     i18n: { language: 'zh-CN' },
@@ -41,6 +42,17 @@ describe('BranchNode status presentation', () => {
     renderNode('PRUNED');
     expect(screen.getByText('可能性较低')).toBeInTheDocument();
     expect(screen.queryByText('PRUNED')).not.toBeInTheDocument();
+  });
+
+  it('renders a neutral interrupted state for an ACTIVE branch under a terminal scenario', () => {
+    const { container } = render(
+      <BranchNode data={{ ...baseData, status: 'ACTIVE', interrupted: true }} />,
+    );
+    expect(screen.getByText('已中断')).toBeInTheDocument();
+    expect(screen.queryByText('推演中')).not.toBeInTheDocument();
+    expect(container.querySelector('.branch-node--interrupted')).toBeTruthy();
+    expect(container.querySelector('.status-dot--interrupted')).toBeTruthy();
+    expect(container.querySelector('.branch-node--active')).toBeNull();
   });
 
   it('shows the PRUNED tooltip/help text inline so it is readable without hover', () => {

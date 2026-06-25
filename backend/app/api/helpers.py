@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ from app.services.llm_resolution import (
 )
 from app.services.parser import parse_question
 from app.services.runtime_lock import (
+    RuntimeLockBusyError,
     RuntimeLockLease,
     acquire_runtime_lock,
     refresh_runtime_lock,
@@ -60,6 +62,7 @@ from app.services.simulation_cancel import (
 from app.services.simulator import (
     _update_scenario_status,
     reconcile_scenario_done_if_complete,
+    reconcile_unfinished_branches_for_terminal_scenario,
     run_simulation,
     simulation_activity_is_fresh,
 )
@@ -552,6 +555,8 @@ _parse_phase_simulations: set[str] = set()
 _task_registry: dict[str, asyncio.Task] = {}
 _SIMULATION_LOCK_REFRESH_FRACTION = 0.33
 _SIMULATION_LOCK_LOSS_POLL_SECONDS = 0.01
+_SIMULATION_LOCK_TRANSIENT_FAILURE_LIMIT = 3
+_SIMULATION_LOCK_TRANSIENT_WARNING_INTERVAL_SECONDS = 30.0
 _SIMULATION_STALL_POLL_SECONDS = 1.0
 _SIMULATION_CREATE_GRACE_SECONDS = 90.0
 
@@ -599,6 +604,21 @@ def _runtime_lock_refresh_interval(
     )
 
 
+def _runtime_lock_error_is_transient_busy(exc: Exception) -> bool:
+    if isinstance(exc, RuntimeLockBusyError):
+        return True
+    if isinstance(exc, sqlite3.OperationalError):
+        message = str(exc).lower()
+        return (
+            "database is locked" in message
+            or "database is busy" in message
+            or "database table is locked" in message
+            or message.strip() == "busy"
+            or message.strip() == "locked"
+        )
+    return False
+
+
 def _start_runtime_lock_heartbeat(
     lease_holder: list[RuntimeLockLease | None],
     *,
@@ -608,15 +628,60 @@ def _start_runtime_lock_heartbeat(
     stop_event = threading.Event()
 
     def _heartbeat() -> None:
+        consecutive_transient_failures = 0
+        last_transient_warning = 0.0
         refresh_interval = _runtime_lock_refresh_interval(
             lease_holder[0],
             lease_seconds=lease_seconds,
         )
         while not stop_event.wait(refresh_interval):
             current_lease = lease_holder[0]
+            if current_lease is None:
+                return
+            if current_lease.expires_at <= time.time():
+                lease_holder[0] = None
+                logger.warning("%s runtime lock lease expired before refresh", lock_label)
+                return
             try:
                 refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
-            except Exception:
+            except Exception as exc:
+                if _runtime_lock_error_is_transient_busy(exc):
+                    consecutive_transient_failures += 1
+                    now_monotonic = time.monotonic()
+                    if (
+                        now_monotonic - last_transient_warning
+                        >= _SIMULATION_LOCK_TRANSIENT_WARNING_INTERVAL_SECONDS
+                    ):
+                        logger.warning(
+                            "%s runtime lock lease refresh hit SQLite write-lock "
+                            "contention; retaining current lease",
+                            lock_label,
+                        )
+                        last_transient_warning = now_monotonic
+                    current_lease = lease_holder[0]
+                    if current_lease is None:
+                        return
+                    if current_lease.expires_at <= time.time():
+                        lease_holder[0] = None
+                        logger.warning(
+                            "%s runtime lock lease expired before transient SQLite "
+                            "contention recovered",
+                            lock_label,
+                        )
+                        return
+                    refresh_interval = _runtime_lock_refresh_interval(
+                        current_lease,
+                        lease_seconds=lease_seconds,
+                    )
+                    if (
+                        consecutive_transient_failures
+                        >= _SIMULATION_LOCK_TRANSIENT_FAILURE_LIMIT
+                    ):
+                        refresh_interval = min(
+                            refresh_interval,
+                            _SIMULATION_LOCK_LOSS_POLL_SECONDS,
+                        )
+                    continue
                 lease_holder[0] = None
                 logger.exception("%s runtime lock lease refresh failed", lock_label)
                 return
@@ -624,6 +689,7 @@ def _start_runtime_lock_heartbeat(
                 lease_holder[0] = None
                 logger.warning("%s runtime lock lease could not be refreshed", lock_label)
                 return
+            consecutive_transient_failures = 0
             lease_holder[0] = refreshed
             refresh_interval = _runtime_lock_refresh_interval(
                 refreshed,
@@ -673,6 +739,12 @@ def _coerce_utc_datetime(value: object) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _load_scenario_status(engine, scenario_id: str) -> ScenarioStatus | None:
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        return scenario.status if scenario is not None else None
 
 
 def _within_simulation_create_grace(
@@ -1091,12 +1163,22 @@ async def run_sim_background(
             except Exception:
                 reconciled_done = False
                 logger.exception("Failed to reconcile stalled simulation %s", scenario_id)
-            if reconciled_done:
+            persisted_status = _load_scenario_status(engine, scenario_id)
+            if reconciled_done or persisted_status == ScenarioStatus.DONE:
                 try:
                     await ws_manager.broadcast(scenario_id, {"type": "simulation_done"})
                 except Exception:
                     pass
+            elif persisted_status == ScenarioStatus.CANCELLED:
+                try:
+                    await ws_manager.broadcast(scenario_id, {
+                        "type": "simulation_cancelled",
+                        "reason": "user_cancelled",
+                    })
+                except Exception:
+                    pass
             else:
+                _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
                 try:
                     await ws_manager.broadcast(scenario_id, {
                         "type": "simulation_error",
@@ -1104,13 +1186,6 @@ async def run_sim_background(
                     })
                 except Exception:
                     pass
-                with Session(engine) as session:
-                    s = session.get(Scenario, scenario_id)
-                    # H3 fix: idempotent guard — never demote a CANCELLED row to ERROR.
-                    if s and s.status != ScenarioStatus.CANCELLED:
-                        s.status = ScenarioStatus.ERROR
-                        session.add(s)
-                        session.commit()
     except Exception as exc:
         # H3 fix: lock-loss watcher cancels the sim task; the simulator persists
         # CANCELLED before the watcher's RuntimeError reaches us. Suppress the
@@ -1128,21 +1203,39 @@ async def run_sim_background(
                 exc_type,
                 scrubbed,
             )
-            try:
-                await ws_manager.broadcast(scenario_id, {
-                    "type": "simulation_error",
-                    "data": {"error": GENERIC_SIMULATION_ERROR},
-                })
-            except Exception:
-                pass  # WS broadcast is best-effort
             engine = get_engine()
-            with Session(engine) as session:
-                s = session.get(Scenario, scenario_id)
-                # H3 fix: idempotent guard — never demote a CANCELLED row to ERROR.
-                if s and s.status != ScenarioStatus.CANCELLED:
-                    s.status = ScenarioStatus.ERROR
-                    session.add(s)
-                    session.commit()
+            try:
+                reconciled_done = reconcile_scenario_done_if_complete(
+                    engine,
+                    scenario_id,
+                    ignore_runtime_lock=True,
+                )
+            except Exception:
+                reconciled_done = False
+                logger.exception("Failed to reconcile failed simulation %s", scenario_id)
+            persisted_status = _load_scenario_status(engine, scenario_id)
+            if reconciled_done or persisted_status == ScenarioStatus.DONE:
+                try:
+                    await ws_manager.broadcast(scenario_id, {"type": "simulation_done"})
+                except Exception:
+                    pass
+            elif persisted_status == ScenarioStatus.CANCELLED:
+                try:
+                    await ws_manager.broadcast(scenario_id, {
+                        "type": "simulation_cancelled",
+                        "reason": "user_cancelled",
+                    })
+                except Exception:
+                    pass
+            else:
+                _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
+                try:
+                    await ws_manager.broadcast(scenario_id, {
+                        "type": "simulation_error",
+                        "data": {"error": GENERIC_SIMULATION_ERROR},
+                    })
+                except Exception:
+                    pass  # WS broadcast is best-effort
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
@@ -1260,24 +1353,9 @@ async def parse_and_run_background(
         lock_label=f"simulation-parse:{scenario_id}",
     )
 
-    with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if scenario and scenario.status != ScenarioStatus.SIMULATING:
-            scenario.status = ScenarioStatus.SIMULATING
-            session.add(scenario)
-            session.commit()
+    _update_scenario_status(engine, scenario_id, ScenarioStatus.SIMULATING)
 
     from app.api.ws import ws_manager
-    try:
-        await ws_manager.broadcast(scenario_id, {
-            "type": "status",
-            "data": {"status": "simulating", "hierarchical": hierarchical},
-        })
-    except Exception:
-        pass
-
-    local_provider = is_local_provider_url(llm_base_url)
-    quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)  # noqa: E501
 
     # H2 fix: if cancel landed before parse started, finalize as cancelled.
     if is_cancelled(scenario_id):
@@ -1295,6 +1373,17 @@ async def parse_and_run_background(
             _stop_parse_runtime_lock(release=True)
             _cleanup_parse_bookkeeping()
         return
+
+    try:
+        await ws_manager.broadcast(scenario_id, {
+            "type": "status",
+            "data": {"status": "simulating", "hierarchical": hierarchical},
+        })
+    except Exception:
+        pass
+
+    local_provider = is_local_provider_url(llm_base_url)
+    quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)  # noqa: E501
 
     try:
         with llm_request_scope(
@@ -1351,12 +1440,7 @@ async def parse_and_run_background(
             exc_type,
             scrubbed,
         )
-        with Session(engine) as session:
-            scenario = session.get(Scenario, scenario_id)
-            if scenario:
-                scenario.status = ScenarioStatus.ERROR
-                session.add(scenario)
-                session.commit()
+        _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
         from app.api.ws import ws_manager
         try:
             await ws_manager.broadcast(scenario_id, {
@@ -1368,6 +1452,24 @@ async def parse_and_run_background(
         # H2 fix: clean bookkeeping so cancel endpoint stops 409'ing on dead runs.
         _stop_parse_runtime_lock(release=True)
         _cleanup_parse_bookkeeping()
+        return
+
+    if is_cancelled(scenario_id):
+        try:
+            from app.services.simulator import handle_simulation_cancelled
+
+            await handle_simulation_cancelled(
+                scenario_id,
+                ws_callback=ws_manager.broadcast,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to finalize cancelled-after-parse scenario %s",
+                scenario_id,
+            )
+        finally:
+            _stop_parse_runtime_lock(release=True)
+            _cleanup_parse_bookkeeping()
         return
 
     parsed["mode"] = mode
@@ -1425,6 +1527,20 @@ async def parse_and_run_background(
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
             logger.warning("Scenario %s disappeared before parse completion", scenario_id)
+            _stop_parse_runtime_lock(release=True)
+            _cleanup_parse_bookkeeping()
+            return
+        if scenario.status in {
+            ScenarioStatus.CANCELLED,
+            ScenarioStatus.DONE,
+            ScenarioStatus.ERROR,
+        }:
+            logger.info(
+                "Scenario %s reached terminal status %s before parse persisted; "
+                "skipping simulation handoff",
+                scenario_id,
+                scenario.status.value,
+            )
             _stop_parse_runtime_lock(release=True)
             _cleanup_parse_bookkeeping()
             return
@@ -1938,11 +2054,12 @@ def load_scenario_response(
     run self-heals.
     """
     reconcile_scenario_done_if_complete(engine, scenario_id)
+    reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
     # GET-time fail-forward: creation grace protects the POST->first-GET window
     # before the scheduled task can register/acquire its lock. Outside that grace,
-    # stale durable activity means the driver died/stalled and will never finalize
-    # it. _update_scenario_status is sticky-terminal, so a DONE set by reconcile
-    # above is never clobbered.
+    # a live runtime lock wins over stale durable activity: the lock-owning driver
+    # is responsible for timeout/error finalization. Only runs with no live lock
+    # and no fresh durable activity are self-healed here.
     if fail_forward_stale:
         now = datetime.now(timezone.utc)
         with Session(engine) as session:
@@ -1964,8 +2081,12 @@ def load_scenario_response(
             now=now,
             include_created_at=include_created_at_for_freshness,
         )
-        live = runtime_lock_active and activity_fresh
-        if stale_non_terminal and not within_create_grace and not activity_fresh and not live:
+        if (
+            stale_non_terminal
+            and not within_create_grace
+            and not runtime_lock_active
+            and not activity_fresh
+        ):
             _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
     with Session(engine) as session:
         s = session.get(Scenario, scenario_id)

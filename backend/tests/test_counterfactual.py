@@ -995,6 +995,54 @@ class TestResimulateCounterfactual:
         assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
         run_mock.assert_not_called()
 
+    @pytest.mark.parametrize("status", [ScenarioStatus.ERROR, ScenarioStatus.CANCELLED])
+    def test_resimulate_rejects_terminal_failed_or_cancelled_scenario(
+        self,
+        client,
+        monkeypatch,
+        status,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=status)
+        source_bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Interrupted CF",
+            status=BranchStatus.PRUNED,
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+        )
+        _seed_round(engine, cf_bid, 1)
+        acquire_lock = MagicMock()
+        run_mock = MagicMock()
+        schedule_mock = MagicMock()
+
+        monkeypatch.setattr("app.api.graphs._acquire_simulation_lock_for_resume", acquire_lock)
+        monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate")
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+            "message": "Scenario must be in 'done' status to resimulate a counterfactual branch",
+        }
+        acquire_lock.assert_not_called()
+        run_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            branch = session.get(Branch, cf_bid)
+            assert scenario is not None
+            assert branch is not None
+            assert scenario.status == status
+            assert branch.status == BranchStatus.PRUNED
+
     @pytest.mark.parametrize("use_foreign_branch", [False, True])
     def test_resimulate_rejects_missing_or_foreign_branch(self, client, use_foreign_branch):
         engine = get_engine()

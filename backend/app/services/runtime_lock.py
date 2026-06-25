@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import atexit
 import logging
+import random
 import sqlite3
 import threading
 import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import Callable, TypeVar
 from urllib.parse import unquote, urlsplit
 
 from app.config import settings
@@ -19,10 +21,16 @@ logger = logging.getLogger(__name__)
 _RUNTIME_LOCK_TABLE = "runtime_lock"
 _INPROCESS_LOCKS: dict[str, tuple[str, float]] = {}
 _INPROCESS_LOCKS_GUARD = threading.Lock()
-_SQLITE_TIMEOUT_SECONDS = 30.0
+_SQLITE_BUSY_TIMEOUT_MS = 75
+_RUNTIME_LOCK_WRITE_RETRY_ATTEMPTS = 8
+_RUNTIME_LOCK_WRITE_RETRY_BASE_SECONDS = 0.025
+_RUNTIME_LOCK_WRITE_RETRY_MAX_DELAY_SECONDS = 0.5
+_RUNTIME_LOCK_WRITE_RETRY_MAX_SLEEP_SECONDS = 3.0
+_RUNTIME_LOCK_REFRESH_RETRY_DEADLINE_FRACTION = 0.5
 _SQLITE_CONNECTIONS = threading.local()
 _ENSURED_SQLITE_SCHEMA_PATHS: set[str] = set()
 _ENSURE_SQLITE_SCHEMA_GUARD = threading.Lock()
+_WriteResult = TypeVar("_WriteResult")
 
 # Cross-process liveness only exists for file-backed sqlite:/// databases. For
 # simulations, live means the SQLite runtime lock is active AND derived scenario
@@ -38,6 +46,10 @@ class RuntimeLockLease:
     owner_id: str
     db_path: str | None
     expires_at: float
+
+
+class RuntimeLockBusyError(RuntimeError):
+    """Raised when SQLite write-lock contention outlives bounded retries."""
 
 
 def simulation_lock_key(scenario_id: str) -> str:
@@ -116,7 +128,7 @@ def _get_threadlocal_connection_cache() -> dict[str, sqlite3.Connection]:
 
 def _configure_sqlite_connection(conn: sqlite3.Connection, db_path: str) -> None:
     pragmas = (
-        ("busy_timeout", "5000"),
+        ("busy_timeout", str(max(1, int(_SQLITE_BUSY_TIMEOUT_MS)))),
         ("journal_mode", "WAL"),
         ("synchronous", "NORMAL"),
     )
@@ -132,6 +144,10 @@ def _configure_sqlite_connection(conn: sqlite3.Connection, db_path: str) -> None
             )
 
 
+def _sqlite_busy_timeout_seconds() -> float:
+    return max(0.001, max(1, int(_SQLITE_BUSY_TIMEOUT_MS)) / 1000.0)
+
+
 def _get_sqlite_connection(db_path: str) -> sqlite3.Connection:
     cache = _get_threadlocal_connection_cache()
     conn = cache.get(db_path)
@@ -144,10 +160,113 @@ def _get_sqlite_connection(db_path: str) -> sqlite3.Connection:
                 conn.close()
             cache.pop(db_path, None)
 
-    conn = sqlite3.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS, isolation_level=None)
+    conn = sqlite3.connect(
+        db_path,
+        timeout=_sqlite_busy_timeout_seconds(),
+        isolation_level=None,
+    )
     _configure_sqlite_connection(conn, db_path)
     cache[db_path] = conn
     return conn
+
+
+def _is_sqlite_locked_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return (
+        "database is locked" in message
+        or "database is busy" in message
+        or "database table is locked" in message
+        or message.strip() == "busy"
+        or message.strip() == "locked"
+    )
+
+
+def _discard_ensured_schema_cache(db_path: str | None) -> None:
+    if db_path is None:
+        return
+    with _ENSURE_SQLITE_SCHEMA_GUARD:
+        _ENSURED_SQLITE_SCHEMA_PATHS.discard(db_path)
+
+
+def _rollback_quietly(conn: sqlite3.Connection, db_path: str | None = None) -> None:
+    with suppress(sqlite3.DatabaseError):
+        conn.execute("ROLLBACK")
+    _discard_ensured_schema_cache(db_path)
+
+
+def _write_retry_delay(attempt_index: int) -> float:
+    base_delay = _RUNTIME_LOCK_WRITE_RETRY_BASE_SECONDS * (2 ** max(0, attempt_index))
+    capped_delay = min(base_delay, _RUNTIME_LOCK_WRITE_RETRY_MAX_DELAY_SECONDS)
+    jitter = random.uniform(0.0, min(capped_delay * 0.25, 0.05))
+    return capped_delay + jitter
+
+
+def _execute_write_with_retry(
+    conn: sqlite3.Connection,
+    operation: Callable[[], _WriteResult],
+    *,
+    operation_name: str,
+    db_path: str | None,
+    deadline_monotonic: float | None = None,
+) -> _WriteResult:
+    attempts = max(1, int(_RUNTIME_LOCK_WRITE_RETRY_ATTEMPTS))
+    sleep_budget_used = 0.0
+    for attempt_index in range(attempts):
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise RuntimeLockBusyError(
+                f"{operation_name} exceeded SQLite write-lock retry deadline"
+            )
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            _rollback_quietly(conn, db_path)
+            if not _is_sqlite_locked_error(exc):
+                raise
+            if (
+                attempt_index >= attempts - 1
+                or (
+                    deadline_monotonic is not None
+                    and time.monotonic() >= deadline_monotonic
+                )
+            ):
+                raise RuntimeLockBusyError(
+                    f"{operation_name} could not acquire SQLite write lock after "
+                    f"{attempts} attempts"
+                ) from exc
+            delay = _write_retry_delay(attempt_index)
+            if deadline_monotonic is not None:
+                delay = min(delay, max(0.0, deadline_monotonic - time.monotonic()))
+            remaining_budget = max(
+                0.0,
+                _RUNTIME_LOCK_WRITE_RETRY_MAX_SLEEP_SECONDS - sleep_budget_used,
+            )
+            sleep_seconds = min(delay, remaining_budget)
+            if sleep_seconds <= 0:
+                raise RuntimeLockBusyError(
+                    f"{operation_name} exceeded SQLite write-lock retry budget"
+                ) from exc
+            logger.debug(
+                "%s hit SQLite write-lock contention; retrying in %.3fs",
+                operation_name,
+                sleep_seconds,
+            )
+            time.sleep(sleep_seconds)
+            sleep_budget_used += sleep_seconds
+        except Exception:
+            _rollback_quietly(conn, db_path)
+            raise
+    raise RuntimeLockBusyError(
+        f"{operation_name} could not acquire SQLite write lock after {attempts} attempts"
+    )
+
+
+def _refresh_retry_deadline_monotonic(lease: RuntimeLockLease) -> float:
+    remaining_lease_seconds = max(0.0, lease.expires_at - time.time())
+    retry_budget_seconds = min(
+        _RUNTIME_LOCK_WRITE_RETRY_MAX_SLEEP_SECONDS,
+        remaining_lease_seconds * _RUNTIME_LOCK_REFRESH_RETRY_DEADLINE_FRACTION,
+    )
+    return time.monotonic() + max(0.0, retry_budget_seconds)
 
 
 def _close_threadlocal_sqlite_connections() -> None:
@@ -199,28 +318,30 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
         )
 
     conn = _get_sqlite_connection(db_path)
-    try:
+
+    def _acquire() -> RuntimeLockLease | None:
+        attempt_now = time.time()
         conn.execute("BEGIN IMMEDIATE")
         _ensure_runtime_lock_table(conn, db_path)
         conn.execute(
             f"DELETE FROM {_RUNTIME_LOCK_TABLE} WHERE expires_at <= ?",
-            (now,),
+            (attempt_now,),
         )
         existing = conn.execute(
             f"SELECT owner_id FROM {_RUNTIME_LOCK_TABLE} WHERE lock_key = ?",
             (lock_key,),
         ).fetchone()
         if existing is not None:
-            conn.execute("ROLLBACK")
+            _rollback_quietly(conn, db_path)
             return None
 
-        expires_at = now + normalized_lease
+        expires_at = attempt_now + normalized_lease
         conn.execute(
             f"""
             INSERT INTO {_RUNTIME_LOCK_TABLE} (lock_key, owner_id, created_at, expires_at)
             VALUES (?, ?, ?, ?)
             """,
-            (lock_key, owner_id, now, expires_at),
+            (lock_key, owner_id, attempt_now, expires_at),
         )
         conn.execute("COMMIT")
         return RuntimeLockLease(
@@ -229,12 +350,13 @@ def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockL
             db_path=db_path,
             expires_at=expires_at,
         )
-    except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.DatabaseError:
-            pass
-        raise
+
+    return _execute_write_with_retry(
+        conn,
+        _acquire,
+        operation_name="acquire_runtime_lock",
+        db_path=db_path,
+    )
 
 
 def refresh_runtime_lock(
@@ -249,6 +371,8 @@ def refresh_runtime_lock(
     now = time.time()
     normalized_lease = max(float(lease_seconds), 0.01)
     refreshed_expires_at = now + normalized_lease
+    if lease.expires_at <= now:
+        return None
 
     if lease.db_path is None:
         with _INPROCESS_LOCKS_GUARD:
@@ -265,7 +389,11 @@ def refresh_runtime_lock(
         )
 
     conn = _get_sqlite_connection(lease.db_path)
-    try:
+    deadline_monotonic = _refresh_retry_deadline_monotonic(lease)
+
+    def _refresh() -> RuntimeLockLease | None:
+        attempt_now = time.time()
+        refreshed_expires_at = attempt_now + normalized_lease
         conn.execute("BEGIN IMMEDIATE")
         _ensure_runtime_lock_table(conn, lease.db_path)
         cursor = conn.execute(
@@ -274,10 +402,10 @@ def refresh_runtime_lock(
             SET expires_at = ?
             WHERE lock_key = ? AND owner_id = ? AND expires_at > ?
             """,
-            (refreshed_expires_at, lease.lock_key, lease.owner_id, now),
+            (refreshed_expires_at, lease.lock_key, lease.owner_id, attempt_now),
         )
         if (cursor.rowcount or 0) <= 0:
-            conn.execute("ROLLBACK")
+            _rollback_quietly(conn, lease.db_path)
             return None
         conn.execute("COMMIT")
         return RuntimeLockLease(
@@ -286,12 +414,14 @@ def refresh_runtime_lock(
             db_path=lease.db_path,
             expires_at=refreshed_expires_at,
         )
-    except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.DatabaseError:
-            pass
-        raise
+
+    return _execute_write_with_retry(
+        conn,
+        _refresh,
+        operation_name="refresh_runtime_lock",
+        db_path=lease.db_path,
+        deadline_monotonic=deadline_monotonic,
+    )
 
 
 def runtime_lock_is_active(lock_key: str) -> bool:
@@ -335,7 +465,8 @@ def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
             return True
 
     conn = _get_sqlite_connection(lease.db_path)
-    try:
+
+    def _release() -> bool:
         conn.execute("BEGIN IMMEDIATE")
         _ensure_runtime_lock_table(conn, lease.db_path)
         cursor = conn.execute(
@@ -344,9 +475,10 @@ def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
         )
         conn.execute("COMMIT")
         return (cursor.rowcount or 0) > 0
-    except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.DatabaseError:
-            pass
-        raise
+
+    return _execute_write_with_retry(
+        conn,
+        _release,
+        operation_name="release_runtime_lock",
+        db_path=lease.db_path,
+    )

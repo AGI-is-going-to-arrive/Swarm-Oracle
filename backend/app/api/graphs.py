@@ -44,6 +44,7 @@ from app.services.runtime_lock import (
     release_runtime_lock,
     simulation_lock_key,
 )
+from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
 
 logger = logging.getLogger(__name__)
 MAX_REPLAY_BRANCHES = 3
@@ -196,12 +197,15 @@ def _rollback_resume_start(scenario_id: str, branch_id: str) -> None:
 
 
 def _rollback_resimulation_start(scenario_id: str, previous_status: ScenarioStatus) -> None:
-    with Session(get_engine()) as session:
+    engine = get_engine()
+    with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario is not None:
             scenario.status = previous_status
             session.add(scenario)
             session.commit()
+    if previous_status in {ScenarioStatus.CANCELLED, ScenarioStatus.ERROR}:
+        reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
 
 
 def _load_resimulatable_counterfactual(
@@ -569,6 +573,12 @@ async def resimulate_counterfactual(
 
     with Session(get_engine()) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
+        if scenario.status != ScenarioStatus.DONE:
+            raise api_error(
+                409,
+                "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+                "Scenario must be in 'done' status to resimulate a counterfactual branch",
+            )
         previous_status = scenario.status
         _load_resimulatable_counterfactual(
             session,
@@ -587,6 +597,12 @@ async def resimulate_counterfactual(
     try:
         with Session(get_engine()) as session:
             scenario = require_owned_scenario(session, scenario_id, principal)
+            if scenario.status != ScenarioStatus.DONE:
+                raise api_error(
+                    409,
+                    "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+                    "Scenario must be in 'done' status to resimulate a counterfactual branch",
+                )
             previous_status = scenario.status
             _load_resimulatable_counterfactual(
                 session,
