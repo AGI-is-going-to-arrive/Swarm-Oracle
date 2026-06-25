@@ -17,7 +17,7 @@ import app.services.ending_room_service as ending_room_service_module
 from app.api import helpers as helpers_module
 from app.api import ws as ws_module
 from app.models import database as database_module
-from app.models.database import Branch, Scenario, ScenarioStatus, get_engine
+from app.models.database import Branch, BranchStatus, Scenario, ScenarioStatus, get_engine
 from app.services import runtime_lock as runtime_lock_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
@@ -40,6 +40,15 @@ def reset_inprocess_runtime_locks():
     runtime_lock_module._INPROCESS_LOCKS.clear()
     runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
     runtime_lock_module._close_threadlocal_sqlite_connections()
+
+
+def test_runtime_lock_sqlite_connection_enables_busy_timeout_and_wal(tmp_path):
+    db_path = tmp_path / "runtime-lock-pragmas.db"
+
+    conn = runtime_lock_module._get_sqlite_connection(str(db_path))
+
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
 
 @pytest.mark.asyncio
@@ -126,6 +135,85 @@ async def test_parse_and_run_background_preserves_existing_campaign_context(monk
         assert refreshed is not None
         assert refreshed.parsed_context["campaign_context"] == campaign_context
         assert refreshed.parsed_context["mode"] == "blackboard"
+
+
+@pytest.mark.asyncio
+async def test_parse_and_run_background_holds_runtime_lock_until_simulator_handoff(
+    monkeypatch,
+):
+    helpers_module._running_simulations.clear()
+    helpers_module._parse_phase_simulations.clear()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="parse handoff lock", status=ScenarioStatus.SIMULATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        session.add(Branch(scenario_id=scenario.id, title="Initial Branch", probability=1.0))
+        session.commit()
+        scenario_id = scenario.id
+
+    async def fake_parse_question(*_args, **_kwargs):
+        return {
+            "agents": [
+                {
+                    "name": "Analyst",
+                    "role": "Analyst",
+                    "persona": "Checks lock handoff.",
+                    "tier": "CORE",
+                    "stance": "neutral",
+                },
+            ],
+            "initial_title": "Parsed Root",
+            "groups": [],
+        }
+
+    handoff: dict[str, object] = {}
+
+    async def fake_run_sim_background(scenario_arg, **kwargs):
+        lease = kwargs.get("pre_acquired_lock_lease")
+        handoff["scenario_id"] = scenario_arg
+        handoff["lease"] = lease
+        handoff["active"] = runtime_lock_is_active(simulation_lock_key(scenario_arg))
+        release_runtime_lock(lease)
+
+    monkeypatch.setattr(helpers_module, "parse_question", fake_parse_question)
+    monkeypatch.setattr(helpers_module, "run_sim_background", fake_run_sim_background)
+
+    try:
+        await helpers_module.parse_and_run_background(
+            scenario_id,
+            question="parse handoff lock",
+            num_agents=3,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=5,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id=None,
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+        )
+    finally:
+        helpers_module._running_simulations.clear()
+        helpers_module._parse_phase_simulations.clear()
+
+    assert handoff["scenario_id"] == scenario_id
+    assert handoff["lease"] is not None
+    assert handoff["active"] is True
 
 
 def test_runtime_lock_acquire_release_round_trip(monkeypatch, tmp_path):
@@ -452,6 +540,147 @@ async def test_run_sim_background_skips_when_sqlite_runtime_lock_is_held(monkeyp
         helpers_module._running_simulations.clear()
 
     fake_run_simulation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_starts_heartbeat_for_acquired_lock(monkeypatch):
+    helpers_module._running_simulations.clear()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="self-acquired heartbeat", status=ScenarioStatus.SIMULATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+
+    heartbeat_calls: list[tuple[object, float, str]] = []
+
+    def _fake_start_runtime_lock_heartbeat(lease_holder, *, lease_seconds, lock_label):
+        heartbeat_calls.append((lease_holder[0], lease_seconds, lock_label))
+        return threading.Event(), SimpleNamespace(join=lambda timeout=None: None)
+
+    monkeypatch.setattr(helpers_module, "run_simulation", AsyncMock())
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        _fake_start_runtime_lock_heartbeat,
+    )
+
+    await helpers_module.run_sim_background(scenario.id)
+
+    assert heartbeat_calls
+    lease, lease_seconds, lock_label = heartbeat_calls[0]
+    assert lease is not None
+    assert lease_seconds == helpers_module.settings.SIMULATION_LOCK_LEASE_SECONDS
+    assert lock_label == f"simulation:{scenario.id}"
+    assert runtime_lock_is_active(simulation_lock_key(scenario.id)) is False
+    helpers_module._running_simulations.clear()
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_allows_activity_past_legacy_total_timeout(monkeypatch):
+    helpers_module._running_simulations.clear()
+    broadcast = AsyncMock()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="stall timeout", status=ScenarioStatus.SIMULATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+
+    monkeypatch.setattr(helpers_module.settings, "MAX_ROUNDS", 0)
+    monkeypatch.setattr(helpers_module.settings, "SIMULATION_STALL_TIMEOUT_SECONDS", 0.04)
+    monkeypatch.setattr(helpers_module, "_SIMULATION_STALL_POLL_SECONDS", 0.005)
+
+    async def _fake_run_simulation(**kwargs):
+        ws_callback = kwargs["ws_callback"]
+        for completed in range(1, 4):
+            await ws_callback(
+                scenario.id,
+                {
+                    "type": "turn_progress",
+                    "data": {
+                        "branch_id": "branch-1",
+                        "round": 1,
+                        "completed": completed,
+                        "total": 3,
+                    },
+                },
+            )
+            await asyncio.sleep(0.015)
+
+    monkeypatch.setattr(helpers_module, "run_simulation", _fake_run_simulation)
+
+    await helpers_module.run_sim_background(scenario.id)
+
+    with Session(get_engine()) as session:
+        refreshed = session.get(Scenario, scenario.id)
+        assert refreshed is not None
+        assert refreshed.status == ScenarioStatus.SIMULATING
+    assert not any(
+        call.args[1].get("type") == "simulation_error"
+        for call in broadcast.await_args_list
+    )
+    helpers_module._running_simulations.clear()
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_stall_timeout_reconciles_done_before_error(monkeypatch):
+    helpers_module._running_simulations.clear()
+    broadcast = AsyncMock()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="already complete", status=ScenarioStatus.NARRATING)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+        session.add(
+            Branch(
+                scenario_id=scenario_id,
+                title="Complete branch",
+                status=BranchStatus.COMPLETED,
+                story="Story is complete.",
+                insight="Insight is complete.",
+                probability=1.0,
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(helpers_module.settings, "MAX_ROUNDS", 0)
+    monkeypatch.setattr(helpers_module.settings, "SIMULATION_STALL_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(helpers_module, "_SIMULATION_STALL_POLL_SECONDS", 0.005)
+
+    async def _fake_run_simulation(**_kwargs):
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(helpers_module, "run_simulation", _fake_run_simulation)
+
+    await helpers_module.run_sim_background(scenario_id)
+
+    with Session(get_engine()) as session:
+        refreshed = session.get(Scenario, scenario_id)
+        assert refreshed is not None
+        assert refreshed.status == ScenarioStatus.DONE
+
+    event_types = [call.args[1].get("type") for call in broadcast.await_args_list]
+    assert "simulation_done" in event_types
+    assert "simulation_error" not in event_types
+    helpers_module._running_simulations.clear()
 
 
 @pytest.mark.asyncio

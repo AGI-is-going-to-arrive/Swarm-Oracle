@@ -24,12 +24,14 @@ from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentMessage,
+    AgentStateFrame,
     Branch,
     BranchStatus,
     InterventionLog,
     PendingIntervention,
     Round,
     Scenario,
+    ScenarioCheckpoint,
     ScenarioStatus,
 )
 from app.models.database import get_engine
@@ -1077,6 +1079,87 @@ def reconcile_scenario_done_if_complete(
         return True
 
 
+def _coerce_activity_datetime(value: Any) -> datetime | None:
+    if isinstance(value, tuple):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def simulation_last_activity_at(
+    engine,
+    scenario_id: str,
+    *,
+    include_created_at: bool = True,
+) -> datetime | None:
+    """Return latest durable simulation activity from existing timestamped tables."""
+    timestamps: list[datetime] = []
+    with Session(engine) as session:
+        if include_created_at:
+            scenario = session.get(Scenario, scenario_id)
+            scenario_created = _coerce_activity_datetime(
+                getattr(scenario, "created_at", None) if scenario is not None else None
+            )
+            if scenario_created is not None:
+                timestamps.append(scenario_created)
+
+        latest_frame_at = session.exec(
+            select(AgentStateFrame.created_at)
+            .where(AgentStateFrame.scenario_id == scenario_id)
+            .order_by(AgentStateFrame.created_at.desc())
+        ).first()
+        frame_at = _coerce_activity_datetime(latest_frame_at)
+        if frame_at is not None:
+            timestamps.append(frame_at)
+
+        latest_checkpoint_at = session.exec(
+            select(ScenarioCheckpoint.created_at)
+            .where(ScenarioCheckpoint.scenario_id == scenario_id)
+            .order_by(ScenarioCheckpoint.created_at.desc())
+        ).first()
+        checkpoint_at = _coerce_activity_datetime(latest_checkpoint_at)
+        if checkpoint_at is not None:
+            timestamps.append(checkpoint_at)
+
+    if not timestamps:
+        return None
+    return max(timestamps)
+
+
+def simulation_activity_is_fresh(
+    engine,
+    scenario_id: str,
+    *,
+    stale_after_seconds: float | None = None,
+    now: datetime | None = None,
+    include_created_at: bool = True,
+) -> bool:
+    last_activity_at = simulation_last_activity_at(
+        engine,
+        scenario_id,
+        include_created_at=include_created_at,
+    )
+    if last_activity_at is None:
+        return False
+    limit = (
+        settings.SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS
+        if stale_after_seconds is None
+        else stale_after_seconds
+    )
+    current = _coerce_activity_datetime(now) or datetime.now(timezone.utc)
+    return (current - last_activity_at).total_seconds() < float(limit)
+
+
 def reconcile_orphaned_running_scenarios(engine) -> int:
     """Sweep scenarios stuck SIMULATING/NARRATING and finalize them at startup.
 
@@ -1085,13 +1168,10 @@ def reconcile_orphaned_running_scenarios(engine) -> int:
     (``--reload``, SIGKILL, crash, OOM, deploy), the row is left non-terminal with
     ACTIVE branches forever.
 
-    Each candidate is guarded by the same ``simulation:{id}`` runtime lock that live
-    workers hold. If another process still owns an active lease, this sweep skips
-    the row instead of converting a live run to ERROR during a rolling restart. Once
-    the sweep owns the lock, it first tries ``reconcile_scenario_done_if_complete``:
-    a genuinely-complete NARRATING run (all terminal leaves narrated) must become
-    DONE, not ERROR. Anything still non-terminal is a truly-interrupted run and is
-    moved to ERROR via the sticky-terminal helper.
+    A live run must have both the ``simulation:{id}`` runtime lock and fresh
+    activity from existing timestamped tables. An expired lock, or an active lock
+    with stale activity, is treated as dead. Complete NARRATING rows still get a
+    final reconcile pass before ERROR so terminal DONE is not blocked by cleanup.
 
     Returns the number of scenarios transitioned to ERROR.
     """
@@ -1106,8 +1186,27 @@ def reconcile_orphaned_running_scenarios(engine) -> int:
 
     errored = 0
     for scenario_id in stuck_ids:
+        lock_key = simulation_lock_key(scenario_id)
+        lock_active = runtime_lock_is_active(lock_key)
+        activity_fresh = simulation_activity_is_fresh(engine, scenario_id)
+        if lock_active and activity_fresh:
+            continue
+        if lock_active:
+            if reconcile_scenario_done_if_complete(
+                engine,
+                scenario_id,
+                ignore_runtime_lock=True,
+            ):
+                continue
+            _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
+            with Session(engine) as session:
+                scenario = session.get(Scenario, scenario_id)
+                if scenario is not None and scenario.status == ScenarioStatus.ERROR:
+                    errored += 1
+            continue
+
         sweep_lease = acquire_runtime_lock(
-            simulation_lock_key(scenario_id),
+            lock_key,
             lease_seconds=30,
         )
         if sweep_lease is None:
@@ -2856,6 +2955,14 @@ async def _run_simulation_impl(
         active_branches = [b for b in all_branches if b["status"] == "ACTIVE"]
         if not active_branches:
             break
+        await push({
+            "type": "round_progress",
+            "data": {
+                "round": round_num,
+                "phase": "round_start",
+                "active_branches": len(active_branches),
+            },
+        })
 
         detector_budget_ranks: dict[str, int] = {}
         detector_budget_eligible_ids: set[str] | None = None
@@ -3800,6 +3907,9 @@ async def _gather_agent_messages(
     document_reference_context: str = "",
     scenario_user_id: str = "",
     native_search_domains: list[str] | None = None,
+    progress_total: int | None = None,
+    progress_counter: list[int] | None = None,
+    progress_lock: asyncio.Lock | None = None,
 ) -> list[dict]:
     """Gather messages from all agents for this round.
 
@@ -3813,6 +3923,9 @@ async def _gather_agent_messages(
     """
     semaphore = asyncio.Semaphore(get_runtime_parallelism_limit())
     native_citation_lock = asyncio.Lock()
+    turn_progress_total = len(agents) if progress_total is None else progress_total
+    turn_progress_counter = progress_counter if progress_counter is not None else [0]
+    turn_progress_lock = progress_lock if progress_lock is not None else asyncio.Lock()
 
     # Build shared context: prefer Blackboard briefing, fall back to DB
     if blackboard is not None:
@@ -3843,6 +3956,22 @@ async def _gather_agent_messages(
         """Push event if callback is available."""
         if push:
             await push(event)
+
+    async def push_turn_progress() -> None:
+        if turn_progress_total <= 0:
+            return
+        async with turn_progress_lock:
+            turn_progress_counter[0] += 1
+            completed = turn_progress_counter[0]
+        await push_event({
+            "type": "turn_progress",
+            "data": {
+                "branch_id": branch_id,
+                "round": round_num,
+                "completed": completed,
+                "total": turn_progress_total,
+            },
+        })
 
     async def process_agent(agent: dict):
         async with semaphore:
@@ -4164,6 +4293,8 @@ async def _gather_agent_messages(
                     "round": round_num,
                 },
             })
+            _check_cancelled(scenario_id)
+            await push_turn_progress()
 
             # V2: Broadcast viz:bubble_show when visualization is active
             if viz_mapper is not None:
@@ -4357,6 +4488,10 @@ async def _gather_hierarchical_messages(
         leader_agents = [*leader_agents, *custom_workers]
         worker_agents = [a for a in worker_agents if a.get("source_type") != "custom"]
 
+    progress_total = len(leader_agents) + len(worker_agents)
+    progress_counter = [0]
+    progress_lock = asyncio.Lock()
+
     # Step 1: Gather Leader messages (with LLM calls)
     _check_cancelled(scenario_id)
     leader_messages = await _gather_agent_messages(
@@ -4374,6 +4509,9 @@ async def _gather_hierarchical_messages(
         document_reference_context=document_reference_context,
         scenario_user_id=scenario_user_id,
         native_search_domains=native_search_domains,
+        progress_total=progress_total,
+        progress_counter=progress_counter,
+        progress_lock=progress_lock,
     )
     _check_cancelled(scenario_id)
 
@@ -4439,6 +4577,20 @@ async def _gather_hierarchical_messages(
                 "synthesized": True,
             },
         })
+        _check_cancelled(scenario_id)
+        if progress_total > 0:
+            async with progress_lock:
+                progress_counter[0] += 1
+                completed = progress_counter[0]
+            await push_event({
+                "type": "turn_progress",
+                "data": {
+                    "branch_id": branch_id,
+                    "round": round_num,
+                    "completed": completed,
+                    "total": progress_total,
+                },
+            })
 
         # V2: Broadcast viz:bubble_show for worker (synthesized) agents
         if viz_mapper is not None:

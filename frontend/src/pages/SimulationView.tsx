@@ -139,6 +139,7 @@ export function SimulationView() {
   const interventionLifecycle = useSimulationStore((s) => s.interventionLifecycle);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
   const setScenario = useSimulationStore((s) => s.setScenario);
+  const lastContentEventAt = useSimulationStore((s) => s.lastContentEventAt);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
   const scenarioRuntimePreset = useMemo(
     () => matchScenarioRuntimePreset(scenario?.fork_debug?.round_checks ?? null),
@@ -688,14 +689,12 @@ export function SimulationView() {
     && status !== 'error'
     && (status === 'parsing' || status === 'simulating' || status === 'narrating');
 
-  // Reset the progress clock whenever the round advances or the scenario changes.
+  // Reset the progress clock whenever the round advances, the content event signal changes, or the scenario changes.
   useEffect(() => {
-    if (currentRound !== lastProgressRoundRef.current) {
-      lastProgressRoundRef.current = currentRound;
-      lastProgressAtRef.current = Date.now();
-      setSimulationStuck(false);
-    }
-  }, [currentRound, id]);
+    lastProgressRoundRef.current = currentRound;
+    lastProgressAtRef.current = Date.now();
+    setSimulationStuck(false);
+  }, [currentRound, lastContentEventAt, id]);
 
   // Any terminal/non-live state clears the watchdog flag immediately.
   useEffect(() => {
@@ -1534,9 +1533,21 @@ export function SimulationView() {
           surfaces as status='error' with no error string on a polled snapshot; the
           client-side watchdog also flips this on when progress stalls past the hard cap.
           Gated on !error so it never double-renders with the error-string panel above. */}
-      {!error && !isReplayMode && (simulationStuck || status === 'error') && (
-        <div className="sim-error" role="alert" data-testid="simulation-stuck-banner">
+      {!error && !isReplayMode && status === 'error' && (
+        <div className="sim-error" role="alert" data-testid="simulation-stuck-banner-error">
           <p>⚠️ {t('simulation.stuck_title')} {t('simulation.stuck_desc')}</p>
+          <button className="btn" onClick={handleStuckRetry}>
+            {t('simulation.stuck_retry')}
+          </button>
+          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
+            {t('simulation.stuck_back')}
+          </button>
+        </div>
+      )}
+
+      {!error && !isReplayMode && simulationStuck && status !== 'error' && (
+        <div className="sim-error sim-error--soft" role="status" aria-live="polite" data-testid="simulation-stuck-banner-soft">
+          <p>⚠️ {t('simulation.stuck_title_soft')} {t('simulation.stuck_desc_soft')}</p>
           <button className="btn" onClick={handleStuckRetry}>
             {t('simulation.stuck_retry')}
           </button>

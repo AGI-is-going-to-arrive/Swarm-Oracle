@@ -1290,4 +1290,131 @@ describe("simulationStore — scenario hydration", () => {
     expect(store.getState().visualizationEnabled).toBe(false);
     expect(store.getState().viewMode).toBe("classic");
   });
+
+  describe("simulationStore — watchdog and progress events", () => {
+    it("updates lastContentEventAt on various WS events", () => {
+      const store = useSimulationStore;
+      store.getState().reset();
+      expect(store.getState().lastContentEventAt).toBe(0);
+
+      // 1. Status event
+      store.getState().handleWSEvent({
+        type: "status",
+        data: { status: "simulating" },
+      } as WSEvent);
+      const t1 = store.getState().lastContentEventAt;
+      expect(t1).toBeGreaterThan(0);
+
+      // 2. agent_speak_start
+      store.getState().handleWSEvent({
+        type: "agent_speak_start",
+        data: { agent: "A", agent_id: "a1", branch: "b1", round: 1 },
+      } as WSEvent);
+      const t2 = store.getState().lastContentEventAt;
+      expect(t2).toBeGreaterThanOrEqual(t1);
+
+      // 3. turn_progress
+      store.getState().handleWSEvent({
+        type: "turn_progress",
+        data: { branch_id: "b1", round: 1, completed: 2, total: 5 },
+      } as WSEvent);
+      const t3 = store.getState().lastContentEventAt;
+      expect(t3).toBeGreaterThanOrEqual(t2);
+      expect(store.getState().turnProgress).toEqual({
+        branch_id: "b1",
+        round: 1,
+        completed: 2,
+        total: 5,
+      });
+
+      // 4. round_progress
+      store.getState().handleWSEvent({
+        type: "round_progress",
+        data: { round: 2, phase: "round_start", active_branches: 1 },
+      } as WSEvent);
+      const t4 = store.getState().lastContentEventAt;
+      expect(t4).toBeGreaterThanOrEqual(t3);
+      expect(store.getState().turnProgress).toBeNull();
+      expect(store.getState().activeRoundProgress).toEqual({
+        round: 2,
+        active_branches: 1,
+      });
+      expect(store.getState().currentRound).toBe(0);
+    });
+
+    it("keeps active round progress separate from completed currentRound", () => {
+      const store = useSimulationStore;
+      store.getState().reset();
+
+      store.getState().handleWSEvent({
+        type: "round_progress",
+        data: { round: 1, phase: "round_start", active_branches: 2 },
+      } as WSEvent);
+
+      expect(store.getState().currentRound).toBe(0);
+      expect(store.getState().activeRoundProgress).toEqual({
+        round: 1,
+        active_branches: 2,
+      });
+
+      store.getState().handleWSEvent({
+        type: "turn_progress",
+        data: { branch_id: "branch-a", round: 1, completed: 1, total: 3 },
+      } as WSEvent);
+
+      expect(store.getState().currentRound).toBe(0);
+      expect(store.getState().activeRoundProgress).toEqual({
+        round: 1,
+        active_branches: 2,
+      });
+      expect(store.getState().turnProgress).toEqual({
+        branch_id: "branch-a",
+        round: 1,
+        completed: 1,
+        total: 3,
+      });
+    });
+
+    it("preserves lastContentEventAt across a same-scenario re-poll so a true orphan's stuck banner does not self-clear", () => {
+      vi.useFakeTimers();
+      try {
+        const store = useSimulationStore;
+        store.getState().reset();
+        const base = {
+          id: "orphan-resync",
+          question: "q",
+          created_at: new Date().toISOString(),
+          total_rounds: 5,
+          mode: "blackboard",
+          visualization_enabled: false,
+          scene_theme: null,
+          agents: [],
+          branches: [],
+          groups: [],
+          hierarchical: false,
+          messages: [],
+        };
+        // First load of a fresh scenario seeds the watchdog signal.
+        store.getState().setScenario({ ...base, status: "simulating" } as Scenario);
+        const seeded = store.getState().lastContentEventAt;
+        expect(seeded).toBeGreaterThan(0);
+
+        // Time passes with NO new content frame; the watchdog's stuck re-poll resyncs
+        // the SAME scenario. The signal must stay put — otherwise the reset effect
+        // clears simulationStuck and a true orphan's banner only flickers.
+        vi.advanceTimersByTime(5000);
+        store.getState().setScenario({ ...base, status: "simulating" } as Scenario);
+        expect(store.getState().lastContentEventAt).toBe(seeded);
+
+        // A genuine incremental WS frame still advances the signal.
+        store.getState().handleWSEvent({
+          type: "agent_speak_start",
+          data: { agent: "A", agent_id: "a1", branch: "b1", round: 1 },
+        } as WSEvent);
+        expect(store.getState().lastContentEventAt).toBeGreaterThan(seeded);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

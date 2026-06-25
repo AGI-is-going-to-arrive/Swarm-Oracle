@@ -949,6 +949,76 @@ class TestNativeSearchRuntimeWiring:
 
 class TestRunSimulation:
     @pytest.mark.asyncio
+    async def test_full_run_emits_round_progress_at_round_start(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "English",
+                "initial_title": "Initial branch",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Progress Agent",
+                    role="Analyst",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        pushed_events: list[dict] = []
+
+        async def _fake_ws_callback(current_scenario_id: str, event: dict):
+            assert current_scenario_id == scenario_id
+            pushed_events.append(event)
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "Progress is visible.", "emotion": "calm", "diverge": None}
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Complete",
+                "story": "The round completed.",
+                "insight": "Round progress was emitted.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id, ws_callback=_fake_ws_callback)
+
+        progress_events = [
+            event for event in pushed_events if event.get("type") == "round_progress"
+        ]
+        assert progress_events == [
+            {
+                "type": "round_progress",
+                "data": {"round": 1, "phase": "round_start", "active_branches": 1},
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_replay_runtime_rehydrates_owned_model_profile_provider(
         self,
         monkeypatch,
@@ -2478,8 +2548,137 @@ class TestGatherHierarchicalMessages:
         assert captured[0]["branch_id"] == "branch-1"
         assert "Leader Alpha" in captured[0]["content"]
 
+    @pytest.mark.asyncio
+    async def test_turn_progress_counts_leaders_and_synthesized_workers(self, monkeypatch):
+        pushed_events: list[dict] = []
+
+        async def _push(event: dict):
+            pushed_events.append(event)
+
+        async def _fake_gather_agent_messages(
+            *_args,
+            progress_total=None,
+            progress_counter=None,
+            progress_lock=None,
+            push=None,
+            **_kwargs,
+        ):
+            assert progress_total == 2
+            assert progress_counter is not None
+            assert progress_lock is not None
+            async with progress_lock:
+                progress_counter[0] += 1
+                completed = progress_counter[0]
+            await push({
+                "type": "turn_progress",
+                "data": {
+                    "branch_id": "branch-1",
+                    "round": 7,
+                    "completed": completed,
+                    "total": progress_total,
+                },
+            })
+            return [
+                {
+                    "agent_id": "leader-1",
+                    "agent_name": "Leader Alpha",
+                    "content": "Adopt the compromise route immediately.",
+                    "emotion": "focused",
+                    "diverge": None,
+                }
+            ]
+
+        monkeypatch.setattr(
+            "app.services.simulator._gather_agent_messages",
+            _fake_gather_agent_messages,
+        )
+        monkeypatch.setattr("app.services.simulator._save_messages", lambda *_args, **_kwargs: ["worker-message-id"])
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda **_kwargs: None)
+
+        await _gather_hierarchical_messages(
+            engine=object(),
+            scenario_id="scenario-1",
+            branch_id="branch-1",
+            round_id="round-1",
+            round_num=7,
+            leader_agents=[{"id": "leader-1", "name": "Leader Alpha", "role": "Coordinator"}],
+            worker_agents=[{"id": "worker-1", "name": "Worker Beta", "role": "Analyst"}],
+            agent_to_group={"Worker Beta": "alpha"},
+            group_leaders={"alpha": "Leader Alpha"},
+            setting_bg="bg",
+            topic="topic",
+            push=_push,
+        )
+
+        progress_events = [
+            event for event in pushed_events if event.get("type") == "turn_progress"
+        ]
+        assert [event["data"]["completed"] for event in progress_events] == [1, 2]
+        assert all(
+            set(event["data"]) == {"branch_id", "round", "completed", "total"}
+            for event in progress_events
+        )
+        assert all(event["data"]["branch_id"] == "branch-1" for event in progress_events)
+        assert all(event["data"]["round"] == 7 for event in progress_events)
+        assert all(event["data"]["total"] == 2 for event in progress_events)
+
 
 class TestGatherAgentMessages:
+    @pytest.mark.asyncio
+    async def test_turn_progress_emits_after_each_completed_agent(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 4)
+        agent_ids = [
+            _make_agent(engine, sid, name="Agent A", tier=AgentTier.IMPORTANT),
+            _make_agent(engine, sid, name="Agent B", tier=AgentTier.IMPORTANT),
+        ]
+        with Session(engine) as session:
+            agents = [_agent_to_dict(session.get(Agent, agent_id)) for agent_id in agent_ids]
+
+        pushed_events: list[dict] = []
+
+        async def _push(event: dict):
+            pushed_events.append(event)
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "Visible progress.", "emotion": "calm", "diverge": None}
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            4,
+            agents,
+            "时代: 测试\n地点: 本地\n背景: 进度",
+            "是否展示进度",
+            push=_push,
+            language="Chinese",
+        )
+
+        progress_events = [
+            event for event in pushed_events if event.get("type") == "turn_progress"
+        ]
+        assert [event["data"]["completed"] for event in progress_events] == [1, 2]
+        assert all(
+            set(event["data"]) == {"branch_id", "round", "completed", "total"}
+            for event in progress_events
+        )
+        assert all(event["data"]["branch_id"] == bid for event in progress_events)
+        assert all(event["data"]["round"] == 4 for event in progress_events)
+        assert all(event["data"]["total"] == 2 for event in progress_events)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tier", [AgentTier.CORE, AgentTier.IMPORTANT])
     async def test_core_and_important_prompts_build_on_other_agents_points(

@@ -82,6 +82,17 @@ export interface SimulationState {
   currentRound: number;
   simStartTime: number | null;        // timestamp when simulation started
   roundCompleteTimes: number[];       // timestamps when each round completed
+  lastContentEventAt: number;         // ms timestamp of the last content activity signal
+  turnProgress: {
+    branch_id: string;
+    round: number;
+    completed: number;
+    total: number;
+  } | null;
+  activeRoundProgress: {
+    round: number;
+    active_branches: number;
+  } | null;
 
   // Intervention
   interventionLog: Array<{ branch_id: string; text: string; round: number }>;
@@ -123,6 +134,17 @@ const initialState = {
   currentRound: 0,
   simStartTime: null as number | null,
   roundCompleteTimes: [] as number[],
+  lastContentEventAt: 0,
+  turnProgress: null as {
+    branch_id: string;
+    round: number;
+    completed: number;
+    total: number;
+  } | null,
+  activeRoundProgress: null as {
+    round: number;
+    active_branches: number;
+  } | null,
   interventionLog: [] as InterventionLogEntry[],
   interventionLifecycle: new Map<string, InterventionLifecycleState>(),
   isSimulationComplete: false,
@@ -258,6 +280,13 @@ function applyScenarioSnapshot(
     currentRound: sameScenario ? Math.max(state.currentRound, highestRound) : highestRound,
     simStartTime: sameScenario ? state.simStartTime : null,
     roundCompleteTimes: sameScenario ? state.roundCompleteTimes : [],
+    // Snapshot/re-poll must NOT count as content progress: a same-scenario resync
+    // (including the watchdog's own stuck re-poll) keeps the prior signal so a true
+    // orphan's stuck banner stays visible instead of self-clearing. Genuine progress
+    // only arrives via incremental WS frames (agent_speak / round_summary / narration / ...).
+    lastContentEventAt: sameScenario ? state.lastContentEventAt : Date.now(),
+    turnProgress: sameScenario ? state.turnProgress : null,
+    activeRoundProgress: sameScenario ? state.activeRoundProgress : null,
     isSimulationComplete: mergedStatus === 'done',
     interventionLog: sameScenario ? state.interventionLog : [],
     interventionLifecycle: nextLifecycle,
@@ -285,6 +314,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       currentRound: 0,
       simStartTime: null,
       roundCompleteTimes: [],
+      lastContentEventAt: Date.now(),
+      turnProgress: null,
+      activeRoundProgress: null,
       isSimulationComplete: false,
     });
     try {
@@ -308,6 +340,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         currentRound: Math.max(0, ...((scenario.messages || []) as AgentMessage[]).map((message) => message.round ?? 0)),
         simStartTime: null,
         roundCompleteTimes: [],
+        lastContentEventAt: Date.now(),
+        turnProgress: null,
+        activeRoundProgress: null,
         interventionLog: [],
         interventionLifecycle: new Map<string, InterventionLifecycleState>(),
         isSimulationComplete: scenario.status === 'done',
@@ -385,6 +420,13 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             simStartTime: event.data.status === 'simulating' && !state.simStartTime
               ? Date.now()
               : state.simStartTime,
+            lastContentEventAt: Date.now(),
+            turnProgress: mergedStatus === 'done' || mergedStatus === 'error' || mergedStatus === 'cancelled'
+              ? null
+              : state.turnProgress,
+            activeRoundProgress: mergedStatus === 'done' || mergedStatus === 'error' || mergedStatus === 'cancelled'
+              ? null
+              : state.activeRoundProgress,
           };
         });
         break;
@@ -392,6 +434,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       case 'agent_speak_start':
         // Agent begins thinking — show "thinking" indicator
         set((state) => ({
+          lastContentEventAt: Date.now(),
           thinkingAgents: [
             ...state.thinkingAgents.filter(
               (t) => !(t.agent_id === event.data.agent_id && t.branch === event.data.branch && t.round === event.data.round)
@@ -408,6 +451,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
       case 'agent_speak_delta':
         // Ignored — we no longer use token-level streaming
+        set(() => ({
+          lastContentEventAt: Date.now(),
+        }));
         break;
 
       case 'agent_speak': {
@@ -420,6 +466,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           const isDuplicate = seenMessageKeys.has(dedupKey);
           if (isDuplicate) {
             return {
+              lastContentEventAt: Date.now(),
               thinkingAgents: state.thinkingAgents.filter(
                 (t) => !(t.agent_id === d.agent_id && t.branch === d.branch && t.round === d.round),
               ),
@@ -433,6 +480,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             rebuildSeenMessageKeys(newMessages, state.scenario?.id);
           }
           return {
+            lastContentEventAt: Date.now(),
             messages: newMessages,
             thinkingAgents: state.thinkingAgents.filter(
               (t) => !(t.agent_id === d.agent_id && t.branch === d.branch && t.round === d.round),
@@ -457,7 +505,17 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           if (times.length < roundNum) {
             times.push(Date.now());
           }
-          return { currentRound: newRound, roundCompleteTimes: times };
+          return {
+            currentRound: newRound,
+            roundCompleteTimes: times,
+            lastContentEventAt: Date.now(),
+            turnProgress: state.turnProgress?.round && state.turnProgress.round <= newRound
+              ? null
+              : state.turnProgress,
+            activeRoundProgress: state.activeRoundProgress?.round && state.activeRoundProgress.round <= newRound
+              ? null
+              : state.activeRoundProgress,
+          };
         });
         break;
 
@@ -469,6 +527,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           // newer branch_init payload from the simulator.
           if (state.branches.some((b) => b.id === event.data.id)) {
             return {
+              lastContentEventAt: Date.now(),
               branches: state.branches.map((b) =>
                 b.id === event.data.id
                   ? {
@@ -483,6 +542,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             };
           }
           return {
+            lastContentEventAt: Date.now(),
             branches: [
               ...state.branches,
               {
@@ -506,6 +566,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
       case 'branch_fork':
         set((state) => ({
+          lastContentEventAt: Date.now(),
           branches: [
             // Mark parent as COMPLETED (it forked into children)
             ...state.branches.map((b) =>
@@ -540,6 +601,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
       case 'branch_update':
         set((state) => ({
+          lastContentEventAt: Date.now(),
           branches: state.branches.map((b) =>
             b.id === event.data.branch_id
               ? mergeBranch(b, {
@@ -553,6 +615,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
       case 'narration':
         set((state) => ({
+          lastContentEventAt: Date.now(),
           branches: state.branches.map((b) =>
             b.id === event.data.branch_id
               ? {
@@ -662,6 +725,45 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         });
         break;
 
+      case 'turn_progress':
+        set((state) => {
+          if (event.data.round <= state.currentRound) {
+            return {
+              lastContentEventAt: Date.now(),
+              turnProgress: null,
+            };
+          }
+          return {
+            lastContentEventAt: Date.now(),
+            activeRoundProgress: state.activeRoundProgress?.round === event.data.round
+              ? state.activeRoundProgress
+              : {
+                  round: event.data.round,
+                  active_branches: 1,
+                },
+            turnProgress: {
+              branch_id: event.data.branch_id,
+              round: event.data.round,
+              completed: event.data.completed,
+              total: event.data.total,
+            },
+          };
+        });
+        break;
+
+      case 'round_progress':
+        set((state) => ({
+          lastContentEventAt: Date.now(),
+          activeRoundProgress: event.data.round > state.currentRound
+            ? {
+                round: event.data.round,
+                active_branches: event.data.active_branches,
+              }
+            : null,
+          turnProgress: null,
+        }));
+        break;
+
       case 'kg:delta':
       case 'kg:snapshot_invalidated':
         break;
@@ -670,7 +772,11 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         // H4 fix: cancelled is terminal — late simulation_done must not regress it.
         set((state) => {
           if (state.status === 'cancelled') {
-            return { thinkingAgents: [] };
+            return {
+              thinkingAgents: [],
+              turnProgress: null,
+              activeRoundProgress: null,
+            };
           }
           const nextLifecycle = new Map(state.interventionLifecycle);
           for (const key of nextLifecycle.keys()) {
@@ -680,6 +786,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             status: 'done',
             isSimulationComplete: true,
             thinkingAgents: [],
+            turnProgress: null,
+            activeRoundProgress: null,
             interventionLifecycle: nextLifecycle,
           };
         });
@@ -691,6 +799,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           cancelReason: event.reason ?? 'user_cancelled',
           isSimulationComplete: state.isSimulationComplete,
           thinkingAgents: [],
+          turnProgress: null,
+          activeRoundProgress: null,
           error: null,
           errorCode: null,
         }));
@@ -700,7 +810,11 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         // H4 fix: cancelled is terminal — late simulation_error must not regress it.
         set((state) => {
           if (state.status === 'cancelled') {
-            return { thinkingAgents: [] };
+            return {
+              thinkingAgents: [],
+              turnProgress: null,
+              activeRoundProgress: null,
+            };
           }
           return {
             status: 'error',
@@ -711,6 +825,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
               translate('common.api_errors.simulation_start_failed'),
             ),
             thinkingAgents: [],
+            turnProgress: null,
+            activeRoundProgress: null,
           };
         });
         break;

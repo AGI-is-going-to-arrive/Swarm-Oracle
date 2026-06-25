@@ -24,6 +24,11 @@ _SQLITE_CONNECTIONS = threading.local()
 _ENSURED_SQLITE_SCHEMA_PATHS: set[str] = set()
 _ENSURE_SQLITE_SCHEMA_GUARD = threading.Lock()
 
+# Cross-process liveness only exists for file-backed sqlite:/// databases. For
+# simulations, live means the SQLite runtime lock is active AND derived scenario
+# activity is fresh; dead means the lock expired or the lock is active but
+# activity is stale. In-memory / non-SQLite fallback is process-local only.
+
 
 @dataclass(frozen=True)
 class RuntimeLockLease:
@@ -109,6 +114,24 @@ def _get_threadlocal_connection_cache() -> dict[str, sqlite3.Connection]:
     return cache
 
 
+def _configure_sqlite_connection(conn: sqlite3.Connection, db_path: str) -> None:
+    pragmas = (
+        ("busy_timeout", "5000"),
+        ("journal_mode", "WAL"),
+        ("synchronous", "NORMAL"),
+    )
+    for name, value in pragmas:
+        try:
+            conn.execute(f"PRAGMA {name}={value}")
+        except sqlite3.Error:
+            logger.debug(
+                "Failed to apply runtime-lock SQLite PRAGMA %s for %s",
+                name,
+                db_path,
+                exc_info=True,
+            )
+
+
 def _get_sqlite_connection(db_path: str) -> sqlite3.Connection:
     cache = _get_threadlocal_connection_cache()
     conn = cache.get(db_path)
@@ -122,6 +145,7 @@ def _get_sqlite_connection(db_path: str) -> sqlite3.Connection:
             cache.pop(db_path, None)
 
     conn = sqlite3.connect(db_path, timeout=_SQLITE_TIMEOUT_SECONDS, isolation_level=None)
+    _configure_sqlite_connection(conn, db_path)
     cache[db_path] = conn
     return conn
 

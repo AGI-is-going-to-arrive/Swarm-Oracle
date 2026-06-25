@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import selectinload
@@ -60,6 +61,7 @@ from app.services.simulator import (
     _update_scenario_status,
     reconcile_scenario_done_if_complete,
     run_simulation,
+    simulation_activity_is_fresh,
 )
 
 logger = logging.getLogger(__name__)
@@ -550,6 +552,8 @@ _parse_phase_simulations: set[str] = set()
 _task_registry: dict[str, asyncio.Task] = {}
 _SIMULATION_LOCK_REFRESH_FRACTION = 0.33
 _SIMULATION_LOCK_LOSS_POLL_SECONDS = 0.01
+_SIMULATION_STALL_POLL_SECONDS = 1.0
+_SIMULATION_CREATE_GRACE_SECONDS = 90.0
 
 
 def register_running_task(scenario_id: str, task: asyncio.Task) -> None:
@@ -571,6 +575,9 @@ def _runtime_lock_lease_alive(
 ) -> bool:
     lease = lease_holder[0]
     if lease is None:
+        return False
+    if not isinstance(lease, RuntimeLockLease):
+        lease_holder[0] = None
         return False
     if lease.expires_at <= time.time():
         lease_holder[0] = None
@@ -643,6 +650,68 @@ async def _watch_runtime_lock_loss(
     while _runtime_lock_lease_alive(lease_holder):
         await asyncio.sleep(_SIMULATION_LOCK_LOSS_POLL_SECONDS)
     raise RuntimeError("simulation runtime lock was lost during execution")
+
+
+def _simulation_lock_lease_seconds() -> float:
+    return max(60.0, float(settings.SIMULATION_LOCK_LEASE_SECONDS))
+
+
+def _simulation_stall_timeout_seconds() -> float:
+    return max(0.01, float(settings.SIMULATION_STALL_TIMEOUT_SECONDS))
+
+
+def _coerce_utc_datetime(value: object) -> datetime | None:
+    if isinstance(value, tuple):
+        value = value[0] if value else None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _within_simulation_create_grace(
+    created_at: object,
+    *,
+    now: datetime,
+) -> bool:
+    created = _coerce_utc_datetime(created_at)
+    if created is None:
+        return False
+    return (now - created).total_seconds() <= _SIMULATION_CREATE_GRACE_SECONDS
+
+
+def _is_simulation_activity_event(event: dict) -> bool:
+    event_type = str(event.get("type") or "").strip()
+    return bool(event_type) and event_type != "simulation_error"
+
+
+async def _await_with_simulation_stall_timeout(
+    awaitable,
+    *,
+    last_activity_monotonic: list[float],
+    timeout_seconds: float,
+) -> None:
+    task = asyncio.create_task(awaitable)
+    poll_seconds = max(0.001, min(_SIMULATION_STALL_POLL_SECONDS, timeout_seconds))
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=poll_seconds)
+            if task in done:
+                return await task
+            if time.monotonic() - last_activity_monotonic[0] >= timeout_seconds:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise asyncio.TimeoutError
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def _format_background_exception(exc: BaseException) -> tuple[str, str]:
@@ -841,9 +910,9 @@ async def run_sim_background(
 
     from app.api.ws import ws_manager
     try:
-        # H-5 fix: total simulation timeout (MAX_ROUNDS * 180s ceiling)
-        total_timeout = settings.MAX_ROUNDS * 180
-        lock_lease_seconds = total_timeout + 60
+        lock_lease_seconds = _simulation_lock_lease_seconds()
+        stall_timeout_seconds = _simulation_stall_timeout_seconds()
+        last_activity_monotonic = [time.monotonic()]
         if lock_lease_holder[0] is None:
             lock_lease_holder[0] = acquire_runtime_lock(
                 simulation_lock_key(scenario_id),
@@ -856,7 +925,15 @@ async def run_sim_background(
                 )
                 return
             lock_lease_to_release = lock_lease_holder[0]
-        else:
+        if not isinstance(lock_lease_holder[0], RuntimeLockLease):
+            logger.warning(
+                "Simulation %s runtime lock returned an invalid lease; "
+                "continuing without lock heartbeat",
+                scenario_id,
+            )
+            lock_lease_holder[0] = None
+            lock_lease_to_release = None
+        if lock_lease_holder[0] is not None:
             heartbeat_stop, heartbeat_thread = _start_runtime_lock_heartbeat(
                 lock_lease_holder,
                 lease_seconds=lock_lease_seconds,
@@ -932,9 +1009,14 @@ async def run_sim_background(
                 else parsed_context.get("native_search_upstream")
             )
 
+        async def _broadcast_with_activity(target_scenario_id: str, event: dict):
+            if _is_simulation_activity_event(event):
+                last_activity_monotonic[0] = time.monotonic()
+            await ws_manager.broadcast(target_scenario_id, event)
+
         sim_kwargs: dict = {
             "scenario_id": scenario_id,
-            "ws_callback": ws_manager.broadcast,
+            "ws_callback": _broadcast_with_activity,
             "llm_overrides": effective_llm_overrides or llm_overrides,
         }
         if branch_id is not None:
@@ -968,9 +1050,10 @@ async def run_sim_background(
                     await asyncio.gather(simulation_task, return_exceptions=True)
 
         with llm_request_scope(**scope_kwargs):
-            await asyncio.wait_for(
+            await _await_with_simulation_stall_timeout(
                 _run_simulation_with_lock_guard(),
-                timeout=total_timeout,
+                last_activity_monotonic=last_activity_monotonic,
+                timeout_seconds=stall_timeout_seconds,
             )
     except asyncio.CancelledError:
         if is_cancelled(scenario_id):
@@ -994,24 +1077,40 @@ async def run_sim_background(
             )
         else:
             logger.error(
-                "Simulation %s timed out after %ds",
-                scenario_id, settings.MAX_ROUNDS * 180,
+                "Simulation %s stalled with no activity for %.1fs",
+                scenario_id,
+                _simulation_stall_timeout_seconds(),
             )
-            try:
-                await ws_manager.broadcast(scenario_id, {
-                    "type": "simulation_error",
-                    "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
-                })
-            except Exception:
-                pass
             engine = get_engine()
-            with Session(engine) as session:
-                s = session.get(Scenario, scenario_id)
-                # H3 fix: idempotent guard — never demote a CANCELLED row to ERROR.
-                if s and s.status != ScenarioStatus.CANCELLED:
-                    s.status = ScenarioStatus.ERROR
-                    session.add(s)
-                    session.commit()
+            try:
+                reconciled_done = reconcile_scenario_done_if_complete(
+                    engine,
+                    scenario_id,
+                    ignore_runtime_lock=True,
+                )
+            except Exception:
+                reconciled_done = False
+                logger.exception("Failed to reconcile stalled simulation %s", scenario_id)
+            if reconciled_done:
+                try:
+                    await ws_manager.broadcast(scenario_id, {"type": "simulation_done"})
+                except Exception:
+                    pass
+            else:
+                try:
+                    await ws_manager.broadcast(scenario_id, {
+                        "type": "simulation_error",
+                        "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
+                    })
+                except Exception:
+                    pass
+                with Session(engine) as session:
+                    s = session.get(Scenario, scenario_id)
+                    # H3 fix: idempotent guard — never demote a CANCELLED row to ERROR.
+                    if s and s.status != ScenarioStatus.CANCELLED:
+                        s.status = ScenarioStatus.ERROR
+                        session.add(s)
+                        session.commit()
     except Exception as exc:
         # H3 fix: lock-loss watcher cancels the sim task; the simulator persists
         # CANCELLED before the watcher's RuntimeError reaches us. Suppress the
@@ -1121,6 +1220,46 @@ async def parse_and_run_background(
     if parse_task is not None:
         register_running_task(scenario_id, parse_task)
 
+    parse_lock_lease_seconds = _simulation_lock_lease_seconds()
+    parse_lock_lease_holder: list[RuntimeLockLease | None] = [
+        acquire_runtime_lock(
+            simulation_lock_key(scenario_id),
+            lease_seconds=parse_lock_lease_seconds,
+        )
+    ]
+    parse_heartbeat_stop: threading.Event | None = None
+    parse_heartbeat_thread: threading.Thread | None = None
+
+    def _cleanup_parse_bookkeeping() -> None:
+        clear_cancel_token(scenario_id)
+        clear_running_task(scenario_id, parse_task)
+        _running_simulations.discard(scenario_id)
+        _parse_phase_simulations.discard(scenario_id)
+
+    def _stop_parse_runtime_lock(*, release: bool) -> None:
+        nonlocal parse_heartbeat_stop, parse_heartbeat_thread
+        if parse_heartbeat_stop is not None and parse_heartbeat_thread is not None:
+            _stop_runtime_lock_heartbeat(parse_heartbeat_stop, parse_heartbeat_thread)
+            parse_heartbeat_stop = None
+            parse_heartbeat_thread = None
+        if release:
+            release_runtime_lock(parse_lock_lease_holder[0])
+            parse_lock_lease_holder[0] = None
+
+    if parse_lock_lease_holder[0] is None:
+        logger.warning(
+            "Simulation %s already running via another worker during parse — "
+            "skipping duplicate launch",
+            scenario_id,
+        )
+        _cleanup_parse_bookkeeping()
+        return
+    parse_heartbeat_stop, parse_heartbeat_thread = _start_runtime_lock_heartbeat(
+        parse_lock_lease_holder,
+        lease_seconds=parse_lock_lease_seconds,
+        lock_label=f"simulation-parse:{scenario_id}",
+    )
+
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario and scenario.status != ScenarioStatus.SIMULATING:
@@ -1153,10 +1292,8 @@ async def parse_and_run_background(
                 "Failed to finalize early-cancelled scenario %s", scenario_id,
             )
         finally:
-            clear_cancel_token(scenario_id)
-            clear_running_task(scenario_id, parse_task)
-            _running_simulations.discard(scenario_id)
-            _parse_phase_simulations.discard(scenario_id)
+            _stop_parse_runtime_lock(release=True)
+            _cleanup_parse_bookkeeping()
         return
 
     try:
@@ -1199,16 +1336,12 @@ async def parse_and_run_background(
                     scenario_id,
                 )
             finally:
-                clear_cancel_token(scenario_id)
-                clear_running_task(scenario_id, parse_task)
-                _running_simulations.discard(scenario_id)
-                _parse_phase_simulations.discard(scenario_id)
+                _stop_parse_runtime_lock(release=True)
+                _cleanup_parse_bookkeeping()
             return
         # Not user-cancel: clean bookkeeping then propagate.
-        clear_cancel_token(scenario_id)
-        clear_running_task(scenario_id, parse_task)
-        _running_simulations.discard(scenario_id)
-        _parse_phase_simulations.discard(scenario_id)
+        _stop_parse_runtime_lock(release=True)
+        _cleanup_parse_bookkeeping()
         raise
     except Exception as exc:
         exc_type, scrubbed = _format_background_exception(exc)
@@ -1233,10 +1366,8 @@ async def parse_and_run_background(
         except Exception:
             pass
         # H2 fix: clean bookkeeping so cancel endpoint stops 409'ing on dead runs.
-        clear_cancel_token(scenario_id)
-        clear_running_task(scenario_id, parse_task)
-        _running_simulations.discard(scenario_id)
-        _parse_phase_simulations.discard(scenario_id)
+        _stop_parse_runtime_lock(release=True)
+        _cleanup_parse_bookkeeping()
         return
 
     parsed["mode"] = mode
@@ -1294,6 +1425,8 @@ async def parse_and_run_background(
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
             logger.warning("Scenario %s disappeared before parse completion", scenario_id)
+            _stop_parse_runtime_lock(release=True)
+            _cleanup_parse_bookkeeping()
             return
 
         existing_context = (
@@ -1572,10 +1705,17 @@ async def parse_and_run_background(
         supports_native_search_override=supports_native_search,
         native_search_upstream_override=native_search_upstream,
     ):
-        await run_sim_background(
-            scenario_id,
-            llm_overrides=llm_overrides,
-        )
+        pre_acquired_lock_lease = parse_lock_lease_holder[0]
+        _stop_parse_runtime_lock(release=False)
+        parse_lock_lease_holder[0] = None
+        try:
+            await run_sim_background(
+                scenario_id,
+                llm_overrides=llm_overrides,
+                pre_acquired_lock_lease=pre_acquired_lock_lease,
+            )
+        finally:
+            release_runtime_lock(pre_acquired_lock_lease)
 
 
 def _parse_web_context_json(raw: str | None) -> dict | None:
@@ -1794,29 +1934,38 @@ def load_scenario_response(
     False on the create/import response paths: those call this synchronously right
     after ``schedule_background_task`` (an ``asyncio.create_task``) but before the
     scheduled coroutine runs, so the brand-new run has not yet acquired its runtime
-    lock or registered in ``_running_simulations`` — finalizing it here would wrongly
-    mark every freshly-created scenario ERROR. Polling GETs (a later, separate
-    request) leave it True so a genuinely dead run self-heals.
+    lock. Polling GETs (a later, separate request) leave it True so a genuinely dead
+    run self-heals.
     """
     reconcile_scenario_done_if_complete(engine, scenario_id)
-    # GET-time fail-forward: covers "task died but process still alive". If the
-    # scenario is still SIMULATING/NARRATING after reconcile but the run is NOT live
-    # (no active runtime-lock heartbeat AND not tracked in _running_simulations), the
-    # driver died mid-run and will never finalize it — move it to ERROR so the UI
-    # stops spinning. _update_scenario_status is sticky-terminal, so a genuinely
-    # complete run that reconcile just set to DONE is never clobbered.
+    # GET-time fail-forward: creation grace protects the POST->first-GET window
+    # before the scheduled task can register/acquire its lock. Outside that grace,
+    # stale durable activity means the driver died/stalled and will never finalize
+    # it. _update_scenario_status is sticky-terminal, so a DONE set by reconcile
+    # above is never clobbered.
     if fail_forward_stale:
+        now = datetime.now(timezone.utc)
         with Session(engine) as session:
             stale = session.get(Scenario, scenario_id)
             stale_non_terminal = stale is not None and stale.status in (
                 ScenarioStatus.SIMULATING,
                 ScenarioStatus.NARRATING,
             )
-        if (
-            stale_non_terminal
-            and scenario_id not in _running_simulations
-            and not runtime_lock_is_active(simulation_lock_key(scenario_id))
-        ):
+            within_create_grace = (
+                _within_simulation_create_grace(stale.created_at, now=now)
+                if stale is not None
+                else False
+            )
+        runtime_lock_active = runtime_lock_is_active(simulation_lock_key(scenario_id))
+        include_created_at_for_freshness = within_create_grace or runtime_lock_active
+        activity_fresh = simulation_activity_is_fresh(
+            engine,
+            scenario_id,
+            now=now,
+            include_created_at=include_created_at_for_freshness,
+        )
+        live = runtime_lock_active and activity_fresh
+        if stale_non_terminal and not within_create_grace and not activity_fresh and not live:
             _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
     with Session(engine) as session:
         s = session.get(Scenario, scenario_id)

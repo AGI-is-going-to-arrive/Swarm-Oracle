@@ -1282,6 +1282,8 @@ export type WSEvent =
     | { type: 'agent_speak_delta'; data: { agent: string; agent_id: string; delta: string; branch: string; round: number } }
     | { type: 'agent_speak'; data: AgentMessage }
     | { type: 'round_summary'; data: { branch_id: string; round: number; summary: string } }
+    | { type: 'turn_progress'; data: { branch_id: string; round: number; completed: number; total: number } }
+    | { type: 'round_progress'; data: { round: number; phase: 'round_start'; active_branches: number } }
     | { type: 'branch_init'; data: { id: string; title: string; probability: number; status: string; parent_branch_id: string | null } }
     | { type: 'branch_fork'; data: { parent: string; children: Array<{ id: string; title: string; description?: string; fork_round: number; probability: number }>; reason: string } }
     | { type: 'branch_prune'; data: { branch_id: string; reason: string } }

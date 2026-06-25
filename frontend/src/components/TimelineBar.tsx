@@ -160,6 +160,8 @@ export function TimelineBar({
   const simStartTime = useSimulationStore((s) => s.simStartTime);
   const roundCompleteTimes = useSimulationStore((s) => s.roundCompleteTimes);
   const messages = useSimulationStore((s) => s.messages);
+  const turnProgress = useSimulationStore((s) => s.turnProgress);
+  const activeRoundProgress = useSimulationStore((s) => s.activeRoundProgress);
 
   const totalRounds = normalizeTotalRounds(scenario?.total_rounds);
   const mode = scenario?.mode ?? 'blackboard';
@@ -175,6 +177,14 @@ export function TimelineBar({
     return status;
   }, [currentRound, messages.length, status, totalRounds]);
   const isSimulatingOrNarrating = displayStatus === 'simulating' || displayStatus === 'narrating';
+  const activeRound = displayStatus === 'simulating'
+    && activeRoundProgress
+    && activeRoundProgress.round > currentRound
+    ? activeRoundProgress.round
+    : currentRound;
+  const displayRound = displayStatus === 'narrating' && totalRounds !== null
+    ? totalRounds
+    : activeRound;
 
   // Warmup elapsed ticker — drives the "running for M:SS" readout + slow hint in the
   // sticky banner so a slow-but-working local model never looks frozen during warmup.
@@ -196,6 +206,32 @@ export function TimelineBar({
   const warmupElapsedLabel = formatElapsed(warmupElapsedMs);
   const warmupIsSlow = warmupElapsedMs >= WARMUP_SLOW_HINT_MS;
 
+  const currentRoundStartTime = useMemo(() => {
+    if (displayRound === 0 || displayRound === 1) {
+      return warmupStart;
+    }
+    return roundCompleteTimes[displayRound - 2] ?? warmupStart;
+  }, [displayRound, warmupStart, roundCompleteTimes]);
+
+  const currentRoundElapsedMs = Math.max(0, elapsedNow - currentRoundStartTime);
+  const currentRoundIsSlow = currentRoundElapsedMs >= WARMUP_SLOW_HINT_MS;
+  const showTurnProgress = Boolean(turnProgress && turnProgress.round === displayRound);
+  const branchProgressLabel = turnProgress
+    ? branches.find((branch) => branch.id === turnProgress.branch_id)?.title || turnProgress.branch_id
+    : '';
+  const turnProgressLabel = showTurnProgress && turnProgress
+    ? t(
+        (activeRoundProgress?.active_branches ?? 1) > 1
+          ? 'sim.timeline.turn_progress_branch_msg'
+          : 'sim.timeline.turn_progress_msg',
+        {
+          branch: branchProgressLabel,
+          completed: turnProgress.completed,
+          total: turnProgress.total,
+        },
+      )
+    : '';
+
   const { progressPercent, eta, avgRoundTime } = useMemo(() => {
     if (displayStatus === 'narrating') {
       return {
@@ -205,13 +241,13 @@ export function TimelineBar({
       };
     }
 
-    if (displayStatus !== 'simulating' || currentRound === 0) {
+    if (displayStatus !== 'simulating' || displayRound === 0) {
       return { progressPercent: 0, eta: '', avgRoundTime: 0 };
     }
 
     const pct = totalRounds === null
       ? 0
-      : Math.min(100, Math.round((currentRound / totalRounds) * 100));
+      : Math.min(100, Math.round((displayRound / totalRounds) * 100));
 
     let avgTime = 0;
     if (roundCompleteTimes.length >= 2) {
@@ -224,7 +260,7 @@ export function TimelineBar({
       avgTime = (roundCompleteTimes[0] - simStartTime) / 1000;
     }
 
-    const remainingRounds = totalRounds === null ? 0 : Math.max(0, totalRounds - currentRound);
+    const remainingRounds = totalRounds === null ? 0 : Math.max(0, totalRounds - displayRound);
     const multiplier = roundCompleteTimes.length < 2 ? getModeMultiplier(mode) : 1.0;
     const etaSeconds = avgTime > 0 ? remainingRounds * avgTime * multiplier : 0;
 
@@ -233,7 +269,7 @@ export function TimelineBar({
       eta: formatETA(etaSeconds),
       avgRoundTime: Math.round(avgTime),
     };
-  }, [currentRound, displayStatus, mode, roundCompleteTimes, simStartTime, totalRounds, t]);
+  }, [displayRound, displayStatus, mode, roundCompleteTimes, simStartTime, totalRounds, t]);
 
   const stages: StageDef[] = [
     { key: 'parsing', label: t('sim.timeline.parsing'), icon: '🔍' },
@@ -267,14 +303,14 @@ export function TimelineBar({
     }
 
     const isNarrating = displayStatus === 'narrating';
-    const isPreparing = displayStatus === 'simulating' && currentRound === 0;
+    const isPreparing = displayStatus === 'simulating' && displayRound === 0;
 
     const currentText = isNarrating && totalRounds !== null
       ? `R${totalRounds}/${totalRounds}`
-      : currentRound > 0
+      : displayRound > 0
         ? totalRounds !== null
-          ? `R${currentRound}/${totalRounds}`
-          : `R${currentRound}`
+          ? `R${displayRound}/${totalRounds}`
+          : `R${displayRound}`
         : warmupIsSlow
           ? t('sim.timeline.preparing_slow')
           : t('sim.timeline.preparing');
@@ -286,9 +322,18 @@ export function TimelineBar({
         ? `${t('sim.timeline.eta_remaining')} ${eta}`
         : '';
 
+    const slowText = !isPreparing && displayStatus === 'simulating' && currentRoundIsSlow
+      ? `, ${t('sim.timeline.simulating_slow')}, ${t('sim.timeline.elapsed', { time: warmupElapsedLabel })}`
+      : '';
+    const turnProgressText = !isPreparing && displayStatus === 'simulating' && showTurnProgress
+      ? `, ${turnProgressLabel}`
+      : '';
+    const pctText = showProgressPercent && !currentRoundIsSlow ? `, ${progressPercent}%` : '';
+    const etaTextVal = etaText && !currentRoundIsSlow ? `, ${etaText}` : '';
+
     const srText = isNarrating
       ? t('sim.timeline.narrating_progress')
-      : `${currentText}${showProgressPercent ? `, ${progressPercent}%` : ''}${etaText ? `, ${etaText}` : ''}`;
+      : `${currentText}${pctText}${etaTextVal}${slowText}${turnProgressText}`;
 
     return (
       <div
@@ -306,9 +351,9 @@ export function TimelineBar({
           <span className="sim-progress-ledger__steps" aria-hidden="true">
             {Array.from({ length: totalRounds }, (_, index) => {
               const roundNo = index + 1;
-              const tickState = isNarrating || roundNo < currentRound
+              const tickState = isNarrating || roundNo < displayRound
                 ? 'is-done'
-                : roundNo === currentRound
+                : roundNo === displayRound
                   ? 'is-current'
                   : '';
               return (
@@ -330,13 +375,33 @@ export function TimelineBar({
               </span>
             </>
           )}
-          {!isPreparing && showProgressPercent && (
+          {!isPreparing && displayStatus === 'simulating' && currentRoundIsSlow && (
+            <>
+              <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
+              <span className="sim-progress-ledger__slow" role="status" aria-live="polite">
+                {t('sim.timeline.simulating_slow')}
+              </span>
+              <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
+              <span className="sim-progress-ledger__eta">
+                {t('sim.timeline.elapsed', { time: warmupElapsedLabel })}
+              </span>
+            </>
+          )}
+          {!isPreparing && displayStatus === 'simulating' && showTurnProgress && (
+            <>
+              <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
+              <span className="sim-progress-ledger__turn-progress">
+                {turnProgressLabel}
+              </span>
+            </>
+          )}
+          {!isPreparing && showProgressPercent && !currentRoundIsSlow && (
             <>
               <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
               <span className="sim-progress-ledger__pct">{progressPercent}%</span>
             </>
           )}
-          {etaText && (
+          {etaText && !currentRoundIsSlow && (
             <>
               <span className="sim-progress-ledger__sep" aria-hidden="true">·</span>
               <span className="sim-progress-ledger__eta">{etaText}</span>
@@ -387,10 +452,10 @@ export function TimelineBar({
             <span className="progress-round">
               {displayStatus === 'narrating' && totalRounds !== null
                 ? `R${totalRounds}/${totalRounds}`
-                : currentRound > 0
+                : displayRound > 0
                   ? totalRounds !== null
-                    ? `R${currentRound}/${totalRounds}`
-                    : `R${currentRound}`
+                    ? `R${displayRound}/${totalRounds}`
+                    : `R${displayRound}`
                   : t('sim.timeline.preparing')}
             </span>
             {(displayStatus === 'narrating' || totalRounds !== null) && (
@@ -410,10 +475,10 @@ export function TimelineBar({
           <div className="sr-only" aria-live="polite">
             {displayStatus === 'narrating'
               ? t('sim.timeline.narrating_progress')
-              : `${displayStatus === 'simulating' && currentRound > 0
+              : `${displayStatus === 'simulating' && displayRound > 0
                 ? totalRounds !== null
-                  ? `R${currentRound}/${totalRounds}`
-                  : `R${currentRound}`
+                  ? `R${displayRound}/${totalRounds}`
+                  : `R${displayRound}`
                 : t('sim.timeline.preparing')}${totalRounds !== null ? `, ${progressPercent}%` : ''}`}
           </div>
         </div>
@@ -517,10 +582,10 @@ export function TimelineBar({
         <span className="stat">
           <span className="stat__label">{t('sim.timeline.round_label')}</span>
           <span className="stat__value">
-            {currentRound > 0
+            {displayRound > 0
               ? totalRounds !== null
-                ? `${currentRound}/${totalRounds}`
-                : `R${currentRound}`
+                ? `${displayRound}/${totalRounds}`
+                : `R${displayRound}`
               : totalRounds !== null
                 ? `0/${totalRounds}`
                 : '0'}

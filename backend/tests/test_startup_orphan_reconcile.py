@@ -9,10 +9,13 @@ locks are left alone so rolling restarts cannot kill a run in another process.
 These tests use real SQLite test databases (conftest's autouse fixture).
 """
 
+import time
+
 from sqlmodel import Session
 
 from app.models import Branch, BranchStatus, Scenario, ScenarioStatus
 from app.models.database import get_engine
+import app.services.simulator as simulator_module
 from app.services.simulator import (
     _create_branch,
     reconcile_orphaned_running_scenarios,
@@ -82,6 +85,28 @@ class TestReconcileOrphanedRunningScenarios:
 
             assert errored == 0
             assert _status(engine, scenario_id) == ScenarioStatus.SIMULATING
+        finally:
+            release_runtime_lock(lease)
+
+    def test_active_runtime_lock_with_stale_activity_is_marked_error(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine, ScenarioStatus.SIMULATING)
+        branch_id = _create_branch(engine, scenario_id, title="静默卡死分支")
+        _set_branch(engine, branch_id, status=BranchStatus.ACTIVE)
+        lease = acquire_runtime_lock(simulation_lock_key(scenario_id), lease_seconds=30)
+        assert lease is not None
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS",
+            0.001,
+        )
+
+        try:
+            time.sleep(0.01)
+            errored = reconcile_orphaned_running_scenarios(engine)
+
+            assert errored == 1
+            assert _status(engine, scenario_id) == ScenarioStatus.ERROR
         finally:
             release_runtime_lock(lease)
 

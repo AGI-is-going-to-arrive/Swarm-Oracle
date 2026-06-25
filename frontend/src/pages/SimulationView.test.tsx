@@ -2191,4 +2191,54 @@ describe('SimulationView replay automation output', () => {
       });
     });
   });
+
+  it("renders soft stuck banner after watchdog timeout, and hard error banner on status='error'", async () => {
+    vi.useFakeTimers();
+    try {
+      mockStore.scenario = {
+        ...baseScenario,
+        status: 'simulating',
+      };
+      mockStore.status = 'simulating';
+      mockStore.isSimulationComplete = false;
+      mockStore.error = null;
+      mockStore.currentRound = 1;
+
+      const { rerender } = render(
+        <MemoryRouter initialEntries={['/sim/scenario-1']}>
+          <Routes>
+            <Route path="/sim/:id" element={<SimulationView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      // Initially, no stuck banner should be present
+      expect(screen.queryByTestId('simulation-stuck-banner-soft')).toBeNull();
+      expect(screen.queryByTestId('simulation-stuck-banner-error')).toBeNull();
+
+      // Fast-forward by 5 minutes (STUCK_HARD_CAP_MS is 300,000ms)
+      act(() => {
+        vi.advanceTimersByTime(300_000);
+      });
+
+      // Now soft stuck banner should be displayed
+      expect(screen.getByTestId('simulation-stuck-banner-soft')).toBeInTheDocument();
+      expect(screen.queryByTestId('simulation-stuck-banner-error')).toBeNull();
+
+      // If backend reports 'error' status, it should render the hard error banner instead
+      mockStore.status = 'error';
+      rerender(
+        <MemoryRouter initialEntries={['/sim/scenario-1']}>
+          <Routes>
+            <Route path="/sim/:id" element={<SimulationView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(screen.queryByTestId('simulation-stuck-banner-soft')).toBeNull();
+      expect(screen.getByTestId('simulation-stuck-banner-error')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -407,7 +407,10 @@
         "tooltip_results": "结局",
         "tooltip_no_events": "本轮暂无额外事件",
         "elapsed": "已运行 {{time}}",
-        "preparing_slow": "本地推理较慢，仍在进行…"
+        "preparing_slow": "本地推理较慢，仍在进行…",
+        "simulating_slow": "本地模型推理较慢，仍在推进",
+        "turn_progress_msg": "本轮 {{completed}}/{{total}} 位 Agent 已发言",
+        "turn_progress_branch_msg": "{{branch}}：{{completed}}/{{total}} 位 Agent 已发言"
       },
       "warmup": {
         "title": "导演准备中",
@@ -3423,6 +3426,8 @@
       "cancelled_desc": "推演已被取消。",
       "stuck_title": "推演似乎已中断。",
       "stuck_desc": "这条推演长时间没有新进展，可能已停止。你可以重新发起或返回首页。",
+      "stuck_title_soft": "这条推演进展较慢。",
+      "stuck_desc_soft": "可能仍在后台运行，也可能已停止。你可以重新发起或返回首页。",
       "stuck_retry": "重新推演",
       "stuck_back": "返回首页"
     },

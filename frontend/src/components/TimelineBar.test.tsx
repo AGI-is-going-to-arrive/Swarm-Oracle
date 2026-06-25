@@ -1,4 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +27,16 @@ const mockState = {
   simStartTime: 0,
   roundCompleteTimes: [] as number[],
   messages: [] as AgentMessage[],
+  turnProgress: null as {
+    branch_id: string;
+    round: number;
+    completed: number;
+    total: number;
+  } | null,
+  activeRoundProgress: null as {
+    round: number;
+    active_branches: number;
+  } | null,
 };
 
 vi.mock('react-i18next', () => ({
@@ -48,6 +60,8 @@ describe('TimelineBar replay controls', () => {
       mode: 'blackboard',
     };
     mockState.currentRound = 3;
+    mockState.turnProgress = null;
+    mockState.activeRoundProgress = null;
     mockState.branches = [
       {
         id: 'root',
@@ -224,5 +238,109 @@ describe('TimelineBar replay controls', () => {
     expect(screen.queryByText('R10')).not.toBeInTheDocument();
     expect(screen.queryByText('R0/10')).not.toBeInTheDocument();
     expect(screen.getAllByText('sim.timeline.preparing').length).toBeGreaterThan(0);
+  });
+
+  it('renders slow simulating hint and turn progress details when slow or progress event arrives', () => {
+    vi.useFakeTimers();
+    try {
+      mockState.status = 'simulating';
+      mockState.currentRound = 1;
+      mockState.activeRoundProgress = {
+        round: 1,
+        active_branches: 1,
+      };
+      mockState.scenario = {
+        ...mockState.scenario,
+        status: 'simulating',
+        total_rounds: 3,
+      };
+      mockState.simStartTime = Date.now();
+      mockState.roundCompleteTimes = [];
+      mockState.turnProgress = {
+        branch_id: 'root',
+        round: 1,
+        completed: 2,
+        total: 5,
+      };
+
+      const { container, rerender } = render(<TimelineBar stickyBanner />);
+
+      // At start, not slow, so no simulating_slow hint, but should show turn progress
+      expect(container.querySelector('.sim-progress-ledger__turn-progress')).toHaveTextContent('sim.timeline.turn_progress_msg');
+      expect(container.querySelector('.sim-progress-ledger__slow')).toBeNull();
+
+      // Fast forward by 30 seconds to make it slow
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+
+      rerender(<TimelineBar stickyBanner />);
+
+      expect(container.querySelector('.sim-progress-ledger__slow')).toHaveTextContent('sim.timeline.simulating_slow');
+      expect(container.querySelector('.sim-progress-ledger__turn-progress')).toHaveTextContent('sim.timeline.turn_progress_msg');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows active turn progress before round_summary advances currentRound', () => {
+    mockState.status = 'simulating';
+    mockState.currentRound = 0;
+    mockState.activeRoundProgress = {
+      round: 1,
+      active_branches: 1,
+    };
+    mockState.scenario = {
+      ...mockState.scenario,
+      status: 'simulating',
+      total_rounds: 3,
+    };
+    mockState.turnProgress = {
+      branch_id: 'root',
+      round: 1,
+      completed: 1,
+      total: 5,
+    };
+
+    const { container } = render(<TimelineBar stickyBanner />);
+
+    expect(container.querySelector('.sim-progress-ledger__round')).toHaveTextContent('R1/3');
+    expect(container.querySelector('.sim-progress-ledger__turn-progress')).toHaveTextContent('sim.timeline.turn_progress_msg');
+  });
+
+  it('uses branch-scoped turn progress copy when multiple branches are active', () => {
+    mockState.status = 'simulating';
+    mockState.currentRound = 1;
+    mockState.activeRoundProgress = {
+      round: 2,
+      active_branches: 2,
+    };
+    mockState.scenario = {
+      ...mockState.scenario,
+      status: 'simulating',
+      total_rounds: 3,
+    };
+    mockState.turnProgress = {
+      branch_id: 'b2',
+      round: 2,
+      completed: 1,
+      total: 4,
+    };
+
+    const { container } = render(<TimelineBar stickyBanner />);
+
+    expect(container.querySelector('.sim-progress-ledger__round')).toHaveTextContent('R2/3');
+    expect(container.querySelector('.sim-progress-ledger__turn-progress')).toHaveTextContent('sim.timeline.turn_progress_branch_msg');
+  });
+
+  it('keeps theater soft stuck banners neutral after theater error overrides', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/pages/SimulationView.css'), 'utf8');
+    const theaterHardRule = css.indexOf('.simulation-view--theater .sim-error {');
+    const theaterSoftRule = css.indexOf('.simulation-view--theater .sim-error--soft {');
+
+    expect(theaterHardRule).toBeGreaterThanOrEqual(0);
+    expect(theaterSoftRule).toBeGreaterThan(theaterHardRule);
+    expect(css).toMatch(/\.simulation-view--theater \.sim-error--soft\s*\{[\s\S]*?background:\s*rgba\(88, 85, 79, 0\.07\);/);
+    expect(css).toMatch(/\.simulation-view--theater \.sim-error--soft p\s*\{[\s\S]*?color:\s*#58554f;/);
   });
 });

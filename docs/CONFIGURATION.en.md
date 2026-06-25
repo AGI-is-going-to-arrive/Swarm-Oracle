@@ -148,7 +148,19 @@ Docker Compose stores the database and Chroma data in the `/data` volume so they
 
 ---
 
-## 5. Session Gate and Admin Endpoints (Optional, Advanced)
+## 5. Simulation Runtime and Recovery
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `SIMULATION_LOCK_LEASE_SECONDS` | Runtime-lock lease for the main simulation background task; live tasks refresh it periodically | `120` |
+| `SIMULATION_STALL_TIMEOUT_SECONDS` | Seconds without content, progress, or durable activity before the background task converges as stalled | `900` |
+| `SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS` | Stale-activity window used by polling reads and startup recovery | `900` |
+
+These values drive background simulation liveness. A running simulation holds and refreshes a runtime lock; as long as WebSocket content frames, round / turn progress, checkpoints, or other durable activity continue, a slow LLM is not killed just because total wall-clock time is long. Only a run with no activity past the stall timeout converges to an error terminal state. Polling reads also avoid fail-forwarding newly created runs or runs that still hold an active lock, so slow parse and first-round warmup are not mistaken for interruption.
+
+---
+
+## 6. Session Gate and Admin Endpoints (Optional, Advanced)
 
 `SESSION_SECRET` is empty by default, which means local development has no auth gate. When set, REST requests need an `X-Session-Token` header, WebSocket connections need first-frame authentication, and `/metrics` can also be accessed with the same session token. This is a temporary coarse-grained demo gate, not a complete multi-user permission system.
 
@@ -158,7 +170,7 @@ Scenario questions and debate questions have a public 2000-character input limit
 
 ---
 
-## 6. Development Test Only
+## 7. Development Test Only
 
 `SWARM_E2E_FIXTURE_MODE=1` enables the frontend offline fixture harness, mainly for release / E2E signoff. When paired with a blackhole backend such as `SWARM_BACKEND_URL=http://127.0.0.1:9`, uncovered `/api`, node-side backend calls, and same-origin `/ws/**` fail closed and fail the test. This mode validates zero fixture escape from the frontend harness; it does not validate real backend business logic.
 

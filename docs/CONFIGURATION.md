@@ -148,7 +148,19 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 ---
 
-## 5. 会话门禁与管理端点（可选，进阶）
+## 5. 推演运行时与回收
+
+| 配置项 | 说明 | 默认 |
+|--------|------|------|
+| `SIMULATION_LOCK_LEASE_SECONDS` | 主推演后台任务的 runtime lock 租期；运行中会定期续租 | `120` |
+| `SIMULATION_STALL_TIMEOUT_SECONDS` | 后台推演完全没有内容、进度或持久化活动后，按 stall 收敛的等待秒数 | `900` |
+| `SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS` | 轮询读取和启动恢复判断 stale activity 的窗口 | `900` |
+
+这组值用于后台推演活性判断。正在运行的推演会持有 runtime lock 并定期续租；只要仍有 WebSocket 内容帧、轮次 / 发言进度、checkpoint 或其它持久化活动，慢 LLM 不会因为总墙钟时间长被杀掉。超过 stall timeout 完全没有活动时，后台任务才会收敛为错误终态；轮询读取也会避开刚创建和仍持有 active lock 的 run，避免把慢 parse 或首轮误判为中断。
+
+---
+
+## 6. 会话门禁与管理端点（可选，进阶）
 
 `SESSION_SECRET` 默认留空，表示本地开发不开鉴权。设置后，REST 接口需要 `X-Session-Token` 头、WebSocket 需要首帧鉴权，`/metrics` 也可以用同一个 session token 访问。这是一个**临时的全局粗粒度门禁**，适合给 demo 加一道简单口令，不是完整的多用户权限系统。
 
@@ -158,7 +170,7 @@ Scenario 问题和辩论题目的公开输入上限是 2000 字符。前端受�
 
 ---
 
-## 6. 开发测试专用
+## 7. 开发测试专用
 
 `SWARM_E2E_FIXTURE_MODE=1` 会启用前端离线 fixture harness，主要用于 release / E2E 签收。配合 `SWARM_BACKEND_URL=http://127.0.0.1:9` 这类黑洞后端地址时，未被 fixture 覆盖的 `/api`、node-side backend 调用和同源 `/ws/**` 会 fail-closed，并让测试失败。这个模式验证前端 fixture 零逃逸，不验证真实后端业务逻辑。
 

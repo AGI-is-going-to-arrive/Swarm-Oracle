@@ -180,6 +180,16 @@
   font-size: 0.85rem;
 }
 
+/* Soft stuck = client-side slowness watchdog (not a backend error): neutral tone,
+   role="status". The hard-error banner keeps .sim-error's danger styling + role="alert". */
+.sim-error--soft {
+  background: hsla(220, 13%, 50%, 0.07);
+  border-bottom-color: hsla(220, 13%, 50%, 0.16);
+}
+.sim-error--soft p {
+  color: var(--text-secondary, #5b6472);
+}
+
 /* ── S1-1 Cancellation surface ───────────────────────────── */
 .sim-cancel-btn {
   font-weight: 600;
@@ -1300,6 +1310,13 @@
 }
 .simulation-view--theater .sim-error p {
   color: #C5283D;
+}
+.simulation-view--theater .sim-error--soft {
+  background: rgba(88, 85, 79, 0.07);
+  border-bottom-color: rgba(88, 85, 79, 0.16);
+}
+.simulation-view--theater .sim-error--soft p {
+  color: #58554f;
 }
 
 /* ── Sidebar toggle → Light Theater accent ───────────────── */

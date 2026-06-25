@@ -8,7 +8,7 @@
   /* ---- real content (verbatim) ---- */
   var FEATURES = [
     { id: "F01", img: "01-home.png", hero: false, zt: "首页提问框与开始推演", et: "Home Question Box and Start Simulation",
-      zd: "在首页输入一个「如果……会怎样？」问题，确认问题和本局设置后进入多 Agent 推演；问题、LLM 或预算未就绪时，开始按钮会显示原因。", ed: "Enter a “what if?” question on the home page, confirm the question and run settings, then start the multi-agent simulation; when the question, LLM, or budget is not ready, the start button shows the reason." },
+      zd: "在首页输入一个「如果……会怎样？」问题，确认问题和本局设置后进入多 Agent 推演；运行中会显示轮次、轮内发言进度和慢模型仍在工作的状态，问题、LLM 或预算未就绪时，开始按钮会显示原因。", ed: "Enter a “what if?” question on the home page, confirm the question and run settings, then start the multi-agent simulation; during the run it shows rounds, in-round speaking progress, and the still-working state for slow models. When the question, LLM, or budget is not ready, the start button shows the reason." },
     { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
       zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
     { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",
@@ -51,7 +51,7 @@
 
   var MODES = [
     { n: "01", img: ["21-simulation.png", "02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
-      zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线；推演页显示当前轮次、进度、ETA 和首轮预热时长，慢模型会提示仍在工作，中断运行会进入可重试状态，底部进度与回放时间线避开消息和控件，结果页用一句话回答原问题并给出置信度，每条终局叶子世界线带标题、归一化概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the simulation page shows current round, progress, ETA and first-round warmup elapsed time, slow models get a still-working hint, interrupted runs become retryable, bottom progress and replay timelines stay clear of messages and controls, and the result page answers the original question in one line with a confidence. Each terminal leaf worldline carries a title, normalized probability, story summary and a direct answer." },
+      zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线；推演页显示当前轮次、轮内 Agent 发言进度、整体进度、ETA 和首轮预热时长，慢模型只要仍有内容或进度活动就提示仍在工作，真正中断才进入可重试状态，底部进度与回放时间线避开消息和控件，结果页用一句话回答原问题并给出置信度，每条终局叶子世界线带标题、归一化概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the simulation page shows current round, in-round Agent speaking progress, overall progress, ETA and first-round warmup elapsed time. Slow models stay in the still-working state while content or progress activity continues, truly interrupted runs become retryable, bottom progress and replay timelines stay clear of messages and controls, and the result page answers the original question in one line with a confidence. Each terminal leaf worldline carries a title, normalized probability, story summary and a direct answer." },
     { n: "02", img: ["20-debate-arena.png", "15-debate.png"], zt: "辩论竞技场", et: "Debate Arena",
       zd: "辩论竞技场创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；辩论结果页展示比分、角色和裁判结论，可加载论点地图。", ed: "The Debate Arena creates affirmative, opposing and judge roles and runs a shorter staged debate; the result page shows the score, roles and the judge’s verdict, and can load the argument map." },
     { n: "03", img: ["17-ending-chamber.png"], zt: "神谕密室 / 结局会客厅", et: "Oracle Chambers / Ending Chamber",

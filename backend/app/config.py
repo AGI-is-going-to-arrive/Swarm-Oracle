@@ -132,6 +132,9 @@ class Settings(BaseSettings):
     MAX_CUSTOM_AGENTS: int = 20
     DEFAULT_ROUNDS: int = 10
     HIERARCHICAL_AGENT_THRESHOLD: int = 50  # P3-A: auto-enable hierarchical mode above this
+    SIMULATION_LOCK_LEASE_SECONDS: float = Field(default=120.0, gt=0)
+    SIMULATION_STALL_TIMEOUT_SECONDS: float = Field(default=900.0, gt=0)
+    SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS: float = Field(default=900.0, gt=0)
 
     # ── Concurrency ──────────────────────────────────────
     LLM_CONCURRENCY: int = 5
