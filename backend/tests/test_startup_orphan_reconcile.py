@@ -11,19 +11,24 @@ These tests use real SQLite test databases (conftest's autouse fixture).
 
 import time
 
+from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+import app.services.runtime_lock as runtime_lock_module
+import app.services.simulator as simulator_module
+from app.main import app
 from app.models import Branch, BranchStatus, Scenario, ScenarioStatus
 from app.models.database import get_engine
-import app.services.simulator as simulator_module
+from app.services.runtime_lock import (
+    acquire_runtime_lock,
+    reconcile_orphaned_report_locks,
+    release_runtime_lock,
+    runtime_lock_is_active,
+    simulation_lock_key,
+)
 from app.services.simulator import (
     _create_branch,
     reconcile_orphaned_running_scenarios,
-)
-from app.services.runtime_lock import (
-    acquire_runtime_lock,
-    release_runtime_lock,
-    simulation_lock_key,
 )
 
 
@@ -59,6 +64,20 @@ def _status(engine, scenario_id) -> ScenarioStatus:
         row = session.get(Scenario, scenario_id)
         assert row is not None
         return row.status
+
+
+def _force_sqlite_lock_expired(lock_key: str) -> None:
+    db_path = runtime_lock_module._runtime_lock_db_path()
+    assert db_path is not None
+    conn = runtime_lock_module._get_sqlite_connection(db_path)
+    conn.execute(
+        f"""
+        UPDATE {runtime_lock_module._RUNTIME_LOCK_TABLE}
+        SET expires_at = ?
+        WHERE lock_key = ?
+        """,
+        (time.time() - 1.0, lock_key),
+    )
 
 
 class TestReconcileOrphanedRunningScenarios:
@@ -193,3 +212,66 @@ class TestReconcileOrphanedRunningScenarios:
         _make_scenario(engine, ScenarioStatus.DONE)
 
         assert reconcile_orphaned_running_scenarios(engine) == 0
+
+
+def test_main_lifespan_clears_expired_orphaned_report_runtime_lock():
+    lock_key = "result-report:startup-sweep"
+    lease = acquire_runtime_lock(lock_key, lease_seconds=30)
+    assert lease is not None
+    assert runtime_lock_is_active(lock_key) is True
+    _force_sqlite_lock_expired(lock_key)
+
+    try:
+        with TestClient(app):
+            pass
+
+        assert runtime_lock_is_active(lock_key) is False
+    finally:
+        release_runtime_lock(lease)
+
+
+def test_reconcile_orphaned_report_locks_preserves_live_sqlite_report_lock():
+    expired_key = "result-report:startup-expired"
+    live_key = "result-report:startup-live"
+    expired = acquire_runtime_lock(expired_key, lease_seconds=30)
+    live = acquire_runtime_lock(live_key, lease_seconds=30)
+    assert expired is not None
+    assert live is not None
+    _force_sqlite_lock_expired(expired_key)
+
+    try:
+        cleared = reconcile_orphaned_report_locks()
+
+        assert cleared == 1
+        assert runtime_lock_is_active(expired_key) is False
+        assert runtime_lock_is_active(live_key) is True
+    finally:
+        release_runtime_lock(expired)
+        release_runtime_lock(live)
+
+
+def test_reconcile_orphaned_report_locks_preserves_live_inprocess_report_lock(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        runtime_lock_module.settings,
+        "DATABASE_URL",
+        "sqlite:///:memory:",
+    )
+    expired_key = "result-report:inprocess-expired"
+    live_key = "result-report:inprocess-live"
+    now = time.time()
+    with runtime_lock_module._INPROCESS_LOCKS_GUARD:
+        runtime_lock_module._INPROCESS_LOCKS.clear()
+        runtime_lock_module._INPROCESS_LOCKS[expired_key] = ("expired-owner", now - 1.0)
+        runtime_lock_module._INPROCESS_LOCKS[live_key] = ("live-owner", now + 30.0)
+
+    try:
+        cleared = reconcile_orphaned_report_locks()
+
+        assert cleared == 1
+        assert runtime_lock_is_active(expired_key) is False
+        assert runtime_lock_is_active(live_key) is True
+    finally:
+        with runtime_lock_module._INPROCESS_LOCKS_GUARD:
+            runtime_lock_module._INPROCESS_LOCKS.clear()

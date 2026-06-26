@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -233,6 +234,158 @@ def _persisted_report(scenario_id: str) -> dict[str, Any]:
         return report
 
 
+def test_branch_distribution_marks_terminal_completed_leaves_only() -> None:
+    from app.services.result_report.reducer import reduce_branch_distribution
+
+    branches = [
+        Branch(
+            id="branch-root",
+            scenario_id="scenario-terminal-leaf-gap",
+            title="Prologue root",
+            probability=1.0,
+            fork_round=0,
+            status=BranchStatus.COMPLETED,
+        ),
+        Branch(
+            id="branch-mid",
+            scenario_id="scenario-terminal-leaf-gap",
+            title="Mid-tree pressure",
+            probability=0.4428,
+            fork_round=2,
+            status=BranchStatus.COMPLETED,
+            parent_branch_id="branch-root",
+        ),
+        Branch(
+            id="branch-answer-leaf",
+            scenario_id="scenario-terminal-leaf-gap",
+            title="Answer leaf",
+            probability=0.3841,
+            fork_round=4,
+            status=BranchStatus.COMPLETED,
+            parent_branch_id="branch-mid",
+        ),
+        Branch(
+            id="branch-runner-leaf",
+            scenario_id="scenario-terminal-leaf-gap",
+            title="Runner-up leaf",
+            probability=0.2069,
+            fork_round=4,
+            status=BranchStatus.COMPLETED,
+            parent_branch_id="branch-root",
+        ),
+        Branch(
+            id="branch-active-leaf",
+            scenario_id="scenario-terminal-leaf-gap",
+            title="Active leaf",
+            probability=0.19,
+            fork_round=4,
+            status=BranchStatus.ACTIVE,
+            parent_branch_id="branch-mid",
+        ),
+    ]
+
+    distribution = reduce_branch_distribution(
+        branches,
+        target_branch_id="branch-answer-leaf",
+        parent_branch_ids={"branch-root", "branch-mid"},
+    )
+    by_id = {item["branch_id"]: item for item in distribution}
+
+    assert by_id["branch-root"]["is_terminal_leaf"] is False
+    assert by_id["branch-mid"]["is_terminal_leaf"] is False
+    assert by_id["branch-answer-leaf"]["is_terminal_leaf"] is True
+    assert by_id["branch-runner-leaf"]["is_terminal_leaf"] is True
+    assert by_id["branch-active-leaf"]["is_terminal_leaf"] is False
+
+
+def test_probability_gap_indicator_compares_terminal_leaves_not_full_head() -> None:
+    from app.services.result_report import builder
+
+    reducer_result = SimpleNamespace(
+        branch_distribution=[
+            {
+                "branch_id": "branch-root",
+                "label": "Prologue root",
+                "probability": 1.0,
+                "dominant": False,
+                "status": "COMPLETED",
+                "is_terminal_leaf": False,
+            },
+            {
+                "branch_id": "branch-mid",
+                "label": "Mid-tree pressure",
+                "probability": 0.4428,
+                "dominant": False,
+                "status": "COMPLETED",
+                "is_terminal_leaf": False,
+            },
+            {
+                "branch_id": "branch-answer-leaf",
+                "label": "Answer leaf",
+                "probability": 0.3841,
+                "dominant": True,
+                "status": "COMPLETED",
+                "is_terminal_leaf": True,
+            },
+            {
+                "branch_id": "branch-runner-leaf",
+                "label": "Runner-up leaf",
+                "probability": 0.2069,
+                "dominant": False,
+                "status": "COMPLETED",
+                "is_terminal_leaf": True,
+            },
+        ],
+    )
+
+    zh = builder._probability_gap_indicator(
+        reducer_result,
+        allowed_evidence_ids=set(),
+        language="zh",
+    )
+    en = builder._probability_gap_indicator(
+        reducer_result,
+        allowed_evidence_ids=set(),
+        language="en",
+    )
+
+    assert zh is not None
+    assert en is not None
+    assert "18 个百分点" in zh.observation
+    assert "（38% 对 21%）" in zh.observation
+    assert "100% 对 44%" not in zh.observation
+    assert "18 percentage points" in en.observation
+    assert "(38% vs 21%)" in en.observation
+    assert "100% vs 44%" not in en.observation
+
+    one_terminal_result = SimpleNamespace(
+        branch_distribution=[
+            {
+                "branch_id": "branch-root",
+                "probability": 1.0,
+                "dominant": False,
+                "status": "COMPLETED",
+                "is_terminal_leaf": False,
+            },
+            {
+                "branch_id": "branch-answer-leaf",
+                "probability": 0.3841,
+                "dominant": True,
+                "status": "COMPLETED",
+                "is_terminal_leaf": True,
+            },
+        ],
+    )
+    assert (
+        builder._probability_gap_indicator(
+            one_terminal_result,
+            allowed_evidence_ids=set(),
+            language="zh",
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_indicator_enrichment_populates_s4_fields_and_real_evidence_refs(
     monkeypatch,
@@ -295,7 +448,8 @@ async def test_indicator_scaffolding_localizes_to_zh_with_real_evidence(monkeypa
 
     text = _indicator_text(report.indicators_to_watch)
     assert report.language == "zh"
-    assert "第 1 轮信号" in text
+    assert "主张是否被复现" in text
+    assert "这座城市是否应该批准 AI 公交方案？" in text
     assert "主导路线" in text
     assert "后续" in text
     assert "证据 ev_001" in text

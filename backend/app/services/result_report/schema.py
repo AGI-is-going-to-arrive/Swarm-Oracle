@@ -13,6 +13,20 @@ LanguageCode = Literal["zh", "en"]
 GenerationMode = Literal["generation", "rewrite", "static"]
 ReportStatus = Literal["generating", "complete", "partial", "failed", "skipped"]
 ReportTier = Literal["generation", "rewrite", "static"]
+SectionTier = Literal["generation", "rewrite", "static"]
+# Why a section fell back to its static/offline tier. ``None`` means the section
+# was produced by the LLM (generation/rewrite) without any failure.
+SectionFailureReason = Literal[
+    "timeout",
+    "tool_floor_not_met",
+    "empty_outline",
+    "json_parse_error",
+    "plan_outline_timeout",
+    "unsupported_action",
+    "tool_budget_exhausted",
+    "empty_body",
+    "other",
+]
 ConfidenceLevel = Literal["high", "medium", "low"]
 EvidenceKind = Literal["utterance", "causal_fact", "faction_event", "interview"]
 IndicatorDirection = Literal["up", "down"]
@@ -294,6 +308,12 @@ class ReportSection(_StrictModel):
     body_md_i18n: I18nText
     evidence_refs: list[str] = Field(default_factory=list)
     charts: list[Chart] = Field(default_factory=list)
+    # Per-section observability (S9). ``tier`` records which generation tier
+    # produced this section; ``failure_reason`` is non-null only when the
+    # section fell back to ``static`` and explains why the LLM tiers failed.
+    # Both default so legacy persisted reports deserialize unchanged.
+    tier: SectionTier = "generation"
+    failure_reason: SectionFailureReason | None = None
 
 
 class EvidenceRef(_StrictModel):

@@ -290,6 +290,46 @@ def _sweep_expired_inprocess_locks(now: float) -> None:
         _INPROCESS_LOCKS.pop(key, None)
 
 
+def reconcile_orphaned_report_locks() -> int:
+    """Clear expired report-generation locks left behind by a dead worker."""
+
+    db_path = _runtime_lock_db_path()
+    if db_path is None:
+        now = time.time()
+        with _INPROCESS_LOCKS_GUARD:
+            report_keys = [
+                key
+                for key, (_owner_id, expires_at) in _INPROCESS_LOCKS.items()
+                if key.startswith("result-report:") and expires_at <= now
+            ]
+            for key in report_keys:
+                _INPROCESS_LOCKS.pop(key, None)
+            return len(report_keys)
+
+    conn = _get_sqlite_connection(db_path)
+
+    def _delete_report_locks() -> int:
+        attempt_now = time.time()
+        conn.execute("BEGIN IMMEDIATE")
+        _ensure_runtime_lock_table(conn, db_path)
+        cursor = conn.execute(
+            f"""
+            DELETE FROM {_RUNTIME_LOCK_TABLE}
+            WHERE lock_key LIKE ? AND expires_at <= ?
+            """,
+            ("result-report:%", attempt_now),
+        )
+        conn.execute("COMMIT")
+        return cursor.rowcount or 0
+
+    return _execute_write_with_retry(
+        conn,
+        _delete_report_locks,
+        operation_name="reconcile_orphaned_report_locks",
+        db_path=db_path,
+    )
+
+
 def acquire_runtime_lock(lock_key: str, *, lease_seconds: float) -> RuntimeLockLease | None:
     """Acquire a crash-safe runtime lock lease backed by SQLite when available."""
     now = time.time()

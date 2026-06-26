@@ -67,8 +67,17 @@ def reduce(
     scenario_id: str,
     *,
     max_evidence: int | None = None,
+    dominant_branch_id: str | None = None,
 ) -> ReducerResult:
-    """Reduce one scenario into deterministic structured report fields."""
+    """Reduce one scenario into deterministic structured report fields.
+
+    ``dominant_branch_id`` is the answer-leaf the calling endpoint already
+    selected (``scenarios.py`` ``_terminal_completed_branches``). When provided
+    and viable, every anchored field (likelihood/confidence/evidence/dissenting/
+    key_participants) is derived from it instead of the bare highest-probability
+    branch, which is typically the prologue root (``fork_round=0``, ``p=1.0``)
+    with empty story/insight. ``branch_distribution`` always stays full-sorted.
+    """
 
     evidence_limit = (
         settings.REPORT_MAX_EVIDENCE_PER_SECTION
@@ -80,13 +89,18 @@ def reduce(
         completed_branches = _sort_branches_for_report(
             _load_branches(session, scenario_id, completed_only=True)
         )
+        all_branches = _load_branches(session, scenario_id, completed_only=False)
+        parent_branch_ids = {
+            branch.parent_branch_id
+            for branch in all_branches
+            if branch.parent_branch_id
+        }
         fallback_branches = (
             completed_branches
             if completed_branches
-            else _sort_branches_for_report(
-                _load_branches(session, scenario_id, completed_only=False)
-            )
+            else _sort_branches_for_report(all_branches)
         )
+        result_quality_confidence = _scenario_result_quality_confidence(scenario)
 
     if scenario is None:
         return _missing_result("scenario_not_found")
@@ -95,9 +109,20 @@ def reduce(
 
     status: StatStatus = "available" if completed_branches else "partial"
     reason = None if completed_branches else "no_completed_branches"
-    target = fallback_branches[0]
+    target = _pick_target(
+        fallback_branches,
+        preferred_id=dominant_branch_id,
+        all_branches=all_branches,
+    )
     target_branch_id = target.id
-    branch_distribution = reduce_branch_distribution(fallback_branches)
+    # Full-sorted distribution stays anchored on the whole branch set (H-3):
+    # the "what almost won" / probability bar must show every route, only the
+    # verdict/evidence/confidence anchors move to the chosen answer leaf.
+    branch_distribution = reduce_branch_distribution(
+        fallback_branches,
+        target_branch_id=target_branch_id,
+        parent_branch_ids=parent_branch_ids,
+    )
     likelihood = _derive_likelihood(target.probability, len(fallback_branches))
     evidence = collect_evidence_pool(
         engine,
@@ -115,6 +140,7 @@ def reduce(
         branch_count=len(fallback_branches),
         agent_consensus_status=agent_consensus.status,
         agent_consensus=agent_consensus.value,
+        confidence_ceiling=result_quality_confidence,
     )
     charts = [
         Chart(kind="probability_bar", data=_probability_bar_data(branch_distribution)),
@@ -134,7 +160,11 @@ def reduce(
         analytic_confidence=analytic_confidence,
         evidence=evidence,
         key_participants=reduce_key_participants(engine, target),
-        dissenting=reduce_dissenting_view(fallback_branches),
+        dissenting=reduce_dissenting_view(
+            fallback_branches,
+            dominant=target,
+            parent_branch_ids=parent_branch_ids,
+        ),
         charts=charts,
         faction_consensus=faction_consensus,
         polarization=polarization,
@@ -143,26 +173,45 @@ def reduce(
     )
 
 
-def reduce_branch_distribution(branches: list[Branch]) -> list[dict[str, Any]]:
+def reduce_branch_distribution(
+    branches: list[Branch],
+    *,
+    target_branch_id: str | None = None,
+    parent_branch_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Return /story-equivalent branch ordering with a dominant marker."""
 
     ordered = sorted(
         branches,
         key=lambda item: (-_clamp_probability(item.probability), item.fork_round, item.id),
     )
-    return [
-        {
-            "branch_id": branch.id,
-            "label": branch.title.strip() or branch.id,
-            "probability": _clamp_probability(branch.probability),
-            "fork_round": branch.fork_round,
-            "dominant": index == 0,
-            "status": (
-                branch.status.value if hasattr(branch.status, "value") else str(branch.status)
-            ),
+    parent_ids = (
+        set(parent_branch_ids)
+        if parent_branch_ids is not None
+        else {
+            branch.parent_branch_id
+            for branch in branches
+            if branch.parent_branch_id
         }
-        for index, branch in enumerate(ordered)
-    ]
+    )
+    distribution: list[dict[str, Any]] = []
+    for index, branch in enumerate(ordered):
+        status = branch.status.value if hasattr(branch.status, "value") else str(branch.status)
+        distribution.append(
+            {
+                "branch_id": branch.id,
+                "label": branch.title.strip() or branch.id,
+                "probability": _clamp_probability(branch.probability),
+                "fork_round": branch.fork_round,
+                "dominant": branch.id == target_branch_id if target_branch_id else index == 0,
+                "status": status,
+                "is_terminal_leaf": (
+                    status == BranchStatus.COMPLETED.value
+                    and branch.id not in parent_ids
+                ),
+            }
+        )
+    return distribution
 
 
 def derive_likelihood_label(probability: float) -> str:
@@ -184,14 +233,35 @@ def derive_likelihood_label(probability: float) -> str:
     return "almost_certain"
 
 
+_CONFIDENCE_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def _clamp_confidence_level(level: str, ceiling: str | None) -> str:
+    """Cap a derived confidence level so it never exceeds the LLM self-rating."""
+
+    if ceiling not in _CONFIDENCE_ORDER:
+        return level
+    if _CONFIDENCE_ORDER.get(level, 0) <= _CONFIDENCE_ORDER[ceiling]:
+        return level
+    return ceiling
+
+
 def derive_confidence(
     *,
     evidence_count: int,
     branch_count: int,
     agent_consensus_status: StatStatus,
     agent_consensus: float | None,
+    confidence_ceiling: str | None = None,
 ) -> AnalyticConfidence:
-    """Derive analytic confidence from countable support signals only."""
+    """Derive analytic confidence from countable support signals only.
+
+    ``confidence_ceiling`` (S5) clamps the result so the countable analytic
+    confidence never claims more certainty than the LLM's own
+    ``result_quality.confidence`` self-rating. This kills the split-brain where
+    a prologue-root ``evidence_count>=3`` bump pushed the verdict to ``high``
+    while the model reported ``medium``.
+    """
 
     score = 0
     if branch_count >= 2:
@@ -210,6 +280,8 @@ def derive_confidence(
         level = "medium"
     else:
         level = "low"
+
+    level = _clamp_confidence_level(level, confidence_ceiling)
 
     if agent_consensus is None:
         consensus_part = agent_consensus_status
@@ -399,11 +471,40 @@ def reduce_key_participants(engine, branch: Branch) -> list[KeyParticipant]:
     )
 
 
-def reduce_dissenting_view(branches: list[Branch]) -> DissentingView | None:
+def reduce_dissenting_view(
+    branches: list[Branch],
+    *,
+    dominant: Branch | None = None,
+    parent_branch_ids: set[str] | None = None,
+) -> DissentingView | None:
     if len(branches) < 2:
         return None
-    dominant = branches[0]
-    runner_up = branches[1]
+    # H-3: the dominant anchor must follow the chosen answer leaf, not the bare
+    # ``branches[0]`` (prologue root). The runner-up is the strongest *other*
+    # route, so "what almost won" stays meaningful even when ``dominant`` is not
+    # the highest-probability branch in the full-sorted list.
+    if dominant is None:
+        dominant = branches[0]
+    parent_ids = (
+        set(parent_branch_ids)
+        if parent_branch_ids is not None
+        else {
+            branch.parent_branch_id
+            for branch in branches
+            if branch.parent_branch_id
+        }
+    )
+    runner_up = next(
+        (
+            branch
+            for branch in _sort_branches_for_report(branches)
+            if branch.id != dominant.id
+            and _is_completed_terminal_leaf(branch, parent_ids)
+        ),
+        None,
+    )
+    if runner_up is None:
+        return None
     return DissentingView(
         runner_up_branch_id=runner_up.id,
         why_verdict_could_be_wrong=(
@@ -415,6 +516,68 @@ def reduce_dissenting_view(branches: list[Branch]) -> DissentingView | None:
         or runner_up.fork_reason.strip()
         or runner_up.id,
     )
+
+
+def _branch_has_content(branch: Branch) -> bool:
+    return bool((branch.story or "").strip() or (branch.insight or "").strip())
+
+
+def _is_completed_terminal_leaf(branch: Branch, parent_branch_ids: set[str]) -> bool:
+    status = branch.status.value if hasattr(branch.status, "value") else str(branch.status)
+    return status == BranchStatus.COMPLETED.value and branch.id not in parent_branch_ids
+
+
+def _pick_target(
+    fallback_branches: list[Branch],
+    *,
+    preferred_id: str | None,
+    all_branches: list[Branch],
+) -> Branch:
+    """Choose the anchor branch for verdict/evidence/confidence (S1).
+
+    Priority:
+      1. the endpoint-provided ``preferred_id`` (answer leaf) when it exists and
+         has story/insight content;
+      2. the highest-probability *terminal leaf* (a COMPLETED branch that is not
+         any other branch's parent and not a ``fork_round==0`` root) that has
+         content — mirrors ``scenarios._terminal_completed_branches``;
+      3. ``fallback_branches[0]`` (legacy behaviour) when nothing else qualifies.
+    """
+
+    by_id = {branch.id: branch for branch in fallback_branches}
+    if preferred_id and preferred_id in by_id:
+        candidate = by_id[preferred_id]
+        if _branch_has_content(candidate):
+            return candidate
+
+    parent_ids = {
+        branch.parent_branch_id for branch in all_branches if branch.parent_branch_id
+    }
+    # fallback_branches is already probability-desc sorted.
+    for candidate in fallback_branches:
+        if candidate.fork_round == 0:
+            continue
+        if candidate.id in parent_ids:
+            continue
+        if _branch_has_content(candidate):
+            return candidate
+
+    return fallback_branches[0]
+
+
+def _scenario_result_quality_confidence(scenario: Scenario | None) -> str | None:
+    """Extract ``parsed_context.result_quality.confidence`` if present (S5)."""
+
+    if scenario is None:
+        return None
+    parsed_context = scenario.parsed_context
+    if not isinstance(parsed_context, dict):
+        return None
+    result_quality = parsed_context.get("result_quality")
+    if not isinstance(result_quality, dict):
+        return None
+    confidence = result_quality.get("confidence")
+    return confidence if isinstance(confidence, str) else None
 
 
 def _sort_branches_for_report(branches: list[Branch]) -> list[Branch]:

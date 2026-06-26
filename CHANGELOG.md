@@ -37,6 +37,11 @@ file; use `Unreleased` until maintainers cut a release tag.
   page.
 - Documented terminal failed-run recovery so unfinished branches are described
   as interrupted instead of still simulating or low-probability pruned.
+- Refined result reports so verdicts, evidence, dissent, charts, and indicators
+  are documented as anchored to the terminal answer leaf, with LLM-generated
+  follow-up indicators and in-place retry refreshes.
+- Documented the shorter report ReACT ceiling, longer per-step report timeout,
+  and result-report runtime-lock lease in the public configuration surface.
 
 ### Fixed
 
@@ -54,3 +59,8 @@ file; use `Unreleased` until maintainers cut a release tag.
 - Fixed terminal `error` / `cancelled` scenarios so unfinished branches are
   reconciled before clients render them, avoiding the mixed interrupted,
   100%, in-progress, and error state on `/sim/:id`.
+- Hardened result-report generation so lost report leases or SSE timeouts do
+  not let one worker overwrite another worker's live report generation.
+- Hardened Agent speech prompts to keep persona, prior-round references, and
+  the original question anchored while filtering empty filler without banning
+  concrete casual speech.

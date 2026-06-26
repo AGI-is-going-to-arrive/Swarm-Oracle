@@ -34,6 +34,8 @@ from app.services.result_report.reducer import (
     derive_confidence,
     derive_likelihood_label,
     reduce,
+    reduce_branch_distribution,
+    reduce_dissenting_view,
 )
 
 
@@ -310,6 +312,89 @@ def test_reduce_selects_target_after_probability_clamp():
         "branch-raw-over-one",
     ]
     assert result.branch_distribution[0]["dominant"] is True
+
+
+def test_branch_distribution_dominant_can_follow_target_branch_id():
+    branches = [
+        Branch(
+            id="branch-root",
+            scenario_id="scenario-direct-distribution",
+            title="Prologue",
+            probability=1.0,
+            fork_round=0,
+            status=BranchStatus.COMPLETED,
+        ),
+        Branch(
+            id="branch-answer-leaf",
+            scenario_id="scenario-direct-distribution",
+            title="Answer leaf",
+            probability=0.3841,
+            fork_round=4,
+            status=BranchStatus.COMPLETED,
+        ),
+    ]
+
+    targeted = reduce_branch_distribution(branches, target_branch_id="branch-answer-leaf")
+    legacy = reduce_branch_distribution(branches)
+
+    assert [item["branch_id"] for item in targeted] == [
+        "branch-root",
+        "branch-answer-leaf",
+    ]
+    assert targeted[0]["dominant"] is False
+    assert targeted[1]["dominant"] is True
+    assert legacy[0]["branch_id"] == "branch-root"
+    assert legacy[0]["dominant"] is True
+    assert legacy[1]["dominant"] is False
+
+
+def test_dissenting_runner_up_uses_strongest_other_terminal_leaf():
+    root = Branch(
+        id="branch-root",
+        scenario_id="scenario-dissenting-terminal-leaf",
+        title="Prologue root",
+        probability=1.0,
+        fork_round=0,
+        status=BranchStatus.COMPLETED,
+    )
+    mid = Branch(
+        id="branch-mid",
+        scenario_id="scenario-dissenting-terminal-leaf",
+        parent_branch_id=root.id,
+        title="Mid-tree leak",
+        probability=0.44,
+        fork_round=2,
+        status=BranchStatus.COMPLETED,
+    )
+    answer_leaf = Branch(
+        id="branch-answer-leaf",
+        scenario_id="scenario-dissenting-terminal-leaf",
+        parent_branch_id=mid.id,
+        title="深夜泄露",
+        probability=0.3841,
+        fork_round=4,
+        status=BranchStatus.COMPLETED,
+    )
+    runner_up_leaf = Branch(
+        id="branch-runner-up-leaf",
+        scenario_id="scenario-dissenting-terminal-leaf",
+        parent_branch_id=root.id,
+        title="Staged morning release",
+        probability=0.21,
+        fork_round=4,
+        status=BranchStatus.COMPLETED,
+    )
+
+    dissenting = reduce_dissenting_view(
+        [root, mid, answer_leaf, runner_up_leaf],
+        dominant=answer_leaf,
+        parent_branch_ids={root.id, mid.id},
+    )
+
+    assert dissenting is not None
+    assert dissenting.runner_up_branch_id == runner_up_leaf.id
+    assert dissenting.runner_up_branch_id != root.id
+    assert dissenting.runner_up_branch_id != mid.id
 
 
 def test_reduce_computes_consensus_polarization_charts_and_participants():
@@ -669,3 +754,152 @@ def test_reduce_path_makes_zero_llm_calls(monkeypatch):
     result = reduce(get_engine(), scenario_id)
 
     assert result.target_branch_id == "branch-a"
+
+
+def _seed_split_brain_scenario(
+    *,
+    result_quality_confidence: str | None = "medium",
+) -> str:
+    """Seed a scenario reproducing the split-brain layout (S1/S5 regression).
+
+    A ``fork_round=0`` prologue root (``p=1.0``, empty story/insight, parent of
+    everything) plus a real answer leaf (``fork_round=4``, lower probability,
+    populated story/insight, not a parent).
+    """
+
+    engine = get_engine()
+    parsed_context: dict[str, Any] = {}
+    if result_quality_confidence is not None:
+        parsed_context["result_quality"] = {"confidence": result_quality_confidence}
+    with Session(engine) as session:
+        scenario = Scenario(
+            id="scenario-split-brain",
+            question="When will GPT-5.6 ship?",
+            status=ScenarioStatus.DONE,
+            parsed_context=parsed_context,
+        )
+        session.add(scenario)
+        session.add(
+            Agent(
+                id="agent-analyst",
+                scenario_id=scenario.id,
+                name="Release Analyst",
+                role="Analyst",
+            ),
+        )
+        session.add_all(
+            [
+                Branch(
+                    id="branch-root",
+                    scenario_id=scenario.id,
+                    title="Prologue",
+                    story="",
+                    insight="",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-leaf",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-root",
+                    title="June morning release",
+                    story="The council debated the exact release window for days.",
+                    insight="A June morning launch is the most defensible read.",
+                    probability=0.3841,
+                    fork_round=4,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-leaf-2",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-root",
+                    title="Autumn slip",
+                    story="A later autumn slip stays plausible if testing drags.",
+                    insight="Autumn slip remains the runner-up route.",
+                    probability=0.2069,
+                    fork_round=4,
+                    status=BranchStatus.COMPLETED,
+                ),
+            ],
+        )
+        session.commit()
+    return "scenario-split-brain"
+
+
+def test_reduce_honors_dominant_branch_id_over_prologue_root():
+    """S1/AC-1: passing the answer leaf anchors every field away from the root."""
+
+    scenario_id = _seed_split_brain_scenario()
+
+    result = reduce(get_engine(), scenario_id, dominant_branch_id="branch-leaf")
+
+    assert result.target_branch_id == "branch-leaf"
+    assert result.likelihood.probability == pytest.approx(0.3841)
+    assert result.likelihood.wep != "almost_certain"
+    # dissenting dominant follows the answer leaf, runner-up is the other leaf.
+    assert result.dissenting is not None
+    assert result.dissenting.runner_up_branch_id == "branch-leaf-2"
+    assert "dominant_probability=0.3841" in result.dissenting.why_verdict_could_be_wrong
+    # branch_distribution stays full-sorted with the highest-probability root first.
+    assert result.branch_distribution[0]["branch_id"] == "branch-root"
+    assert result.branch_distribution[0]["dominant"] is False
+    assert result.branch_distribution[1]["branch_id"] == "branch-leaf"
+    assert result.branch_distribution[1]["dominant"] is True
+
+
+def test_reduce_falls_back_to_terminal_leaf_without_dominant():
+    """S1: even without a dominant id, the bare prologue root is skipped."""
+
+    scenario_id = _seed_split_brain_scenario()
+
+    result = reduce(get_engine(), scenario_id)
+
+    # branch-root (fork_round=0, parent, empty) must NOT be the anchor.
+    assert result.target_branch_id == "branch-leaf"
+    assert result.likelihood.wep != "almost_certain"
+
+
+def test_reduce_clamps_confidence_to_result_quality_ceiling():
+    """S5/AC-2: analytic confidence never exceeds the LLM self-rating."""
+
+    scenario_id = _seed_split_brain_scenario(result_quality_confidence="medium")
+
+    result = reduce(get_engine(), scenario_id, dominant_branch_id="branch-leaf")
+
+    assert result.analytic_confidence.level in {"low", "medium"}
+    # Without the ceiling the same countable signals (>=2 branches, >=3 evidence
+    # would have pushed high); the ceiling caps it at the model's medium.
+
+
+def test_derive_confidence_ceiling_caps_high_to_medium():
+    """S5 unit: a high countable score is clamped down to the medium ceiling."""
+
+    capped = derive_confidence(
+        evidence_count=4,
+        branch_count=3,
+        agent_consensus_status="available",
+        agent_consensus=0.75,
+        confidence_ceiling="medium",
+    )
+    assert capped.level == "medium"
+
+    # A None/invalid ceiling leaves the derived level untouched.
+    uncapped = derive_confidence(
+        evidence_count=4,
+        branch_count=3,
+        agent_consensus_status="available",
+        agent_consensus=0.75,
+        confidence_ceiling=None,
+    )
+    assert uncapped.level == "high"
+
+    # A ceiling at/above the derived level does not raise it.
+    not_raised = derive_confidence(
+        evidence_count=0,
+        branch_count=1,
+        agent_consensus_status="missing",
+        agent_consensus=None,
+        confidence_ceiling="high",
+    )
+    assert not_raised.level == "low"

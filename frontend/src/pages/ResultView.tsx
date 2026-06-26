@@ -246,6 +246,31 @@ export default function ResultView() {
     refreshTriggeredRef.current = true;
     setRefreshTrigger((prev) => prev + 1);
   }, []);
+  const reportRefreshSeqRef = useRef(0);
+  useEffect(() => {
+    reportRefreshSeqRef.current += 1;
+  }, [id]);
+  // 内联报告页「重新生成报告」完成后局部重拉 story 同步最新 full_report，避免
+  // ResultReportPanel 无 onRefresh 时走 window.location.reload 硬刷整页（丢失本页其它
+  // 状态）。不复用上面一次性的 refresh：那是 multi-run 完成专用（once-guard + 经
+  // refreshTrigger 触发会清空 storyData 的 load effect、会重挂面板）；报告可多次重
+  // 生成，故独立局部刷新，不清状态、不重挂、稳定引用避免 panel onRefresh effect 抖动。
+  const refreshReportData = useCallback(() => {
+    if (!id) return;
+    const requestSeq = reportRefreshSeqRef.current + 1;
+    reportRefreshSeqRef.current = requestSeq;
+    void getStory(id)
+      .then((story) => {
+        if (reportRefreshSeqRef.current !== requestSeq) return;
+        setStoryData((prev) =>
+          prev ? { ...story, question: story.question || prev.question } : story,
+        );
+      })
+      .catch((err: unknown) => {
+        if (reportRefreshSeqRef.current !== requestSeq) return;
+        console.error('Failed to refresh result report data:', err);
+      });
+  }, [id]);
   const endingRoomLiveSnapshot = useEndingRoomStore((state) => state.snapshot);
   const endingRoomLiveResult = useEndingRoomStore((state) => state.result);
   const endingRoomLiveActiveThreadId = useEndingRoomStore((state) => state.activeThreadId);
@@ -1982,7 +2007,7 @@ export default function ResultView() {
         <SocialFeedPanel scenarioId={scenario.id} />
       )}
 
-      <ResultReportPanel />
+      <ResultReportPanel onRefresh={refreshReportData} />
 
       {/* HOPs probability sampling animation */}
       {branches.length >= 2 && (

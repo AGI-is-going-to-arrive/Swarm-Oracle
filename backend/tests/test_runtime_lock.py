@@ -24,6 +24,7 @@ from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
     ending_room_lock_key,
+    reconcile_orphaned_report_locks,
     refresh_runtime_lock,
     release_runtime_lock,
     runtime_lock_is_active,
@@ -322,6 +323,30 @@ def test_runtime_lock_reclaims_expired_leases(monkeypatch, tmp_path):
 
     reclaimed = acquire_runtime_lock(debate_lock_key("debate-1"), lease_seconds=30)
     assert reclaimed is not None
+
+
+def test_reconcile_orphaned_report_locks_clears_only_report_locks(monkeypatch, tmp_path):
+    db_path = tmp_path / "runtime-lock-report-sweep.db"
+    monkeypatch.setattr(
+        "app.services.runtime_lock.settings.DATABASE_URL",
+        f"sqlite:///{db_path}",
+    )
+
+    report_lease = acquire_runtime_lock("result-report:stale-report", lease_seconds=0.01)
+    simulation_lease = acquire_runtime_lock(
+        simulation_lock_key("still-running"),
+        lease_seconds=30,
+    )
+    assert report_lease is not None
+    assert simulation_lease is not None
+    time.sleep(0.03)
+
+    cleared = reconcile_orphaned_report_locks()
+
+    assert cleared == 1
+    assert runtime_lock_is_active("result-report:stale-report") is False
+    assert runtime_lock_is_active(simulation_lock_key("still-running")) is True
+    assert release_runtime_lock(simulation_lease) is True
 
 
 def test_runtime_lock_fallback_enforces_in_process_mutual_exclusion(monkeypatch):

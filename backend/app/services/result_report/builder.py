@@ -42,6 +42,8 @@ from app.services.result_report.schema import (
     ReportStatus,
     ReportTier,
     ResultReportSSEEvent,
+    SectionFailureReason,
+    SectionTier,
     ToolTraceSummary,
     Verdict,
     encode_sse_event,
@@ -49,7 +51,9 @@ from app.services.result_report.schema import (
     validate_full_report_payload,
 )
 from app.services.runtime_lock import (
+    RuntimeLockLease,
     acquire_runtime_lock,
+    refresh_runtime_lock,
     release_runtime_lock,
     runtime_lock_is_active,
 )
@@ -57,7 +61,8 @@ from app.services.web_context import _sanitize_url
 
 logger = logging.getLogger(__name__)
 
-SectionTier = Literal["generation", "rewrite", "static"]
+# ``SectionTier`` / ``SectionFailureReason`` are imported from schema so the
+# per-section observability contract (S9) stays single-sourced.
 ProgressCallback = Callable[[ResultReportSSEEvent], Awaitable[None] | None]
 
 _ALLOWED_SECTION_IDS = (
@@ -75,6 +80,8 @@ _CHART_SECTION_PREFERENCES: dict[str, tuple[str, ...]] = {
 _TIER_ORDER: dict[SectionTier, int] = {"generation": 0, "rewrite": 1, "static": 2}
 _REPORT_LOCKS: dict[str, asyncio.Lock] = {}
 _SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+_REPORT_RUNTIME_LOCK_REFRESH_FRACTION = 0.4
+_REPORT_RUNTIME_LOCK_MAX_REFRESH_INTERVAL_SECONDS = 15.0
 _INTERVIEW_AGENT_BUDGET = 3
 _INTERVIEW_CANDIDATE_LIMIT = 8
 _INTERVIEW_EVIDENCE_PER_AGENT_CAP = 5
@@ -142,9 +149,32 @@ class InterviewCandidate:
 class ResultReportBuilderError(RuntimeError):
     """Raised for build-time failures that should stay local to the report."""
 
+    def __init__(self, *args: object, reason: SectionFailureReason | None = None) -> None:
+        super().__init__(*args)
+        # Optional structured failure classification (S9) so the section
+        # fallback path can surface *why* it dropped to the static tier.
+        self.reason = reason
+
 
 class ResultReportAlreadyRunningError(ResultReportBuilderError):
     """Raised when another worker already owns the report generation lease."""
+
+
+class ResultReportRuntimeLockLostError(ResultReportBuilderError):
+    """Raised when report generation no longer owns its durable lease."""
+
+
+def _classify_section_failure(exc: BaseException | None) -> SectionFailureReason:
+    """Map a section-generation exception to a structured failure reason (S9)."""
+
+    if exc is None:
+        return "other"
+    if isinstance(exc, TimeoutError | asyncio.TimeoutError):
+        return "timeout"
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        return reason
+    return "other"
 
 
 def _report_runtime_lock_key(scenario_id: str) -> str:
@@ -168,19 +198,96 @@ def _drop_report_lock_if_idle(scenario_id: str, lock: asyncio.Lock) -> None:
 
 
 def _report_runtime_lock_lease_seconds() -> float:
-    section_budget = (
-        max(settings.REPORT_MAX_SECTIONS, settings.REPORT_MIN_SECTIONS)
-        * max(settings.REPORT_MAX_TOOL_CALLS_PER_SECTION, 1)
-        * max(settings.REPORT_SECTION_TIMEOUT_SECONDS, 0.01)
-        * 2
+    return max(0.01, float(settings.REPORT_RUNTIME_LOCK_LEASE_SECONDS))
+
+
+def _report_runtime_lock_refresh_interval(
+    lease: RuntimeLockLease | None,
+    *,
+    lease_seconds: float,
+) -> float:
+    remaining_seconds = max(0.01, float(lease_seconds))
+    if lease is not None:
+        remaining_seconds = max(0.01, lease.expires_at - time.time())
+    return max(
+        0.01,
+        min(
+            _REPORT_RUNTIME_LOCK_MAX_REFRESH_INTERVAL_SECONDS,
+            min(float(lease_seconds), remaining_seconds)
+            * _REPORT_RUNTIME_LOCK_REFRESH_FRACTION,
+        ),
     )
-    return max(60.0, settings.REPORT_PLAN_TIMEOUT_SECONDS + section_budget + 60.0)
+
+
+def _report_runtime_lock_is_alive(
+    lease_holder: list[RuntimeLockLease | None] | None,
+) -> bool:
+    if lease_holder is None:
+        return True
+    lease = lease_holder[0]
+    return lease is not None and lease.expires_at > time.time()
+
+
+def _ensure_report_runtime_lock_alive(
+    lease_holder: list[RuntimeLockLease | None] | None,
+) -> None:
+    if not _report_runtime_lock_is_alive(lease_holder):
+        raise ResultReportRuntimeLockLostError("Result report runtime lock was lost")
+
+
+async def _run_report_runtime_lock_heartbeat(
+    lease_holder: list[RuntimeLockLease | None],
+    *,
+    lease_seconds: float,
+) -> None:
+    while True:
+        current_lease = lease_holder[0]
+        if current_lease is None:
+            return
+        refresh_interval = _report_runtime_lock_refresh_interval(
+            current_lease,
+            lease_seconds=lease_seconds,
+        )
+        await asyncio.sleep(refresh_interval)
+        current_lease = lease_holder[0]
+        if current_lease is None:
+            return
+        if current_lease.expires_at <= time.time():
+            lease_holder[0] = None
+            logger.warning("Result report runtime lock lease expired before refresh")
+            return
+        try:
+            refreshed = await asyncio.to_thread(
+                refresh_runtime_lock,
+                current_lease,
+                lease_seconds=lease_seconds,
+            )
+        except Exception:  # noqa: BLE001 - lock loss must stop report writes
+            lease_holder[0] = None
+            logger.exception("Result report runtime lock lease refresh failed")
+            return
+        if refreshed is None:
+            lease_holder[0] = None
+            logger.warning("Result report runtime lock lease could not be refreshed")
+            return
+        lease_holder[0] = refreshed
 
 
 def _report_sse_stall_timeout_seconds() -> float:
     """Maximum visible silence before a manual SSE retry fails closed."""
 
-    return _report_runtime_lock_lease_seconds() + 5.0
+    timed_calls_per_tier = min(max(settings.REPORT_MAX_TOOL_CALLS_PER_SECTION, 1), 2)
+    section_silence_budget = (
+        timed_calls_per_tier
+        * max(settings.REPORT_SECTION_TIMEOUT_SECONDS, 0.01)
+        * 2
+    )
+    return max(
+        _report_runtime_lock_lease_seconds() + 5.0,
+        max(settings.REPORT_PLAN_TIMEOUT_SECONDS, 0.01)
+        + section_silence_budget
+        + 5.0,
+    )
 
 
 def _report_llm_scope_kwargs(
@@ -278,6 +385,14 @@ async def build_report(
                 raise ResultReportAlreadyRunningError(
                     "Result report generation is already in progress",
                 )
+            lease_holder: list[RuntimeLockLease | None] = [lease]
+            heartbeat_task = asyncio.create_task(
+                _run_report_runtime_lock_heartbeat(
+                    lease_holder,
+                    lease_seconds=lease_seconds,
+                ),
+                name=f"result-report-runtime-lock:{scenario_id}",
+            )
 
             try:
                 return await _build_report_unlocked(
@@ -285,20 +400,29 @@ async def build_report(
                     dominant_branch_id,
                     overrides=normalized_overrides,
                     progress=progress,
+                    report_lock_holder=lease_holder,
                 )
             except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
-                try:
-                    await asyncio.to_thread(
-                        _persist_failed_report_if_absent,
-                        scenario_id,
-                        dominant_branch_id,
+                if _report_runtime_lock_is_alive(lease_holder):
+                    try:
+                        await asyncio.to_thread(
+                            _persist_failed_report_if_absent,
+                            scenario_id,
+                            dominant_branch_id,
+                        )
+                    except Exception:  # noqa: BLE001 - preserve original builder error
+                        logger.warning("Failed to persist result report failure marker")
+                else:
+                    logger.warning(
+                        "Skipping result report failure marker after runtime lock loss"
                     )
-                except Exception:  # noqa: BLE001 - preserve original builder error
-                    logger.warning("Failed to persist result report failure marker")
                 raise
             finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
                 try:
-                    await asyncio.to_thread(release_runtime_lock, lease)
+                    await asyncio.to_thread(release_runtime_lock, lease_holder[0])
                 except Exception:  # noqa: BLE001 - do not mask the report outcome
                     logger.warning("Failed to release result report runtime lock")
     finally:
@@ -311,6 +435,7 @@ async def _build_report_unlocked(
     *,
     overrides: ReportGenerationOverrides | None,
     progress: ProgressCallback | None,
+    report_lock_holder: list[RuntimeLockLease | None] | None = None,
 ) -> FullReport:
     engine = get_engine()
     reducer_result = await asyncio.to_thread(
@@ -318,8 +443,15 @@ async def _build_report_unlocked(
         engine,
         scenario_id,
         max_evidence=settings.REPORT_MAX_EVIDENCE_PER_SECTION,
+        dominant_branch_id=dominant_branch_id,
     )
-    target_branch_id = dominant_branch_id or reducer_result.target_branch_id
+    # M-1 (W1-1 follow-up): defer to the reducer's resolved anchor. ``_pick_target``
+    # already rejected a content-less dominant leaf and chose a viable
+    # content-bearing leaf; honoring it here keeps the header / builder context /
+    # evidence-reuse key all on the same branch the reducer anchored evidence,
+    # confidence, and dissent on. Only fall back to the raw endpoint dominant id
+    # when the reducer produced none (degenerate single/empty-branch shapes).
+    target_branch_id = reducer_result.target_branch_id or dominant_branch_id
     if not target_branch_id:
         raise ResultReportBuilderError("No dominant branch is available")
 
@@ -346,11 +478,13 @@ async def _build_report_unlocked(
         tier=_worst_tier(section_tiers) if completed_sections else "generation",
     )
     report = _fit_report_to_byte_cap(report)
+    _ensure_report_runtime_lock_alive(report_lock_holder)
     _persist_report_payload(scenario_id, report.model_dump(mode="json"))
 
     reused_section_ids = {section.id for section in reusable_sections}
 
     for section_plan in outline.sections:
+        _ensure_report_runtime_lock_alive(report_lock_holder)
         if section_plan.section_id in reused_section_ids:
             continue
         await _emit_progress(
@@ -408,6 +542,7 @@ async def _build_report_unlocked(
                 tier=_worst_tier(section_tiers),
             )
             report = _fit_report_to_byte_cap(report)
+            _ensure_report_runtime_lock_alive(report_lock_holder)
             _persist_report_payload(scenario_id, report.model_dump(mode="json"))
             continue
 
@@ -426,6 +561,7 @@ async def _build_report_unlocked(
             tier=_worst_tier(section_tiers),
         )
         report = _fit_report_to_byte_cap(report)
+        _ensure_report_runtime_lock_alive(report_lock_holder)
         _persist_report_payload(scenario_id, report.model_dump(mode="json"))
         await _emit_progress(
             progress,
@@ -449,6 +585,7 @@ async def _build_report_unlocked(
     final_sections = completed_sections
     if final_status == "failed" and not completed_sections and outline.sections:
         final_sections = _outline_failure_placeholder_sections(outline)
+    llm_indicators: list[IndicatorToWatch] | None = None
     if final_status == "failed":
         interview_evidence: list[dict[str, Any]] = []
         interview_status = InterviewStatus(
@@ -459,11 +596,52 @@ async def _build_report_unlocked(
             message="Report sections failed before interviews could run.",
         )
     else:
-        interview_evidence, interview_status = await _build_interview_evidence(
-            context,
-            reducer_result,
-            overrides=overrides,
+        # M-2: the interview-evidence and indicators-to-watch LLM calls share no
+        # state (indicators does not consume interview_evidence; both take the same
+        # inputs) and both are independently fail-soft, so run them concurrently to
+        # reclaim one serial LLM round-trip on the success path. Concurrency is safe
+        # because the LLM scope and native-citation state are ContextVars
+        # (llm_client._REQUEST_CONTEXT / _last_native_citations); asyncio copies the
+        # context per Task, so each gathered coroutine gets an isolated copy with no
+        # cross-contamination. return_exceptions keeps one failure from aborting the
+        # whole report — a raised error degrades to the same skipped/None tiers the
+        # failed path uses.
+        interview_result, indicators_result = await asyncio.gather(
+            _build_interview_evidence(context, reducer_result, overrides=overrides),
+            _build_indicators_llm(context, reducer_result, overrides=overrides),
+            return_exceptions=True,
         )
+        if isinstance(interview_result, BaseException):
+            logger.warning(
+                "Result report interview evidence failed concurrently: %s",
+                _safe_error_message(
+                    interview_result
+                    if isinstance(interview_result, Exception)
+                    else None
+                ),
+            )
+            interview_evidence = []
+            interview_status = InterviewStatus(
+                status="skipped",
+                requested_agents=0,
+                completed_agents=0,
+                truncated_agents=0,
+                message="Interview evidence generation failed.",
+            )
+        else:
+            interview_evidence, interview_status = interview_result
+        if isinstance(indicators_result, BaseException):
+            logger.warning(
+                "Result report indicators generation failed concurrently: %s",
+                _safe_error_message(
+                    indicators_result
+                    if isinstance(indicators_result, Exception)
+                    else None
+                ),
+            )
+            llm_indicators = None
+        else:
+            llm_indicators = indicators_result
     report = _assemble_report(
         context,
         reducer_result,
@@ -473,8 +651,10 @@ async def _build_report_unlocked(
         tier=final_tier,
         interview_evidence=interview_evidence,
         interview_status=interview_status,
+        indicators_to_watch=llm_indicators,
     )
     report = _fit_report_to_byte_cap(report)
+    _ensure_report_runtime_lock_alive(report_lock_holder)
     _persist_report_payload(scenario_id, report.model_dump(mode="json"))
     return report
 
@@ -498,6 +678,9 @@ async def build_report_safe(
     except ResultReportAlreadyRunningError:
         logger.info("Result report generation skipped because another worker owns the lease")
         return await asyncio.to_thread(_load_existing_full_report, scenario_id)
+    except ResultReportRuntimeLockLostError:
+        logger.info("Result report generation stopped after losing the runtime lock")
+        return await asyncio.to_thread(_load_existing_full_report, scenario_id)
     except Exception as exc:  # noqa: BLE001 - auto report generation is best-effort
         logger.info(
             "Result report generation failed; ensuring failed marker: %s",
@@ -505,7 +688,7 @@ async def build_report_safe(
         )
         try:
             return await asyncio.to_thread(
-                _persist_failed_report_if_absent,
+                _persist_failed_report_if_lock_available,
                 scenario_id,
                 dominant_branch_id,
             )
@@ -557,7 +740,7 @@ async def build_report_sse_stream(
                         await task
                     with contextlib.suppress(Exception):
                         await asyncio.to_thread(
-                            _persist_failed_report_if_absent,
+                            _persist_failed_report_if_lock_available,
                             scenario_id,
                             dominant_branch_id,
                         )
@@ -677,7 +860,14 @@ async def plan_outline(
                 timeout=settings.REPORT_PLAN_TIMEOUT_SECONDS,
             )
         return _normalize_outline_payload(payload, context)
-    except Exception:  # noqa: BLE001 - plan fallback must not abort
+    except Exception as exc:  # noqa: BLE001 - plan fallback must not abort
+        outline_reason: SectionFailureReason = _classify_section_failure(exc)
+        if outline_reason == "timeout":
+            outline_reason = "plan_outline_timeout"
+        logger.warning(
+            "Result report outline planning failed; using fallback outline (reason=%s)",
+            outline_reason,
+        )
         return _fallback_outline(context, reducer_result)
 
 
@@ -690,6 +880,9 @@ async def generate_section_react(
 ) -> SectionBuildResult:
     """Generate one section using a bounded ReACT-style tool loop."""
 
+    # Track the most recent LLM-tier failure so the static fallback can report
+    # *why* it had to drop offline (S9 observability).
+    failure_reason: SectionFailureReason = "other"
     try:
         return await _generate_section_tier(
             context,
@@ -698,8 +891,13 @@ async def generate_section_react(
             overrides=overrides,
             tier="generation",
         )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - classify then fall through to rewrite
+        failure_reason = _classify_section_failure(exc)
+        logger.info(
+            "Result report section '%s' generation tier failed (reason=%s)",
+            section.section_id,
+            failure_reason,
+        )
     try:
         return await _generate_section_tier(
             context,
@@ -708,9 +906,24 @@ async def generate_section_react(
             overrides=overrides,
             tier="rewrite",
         )
-    except Exception:
-        pass
-    return _static_section_from_context(context, section, reducer_result)
+    except Exception as exc:  # noqa: BLE001 - classify then fall through to static
+        failure_reason = _classify_section_failure(exc)
+        logger.info(
+            "Result report section '%s' rewrite tier failed (reason=%s)",
+            section.section_id,
+            failure_reason,
+        )
+    logger.warning(
+        "Result report section '%s' fell back to static tier (reason=%s)",
+        section.section_id,
+        failure_reason,
+    )
+    return _static_section_from_context(
+        context,
+        section,
+        reducer_result,
+        failure_reason=failure_reason,
+    )
 
 
 async def _generate_section_tier(
@@ -723,6 +936,13 @@ async def _generate_section_tier(
 ) -> SectionBuildResult:
     history: list[str] = []
     trace: list[ToolTraceSummary] = []
+    # The section tool re-serves the same reducer evidence on every call, so we
+    # track which evidence ids have already been surfaced. The first tool call
+    # adds them all (progress); any later call adds nothing (no progress) and the
+    # loop pivots to a forced final answer instead of spending another timed
+    # iteration on an empty spin that would otherwise time out into a static tier.
+    served_evidence_ids: set[str] = set()
+    force_final = False
     max_steps = max(1, settings.REPORT_MAX_TOOL_CALLS_PER_SECTION)
     for iteration in range(1, max_steps + 1):
         prompt = _build_section_prompt(
@@ -731,6 +951,7 @@ async def _generate_section_tier(
             reducer_result,
             tier=tier,
             history=history,
+            force_final=force_final,
         )
         with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
             payload = await asyncio.wait_for(
@@ -749,7 +970,10 @@ async def _generate_section_tier(
                 timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
             )
         if not isinstance(payload, dict):
-            raise ResultReportBuilderError("Section payload must be an object")
+            raise ResultReportBuilderError(
+                "Section payload must be an object",
+                reason="json_parse_error",
+            )
 
         if _looks_like_final_section(payload):
             return _section_result_from_payload(
@@ -765,6 +989,15 @@ async def _generate_section_tier(
         if not isinstance(params, dict):
             params = {}
         if action == "query_branch_messages":
+            if force_final:
+                # The model already received an explicit final-only directive but
+                # called the tool again. There is no new evidence to gain, so stop
+                # here rather than spend more timed iterations; the rewrite/static
+                # tiers below still cover this section.
+                raise ResultReportBuilderError(
+                    "Section ignored final-only directive after no-progress tool call",
+                    reason="tool_budget_exhausted",
+                )
             started = time.monotonic()
             tool_result, item_count = _tool_query_branch_messages(
                 context,
@@ -780,6 +1013,23 @@ async def _generate_section_tier(
                     elapsed_ms=elapsed_ms,
                 )
             )
+            served_ids = {
+                evidence.id
+                for evidence in reducer_result.evidence[
+                    : settings.REPORT_MAX_EVIDENCE_PER_SECTION
+                ]
+            }
+            served_evidence_ids |= served_ids
+            # _tool_query_branch_messages is a deterministic re-serve of the same
+            # reducer evidence, so the first call already surfaces everything there
+            # is to gain. Any subsequent call would add nothing new — demand a final
+            # answer on the very next pass rather than funding another timed empty
+            # spin that risks a timeout into the static tier. (The subset guard is a
+            # defensive double-check in case the tool ever returns a narrower set.)
+            if served_evidence_ids and (
+                not served_ids or served_ids <= served_evidence_ids
+            ):
+                force_final = True
             history.append(
                 "\n\n".join(
                     [
@@ -797,9 +1047,15 @@ async def _generate_section_tier(
             )
             continue
 
-        raise ResultReportBuilderError(f"Unsupported section action: {action or '<empty>'}")
+        raise ResultReportBuilderError(
+            f"Unsupported section action: {action or '<empty>'}",
+            reason="unsupported_action",
+        )
 
-    raise ResultReportBuilderError("Section generation exceeded tool budget")
+    raise ResultReportBuilderError(
+        "Section generation exceeded tool budget",
+        reason="tool_budget_exhausted",
+    )
 
 
 def _load_builder_context(scenario_id: str, branch_id: str) -> BuilderContext:
@@ -877,15 +1133,29 @@ def _build_section_prompt(
     *,
     tier: SectionTier,
     history: list[str],
+    force_final: bool = False,
 ) -> str:
     evidence_digest = _evidence_digest(reducer_result, max_items=6)
     history_block = "\n\n".join(history[-settings.REPORT_MAX_TOOL_CALLS_PER_SECTION:])
     web_block = "\n\n".join(context.web_context_blocks[:3])
+    # No-progress escape hatch: the section tool only re-serves the same reducer
+    # evidence batch, so once it has run there is nothing new to fetch. Rather than
+    # spend another timed iteration on an empty spin (and risk timing out into a
+    # static fallback), the loop sets force_final to demand the answer be written
+    # from the material already gathered.
+    force_final_directive = (
+        "You already have all available evidence and the query tool cannot return "
+        "anything new. Write the final_section now from the evidence and tool "
+        "history below; do NOT call any tool."
+        if force_final
+        else ""
+    )
     return "\n\n".join(
         item
         for item in [
             "REPORT_SECTION_REACT",
             f"tier={tier}",
+            force_final_directive,
             "Use tools only by returning "
             '{"action":"query_branch_messages","params":{"query":"..."}}. '
             "Finish by returning "
@@ -1044,6 +1314,8 @@ def _section_result_from_payload(
         body_md_i18n=I18nText.model_validate(body_i18n),
         evidence_refs=evidence_refs[: settings.REPORT_MAX_EVIDENCE_PER_SECTION],
         charts=[],
+        tier=tier,
+        failure_reason=None,
     )
     return SectionBuildResult(section=report_section, tier=tier, tool_trace=trace)
 
@@ -1052,9 +1324,18 @@ def _static_section_from_context(
     context: BuilderContext,
     section: SectionPlan,
     reducer_result: ReducerResult,
+    *,
+    failure_reason: SectionFailureReason = "other",
 ) -> SectionBuildResult:
     probability = reducer_result.likelihood.probability
     evidence_refs = [item.id for item in reducer_result.evidence[:2]]
+    has_source_body = bool(context.branch_insight or context.branch_story)
+    # When neither insight nor story exists, the static body is just the
+    # boilerplate fallback line — record that as ``empty_body`` so diagnostics
+    # can tell "LLM failed but we had content" from "LLM failed AND no content".
+    resolved_reason: SectionFailureReason = (
+        failure_reason if has_source_body else "empty_body"
+    )
     fallback_body = (
         context.branch_insight
         or context.branch_story
@@ -1084,6 +1365,8 @@ def _static_section_from_context(
         body_md_i18n=I18nText(zh=zh, en=en),
         evidence_refs=evidence_refs,
         charts=[],
+        tier="static",
+        failure_reason=resolved_reason,
     )
     return SectionBuildResult(section=report_section, tier="static", tool_trace=[])
 
@@ -1101,6 +1384,8 @@ def _outline_failure_placeholder_sections(outline: ReportOutline) -> list[Report
             ),
             evidence_refs=[],
             charts=[],
+            tier="static",
+            failure_reason="empty_outline",
         )
         for section in outline.sections
     ]
@@ -1116,6 +1401,7 @@ def _assemble_report(
     tier: ReportTier,
     interview_evidence: list[dict[str, Any]] | None = None,
     interview_status: InterviewStatus | None = None,
+    indicators_to_watch: list[IndicatorToWatch] | None = None,
 ) -> FullReport:
     result_quality = (
         context.parsed_context.get("result_quality")
@@ -1153,7 +1439,11 @@ def _assemble_report(
         ),
         sections=sections_with_charts,
         evidence=_safe_evidence_refs(reducer_result),
-        indicators_to_watch=_safe_indicators_to_watch(context, reducer_result),
+        indicators_to_watch=_safe_indicators_to_watch(
+            context,
+            reducer_result,
+            llm_indicators=indicators_to_watch,
+        ),
         dissenting=reducer_result.dissenting,
         key_participants=reducer_result.key_participants,
         follow_ups=_follow_ups(context),
@@ -1446,10 +1736,58 @@ def _assign_chart_sections(
     return assignments
 
 
+# S3 anti-slop blacklist (AC-4): generic, says-nothing indicator phrasing that the
+# proposal explicitly flagged. If the LLM tier produces any of these, we reject its
+# output and fall back to the evidence-inlined template tier rather than ship slop.
+_INDICATOR_SLOP_BLACKLIST: tuple[str, ...] = (
+    "如果这个信号持续出现",
+    "它会强化主导路线",
+    "同一议题被另一位参与者",
+    "下一次后续更新周期",
+    "持续关注",
+    "挑战与机遇并存",
+    "综上所述",
+    "值得注意的是",
+    "if this signal persists",
+    "reinforces the dominant branch",
+    "the same issue is repeated by another participant",
+    "next follow-up cycle",
+    "continue to monitor",
+    "challenges and opportunities",
+    "it is worth noting",
+)
+
+
+def _indicator_text_is_slop(value: str) -> bool:
+    lowered = str(value or "").lower()
+    return any(token.lower() in lowered for token in _INDICATOR_SLOP_BLACKLIST)
+
+
+def _indicator_question_focus(question: str, language: str) -> str:
+    """Short, sanitized anchor of the original what-if question for tripwire copy."""
+
+    cleaned = _scrub_sensitive_text(str(question or "").strip())
+    if not cleaned:
+        return "这个推演问题" if language == "zh" else "this what-if question"
+    limit = 36 if language == "zh" else 80
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rstrip() + ("…" if language == "zh" else "...")
+
+
 def _safe_indicators_to_watch(
     context: BuilderContext,
     reducer_result: ReducerResult,
+    *,
+    llm_indicators: list[IndicatorToWatch] | None = None,
 ) -> list[IndicatorToWatch]:
+    # S3 three-tier fail-soft:
+    #   tier 1 — ``llm_indicators`` (pre-computed by the async LLM tier in
+    #            ``_build_report_unlocked``) when the model produced viable rows;
+    #   tier 2 — evidence-inlined template (``_build_indicators_to_watch``);
+    #   tier 3 — empty list, only when even the template raises.
+    if llm_indicators:
+        return llm_indicators
     try:
         return _build_indicators_to_watch(context, reducer_result)
     except Exception:  # noqa: BLE001 - S4 indicators must not fail the report
@@ -1457,40 +1795,265 @@ def _safe_indicators_to_watch(
         return []
 
 
+async def _build_indicators_llm(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+    *,
+    overrides: ReportGenerationOverrides | None,
+) -> list[IndicatorToWatch] | None:
+    """S3 tier 1: generate indicators-to-watch with the LLM (fail-soft → None).
+
+    Each indicator is grounded on real reducer evidence coordinates + real reducer
+    probability/consensus stats and tied back to the original what-if question, with
+    a concrete flip/reinforce tripwire. Untrusted text is wrapped via
+    ``format_untrusted_text_block`` and the call reuses the existing report LLM scope
+    (no new ``validate_llm_base_url`` bypass — AC-12).
+    """
+
+    if not reducer_result.evidence:
+        # Without at least one real evidence coordinate the LLM tier cannot bind
+        # tripwires to anything verifiable; let the template tier handle it.
+        return None
+
+    try:
+        prompt = _build_indicators_prompt(context, reducer_result)
+        with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
+            payload = await asyncio.wait_for(
+                llm_call_json(
+                    prompt,
+                    api_key=overrides.api_key if overrides else None,
+                    base_url=overrides.base_url if overrides else None,
+                    model=overrides.model if overrides else None,
+                    temperature=(
+                        overrides.temperature
+                        if overrides and overrides.temperature is not None
+                        else 0.5
+                    ),
+                    reasoning_effort="low",
+                ),
+                timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
+            )
+        indicators = _normalize_indicators_payload(payload, context, reducer_result)
+    except Exception:  # noqa: BLE001 - indicators are non-critical; fall back to template
+        logger.info(
+            "Result report LLM indicators failed; falling back to template indicators"
+        )
+        return None
+    return indicators or None
+
+
+def _build_indicators_prompt(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+) -> str:
+    language = "zh" if context.language == "zh" else "en"
+    evidence_digest = _evidence_digest(
+        reducer_result, max_items=settings.REPORT_MAX_EVIDENCE_PER_SECTION
+    )
+    distribution = json.dumps(
+        reducer_result.branch_distribution[:5], ensure_ascii=False, separators=(",", ":")
+    )
+    result_quality = (
+        context.parsed_context.get("result_quality")
+        if isinstance(context.parsed_context.get("result_quality"), dict)
+        else {}
+    )
+    stats = json.dumps(
+        {
+            "likelihood_probability": round(reducer_result.likelihood.probability, 4),
+            "likelihood_wep": reducer_result.likelihood.wep,
+            "confidence_level": reducer_result.analytic_confidence.level,
+            "polarization": reducer_result.polarization.value,
+            "agent_consensus": reducer_result.agent_consensus.value,
+            "result_quality_confidence": result_quality.get("confidence"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    allowed_ids = [item.id for item in reducer_result.evidence]
+    if language == "zh":
+        directive = (
+            "你是情报分析师，为这份「如果…会怎样」推演报告写『后续观察指标 "
+            "(Indicators to Watch)』。生成 3-4 条指标，严格返回 JSON。每条必须："
+            "(1) 直接回指原问题；(2) signal 是一个具体、可观测、可预先登记的事件，"
+            "不是泛泛的『持续关注』；(3) threshold 给出明确的翻盘/强化触发条件 "
+            "(tripwire)，写清什么新信息会让结论被推翻或被强化；(4) evidence_refs "
+            "只能引用下方给定的真实证据 id；(5) 每条指标信息密度高、彼此不同，"
+            "不要套话。禁止出现：『如果这个信号持续出现，它会强化主导路线』、"
+            "『同一议题被另一位参与者再次提及』、『下一次后续更新周期』、"
+            "『持续关注』、『综上所述』、『值得注意的是』这类放之四海皆准的话术。"
+        )
+    else:
+        directive = (
+            "You are an intelligence analyst writing the 'Indicators to Watch' "
+            "section of this what-if forecast report. Produce 3-4 indicators and "
+            "return strict JSON only. Each indicator must: (1) point back to the "
+            "original question; (2) have a 'signal' that is a concrete, observable, "
+            "pre-registered event, not a vague 'keep monitoring'; (3) give a "
+            "'threshold' with an explicit flip/reinforce tripwire — what new "
+            "information would overturn or strengthen the verdict; (4) only cite "
+            "evidence ids from the supplied real evidence; (5) be high-density and "
+            "differentiated. Forbidden boilerplate: 'if this signal persists it "
+            "reinforces the dominant branch', 'the same issue is repeated by another "
+            "participant', 'next follow-up cycle', 'continue to monitor', "
+            "'it is worth noting'."
+        )
+    shape = (
+        'Required JSON shape: {"action":"indicators_to_watch","indicators":['
+        '{"signal":"...","direction":"up|down","note":"...","threshold":"...",'
+        '"observation":"...","time_horizon":"...","rationale":"...",'
+        '"evidence_refs":["ev_001"]}]}'
+    )
+    return "\n\n".join(
+        item
+        for item in [
+            "REPORT_INDICATORS",
+            directive,
+            shape,
+            f"Allowed evidence ids (use only these): {json.dumps(allowed_ids)}",
+            format_untrusted_text_block(
+                "Original what-if question", context.question, max_chars=1200
+            ),
+            format_untrusted_text_block(
+                "Verdict / question answer (for anchoring only)",
+                "\n".join(
+                    str(result_quality.get(key) or "").strip()
+                    for key in ("question_answer", "verdict")
+                ).strip(),
+                max_chars=1600,
+            ),
+            format_untrusted_text_block(
+                "Reducer evidence (real coordinates)", evidence_digest, max_chars=3200
+            ),
+            format_untrusted_text_block(
+                "Branch probability distribution", distribution, max_chars=1600
+            ),
+            format_untrusted_text_block("Reducer stats", stats, max_chars=800),
+        ]
+        if item
+    )
+
+
+def _normalize_indicators_payload(
+    payload: object,
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+) -> list[IndicatorToWatch]:
+    if not isinstance(payload, dict):
+        raise ResultReportBuilderError("Indicators payload must be an object")
+    if str(payload.get("action") or "").strip() != "indicators_to_watch":
+        raise ResultReportBuilderError("Indicators payload action is invalid")
+    raw_entries = payload.get("indicators")
+    if not isinstance(raw_entries, list) or not raw_entries:
+        raise ResultReportBuilderError("Indicators must be a non-empty list")
+
+    language = "zh" if context.language == "zh" else "en"
+    evidence_ids = {item.id for item in reducer_result.evidence}
+    indicators: list[IndicatorToWatch] = []
+    for raw in raw_entries:
+        if not isinstance(raw, dict):
+            continue
+        signal = str(raw.get("signal") or "").strip()
+        note = str(raw.get("note") or "").strip()
+        threshold = str(raw.get("threshold") or "").strip()
+        if not signal or not note or not threshold:
+            # An indicator without a real signal + tripwire is exactly the slop we
+            # are trying to kill; drop it.
+            continue
+        combined = " ".join(
+            [
+                signal,
+                note,
+                threshold,
+                str(raw.get("observation") or ""),
+                str(raw.get("rationale") or ""),
+            ]
+        )
+        if _indicator_text_is_slop(combined):
+            # Reject the whole LLM batch on any blacklist hit so we do not ship a
+            # mix of grounded + slop rows (AC-4).
+            raise ResultReportBuilderError("Indicators contain blacklisted slop phrasing")
+        raw_refs = raw.get("evidence_refs")
+        evidence_refs = (
+            [str(ref) for ref in raw_refs if isinstance(ref, str)]
+            if isinstance(raw_refs, list)
+            else []
+        )
+        indicators.append(
+            _indicator(
+                signal=signal,
+                direction=str(raw.get("direction") or "up"),
+                note=note,
+                threshold=threshold,
+                observation=str(raw.get("observation") or "").strip(),
+                time_horizon=str(raw.get("time_horizon") or "").strip(),
+                rationale=str(raw.get("rationale") or "").strip(),
+                evidence_refs=evidence_refs,
+                allowed_evidence_ids=evidence_ids,
+                language=language,
+            )
+        )
+        if len(indicators) >= 5:
+            break
+    if not indicators:
+        raise ResultReportBuilderError("Indicators payload yielded no usable rows")
+    return indicators
+
+
 def _build_indicators_to_watch(
     context: BuilderContext,
     reducer_result: ReducerResult,
 ) -> list[IndicatorToWatch]:
+    # S3 fallback tier (挡2): used when the LLM indicator tier fails/times out.
+    # Unlike the old template, every row inlines the *actual* evidence claim,
+    # the *actual* reducer probability numbers, and ties the tripwire back to the
+    # original what-if question instead of the generic "信号持续出现 → 强化主导路线"
+    # / "同一议题被另一位参与者再次提及" boilerplate the proposal called out.
     indicators: list[IndicatorToWatch] = []
     evidence_ids = {item.id for item in reducer_result.evidence}
     language = "zh" if context.language == "zh" else "en"
+    question_focus = _indicator_question_focus(context.question, language)
 
     for evidence in reducer_result.evidence[:2]:
+        claim = _truncate_indicator_text(evidence.quote, 150, language)
         if language == "zh":
-            quote = _truncate_indicator_text(evidence.quote, 140, language)
-            signal = f"第 {evidence.round_number} 轮信号：{evidence.agent_name}"
-            note = "如果这个信号持续出现，它会强化主导路线。"
-            threshold = "同一议题被另一位参与者、后续轮次或后续来源再次提及。"
-            observation = (
-                f"第 {evidence.round_number} 轮，{evidence.agent_name}：\n"
-                f"{quote}"
+            signal = f"{evidence.agent_name}（第 {evidence.round_number} 轮）的主张是否被复现"
+            note = (
+                f"{evidence.agent_name} 在主导路线上断言：「{claim}」——"
+                f"这是支撑「{question_focus}」结论的关键论据。"
             )
-            time_horizon = "下一次后续更新周期"
-            rationale = f"由主导路线上的证据 {evidence.id} 支持。"
-        else:
-            quote = _truncate_indicator_text(evidence.quote, 140, language)
-            signal = f"Round {evidence.round_number} signal from {evidence.agent_name}"
-            note = "If this signal persists, it reinforces the dominant branch."
             threshold = (
-                "The same issue is repeated by another participant, later round, "
-                "or follow-up source."
+                f"翻盘信号：出现与「{claim[:48]}」直接冲突的新证据，"
+                f"或另一位参与者在后续轮次拿出更强的反例；"
+                f"强化信号：另一条独立分支或来源复述同一主张。"
+            )
+            observation = f"第 {evidence.round_number} 轮 · {evidence.agent_name}：{claim}"
+            time_horizon = "下一轮模拟或下一份证据刷新时复查"
+            rationale = f"绑定主导路线证据 {evidence.id}（第 {evidence.round_number} 轮）。"
+        else:
+            signal = (
+                f"Whether {evidence.agent_name}'s round-{evidence.round_number} claim "
+                f"gets reproduced"
+            )
+            note = (
+                f"{evidence.agent_name} asserts on the dominant branch: \"{claim}\" — "
+                f"this is the load-bearing argument behind the answer to "
+                f"\"{question_focus}\"."
+            )
+            threshold = (
+                f"Flip signal: new evidence directly contradicting \"{claim[:48]}\", "
+                f"or another participant lands a stronger counter-example in a later "
+                f"round; reinforce signal: an independent branch or source restates "
+                f"the same claim."
             )
             observation = (
-                f"Round {evidence.round_number}, {evidence.agent_name}:\n"
-                f"{quote}"
+                f"Round {evidence.round_number} · {evidence.agent_name}: {claim}"
             )
-            time_horizon = "next follow-up cycle"
-            rationale = f"Supported by evidence {evidence.id} on the dominant branch."
+            time_horizon = "Re-check on the next simulated round or evidence refresh"
+            rationale = (
+                f"Bound to dominant-branch evidence {evidence.id} "
+                f"(round {evidence.round_number})."
+            )
         indicators.append(
             _indicator(
                 signal=signal,
@@ -1535,6 +2098,7 @@ def _build_indicators_to_watch(
                 fallback_signal,
                 allowed_evidence_ids=evidence_ids,
                 language=language,
+                question_focus=question_focus,
             )
         )
 
@@ -1546,19 +2110,36 @@ def _insufficient_evidence_indicator(
     *,
     allowed_evidence_ids: set[str],
     language: str,
+    question_focus: str = "",
 ) -> IndicatorToWatch:
+    focus = str(question_focus or "").strip()
     if language == "zh":
-        note = "观察主导路线条件是否再次出现。"
-        threshold = "后续更新用真实坐标重复该分支条件。"
-        observation = "这个信号还没有可引用的消息级证据坐标。"
-        time_horizon = "下一次后续更新周期"
-        rationale = "还没有报告证据坐标支持这个指标。"
+        anchor = f"对「{focus}」而言，" if focus else ""
+        note = f"{anchor}这条主导路线条件目前没有可引用的消息级证据坐标。"
+        threshold = (
+            f"翻盘信号：后续模拟里出现一条带真实坐标、与「{signal}」相反的发言；"
+            f"强化信号：后续更新用真实坐标复现该分支条件。"
+        )
+        observation = "诚实降级：该结论目前缺乏消息级证据坐标支撑。"
+        time_horizon = "下一轮模拟或下一份证据刷新时复查"
+        rationale = "尚无报告证据坐标可绑定到这条指标。"
     else:
-        note = "Watch whether the dominant branch condition appears again."
-        threshold = "A later update repeats the branch condition with a real coordinate."
-        observation = "No message-level evidence coordinate is available for this signal."
-        time_horizon = "next follow-up cycle"
-        rationale = "No report evidence coordinate supports this indicator yet."
+        anchor = f"For \"{focus}\", " if focus else ""
+        note = (
+            f"{anchor}this dominant-branch condition has no citable "
+            f"message-level evidence coordinate yet."
+        )
+        threshold = (
+            f"Flip signal: a later simulated turn produces a real-coordinate "
+            f"statement contradicting \"{signal}\"; reinforce signal: a follow-up "
+            f"update reproduces the branch condition with a real coordinate."
+        )
+        observation = (
+            "Honest downgrade: this claim currently lacks a message-level "
+            "evidence coordinate."
+        )
+        time_horizon = "Re-check on the next simulated round or evidence refresh"
+        rationale = "No report evidence coordinate can be bound to this indicator yet."
     return _indicator(
         signal=signal,
         direction="up",
@@ -1580,10 +2161,24 @@ def _probability_gap_indicator(
     language: str,
 ) -> IndicatorToWatch | None:
     distribution = reducer_result.branch_distribution
-    if len(distribution) < 2:
+    competitive_leaves = [item for item in distribution if item.get("is_terminal_leaf")]
+    if len(competitive_leaves) < 2:
         return None
-    dominant = distribution[0]
-    runner_up = distribution[1]
+    dominant = next(
+        (item for item in competitive_leaves if item.get("dominant") is True),
+        competitive_leaves[0],
+    )
+    dominant_branch_id = dominant.get("branch_id")
+    runner_up = next(
+        (
+            item
+            for item in competitive_leaves
+            if item is not dominant and item.get("branch_id") != dominant_branch_id
+        ),
+        None,
+    )
+    if runner_up is None:
+        return None
     dominant_probability = _coerce_probability(dominant.get("probability"))
     runner_up_probability = _coerce_probability(runner_up.get("probability"))
     gap = max(0.0, dominant_probability - runner_up_probability)
@@ -1840,9 +2435,34 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
     while payload.get("sections") and utf8_json_size_bytes(payload) > max_bytes:
         payload["sections"].pop()
     if utf8_json_size_bytes(payload) > max_bytes:
+        _shrink_payload_indicators(payload)
+    if utf8_json_size_bytes(payload) > max_bytes:
         payload["evidence"] = payload.get("evidence", [])[:1]
+    # S3: indicator copy is richer now (real evidence + tripwires); drop whole
+    # indicator rows last so an oversize report can still fit the byte budget
+    # instead of raising ResultReportTooLargeError.
+    while payload.get("indicators_to_watch") and utf8_json_size_bytes(payload) > max_bytes:
+        payload["indicators_to_watch"].pop()
     _sync_payload_evidence_refs(payload)
     return validate_full_report_payload(payload, max_bytes=max_bytes)
+
+
+def _shrink_payload_indicators(payload: dict[str, Any]) -> None:
+    """Tighten indicator text fields under byte pressure before dropping rows."""
+
+    for indicator in payload.get("indicators_to_watch") or []:
+        if not isinstance(indicator, dict):
+            continue
+        for field, limit in (
+            ("signal", 120),
+            ("note", 120),
+            ("threshold", 140),
+            ("observation", 120),
+            ("time_horizon", 80),
+            ("rationale", 120),
+        ):
+            if indicator.get(field):
+                indicator[field] = _truncate_text(str(indicator.get(field) or ""), limit)
 
 
 def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
@@ -1923,7 +2543,7 @@ def _reusable_existing_sections(
     ]
     if not reusable:
         return [], []
-    return reusable, [existing.tier for _section in reusable]
+    return reusable, [section.tier for section in reusable]
 
 
 def _persist_failed_report_if_absent(
@@ -1944,13 +2564,53 @@ def _persist_failed_report_if_absent(
         if existing is not None and existing.status != "generating":
             return existing
 
-        branch = _load_failed_report_branch(session, scenario_id, dominant_branch_id)
-        payload = _failed_report_payload(scenario, parsed_context, branch, dominant_branch_id)
+        target_branch_id = _resolve_failed_report_target_branch_id(
+            scenario_id,
+            dominant_branch_id,
+        )
+        branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
+        payload = _failed_report_payload(scenario, parsed_context, branch, target_branch_id)
     _persist_report_payload(scenario_id, payload)
     return validate_full_report_payload(
         payload,
         max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
     )
+
+
+def _persist_failed_report_if_lock_available(
+    scenario_id: str,
+    dominant_branch_id: str,
+) -> FullReport | None:
+    lease = acquire_runtime_lock(
+        _report_runtime_lock_key(scenario_id),
+        lease_seconds=_report_runtime_lock_lease_seconds(),
+    )
+    if lease is None:
+        logger.info(
+            "Skipping result report failure marker because another worker owns the lease",
+        )
+        return _load_existing_full_report(scenario_id)
+    try:
+        return _persist_failed_report_if_absent(scenario_id, dominant_branch_id)
+    finally:
+        release_runtime_lock(lease)
+
+
+def _resolve_failed_report_target_branch_id(
+    scenario_id: str,
+    dominant_branch_id: str,
+) -> str:
+    try:
+        reducer_result = reduce_report(
+            get_engine(),
+            scenario_id,
+            max_evidence=0,
+            dominant_branch_id=dominant_branch_id,
+        )
+    except Exception:  # noqa: BLE001 - failure marker must stay fail-soft
+        logger.debug("Failed to resolve failed report target branch", exc_info=True)
+        return dominant_branch_id
+    return reducer_result.target_branch_id or dominant_branch_id
 
 
 def _load_failed_report_branch(

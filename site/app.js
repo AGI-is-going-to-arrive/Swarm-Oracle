@@ -12,7 +12,7 @@
     { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
       zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
     { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",
-      zd: "结果页先显示深读摘要和章节目录，完整报告在独立页展开；报告按真实字段渲染证据、终局概率/阵营图表和不确定性，证据侧栏可跳回 replay。", ed: "The result page first shows a digest and section links, then opens the full report on its own page; the report renders evidence, terminal probability/faction charts and uncertainty from real fields, with evidence jump-backs to replay." },
+      zd: "结果页先露深读摘要；完整报告展开证据、AI 扮演角色访谈、后续观察指标和概率/阵营图表。重生成后原页更新，证据可跳回 replay。", ed: "The result page previews the deep read; the full report opens evidence, simulated-persona interviews, watch signals, and probability/faction charts. Regeneration updates in place, and evidence jumps back to replay." },
     { id: "F02", img: "20-debate-arena.png", hero: false, zt: "辩论竞技场", et: "Debate Arena",
       zd: "从首页直接进入辩论竞技场，创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；无可用 LLM 或启动失败时，页面会显示原因。", ed: "Jump straight into the Debate Arena, create affirmative, opposing and judge roles, and run a shorter staged adversarial debate; if no LLM is usable or launch fails, the page shows the reason." },
     { id: "F13", img: "14-roundtable.png", hero: false, zt: "世界线圆桌", et: "Worldline Roundtable",

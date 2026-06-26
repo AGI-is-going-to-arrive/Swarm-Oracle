@@ -217,9 +217,22 @@ class Settings(BaseSettings):
     PACKS_DIR: Path = Field(default_factory=lambda: (REPO_ROOT / "packs").resolve())
     REPORT_MAX_SECTIONS: int = Field(default=5, ge=1)
     REPORT_MIN_SECTIONS: int = Field(default=2, ge=1)
-    REPORT_MAX_TOOL_CALLS_PER_SECTION: int = Field(default=5, ge=0)
+    # ReACT iteration ceiling per section. The section tool (``query_branch_messages``)
+    # re-serves the same reducer evidence on every call, so once the first tool call
+    # has surfaced that batch there is no new information to gain — a no-progress guard
+    # in ``_generate_section_tier`` forces an early final long before this ceiling. 3
+    # leaves room for plan → one grounded tool call → final without funding empty spins.
+    REPORT_MAX_TOOL_CALLS_PER_SECTION: int = Field(default=3, ge=0)
     REPORT_MIN_TOOL_CALLS_PER_SECTION: int = Field(default=2, ge=0)
-    REPORT_SECTION_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0)
+    # Per-LLM-call timeout for a single section/interview/indicators step. Raised 60→120
+    # (user decision 2026-06-26) so a single slow local-model response no longer trips the
+    # timeout → static fallback. Bounded against runaway cost by the no-progress early-final
+    # guard: that guard makes a tier spend at most min(tool_calls, 2) *timed* round-trips
+    # (one grounded tool call, then a forced final; a 3rd call is rejected, never timed).
+    REPORT_SECTION_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0)
+    # Short crash-recovery lease for result-report generation. The builder refreshes this
+    # lease while running, so a killed worker blocks retries for at most this TTL.
+    REPORT_RUNTIME_LOCK_LEASE_SECONDS: float = Field(default=120.0, gt=0)
     REPORT_PLAN_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0)
     REPORT_MAX_EVIDENCE_PER_SECTION: int = Field(default=5, ge=0)
     REPORT_SECTION_CONTENT_MAX_CHARS: int = Field(default=12_000, ge=1)

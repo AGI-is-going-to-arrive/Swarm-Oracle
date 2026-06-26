@@ -81,6 +81,7 @@ graphify-out/
 /P2_*.json
 /P2_*.md
 /p2-*.md
+/backend/_ac11_*
 /frontend/P6-*.md
 /frontend/kg-force-layout-research.md
 /frontend/p2-*.md

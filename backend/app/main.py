@@ -69,6 +69,18 @@ async def lifespan(app: FastAPI):
         )
     except Exception:  # noqa: BLE001 - sweep is best-effort; never block startup
         logging.getLogger(__name__).exception("Startup orphan sweep failed (non-fatal)")
+    try:
+        from app.services.runtime_lock import reconcile_orphaned_report_locks
+
+        cleared_report_locks = reconcile_orphaned_report_locks()
+        logging.getLogger(__name__).info(
+            "Startup report-lock sweep: %d orphaned report lock(s) cleared",
+            cleared_report_locks,
+        )
+    except Exception:  # noqa: BLE001 - sweep is best-effort; never block startup
+        logging.getLogger(__name__).exception(
+            "Startup report-lock sweep failed (non-fatal)"
+        )
     logging.getLogger(__name__).info(
         "SwarmOracle started — LLM: %s @ %s",
         settings.LLM_MODEL_NAME, settings.LLM_RESPONSES_URL,

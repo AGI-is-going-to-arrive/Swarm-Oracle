@@ -30,11 +30,11 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 - **Worldline Roundtable**: Representatives from multiple sides discuss around a table. After it finishes, you can return to the saved result and continue Deep Dive.
 - **Counterfactual comparison**: "If that sentence had been said differently, how would the worldline change?"
 - **Causal graph + knowledge graph**: Enter the graph workbench, knowledge graph explorer, and timeline galaxy from the result page.
-- **Custom Agents**: Create, import, and export your own characters in the Agent Workshop.
+- **Custom Agents**: Create, import, and export your own characters in the Agent Workshop; in simulations, their persona, memory, and concrete prior-round points shape their voice and what they respond to.
 - **Education templates and Local Packs**: Start from classroom templates or repo-local `packs/` presets; Local Packs support genre segments, search, preview, and one-click import.
 - **Prediction journal and leaderboard**: Record predictions, review calibration, and view the global leaderboard.
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
-- **Full report and evidence replay**: The result page shows a digest and section links first; the standalone report renders evidence, probability bands, charts, and replay jump-backs.
+- **Full report and evidence replay**: The result page shows a digest and section links first; the standalone report anchors verdicts, evidence, indicators, probability bands, and charts to the terminal answer leaf, with replay jump-backs.
 - **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API, with saved profiles carrying rate limits, concurrency, capability overrides, and native-search upstream declarations selectable from the home page, Debate Arena, and result-page Oracle Chambers.
 
 > For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.

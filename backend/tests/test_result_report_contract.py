@@ -199,6 +199,8 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "body_md_i18n",
         "evidence_refs",
         "charts",
+        "tier",
+        "failure_reason",
     }
     assert set(report.sections[0].charts[0].model_fields) == {
         "kind",
