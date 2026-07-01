@@ -1201,6 +1201,210 @@ def test_persist_failed_report_replaces_stale_generating_report():
     assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
 
 
+def test_persist_generating_report_placeholder_if_absent():
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+
+    placeholder = builder.persist_generating_report_placeholder_if_absent(
+        scenario_id,
+        "branch-a",
+    )
+
+    assert placeholder.status == "generating"
+    assert placeholder.generation_mode == "static"
+    assert placeholder.tier == "static"
+    assert placeholder.target_branch_id == "branch-a"
+    assert placeholder.sections == []
+    assert placeholder.interview_status is not None
+    assert placeholder.interview_status.status == "skipped"
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "generating"
+
+
+def test_retry_placeholder_does_not_reopen_failed_report_when_lock_unavailable(
+    monkeypatch,
+):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+    monkeypatch.setattr(
+        builder,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    report = builder._persist_generating_report_placeholder_for_retry(
+        scenario_id,
+        "branch-a",
+    )
+
+    assert report is not None
+    assert report.status == "failed"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_retries_failed_report_until_success(monkeypatch):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    attempts = 0
+
+    def complete_payload() -> dict[str, Any]:
+        payload = _legal_full_report()
+        payload["target_branch_id"] = "branch-a"
+        payload["evidence"][0]["branch_id"] = "branch-a"
+        payload["sections"][0]["charts"][0]["data"]["branches"][0]["branch_id"] = "branch-a"
+        return payload
+
+    async def fail_then_success(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+        payload = complete_payload()
+        builder._persist_report_payload(scenario_id, payload)
+        return validate_full_report_payload(payload)
+
+    monkeypatch.setattr(builder, "build_report", fail_then_success)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert attempts == 2
+    assert report is not None
+    assert report.status == "complete"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_retries_static_only_report_until_success(monkeypatch):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    attempts = 0
+
+    def payload_with_section_tier(tier: str) -> dict[str, Any]:
+        payload = _legal_full_report()
+        payload["target_branch_id"] = "branch-a"
+        payload["sections"][0]["tier"] = tier
+        if tier == "static":
+            payload["generation_mode"] = "static"
+            payload["tier"] = "static"
+            payload["sections"][0]["failure_reason"] = "other"
+        return payload
+
+    async def static_then_success(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal attempts
+        attempts += 1
+        payload = payload_with_section_tier("static" if attempts == 1 else "generation")
+        builder._persist_report_payload(scenario_id, payload)
+        return validate_full_report_payload(payload)
+
+    monkeypatch.setattr(builder, "build_report", static_then_success)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert attempts == 2
+    assert report is not None
+    assert report.status == "complete"
+    assert report.sections[0].tier == "generation"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).tier == "generation"
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_retries_exception_until_success(monkeypatch):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    attempts = 0
+
+    async def error_then_success(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("provider temporarily unavailable")
+        payload = _legal_full_report()
+        payload["target_branch_id"] = "branch-a"
+        builder._persist_report_payload(scenario_id, payload)
+        return validate_full_report_payload(payload)
+
+    monkeypatch.setattr(builder, "build_report", error_then_success)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert attempts == 2
+    assert report is not None
+    assert report.status == "complete"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_stops_after_retry_budget_and_returns_failed(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    attempts = 0
+
+    async def always_failed(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal attempts
+        attempts += 1
+        return builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+
+    monkeypatch.setattr(builder, "build_report", always_failed)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 2)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert attempts == 2
+    assert report is not None
+    assert report.status == "failed"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_marks_static_only_report_failed_after_retry_budget(
+    monkeypatch,
+):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    attempts = 0
+
+    async def always_static(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal attempts
+        attempts += 1
+        payload = _legal_full_report()
+        payload["target_branch_id"] = "branch-a"
+        payload["generation_mode"] = "static"
+        payload["tier"] = "static"
+        payload["sections"][0]["tier"] = "static"
+        payload["sections"][0]["failure_reason"] = "other"
+        builder._persist_report_payload(scenario_id, payload)
+        return validate_full_report_payload(payload)
+
+    monkeypatch.setattr(builder, "build_report", always_static)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 2)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert attempts == 2
+    assert report is not None
+    assert report.status == "failed"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+
+
 @pytest.mark.asyncio
 async def test_build_report_safe_does_not_overwrite_live_generation_when_marker_lock_unavailable(
     monkeypatch,
@@ -1217,6 +1421,7 @@ async def test_build_report_safe_does_not_overwrite_live_generation_when_marker_
         raise RuntimeError("builder failed after another worker started")
 
     monkeypatch.setattr(builder, "build_report", failing_build_report)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
     monkeypatch.setattr(
         builder,
         "acquire_runtime_lock",
@@ -1337,6 +1542,36 @@ async def test_report_sse_stream_times_out_stalled_generation(monkeypatch):
     assert '"report_id": "scenario-report"' in payload
     assert '"status": "failed"' in payload
     assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_report_sse_stream_does_not_auto_retry_failed_generation(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    attempts = 0
+
+    async def failing_build_report(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("manual report failed once")
+
+    monkeypatch.setattr(builder, "build_report", failing_build_report)
+
+    frames: list[str] = []
+    async for frame in builder.build_report_sse_stream(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    ):
+        frames.append(frame)
+
+    payload = "".join(frames)
+    assert attempts == 1
+    assert "event: report_started" in payload
+    assert "event: report_failed" in payload
+    assert "REPORT_FAILED" in payload
+    assert "event: report_complete" in payload
 
 
 @pytest.mark.asyncio
@@ -1877,12 +2112,19 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
         "app.services.result_report.builder.build_report",
         failing_build_report,
     )
+    monkeypatch.setattr(
+        "app.services.result_report.builder._auto_report_retry_delay_seconds",
+        lambda _attempt: 0.0,
+    )
 
     await run_simulation(scenario_id, ws_callback=fake_ws_callback)
     await asyncio.sleep(0)
 
     await asyncio.wait_for(report_called.wait(), timeout=1)
-    assert report_call_count == 1
+    deadline = time.monotonic() + 1.0
+    while report_call_count < 3 and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert report_call_count == 3
     assert any(event.get("type") == "simulation_done" for event in events)
     deadline = time.monotonic() + 1.0
     report: dict[str, Any] | None = None
@@ -1895,7 +2137,8 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
             candidate = (persisted.parsed_context or {}).get("full_report")
             if isinstance(candidate, dict):
                 report = candidate
-                break
+                if validate_full_report_payload(candidate).status == "failed":
+                    break
         await asyncio.sleep(0.01)
 
     assert persisted_status == ScenarioStatus.DONE
@@ -1904,6 +2147,89 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
     assert validated.status == "failed"
     assert validated.generation_mode == "static"
     assert validated.tier == "static"
+    assert validated.sections == []
+
+
+@pytest.mark.asyncio
+async def test_report_auto_path_persists_placeholder_before_background_builder_runs(
+    monkeypatch,
+):
+    import app.services.simulator as simulator_module
+    from app.services.simulator import run_simulation
+
+    engine = get_engine()
+    scenario = Scenario(
+        question="Can the habitat survive one more week?",
+        parsed_context={
+            "_language": "English",
+            "setting": {},
+            "simulation_rounds": 1,
+            "mode": "raw",
+        },
+        status=ScenarioStatus.SIMULATING,
+    )
+    with Session(engine) as session:
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+        session.add(
+            Agent(
+                scenario_id=scenario_id,
+                name="Systems Lead",
+                role="Engineer",
+            )
+        )
+        session.commit()
+
+    async def fake_llm_json(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"content": "Life support stays stable.", "emotion": "focused"}
+
+    async def fake_llm_text(*_args: Any, **_kwargs: Any) -> str:
+        return "Life support stays stable."
+
+    async def fake_narrate_branch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "title": "Stabilize first",
+            "story": "The habitat survives by prioritizing life support.",
+            "insight": "Repair sequencing matters more than expansion.",
+            "key_moments": [],
+        }
+
+    scheduled_coroutines = []
+
+    def fake_schedule_background_task(coro):
+        scheduled_coroutines.append(coro)
+        coro.close()
+        return asyncio.create_task(asyncio.sleep(0))
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+    monkeypatch.setattr(
+        "app.services.simulator.llm_call_json_with_stream_fallback",
+        fake_llm_json,
+    )
+    monkeypatch.setattr("app.services.simulator.llm_call", fake_llm_text)
+    monkeypatch.setattr("app.services.simulator.llm_call_json", fake_llm_json)
+    monkeypatch.setattr("app.services.simulator.narrate_branch", fake_narrate_branch)
+    monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.api.helpers.schedule_background_task",
+        fake_schedule_background_task,
+    )
+
+    await run_simulation(scenario_id)
+
+    assert scheduled_coroutines
+    with Session(engine) as session:
+        persisted = session.get(Scenario, scenario_id)
+        assert persisted is not None
+        assert persisted.status == ScenarioStatus.DONE
+        report = (persisted.parsed_context or {}).get("full_report")
+
+    assert isinstance(report, dict)
+    validated = validate_full_report_payload(report)
+    assert validated.status == "generating"
     assert validated.sections == []
 
 

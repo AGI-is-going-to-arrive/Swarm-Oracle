@@ -82,6 +82,9 @@ _REPORT_LOCKS: dict[str, asyncio.Lock] = {}
 _SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 _REPORT_RUNTIME_LOCK_REFRESH_FRACTION = 0.4
 _REPORT_RUNTIME_LOCK_MAX_REFRESH_INTERVAL_SECONDS = 15.0
+_AUTO_REPORT_MAX_ATTEMPTS = 3
+_AUTO_REPORT_RETRY_BASE_DELAY_SECONDS = 1.0
+_AUTO_REPORT_RETRY_MAX_DELAY_SECONDS = 8.0
 _INTERVIEW_AGENT_BUDGET = 3
 _INTERVIEW_CANDIDATE_LIMIT = 8
 _INTERVIEW_EVIDENCE_PER_AGENT_CAP = 5
@@ -668,33 +671,127 @@ async def build_report_safe(
 ) -> FullReport | None:
     """Run report generation for fire-and-forget callers without surfacing errors."""
 
-    try:
-        return await build_report(
-            scenario_id,
-            dominant_branch_id,
-            overrides=overrides,
-            progress=progress,
-        )
-    except ResultReportAlreadyRunningError:
-        logger.info("Result report generation skipped because another worker owns the lease")
-        return await asyncio.to_thread(_load_existing_full_report, scenario_id)
-    except ResultReportRuntimeLockLostError:
-        logger.info("Result report generation stopped after losing the runtime lock")
-        return await asyncio.to_thread(_load_existing_full_report, scenario_id)
-    except Exception as exc:  # noqa: BLE001 - auto report generation is best-effort
-        logger.info(
-            "Result report generation failed; ensuring failed marker: %s",
-            type(exc).__name__,
-        )
+    max_attempts = _auto_report_max_attempts()
+    for attempt in range(1, max_attempts + 1):
         try:
-            return await asyncio.to_thread(
-                _persist_failed_report_if_lock_available,
+            report = await build_report(
                 scenario_id,
                 dominant_branch_id,
+                overrides=overrides,
+                progress=progress,
             )
-        except Exception:  # noqa: BLE001 - simulator completion must stay fail-soft
-            logger.warning("Failed to persist result report failure marker")
-            return None
+        except ResultReportAlreadyRunningError:
+            logger.info("Result report generation skipped because another worker owns the lease")
+            return await asyncio.to_thread(_load_existing_full_report, scenario_id)
+        except ResultReportRuntimeLockLostError:
+            logger.info("Result report generation stopped after losing the runtime lock")
+            return await asyncio.to_thread(_load_existing_full_report, scenario_id)
+        except Exception as exc:  # noqa: BLE001 - auto report generation is best-effort
+            if attempt < max_attempts:
+                logger.info(
+                    "Result report generation failed on attempt %d/%d; retrying: %s",
+                    attempt,
+                    max_attempts,
+                    type(exc).__name__,
+                )
+                await _prepare_auto_report_retry(
+                    scenario_id,
+                    dominant_branch_id,
+                    attempt=attempt,
+                )
+                continue
+            logger.info(
+                "Result report generation failed after %d attempts; ensuring failed marker: %s",
+                max_attempts,
+                type(exc).__name__,
+            )
+            try:
+                return await asyncio.to_thread(
+                    _persist_failed_report_if_lock_available,
+                    scenario_id,
+                    dominant_branch_id,
+                )
+            except Exception:  # noqa: BLE001 - simulator completion must stay fail-soft
+                logger.warning("Failed to persist result report failure marker")
+                return None
+
+        if not _auto_report_should_retry(report):
+            return report
+        if attempt >= max_attempts:
+            return await _finalize_auto_report_retry_exhausted(
+                scenario_id,
+                dominant_branch_id,
+                fallback_report=report,
+            )
+        logger.info(
+            "Result report generation produced failed report on attempt %d/%d; retrying",
+            attempt,
+            max_attempts,
+        )
+        await _prepare_auto_report_retry(
+            scenario_id,
+            dominant_branch_id,
+            attempt=attempt,
+        )
+    return await asyncio.to_thread(_load_existing_full_report, scenario_id)
+
+
+def _auto_report_max_attempts() -> int:
+    return max(1, _AUTO_REPORT_MAX_ATTEMPTS)
+
+
+def _auto_report_retry_delay_seconds(attempt: int) -> float:
+    delay = _AUTO_REPORT_RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt - 1))
+    return min(_AUTO_REPORT_RETRY_MAX_DELAY_SECONDS, max(0.0, delay))
+
+
+def _auto_report_should_retry(report: FullReport | None) -> bool:
+    if report is None:
+        return True
+    if report.status in {"failed", "generating"}:
+        return True
+    return not _report_has_llm_enhanced_sections(report)
+
+
+def _report_has_llm_enhanced_sections(report: FullReport) -> bool:
+    return any(section.tier in {"generation", "rewrite"} for section in report.sections)
+
+
+async def _finalize_auto_report_retry_exhausted(
+    scenario_id: str,
+    dominant_branch_id: str,
+    *,
+    fallback_report: FullReport | None,
+) -> FullReport | None:
+    try:
+        failed = await asyncio.to_thread(
+            _persist_failed_report_after_auto_retry_exhausted,
+            scenario_id,
+            dominant_branch_id,
+        )
+        return failed or fallback_report
+    except Exception:  # noqa: BLE001 - simulator completion must stay fail-soft
+        logger.warning("Failed to persist exhausted result report retry marker")
+        return fallback_report
+
+
+async def _prepare_auto_report_retry(
+    scenario_id: str,
+    dominant_branch_id: str,
+    *,
+    attempt: int,
+) -> None:
+    try:
+        await asyncio.to_thread(
+            _persist_generating_report_placeholder_for_retry,
+            scenario_id,
+            dominant_branch_id,
+        )
+    except Exception:  # noqa: BLE001 - retry should proceed even if marker repair fails
+        logger.warning("Failed to restore result report retry placeholder")
+    delay = _auto_report_retry_delay_seconds(attempt)
+    if delay > 0:
+        await asyncio.sleep(delay)
 
 
 async def build_report_sse_stream(
@@ -2550,10 +2647,85 @@ def _persist_failed_report_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
 ) -> FullReport:
+    return _persist_placeholder_report_if_absent(
+        scenario_id,
+        dominant_branch_id,
+        status="failed",
+    )
+
+
+def persist_generating_report_placeholder_if_absent(
+    scenario_id: str,
+    dominant_branch_id: str,
+) -> FullReport:
+    return _persist_placeholder_report_if_absent(
+        scenario_id,
+        dominant_branch_id,
+        status="generating",
+    )
+
+
+def _persist_generating_report_placeholder_for_retry(
+    scenario_id: str,
+    dominant_branch_id: str,
+) -> FullReport | None:
+    lease = acquire_runtime_lock(
+        _report_runtime_lock_key(scenario_id),
+        lease_seconds=_report_runtime_lock_lease_seconds(),
+    )
+    if lease is None:
+        logger.info(
+            "Skipping result report retry placeholder because another worker owns the lease",
+        )
+        return _load_existing_full_report(scenario_id)
+    try:
+        return _persist_placeholder_report_if_absent(
+            scenario_id,
+            dominant_branch_id,
+            status="generating",
+            replace_failed=True,
+            replace_unenhanced=True,
+        )
+    finally:
+        release_runtime_lock(lease)
+
+
+def _persist_failed_report_after_auto_retry_exhausted(
+    scenario_id: str,
+    dominant_branch_id: str,
+) -> FullReport | None:
+    lease = acquire_runtime_lock(
+        _report_runtime_lock_key(scenario_id),
+        lease_seconds=_report_runtime_lock_lease_seconds(),
+    )
+    if lease is None:
+        logger.info(
+            "Skipping exhausted result report marker because another worker owns the lease",
+        )
+        return _load_existing_full_report(scenario_id)
+    try:
+        return _persist_placeholder_report_if_absent(
+            scenario_id,
+            dominant_branch_id,
+            status="failed",
+            replace_unenhanced=True,
+        )
+    finally:
+        release_runtime_lock(lease)
+
+
+def _persist_placeholder_report_if_absent(
+    scenario_id: str,
+    dominant_branch_id: str,
+    *,
+    status: Literal["failed", "generating"],
+    replace_failed: bool = False,
+    replace_unenhanced: bool = False,
+) -> FullReport:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
-            raise ResultReportBuilderError("Scenario not found while persisting failed report")
+            raise ResultReportBuilderError("Scenario not found while persisting report placeholder")
 
         parsed_context = (
             dict(scenario.parsed_context)
@@ -2561,15 +2733,38 @@ def _persist_failed_report_if_absent(
             else {}
         )
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
-        if existing is not None and existing.status != "generating":
-            return existing
+        if existing is not None:
+            if (
+                status == "failed"
+                and existing.status != "generating"
+                and not (
+                    replace_unenhanced
+                    and not _report_has_llm_enhanced_sections(existing)
+                )
+            ):
+                return existing
+            if (
+                status == "generating"
+                and (existing.status != "failed" or not replace_failed)
+                and not (
+                    replace_unenhanced
+                    and not _report_has_llm_enhanced_sections(existing)
+                )
+            ):
+                return existing
 
         target_branch_id = _resolve_failed_report_target_branch_id(
             scenario_id,
             dominant_branch_id,
         )
         branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
-        payload = _failed_report_payload(scenario, parsed_context, branch, target_branch_id)
+        payload = _placeholder_report_payload(
+            scenario,
+            parsed_context,
+            branch,
+            target_branch_id,
+            status=status,
+        )
     _persist_report_payload(scenario_id, payload)
     return validate_full_report_payload(
         payload,
@@ -2640,23 +2835,72 @@ def _load_failed_report_branch(
     return branches[0] if branches else None
 
 
-def _failed_report_payload(
+def _placeholder_report_payload(
     scenario: Scenario,
     parsed_context: dict[str, Any],
     branch: Branch | None,
     dominant_branch_id: str,
+    *,
+    status: Literal["failed", "generating"],
 ) -> dict[str, Any]:
     language = _detect_language(scenario.question or "", parsed_context)
     target_branch_id = branch.id if branch is not None else (dominant_branch_id or scenario.id)
     probability = _clamp_probability(branch.probability if branch is not None else 0.0)
-    title_i18n = I18nText(
-        zh="完整报告暂未生成",
-        en="Full report unavailable",
-    )
-    summary_i18n = I18nText(
-        zh="报告生成失败，模拟结果仍可正常查看。",
-        en="Report generation failed; the simulation result remains available.",
-    )
+    if status == "generating":
+        title_i18n = I18nText(
+            zh="完整报告生成中",
+            en="Full report generating",
+        )
+        summary_i18n = I18nText(
+            zh="完整报告正在生成，模拟结果已可正常查看。",
+            en="The full report is being generated; the simulation result is available.",
+        )
+        headline_answer = (
+            "完整报告正在生成，稍后将展示增强分析。"
+            if language == "zh"
+            else "The full report is being generated and enhanced analysis will appear shortly."
+        )
+        confidence_basis = (
+            "The report builder has been scheduled but has not produced sections yet."
+        )
+        limitations = (
+            "Report generation is in progress. This placeholder preserves the report "
+            "contract until generated sections are persisted."
+        )
+        interview_status = InterviewStatus(
+            status="skipped",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            message="Report generation has not reached interview extraction yet.",
+        )
+    else:
+        title_i18n = I18nText(
+            zh="完整报告暂未生成",
+            en="Full report unavailable",
+        )
+        summary_i18n = I18nText(
+            zh="报告生成失败，模拟结果仍可正常查看。",
+            en="Report generation failed; the simulation result remains available.",
+        )
+        headline_answer = (
+            "报告生成失败，未能生成可展示章节。"
+            if language == "zh"
+            else "Report generation failed before renderable sections were produced."
+        )
+        confidence_basis = "The report builder failed before producing a renderable report."
+        limitations = (
+            "Report generation failed before any renderable section could be produced. "
+            "Existing simulation results remain available."
+        )
+        interview_status = InterviewStatus(
+            status="failed",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            error_code="REPORT_FAILED",
+            message="Report generation failed before interviews could run.",
+        )
     report = FullReport(
         version="1.0",
         generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -2669,14 +2913,10 @@ def _failed_report_payload(
         title_i18n=title_i18n,
         summary=getattr(summary_i18n, language),
         summary_i18n=summary_i18n,
-        status="failed",
+        status=status,
         tier="static",
         verdict=Verdict(
-            headline_answer=(
-                "报告生成失败，未能生成可展示章节。"
-                if language == "zh"
-                else "Report generation failed before renderable sections were produced."
-            ),
+            headline_answer=headline_answer,
             likelihood=Likelihood(
                 probability=probability,
                 interval=(probability, probability),
@@ -2684,7 +2924,7 @@ def _failed_report_payload(
             ),
             analytic_confidence=AnalyticConfidence(
                 level="low",
-                basis="The report builder failed before producing a renderable report.",
+                basis=confidence_basis,
             ),
             disclaimer=None,
         ),
@@ -2694,19 +2934,9 @@ def _failed_report_payload(
         dissenting=None,
         key_participants=[],
         follow_ups=[],
-        limitations=(
-            "Report generation failed before any renderable section could be produced. "
-            "Existing simulation results remain available."
-        ),
+        limitations=limitations,
         interview_evidence=[],
-        interview_status=InterviewStatus(
-            status="failed",
-            requested_agents=0,
-            completed_agents=0,
-            truncated_agents=0,
-            error_code="REPORT_FAILED",
-            message="Report generation failed before interviews could run.",
-        ),
+        interview_status=interview_status,
         premortem=[],
         language_status=LanguageStatus(zh="available", en="available"),
     )

@@ -112,6 +112,136 @@ def _make_agent(engine, scenario_id, name="TestAgent", tier=AgentTier.IMPORTANT)
         return a.id
 
 
+def _load_agent_dict(engine, agent_id: str) -> dict:
+    with Session(engine) as session:
+        agent = session.get(Agent, agent_id)
+        assert agent is not None
+        return _agent_to_dict(agent)
+
+
+@pytest.mark.asyncio
+async def test_gather_agent_messages_times_out_hung_turn_llm(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Slow branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(
+        engine,
+        scenario_id,
+        name="SlowAgent",
+        tier=AgentTier.CROWD,
+    )
+    agent = _load_agent_dict(engine, agent_id)
+    events: list[dict] = []
+
+    async def hung_llm_call(*_args, **_kwargs):
+        await asyncio.sleep(1)
+        return "unreachable"
+
+    async def push(event: dict) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(simulator_module, "_AGENT_TURN_REQUEST_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(simulator_module, "_AGENT_TURN_TOTAL_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(simulator_module, "llm_call", hung_llm_call)
+
+    messages = await simulator_module._gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        [agent],
+        "",
+        "Will a stalled provider block the run?",
+        push=push,
+        language="Chinese",
+    )
+
+    assert messages[0]["content"] == "（SlowAgent 沉默了）"
+    assert [event["type"] for event in events] == [
+        "agent_speak_start",
+        "agent_speak",
+        "turn_progress",
+    ]
+    with Session(engine) as session:
+        saved = session.exec(select(AgentMessage)).all()
+        assert len(saved) == 1
+        assert saved[0].content == "（SlowAgent 沉默了）"
+
+
+@pytest.mark.asyncio
+async def test_narrate_branch_data_fail_soft_returns_completable_fallback(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Fallback branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="Analyst", tier=AgentTier.CROWD)
+    agent = _load_agent_dict(engine, agent_id)
+    _save_message(
+        engine,
+        round_id,
+        agent_id,
+        "The decisive pressure point is supply.",
+        "calm",
+        None,
+    )
+
+    async def fail_narration(*_args, **_kwargs):
+        raise RuntimeError("narration provider stalled")
+
+    monkeypatch.setattr(simulator_module, "_narrate_branch_data", fail_narration)
+
+    result = await simulator_module._narrate_branch_data_fail_soft(
+        engine,
+        branch_id,
+        [agent],
+        language="Chinese",
+        question="Will the fallback complete?",
+    )
+
+    assert result["title"] == "Fallback branch"
+    assert result["story"].strip()
+    assert result["insight"].strip()
+    assert result["question_answer"] == ""
+
+
+def test_save_narration_fail_soft_retries_without_optional_question_answer(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Durable branch")
+    original_save_narration = simulator_module._save_narration
+    question_answers: list[str] = []
+
+    def flaky_save_narration(engine_arg, branch_id_arg, narration_arg):
+        question_answers.append(str(narration_arg.get("question_answer") or ""))
+        if len(question_answers) == 1:
+            raise RuntimeError("json path update failed")
+        return original_save_narration(engine_arg, branch_id_arg, narration_arg)
+
+    monkeypatch.setattr(simulator_module, "_save_narration", flaky_save_narration)
+
+    simulator_module._save_narration_fail_soft(
+        engine,
+        branch_id,
+        {
+            "story": "The branch completes through a local fallback.",
+            "insight": "Fallback persistence should still mark the branch complete.",
+            "question_answer": "The fallback path completes.",
+            "key_moments": ["provider stalled"],
+        },
+        language="English",
+    )
+
+    assert question_answers == ["The fallback path completes.", ""]
+    with Session(engine) as session:
+        branch = session.get(Branch, branch_id)
+        assert branch is not None
+        assert branch.status == BranchStatus.COMPLETED
+        assert branch.story == "The branch completes through a local fallback."
+        assert branch.insight == "Fallback persistence should still mark the branch complete."
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

@@ -61,7 +61,11 @@ from app.services.memory import (
     retrieve_relevant_memories,
     store_memory,
 )
-from app.services.narrator import _strip_round_markers, narrate_branch
+from app.services.narrator import (
+    _build_fallback_narration,
+    _strip_round_markers,
+    narrate_branch,
+)
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     release_runtime_lock,
@@ -143,6 +147,8 @@ _intervention_lock = asyncio.Lock()
 logger = logging.getLogger(__name__)
 
 _NARRATE_MAX_CHARS = 3000
+_AGENT_TURN_REQUEST_TIMEOUT_SECONDS = 45.0
+_AGENT_TURN_TOTAL_TIMEOUT_SECONDS = 180.0
 _FORK_DEBUG_TRACE_KEY = "fork_debug_trace"
 _FORK_DEBUG_MAX_SIGNALS = 12
 _FORK_DEBUG_MAX_SIGNAL_CHARS = 240
@@ -3532,7 +3538,7 @@ async def _run_simulation_impl(
             _check_cancelled(scenario_id)
             if b["status"] in ("ACTIVE", "COMPLETED"):
                 _check_cancelled(scenario_id)
-                narration = await _narrate_branch_data(
+                narration = await _narrate_branch_data_fail_soft(
                     engine,
                     b["id"],
                     agents,
@@ -3542,7 +3548,12 @@ async def _run_simulation_impl(
                     question=scenario.question or "",
                 )
                 _check_cancelled(scenario_id)
-                _save_narration(engine, b["id"], narration)
+                narration = _save_narration_fail_soft(
+                    engine,
+                    b["id"],
+                    narration,
+                    language=detected_language,
+                )
                 await push({
                     "type": "narration",
                     "data": {
@@ -3621,8 +3632,22 @@ async def _run_simulation_impl(
                     if key in report_override_keys
                 }
                 from app.api.helpers import schedule_background_task
-                from app.services.result_report.builder import build_report_safe
+                from app.services.result_report.builder import (
+                    build_report_safe,
+                    persist_generating_report_placeholder_if_absent,
+                )
 
+                try:
+                    persist_generating_report_placeholder_if_absent(
+                        scenario_id,
+                        report_branch_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to persist result report placeholder: %s: %s",
+                        type(exc).__name__,
+                        _scrub_sensitive_text(str(exc)),
+                    )
                 schedule_background_task(
                     build_report_safe(
                         scenario_id,
@@ -4205,14 +4230,18 @@ async def _gather_agent_messages(
                             purpose="scenario_turn_generation",
                         )
                     ):
-                        raw_text = await llm_call(
-                            turn_prompt,
-                            reasoning_effort=effort,
-                            model=_overrides.get("model"),
-                            api_key=_overrides.get("api_key"),
-                            base_url=_overrides.get("base_url"),
-                            temperature=turn_temperature,
-                            native_search_domains=native_search_domains,
+                        raw_text = await asyncio.wait_for(
+                            llm_call(
+                                turn_prompt,
+                                reasoning_effort=effort,
+                                model=_overrides.get("model"),
+                                api_key=_overrides.get("api_key"),
+                                base_url=_overrides.get("base_url"),
+                                temperature=turn_temperature,
+                                timeout=_AGENT_TURN_REQUEST_TIMEOUT_SECONDS,
+                                native_search_domains=native_search_domains,
+                            ),
+                            timeout=_AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
                         )
                     _check_cancelled(scenario_id)
                     await persist_native_citations_if_any()
@@ -4276,14 +4305,17 @@ async def _gather_agent_messages(
                             purpose="scenario_turn_generation",
                         )
                     ):
-                        result = await llm_call_json(
-                            extract_prompt,
-                            reasoning_effort="low",
-                            model=_overrides.get("model"),
-                            api_key=_overrides.get("api_key"),
-                            base_url=_overrides.get("base_url"),
-                            temperature=0.2,
-                            fallback_mode="agent_message",
+                        result = await asyncio.wait_for(
+                            llm_call_json(
+                                extract_prompt,
+                                reasoning_effort="low",
+                                model=_overrides.get("model"),
+                                api_key=_overrides.get("api_key"),
+                                base_url=_overrides.get("base_url"),
+                                temperature=0.2,
+                                fallback_mode="agent_message",
+                            ),
+                            timeout=_AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
                         )
                     # H5 fix: cancel guard after Pass-2 metadata extraction.
                     _check_cancelled(scenario_id)
@@ -5258,6 +5290,113 @@ async def _narrate_branch_data(
     )
     result["title"] = branch_info.get("title", "未命名")
     return result
+
+
+def _ensure_completable_narration(narration: dict, *, language: str) -> dict:
+    result = dict(narration or {})
+    story = _strip_round_markers(str(result.get("story", "") or ""))
+    insight = _strip_round_markers(str(result.get("insight", "") or ""))
+    if not story:
+        story = (
+            "该分支已完成推演，但叙事生成失败；系统保留了原始发言记录作为依据。"
+            if _is_chinese_language(language)
+            else (
+                "This branch completed simulation, but narrative generation failed; "
+                "the raw transcript remains available as evidence."
+            )
+        )
+    if not insight:
+        excerpt = " ".join(story.split())
+        insight = (excerpt[:120] + "…") if len(excerpt) > 120 else excerpt
+    result["story"] = story
+    result["insight"] = insight
+    return result
+
+
+def _build_local_branch_narration_fallback(
+    engine,
+    branch_id,
+    *,
+    language: str,
+    question: str,
+) -> dict:
+    branch_info = _get_branch(engine, branch_id)
+    all_msgs = _get_recent_messages(engine, branch_id, max_rounds=100)
+    raw_text = "\n".join(
+        f"[R{m.get('round', '?')} {m['agent_name']}]: {m['content']}"
+        for m in all_msgs
+    )
+    result = _build_fallback_narration(
+        branch_info.get("title", ""),
+        branch_info.get("probability", 0.5),
+        raw_text[:_NARRATE_MAX_CHARS],
+        language=language,
+        question=question,
+    )
+    result["title"] = branch_info.get(
+        "title",
+        "未命名" if _is_chinese_language(language) else "Untitled",
+    )
+    result["question_answer"] = ""
+    return _ensure_completable_narration(result, language=language)
+
+
+async def _narrate_branch_data_fail_soft(
+    engine,
+    branch_id,
+    agents,
+    *,
+    language: str = "Chinese",
+    llm_overrides: dict | None = None,
+    web_context_block: str = "",
+    question: str = "",
+) -> dict:
+    try:
+        narration = await _narrate_branch_data(
+            engine,
+            branch_id,
+            agents,
+            language=language,
+            llm_overrides=llm_overrides,
+            web_context_block=web_context_block,
+            question=question,
+        )
+    except SimulationCancelled:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Branch narration failed for %s; using local fallback: %s: %s",
+            branch_id,
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
+        )
+        narration = _build_local_branch_narration_fallback(
+            engine,
+            branch_id,
+            language=language,
+            question=question,
+        )
+    return _ensure_completable_narration(narration, language=language)
+
+
+def _save_narration_fail_soft(engine, branch_id, narration: dict, *, language: str) -> dict:
+    durable_narration = _ensure_completable_narration(narration, language=language)
+    try:
+        _save_narration(engine, branch_id, durable_narration)
+        return durable_narration
+    except Exception as exc:
+        logger.warning(
+            "Narration persistence failed for %s; retrying without optional answer: %s: %s",
+            branch_id,
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
+        )
+        retry_narration = dict(durable_narration)
+        retry_narration["question_answer"] = ""
+        _save_narration(engine, branch_id, retry_narration)
+        return retry_narration
 
 
 # ── Database helpers ─────────────────────────────────────
