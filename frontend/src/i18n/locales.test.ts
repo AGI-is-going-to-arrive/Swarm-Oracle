@@ -123,7 +123,7 @@ describe('i18n locale resources', () => {
     expect(en.translation.sim.tree.status_pruned).toBe('Low likelihood');
     expect(zh.translation.sim.tree.status_pruned).toBe('可能性较低');
     expect(en.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
-    expect(zh.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
+    expect(zh.translation.debate.runtime_preset_not_applicable).toContain('辩论竞技场');
   });
 
   it('provides localized labels for Phase 3 agent, causal, and compare pages', () => {

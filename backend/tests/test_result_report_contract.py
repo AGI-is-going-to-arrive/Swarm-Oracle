@@ -293,6 +293,20 @@ def test_full_report_schema_preserves_stale_report_after_likelihood_normalizatio
     assert report.verdict.likelihood.interval == (1.0, 1.0)
 
 
+def test_full_report_for_story_preserves_legacy_likelihood_without_wep():
+    from app.services.result_report.schema import full_report_for_story
+
+    payload = _legal_full_report()
+    del payload["verdict"]["likelihood"]["wep"]
+
+    report = full_report_for_story(payload)
+
+    assert report is not None
+    assert report["verdict"]["likelihood"]["probability"] == 0.68
+    assert report["verdict"]["likelihood"]["interval"] == [0.55, 0.76]
+    assert report["verdict"]["likelihood"]["wep"] == "likely"
+
+
 def test_chart_schema_freezes_known_payload_shapes_and_unknown_passthrough():
     from app.services.result_report.schema import (
         KNOWN_CHART_TYPES,

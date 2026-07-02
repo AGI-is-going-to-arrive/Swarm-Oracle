@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -468,6 +468,48 @@ describe('EndingChatModal', () => {
     expect(screen.getAllByText('Replay mode is read-only for ending chambers.').length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
     expect(storeState.openRoom).not.toHaveBeenCalled();
+  });
+
+  it('closes on a genuine overlay click but not on a drag that ends over the overlay', () => {
+    // Regression NEW-H1: a mousedown inside the modal (text selection in composer or
+    // transcript) released over the overlay dispatches `click` on the overlay and
+    // used to close the whole modal mid-conversation.
+    const onClose = vi.fn();
+    const { container } = render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly
+        fallbackMessages={[]}
+        onClose={onClose}
+        onModeChange={vi.fn()}
+        onAutomationStateChange={vi.fn()}
+      />,
+    );
+    const overlay = container.querySelector('.ending-chat-overlay');
+    const modal = screen.getByTestId('ending-chat-modal');
+    expect(overlay).not.toBeNull();
+
+    // Drag out: press inside the modal, release/click lands on the overlay → stay open.
+    fireEvent.mouseDown(modal);
+    fireEvent.click(overlay as Element);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Drag in: press on the overlay, release over the modal, then the browser may
+    // synthesize a click on the overlay — still not a genuine overlay click.
+    fireEvent.mouseDown(overlay as Element);
+    fireEvent.mouseUp(modal);
+    fireEvent.click(overlay as Element);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Genuine overlay click: press and release both on the overlay → close.
+    fireEvent.mouseDown(overlay as Element);
+    fireEvent.mouseUp(overlay as Element);
+    fireEvent.click(overlay as Element);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('strips leaked reasoning prefixes from assistant transcript turns', () => {

@@ -31,7 +31,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { buildAutomationErrorState } from '../lib/apiErrorMessage';
+import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   ensureScenarioObjectives,
   getScenarioArchiveKeyMoments,
@@ -1528,7 +1528,7 @@ export function SimulationView() {
           already-localized message. */}
       {error && (
         <div className="sim-error">
-          <p>⚠️ {errorCode === 'RUNTIME_ERROR' ? t('simulation.runtime_failed') : error}</p>
+          <p>⚠️ {errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, error || t('simulation.runtime_failed')) : error}</p>
           <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
             {t('sim.status.back')}
           </button>

@@ -1150,6 +1150,67 @@ def _build_roundtable_witness_content(
     return ". ".join(parts_en) + "."
 
 
+def _followup_fallback_hinge(
+    participant_evidence: dict[str, Any],
+    *,
+    language: str,
+) -> str:
+    for key, limit in (
+        ("evidence_hook", 84),
+        ("branch_insight", 84),
+        ("branch_title", 60),
+        ("latest_quote", 84),
+    ):
+        value = _oracle_visible_clause(
+            participant_evidence.get(key),
+            language=language,
+            limit=limit,
+        )
+        if value:
+            return value
+    return ""
+
+
+def _followup_role_suffix(role_hint: str, *, language: str) -> str:
+    cleaned = sanitize_untrusted_text(role_hint, max_chars=40).strip()
+    if not cleaned:
+        return ""
+    if language == "zh":
+        lowered = cleaned.lower()
+        if lowered == "archivist":
+            return "（档案官）"
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9 _/-]{2,}", cleaned):
+            return ""
+        return f"（{cleaned}）"
+    return f" ({cleaned})"
+
+
+def _clean_followup_question_echo(user_content: str | None, *, language: str) -> str:
+    cleaned = sanitize_untrusted_text(user_content or "", max_chars=120)
+    if not cleaned:
+        return ""
+    if language == "zh":
+        if cleaned.count("你问") > 1:
+            return ""
+        cleaned = re.sub(r"[\w\u4e00-\u9fff·\s]{1,40}：(?=你问|我先|这句)", "", cleaned)
+        cleaned = re.sub(r"你问[「\"]\s*你问", "你问", cleaned)
+        recursive_markers = ("我会把答案落在", "这不是旁枝", "桌面上真正能判")
+        if cleaned.count("你问") > 1 or "你问「你问" in cleaned:
+            return ""
+    else:
+        cleaned = re.sub(r"^[A-Za-z][A-Za-z0-9 ._-]{1,40}:\s*", "", cleaned)
+        cleaned = re.sub(
+            r"\bYou asked ['\"]?\s*You asked\b",
+            "You asked",
+            cleaned,
+            flags=re.I,
+        )
+        recursive_markers = ("I would anchor the answer", "That is not side detail")
+    if any(marker in cleaned for marker in recursive_markers):
+        return ""
+    return sanitize_untrusted_text(cleaned, max_chars=52)
+
+
 def _build_followup_reply_content(
     room: EndingRoom,
     *,
@@ -1176,13 +1237,13 @@ def _build_followup_reply_content(
     is_archivist = response_participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
     role_hint = str(participant_evidence.get("role_hint") or "").strip()
     bio_hint = str(participant_evidence.get("bio_hint") or "").strip()
-    evidence_hint = str(participant_evidence.get("evidence_hook") or room.title).strip()
     latest_quote = str(participant_evidence.get("latest_quote") or "").strip()
     latest_round = int(participant_evidence.get("latest_round") or 0)
     profile_focus_hint = _oracle_profile_focus_hint(room)
-    user_question = sanitize_untrusted_text(user_content, max_chars=80)
 
     is_zh = room.language == "zh"
+    evidence_hint = _followup_fallback_hinge(participant_evidence, language=room.language)
+    user_question = _clean_followup_question_echo(user_content, language=room.language)
 
     def _clean_sentence(value: str) -> str:
         return str(value or "").strip().strip("。.!?！？")
@@ -1195,11 +1256,7 @@ def _build_followup_reply_content(
         cleaned = [_clean_sentence(part) for part in parts if _clean_sentence(part)]
         return ". ".join(cleaned) + ("." if cleaned else "")
 
-    role_suffix = (
-        f"（{role_hint}）"
-        if role_hint and is_zh
-        else (f" ({role_hint})" if role_hint else "")
-    )
+    role_suffix = _followup_role_suffix(role_hint, language=room.language)
     quote_zh = (
         f"R{latest_round} 原话是「{latest_quote}」"
         if latest_quote and latest_round > 0
@@ -1212,83 +1269,96 @@ def _build_followup_reply_content(
     )
 
     if is_zh:
-        speaker = f"{target_label}{role_suffix}"
+        speaker = f"我{role_suffix}"
+        hinge_clause = f"「{evidence_hint}」" if evidence_hint else "这处转折"
+        question_clause = f"你问「{user_question}」" if user_question else "这句追问"
         if interaction_mode == EndingRoomInteractionMode.THREAD_FOLLOWUP:
             return _zh_join(
-                f"{speaker}：你问「{user_question}」，我会把答案落在「{evidence_hint}」",
+                f"{question_clause}，我会把答案落在{hinge_clause}",
                 quote_zh,
                 "这不是旁枝，是这条线还能不能继续推进的门槛",
             )
         if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
             return _zh_join(
-                f"{speaker}：这张证据卡真正补上的，是「{evidence_hint}」",
+                f"这张证据卡真正补上的，是{hinge_clause}",
                 quote_zh,
                 "它改变的不是气氛，而是这场争论里哪条因果链更硬",
             )
         if interaction_mode == EndingRoomInteractionMode.EPILOGUE:
             return _zh_join(
-                f"{speaker}：往后三步看，先回来的还是「{evidence_hint}」这笔账",
+                f"往后三步看，先回来的还是{hinge_clause}这笔账",
                 quote_zh,
                 "它会继续压着人做选择，而不是在结局页就消失",
             )
         if is_archivist:
             target_clause = f"这句是追着{addressed_label}来的" if addressed_label else ""
             return _zh_join(
-                f"{target_label}：我先把这句追问钉住",
+                "我先把这句追问钉住",
                 target_clause,
-                f"桌面上真正能判的核心转折，是「{evidence_hint}」",
+                f"桌面上真正能判的转折，是{hinge_clause}",
                 f"接下来要问的是它怎样改变{profile_focus_hint or '后果'}",
             )
         if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
-            target = addressed_label or target_label
+            target = addressed_label if addressed_label and addressed_label != target_label else ""
+            target_clause = (
+                f"你点名{target}，其实是在追问{hinge_clause}"
+                if target
+                else f"这句追问落在{hinge_clause}"
+            )
             return _zh_join(
-                f"{speaker}：{target}被问到的其实就是「{evidence_hint}」",
+                f"{speaker}会先回答这一点：{target_clause}",
                 quote_zh,
                 "我的回答是，这里撑不住，后面的判断也就站不稳",
             )
         return _zh_join(
-            f"{speaker}：我只补一个角度，关键仍是「{evidence_hint}」",
+            f"{speaker}只补一个角度，关键仍是{hinge_clause}",
             quote_zh or bio_hint,
             f"这会直接影响{profile_focus_hint or '后续代价'}",
         )
 
-    speaker = f"{target_label}{role_suffix}"
+    speaker = f"I{role_suffix}"
+    hinge_clause = f"'{evidence_hint}'" if evidence_hint else "that hinge"
+    question_clause = f"You asked '{user_question}'" if user_question else "This follow-up"
     if interaction_mode == EndingRoomInteractionMode.THREAD_FOLLOWUP:
         return _en_join(
-            f"{speaker}: You asked '{user_question}', "
-            f"and I would anchor the answer on '{evidence_hint}'",
+            f"{question_clause}, and I would anchor the answer on {hinge_clause}",
             quote_en,
             "That is not side detail; it is the threshold this line has to survive",
         )
     if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
         return _en_join(
-            f"{speaker}: This evidence card adds one thing that matters: '{evidence_hint}'",
+            f"This evidence card adds one thing that matters: {hinge_clause}",
             quote_en,
             "It changes which causal chain in the table can actually carry the verdict",
         )
     if interaction_mode == EndingRoomInteractionMode.EPILOGUE:
         return _en_join(
-            f"{speaker}: Three moves later, the bill still comes due at '{evidence_hint}'",
+            f"Three moves later, the bill still comes due at {hinge_clause}",
             quote_en,
             "That pressure keeps forcing choices after the ending page",
         )
     if is_archivist:
         target_clause = f"This follows {addressed_label}'s answer" if addressed_label else ""
         return _en_join(
-            f"{target_label}: I would pin this follow-up to one hinge",
+            "I would pin this follow-up to one hinge",
             target_clause,
-            f"The table can actually judge the core hinge: '{evidence_hint}'",
+            f"The table can actually judge the hinge: {hinge_clause}",
             f"The next question is how it changes {profile_focus_hint or 'the consequences'}",
         )
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
-        target = addressed_label or target_label
+        target = addressed_label if addressed_label and addressed_label != target_label else ""
+        target_clause = (
+            f"You named {target}, but the real question is {hinge_clause}"
+            if target
+            else f"The question lands on {hinge_clause}"
+        )
         return _en_join(
-            f"{speaker}: {target} is really being asked about '{evidence_hint}'",
+            f"{speaker} would answer this first: {target_clause}",
             quote_en,
             "If that fails, the later judgment does not stand either",
         )
     return _en_join(
-        f"{speaker}: I will add one angle; the hinge is still '{evidence_hint}'",
+        f"{speaker} will add one angle; the hinge is still {hinge_clause}",
         quote_en or bio_hint,
         f"That directly changes {profile_focus_hint or 'the next cost'}",
     )
@@ -2182,6 +2252,8 @@ def _build_oracle_generation_prompt(
         f"{vocab_section}"
         "Hard rules:\n"
         "- You ARE this character — draw on their role, persona, emotional state, and stance\n"
+        "- Use first person; never refer to yourself by display name or in third person\n"
+        "- For follow-up replies, choose a role-specific stance and opening rhythm; do not reuse another speaker's verdict phrasing\n"  # noqa: E501
         "- Reference the original scenario question and how this branch's events connect to it\n"
         "- Use specific names, events, numbers, and turning points from the simulation\n"
         "- Sound like a real person talking at a table, not an AI writing a report\n"
@@ -2394,6 +2466,8 @@ def _build_oracle_rewrite_prompt(
         f"{vocab_section}"
         "Hard rules:\n"
         "- The anchor copy is a semantic safety net only — do NOT paraphrase it line by line\n"
+        "- Use first person; never refer to yourself by display name or in third person\n"
+        "- For follow-up replies, choose a role-specific stance and opening rhythm; do not reuse another speaker's verdict phrasing\n"  # noqa: E501
         "- Preserve the factual scope and conclusion direction, but use completely fresh wording\n"
         "- Do not invent facts, branches, quotes, or motives not already in context\n"
         "- Sound like a real person talking at a table, not like an AI writing a report\n"

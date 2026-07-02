@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAgentStore } from '../stores/agentStore';
+import type { AgentIdentityInfo } from '../types';
 import './AgentSelectionStrip.css';
 
 interface AgentSelectionStripProps {
@@ -11,6 +12,12 @@ interface AgentSelectionStripProps {
 }
 
 const MAX_VISIBLE_PILLS = 3;
+
+interface AgentNameGroup {
+  key: string;
+  representative: AgentIdentityInfo;
+  agents: AgentIdentityInfo[];
+}
 
 export default function AgentSelectionStrip({
   userId,
@@ -32,10 +39,27 @@ export default function AgentSelectionStrip({
     }
   }, [visible, userId, fetchIdentities]);
 
-  const customAgents = useMemo(
-    () => identities.filter((agent) => agent.kind === 'custom'),
-    [identities],
-  );
+  const customAgentGroups = useMemo<AgentNameGroup[]>(() => {
+    // The identity store can legally hold several agents with the same display name
+    // (one per scenario/continuity key). The quick-select strip shows one pill per
+    // name — the full attach panel still lists every identity for precise picking.
+    const groupsByName = new Map<string, AgentNameGroup>();
+    for (const agent of identities) {
+      if (agent.kind !== 'custom') continue;
+      const nameKey = agent.display_name.trim();
+      const existing = groupsByName.get(nameKey);
+      if (existing) {
+        existing.agents.push(agent);
+      } else {
+        groupsByName.set(nameKey, {
+          key: nameKey,
+          representative: agent,
+          agents: [agent],
+        });
+      }
+    }
+    return Array.from(groupsByName.values());
+  }, [identities]);
 
   if (!visible) return null;
 
@@ -57,7 +81,7 @@ export default function AgentSelectionStrip({
     );
   }
 
-  if (customAgents.length === 0) {
+  if (customAgentGroups.length === 0) {
     return (
       <fieldset className="agent-strip agent-strip--empty">
         <legend className="sr-only">{t('agents.quick_select')}</legend>
@@ -69,16 +93,20 @@ export default function AgentSelectionStrip({
     );
   }
 
-  const visibleAgents = customAgents.slice(0, MAX_VISIBLE_PILLS);
-  const moreCount = Math.max(0, customAgents.length - MAX_VISIBLE_PILLS);
+  const visibleGroups = customAgentGroups.slice(0, MAX_VISIBLE_PILLS);
+  const moreCount = Math.max(0, customAgentGroups.length - MAX_VISIBLE_PILLS);
   const selectionFull = selectedIds.size >= maxSelected;
 
   return (
     <fieldset className="agent-strip">
       <legend className="sr-only">{t('agents.quick_select')}</legend>
       <ul className="agent-strip__pills">
-        {visibleAgents.map((agent) => {
-          const isSelected = selectedIds.has(agent.id);
+        {visibleGroups.map((group) => {
+          const agent = group.representative;
+          const selectedGroupIds = group.agents
+            .filter((candidate) => selectedIds.has(candidate.id))
+            .map((candidate) => candidate.id);
+          const isSelected = selectedGroupIds.length > 0;
           const isDisabled = !isSelected && selectionFull;
           return (
             <li key={agent.id} className="agent-strip__pill-item">
@@ -96,7 +124,15 @@ export default function AgentSelectionStrip({
                   className="sr-only"
                   checked={isSelected}
                   disabled={isDisabled}
-                  onChange={() => toggleSelection(agent.id, maxSelected)}
+                  onChange={() => {
+                    if (selectedGroupIds.length > 0) {
+                      for (const selectedId of selectedGroupIds) {
+                        toggleSelection(selectedId, maxSelected);
+                      }
+                    } else {
+                      toggleSelection(agent.id, maxSelected);
+                    }
+                  }}
                 />
                 <span className="agent-strip__pill-text">{agent.display_name}</span>
               </label>

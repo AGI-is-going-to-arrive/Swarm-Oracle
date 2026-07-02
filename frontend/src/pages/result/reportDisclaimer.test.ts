@@ -23,4 +23,16 @@ describe('getReportDisclaimerText', () => {
   it('preserves scenario-specific backend disclaimers', () => {
     expect(getReportDisclaimerText('Scenario-specific caveat.', tZh)).toBe('Scenario-specific caveat.');
   });
+
+  it('maps the suppressed-likelihood boilerplate (both languages) to its own key', () => {
+    const suppressedEn =
+      'The report suppresses the statistical band because the only resolved ' +
+      'anchor is a root or fork-parent fallback rather than an answer-bearing branch.';
+    const suppressedZh =
+      '报告已隐藏统计区间，因为唯一可解析锚点是根分支或分叉父分支，而不是直接回答问题的分支。';
+    const tKeyed = (key: string, defaultValue: string) =>
+      key === 'result.report.disclaimer_suppressed' ? '[[suppressed-l10n]]' : defaultValue;
+    expect(getReportDisclaimerText(suppressedEn, tKeyed)).toBe('[[suppressed-l10n]]');
+    expect(getReportDisclaimerText(suppressedZh, tKeyed)).toBe('[[suppressed-l10n]]');
+  });
 });

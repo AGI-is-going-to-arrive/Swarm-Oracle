@@ -13,8 +13,6 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ![SwarmOracle 首页](docs/screenshots/01-home.png)
 
-社交预览使用仓库内已存在的截图和在线介绍页素材；首屏 GIF 尚未提交，后续应由浏览器 lane 录制并在确认真实文件后再引用。
-
 ## 在线介绍页 / Live Demo
 
 打开就能看完整截图和一段介绍视频：**https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
@@ -23,8 +21,8 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ## 功能亮点
 
-- **多分支推演**：一个问题，多条故事线；推演页显示当前轮次、轮内 Agent 发言进度、整体进度、ETA 和首轮预热时长，慢模型只要仍有内容、进度活动或有效运行信号就保持仍在工作的口径，真正失败、取消或后台任务确实中断时，未完成分支会显示为已中断而不是继续显示推演中，结果页只按终局叶子世界线展示归一后的结局概率
-- **Pixel Theater + 导演/玩法卡**：用像素剧场观看推演，底部进度和回放时间线会避开消息、缩放与语言切换控件，并可用 14 张导演/玩法卡改变当前世界线节奏
+- **多分支推演**：一个问题，多条故事线；推演页实时显示轮次、发言进度和 ETA，慢模型会显示已运行时长，中断的分支明确标出；结果页按终局世界线给出归一化概率
+- **Pixel Theater + 导演/玩法卡**：用像素剧场观看推演，14 张导演/玩法卡可以改变当前世界线的节奏
 - **辩论竞技场**：AI 正反方激辩，帮你看清争议的两面
 - **神谕密室**：与当前世界线里的 AI 角色深度对话，追问细节
 - **世界线圆桌**：多方代表圆桌讨论，完成后可回到已保存结果并继续 Deep Dive
@@ -34,8 +32,8 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 - **教学模板与本地主题包**：用课堂模板或仓库内 `packs/` 预设快速填入问题和推荐设置，本地包支持类型分段、搜索、预览和一键导入
 - **预测日志与排行榜**：记录预测、复盘校准，也能看全局排行榜
 - **Snapshot 导入 / 导出**：把一次推演打包保存，之后再导入继续查看
-- **完整报告与证据回放**：结果页先给深读摘要和章节入口，独立报告页按终局答案叶锚定结论、证据、观察指标、概率区间和图表，证据能跳回 replay
-- **模型配置与自带 LLM**：兼容任何 OpenAI 格式的 API，可保存带限速、并发、能力覆盖和原生搜索上游声明的 profile 后在首页、辩论和结果页会客厅里直接选择
+- **完整报告与证据回放**：结果页先给深读摘要和章节入口；独立报告页展开结论、证据、观察指标、概率区间和图表。概率区间只在有可回答分支锚点时显示，证据能跳回对应回放
+- **模型配置与自带 LLM**：兼容任何 OpenAI 格式的 API，可保存多套模型 profile（地址、密钥、限速、并发等），在首页、辩论和结果页会客厅里直接选择
 
 > 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**；逐项功能图鉴见 **[FEATURES.md](docs/FEATURES.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
 
@@ -53,21 +51,26 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ### Tier 1：公共 Gallery
 
-占位入口，F1 完成后激活。当前请使用在线介绍页查看截图和视频，或使用下面的 Tier 2 / Tier 3 本地方式。
+公共在线 Gallery 尚未上线。当前请使用在线介绍页查看截图和视频，或使用下面的 Tier 2 / Tier 3 本地方式。
 
 ### Tier 2：零密钥 Demo
 
-导入 `samples/snapshots/` 下的 sanitized snapshot 即可查看离线演示，不需要 LLM API。示例场景包含 **如果郑和比哥伦布先发现了美洲大陆**，当前样本文件为 `samples/snapshots/*.swarm`；通过页面的 Snapshot 导入入口加载。
+先按下方「快速开始」启动前后端（这一步不需要真实 LLM key），再在首页用 Snapshot 导入入口加载 `samples/snapshots/` 下的 sanitized snapshot（`*.swarm` 文件），即可查看离线演示。示例场景包含 **如果郑和比哥伦布先发现了美洲大陆**。
 
 ### Tier 3：BYOK 完整运行
 
-配置你自己的 OpenAI-compatible LLM 服务后运行完整推演。Docker 和本地开发都使用同一组核心配置项；也可以在 `/admin/setup` 保存模型 profile，记录 Base URL、模型、key、限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明，之后首页会把带 key 的 profile 当作已配置 LLM 来使用，并可复用到主推演、辩论和结果页会客厅。会客厅的模型配置藏在默认折叠的「高级设置」里，不选则走全局默认。开始或辩论按钮不可用时会在按钮下方说明原因，例如缺少问题、未配置 LLM 或本轮预算被 RPM/TPM 挡住；首页启动确认会使用输入框当前已提交文本，中文等输入法组词未确认时不会误触发。自动启动前只做轻量 LLM 预检，不跑 provider 并发压测；测试连接会把普通连通性、完整 provider probe 和模型原生搜索探测分开显示。已知官方 provider 的裸 `/v1` Base URL 会在运行时按 Responses 形态尝试原生工具注入，但不会回显完整派生 URL。如果本地代理实际转发到 xAI / OpenAI Responses 上游，仍需要在 profile 里显式声明对应上游，系统才会按官方 native-search adapter 注入工具；如果该代理或上游拒绝原生搜索工具，运行时会去掉原生工具重试一次，推演继续走普通 LLM 输出。若后续需要 LLM 的路径无法恢复原 profile，会要求重新选择或提供完整的 key / Base URL / 模型，不会静默换到其它凭据。
+用你自己的 OpenAI-compatible LLM 服务运行完整推演，两种配置方式任选其一：
+
+1. 在 `.env`（本地开发）或 `.env.docker`（Docker）里填入 `LLM_RESPONSES_URL` / `LLM_API_KEY` / `LLM_MODEL_NAME`；
+2. 启动后打开 `/admin/setup`，测试连接并保存一个带 key 的模型 profile，之后首页、辩论和结果页会客厅都可以直接选它。
+
+代理转发、原生搜索上游声明等高级行为见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
 
 ## 快速开始
 
 ### 运行要求
 
-最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。
+最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。Safari/iOS 16.2-16.3 会把 GFM 表格/删除线降级为普通 Markdown，但仍使用安全渲染。
 
 ### Docker 一键部署（推荐）
 
@@ -167,7 +170,7 @@ npm run dev
 |--------|------|------|
 | `LLM_RESPONSES_URL` | LLM 服务地址 | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
-| `LLM_MODEL_NAME` | 模型名称 | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
+| `LLM_MODEL_NAME` | 模型名称 | `gpt-5.4-mini` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
 | `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
@@ -187,6 +190,9 @@ Docker Compose 会读取 `.env.docker`（如果存在），并把数据库和 Ch
 SwarmOracle/
 ├── backend/          # FastAPI 后端 (Python)
 ├── frontend/         # React + Phaser 前端 (TypeScript)
+├── docs/             # 使用指南 / 功能图鉴 / 配置说明
+├── packs/            # 本地主题包（双语预设场景）
+├── samples/          # 零密钥演示 snapshot
 ├── docker-compose.yml
 ├── .env.example      # 本地开发配置模板
 └── .env.docker       # Docker 部署本地配置，默认不提交

@@ -332,6 +332,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   useEffect(() => {
     setLocalStoryData(null);
     setLocalGenerating(false);
+    setRetryError(false);
   }, [storyData]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -369,6 +370,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         if (newReport && newReport.status !== 'generating') {
           setLocalStoryData(updatedStory);
           setLocalGenerating(false);
+          setRetryError(false);
           if (onRefresh) {
             onRefresh();
           }
@@ -456,6 +458,11 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
     const timeoutId = setTimeout(() => controller.abort(), REPORT_GENERATE_TIMEOUT_MS);
 
+    // Show the honest "generating" state (and arm the status poll) for the whole
+    // attempt — if the stream times out below while the backend keeps generating,
+    // the poll is what eventually clears the stale partial banner.
+    setLocalGenerating(true);
+
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const res = await generateReport(
@@ -483,6 +490,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       if (isAlreadyRunning) {
         setLocalGenerating(true);
       } else {
+        // Stream completed: drop the local generating flag so the freshly fetched
+        // report renders immediately instead of waiting for the next poll tick.
+        setLocalGenerating(false);
+        setRetryError(false);
         if (onRefresh) {
           onRefresh();
         } else if (typeof window !== 'undefined') {
@@ -494,7 +505,13 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       if (isMountedRef.current) {
         if (error && (error.code === 'REPORT_ALREADY_RUNNING' || error.message?.includes('REPORT_ALREADY_RUNNING'))) {
           setLocalGenerating(true);
+        } else if (error?.name === 'AbortError') {
+          // The backend ties report generation to the SSE generator; aborting the
+          // reader can cancel the in-flight build, so surface a retryable failure.
+          setLocalGenerating(false);
+          setRetryError(true);
         } else {
+          setLocalGenerating(false);
           setRetryError(true);
         }
       }

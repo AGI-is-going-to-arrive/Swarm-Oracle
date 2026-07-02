@@ -948,6 +948,8 @@ def test_worldline_roundtable_api_accepts_branch_scoped_selected_representatives
                 {"branch_id": fixture["branch_b_id"], "agent_id": fixture["shared_agent_id"]},
                 {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
             ],
+            "discussion_format": "quick_review",
+            "cast_mode": "smart_pick",
             "language": "zh",
         },
     )

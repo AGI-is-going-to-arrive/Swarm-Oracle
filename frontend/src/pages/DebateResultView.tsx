@@ -448,7 +448,11 @@ export function DebateResultView() {
     return (
       <div className="debate-shell">
         <div className="debate-shell__inner">
-          <p className="debate-modal__error">{error || t('debate.result_missing')}</p>
+          <p className="debate-modal__error">
+            {errorCode
+              ? getLocalizedApiErrorMessage({ code: errorCode }, t, error || t('debate.result_missing'))
+              : (error || t('debate.result_missing'))}
+          </p>
           <button type="button" className="btn btn-primary" onClick={() => navigate(id ? `/debate/${id}` : '/')}>
             {t('debate.back_home')}
           </button>

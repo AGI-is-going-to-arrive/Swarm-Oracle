@@ -489,6 +489,11 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
         monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
         monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+        # Pin defaults the assertion relies on — the local .env may disable all
+        # guards (LLM_CONCURRENCY=0), which would legally return None instead.
+        monkeypatch.setattr(llm_client.settings, "LLM_CONCURRENCY", 5)
+        monkeypatch.setattr(llm_client.settings, "LLM_REQUESTS_PER_MINUTE", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_TOKENS_PER_MINUTE", 0)
 
         llm_client._pending_requests = 999
 

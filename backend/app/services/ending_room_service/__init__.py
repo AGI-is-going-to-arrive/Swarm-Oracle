@@ -475,7 +475,7 @@ def create_ending_room(
         effective_witness = normalized_witness
         if normalized_room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
             if normalized_cast_mode == "smart_pick" and explicit_cast_mode == "smart_pick":
-                effective_representatives = []
+                effective_representatives = normalized_representatives
                 effective_witness = None
             elif normalized_cast_mode == "custom":
                 selected_representative_branch_ids = {
@@ -1490,6 +1490,10 @@ def _reconcile_auto_recap_progress(
     return []
 
 
+def _omo_branch_pressure_zh(anchor_branch_title: str) -> str:
+    return f"《{anchor_branch_title}》的压力点已经集中到这一步。"
+
+
 def _build_room_plan(
     session: Session,
     room: EndingRoom,
@@ -1707,7 +1711,6 @@ def _build_room_plan(
         if participant.role_slot == EndingRoomRoleSlot.AGENT
     ]
     secondary_speaker = next((participant for participant in agent_speakers if participant.id != primary_speaker.id), None)  # noqa: E501
-    primary_meta = primary_speaker.persona_snapshot_json or {}
     evidence_hook = (
         (context["anchor_branch"]["key_moments"] or [None])[0]
         or context["anchor_branch"]["insight"]
@@ -1735,10 +1738,6 @@ def _build_room_plan(
         )
         if secondary_speaker is not None
         else None
-    )
-    role_hint = str(primary_meta.get("agent_role") or "").strip()
-    persona_hint = str(
-        primary_meta.get("bio_short") or primary_meta.get("agent_persona") or "").strip(
     )
     primary_quote = primary_evidence.get("latest_quote")
     primary_round = int(primary_evidence.get("latest_round") or 0)
@@ -1805,8 +1804,6 @@ def _build_room_plan(
         else ""
     )
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
-        safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
-        safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
         move_text = (
             (
                 f"问题：「{question_display}」。只改一步：「{evidence_hook_display}」。"
@@ -1836,18 +1833,14 @@ def _build_room_plan(
                 "participant_id": primary_speaker.id,
                 "phase": EndingRoomPhase.OPENING,
                 "content": (
-                    f"{primary_display_name}。"
+                    f"我会把这一局先落在「{evidence_hook_display}」。"
                     f"{primary_quote_clause_zh}"
-                    f"世界线：《{anchor_branch_title}》。"
-                    f"{role_hint + '。' if role_hint else ''}{persona_hint + '。' if persona_hint else ''}"  # noqa: E501
-                    f"核心转折：「{evidence_hook_display}」。"
+                    f"{branch_insight_sentence_zh or _omo_branch_pressure_zh(anchor_branch_title)}"
                     if room.language == "zh"
                     else (
-                        f"{primary_display_name}. "
+                        f"I would put the whole room on one move: {evidence_hook_display}. "
                         f"{primary_quote_clause_en}"
-                        f"Worldline: {anchor_branch_title}. "
-                        f"{(safe_role_hint + '. ') if safe_role_hint else ''}{(safe_persona_hint + '. ') if safe_persona_hint else ''}"  # noqa: E501
-                        f"Key hinge: '{evidence_hook_display}'."
+                        f"{branch_insight_sentence_en or f'The pressure in {anchor_branch_title} concentrates there. '}"  # noqa: E501
                     )
                 ),
                 "emotion": "reflective",
@@ -2199,6 +2192,46 @@ async def _watch_ending_room_runtime_lock_loss(
         await asyncio.sleep(_ENDING_ROOM_LOCK_LOSS_POLL_SECONDS)
 
 
+def _vary_adjacent_duplicate_turn_content(
+    content: str,
+    *,
+    previous_content: str | None,
+    language: str,
+) -> str:
+    if not previous_content or content.strip() != previous_content.strip():
+        return content
+    suffix = (
+        "换个角度说，这一轮把同一处压力重新落到下一步选择上。"
+        if language == "zh"
+        else "Put another way, this turn re-anchors the same pressure on the next choice."
+    )
+    if suffix in content:
+        return content
+    separator = "" if content.rstrip().endswith(("。", ".", "!", "！", "?", "？")) else " "
+    return f"{content.rstrip()}{separator}{suffix}"
+
+
+def _apply_adjacent_duplicate_turn_variations(
+    planned_turns: list[dict[str, Any]],
+    *,
+    language: str,
+) -> list[dict[str, Any]]:
+    varied_turns: list[dict[str, Any]] = []
+    previous_content: str | None = None
+    for turn in planned_turns:
+        content = str(turn.get("content") or "")
+        varied_content = _vary_adjacent_duplicate_turn_content(
+            content,
+            previous_content=previous_content,
+            language=language,
+        )
+        if varied_content != turn.get("content"):
+            turn = {**turn, "content": varied_content}
+        varied_turns.append(turn)
+        previous_content = varied_content
+    return varied_turns
+
+
 async def run_ending_room_background(
     room_id: str,
     *,
@@ -2291,6 +2324,17 @@ async def run_ending_room_background(
                 planned_turns,
                 result,
                 **enhance_kwargs,
+            )
+            planned_turns = _apply_adjacent_duplicate_turn_variations(
+                planned_turns,
+                language=room_language,
+            )
+            result = _rebuild_room_result(
+                room,
+                participants,
+                planned_turns,
+                result,
+                scenario_question=_load_scenario_question(room_scenario_id),
             )
             existing_auto_turns = _reconcile_auto_recap_progress(
                 session,

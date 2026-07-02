@@ -9,7 +9,7 @@
 
 下面只列**面向用户**的常用配置；更细的调优项见模板文件里的注释。
 
-最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。
+最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。Safari/iOS 16.2-16.3 会把 GFM 表格/删除线降级为普通 Markdown，但仍使用安全渲染。
 
 ---
 
@@ -22,7 +22,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 |--------|------|------|
 | `LLM_RESPONSES_URL` | LLM 服务地址 | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
-| `LLM_MODEL_NAME` | 模型名称（取决于你的服务） | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
+| `LLM_MODEL_NAME` | 模型名称（取决于你的服务） | `gpt-5.4-mini` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `LLM_EXTRA_ALLOWED_HOSTS` | 请求级 BYOK 额外允许的 host，逗号分隔 | `llm.example.com,192.168.1.25` |
 | `LLM_ALLOW_PRIVATE_BYOK_HOSTS` | 是否允许请求级 BYOK 使用额外配置的私网 / LAN / loopback host | `false`（默认） |
 | `LLM_ALLOW_LOCAL_BYOK_HOSTS` | 是否允许请求级 BYOK 使用内置本地别名 | `true`（默认） |
@@ -102,7 +102,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 还有几个后端内部/实验开关默认保持关闭，不作为普通用户入口介绍：`FEATURE_ROUNDTABLE_INSIGHT_LLM`、`FEATURE_HALLUCINATION_GATE`、`FEATURE_IDENTITY_COMPACTION`。
 
-`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现深读摘要入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。完成态 inline 只展示置信度、真实字段派生的摘要、章节目录和独立报告链接；完整章节在 `/result/:id/report` 展开，replay 下没有 live 生成 / 重试入口。报告正文使用安全 Markdown 渲染，支持 GFM 表格和删除线，不放行图片；报告的 verdict / 置信度 / 证据 / 异见 / 概率图锚定终局答案叶，观察指标 / watch-list 由 LLM 结合报告证据生成并经过空话过滤。报告提供 `probability_bar` / `faction_share` 数据时会显示概率与阵营图表。概率和区间只展示合法可渲染值，异常值会被后端规范化或在前端降级为定性文案。重试会沿用当前标签页的 BYOK provider policy，完成后只刷新报告数据，不硬刷新整页；`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
+`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现深读摘要入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。完成态 inline 只展示置信度、真实字段派生的摘要、章节目录和独立报告链接；完整章节在 `/result/:id/report` 展开，replay 下没有 live 生成 / 重试入口。报告正文使用安全 Markdown 渲染；支持正则 lookbehind 的现代浏览器会启用 GFM 表格和删除线，Safari/iOS 16.2-16.3 等不支持 lookbehind 的引擎会降级为普通 Markdown，但仍不放行图片。报告的 verdict / 置信度 / 证据 / 异见 / 概率图锚定终局答案叶，观察指标 / watch-list 由 LLM 结合报告证据生成并经过空话过滤。只有存在可回答终局锚点，且报告提供 `probability_bar` / `faction_share` 数据时，才会显示概率与阵营图表。合法历史概率会被兼容规范化；缺少可回答分支锚点、非法概率 / 区间或语义无法确认时，前端会降级为定性文案，不伪造 `0.0%`。重试会沿用当前标签页的 BYOK provider policy，完成后只刷新报告数据，不硬刷新整页；超时或被中止的重试会保留可重试状态，不把未完成结果当成成功。`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
 
 常用报告生成参数：
 

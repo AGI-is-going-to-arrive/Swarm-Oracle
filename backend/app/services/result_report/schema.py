@@ -152,6 +152,23 @@ def _normalize_likelihood_interval(value: Any) -> tuple[float, float]:
     return (low, high) if low <= high else (high, low)
 
 
+def _derive_likelihood_label(probability: float) -> str:
+    probability = _clamp01(probability)
+    if probability < 0.05:
+        return "almost_no_chance"
+    if probability < 0.20:
+        return "very_unlikely"
+    if probability < 0.40:
+        return "unlikely"
+    if probability < 0.60:
+        return "roughly_even"
+    if probability < 0.80:
+        return "likely"
+    if probability < 0.95:
+        return "very_likely"
+    return "almost_certain"
+
+
 class Likelihood(_StrictModel):
     probability: float = Field(ge=0.0, le=1.0)
     interval: tuple[float, float]
@@ -170,6 +187,13 @@ class Likelihood(_StrictModel):
         if "interval" in normalized:
             normalized["interval"] = _normalize_likelihood_interval(
                 normalized.get("interval"),
+            )
+        wep = str(normalized.get("wep") or "").strip()
+        if wep:
+            normalized["wep"] = wep
+        else:
+            normalized["wep"] = _derive_likelihood_label(
+                _normalize_likelihood_probability(normalized.get("probability")),
             )
         return normalized
 

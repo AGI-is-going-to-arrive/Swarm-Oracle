@@ -13,8 +13,6 @@ SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI a
 
 ![SwarmOracle home](docs/screenshots-en/01-home.png)
 
-The social preview should use existing repository screenshots and the live intro page assets. No hero GIF is linked yet; the browser lane should capture one first and only then add a real file reference.
-
 ## Live Demo
 
 Open it for the full screenshots and a short intro video: **https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
@@ -23,8 +21,8 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 
 ## Features
 
-- **Multi-branch simulation**: One question, multiple storylines; the simulation page shows current round, in-round Agent speaking progress, overall progress, ETA, and first-round warmup elapsed time, slow models stay in the still-working state while content, progress activity, or a live run signal continues; truly failed, cancelled, or orphaned runs show unfinished branches as interrupted instead of still in progress, and the result page reports normalized probabilities for terminal leaf worldlines only.
-- **Pixel Theater + director/gameplay cards**: Watch the run in the pixel-stage view; bottom progress and replay timeline controls stay clear of messages, zoom controls, and the language switcher while 14 director/gameplay cards can change the current worldline rhythm.
+- **Multi-branch simulation**: One question, multiple storylines; the simulation page shows rounds, speaking progress, and ETA live, slow models show elapsed time, and interrupted branches are clearly marked; the result page reports normalized probabilities for terminal worldlines.
+- **Pixel Theater + director/gameplay cards**: Watch the run in the pixel-stage view, where 14 director/gameplay cards can change the current worldline rhythm.
 - **Debate Arena**: AI affirmative and opposing sides debate so you can see both sides of an issue.
 - **Oracle Chambers**: Talk in depth with AI characters from the current worldline and ask follow-up questions.
 - **Worldline Roundtable**: Representatives from multiple sides discuss around a table. After it finishes, you can return to the saved result and continue Deep Dive.
@@ -34,8 +32,8 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 - **Education templates and Local Packs**: Start from classroom templates or repo-local `packs/` presets; Local Packs support genre segments, search, preview, and one-click import.
 - **Prediction journal and leaderboard**: Record predictions, review calibration, and view the global leaderboard.
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
-- **Full report and evidence replay**: The result page shows a digest and section links first; the standalone report anchors verdicts, evidence, indicators, probability bands, and charts to the terminal answer leaf, with replay jump-backs.
-- **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API, with saved profiles carrying rate limits, concurrency, capability overrides, and native-search upstream declarations selectable from the home page, Debate Arena, and result-page Oracle Chambers.
+- **Full report and evidence replay**: The result page shows a digest and section links first; the standalone report opens verdicts, evidence, indicators, probability bands, and charts. Statistical bands only appear when anchored to an answer-bearing branch, and evidence jumps back to the replay.
+- **Model profiles and bring your own LLM**: Compatible with any OpenAI-format API; save several model profiles (URL, key, rate limits, concurrency and more) and select one from the home page, Debate Arena, or result-page Oracle Chambers.
 
 > For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
 
@@ -53,21 +51,26 @@ Ask a question, watch a group of AI agents simulate several storylines, get a ve
 
 ### Tier 1: Public Gallery
 
-Placeholder entry. It will be activated after F1. For now, use the live intro page for screenshots and video, or use Tier 2 / Tier 3 locally.
+A public online gallery is not yet available. For now, use the live intro page for screenshots and video, or run it locally via Tier 2 / Tier 3 below.
 
 ### Tier 2: Keyless Demo
 
-Import a sanitized snapshot from `samples/snapshots/` to view an offline demo with no LLM API. The sample scenarios include **What if Zheng He discovered the Americas before Columbus**. Current sample files use the `samples/snapshots/*.swarm` convention; load them through the Snapshot import entry in the app.
+Start the backend and frontend first via Quick Start below (this step needs no real LLM key), then load a sanitized snapshot (a `*.swarm` file) from `samples/snapshots/` through the Snapshot import entry on the home page to view an offline demo. The sample scenarios include **What if Zheng He discovered the Americas before Columbus**.
 
 ### Tier 3: BYOK Full Run
 
-Configure your own OpenAI-compatible LLM service and run full simulations. Docker and local development use the same core configuration keys; you can also save a model profile from `/admin/setup` with its Base URL, model, key, rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. The home page treats profiles with a key as configured LLM access and can reuse them for simulations, debates, and result-page Oracle Chambers. Chamber model selection lives under a collapsed-by-default Advanced settings disclosure; leaving it blank uses the global default. When a start or debate button is unavailable, the page shows the reason below it, such as a missing question, no configured LLM, or an RPM/TPM budget block for this run; launch confirmation uses the text currently committed in the question box, so unfinished IME composition does not trigger a run. Automatic launch preflight uses a lightweight LLM check without provider parallelism probing; Test connection still separates ordinary connectivity, the full provider probe, and the model-native search probe. Bare `/v1` Base URLs on known official provider hosts are treated as the Responses form at runtime for native tool injection, without echoing the full derived URL. If a local proxy actually forwards to an xAI / OpenAI Responses upstream, still declare that upstream on the profile so the system can use the official native-search adapter for tool injection; if that proxy or upstream rejects native-search tools, the runtime retries once without native tools and continues with ordinary LLM output. If later LLM-backed paths cannot recover the original profile, they ask you to reselect it or provide a complete key / Base URL / model instead of silently switching credentials.
+Run full simulations with your own OpenAI-compatible LLM service. Pick either setup path:
+
+1. Fill `LLM_RESPONSES_URL` / `LLM_API_KEY` / `LLM_MODEL_NAME` in `.env` (local development) or `.env.docker` (Docker);
+2. After startup, open `/admin/setup`, test the connection, and save a model profile with a key. The home page, Debate Arena, and result-page Oracle Chambers can then select that profile directly.
+
+Advanced behavior such as proxy forwarding and native-search upstream declarations is covered in **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
 
 ## Quick Start
 
 ### Requirements
 
-Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern browsers that support oklch / color-mix).
+Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern browsers that support oklch / color-mix). On Safari/iOS 16.2-16.3, GFM tables and strikethrough degrade to plain Markdown while safe rendering stays enabled.
 
 ### One-command Docker deployment (recommended)
 
@@ -167,7 +170,7 @@ Core configuration lives in `.env.example` for local development or `.env.docker
 |--------|------|------|
 | `LLM_RESPONSES_URL` | LLM service URL | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API key | `sk-...` |
-| `LLM_MODEL_NAME` | Model name | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
+| `LLM_MODEL_NAME` | Model name | `gpt-5.4-mini` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `ENABLE_WEB_SEARCH` | Search enhancement (optional) | `false` |
 | `WEB_SEARCH_PROVIDER` | Search provider (when search is enabled) | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
@@ -187,6 +190,9 @@ The database migration owner remains backend `init_db()`. FastAPI lifespan stamp
 SwarmOracle/
 ├── backend/          # FastAPI backend (Python)
 ├── frontend/         # React + Phaser frontend (TypeScript)
+├── docs/             # Usage guide / feature catalog / configuration
+├── packs/            # Local packs (bilingual preset scenarios)
+├── samples/          # Keyless demo snapshots
 ├── docker-compose.yml
 ├── .env.example      # Local development configuration template
 └── .env.docker       # Local Docker deployment config, not committed by default

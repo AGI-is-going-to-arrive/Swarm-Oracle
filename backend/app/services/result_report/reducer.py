@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
@@ -60,6 +61,7 @@ class ReducerResult:
     polarization: StatResult[float]
     agent_consensus: StatResult[float]
     round_count: int
+    verdict_disclaimer: str | None = None
 
 
 def reduce(
@@ -114,16 +116,35 @@ def reduce(
         preferred_id=dominant_branch_id,
         all_branches=all_branches,
     )
+    verdict_disclaimer: str | None = None
+    if _is_unsafe_root_or_parent_anchor(target, all_branches) and len(all_branches) > 1:
+        answer_target = _pick_result_quality_answer_branch(scenario, all_branches)
+        if answer_target is not None:
+            target = answer_target
+            if answer_target.status != BranchStatus.COMPLETED:
+                status = "partial"
+                reason = "answer_branch_not_completed"
+        else:
+            verdict_disclaimer = _root_likelihood_disclaimer(_scenario_language(scenario))
     target_branch_id = target.id
+    distribution_branches = (
+        _sort_branches_for_report(all_branches)
+        if target_branch_id not in {branch.id for branch in fallback_branches}
+        else fallback_branches
+    )
     # Full-sorted distribution stays anchored on the whole branch set (H-3):
     # the "what almost won" / probability bar must show every route, only the
     # verdict/evidence/confidence anchors move to the chosen answer leaf.
     branch_distribution = reduce_branch_distribution(
-        fallback_branches,
+        distribution_branches,
         target_branch_id=target_branch_id,
         parent_branch_ids=parent_branch_ids,
     )
-    likelihood = _derive_likelihood(target.probability, len(fallback_branches))
+    likelihood = (
+        _suppressed_root_likelihood()
+        if verdict_disclaimer is not None
+        else _derive_likelihood(target.probability, len(distribution_branches))
+    )
     evidence = collect_evidence_pool(
         engine,
         scenario_id,
@@ -137,7 +158,7 @@ def reduce(
     polarization = _reduce_polarization_from_stats(faction_snapshots, relation_stats)
     analytic_confidence = derive_confidence(
         evidence_count=len(evidence),
-        branch_count=len(fallback_branches),
+        branch_count=len(distribution_branches),
         agent_consensus_status=agent_consensus.status,
         agent_consensus=agent_consensus.value,
         confidence_ceiling=result_quality_confidence,
@@ -170,6 +191,7 @@ def reduce(
         polarization=polarization,
         agent_consensus=agent_consensus,
         round_count=_count_rounds(engine, target_branch_id),
+        verdict_disclaimer=verdict_disclaimer,
     )
 
 
@@ -565,6 +587,144 @@ def _pick_target(
     return fallback_branches[0]
 
 
+def _is_unsafe_root_or_parent_anchor(branch: Branch, all_branches: list[Branch]) -> bool:
+    parent_ids = {item.parent_branch_id for item in all_branches if item.parent_branch_id}
+    if branch.id in parent_ids:
+        return True
+    return branch.fork_round == 0 and not _branch_has_content(branch)
+
+
+def _scenario_language(scenario: Scenario | None) -> str:
+    if scenario is None:
+        return "en"
+    parsed_context = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
+    explicit = str(parsed_context.get("_language") or "").lower()
+    if explicit.startswith("zh") or "chinese" in explicit:
+        return "zh"
+    if explicit.startswith("en") or "english" in explicit:
+        return "en"
+    question = str(scenario.question or "")
+    return "zh" if any("\u4e00" <= char <= "\u9fff" for char in question) else "en"
+
+
+def _root_likelihood_disclaimer(language: str) -> str:
+    if language == "zh":
+        return (
+            "报告已隐藏统计区间，因为唯一可解析锚点是根分支或分叉父分支，"
+            "而不是直接回答问题的分支。"
+        )
+    return (
+        "The report suppresses the statistical band because the only resolved "
+        "anchor is a root or fork-parent fallback rather than an answer-bearing branch."
+    )
+
+
+def _pick_result_quality_answer_branch(
+    scenario: Scenario | None,
+    all_branches: list[Branch],
+) -> Branch | None:
+    if scenario is None or not isinstance(scenario.parsed_context, dict):
+        return None
+    result_quality = scenario.parsed_context.get("result_quality")
+    if not isinstance(result_quality, dict):
+        return None
+    branches_by_id = {branch.id: branch for branch in all_branches}
+    parent_ids = {branch.parent_branch_id for branch in all_branches if branch.parent_branch_id}
+    question_answer = _normalize_answer_text(result_quality.get("question_answer"))
+    top_probability = _percentage_probability(question_answer)
+    branch_answers = result_quality.get("branch_question_answers")
+    answer_candidates: list[tuple[Branch, str]] = []
+    if isinstance(branch_answers, dict):
+        for branch_id, answer in branch_answers.items():
+            branch = branches_by_id.get(str(branch_id))
+            answer_text = _normalize_answer_text(answer)
+            if (
+                branch is not None
+                and _branch_has_content(branch)
+                and answer_text
+            ):
+                answer_candidates.append((branch, answer_text))
+    elif isinstance(branch_answers, list):
+        for item in branch_answers:
+            if not isinstance(item, dict):
+                continue
+            branch = branches_by_id.get(str(item.get("branch_id") or item.get("id") or ""))
+            answer = item.get("answer") or item.get("question_answer") or item.get("verdict")
+            answer_text = _normalize_answer_text(answer)
+            if (
+                branch is not None
+                and _branch_has_content(branch)
+                and answer_text
+            ):
+                answer_candidates.append((branch, answer_text))
+    if answer_candidates:
+        return min(
+            answer_candidates,
+            key=lambda item: _answer_branch_candidate_key(
+                item[0],
+                item[1],
+                parent_branch_ids=parent_ids,
+                top_probability=top_probability,
+            ),
+        )[0]
+    if top_probability is None:
+        return None
+    candidates = [
+        branch
+        for branch in all_branches
+        if branch.fork_round != 0 and _branch_has_content(branch)
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda branch: _answer_branch_candidate_key(
+            branch,
+            "",
+            parent_branch_ids=parent_ids,
+            top_probability=top_probability,
+        ),
+    )
+
+
+def _answer_branch_candidate_key(
+    branch: Branch,
+    answer: str,
+    *,
+    parent_branch_ids: set[str],
+    top_probability: float | None,
+) -> tuple[int, float, float, int, str]:
+    terminal_rank = 0 if _is_completed_terminal_leaf(branch, parent_branch_ids) else 1
+    answer_probability = _percentage_probability(answer)
+    if top_probability is None:
+        quality_delta = 0.0
+    elif answer_probability is not None:
+        quality_delta = abs(answer_probability - top_probability)
+    else:
+        quality_delta = abs(_clamp_probability(branch.probability) - top_probability)
+    return (
+        terminal_rank,
+        round(quality_delta, 6),
+        -_clamp_probability(branch.probability),
+        branch.fork_round,
+        branch.id,
+    )
+
+
+def _normalize_answer_text(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("answer") or value.get("question_answer") or value.get("verdict")
+    return str(value or "").strip()
+
+
+def _percentage_probability(text: str) -> float | None:
+    match = re.search(r"(\d{1,3}(?:\.\d+)?)\s*%", text)
+    if match is None:
+        return None
+    value = float(match.group(1)) / 100.0
+    return _clamp_probability(value)
+
+
 def _scenario_result_quality_confidence(scenario: Scenario | None) -> str | None:
     """Extract ``parsed_context.result_quality.confidence`` if present (S5)."""
 
@@ -649,6 +809,10 @@ def _derive_likelihood(probability: float, branch_count: int) -> Likelihood:
         ),
         wep=derive_likelihood_label(probability),
     )
+
+
+def _suppressed_root_likelihood() -> Likelihood:
+    return Likelihood(probability=0.0, interval=(0.0, 0.0), wep="missing")
 
 
 def _probability_bar_data(branch_distribution: list[dict[str, Any]]) -> dict[str, Any]:

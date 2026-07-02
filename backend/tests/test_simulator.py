@@ -359,6 +359,9 @@ async def test_roundtable_survey_sanitizes_prompt_leak_answer(monkeypatch):
         source_branch_id=None,
         memories=[],
         language="zh",
+        scenario_question="",
+        branch_card={},
+        roundtable_summary=[],
     )
     captured_prompts: list[str] = []
 

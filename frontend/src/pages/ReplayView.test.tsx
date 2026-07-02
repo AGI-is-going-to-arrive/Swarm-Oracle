@@ -141,6 +141,17 @@ describe('ReplayView — data path', () => {
           edges: [],
         });
       }
+      if (url.endsWith('/sc-xyz')) {
+        return jsonResponse({
+          id: 'sc-xyz',
+          question: 'Test scenario?',
+          status: 'done',
+          branches: [
+            { id: 'b1', title: 'Branch 1', probability: 0.6, status: 'ACTIVE' },
+            { id: 'b2', title: 'Branch 2', probability: 0.4, status: 'ACTIVE' }
+          ]
+        });
+      }
       return jsonResponse({}, 404);
     });
 
@@ -149,7 +160,7 @@ describe('ReplayView — data path', () => {
     await waitFor(() => {
       expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
 
     // Agent queue populated from graph payload
     expect(screen.getByTestId('replay-agent-queue-a1')).toBeInTheDocument();
@@ -158,6 +169,10 @@ describe('ReplayView — data path', () => {
     // Playback controls present
     expect(screen.getByTestId('replay-playback-control-play')).toBeInTheDocument();
     expect(screen.getByTestId('replay-playback-control-speed-2x')).toBeInTheDocument();
+
+    // Verify branch filter dropdown labels are name + probability (FE-M2)
+    expect(screen.getByText('Branch 1 · 60.0%')).toBeInTheDocument();
+    expect(screen.getByText('Branch 2 · 40.0%')).toBeInTheDocument();
   });
 
   it('renders empty state when replay-trace returns no nodes', async () => {

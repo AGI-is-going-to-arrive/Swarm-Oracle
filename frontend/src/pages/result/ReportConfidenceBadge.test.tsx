@@ -100,6 +100,19 @@ describe('ReportConfidenceBadge', () => {
     expect(container.querySelector('.report-hero')).not.toBeNull();
   });
 
+  it('suppresses probability and interval when the backend sends the wep="missing" sentinel', () => {
+    // Backend emits wep="missing" + probability 0.0 on the suppressed-statistics path
+    // (no answer branch resolvable). Rendering "0.0%" would misread as a real estimate.
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({ likelihood: { probability: 0, interval: [0, 1], wep: 'missing' } })}
+      />,
+    );
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.queryByText('0.0')).toBeNull();
+    expect(screen.getByText('[L10N wep missing]')).toBeInTheDocument();
+  });
+
   it('shows a localized safe fallback for an unknown confidence level (never the raw value)', () => {
     render(
       <ReportConfidenceBadge

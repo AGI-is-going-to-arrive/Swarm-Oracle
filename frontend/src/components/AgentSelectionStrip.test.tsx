@@ -185,6 +185,61 @@ describe('AgentSelectionStrip', () => {
     expect(screen.queryByText(/\+\d+ more/)).not.toBeInTheDocument();
   });
 
+  it('shows one pill per display name when identities share a name', async () => {
+    // The identity store legally holds one identity per scenario/continuity key —
+    // the quick-select strip must not show duplicate name pills (e.g. 曹操 ×2).
+    const dupA = { ...makeAgent(1), display_name: '曹操', continuity_key: 'ck-1' };
+    const dupB = { ...makeAgent(2), display_name: '曹操', continuity_key: 'ck-2' };
+    const other = { ...makeAgent(3), display_name: '刘备' };
+    useAgentStore.setState({
+      identities: [dupA, dupB, other],
+      loadedUserId: 'user-1',
+    });
+
+    render(
+      <AgentSelectionStrip
+        userId="user-1"
+        visible={true}
+        maxSelected={3}
+        onManageClick={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('刘备')).toBeInTheDocument();
+    expect(screen.getAllByText('曹操')).toHaveLength(1);
+  });
+
+  it('shows and clears a selected duplicate-name identity hidden behind the quick pill', async () => {
+    const user = userEvent.setup();
+    const dupA = { ...makeAgent(1), display_name: '曹操', continuity_key: 'ck-1' };
+    const dupB = { ...makeAgent(2), display_name: '曹操', continuity_key: 'ck-2' };
+    useAgentStore.setState({
+      identities: [dupA, dupB],
+      selectedIds: new Set([dupB.id]),
+      loadedUserId: 'user-1',
+    });
+
+    render(
+      <AgentSelectionStrip
+        userId="user-1"
+        visible={true}
+        maxSelected={1}
+        onManageClick={vi.fn()}
+      />,
+    );
+
+    const caoCaoBox = await screen.findByRole('checkbox', { name: '曹操' });
+    expect(caoCaoBox).toBeChecked();
+    expect(caoCaoBox).not.toBeDisabled();
+
+    await user.click(caoCaoBox);
+
+    await waitFor(() => {
+      expect(useAgentStore.getState().selectedIds.has(dupB.id)).toBe(false);
+      expect(useAgentStore.getState().selectedIds.has(dupA.id)).toBe(false);
+    });
+  });
+
   it('shows "+N more" indicator when more than 3 agents', async () => {
     const agents = [makeAgent(1), makeAgent(2), makeAgent(3), makeAgent(4), makeAgent(5)];
     listAgentIdentitiesMock.mockResolvedValue(agents);

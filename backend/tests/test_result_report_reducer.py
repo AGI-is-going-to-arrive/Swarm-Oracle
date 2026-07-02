@@ -860,6 +860,171 @@ def test_reduce_falls_back_to_terminal_leaf_without_dominant():
     assert result.likelihood.wep != "almost_certain"
 
 
+def test_reduce_uses_pruned_answer_branch_for_likelihood_when_root_is_legacy_fallback():
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(
+            id="scenario-pruned-answer-anchor",
+            question="巴西能否夺得2026世界杯？",
+            status=ScenarioStatus.DONE,
+            parsed_context={
+                "result_quality": {
+                    "question_answer": "不能明确下定论；可回答的世界线显示巴西夺冠概率约45%。",
+                    "confidence": "medium",
+                    "branch_question_answers": {
+                        "branch-answer": "巴西夺冠概率约45%。"
+                    },
+                }
+            },
+        )
+        session.add(scenario)
+        session.add(
+            Agent(
+                id="agent-answer",
+                scenario_id=scenario.id,
+                name="World Cup Analyst",
+                role="Analyst",
+            )
+        )
+        session.add_all(
+            [
+                Branch(
+                    id="branch-root",
+                    scenario_id=scenario.id,
+                    title="结局会客厅",
+                    story="Legacy root fallback still has generic room text.",
+                    insight="Root should not emit a 100 percent likelihood.",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-answer",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-root",
+                    title="巴西冲冠线",
+                    story="淘汰赛一路走到决赛，但点球风险仍然很高。",
+                    insight="巴西有回答问题的夺冠路径，但不是确定结论。",
+                    probability=0.45,
+                    fork_round=4,
+                    status=BranchStatus.PRUNED,
+                ),
+                Branch(
+                    id="branch-runner-up",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-root",
+                    title="半决赛止步线",
+                    story="半决赛伤病拖慢了推进。",
+                    insight="另一条可回答路径给出较低夺冠机会。",
+                    probability=0.35,
+                    fork_round=4,
+                    status=BranchStatus.PRUNED,
+                ),
+            ]
+        )
+        session.add(Round(id="round-answer", branch_id="branch-answer", round_number=1))
+        session.add(
+            AgentMessage(
+                id="msg-answer",
+                round_id="round-answer",
+                agent_id="agent-answer",
+                content="45% 不是确定性，只是这条可回答路径的概率。",
+                emotion="measured",
+            )
+        )
+        session.commit()
+
+    result = reduce(engine, "scenario-pruned-answer-anchor")
+
+    assert result.target_branch_id == "branch-answer"
+    assert result.likelihood.probability == pytest.approx(0.45)
+    assert result.likelihood.wep != "almost_certain"
+    assert result.likelihood.interval != (0.9, 1.0)
+
+
+def test_reduce_answer_branch_fallback_prefers_later_terminal_quality_match():
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(
+            id="scenario-answer-branch-ranked",
+            question="这项政策会通过吗？",
+            status=ScenarioStatus.DONE,
+            parsed_context={
+                "result_quality": {
+                    "question_answer": "可回答世界线显示政策通过概率约62%。",
+                    "confidence": "medium",
+                    "branch_question_answers": {
+                        "branch-low-answer": "政策通过概率约35%。",
+                        "branch-high-answer": "政策通过概率约62%。",
+                    },
+                }
+            },
+        )
+        session.add(scenario)
+        session.add(
+            Agent(
+                id="agent-ranked-answer",
+                scenario_id=scenario.id,
+                name="Policy Analyst",
+                role="Analyst",
+            )
+        )
+        session.add_all(
+            [
+                Branch(
+                    id="branch-root-ranked",
+                    scenario_id=scenario.id,
+                    title="根分支聚合",
+                    story="Legacy root fallback text should not anchor the answer.",
+                    insight="Root is only a planning aggregate.",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-low-answer",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-root-ranked",
+                    title="低概率通过线",
+                    story="The policy barely survives committee review.",
+                    insight="This branch answers the question, but at lower probability.",
+                    probability=0.35,
+                    fork_round=2,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-high-answer",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-root-ranked",
+                    title="高概率通过线",
+                    story="The policy passes after safeguards are accepted.",
+                    insight="This branch best matches the top-level answer.",
+                    probability=0.62,
+                    fork_round=3,
+                    status=BranchStatus.COMPLETED,
+                ),
+            ]
+        )
+        session.add(Round(id="round-ranked-answer", branch_id="branch-high-answer", round_number=1))
+        session.add(
+            AgentMessage(
+                id="msg-ranked-answer",
+                round_id="round-ranked-answer",
+                agent_id="agent-ranked-answer",
+                content="62% is the answer-bearing branch, even though it was stored later.",
+                emotion="measured",
+            )
+        )
+        session.commit()
+
+    result = reduce(engine, "scenario-answer-branch-ranked", dominant_branch_id="branch-root-ranked")
+
+    assert result.target_branch_id == "branch-high-answer"
+    assert result.likelihood.probability == pytest.approx(0.62)
+    assert result.branch_distribution[0]["branch_id"] == "branch-root-ranked"
+    assert result.branch_distribution[0]["dominant"] is False
+
+
 def test_reduce_clamps_confidence_to_result_quality_ceiling():
     """S5/AC-2: analytic confidence never exceeds the LLM self-rating."""
 

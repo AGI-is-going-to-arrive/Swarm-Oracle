@@ -84,12 +84,25 @@ export default function PredictionModal({
   const [text, setText] = useState('');
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const branchOptions = getStructuredBetOptions(branches);
+  // Freeze the branch options snapshot when the modal opens to prevent target drift during narration.
+  const [frozenBranchOptions, setFrozenBranchOptions] = useState(() => getStructuredBetOptions(branches));
+
+  // If the modal was mounted before branches loaded, capture and freeze the first
+  // batch of active branches. Render-phase conditional setState is the documented
+  // "adjust state when props change" pattern (react.dev/you-might-not-need-an-effect);
+  // the guard converges after one adjustment, so no render loop is possible.
+  if (frozenBranchOptions.length === 0 && branches.length > 0) {
+    const lateActiveOptions = getStructuredBetOptions(branches);
+    if (lateActiveOptions.length > 0) {
+      setFrozenBranchOptions(lateActiveOptions);
+    }
+  }
+
   const committedBranchId = initialMeta?.commitment.branchId ?? '';
   const defaultTargetBranchId =
-    branchOptions.some((branch) => branch.id === committedBranchId)
+    frozenBranchOptions.some((branch) => branch.id === committedBranchId)
       ? committedBranchId
-      : branchOptions[0]?.id ?? '';
+      : frozenBranchOptions[0]?.id ?? '';
   const [targetBranchIdOverride, setTargetBranchIdOverride] = useState<string | null>(null);
   const [endingTone, setEndingTone] = useState<EndingToneId>('order');
   const [profileResonance, setProfileResonance] = useState<ProfileResonanceId>('aligned');
@@ -104,6 +117,30 @@ export default function PredictionModal({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittedPredictionRef = useRef<{ pendingMeta: ScenarioMeta } | null>(null);
   const submittingRef = useRef(false);
+
+  const getSubmitDisabledReason = (): string => {
+    // Called from JSX — render path must not read refs (react-hooks/refs);
+    // `status` alone drives the visible reason.
+    if (status === 'submitting') {
+      return t('prediction.disabled_reason.submitting');
+    }
+    if (status === 'success') {
+      return t('prediction.disabled_reason.success');
+    }
+    if (isLocked && !isPersistenceRetry) {
+      return t('prediction.disabled_reason.locked');
+    }
+    if (!text.trim()) {
+      return t('prediction.disabled_reason.empty_text');
+    }
+    if (effectiveBetKind === 'branch_winner' && !hasValidBranchTarget) {
+      return t('prediction.disabled_reason.invalid_branch');
+    }
+    if (isPredictionTooLong) {
+      return t('prediction.disabled_reason.too_long');
+    }
+    return '';
+  };
 
   useEffect(() => {
     let active = true;
@@ -190,9 +227,9 @@ export default function PredictionModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
-  const hasBranchTargets = branchOptions.length > 0;
+  const hasBranchTargets = frozenBranchOptions.length > 0;
   const targetBranchId =
-    targetBranchIdOverride && branchOptions.some((branch) => branch.id === targetBranchIdOverride)
+    targetBranchIdOverride && frozenBranchOptions.some((branch) => branch.id === targetBranchIdOverride)
       ? targetBranchIdOverride
       : defaultTargetBranchId;
   const effectiveBetKind =
@@ -210,7 +247,7 @@ export default function PredictionModal({
   const betTargetLabel =
     effectiveBetKind === 'branch_winner'
       ? (
-        branchOptions.find((branch) => branch.id === targetBranchId)?.label
+        frozenBranchOptions.find((branch) => branch.id === targetBranchId)?.label
         ?? t('prediction.waiting_worldline')
       )
       : effectiveBetKind === 'ending_tone'
@@ -220,12 +257,15 @@ export default function PredictionModal({
     initialMeta?.commitment.branchTitle
     ?? t('prediction.commitment_empty');
   const oracleLabel = userName.trim() || t('prediction.name_placeholder');
+  // Render-time disabled state relies on `status` only; the same-tick double-submit
+  // window is still guarded by submittingRef inside handleSubmit (refs must not be
+  // read during render — react-hooks/refs).
   const isDisabled = status === 'submitting' || status === 'success' || isLocked;
   const effectiveTargetBranchId =
-    branchOptions.some((branch) => branch.id === targetBranchId)
+    frozenBranchOptions.some((branch) => branch.id === targetBranchId)
       ? targetBranchId
       : defaultTargetBranchId;
-  const hasValidBranchTarget = branchOptions.some((branch) => branch.id === effectiveTargetBranchId);
+  const hasValidBranchTarget = frozenBranchOptions.some((branch) => branch.id === effectiveTargetBranchId);
   const structuredTargetId =
     effectiveBetKind === 'branch_winner'
       ? effectiveTargetBranchId
@@ -234,7 +274,7 @@ export default function PredictionModal({
         : profileResonance;
   const structuredTargetLabel =
     effectiveBetKind === 'branch_winner'
-      ? branchOptions.find((branch) => branch.id === effectiveTargetBranchId)?.label ?? effectiveTargetBranchId
+      ? frozenBranchOptions.find((branch) => branch.id === effectiveTargetBranchId)?.label ?? effectiveTargetBranchId
       : effectiveBetKind === 'ending_tone'
         ? getEndingToneLabel(endingTone, isZh)
         : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
@@ -275,11 +315,39 @@ export default function PredictionModal({
 
   const handleSubmit = async () => {
     const trimmed = text.trim();
-    if (!trimmed || submittingRef.current || status === 'submitting' || status === 'success') return;
-    if (effectiveBetKind === 'branch_winner' && !hasValidBranchTarget) {
+    if (!trimmed) {
       setStatus('error');
-      setErrorMsg(t('prediction.error_branch_pending'));
+      setErrorMsg(t('prediction.disabled_reason.empty_text'));
       return;
+    }
+    if (submittingRef.current || status === 'submitting') {
+      setStatus('error');
+      setErrorMsg(t('prediction.disabled_reason.submitting'));
+      return;
+    }
+    if (status === 'success') {
+      setStatus('error');
+      setErrorMsg(t('prediction.disabled_reason.success'));
+      return;
+    }
+    if (effectiveBetKind === 'branch_winner') {
+      if (!effectiveTargetBranchId) {
+        setStatus('error');
+        setErrorMsg(t('prediction.error_branch_pending'));
+        return;
+      }
+      // Check target branch validity against the live (unfrozen) branches status at
+      // submission time — but skip when the server already accepted this prediction and
+      // we are only retrying the local persistence step (the branch may have legally
+      // exited ACTIVE since; failing here would strand the accepted bet forever).
+      if (!submittedPredictionRef.current) {
+        const liveActiveOptions = getStructuredBetOptions(branches);
+        if (!liveActiveOptions.some((b) => b.id === effectiveTargetBranchId)) {
+          setStatus('error');
+          setErrorMsg(t('prediction.error_branch_invalid'));
+          return;
+        }
+      }
     }
 
     submittingRef.current = true;
@@ -512,7 +580,7 @@ export default function PredictionModal({
             )}
           </div>
 
-          {effectiveBetKind === 'branch_winner' && branchOptions.length > 0 && (
+          {effectiveBetKind === 'branch_winner' && frozenBranchOptions.length > 0 && (
             <div className="pred-field">
               <label className="pred-label" htmlFor="pred-branch">{t('prediction.bet_target_label')}</label>
               <select
@@ -522,7 +590,7 @@ export default function PredictionModal({
                 onChange={(e) => setTargetBranchIdOverride(e.target.value)}
                 disabled={isDisabled}
               >
-                {branchOptions.map((branch) => (
+                {frozenBranchOptions.map((branch) => (
                   <option key={branch.id} value={branch.id}>{branch.label}</option>
                 ))}
               </select>
@@ -636,6 +704,11 @@ export default function PredictionModal({
           <div className="prediction-modal__status" aria-live="polite">
             {errorMsg && <p className="modal-error">{errorMsg}</p>}
             {status === 'success' && <p className="modal-success">{t('prediction.success')}</p>}
+            {!canSubmit && !errorMsg && status !== 'success' && (
+              <p className="pred-submit-hint" style={{ color: 'var(--color-text-muted, #888)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                {getSubmitDisabledReason()}
+              </p>
+            )}
           </div>
         </div>
 

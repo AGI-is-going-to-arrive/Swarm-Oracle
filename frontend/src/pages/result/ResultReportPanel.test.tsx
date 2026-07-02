@@ -12,6 +12,7 @@ vi.mock('../../hooks/useCapabilityCheck', () => ({
 }));
 vi.mock('../../api/client', () => ({
   generateReport: vi.fn(),
+  getStory: vi.fn(),
 }));
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', () => ({
@@ -204,16 +205,19 @@ describe('ResultReportPanel — manual retry stream handling', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByRole('button', { name: /Generating/i })).toBeDisabled();
+    // The retry immediately shows the honest generating card (poll armed).
+    expect(screen.getByText(/Building your report/i)).toBeInTheDocument();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(35 * 60_000);
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    expect(screen.getByText(/Retry failed/i)).toBeInTheDocument();
+    // Client-side stream timeout aborts the SSE request; the backend ties the
+    // report task to that generator, so the user must see a retryable failure.
     expect(reader.cancel).toHaveBeenCalled();
     expect(reader.releaseLock).toHaveBeenCalled();
+    expect(screen.getByText(/Retry failed/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Retry Generation/i })).not.toBeDisabled();
   });
 
@@ -229,7 +233,7 @@ describe('ResultReportPanel — manual retry stream handling', () => {
     });
 
     expect(mockedGenerateReport).not.toHaveBeenCalled();
-    expect(screen.getByText(/Your API key is invalid or rejected by the provider/i)).toBeInTheDocument();
+    expect(screen.getByText(/The provider rejected this request/i)).toBeInTheDocument();
   });
 
   it('accumulates tool_trace from SSE stream, renders collapsed chip, and expands on click', async () => {

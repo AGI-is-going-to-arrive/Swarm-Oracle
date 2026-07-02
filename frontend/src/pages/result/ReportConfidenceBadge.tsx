@@ -105,11 +105,15 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
 
   // §E: probability / interval honest display guards. Stale/garbage data degrades to a
   // qualitative band or em-dash — it is never silently clamped into a fake range.
-  const probabilityRenderable = isRenderableProbability(likelihood.probability);
+  // wep="missing" is the backend suppressed-statistics sentinel (no answer branch was
+  // resolvable): its probability/interval are placeholders, not estimates — hide both.
+  const statisticsSuppressed = normalizedWep === 'missing';
+  const probabilityRenderable =
+    !statisticsSuppressed && isRenderableProbability(likelihood.probability);
   const probabilityText = probabilityRenderable
     ? (likelihood.probability * 100).toFixed(1)
     : '—';
-  const intervalRenderable = isRenderableInterval(likelihood.interval);
+  const intervalRenderable = !statisticsSuppressed && isRenderableInterval(likelihood.interval);
 
   // Prefer scenario-specific disclaimers, but localize legacy persisted boilerplate.
   // Kept as a tail footnote so the existing scenario-custom disclaimer path is preserved.

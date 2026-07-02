@@ -76,10 +76,17 @@ describe('GraphNodeCard', () => {
     expect(card).toHaveStyle({ background: 'oklch(0.65 0.15 250)' });
   });
 
-  it('applies border color from status', () => {
+  it('applies border color from status on all four sides (longhand-only, no shorthand)', () => {
+    // Longhands only: mixing the `border` shorthand with per-side longhands trips
+    // React's dev-mode style conflict warning (see GraphNodeCard style comment).
     render(<GraphNodeCard {...makeProps({ borderColor: '#e74c3c' })} />, { wrapper: Wrapper });
     const card = screen.getByRole('button', { name: 'Short label' });
-    expect(card).toHaveStyle({ border: '2px solid #e74c3c' });
+    expect(card).toHaveStyle({
+      borderTop: '2px solid #e74c3c',
+      borderRight: '2px solid #e74c3c',
+      borderBottom: '2px solid #e74c3c',
+      borderLeft: '2px solid #e74c3c',
+    });
   });
 
   it('applies dimmed state (opacity + grayscale)', () => {

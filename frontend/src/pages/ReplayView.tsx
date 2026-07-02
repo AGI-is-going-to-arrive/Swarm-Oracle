@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { buildSessionHeaders, getReplayTrace, isApiError } from '../api/client';
-import type { ReplayTraceNode, ReplayTraceResponse } from '../types';
+import { buildSessionHeaders, getReplayTrace, isApiError, getScenario } from '../api/client';
+import type { ReplayTraceNode, ReplayTraceResponse, BranchInfo } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import {
   useReplayTimeline,
@@ -174,6 +174,7 @@ export function ReplayView() {
 
   const [trace, setTrace] = useState<ReplayTraceResponse | null>(null);
   const [graph, setGraph] = useState<CausalGraphResponse | null>(null);
+  const [branchesInfo, setBranchesInfo] = useState<BranchInfo[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -196,13 +197,15 @@ export function ReplayView() {
     setError(null);
     setTrace(null);
     setGraph(null);
+    setBranchesInfo([]);
     // Preserve a `?branch=` deep-link filter across (re)fetches; only options-validation clears it.
     setBranchFilter(targetBranchId || '');
     setLoadMoreError(null);
     try {
-      const [traceResult, graphRes] = await Promise.allSettled([
+      const [traceResult, graphRes, scenarioRes] = await Promise.allSettled([
         getReplayTrace(id),
         fetch(`/api/scenario/${encodedId}/causal-graph`, { headers: buildSessionHeaders() }),
+        getScenario(id),
       ]);
       if (fetchSeqRef.current !== requestId) return;
       if (traceResult.status === 'fulfilled') {
@@ -221,11 +224,17 @@ export function ReplayView() {
       } else {
         setGraph(null);
       }
+      if (scenarioRes.status === 'fulfilled') {
+        setBranchesInfo(scenarioRes.value.branches ?? []);
+      } else {
+        setBranchesInfo([]);
+      }
     } catch {
       if (fetchSeqRef.current !== requestId) return;
       setError(-1);
       setTrace(null);
       setGraph(null);
+      setBranchesInfo([]);
     } finally {
       if (fetchSeqRef.current === requestId) {
         setLoadingData(false);
@@ -367,6 +376,18 @@ export function ReplayView() {
     }
     return [...seen].sort();
   }, [graph, trace]);
+
+  const branchOptionMap = useMemo(() => {
+    return new Map(branchesInfo.map((b) => [b.id, b]));
+  }, [branchesInfo]);
+
+  const buildBranchOptionLabel = useCallback((branchId: string) => {
+    const info = branchOptionMap.get(branchId);
+    if (!info) return branchId;
+    const title = info.title && info.title.trim().length > 0 ? info.title : branchId;
+    if (info.probability == null) return title;
+    return `${title} · ${(info.probability * 100).toFixed(1)}%`;
+  }, [branchOptionMap]);
 
   // Reset filter when current selection becomes invalid (e.g., after refetch).
   useEffect(() => {
@@ -550,7 +571,7 @@ export function ReplayView() {
               >
                 <option value="">{t('replay.all_branches', 'All branches')}</option>
                 {branchOptions.map((branchId) => (
-                  <option key={branchId} value={branchId}>{branchId}</option>
+                  <option key={branchId} value={branchId}>{buildBranchOptionLabel(branchId)}</option>
                 ))}
               </select>
             </div>

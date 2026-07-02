@@ -223,7 +223,7 @@ describe('LocalPackPicker', () => {
     render(<LocalPackPicker onImport={vi.fn()} />);
 
     expect(
-      screen.getByText('Local packs feature is disabled. Check capability settings.')
+      screen.getByText('This feature is turned off on this server. Ask the admin to enable it.')
     ).toBeInTheDocument();
 
     // Negative assertions: assert endpoints are NOT called

@@ -55,9 +55,12 @@ class SurveyParticipantContext:
     role: str
     persona: str
     language: str
+    scenario_question: str
     agent_identity_id: str | None
     source_agent_id: str | None
     source_branch_id: str | None
+    branch_card: dict[str, Any]
+    roundtable_summary: list[str]
     memories: list[dict[str, Any]]
 
 
@@ -194,6 +197,8 @@ def _resolve_persona(
     snapshot: dict[str, Any],
     parsed_agent: dict[str, Any],
     source_agent: Agent | None,
+    *,
+    language: str,
 ) -> str:
     for candidate in (
         snapshot.get("agent_persona"),
@@ -206,7 +211,85 @@ def _resolve_persona(
         cleaned = _normalize_text(candidate)
         if cleaned:
             return cleaned
+    if language == "zh":
+        return "请从你当前世界线的第一人称视角回应。"
     return "Respond from your current worldline perspective."
+
+
+def _branch_card_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    card: dict[str, Any] = {}
+    key_map = {
+        "branch_title": "branch_title",
+        "branch_probability": "branch_probability",
+        "branch_story": "branch_story",
+        "branch_insight": "branch_insight",
+        "agent_stance": "agent_stance",
+        "opening_quote": "opening_quote",
+        "latest_quote": "latest_quote",
+    }
+    for source_key, target_key in key_map.items():
+        value = snapshot.get(source_key)
+        if _normalize_text(value):
+            card[target_key] = value
+    moments = snapshot.get("branch_key_moments") or snapshot.get("key_moments")
+    if isinstance(moments, list):
+        cleaned_moments = [_normalize_text(item) for item in moments if _normalize_text(item)]
+        if cleaned_moments:
+            card["branch_key_moments"] = cleaned_moments[:4]
+    elif _normalize_text(moments):
+        card["branch_key_moments"] = [_normalize_text(moments)]
+    return card
+
+
+def _roundtable_summary_items(result_json: Any) -> list[str]:
+    if not isinstance(result_json, dict):
+        return []
+    items: list[str] = []
+    summary = _normalize_text(result_json.get("summary"))
+    if summary:
+        items.append(summary)
+    for insight in result_json.get("phase_insights") or []:
+        if not isinstance(insight, dict):
+            continue
+        value = _normalize_text(insight.get("insight_body") or insight.get("commentary"))
+        if value:
+            items.append(value)
+            break
+    for turn in result_json.get("supporting_turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        value = _normalize_text(turn.get("explanation") or turn.get("content"))
+        if value:
+            items.append(value)
+            break
+    for key in ("archivist_note", "next_move"):
+        value = _normalize_text(result_json.get(key))
+        if value:
+            items.append(value)
+    deduped: list[str] = []
+    for item in items:
+        if item not in deduped:
+            deduped.append(item)
+        if len(deduped) >= 3:
+            break
+    return deduped
+
+
+def _survey_banned_phrase_guard(language: str) -> str:
+    shared = (
+        "Banned filler phrases include: 综上所述、值得注意的是、总体来看、"
+        "本质上、可以看出; in conclusion, it is worth noting, overall, "
+        "essentially, needless to say."
+    )
+    if language == "zh":
+        return (
+            f"Do not use banned filler phrases. {shared} "
+            "直接回答问题，使用具体事件和代价。"
+        )
+    return (
+        f"Do not use banned filler phrases. {shared} "
+        "Answer directly with concrete events and costs."
+    )
 
 
 def _resolve_role(
@@ -319,8 +402,10 @@ def _load_participant_contexts(
             room = next(iter(room_by_id.values()))
             _ensure_roundtable_ready(room)
             language = _room_language(room)
+            roundtable_summary = _roundtable_summary_items(room.result_json)
         else:
             language = "en"
+            roundtable_summary = []
 
         source_agent_ids = {
             participant.source_agent_id
@@ -354,11 +439,19 @@ def _load_participant_contexts(
                         source_agent,
                         language,
                     ),
-                    persona=_resolve_persona(snapshot, parsed_agent, source_agent),
+                    persona=_resolve_persona(
+                        snapshot,
+                        parsed_agent,
+                        source_agent,
+                        language=language,
+                    ),
                     language=language,
+                    scenario_question=scenario.question or "",
                     agent_identity_id=identity_id,
                     source_agent_id=participant.source_agent_id,
                     source_branch_id=participant.source_branch_id,
+                    branch_card=_branch_card_from_snapshot(snapshot),
+                    roundtable_summary=roundtable_summary,
                     memories=_load_identity_memories(identity_id),
                 )
             )
@@ -400,6 +493,21 @@ def _build_survey_prompt(
         question,
         max_chars=2000,
     )
+    scenario_question_block = format_untrusted_text_block(
+        "Original scenario question",
+        participant.scenario_question,
+        max_chars=1200,
+    )
+    branch_card_block = format_untrusted_text_block(
+        "Participant worldline card",
+        json.dumps(participant.branch_card, ensure_ascii=False, separators=(",", ":")),
+        max_chars=2400,
+    )
+    roundtable_summary_block = format_untrusted_text_block(
+        "Roundtable result summary",
+        "\n".join(f"- {item}" for item in participant.roundtable_summary),
+        max_chars=2000,
+    )
     persona_block = format_untrusted_text_block(
         "Participant persona",
         participant.persona,
@@ -431,6 +539,9 @@ def _build_survey_prompt(
             "Participant role", participant.role, max_chars=200,
         ),
         persona_block,
+        scenario_question_block,
+        branch_card_block,
+        roundtable_summary_block,
     ]
     prompt_parts.append(
         "Voice guidance:\n"
@@ -444,6 +555,7 @@ def _build_survey_prompt(
     prompt_parts.extend(
         [
             question_block,
+            _survey_banned_phrase_guard(participant.language),
             "Rules:\n"
             "- Answer in first person, in the same language as the question.\n"
             "- Be concrete: cite specific events, turning points, "
@@ -628,9 +740,12 @@ def debug_dump_participant_contexts(
             "display_name": item.display_name,
             "role": item.role,
             "persona": item.persona,
+            "scenario_question": item.scenario_question,
             "agent_identity_id": item.agent_identity_id,
             "source_agent_id": item.source_agent_id,
             "source_branch_id": item.source_branch_id,
+            "branch_card": json.loads(json.dumps(item.branch_card, ensure_ascii=False)),
+            "roundtable_summary": list(item.roundtable_summary),
             "memories": json.loads(json.dumps(item.memories, ensure_ascii=False)),
         }
         for item in contexts

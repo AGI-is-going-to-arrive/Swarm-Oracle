@@ -58,16 +58,31 @@ Backend pytest:
 cd backend && .venv/bin/python -m pytest
 ```
 
+```powershell
+# Windows PowerShell
+cd backend; .venv\Scripts\python.exe -m pytest
+```
+
 Frontend typecheck:
 
 ```bash
 cd frontend && npx tsc --noEmit -p tsconfig.app.json
 ```
 
+```powershell
+# Windows PowerShell
+cd frontend; npx tsc --noEmit -p tsconfig.app.json
+```
+
 Frontend tests:
 
 ```bash
 cd frontend && npm test
+```
+
+```powershell
+# Windows PowerShell
+cd frontend; npm test
 ```
 
 ## Branch and PR Etiquette / 分支与 PR 规范

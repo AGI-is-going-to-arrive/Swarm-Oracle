@@ -485,7 +485,7 @@ def _build_followup_turn_plans(
 ) -> tuple[EndingRoomTurn, list[_OracleFollowupPlan]]:
     branch_rows_by_id: dict[str, list[dict[str, Any]]] = {}
     branch_hooks_by_id: dict[str, str] = {}
-    fallback_hook = room.title
+    fallback_hook = ""
     if room.anchor_branch_id:
         branch = session.get(Branch, room.anchor_branch_id)
         if branch is not None:

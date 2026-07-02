@@ -862,7 +862,11 @@ export function DebateArenaView() {
         {betNotice && <p className="debate-phase-chip">{betNotice}</p>}
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
         <p className="debate-phase-chip">{t('debate.runtime_preset_not_applicable')}</p>
-        {error && <p className="debate-modal__error">{error}</p>}
+        {error && (
+          <p className="debate-modal__error">
+            {errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, error) : error}
+          </p>
+        )}
         {phaseCueCopy && !debate?.result_ready && (
           <section
             key={phaseCue?.token}

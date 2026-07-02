@@ -8,7 +8,7 @@
       "outcome_false": "未发生",
       "brier_score": "Brier 评分",
       "brier_hint": "评分越低越好（0.0 表示完美预测，1.0 表示最差预测）。",
-      "disabled_placeholder": "您 vs 预言机 对比功能已禁用。请检查相关能力配置。",
+      "disabled_placeholder": "本服务器未开启此功能，如需使用请联系管理员开启。",
       "empty_state": "无可对比数据。您可能未锁定预测，或者场景尚未得出结论。",
       "not_scorable_actual_outcome_unavailable": "该预测暂无法评分：本次推演未记录结构化结果。",
       "not_scorable_generic": "该预测暂无法评分。"
@@ -39,9 +39,9 @@
       "capability_disabled": "多世界线运行已禁用。",
       "panel_title": "多运行分布",
       "progress_label": "运行中：已完成 {{current}} / {{total}}",
-      "histogram_verdicts": "裁决计数 ({{count}} 条世界线计数)",
-      "histogram_outcomes": "结局计数 ({{count}} 条世界线计数)",
-      "worldlines_list_title": "世界线裁决账本",
+      "histogram_verdicts": "裁决计数（共 {{count}} 条世界线）",
+      "histogram_outcomes": "结局计数（共 {{count}} 条世界线）",
+      "worldlines_list_title": "各世界线裁决",
       "run_index": "运行 #{{index}}",
       "status_label": "状态",
       "verdict_label": "裁决",
@@ -60,7 +60,7 @@
     },
     "document_seed": {
       "panel_title": "文档种子上下文",
-      "capability_disabled": "文档种子功能未启用，请检查相关能力配置。",
+      "capability_disabled": "本服务器未开启此功能，如需使用请联系管理员开启。",
       "accept_hint": "支持 PDF, TXT, MD，大小不超过 {{max}} MB",
       "dropzone_title": "拖拽 PDF, TXT 或 MD 文件到此处，或点击浏览",
       "dropzone_aria": "选择文档以播种世界线上下文",
@@ -90,7 +90,7 @@
     },
     "local_packs": {
       "panel_title": "本地主题包",
-      "capability_disabled": "本地主题包功能未启用，请检查相关能力配置。",
+      "capability_disabled": "本服务器未开启此功能，如需使用请联系管理员开启。",
       "loading": "正在加载本地主题包...",
       "retry": "重试",
       "search_placeholder": "搜索标题、描述或类型...",
@@ -186,7 +186,7 @@
       "placeholder_2": "如果人类在2000年登陆火星？",
       "placeholder_3": "如果互联网从未被发明？",
       "question_input_label": "推演问题",
-      "submit": "⚡ 开始推演",
+      "submit": "开始推演",
       "confirm_launch_title": "确认开始推演",
       "confirm_launch_settings": "{{rounds}} 轮 · {{agents}} 个 Agent · {{mode}}",
       "simulation_eta_hint": "按当前 {{agents}} 个 Agent × {{rounds}} 轮，主模式预计约 {{minutes}} 分钟。",
@@ -213,7 +213,7 @@
       "agents_standard": "⚖ 标准",
       "agents_large": "🔥 大规模",
       "agents_extreme": "🌋 极限",
-      "mode_label": "推演模式",
+      "mode_label": "Agent 协作方式",
       "mode_blackboard_title": "Agent 通过共享黑板交换信息，上下文更紧凑",
       "mode_raw_title": "每个 Agent 都能看到完整历史发言",
       "mode_blackboard": "协作讨论（推荐）",
@@ -221,7 +221,7 @@
       "mode_blackboard_desc": "Agent 通过中央黑板共享信息，讨论更结构化：推荐大多数场景使用",
       "mode_raw_desc": "Agent 掌握全部历史发言，信息更全，但更慢、更耗算力",
       "web_search_toggle": "搜索增强推演",
-      "web_search_hint": "优先使用已配置好的搜索；推荐方式不需要你填密钥或服务地址。",
+      "web_search_hint": "若服务器已配置搜索，选推荐方式即可、无需填任何密钥；未配置时可在下方改用自己的搜索服务。",
       "web_search_mode_label": "搜索接入方式",
       "web_search_mode_server": "推荐：使用已配置搜索",
       "web_search_mode_server_hint": "使用服务器已配置的 {{provider}}，不需要填写密钥或服务地址。",
@@ -276,7 +276,7 @@
       "byok_api_key_label": "API 密钥",
       "byok_api_key_help": "填写你的模型服务密钥，仅保存在当前标签页会话中。",
       "byok_base_url_label": "接口地址",
-      "byok_base_url_help": "填写 OpenAI 兼容的接口地址，支持直接填到 /v1。原生搜索需 Responses 端点（base_url 以 /responses 结尾）。",
+      "byok_base_url_help": "填 OpenAI 兼容接口地址（可直接填到 /v1）。需要模型原生联网搜索时才要求 /responses 结尾，详见文档。",
       "byok_model_label": "模型名称",
       "byok_model_help": "填写实际调用的模型名称，例如 gpt-5.4-mini。",
       "org_id_label": "组织 ID",
@@ -313,7 +313,7 @@
       "reasoning_hint": "力度越高 = 思考越深但速度越慢",
       "runtime_preset_label": "推演模式",
       "runtime_preset_hint": "控制推演时分支分裂的积极程度。",
-      "runtime_preset_scope_main_only": "只影响推演中的世界线，不改 Debate Arena 规则或裁决。",
+      "runtime_preset_scope_main_only": "只影响推演中的世界线，不改辩论竞技场规则或裁决。",
       "runtime_preset_conservative": "谨慎",
       "runtime_preset_conservative_desc": "适合治理、审批、法庭等题材，结果更稳重、分支更少。",
       "runtime_preset_balanced": "均衡",
@@ -407,8 +407,8 @@
         "tooltip_results": "结局",
         "tooltip_no_events": "本轮暂无额外事件",
         "elapsed": "已运行 {{time}}",
-        "preparing_slow": "本地推理较慢，仍在进行…",
-        "simulating_slow": "本地模型推理较慢，仍在推进",
+        "preparing_slow": "首轮响应较慢，仍在推进…",
+        "simulating_slow": "推理响应较慢，仍在推进",
         "turn_progress_msg": "本轮 {{completed}}/{{total}} 位 Agent 已发言",
         "turn_progress_branch_msg": "{{branch}}：{{completed}}/{{total}} 位 Agent 已发言"
       },
@@ -696,7 +696,8 @@
         "footerTagline": "AI 多代理叙事推演 · 仅供探索",
         "readFullReport": "阅读完整报告",
         "readFullReportLead": "想看完整推理过程？",
-        "takeawaysLabel": "关键要点"
+        "takeawaysLabel": "关键要点",
+        "disclaimer_suppressed": "已隐藏统计区间：本次推演没有能直接回答问题的分支可作锚点。"
       },
       "title": "推演结果",
       "subtitle": "多结局对比",
@@ -729,7 +730,7 @@
       "fork_reason": "分歧原因",
       "export": "📥 导出 Markdown",
       "exporting": "导出中...",
-      "predictions_title": "预测结果",
+      "predictions_title": "预测记录",
       "no_predictions": "暂无预测",
       "score_predictions": "🏆 触发评分",
       "scoring": "评分中...",
@@ -885,7 +886,7 @@
       "director_debrief_action_conversation_kicker": "继续追问",
       "director_debrief_action_conversation_title": "围绕本结果追问",
       "director_debrief_action_conversation_detail": "从当前结果分支出发，不开启泛泛的聊天。",
-      "director_debrief_action_conversation_unavailable": "这里不能发起 live 追问；先使用已保存复盘和分析入口。",
+      "director_debrief_action_conversation_unavailable": "这里不能发起实时追问；先使用已保存复盘和分析入口。",
       "director_debrief_score_title": "这次为什么涨分",
       "director_debrief_score_completed": "完成结算",
       "director_debrief_score_daily": "每日挑战",
@@ -1019,7 +1020,7 @@
       "ending_room_picker_limit": "最多选择 {{count}} 位",
       "ending_room_picker_empty": "当前结果页没有可用于手动选人的世界线发言记录，将按默认房间规则继续。",
       "ending_room_picker_impact": "影响 {{impact}} · 发言 {{turns}} 次 · 转折命中 {{hinges}} · 最近 R{{round}}",
-      "ending_room_picker_fallback_roster": "当前世界线缺少逐条发言记录，按当前可见 roster 兜底",
+      "ending_room_picker_fallback_roster": "当前世界线缺少逐条发言记录，按当前可见名单兜底",
       "ending_room_picker_fallback_lineup": "兜底阵容",
       "ending_room_picker_enter": "进入会客厅",
       "ending_room_advanced_label": "高级设置",
@@ -1173,6 +1174,15 @@
       "error_too_long": "加入下注元数据后预测内容过长，请缩短判断依据。",
       "error_branch_pending": "当前还没有可下注的活跃世界线，请稍候再试。",
       "error_persistence": "预测已提交，但本地状态同步失败。请重试以保存。",
+      "error_branch_invalid": "所选的目标世界线已不再活跃，请选择其他活跃世界线。",
+      "disabled_reason": {
+        "submitting": "正在提交预测...",
+        "success": "预测已成功提交。",
+        "locked": "此预测已锁定，不可编辑。",
+        "empty_text": "请填写预测依据。",
+        "invalid_branch": "请选择一个活跃的目标世界线。",
+        "too_long": "预测文本内容过长。"
+      },
       "branch_unavailable_note": "当前只开放了主世界线，先押结局倾向或题材回响会更稳。",
       "confidence_low": "猜测",
       "confidence_mid": "有根据",
@@ -1295,7 +1305,7 @@
       "source_branch": "来源分支",
       "primary_agent": "目标角色",
       "secondary_agent": "第二角色",
-      "hint": "先选卡，再补充一句导演指令。提交后会走现有 intervention API，把结构化事件直接送进推演引擎。",
+      "hint": "先选卡，再补一句导演指令；提交后这个事件会作为一次干预注入当前世界线。",
       "art_alt": "玩法策略徽记",
       "profile_label": "当前玩法画像",
       "director_points": "导演点数",
@@ -1389,7 +1399,7 @@
       "entry_desc": "更短、更聚焦的 What-If 对抗模式：正方、反方、评委和结构化押注同屏推进。",
       "entry_cta": "进入辩论竞技场",
       "entry_hint": "辩论竞技场通常 3-5 分钟打完一局，适合快速看胜负、判词和最佳论点。",
-      "runtime_preset_not_applicable": "首页的三档推演模式只作用于主模式里的世界线分岔，不会改变 Debate Arena 的回合规则或裁决逻辑。",
+      "runtime_preset_not_applicable": "首页的三档推演模式只作用于主模式里的世界线分岔，不会改变辩论竞技场的回合规则或裁决逻辑。",
       "loading": "正在搭建辩论舞台...",
       "status_live": "进行中",
       "status_done": "判词已出",
@@ -1624,7 +1634,7 @@
       "theme_cues": "题材提示",
       "current_participants": "当前参与者",
       "new_thread": "新建追问线程",
-      "empty_roster_fallback": "当前世界线没有稳定的参与者 roster，已退回档案官独立复盘。",
+      "empty_roster_fallback": "当前世界线没有稳定的参与者名单，已退回档案官独立复盘。",
       "speaking": "正在发言",
       "current_target": "当前追问对象",
       "metric_impact": "影响 {{count}}",
@@ -1957,21 +1967,66 @@
       "achievement_unlocked": "成就解锁！",
       "achievement_dismiss": "关闭",
       "badges": {
-        "first_daily": { "name": "初次推演", "description": "首次完成每日挑战" },
-        "streak_3": { "name": "三日连胜", "description": "连续 3 天完成每日挑战" },
-        "streak_7": { "name": "一周达人", "description": "连续 7 天完成每日挑战" },
-        "streak_14": { "name": "双周之星", "description": "连续 14 天完成每日挑战" },
-        "streak_30": { "name": "月度传奇", "description": "连续 30 天完成每日挑战" },
-        "weekly_finisher": { "name": "赛道达人", "description": "完成一轮周赛道" },
-        "weekly_bonus": { "name": "额外奖励", "description": "获得周赛奖励积分" },
-        "archive_a": { "name": "A 级档案", "description": "获得 A 级档案评分" },
-        "archive_s": { "name": "S 级档案", "description": "获得 S 级档案评分" },
-        "bet_first": { "name": "初次命中", "description": "首次成功预测下注" },
-        "bet_streak_3": { "name": "三连中", "description": "连续命中 3 次预测" },
-        "profile_level_3": { "name": "小有成就", "description": "任意领域达到等级 3" },
-        "profile_level_5": { "name": "领域专家", "description": "任意领域达到等级 5" },
-        "five_profiles_level_3": { "name": "全面发展", "description": "5 个领域均达到等级 3" },
-        "objective_finisher": { "name": "目标达人", "description": "完成所有导演目标" }
+        "first_daily": {
+          "name": "初次推演",
+          "description": "首次完成每日挑战"
+        },
+        "streak_3": {
+          "name": "三日连胜",
+          "description": "连续 3 天完成每日挑战"
+        },
+        "streak_7": {
+          "name": "一周达人",
+          "description": "连续 7 天完成每日挑战"
+        },
+        "streak_14": {
+          "name": "双周之星",
+          "description": "连续 14 天完成每日挑战"
+        },
+        "streak_30": {
+          "name": "月度传奇",
+          "description": "连续 30 天完成每日挑战"
+        },
+        "weekly_finisher": {
+          "name": "赛道达人",
+          "description": "完成一轮周赛道"
+        },
+        "weekly_bonus": {
+          "name": "额外奖励",
+          "description": "获得周赛奖励积分"
+        },
+        "archive_a": {
+          "name": "A 级档案",
+          "description": "获得 A 级档案评分"
+        },
+        "archive_s": {
+          "name": "S 级档案",
+          "description": "获得 S 级档案评分"
+        },
+        "bet_first": {
+          "name": "初次命中",
+          "description": "首次成功预测下注"
+        },
+        "bet_streak_3": {
+          "name": "三连中",
+          "description": "连续命中 3 次预测"
+        },
+        "profile_level_3": {
+          "name": "小有成就",
+          "description": "任意领域达到等级 3"
+        },
+        "profile_level_5": {
+          "name": "领域专家",
+          "description": "任意领域达到等级 5"
+        },
+        "five_profiles_level_3": {
+          "name": "全面发展",
+          "description": "5 个领域均达到等级 3"
+        },
+        "objective_finisher": {
+          "name": "目标达人",
+          "description": "完成所有导演目标"
+        }
       }
     },
     "campaign_sheet": {
@@ -3081,7 +3136,7 @@
         "quota_exceeded": "今日对话配额已用完，请明天再试。",
         "network": "网络错误，请检查连接后重试。",
         "ws_lost": "实时连接已断开，正在重连…",
-        "byok_invalid": "API 密钥无效或被服务商拒绝。",
+        "byok_invalid": "服务商拒绝了这次请求（401）。请核对 API 密钥；如果用的是代理端点，也可能是上游临时故障，稍等后重试。",
         "server_error": "服务器错误，请稍后重试。",
         "retry_cta": "重试",
         "discard_cta": "关闭"
@@ -3382,7 +3437,7 @@
       "native_probe_title": "原生搜索静态预检",
       "native_probe_live_title": "原生搜索实测验证",
       "native_probe_probing": "探测中…",
-      "native_probe_supported": "静态结果：支持（选择信息源后，推演时才会注入搜索工具）",
+      "native_probe_supported": "静态结果：支持（只有在选择信息源后才会注入搜索工具）",
       "native_probe_live_supported": "实测结果：支持（已验证端点可正常执行原生搜索）",
       "native_probe_unsupported": "静态结果：不支持（推演时不会注入搜索工具）",
       "native_probe_failed": "静态预检失败",
@@ -3492,7 +3547,7 @@
       "section_title": "社交动态",
       "headlines_title": "头条新闻卡片",
       "empty": "此推演未生成社交动态或头条新闻。",
-      "disabled_explanation": "社交动态功能已禁用。请检查功能配置。",
+      "disabled_explanation": "本服务器未开启此功能，如需使用请联系管理员开启。",
       "error": "加载社交动态失败。",
       "retry": "重试",
       "mode_deterministic": "确定性",
@@ -3510,7 +3565,7 @@
     "hops": {
       "title": "概率采样",
       "subtitle": "观察各分支结局的可能性分布",
-      "explainer": "如果重复运行 100 次推演，每个分支大约会出现这么多次。概率越高，该结局越可能发生。",
+      "explainer": "概率越高，代表 AI 群体在这次推演里越倾向这个结局。这是叙事推演的相对权重，不是真实世界的统计概率。",
       "pause": "暂停",
       "play": "播放",
       "branch_fallback": "分支",
@@ -3722,7 +3777,7 @@
       "option_enabled": "启用",
       "option_disabled": "禁用",
       "option_upstream_off": "关闭（强制不注入）",
-      "option_upstream_auto": "自动（跟随 provider 能力）",
+      "option_upstream_auto": "自动（跟随服务商能力）",
       "option_upstream_xai": "xAI Responses",
       "option_upstream_openai": "OpenAI Responses",
       "concurrency_placeholder": "例如 4 (留空表示不限制)",

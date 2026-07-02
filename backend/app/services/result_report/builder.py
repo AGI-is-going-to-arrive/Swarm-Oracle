@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -1192,6 +1193,10 @@ def _build_outline_prompt(context: BuilderContext, reducer_result: ReducerResult
         [
             "REPORT_OUTLINE",
             "Plan a SwarmOracle full report. Return strict JSON only.",
+            "title_i18n must be a final publication title. Do not use 提纲, 大纲, "
+            "纲要, outline, report outline, or any planning label in the title.",
+            "summary_i18n must use completed voice. Do not write 本报告将..., 报告将..., "
+            "This report will..., or any future-tense planning summary.",
             "Choose 2-5 unique section ids from: "
             + ", ".join(_ALLOWED_SECTION_IDS)
             + ".",
@@ -1221,6 +1226,71 @@ def _build_outline_prompt(context: BuilderContext, reducer_result: ReducerResult
             format_untrusted_text_block("Evidence digest", evidence_digest, max_chars=2400),
         ]
     )
+
+
+def _polish_report_title_summary(
+    title_i18n: I18nText,
+    summary_i18n: I18nText,
+) -> tuple[I18nText, I18nText]:
+    return (
+        I18nText(
+            zh=_strip_planning_title(title_i18n.zh),
+            en=_strip_planning_title(title_i18n.en),
+        ),
+        I18nText(
+            zh=_rewrite_planning_summary(summary_i18n.zh),
+            en=_rewrite_planning_summary(summary_i18n.en),
+        ),
+    )
+
+
+def _strip_planning_title(value: str) -> str:
+    original = str(value or "").strip()
+    cleaned = original
+    replacements = [
+        r"\s*[:：\-]\s*SwarmOracle(?:分析)?报告(?:提纲|大纲|纲要)\s*$",
+        r"\s*[:：\-]\s*SwarmOracle\s+(?:Analysis\s+)?Report\s+Outline\s*$",
+        r"\s*[:：\-]\s*Report\s+Outline\s*$",
+        r"\s*[:：]\s*.+\bOutline\s*$",
+        r"\s+SwarmOracle\s+(?:Analysis\s+)?Report\s+Outline\s*$",
+        r"\s+Report\s+Outline\s*$",
+        r"(?:分析)?报告(?:提纲|大纲|纲要)\s*$",
+    ]
+    for pattern in replacements:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = cleaned.rstrip("：:- ").strip()
+    return cleaned or original
+
+
+def _rewrite_planning_summary(value: str) -> str:
+    text = str(value or "").strip()
+    zh_patterns = [
+        (r"^本报告将围绕(.+?)展开", r"本报告围绕\1展开"),
+        (r"^本报告将(评估|核查|分析|审视|检验|讨论|比较|追踪)", r"本报告\1"),
+        (r"^报告将(评估|核查|分析|审视|检验|讨论|比较|追踪)", r"报告\1"),
+    ]
+    for pattern, replacement in zh_patterns:
+        rewritten = re.sub(pattern, replacement, text)
+        if rewritten != text:
+            return rewritten
+    en_verbs = {
+        "examine": "examines",
+        "assess": "assesses",
+        "evaluate": "evaluates",
+        "analyze": "analyzes",
+        "analyse": "analyses",
+        "review": "reviews",
+        "discuss": "discusses",
+        "trace": "traces",
+        "compare": "compares",
+        "test": "tests",
+    }
+    for subject in ("This report", "The report"):
+        for base, present in en_verbs.items():
+            prefix = f"{subject} will {base} "
+            if text.lower().startswith(prefix.lower()):
+                return f"{subject} {present} {text[len(prefix):]}"
+    return text
 
 
 def _build_section_prompt(
@@ -1511,8 +1581,10 @@ def _assemble_report(
     if not headline:
         headline = context.branch_insight or context.branch_title
     language = "zh" if context.language == "zh" else "en"
-    title_i18n = I18nText.model_validate(outline.title_i18n)
-    summary_i18n = I18nText.model_validate(outline.summary_i18n)
+    title_i18n, summary_i18n = _polish_report_title_summary(
+        I18nText.model_validate(outline.title_i18n),
+        I18nText.model_validate(outline.summary_i18n),
+    )
     sections_with_charts = _attach_reducer_charts(sections, reducer_result)
     report = FullReport(
         version="1.0",
@@ -1532,7 +1604,7 @@ def _assemble_report(
             headline_answer=headline,
             likelihood=reducer_result.likelihood,
             analytic_confidence=reducer_result.analytic_confidence,
-            disclaimer=None,
+            disclaimer=reducer_result.verdict_disclaimer,
         ),
         sections=sections_with_charts,
         evidence=_safe_evidence_refs(reducer_result),

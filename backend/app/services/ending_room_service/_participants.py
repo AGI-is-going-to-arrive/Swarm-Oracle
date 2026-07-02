@@ -287,6 +287,7 @@ def _roundtable_representative_def(
     discussion_format: str | None,
     cast_mode: str | None,
     language: str,
+    reserved_agent_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     branch_agents = _visible_branch_agents(
         session,
@@ -315,12 +316,22 @@ def _roundtable_representative_def(
     else:
         if discussion_format == "clash_mode" and cast_mode == "smart_pick":
             branch_agents = _order_clash_mode_candidates(branch_agents, branch)
-        speaker = branch_agents[0] if branch_agents else None
+        reserved = reserved_agent_ids or set()
+        speaker = next(
+            (
+                agent
+                for agent in branch_agents
+                if str(agent.get("source_agent_id") or "") not in reserved
+            ),
+            branch_agents[0] if branch_agents else None,
+        )
         if speaker is not None and selection_reason_override:
             speaker = {
                 **speaker,
                 "selection_reason": selection_reason_override,
             }
+    if speaker is not None and reserved_agent_ids is not None and speaker.get("source_agent_id"):
+        reserved_agent_ids.add(str(speaker["source_agent_id"]))
     return {
         "role_slot": EndingRoomRoleSlot.REPRESENTATIVE.value,
         "display_name": f"{speaker['display_name']} · {branch.title}" if speaker else branch.title,
@@ -412,6 +423,7 @@ def _participant_defs(
             item["branch_id"]: item["agent_id"]
             for item in selected_representatives
         }
+        reserved_representative_agent_ids: set[str] = set()
         representative_selection_reason = (
             selection_recipe
             if selection_recipe in {"trait_mix", "fault_line_first", "witness_augmented"}
@@ -430,6 +442,7 @@ def _participant_defs(
                     discussion_format=discussion_format,
                     cast_mode=cast_mode,
                     language=language,
+                    reserved_agent_ids=reserved_representative_agent_ids,
                 )
             )
         if selected_witness is not None:

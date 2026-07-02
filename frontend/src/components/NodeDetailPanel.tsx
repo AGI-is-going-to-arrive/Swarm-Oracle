@@ -237,7 +237,7 @@ export function NodeDetailPanel({
       )}
 
       {/* Turn ID */}
-      {node.unitTurnId && (
+      {node.unitTurnId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(node.unitTurnId) && (
         <div style={{ fontSize: '0.75rem', color: '#666', marginBottom: '0.5rem' }}>
           {t('node_detail.turn', 'Turn')}: {node.unitTurnId}
         </div>

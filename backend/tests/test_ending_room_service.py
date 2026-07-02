@@ -23,6 +23,7 @@ from app.models import (
     EndingRoomParticipant,
     EndingRoomPhase,
     EndingRoomRoleSlot,
+    EndingRoomStatus,
     EndingRoomThread,
     EndingRoomThreadMode,
     EndingRoomTurn,
@@ -536,6 +537,113 @@ def test_worldline_roundtable_supports_branch_scoped_selected_representatives():
         {"branch_id": branch_id, "agent_id": shared_agent_id}
         for branch_id in scope_branch_ids
     ]
+
+
+def test_worldline_roundtable_smart_pick_preserves_selected_representatives():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+        ],
+        discussion_format="quick_review",
+        cast_mode="smart_pick",
+        language="zh",
+    )
+
+    assert created is True
+    representatives = {
+        participant["source_branch_id"]: participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    }
+    assert set(representatives) == {branch_a_id, branch_b_id}
+    assert all(
+        participant["source_agent_id"] == shared_agent_id
+        for participant in representatives.values()
+    )
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        scope_branch_ids = list((room.config_json or {}).get("selected_branch_ids") or [])
+        assert (room.config_json or {}).get("selected_representatives") == [
+            {"branch_id": branch_id, "agent_id": shared_agent_id}
+            for branch_id in scope_branch_ids
+        ]
+
+
+def test_worldline_roundtable_smart_pick_auto_dedupes_representatives_across_branches():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+    with Session(get_engine()) as session:
+        branch_a_round = session.exec(select(Round).where(Round.branch_id == branch_a_id)).first()
+        branch_b_round = session.exec(select(Round).where(Round.branch_id == branch_b_id)).first()
+        assert branch_a_round is not None
+        assert branch_b_round is not None
+        session.add(
+            AgentMessage(
+                round_id=branch_a_round.id,
+                agent_id=shared_agent_id,
+                content="我再次确认命令链断点在这里。",
+                emotion="focused",
+            )
+        )
+        session.add(
+            AgentMessage(
+                round_id=branch_b_round.id,
+                agent_id=shared_agent_id,
+                content="我再次确认财政解释权断点在这里。",
+                emotion="focused",
+            )
+        )
+        session.commit()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        discussion_format="quick_review",
+        cast_mode="smart_pick",
+        language="zh",
+    )
+
+    assert created is True
+    representative_agent_ids = [
+        participant["source_agent_id"]
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    ]
+    assert len(representative_agent_ids) == 2
+    assert len(set(representative_agent_ids)) == 2
+
+
+def test_worldline_roundtable_smart_pick_allows_reuse_when_pool_is_exhausted():
+    scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        discussion_format="quick_review",
+        cast_mode="smart_pick",
+        language="zh",
+    )
+
+    assert created is True
+    representative_agent_ids = [
+        participant["source_agent_id"]
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    ]
+    assert len(representative_agent_ids) == 2
+    assert len(set(representative_agent_ids)) == 1
 
 
 def test_worldline_roundtable_selected_representatives_hash_is_branch_scoped():
@@ -2954,6 +3062,145 @@ def test_thread_followup_fallback_reads_like_a_direct_reply():
     assert "R2" in content
 
 
+def test_hotseat_fallback_does_not_prefix_or_repeat_self_target():
+    speaker_name = "公民权利顾问 · 审计轨迹稳住授权"
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="结局会客厅",
+        language="zh",
+    )
+    thread = EndingRoomThread(
+        room_id="room-1",
+        title="授权追问",
+        mode=EndingRoomThreadMode.FOLLOWUP,
+        interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+        participant_set_hash="hash",
+        memory_partition_id="partition-thread",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name=speaker_name,
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={
+            "agent_role": "archivist",
+            "bio_short": "把审计轨迹留在台面上。",
+            "branch_title": "授权稳住",
+            "branch_insight": "速度只有在复核路径可见后才会变得耐用",
+        },
+    )
+
+    content = _build_followup_reply_content(
+        room,
+        thread=thread,
+        response_participant=participant,
+        user_content="你自己会怎么回答？",
+        addressed_participants=[participant],
+        interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+        response_index=0,
+        response_count=1,
+        participant_evidence={
+            "role_hint": "archivist",
+            "bio_hint": "把审计轨迹留在台面上。",
+            "latest_quote": "授权要能回看，速度才不会变成盲冲。",
+            "latest_round": 3,
+            "branch_insight": "速度只有在复核路径可见后才会变得耐用",
+        },
+    )
+
+    assert not content.startswith(speaker_name)
+    assert speaker_name not in content
+    assert "被问到" not in content
+    assert "结局会客厅" not in content
+    assert "archivist" not in content
+    assert "速度只有在复核路径可见后才会变得耐用" in content
+
+
+def test_thread_followup_fallback_cleans_recursive_question_echo():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="世界线圆桌",
+        language="zh",
+    )
+    thread = EndingRoomThread(
+        room_id="room-1",
+        title="递归追问",
+        mode=EndingRoomThreadMode.FOLLOWUP,
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        participant_set_hash="hash",
+        memory_partition_id="partition-thread",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="公民权利顾问",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"branch_insight": "授权复核线没有断"},
+    )
+
+    content = _build_followup_reply_content(
+        room,
+        thread=thread,
+        response_participant=participant,
+        user_content="档案官：你问「公民权利顾问：你问「授权为什么没断」」，我先把追问落到这里。",
+        addressed_participants=[],
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        response_index=0,
+        response_count=1,
+        participant_evidence={
+            "latest_quote": "复核线还在，所以授权没有脱轨。",
+            "latest_round": 2,
+            "branch_insight": "授权复核线没有断",
+        },
+    )
+
+    assert "档案官：" not in content
+    assert "公民权利顾问：" not in content
+    assert "你问「你问" not in content
+    assert len(content) < 220
+
+
+def test_followup_generation_prompt_requires_first_person_and_role_distinction():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Ending Chamber",
+        language="zh",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.AGENT,
+        display_name="狄奥多西一世",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "皇帝", "bio_short": "压住命令链的人。"},
+    )
+
+    prompt = _build_oracle_generation_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.VERDICT,
+        user_content="为什么这里会转向？",
+        thread_mode=EndingRoomThreadMode.FOLLOWUP,
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        output_json=False,
+    )
+
+    assert "never refer to yourself by display name" in prompt
+    assert "first person" in prompt
+    assert "role-specific" in prompt
+
+
 def test_strip_oracle_reasoning_prefix_hides_partial_and_closed_think_blocks():
     assert _strip_oracle_reasoning_prefix("<think>internal chain") == ""
     assert _strip_oracle_reasoning_prefix("<think>internal chain</think>Visible answer") == "Visible answer"  # noqa: E501
@@ -3680,9 +3927,9 @@ def test_hotseat_followup_stays_localized_and_archivist_response_is_distinct():
     )
 
     assert len(followup["turns"]) == 3
-    assert followup["turns"][1]["content"].startswith("狄奥多西一世")
-    assert followup["turns"][2]["content"].startswith("档案官")
-    assert "狄奥多西一世" in followup["turns"][2]["content"]
+    assert not followup["turns"][1]["content"].startswith("狄奥多西一世")
+    assert not followup["turns"][2]["content"].startswith("档案官")
+    assert "archivist" not in followup["turns"][2]["content"]
     # Anchor now carries the hotseat mode tag plus the addressed speaker.
     assert "追问" in followup["turns"][2]["content"]
     assert "I will answer the point you addressed first" not in followup["turns"][1]["content"]
@@ -3717,9 +3964,10 @@ def test_archivist_route_followup_returns_distinct_grounded_responses():
     response_texts = [turn["content"] for turn in followup["turns"][1:]]
     assert len(response_texts) == 3
     assert len(set(response_texts)) == len(response_texts)
-    # Archivist anchor carries the route-mode tag and the key hinge.
-    assert "档案官" in response_texts[0]
-    assert "档案官路由" in response_texts[0] or "核心转折" in response_texts[0]
+    # Archivist anchor carries the route-mode hinge without duplicating the UI speaker name.
+    assert not response_texts[0].startswith("档案官")
+    assert "核心转折" not in response_texts[0]
+    assert "追问" in response_texts[0]
     # Other speakers' anchors carry their R{N} note when the branch has messages.
     assert any("R1 原话" in text or "R0 原话" in text for text in response_texts[1:])
 
@@ -4139,12 +4387,88 @@ def test_one_move_only_result_uses_action_reason_cost_contract():
     payload = load_ending_room_result_payload(snapshot["id"])
 
     assert len(payload["turns"]) == 2
+    opening = payload["turns"][0]["content"]
+    assert not opening.startswith("狄奥多西一世。")
+    assert "世界线：《" not in opening
+    assert "核心转折：「" not in opening
+    assert "我" in opening
     next_move = payload["result"]["next_move"]
     # De-templatized copy no longer requires a rigid label; protect action, reason, and consequence.
     assert "只改一步" in next_move
     assert "命令链" in next_move
     assert "杠杆点" in next_move
     assert "后果" in next_move
+
+
+def test_run_ending_room_background_varies_duplicate_turns_before_result_binding(monkeypatch):
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    def _duplicate_room_plan(_session, room, participants):
+        speaker = next(
+            participant
+            for participant in participants
+            if participant.role_slot == EndingRoomRoleSlot.AGENT
+        )
+        turn = {
+            "participant_id": speaker.id,
+            "phase": EndingRoomPhase.OPENING,
+            "content": "这句兜底发言会被重复写入。",
+            "emotion": "steady",
+            "cited_branch_id": branch_a_id,
+            "cited_refs_json": {"kind": "test"},
+        }
+        second = {**turn, "phase": EndingRoomPhase.CROSSFIRE}
+        return [turn, second], {
+            "summary": "重复测试摘要",
+            "next_move": None,
+            "archivist_note": None,
+            "phase_insights": [],
+            "supporting_turns": [
+                {
+                    "turn_id": None,
+                    "phase": item["phase"].value,
+                    "participant_id": item["participant_id"],
+                    "label": speaker.display_name,
+                    "explanation": item["content"],
+                }
+                for item in (turn, second)
+            ],
+        }
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", False)
+    monkeypatch.setattr(ending_room_service_module, "_build_room_plan", _duplicate_room_plan)
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+    payload = load_ending_room_result_payload(snapshot["id"])
+    contents = [turn["content"] for turn in payload["turns"]]
+
+    assert len(contents) == 2
+    assert contents[0] != contents[1]
+    assert contents[0] == "这句兜底发言会被重复写入。"
+    assert all(item["turn_id"] for item in payload["result"]["supporting_turns"])
+    first_run_turn_ids = [turn["id"] for turn in payload["turns"]]
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        room.status = EndingRoomStatus.LIVE
+        room.result_json = None
+        session.add(room)
+        session.commit()
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+    rerun_payload = load_ending_room_result_payload(snapshot["id"])
+
+    assert [turn["id"] for turn in rerun_payload["turns"]] == first_run_turn_ids
+    assert all(item["turn_id"] for item in rerun_payload["result"]["supporting_turns"])
 
 
 def test_run_ending_room_background_is_idempotent_after_done():

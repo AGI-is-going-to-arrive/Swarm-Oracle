@@ -14,6 +14,7 @@ import {
   stripOracleReasoningText,
   threadLabel,
   trimQuoteSnippet,
+  cleanEndingRoomDialogue,
 } from './endingChatHelpers';
 
 describe('endingChatHelpers', () => {
@@ -155,6 +156,35 @@ describe('endingChatHelpers', () => {
     it('handles non-ending domain', () => {
       const result = describeEndingAnchor(['other:x:y'], false, [], []);
       expect(result?.kind).toBe('unknown');
+    });
+  });
+
+  describe('cleanEndingRoomDialogue', () => {
+    it('removes reasoning prefix', () => {
+      const input = '<think>some internal thought</think>Actual message';
+      expect(cleanEndingRoomDialogue(input, '诸葛亮')).toBe('Actual message');
+    });
+
+    it('removes leading speaker name prefix', () => {
+      expect(cleanEndingRoomDialogue('诸葛亮：我同意这个看法', '诸葛亮')).toBe('我同意这个看法');
+      expect(cleanEndingRoomDialogue('Zhuge Liang: I agree with this', 'Zhuge Liang')).toBe('I agree with this');
+    });
+
+    it('replaces Chinese third-person self-references with first-person', () => {
+      expect(cleanEndingRoomDialogue('诸葛亮同意这个看法。', '诸葛亮')).toBe('我同意这个看法。');
+      expect(cleanEndingRoomDialogue('对于此事，诸葛亮认为必须谨慎。', '诸葛亮')).toBe('对于此事，我认为必须谨慎。');
+    });
+
+    it('does not replace English speaker name with first-person since it requires grammar adjustment', () => {
+      expect(cleanEndingRoomDialogue('Zhuge Liang thinks we should be cautious.', 'Zhuge Liang')).toBe('Zhuge Liang thinks we should be cautious.');
+    });
+
+    it('does not throw when the speaker name contains regex metacharacters', () => {
+      // LLM personas / user-built agents can carry names like "王健林 (商人)" or "C++专家".
+      expect(() => cleanEndingRoomDialogue('王健林 (商人)：现金流最重要', '王健林 (商人)')).not.toThrow();
+      expect(cleanEndingRoomDialogue('王健林 (商人)：现金流最重要', '王健林 (商人)')).toBe('现金流最重要');
+      expect(() => cleanEndingRoomDialogue('C++专家认为性能优先。', 'C++专家')).not.toThrow();
+      expect(cleanEndingRoomDialogue('C++专家认为性能优先。', 'C++专家')).toBe('我认为性能优先。');
     });
   });
 });

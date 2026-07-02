@@ -20,7 +20,7 @@ npm run build    # 含 TypeScript 检查和性能预算
 
 ```bash
 npm test         # 单元测试 (vitest)
-npx tsc --noEmit # TypeScript 检查
+npx tsc -b       # TypeScript 检查（裸 tsc --noEmit 在本仓不检查任何文件）
 npm run lint     # 代码检查
 ```
 

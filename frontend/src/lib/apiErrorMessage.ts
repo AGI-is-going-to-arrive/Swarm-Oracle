@@ -91,6 +91,8 @@ export function getLocalizedApiErrorMessage(
     case 'SIMULATION_RUNTIME_FAILED':
     case 'SCENARIO_PARSE_FAILED':
       return t('common.api_errors.simulation_start_failed');
+    case 'RUNTIME_ERROR':
+      return t('simulation.runtime_failed');
     case 'DEBATE_RUNTIME_FAILED':
       return t('common.api_errors.debate_load_failed');
     case 'DIRECTOR_STATE_REVISION_MISMATCH':

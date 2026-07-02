@@ -54,4 +54,25 @@ describe('textOverflowPredictor', () => {
 
     expect(lineCount).toBeGreaterThanOrEqual(2);
   });
+
+  it('falls back to a cheap estimator when Intl.Segmenter is temporarily deleted', () => {
+    type MutableIntl = { Segmenter?: unknown };
+    const intlRef = globalThis.Intl as unknown as MutableIntl;
+    const originalSegmenter = intlRef.Segmenter;
+    // Set to undefined to simulate absence of Segmenter
+    intlRef.Segmenter = undefined;
+    try {
+      const prediction = predictTextOverflow(
+        '如果金融防线和边疆补给同时失守，这条世界线是否还会把体面误当成稳定的最后借口，同时继续要求档案官替所有成本兜底并把错误包装成必然结局',
+        ORACLE_TEXT_LAYOUT_CONTRACTS.resultEndingTitle,
+      );
+
+      // Verify that the cheap estimator still predicts overflow for a long text, and does not crash!
+      expect(prediction.overflow).toBe(true);
+      expect(prediction.overflowLines).toBeGreaterThan(0);
+      expect(prediction.lineCount).toBeGreaterThan(1);
+    } finally {
+      intlRef.Segmenter = originalSegmenter;
+    }
+  });
 });

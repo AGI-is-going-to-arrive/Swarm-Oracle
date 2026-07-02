@@ -67,6 +67,23 @@ def _normalize_interval(value: Any) -> list[float]:
     return [low, high] if low <= high else [high, low]
 
 
+def _derive_likelihood_label(probability: float) -> str:
+    probability = _clamp01(probability)
+    if probability < 0.05:
+        return "almost_no_chance"
+    if probability < 0.20:
+        return "very_unlikely"
+    if probability < 0.40:
+        return "unlikely"
+    if probability < 0.60:
+        return "roughly_even"
+    if probability < 0.80:
+        return "likely"
+    if probability < 0.95:
+        return "very_likely"
+    return "almost_certain"
+
+
 def _json_string_to_object(raw: str) -> dict[str, Any] | None:
     current: Any = raw
     for _attempt in range(2):
@@ -108,6 +125,16 @@ def _normalize_likelihood(full_report: dict[str, Any]) -> bool:
         if likelihood.get("interval") != normalized_interval:
             likelihood["interval"] = normalized_interval
             changed = True
+    normalized_wep = str(likelihood.get("wep") or "").strip()
+    if normalized_wep:
+        if likelihood.get("wep") != normalized_wep:
+            likelihood["wep"] = normalized_wep
+            changed = True
+    else:
+        likelihood["wep"] = _derive_likelihood_label(
+            _normalize_probability(likelihood.get("probability")),
+        )
+        changed = True
     return changed
 
 

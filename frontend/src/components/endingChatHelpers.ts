@@ -296,3 +296,29 @@ export function describeEndingAnchor(
     label: kindLabel,
   };
 }
+
+// Speaker display names come from LLM personas / user-built agents and may contain
+// regex metacharacters ("王健林 (商人)", "C++专家") — escape before interpolation,
+// or new RegExp throws in the render path and takes down the whole modal.
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function cleanEndingRoomDialogue(content: string, speaker: string): string {
+  let cleaned = stripOracleReasoningText(content);
+  if (!cleaned || !speaker) return cleaned;
+
+  const safeSpeaker = escapeRegExp(speaker);
+
+  // Clean leading prefix: "Speaker: " or "Speaker："
+  const prefixPattern = new RegExp(`^\\s*${safeSpeaker}\\s*[:：]\\s*`);
+  cleaned = cleaned.replace(prefixPattern, '');
+
+  // Clean self-references in Chinese
+  if (speaker.length >= 2) {
+    const pattern = new RegExp(`([，。！？；\\n]|^)${safeSpeaker}(认为|觉得|相信|坚信|深感|同意|主张|建议|声明|强调|指出|看来|看来，)`, 'g');
+    cleaned = cleaned.replace(pattern, '$1我$2');
+  }
+
+  return cleaned;
+}

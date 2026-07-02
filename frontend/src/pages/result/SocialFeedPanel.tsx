@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { getSocialFeed } from '../../api/client';
 import type { SocialFeedResponse, SocialFeedEvent, SocialHeadlineCard } from '../../types';
+import { SafeMarkdown } from '../../components/SafeMarkdown';
 import './SocialFeedPanel.css';
 
 interface SocialFeedPanelProps {
@@ -212,7 +213,9 @@ export default function SocialFeedPanel({ scenarioId }: SocialFeedPanelProps) {
                       )}
                     </div>
                     <div className="social-feed-event__branch">{event.branch_title}</div>
-                    <p className="social-feed-event__summary">{event.summary}</p>
+                    <div className="social-feed-event__summary">
+                      <SafeMarkdown>{event.summary}</SafeMarkdown>
+                    </div>
                   </div>
                 </li>
               ))}

@@ -27,6 +27,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.result_report import builder
 from app.services.result_report.schema import (
     FullReport,
     I18nText,
@@ -284,6 +285,74 @@ def _section_payload(section_id: str, *, body: str | None = None) -> dict[str, A
     }
 
 
+def test_outline_prompt_requires_publication_voice_for_title_and_summary():
+    scenario_id = _seed_report_scenario()
+    reducer_result = builder.reduce_report(get_engine(), scenario_id)
+    context = builder.BuilderContext(
+        scenario_id=scenario_id,
+        question="巴西能否夺得2026世界杯？",
+        language="zh",
+        parsed_context={},
+        branch_id="branch-a",
+        branch_title="巴西冲冠线",
+        branch_story="淘汰赛一路走到决赛。",
+        branch_insight="夺冠路径存在但不是确定结论。",
+        web_context_blocks=[],
+    )
+
+    prompt = builder._build_outline_prompt(context, reducer_result)
+
+    assert "final publication title" in prompt
+    assert "提纲" in prompt
+    assert "This report will" in prompt
+    assert "completed voice" in prompt
+
+
+def test_polish_report_title_summary_removes_planning_voice_examples():
+    title, summary = builder._polish_report_title_summary(
+        I18nText(
+            zh="巴西能否夺得2026世界杯：SwarmOracle报告大纲",
+            en="Can Brazil win the 2026 World Cup: SwarmOracle Report Outline",
+        ),
+        I18nText(
+            zh="本报告将评估：巴西队在不同世界线中夺得2026世界杯的可能性。",
+            en="This report will examine whether Brazil can win the 2026 World Cup.",
+        ),
+    )
+    assert title.zh == "巴西能否夺得2026世界杯"
+    assert title.en == "Can Brazil win the 2026 World Cup"
+    assert summary.zh == "本报告评估：巴西队在不同世界线中夺得2026世界杯的可能性。"
+    assert summary.en == "This report examines whether Brazil can win the 2026 World Cup."
+
+    title, summary = builder._polish_report_title_summary(
+        I18nText(
+            zh="巴西能否夺得2026年世界杯冠军：SwarmOracle分析报告提纲",
+            en="GPT-5.6 Release Timing Report Outline",
+        ),
+        I18nText(
+            zh="报告将核查GPT-5.6发布时间是否已经被确证。",
+            en="This report will assess the release evidence.",
+        ),
+    )
+    assert title.zh == "巴西能否夺得2026年世界杯冠军"
+    assert title.en == "GPT-5.6 Release Timing"
+    assert summary.zh == "报告核查GPT-5.6发布时间是否已经被确证。"
+    assert summary.en == "This report assesses the release evidence."
+
+    title, _summary = builder._polish_report_title_summary(
+        I18nText(zh="GPT-5.6发布时间确证报告大纲", en="GPT-5.6 release confirmation"),
+        I18nText(zh="本报告围绕证据链展开。", en="The report reviews the evidence."),
+    )
+    assert title.zh == "GPT-5.6发布时间确证"
+
+    title, _summary = builder._polish_report_title_summary(
+        I18nText(zh="隆中对策纲要", en="Strategic Outline"),
+        I18nText(zh="本报告围绕原文展开。", en="The report reviews the source text."),
+    )
+    assert title.zh == "隆中对策纲要"
+    assert title.en == "Strategic Outline"
+
+
 class QueuedLlm:
     # Responses are consumed strictly FIFO, EXCEPT for the interview/indicators
     # success-path calls. Those two now run concurrently (M-2 asyncio.gather), so a
@@ -372,6 +441,53 @@ def _persisted_report(scenario_id: str) -> dict[str, Any]:
         return report
 
 
+def _seed_suppressed_likelihood_report_scenario() -> str:
+    scenario_id = "scenario-report-suppressed-zh"
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            id=scenario_id,
+            question="这项政策会通过吗？",
+            status=ScenarioStatus.DONE,
+            parsed_context={"_language": "zh"},
+        )
+        session.add(scenario)
+        session.add(
+            Agent(
+                id="agent-suppressed",
+                scenario_id=scenario.id,
+                name="政策分析员",
+                role="Analyst",
+            )
+        )
+        session.add_all(
+            [
+                Branch(
+                    id="branch-suppressed-root",
+                    scenario_id=scenario.id,
+                    title="根分支聚合",
+                    story="根分支只是聚合文本。",
+                    insight="它不是直接回答问题的世界线。",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-suppressed-child",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-suppressed-root",
+                    title="政策调整线",
+                    story="政策仍在调整。",
+                    insight="没有分支级答案。",
+                    probability=0.42,
+                    fork_round=2,
+                    status=BranchStatus.PRUNED,
+                ),
+            ]
+        )
+        session.commit()
+    return scenario_id
+
+
 def test_scrub_sensitive_text_redacts_url_userinfo():
     from app.services.result_report import builder
 
@@ -420,6 +536,69 @@ async def test_build_report_persists_complete_report_with_evidence_coords(monkey
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.status == "complete"
     assert persisted.evidence[0].agent_name == "Privacy Advocate"
+
+
+@pytest.mark.asyncio
+async def test_build_report_persists_polished_outline_title_and_summary(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    dirty_outline = _outline_payload(["timeline", "sources"])
+    dirty_outline["title_i18n"] = {
+        "zh": "巴西能否夺得2026世界杯：SwarmOracle报告大纲",
+        "en": "Can Brazil win the 2026 World Cup: SwarmOracle Report Outline",
+    }
+    dirty_outline["summary_i18n"] = {
+        "zh": "本报告将评估：巴西队在不同世界线中夺得2026世界杯的可能性。",
+        "en": "This report will examine whether Brazil can win the 2026 World Cup.",
+    }
+    fake_llm = QueuedLlm(
+        [
+            dirty_outline,
+            _section_payload("timeline"),
+            _section_payload("sources"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report.title_i18n.zh == "巴西能否夺得2026世界杯"
+    assert report.title_i18n.en == "Can Brazil win the 2026 World Cup"
+    assert report.summary_i18n.zh.startswith("本报告评估")
+    assert report.summary_i18n.en.startswith("This report examines")
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.title_i18n.zh == report.title_i18n.zh
+    assert persisted.summary_i18n.en == report.summary_i18n.en
+
+
+@pytest.mark.asyncio
+async def test_build_report_localizes_suppressed_likelihood_disclaimer_for_zh_report(
+    monkeypatch,
+):
+    scenario_id = _seed_suppressed_likelihood_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            _section_payload("timeline"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-suppressed-root",
+        overrides=None,
+    )
+
+    assert report.language == "zh"
+    assert report.verdict.disclaimer is not None
+    assert "统计区间" in report.verdict.disclaimer
+    assert "The report suppresses" not in report.verdict.disclaimer
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.verdict.disclaimer == report.verdict.disclaimer
 
 
 @pytest.mark.asyncio

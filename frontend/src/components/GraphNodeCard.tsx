@@ -106,21 +106,14 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
         padding: '10px 12px',
         minHeight: d.meta ? 52 : 46,
         fontSize: '0.78rem',
+        // Longhand-only borders: mixing the `border` shorthand with per-side longhands
+        // in one style object trips React's dev conflict warning on every value change.
         borderLeft: hasAccent
           ? `${DAG_CARD_STYLES.accentWidth}px solid ${d.accentColor}`
-          : undefined,
-        border: !hasAccent
-          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
-          : undefined,
-        borderTop: hasAccent
-          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
-          : undefined,
-        borderRight: hasAccent
-          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
-          : undefined,
-        borderBottom: hasAccent
-          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
-          : undefined,
+          : (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)'),
+        borderTop: d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)',
+        borderRight: d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)',
+        borderBottom: d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)',
         display: 'flex',
         flexDirection: 'column',
         gap: 4,

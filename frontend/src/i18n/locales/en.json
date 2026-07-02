@@ -8,7 +8,7 @@
       "outcome_false": "False",
       "brier_score": "Brier Score",
       "brier_hint": "Lower score is better (0.0 is perfect, 1.0 is worst).",
-      "disabled_placeholder": "You-vs-Oracle comparison is disabled. Check capability settings.",
+      "disabled_placeholder": "This feature is turned off on this server. Ask the admin to enable it.",
       "empty_state": "No comparison available. You might not have locked a prediction, or the scenario has no verdict yet.",
       "not_scorable_actual_outcome_unavailable": "This prediction can't be scored: the simulation didn't record a structured outcome.",
       "not_scorable_generic": "This prediction cannot be scored."
@@ -39,9 +39,9 @@
       "capability_disabled": "Multi-run simulation is disabled.",
       "panel_title": "Multi-Run Distribution",
       "progress_label": "Running: {{current}} / {{total}} completed",
-      "histogram_verdicts": "Verdict Counts ({{count}} worldline counts)",
-      "histogram_outcomes": "Outcome Counts ({{count}} worldline counts)",
-      "worldlines_list_title": "Worldlines Verdict Ledger",
+      "histogram_verdicts": "Verdict counts (across {{count}} worldlines)",
+      "histogram_outcomes": "Outcome counts (across {{count}} worldlines)",
+      "worldlines_list_title": "Worldline verdicts",
       "run_index": "Run #{{index}}",
       "status_label": "Status",
       "verdict_label": "Verdict",
@@ -60,7 +60,7 @@
     },
     "document_seed": {
       "panel_title": "Document Seed Context",
-      "capability_disabled": "Document seeding is disabled. Check capability settings.",
+      "capability_disabled": "This feature is turned off on this server. Ask the admin to enable it.",
       "accept_hint": "PDF, TXT, MD, up to {{max}} MB",
       "dropzone_title": "Drop a PDF, TXT, or MD here, or click to browse",
       "dropzone_aria": "Choose a document to seed world context",
@@ -90,7 +90,7 @@
     },
     "local_packs": {
       "panel_title": "Local Packs",
-      "capability_disabled": "Local packs feature is disabled. Check capability settings.",
+      "capability_disabled": "This feature is turned off on this server. Ask the admin to enable it.",
       "loading": "Loading local packs...",
       "retry": "Retry",
       "search_placeholder": "Search title, description, or genre...",
@@ -213,7 +213,7 @@
       "agents_standard": "⚖ Standard",
       "agents_large": "🔥 Large Scale",
       "agents_extreme": "🌋 Extreme",
-      "mode_label": "Simulation Mode",
+      "mode_label": "Context Mode",
       "mode_blackboard_title": "Agents exchange info via shared blackboard, more compact context",
       "mode_raw_title": "Each agent sees the full run history",
       "mode_blackboard": "Collaborative (recommended)",
@@ -221,7 +221,7 @@
       "mode_blackboard_desc": "Agents share a central blackboard for compact, structured discussions — recommended for most scenarios",
       "mode_raw_desc": "Each agent sees the full run history — richer context but slower and uses more compute",
       "web_search_toggle": "Search-Augmented Simulation",
-      "web_search_hint": "Use the configured search path when available. No provider setup is needed for the recommended path.",
+      "web_search_hint": "If the server has search configured, choose the recommended method and no provider key is needed; otherwise, you can use your own search provider below.",
       "web_search_mode_label": "Search connection mode",
       "web_search_mode_server": "Recommended: configured search",
       "web_search_mode_server_hint": "No key or endpoint needed for the {{provider}} server setup.",
@@ -276,9 +276,9 @@
       "byok_api_key_label": "API Key",
       "byok_api_key_help": "Paste your provider API key. It stays only in this tab session.",
       "byok_base_url_label": "Base URL",
-      "byok_base_url_help": "Use an OpenAI-compatible endpoint, including root URLs like .../v1. Native search requires a Responses endpoint (base_url must end with /responses).",
+      "byok_base_url_help": "Enter the OpenAI-compatible API base URL (typically ending in /v1). A /responses suffix is only needed if you require native web search, see docs.",
       "byok_model_label": "Model",
-      "byok_model_help": "Use the exact provider model id you want to call.",
+      "byok_model_help": "Use the exact provider model id you want to call, e.g. gpt-5.4-mini.",
       "org_id_label": "Organization ID",
       "org_id_help": "Optional. Stored in this tab session and sent as X-Org-Id on API requests.",
       "byok_rpm_label": "RPM Limit",
@@ -407,8 +407,8 @@
         "tooltip_results": "Endings",
         "tooltip_no_events": "No extra events this round",
         "elapsed": "Running {{time}}",
-        "preparing_slow": "Local model is slow — still working…",
-        "simulating_slow": "Local model inference is slow, still processing",
+        "preparing_slow": "Still working — this round is taking longer than usual…",
+        "simulating_slow": "Still processing — inference is taking longer than usual",
         "turn_progress_msg": "In this round, {{completed}}/{{total}} agents have spoken",
         "turn_progress_branch_msg": "{{branch}}: {{completed}}/{{total}} agents have spoken"
       },
@@ -696,7 +696,8 @@
         "footerTagline": "AI multi-agent narrative simulation · for exploration only",
         "readFullReport": "Read full report",
         "readFullReportLead": "Want the full reasoning?",
-        "takeawaysLabel": "Key takeaways"
+        "takeawaysLabel": "Key takeaways",
+        "disclaimer_suppressed": "Statistical band hidden: no answer-bearing branch was available to anchor it."
       },
       "title": "Simulation Results",
       "subtitle": "Multi-Ending Comparison",
@@ -1173,6 +1174,15 @@
       "error_too_long": "This prediction is too long after bet metadata is added. Shorten the rationale.",
       "error_branch_pending": "No active worldline is ready for branch betting yet. Try again in a moment.",
       "error_persistence": "Prediction submitted, but local state did not sync. Please retry to save.",
+      "error_branch_invalid": "The selected target branch is no longer active. Please select another branch.",
+      "disabled_reason": {
+        "submitting": "Submitting prediction...",
+        "success": "Prediction submitted successfully.",
+        "locked": "This prediction is locked and cannot be edited.",
+        "empty_text": "Please enter your prediction details.",
+        "invalid_branch": "Please select an active target branch.",
+        "too_long": "Prediction length exceeds the limit."
+      },
       "branch_unavailable_note": "Only the root worldline is available for now. Ending-tone or resonance bets are the safer fallback.",
       "confidence_low": "Guess",
       "confidence_mid": "Informed",
@@ -1295,7 +1305,7 @@
       "source_branch": "Source Branch",
       "primary_agent": "Primary Agent",
       "secondary_agent": "Second Agent",
-      "hint": "Pick the card first, then add one clear director instruction. Submission still goes through the existing intervention API as a structured event.",
+      "hint": "Select a card and provide a director instruction; once submitted, this event will be injected as an intervention into the current timeline.",
       "art_alt": "Gameplay tactics crest",
       "profile_label": "Scenario profile",
       "director_points": "Director points",
@@ -1957,21 +1967,66 @@
       "achievement_unlocked": "Achievement Unlocked!",
       "achievement_dismiss": "Dismiss",
       "badges": {
-        "first_daily": { "name": "First Steps", "description": "Complete your first daily challenge" },
-        "streak_3": { "name": "Three-Day Streak", "description": "3 consecutive daily challenges" },
-        "streak_7": { "name": "Week Warrior", "description": "7 consecutive daily challenges" },
-        "streak_14": { "name": "Two-Week Star", "description": "14 consecutive daily challenges" },
-        "streak_30": { "name": "Monthly Legend", "description": "30 consecutive daily challenges" },
-        "weekly_finisher": { "name": "Track Complete", "description": "Finish a weekly track" },
-        "weekly_bonus": { "name": "Bonus Round", "description": "Earn a weekly bonus" },
-        "archive_a": { "name": "Grade A", "description": "Achieve A-grade archive rating" },
-        "archive_s": { "name": "Grade S", "description": "Achieve S-grade archive rating" },
-        "bet_first": { "name": "First Bet", "description": "Win your first prediction bet" },
-        "bet_streak_3": { "name": "Hat Trick", "description": "Win 3 consecutive bets" },
-        "profile_level_3": { "name": "Rising Star", "description": "Reach level 3 in any topic" },
-        "profile_level_5": { "name": "Topic Expert", "description": "Reach level 5 in any topic" },
-        "five_profiles_level_3": { "name": "Renaissance", "description": "Reach level 3 in 5 topics" },
-        "objective_finisher": { "name": "Goal Getter", "description": "Complete all director objectives" }
+        "first_daily": {
+          "name": "First Steps",
+          "description": "Complete your first daily challenge"
+        },
+        "streak_3": {
+          "name": "Three-Day Streak",
+          "description": "3 consecutive daily challenges"
+        },
+        "streak_7": {
+          "name": "Week Warrior",
+          "description": "7 consecutive daily challenges"
+        },
+        "streak_14": {
+          "name": "Two-Week Star",
+          "description": "14 consecutive daily challenges"
+        },
+        "streak_30": {
+          "name": "Monthly Legend",
+          "description": "30 consecutive daily challenges"
+        },
+        "weekly_finisher": {
+          "name": "Track Complete",
+          "description": "Finish a weekly track"
+        },
+        "weekly_bonus": {
+          "name": "Bonus Round",
+          "description": "Earn a weekly bonus"
+        },
+        "archive_a": {
+          "name": "Grade A",
+          "description": "Achieve A-grade archive rating"
+        },
+        "archive_s": {
+          "name": "Grade S",
+          "description": "Achieve S-grade archive rating"
+        },
+        "bet_first": {
+          "name": "First Bet",
+          "description": "Win your first prediction bet"
+        },
+        "bet_streak_3": {
+          "name": "Hat Trick",
+          "description": "Win 3 consecutive bets"
+        },
+        "profile_level_3": {
+          "name": "Rising Star",
+          "description": "Reach level 3 in any topic"
+        },
+        "profile_level_5": {
+          "name": "Topic Expert",
+          "description": "Reach level 5 in any topic"
+        },
+        "five_profiles_level_3": {
+          "name": "Renaissance",
+          "description": "Reach level 3 in 5 topics"
+        },
+        "objective_finisher": {
+          "name": "Goal Getter",
+          "description": "Complete all director objectives"
+        }
       }
     },
     "campaign_sheet": {
@@ -3081,7 +3136,7 @@
         "quota_exceeded": "Daily conversation quota reached. Try again tomorrow.",
         "network": "Network error. Check your connection and retry.",
         "ws_lost": "Lost real-time connection. Reconnecting…",
-        "byok_invalid": "Your API key is invalid or rejected by the provider.",
+        "byok_invalid": "The provider rejected this request (401). Please check your API key; if you are using a proxy endpoint, it might also be a temporary upstream issue. Please wait and retry.",
         "server_error": "Server error. Please retry in a moment.",
         "retry_cta": "Retry",
         "discard_cta": "Dismiss"
@@ -3382,7 +3437,7 @@
       "native_probe_title": "Native search static check",
       "native_probe_live_title": "Native search live verification",
       "native_probe_probing": "Probing…",
-      "native_probe_supported": "Static result: supported (a search tool is injected only after a source is selected)",
+      "native_probe_supported": "Static result: supported (search tool is only injected after a source is selected)",
       "native_probe_live_supported": "Live result: supported (endpoint verified to execute native search)",
       "native_probe_unsupported": "Static result: not supported (no search tool is injected)",
       "native_probe_failed": "Static check failed",
@@ -3492,7 +3547,7 @@
       "section_title": "Social Feed",
       "headlines_title": "Headline Cards",
       "empty": "No social feed events or headlines generated for this scenario.",
-      "disabled_explanation": "Social Feed is disabled. Check capability settings.",
+      "disabled_explanation": "This feature is turned off on this server. Ask the admin to enable it.",
       "error": "Failed to load social feed.",
       "retry": "Retry",
       "mode_deterministic": "Deterministic",
@@ -3510,7 +3565,7 @@
     "hops": {
       "title": "Probability sampling",
       "subtitle": "Watch how outcomes shift across branches",
-      "explainer": "If we ran this scenario 100 times, each branch would appear roughly this often. Higher probability = more likely outcome.",
+      "explainer": "Higher probability means the swarm leaned toward this ending in this run. These are narrative weights, not real-world statistics.",
       "pause": "Pause",
       "play": "Play",
       "branch_fallback": "Branch",

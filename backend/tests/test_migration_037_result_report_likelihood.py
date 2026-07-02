@@ -53,6 +53,23 @@ def test_037_helper_clamps_dirty_likelihood_and_preserves_context_keys():
     }
 
 
+def test_037_helper_backfills_legacy_likelihood_without_wep():
+    migration = _load_migration_module()
+    report = _legal_full_report()
+    del report["verdict"]["likelihood"]["wep"]
+    parsed_context = {"full_report": report, "result_quality": {"kept": True}}
+
+    normalized, changed = migration._normalize_parsed_context(parsed_context)
+
+    assert changed is True
+    assert normalized["full_report"]["verdict"]["likelihood"] == {
+        "probability": 0.68,
+        "interval": [0.55, 0.76],
+        "wep": "likely",
+    }
+    assert normalized["result_quality"] == {"kept": True}
+
+
 def test_037_helper_preserves_oversized_legal_report_after_likelihood_clamp(monkeypatch):
     from app.config import settings
 

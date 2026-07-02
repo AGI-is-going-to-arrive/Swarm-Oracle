@@ -456,6 +456,8 @@ def _build_participant_followup_evidence(
         "bio_hint": bio_hint,
         "role_hint": role_hint,
         "evidence_hook": _compact_text(evidence_hook, limit=84) or evidence_hook,
+        "branch_title": _compact_text(snapshot.get("branch_title"), limit=60),
+        "branch_insight": _compact_text(snapshot.get("branch_insight"), limit=84),
     }
 
 

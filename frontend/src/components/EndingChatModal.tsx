@@ -18,6 +18,7 @@ import {
 } from './gameplayCards';
 import { useEndingRoomWS } from '../hooks/useEndingRoomWS';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { useEndingRoomStore } from '../stores/endingRoomStore';
 import {
   type AnchorAction,
@@ -35,7 +36,7 @@ import {
   buildEndingAnchorId,
   buildEndingQuotePrompt,
   describeEndingAnchor,
-  stripOracleReasoningText,
+  cleanEndingRoomDialogue,
 } from './endingChatHelpers';
 import type {
   AgentMessage,
@@ -136,6 +137,10 @@ export default function EndingChatModal({
   const modalRef = useRef<HTMLDivElement>(null);
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
   const transcriptListRef = useRef<HTMLDivElement>(null);
+  // Guards overlay-click close against drag gestures: the browser can synthesize a
+  // click on the overlay even when the press or release happened inside the modal.
+  const overlayMouseDownRef = useRef(false);
+  const overlayMouseUpRef = useRef(false);
 
   const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
@@ -188,6 +193,7 @@ export default function EndingChatModal({
     sending,
     status,
     error,
+    errorCode,
     pendingDrafts,
     openRoom,
     loadRoom,
@@ -509,7 +515,7 @@ export default function EndingChatModal({
           speaker: participant?.display_name
             ?? (turn.source === 'user_turn' ? t('ending_room.speaker_you') : t('ending_room.participant_unknown')),
           phase: getEndingRoomPhaseLabel(turn.phase, t),
-          content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
+          content: turn.source === 'user_turn' ? turn.content : cleanEndingRoomDialogue(turn.content, participant?.display_name ?? ''),
           participantId: turn.participant_id,
           roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
         };
@@ -520,7 +526,7 @@ export default function EndingChatModal({
         key: `${message.branch}-${message.round}-${message.agent_id}-${index}`,
         speaker: message.agent,
         phase: `R${message.round}`,
-        content: stripOracleReasoningText(message.message),
+        content: cleanEndingRoomDialogue(message.message, message.agent),
         participantId: null,
         roleSlot: null,
       }));
@@ -547,7 +553,7 @@ export default function EndingChatModal({
         speaker: participant?.display_name
           ?? (turn.source === 'user_turn' ? t('ending_room.speaker_you') : t('ending_room.participant_unknown')),
         phase: getEndingRoomPhaseLabel(turn.phase, t),
-        content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
+        content: turn.source === 'user_turn' ? turn.content : cleanEndingRoomDialogue(turn.content, participant?.display_name ?? ''),
         participantId: turn.participant_id,
         roleSlot: participant?.role_slot ?? (turn.source === 'user_turn' ? 'user' : null),
       };
@@ -579,7 +585,8 @@ export default function EndingChatModal({
     () => {
       if (visibleDrafts.length > 0) {
         return visibleDrafts.map((draft) => {
-          const sanitizedContent = stripOracleReasoningText(draft.content);
+          const participant = participantsById.get(draft.participantId);
+          const sanitizedContent = cleanEndingRoomDialogue(draft.content, participant?.display_name ?? '');
           return {
             key: draft.turnId,
             participantId: draft.participantId,
@@ -632,6 +639,7 @@ export default function EndingChatModal({
       effectiveInteractionMode,
       effectiveSnapshot?.current_phase,
       participants,
+      participantsById,
       readOnly,
       selectedHotseatParticipant?.id,
       sending,
@@ -1117,7 +1125,25 @@ export default function EndingChatModal({
   const handleRestoredConversationDismiss = () => setRestoredConversation(null);
 
   return (
-    <div className="ending-chat-overlay" onClick={onClose}>
+    <div
+      className="ending-chat-overlay"
+      onMouseDown={(event) => {
+        overlayMouseDownRef.current = event.target === event.currentTarget;
+        overlayMouseUpRef.current = false;
+      }}
+      onMouseUp={(event) => {
+        overlayMouseUpRef.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        const startedOnOverlay = overlayMouseDownRef.current;
+        const endedOnOverlay = overlayMouseUpRef.current;
+        overlayMouseDownRef.current = false;
+        overlayMouseUpRef.current = false;
+        if (startedOnOverlay && endedOnOverlay && event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <div
         ref={modalRef}
         className={`ending-chat-modal ${profileId ? `oracle-skin oracle-skin--${profileId}` : ''}`}
@@ -1444,7 +1470,9 @@ export default function EndingChatModal({
 
                 {error && (
                   <section className="ending-chat-panel ending-chat-panel--error">
-                    <p>{error}</p>
+                    <p>
+                      {errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, error) : error}
+                    </p>
                   </section>
                 )}
               </>
