@@ -2458,10 +2458,17 @@ def _build_oracle_rewrite_prompt(
         room.language,
         participant.persona_snapshot_json,
     )
+    character_block = _build_character_identity_block(participant, language=room.language)
+    role_contamination_guard = (
+        "- 非档案官角色不要用“我判”“我来判”“档案官式总结”开场；不要借用主持人、裁判或档案官口吻\n"
+        if room.language == "zh"
+        else "- Unless this speaker is explicitly the Archivist, do not open with 'I judge' or borrow Archivist, host, or judge voice\n"  # noqa: E501
+    )
     return (
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         "You are generating live Oracle Chambers dialogue for SwarmOracle.\n"
         f"{task_line}\n"
+        f"{character_block}\n\n"
         f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode, interaction_mode=interaction_mode)}\n"  # noqa: E501
         f"{vocab_section}"
         "Hard rules:\n"
@@ -2479,6 +2486,7 @@ def _build_oracle_rewrite_prompt(
         "- Vary sentence structure — mix short decisive statements with longer explanations. Never use parallel structures like X是...Y是...Z是...\n"  # noqa: E501
         "- Let persona, stance, and story pressure drive word choice and what gets emphasized first\n"  # noqa: E501
         "- When role, persona, stance, or source quotes exist in context, prioritize them over the anchor template\n"  # noqa: E501
+        f"{role_contamination_guard}"
         "- In roundtables, each speaker must sound noticeably different — vary sentence length, opening style, and emotional register\n"  # noqa: E501
         "- Sound like a person having a real conversation at a table, not writing a report\n"
         "- Reference what other participants said by name — react to their specific points\n"

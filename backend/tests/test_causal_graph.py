@@ -24,6 +24,7 @@ from app.models.database import (
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from app.services.causal_graph import (
     _SCENARIO_LOCK_STRIPE_COUNT,
+    _display_fork_reason,
     _get_scenario_lock,
     _safe_parse_payload,
     _scenario_locks,
@@ -1786,6 +1787,21 @@ class TestBuildSnapshot:
         assert fork_node["payload"]["display_reason"] == "路线分岔：先稳后攻；另一条继续强攻。"
         assert fork_node["payload"]["display_summary"] == "这会改写后勤、继任与前线责任链。"
         assert fork_node["payload"]["reason"] == fork["reason"]
+
+    def test_english_fork_reason_does_not_treat_apostrophe_as_route_quote(self):
+        reason = "The room doesn't split into named paths; it only shifts pressure."
+
+        display = _display_fork_reason(reason, language="English")
+
+        assert "doesn't" in display
+        assert "路线分岔" not in display
+
+    def test_english_fork_reason_uses_english_route_label(self):
+        reason = 'The debate split into "slow audit" and "fast launch" routes.'
+
+        display = _display_fork_reason(reason, language="English")
+
+        assert display == "Route split: slow audit; another path fast launch."
 
     def test_evidence_detail_serialized_when_only_evidence_json_is_set(self):
         _seed_snapshot_edge(

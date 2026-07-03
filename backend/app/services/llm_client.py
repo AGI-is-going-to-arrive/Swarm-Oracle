@@ -86,6 +86,8 @@ _LLM_SAFE_ERROR_MESSAGES: dict[str, str] = {
     "LLM_AUTH_FAILED": "LLM authentication failed. Check the configured API key.",
     "LLM_MODEL_NOT_FOUND": "LLM model was not found. Check the configured model name.",
     "LLM_RATE_LIMITED": "LLM provider rate limit was reached. Retry later.",
+    "LLM_TIMEOUT": "LLM provider timed out. Retry later or raise the configured timeout.",
+    "LLM_EMPTY": "LLM returned no visible content.",
 }
 _MODEL_MISSING_BODY_RE = re.compile(
     r"\b(?:model[_ -]?not[_ -]?found|model\s+not\s+found|no\s+such\s+model)\b"
@@ -646,6 +648,8 @@ def classify_llm_error_code(exc: BaseException) -> str | None:
                 return "LLM_MODEL_NOT_FOUND"
         if isinstance(current, httpx.RequestError):
             return "LLM_UNREACHABLE"
+        if isinstance(current, (TimeoutError, asyncio.TimeoutError)):
+            return "LLM_TIMEOUT"
         current = current.__cause__ or current.__context__
     return None
 
@@ -671,6 +675,23 @@ def _llm_error_from_request(exc: httpx.RequestError) -> LLMError:
         _LLM_SAFE_ERROR_MESSAGES["LLM_UNREACHABLE"],
         code="LLM_UNREACHABLE",
     )
+
+
+def _parse_provider_json(resp: Any, *, context: str) -> dict[str, Any]:
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        response_text = _sanitize_error(str(getattr(resp, "text", ""))[:500])
+        logger.error("%s returned non-JSON success response: %s", context, response_text)
+        raise LLMError("LLM returned non-JSON success response") from exc
+    if not isinstance(data, dict):
+        logger.error(
+            "%s returned unexpected JSON payload type: %s",
+            context,
+            type(data).__name__,
+        )
+        raise LLMError("Unexpected response structure")
+    return data
 
 
 _PROMPT_INJECTION_MARKERS = (
@@ -2499,7 +2520,7 @@ async def llm_call(
                 fallback_resp.raise_for_status()
                 if fallback_is_chat is not None:
                     is_chat = fallback_is_chat
-                return fallback_resp.json()
+                return _parse_provider_json(fallback_resp, context="LLM native no-tools fallback")
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 if status_code == 429 or status_code >= 500:
@@ -2530,7 +2551,7 @@ async def llm_call(
                     timeout=timeout,
                 )
                 resp.raise_for_status()
-                candidate_data = resp.json()
+                candidate_data = _parse_provider_json(resp, context="LLM provider")
                 if active_structured_output_keys:
                     body_error = _detect_structured_output_body_error(candidate_data)
                     if body_error:
@@ -2727,7 +2748,7 @@ async def llm_call(
             "LLM returned empty non-stream content despite success response: %s",
             _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]),
         )
-        raise LLMError("Empty non-stream content")
+        raise LLMError("Empty non-stream content", code="LLM_EMPTY")
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
                  len(text), tok_in, tok_out)
 
@@ -2928,22 +2949,11 @@ def _extract_chat_message_text(message: dict[str, Any]) -> str:
     if not isinstance(message, dict):
         raise TypeError("Chat message must be an object")
     text = message.get("content") or ""
-    visible_text = _strip_reasoning_blocks(str(text))
-    if visible_text.strip():
-        return visible_text
-    reasoning_text = message.get("reasoning_content") or ""
-    return _strip_reasoning_blocks(str(reasoning_text))
+    return _strip_reasoning_blocks(str(text))
 
 
 def _is_benign_empty_chat_completion(data: dict[str, Any]) -> bool:
-    choice = data["choices"][0]
-    if choice.get("finish_reason") not in {"stop", "tool_calls", None}:
-        return False
-    message = choice.get("message") or {}
-    if not isinstance(message, dict):
-        return False
-    reasoning_text = message.get("reasoning_content") or ""
-    return bool(_strip_reasoning_blocks(str(reasoning_text)).strip())
+    return False
 
 
 def _is_benign_empty_responses_output(data: dict[str, Any]) -> bool:
@@ -3067,7 +3077,7 @@ async def llm_call_json_for_family_query_reformulation(
                     timeout=timeout,
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                data = _parse_provider_json(resp, context="Family query reformulation LLM")
                 break
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
@@ -3106,7 +3116,7 @@ async def llm_call_json_for_family_query_reformulation(
     except (KeyError, IndexError, TypeError, StopIteration) as exc:
         raise LLMError("Unexpected response structure") from exc
     if not text.strip():
-        raise LLMError("Empty non-stream content")
+        raise LLMError("Empty non-stream content", code="LLM_EMPTY")
     cleaned = _clean_json_text(text)
     return _parse_json_response(cleaned)
 
@@ -3284,6 +3294,7 @@ async def llm_call_json(
     fallback_mode: str | None = None,
     use_structured_outputs: bool = True,
     structured_output_schema: dict[str, Any] | None = None,
+    timeout: float = 120.0,
 ) -> dict:
     """Call LLM and parse the response as JSON.
 
@@ -3296,6 +3307,7 @@ async def llm_call_json(
         model=model,
         api_key=api_key,
         base_url=base_url,
+        timeout=timeout,
         structured_output_schema=(
             (structured_output_schema or _default_structured_output_schema())
             if use_structured_outputs
@@ -3524,6 +3536,7 @@ async def llm_call_json_stream(
     fallback_mode: str | None = None,
     use_structured_outputs: bool = True,
     structured_output_schema: dict[str, Any] | None = None,
+    timeout: float = 120.0,
 ) -> dict:
     """Stream LLM response with real-time delta callback, then parse as JSON.
 
@@ -3536,7 +3549,9 @@ async def llm_call_json_stream(
         reasoning_effort=reasoning_effort,
         temperature=temperature,
         model=model,
-        api_key=api_key, base_url=base_url,
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout,
         structured_output_schema=(
             (structured_output_schema or _default_structured_output_schema())
             if use_structured_outputs
@@ -3563,6 +3578,7 @@ async def llm_call_json_with_stream_fallback(
     probe_timeout: float = 8.0,
     use_structured_outputs: bool = True,
     structured_output_schema: dict[str, Any] | None = None,
+    timeout: float = 120.0,
 ) -> dict:
     """Prefer streaming JSON when supported, otherwise fall back to non-stream.
 
@@ -3587,6 +3603,7 @@ async def llm_call_json_with_stream_fallback(
                 fallback_mode=fallback_mode,
                 use_structured_outputs=use_structured_outputs,
                 structured_output_schema=structured_output_schema,
+                timeout=timeout,
             )
         except Exception:
             logger.warning(
@@ -3604,6 +3621,7 @@ async def llm_call_json_with_stream_fallback(
         fallback_mode=fallback_mode,
         use_structured_outputs=use_structured_outputs,
         structured_output_schema=structured_output_schema,
+        timeout=timeout,
     )
 
 

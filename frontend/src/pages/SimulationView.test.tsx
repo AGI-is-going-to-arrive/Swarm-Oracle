@@ -6,6 +6,16 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    loading: false,
+    enabled: true,
+    capabilities: { you_vs_oracle: { enabled: true } },
+    error: null,
+    reload: vi.fn(),
+  }),
+}));
 import type { BranchInfo, Scenario, ScenarioDirectorState, ScenarioGameplayState } from '../types';
 import { encodeSimulationReplayToken } from '../lib/simulationReplay';
 import { ApiError } from '../api/client';

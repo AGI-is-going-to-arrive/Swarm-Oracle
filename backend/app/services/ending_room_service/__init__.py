@@ -57,6 +57,8 @@ from app.services.runtime_lock import (
     ending_room_lock_key,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lock_error_is_transient_busy,
+    runtime_lock_lease_is_alive,
 )
 
 from ._content import (  # noqa: F401 — re-exported
@@ -2084,10 +2086,26 @@ def _build_room_plan(
     }
 
 
+def _room_has_terminal_success_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("error"):
+        return False
+    return any(
+        result.get(key)
+        for key in ("summary", "archivist_note", "phase_insights", "supporting_turns")
+    )
+
+
 def _mark_room_error(room_id: str) -> None:
     with Session(get_engine()) as session:
         room = session.get(EndingRoom, room_id)
         if room is None:
+            return
+        if (
+            room.status == EndingRoomStatus.DONE
+            and _room_has_terminal_success_result(room.result_json)
+        ):
             return
         room.status = EndingRoomStatus.ERROR
         room.result_json = {
@@ -2136,6 +2154,19 @@ def _start_ending_room_runtime_lock_heartbeat(
             try:
                 refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
             except Exception as exc:  # pragma: no cover - exercised via watcher contract
+                if runtime_lock_error_is_transient_busy(exc) and runtime_lock_lease_is_alive(
+                    current_lease
+                ):
+                    logger.warning(
+                        "Ending room %s runtime lock refresh hit SQLite write-lock contention; "
+                        "retaining current lease",
+                        room_id,
+                    )
+                    refresh_interval = _ending_room_runtime_lock_refresh_interval(
+                        current_lease,
+                        lease_seconds=lease_seconds,
+                    )
+                    continue
                 failure_holder[0] = exc
                 lease_holder[0] = None
                 logger.warning(

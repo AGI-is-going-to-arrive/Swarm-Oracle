@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -62,6 +63,9 @@ from app.services.runtime_lock import (
     debate_lock_key,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lock_error_is_transient_busy,
+    runtime_lock_is_active,
+    runtime_lock_lease_is_alive,
 )
 
 # Phase 3 F6: Argument map extraction (non-blocking)
@@ -110,6 +114,7 @@ _DEBATE_DIMENSION_LABELS = {
 _VALID_DEBATE_WINNERS = {"proposition", "opposition"}
 _VALID_VERDICT_TONES = {"order", "balance", "rupture"}
 _VALID_PRESSURE_SIDES = {"balanced", "proposition", "opposition"}
+_JUDGE_QUOTE_RE = re.compile(r"[「“\"]([^」”\"]{4,240})[」”\"]")
 _DEBATE_PREDICTION_OPTIONS = {
     "winner": ("proposition", "opposition"),
     "verdict_tone": ("order", "balance", "rupture"),
@@ -117,6 +122,7 @@ _DEBATE_PREDICTION_OPTIONS = {
 _DEBATE_RUNTIME_LOCK_LEASE_SECONDS = 15 * 60
 _DEBATE_RUNTIME_LOCK_REFRESH_FRACTION = 0.33
 _DEBATE_RUNTIME_LOCK_LOST_MESSAGE = "Debate runtime lock was lost during execution"
+_DEBATE_LIVE_ORPHAN_GET_GRACE_SECONDS = 3.0
 
 
 @dataclass
@@ -213,6 +219,68 @@ def _clear_running_debate(debate_id: str) -> None:
         _running_debates.discard(debate_id)
 
 
+def _is_debate_running_in_process(debate_id: str) -> bool:
+    with _running_debates_lock:
+        return debate_id in _running_debates
+
+
+def _datetime_epoch_seconds(value: datetime | None) -> float:
+    if value is None:
+        return 0.0
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
+
+def _live_debate_has_active_runtime_owner(debate_id: str) -> bool:
+    return _is_debate_running_in_process(debate_id) or runtime_lock_is_active(
+        debate_lock_key(debate_id)
+    )
+
+
+def _live_debate_is_past_grace(debate: Debate, *, grace_seconds: float) -> bool:
+    reference = debate.updated_at or debate.created_at
+    return time.time() - _datetime_epoch_seconds(reference) >= max(0.0, grace_seconds)
+
+
+def _mark_loaded_live_debate_orphaned_if_needed(
+    session: Session,
+    debate: Debate,
+    *,
+    grace_seconds: float,
+) -> bool:
+    if debate.status != DebateStatus.LIVE:
+        return False
+    if not _live_debate_is_past_grace(debate, grace_seconds=grace_seconds):
+        return False
+    if _live_debate_has_active_runtime_owner(debate.id):
+        return False
+    debate.status = DebateStatus.ERROR
+    debate.updated_at = _now()
+    session.add(debate)
+    session.commit()
+    session.refresh(debate)
+    return True
+
+
+def reconcile_orphaned_live_debates(engine) -> int:
+    marked = 0
+    with Session(engine) as session:
+        debates = list(
+            session.exec(select(Debate).where(Debate.status == DebateStatus.LIVE)).all()
+        )
+        for debate in debates:
+            if _live_debate_has_active_runtime_owner(debate.id):
+                continue
+            debate.status = DebateStatus.ERROR
+            debate.updated_at = _now()
+            session.add(debate)
+            marked += 1
+        if marked:
+            session.commit()
+    return marked
+
+
 def _empty_turn_fallback(language: str, kind: str) -> str:
     if language == "zh":
         if kind == "argument":
@@ -236,7 +304,27 @@ def _start_runtime_lock_heartbeat(
             current_lease = lease_holder[0]
             try:
                 refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
-            except Exception:
+            except Exception as exc:
+                if runtime_lock_error_is_transient_busy(exc) and runtime_lock_lease_is_alive(
+                    current_lease
+                ):
+                    logger.warning(
+                        "%s runtime lock lease refresh hit SQLite write-lock contention; "
+                        "retaining current lease",
+                        lock_label,
+                    )
+                    remaining_seconds = max(0.01, current_lease.expires_at - time.time())
+                    refresh_interval = max(
+                        0.01,
+                        min(
+                            5.0,
+                            min(lease_seconds, remaining_seconds)
+                            * _DEBATE_RUNTIME_LOCK_REFRESH_FRACTION,
+                        ),
+                    )
+                    if stop_event.wait(refresh_interval):
+                        return
+                    continue
                 lease_holder[0] = None
                 logger.exception("%s runtime lock lease refresh failed", lock_label)
                 return
@@ -1213,11 +1301,103 @@ def _build_judge_analysis_fallback(
     }
 
 
+def _quote_match_text(value: object) -> str:
+    return "".join(str(value or "").casefold().split())
+
+
+def _quoted_fragments(value: str) -> list[str]:
+    return [match.group(1).strip() for match in _JUDGE_QUOTE_RE.finditer(value or "")]
+
+
+def _turn_for_quoted_fragment(
+    quote: str,
+    turns: list[DebateTurn],
+) -> DebateTurn | None:
+    needle = _quote_match_text(quote)
+    if not needle:
+        return None
+    matches = [
+        turn
+        for turn in turns
+        if needle in _quote_match_text(turn.content)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _side_aliases(debate: Debate, side: str) -> set[str]:
+    aliases = {side}
+    if side == "proposition":
+        aliases.update({"正方", "pro", "proposal", debate.proposition_name})
+    elif side == "opposition":
+        aliases.update({"反方", "opp", "opposing", debate.opposition_name})
+    return {alias.casefold() for alias in aliases if str(alias or "").strip()}
+
+
+def _side_alias_matches_text(alias: str, text: str) -> bool:
+    if re.fullmatch(r"[a-z0-9][a-z0-9 _-]*", alias):
+        pattern = rf"(?<![a-z0-9_]){re.escape(alias)}(?![a-z0-9_])"
+        return re.search(pattern, text) is not None
+    return alias in text
+
+
+def _claimed_side_for_text(value: str, debate: Debate) -> str | None:
+    text = value.casefold()
+    hits = {
+        side
+        for side in ("proposition", "opposition")
+        if any(_side_alias_matches_text(alias, text) for alias in _side_aliases(debate, side))
+    }
+    return next(iter(hits)) if len(hits) == 1 else None
+
+
+def _has_quote_attribution_conflict(
+    value: str,
+    *,
+    debate: Debate | None,
+    turns: list[DebateTurn] | None,
+) -> bool:
+    if debate is None or not turns:
+        return False
+    claimed_side = _claimed_side_for_text(value, debate)
+    if claimed_side is None:
+        return False
+    for quote in _quoted_fragments(value):
+        turn = _turn_for_quoted_fragment(quote, turns)
+        if turn is None:
+            continue
+        if str(turn.speaker_side.value) != claimed_side:
+            logger.warning(
+                "Judge analysis quote attribution conflict: claimed=%s actual=%s quote=%s",
+                claimed_side,
+                turn.speaker_side.value,
+                quote[:80],
+            )
+            return True
+    return False
+
+
+def _judge_text_field_or_fallback(
+    value: object,
+    fallback: object,
+    *,
+    debate: Debate | None,
+    turns: list[DebateTurn] | None,
+) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return str(fallback or "")
+    if _has_quote_attribution_conflict(text, debate=debate, turns=turns):
+        return str(fallback or "")
+    return text
+
+
 def _coerce_judge_analysis_payload(
     raw: dict[str, Any],
     fallback: dict[str, Any],
     *,
     language: str,
+    debate: Debate | None = None,
+    turns: list[DebateTurn] | None = None,
 ) -> dict[str, Any]:
     dimension_rationales: dict[str, str] = {}
     raw_dimension_rationales = raw.get("dimension_rationales")
@@ -1225,7 +1405,12 @@ def _coerce_judge_analysis_payload(
         for dimension in DEBATE_DIMENSIONS:
             value = raw_dimension_rationales.get(dimension)
             if isinstance(value, str) and value.strip():
-                dimension_rationales[dimension] = value.strip()
+                dimension_rationales[dimension] = _judge_text_field_or_fallback(
+                    value,
+                    fallback["dimension_rationales"].get(dimension, ""),
+                    debate=debate,
+                    turns=turns,
+                )
     for dimension in DEBATE_DIMENSIONS:
         dimension_rationales.setdefault(dimension, fallback["dimension_rationales"].get(dimension, ""))  # noqa: E501
 
@@ -1234,13 +1419,43 @@ def _coerce_judge_analysis_payload(
         summary = _polish_generated_turn(summary, language=language, phase=DebatePhase.VERDICT)
 
     return {
-        "summary": summary or fallback["summary"],
-        "winner_reason": str(raw.get("winner_reason") or "").strip() or fallback["winner_reason"],
-        "loser_gap": str(raw.get("loser_gap") or "").strip() or fallback["loser_gap"],
-        "swing_factor": str(raw.get("swing_factor") or "").strip() or fallback["swing_factor"],
-        "closing_note": str(raw.get("closing_note") or "").strip() or fallback["closing_note"],
+        "summary": _judge_text_field_or_fallback(
+            summary,
+            fallback["summary"],
+            debate=debate,
+            turns=turns,
+        ),
+        "winner_reason": _judge_text_field_or_fallback(
+            raw.get("winner_reason"),
+            fallback["winner_reason"],
+            debate=debate,
+            turns=turns,
+        ),
+        "loser_gap": _judge_text_field_or_fallback(
+            raw.get("loser_gap"),
+            fallback["loser_gap"],
+            debate=debate,
+            turns=turns,
+        ),
+        "swing_factor": _judge_text_field_or_fallback(
+            raw.get("swing_factor"),
+            fallback["swing_factor"],
+            debate=debate,
+            turns=turns,
+        ),
+        "closing_note": _judge_text_field_or_fallback(
+            raw.get("closing_note"),
+            fallback["closing_note"],
+            debate=debate,
+            turns=turns,
+        ),
         "dimension_rationales": dimension_rationales,
-        "counterplay_explanation": str(raw.get("counterplay_explanation") or "").strip() or fallback.get("counterplay_explanation"),  # noqa: E501
+        "counterplay_explanation": _judge_text_field_or_fallback(
+            raw.get("counterplay_explanation"),
+            fallback.get("counterplay_explanation"),
+            debate=debate,
+            turns=turns,
+        ),
         "adjudication": _coerce_llm_adjudication(raw),
     }
 
@@ -1312,7 +1527,10 @@ async def _generate_judge_analysis(
     )
     highlight_turns = turns[-4:] if len(turns) >= 4 else turns
     highlight_block = "\n".join(
-        f"- {_display_phase(debate.language, turn.phase)} / {turn.speaker_name}: {turn.content}"
+        f"- turn_id={turn.id}; sequence={turn.sequence}; "
+        f"phase={_display_phase(debate.language, turn.phase)}; "
+        f"speaker_side={turn.speaker_side.value}; speaker_name={turn.speaker_name}; "
+        f"content={turn.content}"
         for turn in highlight_turns
     ) or "(none)"
     if debate.language == "zh":
@@ -1347,6 +1565,8 @@ async def _generate_judge_analysis(
             "- adjudication.verdict_tone 必须是 order / balance / rupture 之一\n"
             "- adjudication.dimensions 必须覆盖四个维度，每边都给 1-5 的整数分\n"
             "- 如果没有反制押注，counterplay_explanation 输出空字符串\n"
+            "- 引用某句话时，必须按关键回合摘录里的 speaker_side / speaker_name 归属；"
+            "不确定就不要引用原句\n"
             "- 不要泛泛说'双方都很精彩'，要点到具体的论点、漏洞或转折\n"
             "- 只输出严格 JSON："
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
@@ -1390,6 +1610,7 @@ async def _generate_judge_analysis(
             "- adjudication.verdict_tone must be one of order / balance / rupture\n"
             "- adjudication.dimensions must cover all four dimensions with integer scores from 1-5 for both sides\n"  # noqa: E501
             "- If no counterplay hedge exists, set counterplay_explanation to an empty string\n"
+            "- When quoting a line, attribute it to the exact speaker_side / speaker_name in the key turn ledger; if unsure, do not quote it\n"  # noqa: E501
             "- Avoid generic praise — name the specific arguments, gaps, or turning points\n"
             "- Output strict JSON only: "
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
@@ -1431,6 +1652,8 @@ async def _generate_judge_analysis(
             result,
             fallback,
             language=debate.language,
+            debate=debate,
+            turns=turns,
         )
     except Exception as exc:
         logger.warning("Judge analysis fallback for debate %s: %s", debate_id, exc)
@@ -1733,6 +1956,11 @@ def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
         debate = session.get(Debate, debate_id)
         if debate is None:
             return None
+        _mark_loaded_live_debate_orphaned_if_needed(
+            session,
+            debate,
+            grace_seconds=_DEBATE_LIVE_ORPHAN_GET_GRACE_SECONDS,
+        )
         turns = list(
             session.exec(
                 select(DebateTurn)
@@ -2370,6 +2598,20 @@ async def run_debate_background(
             },
         )
         await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.DONE.value}})  # noqa: E501
+    except asyncio.CancelledError:
+        logger.warning("Debate %s was cancelled during execution", debate_id)
+        _mark_debate_error(debate_id)
+        await ws_callback(
+            debate_id,
+            {
+                "type": "status",
+                "data": {
+                    "status": DebateStatus.ERROR.value,
+                    "error": GENERIC_DEBATE_ERROR,
+                },
+            },
+        )
+        raise
     except Exception as exc:
         logger.error("Debate %s failed: %s", debate_id, exc, exc_info=True)
         _mark_debate_error(debate_id)
@@ -2773,6 +3015,13 @@ def _mark_debate_error(debate_id: str) -> None:
     with Session(engine) as session:
         debate = session.get(Debate, debate_id)
         if debate is None:
+            return
+        if debate.status == DebateStatus.DONE and (
+            debate.winner
+            or debate.verdict_tone
+            or debate.judge_summary
+            or debate.breakdown_json
+        ):
             return
         debate.status = DebateStatus.ERROR
         debate.updated_at = _now()

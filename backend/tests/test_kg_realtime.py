@@ -163,7 +163,7 @@ async def test_simulator_helper_pushes_causal_delta_after_append(monkeypatch):
     async def fake_to_thread(func, *args, **kwargs):
         assert func is simulator._causal_append
         assert args == ("sc1", "br1", 1, ["msg"])
-        assert kwargs == {}
+        assert kwargs == {"language": "Chinese"}
         return expected_delta
 
     monkeypatch.setattr(simulator.asyncio, "to_thread", fake_to_thread)

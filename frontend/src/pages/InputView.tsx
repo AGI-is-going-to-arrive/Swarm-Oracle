@@ -395,6 +395,8 @@ export function InputView() {
     reload: reloadModelProfilesCap,
   } = useCapabilityCheck('model_profiles');
 
+  const { enabled: yvoEnabled } = useCapabilityCheck('you_vs_oracle');
+
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>('');
   const [propositionProfileId, setPropositionProfileId] = useState<string>('');
@@ -2110,13 +2112,15 @@ export function InputView() {
                       {t('snapshot.import_btn')}
                     </button>
                   )}
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => navigate('/leaderboard')}
-                    aria-label={t('home.leaderboard_button_label')}
-                  >
-                    🏆
-                  </button>
+                  {yvoEnabled && (
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => navigate('/leaderboard')}
+                      aria-label={t('home.leaderboard_button_label')}
+                    >
+                      🏆
+                    </button>
+                  )}
                 </nav>
               </div>
             </div>

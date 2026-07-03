@@ -100,6 +100,38 @@ def test_exit_code_fails_only_on_fail_status():
     assert cli._exit_code_for_results([PreflightCheckResult("x", "fail", "bad")]) == 1
 
 
+def test_print_results_falls_back_to_ascii_for_strict_cp1252_stream():
+    cli = _load_preflight_cli()
+
+    class StrictCp1252Stream:
+        encoding = "cp1252"
+
+        def __init__(self):
+            self.parts: list[str] = []
+
+        def write(self, text: str) -> int:
+            text.encode(self.encoding, errors="strict")
+            self.parts.append(text)
+            return len(text)
+
+        def flush(self) -> None:
+            return None
+
+    stream = StrictCp1252Stream()
+
+    cli._print_results(
+        [
+            PreflightCheckResult("runtime", "pass", "ok"),
+            PreflightCheckResult("port", "fail", "busy"),
+        ],
+        stream=stream,
+    )
+
+    output = "".join(stream.parts)
+    assert "[OK] [runtime] PASS: ok" in output
+    assert "[FAIL] [port] FAIL: busy" in output
+
+
 @pytest.mark.asyncio
 async def test_main_prints_results_and_returns_failure_status(monkeypatch, capsys):
     cli = _load_preflight_cli()

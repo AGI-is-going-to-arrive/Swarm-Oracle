@@ -5,7 +5,7 @@
 所有配置都通过环境变量提供。两个模板：
 
 - **本地开发**：把 `.env.example` 复制成 `backend/.env`，编辑 `backend/.env`（注意：直接改 `.env.example` 不会生效，它只是模板）。
-- **Docker 部署**：编辑 `.env.docker`，`docker compose` 会自动读取。
+- **Docker 部署**：先把 `.env.docker.example` 复制成 `.env.docker`（`cp .env.docker.example .env.docker`，该文件默认不入库），再编辑 `.env.docker`，`docker compose` 会自动读取。
 
 下面只列**面向用户**的常用配置；更细的调优项见模板文件里的注释。
 
@@ -29,7 +29,7 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 
 > 安全提示：模板里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL` 不是本地地址，后端会拒绝用占位 key 继续运行，换成你的真实密钥即可。如果你用的是本地网关（如 Ollama），可以保持占位。
 
-可选的 LLM 调优项（一般不用动）：`LLM_REASONING_EFFORT`（推理力度 `none/low/medium/high`）、`LLM_REQUESTS_PER_MINUTE`、`LLM_TOKENS_PER_MINUTE`（限速，`0` 表示不限）、`LLM_CONCURRENCY`（并发数）。
+可选的 LLM 调优项（一般不用动）：`LLM_REASONING_EFFORT`（推理力度 `none/low/medium/high`）、`LLM_REQUESTS_PER_MINUTE`、`LLM_TOKENS_PER_MINUTE`（限速，`0` 表示不限）、`LLM_CONCURRENCY`（全局并发上限；`0` 表示不设上限、即关闭该保护，不是暂停调用）。
 
 服务端默认 LLM 与请求级 BYOK 是两条不同边界：
 
@@ -112,6 +112,9 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `REPORT_MAX_TOOL_CALLS_PER_SECTION` / `REPORT_MIN_TOOL_CALLS_PER_SECTION` | 每个章节 ReACT 工具调用上下限；无新增证据时会提前收束 | `3` / `2` |
 | `REPORT_SECTION_TIMEOUT_SECONDS` | 单个章节、访谈或观察指标 LLM 调用超时 | `120` |
 | `REPORT_RUNTIME_LOCK_LEASE_SECONDS` | 报告生成 runtime lock 租期；运行中会续租，worker 被杀后最多阻塞这个 TTL | `120` |
+| `RESULT_VERDICT_REQUEST_TIMEOUT_SECONDS` / `RESULT_VERDICT_TOTAL_TIMEOUT_SECONDS` | 结果页一句话结论的单次请求 / 总体等待上限；超时后写入可显示的缺失原因，不阻断结果页 | `45` / `50` |
+| `NARRATION_REQUEST_TIMEOUT_SECONDS` / `NARRATION_TOTAL_TIMEOUT_SECONDS` | 结局叙事生成的单次请求 / 总体等待上限；失败时走可完成的 fallback | `35` / `40` |
+| `NARRATION_STREAM_PROBE_TIMEOUT_SECONDS` | 判断叙事流式输出是否有内容的等待上限 | `8` |
 
 > 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
 
@@ -166,6 +169,8 @@ xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-c
 | `SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS` | 轮询读取和启动恢复判断 stale activity 的窗口 | `900` |
 
 这组值用于后台推演活性判断。正在运行的推演会持有 runtime lock 并定期续租；只要仍有 WebSocket 内容帧、轮次 / 发言进度、checkpoint 或其它持久化活动，慢 LLM 不会因为总墙钟时间长被杀掉。超过 stall timeout 完全没有活动时，后台任务才会收敛为错误终态；轮询读取也会避开刚创建和仍持有 active lock 的 run，避免把慢 parse 或首轮误判为中断。
+
+单个 Agent、叙事或 verdict 的短 LLM 调用如果返回空内容，会按稳定 `LLM_EMPTY` 码收口；只有同一批次全员失败时才会中止本轮，部分失败会保留成功发言并给失败 Agent 写入安全占位。
 
 ---
 

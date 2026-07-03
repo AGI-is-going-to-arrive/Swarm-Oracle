@@ -140,7 +140,7 @@ Copy-Item ..\.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-`.env.example` 里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL` 不是本地地址，后端会拒绝继续使用占位 key。
+`.env.example` 默认指向本地地址，占位 key `your-api-key-here` 可以直接启动（对应 Tier 2 零密钥 Demo）。改成非本地地址（如 OpenAI）后，后端会拒绝占位 key，需要填入真实 key。
 
 前端（Node.js 20+）：
 

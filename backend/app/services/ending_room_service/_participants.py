@@ -238,7 +238,7 @@ def _sort_selected_representatives(
 def _clash_stance_score(candidate: dict[str, Any], branch: Branch) -> float:
     stance = str(candidate.get("agent_stance") or "").strip()
     impact_score = float(candidate.get("impact_score") or 0.0)
-    if not stance or len(stance) < 12 or _CJK_RE.search(stance):
+    if not stance or (len(stance) < 12 and not _CJK_RE.search(stance)):
         pressure = _branch_pressure_hint(branch) or ""
         pressure_score = 0.15 if pressure else 0.0
         probability_score = max(float(branch.probability or 0.0), 0.0) * 0.1
@@ -254,8 +254,15 @@ def _clash_stance_score(candidate: dict[str, Any], branch: Branch) -> float:
         "risk",
         "cost",
         "fault",
+        "反对",
+        "质疑",
+        "挑战",
+        "风险",
+        "代价",
+        "冲突",
+        "分歧",
     )
-    if any(cue in lower_stance for cue in clash_cues):
+    if any(cue in lower_stance or cue in stance for cue in clash_cues):
         score += 1.0
     return score + impact_score
 

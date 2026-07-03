@@ -2556,6 +2556,18 @@ def test_classify_section_failure_maps_known_exceptions():
     assert builder._classify_section_failure(None) == "other"
 
 
+def test_classify_section_failure_rejects_unknown_exception_reason():
+    """S9: raw exception reasons must stay inside the public schema enum."""
+    from app.services.result_report import builder
+
+    error = builder.ResultReportBuilderError(
+        "provider returned opaque failure",
+        reason="upstream_provider_meltdown",
+    )
+
+    assert builder._classify_section_failure(error) == "other"
+
+
 def test_report_section_observability_fields_default_and_roundtrip():
     """S9: ``tier``/``failure_reason`` default for legacy payloads and persist."""
     legacy = ReportSection(

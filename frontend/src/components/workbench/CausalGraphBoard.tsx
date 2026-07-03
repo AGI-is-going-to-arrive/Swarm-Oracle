@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import type { TFunction } from 'i18next';
 import { ExportPanel } from '../ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
@@ -529,6 +530,20 @@ export default function CausalGraphBoard({
   }
 
   if (error) {
+    // Only a real FEATURE_DISABLED code means the feature is off. Other 404s
+    // (SCENARIO_NOT_FOUND / BRANCH_NOT_FOUND) and 403 are normal errors that
+    // should surface a localized message + retry, not the "feature disabled" panel.
+    const isFeatureDisabled = error.code === 'FEATURE_DISABLED';
+    if (isFeatureDisabled) {
+      return (
+        <div data-testid="causal-graph-board" className={className} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 200, gap: '0.5rem' }}>
+          <p role="alert" style={{ color: COLORS.textError }}>{t('causal.feature_disabled', 'Causal graph feature is not enabled.')}</p>
+          <Link to="/" style={{ color: COLORS.textLink, textDecoration: 'underline' }}>
+            {t('common.back_home', 'Back to home')}
+          </Link>
+        </div>
+      );
+    }
     return (
       <div data-testid="causal-graph-board" className={className} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 200, gap: '0.5rem' }}>
         <p role="alert" style={{ color: COLORS.textError }}>{getCausalErrorMessage(error, t)}</p>

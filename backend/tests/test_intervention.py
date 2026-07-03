@@ -147,8 +147,33 @@ class TestRetrospectiveIntervention:
             assert new_branch.replay_kind == "retrospective"
             assert new_branch.replay_source_branch_id == bid
             assert new_branch.replay_source_round == 2
-            assert new_branch.title == "Retrospective R2"
+            assert new_branch.title == "回溯 R2"
             assert "地震" in new_branch.fork_reason
+            assert "回溯干预" in new_branch.fork_reason
+
+    def test_english_retrospective_branch_uses_english_copy(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 1)
+        _seed_round(engine, bid, 2)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            scenario.parsed_context = {"_language": "English"}
+            session.add(scenario)
+            session.commit()
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+            "branch_id": bid, "round_number": 2, "text": "a sudden port strike",
+        })
+
+        assert resp.status_code == 200
+        with Session(engine) as session:
+            new_branch = session.get(Branch, resp.json()["new_branch_id"])
+            assert new_branch is not None
+            assert new_branch.title == "Retrospective R2"
+            assert new_branch.fork_reason.startswith("Retrospective intervention:")
+            assert "回溯" not in new_branch.fork_reason
 
     @pytest.mark.parametrize(
         "status",

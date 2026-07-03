@@ -1393,7 +1393,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
 
-        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content") as exc_info:
             await llm_call(
                 "Reply with one sentence.",
                 reasoning_effort="low",
@@ -1401,9 +1401,11 @@ class TestLLMCall:
                 api_key="sk-test",
                 model="gpt-test",
             )
+        assert exc_info.value.code == "LLM_EMPTY"
+        assert classify_llm_error_code(exc_info.value) == "LLM_EMPTY"
 
     @pytest.mark.asyncio
-    async def test_llm_call_falls_back_to_reasoning_content_for_empty_chat_content(
+    async def test_llm_call_treats_reasoning_only_chat_content_as_empty(
         self,
         monkeypatch,
     ):
@@ -1432,15 +1434,42 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
 
-        result = await llm_call(
-            "Reply with one sentence.",
-            reasoning_effort="low",
-            base_url="https://example.com/v1/chat/completions",
-            api_key="sk-test",
-            model="gpt-test",
-        )
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
 
-        assert result == "Reasoning-only answer"
+    @pytest.mark.asyncio
+    async def test_llm_call_wraps_non_json_success_body(self, monkeypatch):
+        class _FakeResponse:
+            text = "not json sk-secret"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                raise ValueError("raw decode failed sk-secret")
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot", _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot", _noop_async_none)
+
+        with pytest.raises(llm_client.LLMError, match="non-JSON"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
 
     @pytest.mark.asyncio
     async def test_llm_call_prefers_content_over_reasoning_content(self, monkeypatch):
@@ -2174,7 +2203,7 @@ class TestLLMCallJSON:
             await llm_call_json("ignored", reasoning_effort="low")
 
     @pytest.mark.asyncio
-    async def test_family_query_reformulation_uses_reasoning_content_fallback(
+    async def test_family_query_reformulation_rejects_reasoning_only_chat_content(
         self,
         monkeypatch,
     ):
@@ -2203,15 +2232,14 @@ class TestLLMCallJSON:
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
 
-        result = await llm_client.llm_call_json_for_family_query_reformulation(
-            "Return a JSON query object.",
-            reasoning_effort="low",
-            base_url="https://example.com/v1/chat/completions",
-            api_key="sk-test",
-            model="gpt-test",
-        )
-
-        assert result == {"query": "fallback query"}
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+            await llm_client.llm_call_json_for_family_query_reformulation(
+                "Return a JSON query object.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
 
     @pytest.mark.asyncio
     async def test_json_keyed_fallback_for_malformed_agent_payload(self, monkeypatch):
@@ -4155,6 +4183,60 @@ class TestLlmCallNativeSearch:
             )
 
         assert result == "fallback answer"
+        assert len(payloads) == 2
+        assert "tools" in payloads[0]
+        assert "tools" not in payloads[1]
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_no_tools_fallback_wraps_non_json_success_body(
+        self,
+        monkeypatch,
+    ):
+        payloads: list[dict] = []
+
+        class _FakeResponse:
+            def __init__(self, body: dict | None = None, *, malformed: bool = False):
+                self._body = body or {}
+                self._malformed = malformed
+                self.text = "not json sk-secret" if malformed else json.dumps(self._body)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                if self._malformed:
+                    raise ValueError("decode failed sk-secret")
+                return self._body
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            if len(payloads) == 1:
+                return _FakeResponse(
+                    {
+                        "output": [
+                            {"type": "web_search_call", "status": "failed"},
+                            {"type": "message", "content": [{"text": "tool failed answer"}]},
+                        ],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                    },
+                )
+            return _FakeResponse(malformed=True)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot", _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot", _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success", _noop_async_none)
+
+        with llm_client.llm_request_scope(supports_native_search_override=True):
+            with pytest.raises(LLMError, match="non-JSON"):
+                await llm_call(
+                    "test prompt",
+                    base_url="https://api.x.ai/v1/responses",
+                    api_key="xai-key",
+                    native_search_domains=["example.com"],
+                )
+
         assert len(payloads) == 2
         assert "tools" in payloads[0]
         assert "tools" not in payloads[1]

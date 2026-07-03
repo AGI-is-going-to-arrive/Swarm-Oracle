@@ -83,12 +83,15 @@ function normalizeTotalRounds(totalRounds: number | null | undefined): number | 
   return normalized > 0 ? normalized : null;
 }
 
-function buildRoundSummary(marker: TimelineRoundMarker): string {
+function buildRoundSummary(
+  marker: TimelineRoundMarker,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
   const bits = [`R${marker.round}`];
-  if (marker.forkCount) bits.push(`fork ${marker.forkCount}`);
-  if (marker.cardCount) bits.push(`cards ${marker.cardCount}`);
-  if (marker.betCount) bits.push(`bets ${marker.betCount}`);
-  if (marker.resultCount) bits.push(`results ${marker.resultCount}`);
+  if (marker.forkCount) bits.push(t('sim.timeline.summary_forks', { count: marker.forkCount }));
+  if (marker.cardCount) bits.push(t('sim.timeline.summary_cards', { count: marker.cardCount }));
+  if (marker.betCount) bits.push(t('sim.timeline.summary_bets', { count: marker.betCount }));
+  if (marker.resultCount) bits.push(t('sim.timeline.summary_results', { count: marker.resultCount }));
   return bits.join(' · ');
 }
 
@@ -96,7 +99,7 @@ function buildRoundTooltipLines(
   marker: TimelineRoundMarker,
   t: (key: string, options?: Record<string, unknown>) => string,
 ): string[] {
-  const lines = [buildRoundSummary(marker)];
+  const lines = [buildRoundSummary(marker, t)];
 
   if (marker.forkTitles?.length) {
     lines.push(`${t('sim.timeline.tooltip_forks')}：${marker.forkTitles.join(' / ')}`);
@@ -496,7 +499,7 @@ export function TimelineBar({
               marker.isAvailable ? 'timeline-round--available' : 'timeline-round--disabled',
               isSelected ? 'timeline-round--selected' : '',
             ].filter(Boolean).join(' ');
-            const summary = buildRoundSummary(marker);
+            const summary = buildRoundSummary(marker, t);
             const tooltipLines = buildRoundTooltipLines(marker, t);
             const tooltipStats = buildTooltipStats(marker, t);
             const content = (
@@ -557,7 +560,7 @@ export function TimelineBar({
                   className={className}
                   onClick={() => onRoundSelect(marker.round)}
                   title={summary}
-                  aria-label={`Jump to replay round ${marker.round}`}
+                  aria-label={t('sim.timeline.jump_to_round', { round: marker.round })}
                   aria-pressed={isSelected}
                 >
                   {content}

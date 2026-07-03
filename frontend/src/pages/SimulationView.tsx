@@ -12,6 +12,7 @@ import '../components/SimWarmup.css';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
 import { useSimulationReplayState } from '../hooks/useSimulationReplayState';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import {
   useSimulationCaptureControls,
   useSimulationDirectorState,
@@ -139,6 +140,7 @@ export function SimulationView() {
   const interventionLifecycle = useSimulationStore((s) => s.interventionLifecycle);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
   const setScenario = useSimulationStore((s) => s.setScenario);
+  const { enabled: youVsOracleEnabled } = useCapabilityCheck('you_vs_oracle');
   const lastContentEventAt = useSimulationStore((s) => s.lastContentEventAt);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
   const scenarioRuntimePreset = useMemo(
@@ -1461,7 +1463,7 @@ export function SimulationView() {
               {t('simulation.cancel_button')}
             </button>
           )}
-          {!isSimulationComplete && !cancelledStatus && (
+          {!isSimulationComplete && !cancelledStatus && youVsOracleEnabled && (
             <button
               className="btn btn-ghost"
               onClick={() => setShowPrediction(true)}

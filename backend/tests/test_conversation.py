@@ -1003,6 +1003,37 @@ class TestAbort:
             await anext(iterator)
 
     @pytest.mark.asyncio
+    async def test_external_cancel_cleans_up_pending_stream_task(self):
+        class StalledStream:
+            def __init__(self):
+                self.started = asyncio.Event()
+                self.cleaned_up = asyncio.Event()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                self.started.set()
+                try:
+                    await asyncio.sleep(3600)
+                finally:
+                    self.cleaned_up.set()
+
+        stream = StalledStream()
+        iterator = conversation_service._stream_with_cancel_signal(
+            stream,
+            asyncio.Event(),
+        )
+        task = asyncio.create_task(anext(iterator))
+        await asyncio.wait_for(stream.started.wait(), timeout=0.2)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        await asyncio.wait_for(stream.cleaned_up.wait(), timeout=0.2)
+
+    @pytest.mark.asyncio
     async def test_cancel_event_interrupts_stalled_stream(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)

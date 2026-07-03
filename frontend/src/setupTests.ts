@@ -581,3 +581,24 @@ afterEach(async () => {
     await Promise.resolve();
   });
 });
+
+vi.mock('./api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api/client')>();
+  return {
+    ...actual,
+    getCapabilities: vi.fn(async () => ({
+      agent_conversation: { enabled: true },
+      you_vs_oracle: { enabled: true },
+      causal_graph: { enabled: true },
+      kg_explorer: { enabled: true },
+      custom_agents: { enabled: true },
+      persona_export: { enabled: true },
+      model_profiles: { enabled: true },
+      counterfactual_replay: { enabled: true },
+      argument_map: { enabled: true },
+      agent_identity: { enabled: true },
+      multi_run: { enabled: true },
+      education_templates: { enabled: true },
+    })),
+  };
+});

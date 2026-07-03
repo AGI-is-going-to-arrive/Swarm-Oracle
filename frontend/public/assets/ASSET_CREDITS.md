@@ -4,7 +4,7 @@ Most visual assets in this project are **AI-generated** pixel art, created speci
 SwarmOracle 2.0. A small set of in-repo timeline marker SVG icons is handcrafted for UI readability.
 They are original works and may be freely used under the project license.
 
-## Asset Inventory (Debate Arena D4 additions included)
+## Asset Inventory
 
 ### Characters (25 files, 18 preloaded at runtime)
 
@@ -75,6 +75,16 @@ They are original works and may be freely used under the project license.
 | `switchboard_forum_variant.png` | Rotating review chamber generic scene variant |
 | `trade_harbor.png` | Maritime trade harbor |
 | `ecology_wasteland.png` | Climate-scarcity threshold zone |
+| `academy_hall.png` | Scholarly academy hall |
+| `arena_colosseum.png` | Gladiatorial colosseum arena |
+| `concert_hall.png` | Concert and performance hall |
+| `cyber_market.png` | Cyberpunk street market |
+| `diplomatic_summit.png` | Diplomatic summit chamber |
+| `finance_exchange.png` | Financial exchange trading floor |
+| `media_tower.png` | Broadcast media tower newsroom |
+| `medical_institute.png` | Medical research institute |
+| `tech_campus.png` | Technology company campus |
+| `underground_network.png` | Clandestine underground hideout |
 
 ### Effects (14)
 
@@ -148,6 +158,12 @@ They are original works and may be freely used under the project license.
 | `generated/gameplay_card_frame_generic.png` | Generic gameplay card frame |
 | `generated/gameplay_card_frame_mythic.png` | Mythic gameplay card frame |
 | `generated/gameplay_card_frame_survival.png` | Survival gameplay card frame |
+| `generated/gameplay_card_frame_diplomacy.png` | Diplomacy gameplay card frame |
+| `generated/gameplay_card_frame_entertainment.png` | Entertainment gameplay card frame |
+| `generated/gameplay_card_frame_finance.png` | Finance gameplay card frame |
+| `generated/gameplay_card_frame_medical.png` | Medical gameplay card frame |
+| `generated/gameplay_card_frame_scholar.png` | Scholar gameplay card frame |
+| `generated/gameplay_card_frame_technology.png` | Technology gameplay card frame |
 | `generated/badge_recommended.png` | Recommended tactics badge |
 | `generated/badge_daily_challenge.png` | Daily challenge badge |
 | `generated/badge_archive_record.png` | Archive record badge |
@@ -171,4 +187,8 @@ They are original works and may be freely used under the project license.
 ---
 
 **Generation**: Raster art assets were created using AI image generation tools. Latest generated UI and Debate Arena assets were produced with Gemini image-preview models, with per-file `.meta.json` provenance next to generated PNGs when available. Timeline marker SVGs were handcrafted in-repo.
-**License**: Same as the project license (see root `LICENSE`).
+**License**: The AI-generated assets and handcrafted SVGs listed above follow the project license (see root `LICENSE`). Bundled third-party fonts are licensed separately; see below.
+
+## Fonts
+
+The web fonts under `frontend/public/fonts/` are third-party works, NOT AI-generated: Cormorant Garamond, Instrument Sans, Noto Sans SC, and Noto Serif SC. All four families are licensed under the SIL Open Font License 1.1 (see `frontend/public/fonts/OFL.txt`). The woff2 files are downloaded from Google Fonts' hosted builds via `frontend/scripts/download-fonts.mjs`.

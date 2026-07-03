@@ -1271,7 +1271,7 @@ async function runCrossBrowserDirectorStateSuite(args) {
   for (const browserName of supportedBrowsers) {
     const { browser, launchProfile } = await launchBrowser(args.headless, browserName);
     writeJson(path.join(args.outputDir, `${browserName}-browser-launch.json`), launchProfile);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
     const page = await context.newPage();
     try {
       runs[browserName] = await runDirectorStateBrowserReadback(page, {
@@ -2693,7 +2693,7 @@ async function runMatrixSuite(args) {
       const replayShot = path.join(sampleDir, "replay.png");
       const resultDir = path.join(sampleDir, "result");
       ensureDir(sampleDir);
-      let page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+      let page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
       console.log(`[matrix] starting ${sample.theme}`);
       try {
         let resolvedScenario = await resolveMatrixScenario(args.baseUrl, sample);
@@ -2709,7 +2709,7 @@ async function runMatrixSuite(args) {
           if (!page.isClosed()) {
             await page.close().catch(() => {});
           }
-          page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+          page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
           recovery = {
             fromScenarioId: sample.scenario_id ?? null,
             reason: themeMismatchReason,
@@ -2741,7 +2741,7 @@ async function runMatrixSuite(args) {
           if (!page.isClosed()) {
             await page.close().catch(() => {});
           }
-          page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+          page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
           recovery = {
             fromScenarioId: sample.scenario_id ?? null,
             reason: originalMessage,
@@ -2867,7 +2867,7 @@ async function assertNoFixtureEscapes(page, fixture, outputDir, label) {
 async function runCornersSuite(args) {
   const { browser, launchProfile } = await launchBrowser(args.headless);
   writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
 
   // M-fixture: in fixture mode, stub ALL network offline (Node fetch + browser
   // page routes + WS) so no request escapes to a real backend. Active fail-closed
@@ -3010,6 +3010,7 @@ async function runMobileSuite(args) {
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
+    locale: 'en-US',
   });
 
   // M-fixture: same offline harness as corners (mobile now carries the flag too).

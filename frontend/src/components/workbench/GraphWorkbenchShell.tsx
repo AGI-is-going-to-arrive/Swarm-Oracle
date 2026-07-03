@@ -86,6 +86,7 @@ export default function GraphWorkbenchShell({
         minHeight: 0,
         contain: 'layout style paint',
         userSelect: isDragging ? 'none' : undefined,
+        WebkitUserSelect: isDragging ? 'none' : undefined,
       }}
     >
       {showNotice && (

@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   getLeaderboard,
@@ -19,6 +19,7 @@ import {
   getLocalizedApiErrorMessage,
 } from '../lib/apiErrorMessage';
 import type { LeaderboardEntry } from '../types';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import './LeaderboardView.css';
 
 const MEDALS = ['🥇', '🥈', '🥉'] as const;
@@ -113,6 +114,13 @@ export default function LeaderboardView() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
 
+  const {
+    loading: capLoading,
+    enabled: capEnabled,
+    error: capError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('you_vs_oracle');
+
   const segment = useMemo(
     () => parseSegmentFromParams(searchParams),
     [searchParams],
@@ -142,6 +150,7 @@ export default function LeaderboardView() {
     advancedCount > 0;
 
   const load = useCallback(async () => {
+    if (!capEnabled || capError) return;
     const loadSeq = loadSeqRef.current + 1;
     loadSeqRef.current = loadSeq;
     setLoading(true);
@@ -162,11 +171,12 @@ export default function LeaderboardView() {
         setLoading(false);
       }
     }
-  }, [segment]);
+  }, [segment, capEnabled, capError]);
 
   useEffect(() => {
+    if (capLoading || capError || !capEnabled) return;
     load();
-  }, [load]);
+  }, [load, capLoading, capError, capEnabled]);
 
   useEffect(() => () => {
     loadSeqRef.current += 1;
@@ -298,6 +308,40 @@ export default function LeaderboardView() {
       }
     };
   }, [entries, errorCode, errorMessage, loading, metadata, segment]);
+
+  if (capLoading) {
+    return (
+      <div className="leaderboard-view text-center p-12">
+        <p>{t('common.loading', 'Loading…')}</p>
+      </div>
+    );
+  }
+
+  if (capError) {
+    return (
+      <div className="leaderboard-view text-center p-12" role="alert">
+        <h1 className="text-lg font-semibold mb-2">{t('common.capability_error_title', 'Cannot verify feature')}</h1>
+        <p>{t('common.capability_error', 'Unable to verify feature availability. Please try again.')}</p>
+        <button type="button" className="btn" onClick={() => void reloadCapability?.()}>
+          {t('common.retry', 'Retry')}
+        </button>
+      </div>
+    );
+  }
+
+  const isFeatureDisabled = !capEnabled || errorCode === 'FEATURE_DISABLED';
+
+  if (isFeatureDisabled) {
+    return (
+      <div className="leaderboard-view text-center p-12" role="alert">
+        <h1 className="text-lg font-semibold mb-2">{t('kg_explorer.feature_disabled_title', 'Feature unavailable')}</h1>
+        <p>{t('kg_explorer.feature_disabled', 'This feature is not enabled on this server.')}</p>
+        <Link to="/" className="underline text-blue-500">
+          {t('common.back_home', 'Back to home')}
+        </Link>
+      </div>
+    );
+  }
 
   const showingLabel =
     metadata && typeof metadata.filtered_count === 'number' && typeof metadata.total_count === 'number'

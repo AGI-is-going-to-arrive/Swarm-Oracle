@@ -15,6 +15,7 @@ import { forceTimelineLayout } from '../lib/g6Layouts';
 import { resolveG6Tokens } from '../lib/graphTokens';
 import { buildKgNodeLabel } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 
 interface GalaxyNode {
   id: string;
@@ -41,13 +42,20 @@ export default function TimelineGalaxy() {
   const { t } = useTranslation();
   const {
     loading: capLoading,
-    enabled: capEnabled,
+    enabled: explorerEnabled,
+    capabilities,
     error: capError,
     reload: reloadCapability,
   } = useCapabilityCheck('kg_explorer');
 
+  const causalEnabled = capabilities
+    ? capabilities.causal_graph?.enabled === true
+    : explorerEnabled;
+  const capEnabled = explorerEnabled && causalEnabled;
+
   const [payload, setPayload] = useState<GalaxyPayload | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ status: number | null; code: string | null } | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -60,21 +68,47 @@ export default function TimelineGalaxy() {
       headers: buildSessionHeaders(),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error(`http_${res.status}`);
+        if (!res.ok) {
+          let code: string | null = null;
+          try {
+            const body = await res.json();
+            if (body && typeof body === 'object') {
+              const r = body as Record<string, unknown>;
+              if (r.detail && typeof r.detail === 'object') {
+                const dr = r.detail as Record<string, unknown>;
+                if (typeof dr.code === 'string') code = dr.code;
+              } else if (typeof r.code === 'string') {
+                code = r.code;
+              }
+            }
+          } catch {
+            // ignore error body parsing failures
+          }
+          throw { status: res.status, code };
+        }
         const data = (await res.json()) as { nodes: GalaxyNode[]; edges: GalaxyEdge[] };
         const maxRound = data.nodes.reduce<number>((acc, n) => {
           if (typeof n.round === 'number' && n.round > acc) return n.round;
           return acc;
         }, 0);
-        if (!cancelled) setPayload({ ...data, max_round: maxRound });
+        if (!cancelled) {
+          setError(null);
+          setPayload({ ...data, max_round: maxRound });
+        }
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'unknown_error');
+        if (cancelled) return;
+        if (err && typeof err === 'object' && ('status' in err || 'code' in err)) {
+          const e = err as { status: number | null; code: string | null };
+          setError({ status: e.status, code: e.code });
+        } else {
+          setError({ status: null, code: 'NETWORK_ERROR' });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [capEnabled, capError, scenarioId]);
+  }, [capEnabled, capError, scenarioId, retryNonce]);
 
   const theme: 'light' | 'dark' =
     typeof document !== 'undefined' && document.documentElement.dataset?.theme === 'dark'
@@ -153,7 +187,14 @@ export default function TimelineGalaxy() {
       </div>
     );
   }
-  if (!capEnabled) {
+  // Only a real FEATURE_DISABLED code (or a failed capability probe) means the
+  // feature is off; a 403 is an auth error and falls to the localized error
+  // surface below — matching CausalGraphBoard/KGGraphBoard.
+  const isFeatureDisabled =
+    !capEnabled ||
+    Boolean(error && error.code === 'FEATURE_DISABLED');
+
+  if (isFeatureDisabled) {
     return (
       <div data-testid="timeline-galaxy-root" className="p-6 text-sm" role="alert">
         <h1>{t('kg_explorer.feature_disabled_title', 'Feature unavailable')}</h1>
@@ -181,9 +222,33 @@ export default function TimelineGalaxy() {
         }}
       />
       {error && (
-        <p role="alert" style={{ color: 'red', fontSize: '0.8rem' }}>
-          {error}
-        </p>
+        <div role="alert" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem', marginTop: '0.5rem' }}>
+          <p style={{ color: 'var(--text-error, #c0392b)', fontSize: '0.8rem', margin: 0 }}>
+            {getLocalizedApiErrorMessage(
+              error,
+              t,
+              t('timeline_galaxy.load_error', 'Unable to load the timeline right now. Please retry.'),
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setRetryNonce((n) => n + 1);
+            }}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: '1px solid var(--border-default, #ccc)',
+              background: 'transparent',
+              color: 'var(--text-link, #8ab4f8)',
+              cursor: 'pointer',
+              fontSize: '0.78rem',
+            }}
+          >
+            {t('common.retry', 'Retry')}
+          </button>
+        </div>
       )}
     </main>
   );

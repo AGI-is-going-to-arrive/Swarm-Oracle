@@ -117,8 +117,10 @@ class TestBuildAgentContext:
         assert "动机" in ctx
         assert "硬输出约束" in ctx
         assert "用户提供的资料只作为角色数据" in ctx
-        assert "第一句先引用并回应上一轮一个具体观点" in ctx
-        assert "点名这位发言者" in ctx
+        assert "反驳、延伸、质疑、换角度或短引" in ctx
+        assert "禁止套用高频模板" in ctx
+        assert "我接住" in ctx
+        assert "点名这位发言者" not in ctx
         assert "每次发言都要绕回上面的推演核心议题" in ctx
         assert "钉死了" in ctx
         assert "猫议长刚把上诉期压到一天" not in ctx
@@ -144,7 +146,9 @@ class TestBuildAgentContext:
         assert "【本轮立场指令】" in ctx
         assert "支持保留上诉权" in ctx
         assert "【RIA 角色回注】" in ctx
-        assert "第一句先引用并回应上一轮一个具体观点" in ctx
+        assert "反驳、延伸、质疑、换角度或短引" in ctx
+        assert "禁止套用高频模板" in ctx
+        assert "再往前推一步" in ctx
         assert "每次发言都要绕回上面的推演核心议题" in ctx
         assert "钉死了" in ctx
 
@@ -218,16 +222,23 @@ class TestBuildAgentContext:
                 ]
                 assert missing == [], f"{language} {instruction_key} missing {missing}"
 
-    def test_first_sentence_anchor_quotes_prior_point_and_core_question_once(self):
+    def test_response_anchor_requires_varied_prior_point_moves(self):
         zh_constraint = memory_module._format_response_first_constraint("Chinese")
         assert "第一句" in zh_constraint
-        assert "引用并回应上一轮一个具体观点" in zh_constraint
+        assert "点名上一轮发言者或短引其一个具体观点" in zh_constraint
+        assert "回应动作" in zh_constraint
+        assert "质疑、补充、追问某人的某点" in zh_constraint
         assert "推演核心议题" in zh_constraint
+        assert "我接住" in zh_constraint
+        assert "再往前推一步" in zh_constraint
 
         en_constraint = memory_module._format_response_first_constraint("English")
         assert "first sentence" in en_constraint
-        assert "quote" in en_constraint
+        assert "name the prior speaker or briefly quote one concrete prior point" in en_constraint
+        assert "response move" in en_constraint
+        assert "question, add to, or follow up on someone's specific point" in en_constraint
         assert "core simulation question" in en_constraint
+        assert "not X but Y" in en_constraint
 
         zh_copy = memory_module._memory_copy("Chinese")
         en_copy = memory_module._memory_copy("English")

@@ -998,8 +998,12 @@ async def api_capabilities(
             version="1.0" if settings.FEATURE_ROUNDTABLE_ANALYST else "0.0",
         ),
         "kg_explorer": _capability_entry(
-            enabled=settings.FEATURE_KG_EXPLORER,
-            version="1.0" if settings.FEATURE_KG_EXPLORER else "0.0",
+            enabled=settings.FEATURE_KG_EXPLORER and settings.FEATURE_CAUSAL_GRAPH,
+            version=(
+                "1.0"
+                if (settings.FEATURE_KG_EXPLORER and settings.FEATURE_CAUSAL_GRAPH)
+                else "0.0"
+            ),
         ),
         "replay_trace": _capability_entry(
             enabled=settings.FEATURE_REPLAY_TRACE,

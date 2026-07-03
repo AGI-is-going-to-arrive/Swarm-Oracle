@@ -38,6 +38,7 @@ from app.models.database import get_engine
 from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
+    classify_llm_error_code,
     format_untrusted_text_block,
     get_last_native_citations,
     get_runtime_parallelism_limit,
@@ -146,6 +147,17 @@ _intervention_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
+
+class AgentTurnBatchFailure(RuntimeError):
+    """Raised when a whole turn batch is degraded by provider-level LLM failures."""
+
+    def __init__(self, *, code: str, failed_agents: list[str]):
+        self.code = code
+        self.failed_agents = failed_agents
+        agent_list = ", ".join(failed_agents)
+        super().__init__(f"Agent turn batch failed with {code}: {agent_list}")
+
+
 _NARRATE_MAX_CHARS = 3000
 _AGENT_TURN_REQUEST_TIMEOUT_SECONDS = 45.0
 _AGENT_TURN_TOTAL_TIMEOUT_SECONDS = 180.0
@@ -159,6 +171,13 @@ _RESULT_VERDICT_TIMEOUT_SECONDS = 10.0
 _FORK_TITLE_REWRITE_TIMEOUT_SECONDS = 8.0
 _FORK_TITLE_REWRITE_MAX_CONCURRENCY = 4
 _TURN_MAX_CHARS = 3000
+_FATAL_AGENT_TURN_LLM_CODES = frozenset({
+    "LLM_AUTH_FAILED",
+    "LLM_RATE_LIMITED",
+    "LLM_UNREACHABLE",
+    "LLM_MODEL_NOT_FOUND",
+    "LLM_EMPTY",
+})
 _AGENT_TURN_PROMPT_PREFIX_MARKER = "SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT"
 _FORK_TITLE_REWRITE_MARKER = "FORK_TITLE_REWRITE"
 _FORK_TITLE_FORBIDDEN_JARGON = (
@@ -280,6 +299,7 @@ async def _append_causal_graph_delta(
     messages: list,
     *,
     fork_event: dict | None = None,
+    language: str = "Chinese",
 ) -> None:
     delta = await asyncio.to_thread(
         _causal_append,
@@ -288,6 +308,7 @@ async def _append_causal_graph_delta(
         round_number,
         messages,
         **({"fork_event": fork_event} if fork_event is not None else {}),
+        language=language,
     )
     if not _KG_REALTIME_AVAILABLE or delta is None:
         return
@@ -3448,6 +3469,7 @@ async def _run_simulation_impl(
                                         "reason": fork_result.get("reason", ""),
                                         "children": [b["id"] for b in new_branch_infos],
                                     },
+                                    language=detected_language,
                                 )
                                 _check_cancelled(scenario_id)
                             except SimulationCancelled:
@@ -3597,7 +3619,10 @@ async def _run_simulation_impl(
             llm_overrides=llm_overrides,
         )
         if verdict is not None:
-            _persist_result_quality_verdict(engine, scenario_id, verdict)
+            if verdict.get("_verdict_generation_failed"):
+                _persist_result_quality_verdict_failure(engine, scenario_id, verdict)
+            else:
+                _persist_result_quality_verdict(engine, scenario_id, verdict)
 
     if branch_id is None and settings.FEATURE_RESULT_REPORT and not verdict_only_multi_run:
         try:
@@ -4176,6 +4201,7 @@ async def _gather_agent_messages(
 
             raw_text = ""
             clean_raw_text: str | None = None
+            turn_failure_code: str | None = None
             try:
                 _overrides = llm_overrides or {}
                 base_temperature = _coerce_turn_temperature(
@@ -4342,18 +4368,22 @@ async def _gather_agent_messages(
             except SimulationCancelled:
                 raise
             except Exception as exc:
+                turn_failure_code = classify_llm_error_code(exc)
                 logger.warning(
                     "Agent %s failed: %s: %s",
                     agent["name"],
                     type(exc).__name__,
                     _scrub_sensitive_text(str(exc)),
                 )
-                fallback_content, _reject_reason = validate_and_sanitize_turn(
-                    raw_text,
-                    agent["name"],
-                    language,
-                )
-                content = fallback_content or _silent_turn_placeholder(agent["name"], language)
+                if turn_failure_code in _FATAL_AGENT_TURN_LLM_CODES:
+                    content = _silent_turn_placeholder(agent["name"], language)
+                else:
+                    fallback_content, _reject_reason = validate_and_sanitize_turn(
+                        raw_text,
+                        agent["name"],
+                        language,
+                    )
+                    content = fallback_content or _silent_turn_placeholder(agent["name"], language)
                 emotion = "neutral"
                 diverge = None
 
@@ -4364,6 +4394,11 @@ async def _gather_agent_messages(
                 "emotion": emotion,
                 "diverge": diverge,
             }
+            if turn_failure_code:
+                msg["_turn_failure_code"] = turn_failure_code
+
+            if turn_failure_code in _FATAL_AGENT_TURN_LLM_CODES:
+                return msg
 
             saved_message_ids = _save_messages(
                 engine,
@@ -4434,9 +4469,74 @@ async def _gather_agent_messages(
             return msg
 
     _check_cancelled(scenario_id)
-    tasks = [process_agent(a) for a in agents]
-    results = await asyncio.gather(*tasks)
+    tasks = [asyncio.create_task(process_agent(a)) for a in agents]
+    try:
+        results = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     _check_cancelled(scenario_id)
+
+    fatal_turn_failures = [
+        msg
+        for msg in results
+        if msg.get("_turn_failure_code") in _FATAL_AGENT_TURN_LLM_CODES
+    ]
+    if fatal_turn_failures:
+        code_counts: dict[str, int] = {}
+        for msg in fatal_turn_failures:
+            code = str(msg.get("_turn_failure_code") or "LLM_UNREACHABLE")
+            code_counts[code] = code_counts.get(code, 0) + 1
+        code = max(code_counts.items(), key=lambda item: item[1])[0]
+        failed_agents = [str(msg.get("agent_name") or "") for msg in fatal_turn_failures]
+        await push_event({
+            "type": "simulation_degraded",
+            "data": {
+                "branch_id": branch_id,
+                "round": round_num,
+                "code": code,
+                "failed_agents": failed_agents,
+                "failed_count": len(fatal_turn_failures),
+                "total": len(results),
+            },
+        })
+        # Batch-level degradation is reserved for provider-wide failure: every
+        # agent turn in this round ended with a fatal provider/empty-output code.
+        # A mixed batch has durable successes, so failed agents keep the normal
+        # visible placeholder path and the round continues.
+        if len(fatal_turn_failures) == len(results):
+            raise AgentTurnBatchFailure(code=code, failed_agents=failed_agents)
+
+        for msg in fatal_turn_failures:
+            saved_message_ids = _save_messages(
+                engine,
+                [
+                    {
+                        "round_id": round_id,
+                        "agent_id": msg["agent_id"],
+                        "content": msg["content"],
+                        "emotion": msg["emotion"],
+                        "diverge": msg.get("diverge"),
+                    }
+                ],
+            ) or []
+            if saved_message_ids:
+                msg["id"] = saved_message_ids[0]
+            await push_event({
+                "type": "agent_speak",
+                "data": {
+                    "agent": msg["agent_name"],
+                    "agent_id": msg["agent_id"],
+                    "message": msg["content"],
+                    "emotion": msg["emotion"],
+                    "branch": branch_id,
+                    "round": round_num,
+                },
+            })
+            await push_turn_progress()
 
     if blackboard is not None:
         for msg in results:
@@ -4994,6 +5094,40 @@ def _build_verdict_only_branch_payloads(
     return payloads
 
 
+def _positive_float_setting(name: str, default: float) -> float:
+    try:
+        value = float(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _result_verdict_timeouts() -> tuple[float, float]:
+    request_timeout = _positive_float_setting(
+        "RESULT_VERDICT_REQUEST_TIMEOUT_SECONDS",
+        _RESULT_VERDICT_TIMEOUT_SECONDS,
+    )
+    total_timeout = _positive_float_setting(
+        "RESULT_VERDICT_TOTAL_TIMEOUT_SECONDS",
+        max(request_timeout + 1.0, _RESULT_VERDICT_TIMEOUT_SECONDS),
+    )
+    return request_timeout, max(total_timeout, request_timeout)
+
+
+def _result_verdict_failure_payload(exc: BaseException) -> dict[str, object]:
+    code = classify_llm_error_code(exc) or "LLM_FAILED"
+    reason = (
+        "result verdict generation timed out"
+        if code == "LLM_TIMEOUT"
+        else f"result verdict generation failed ({code})"
+    )
+    return {
+        "_verdict_generation_failed": True,
+        "verdict_error_code": code,
+        "verdict_missing_reason": reason,
+    }
+
+
 async def _generate_verdict(
     question: str,
     branches: list,
@@ -5081,6 +5215,7 @@ async def _generate_verdict(
             )
 
         _overrides = llm_overrides or {}
+        request_timeout, total_timeout = _result_verdict_timeouts()
         with llm_request_scope(
             **_llm_scope_kwargs(_overrides, purpose="scenario_result_verdict")
         ):
@@ -5096,9 +5231,9 @@ async def _generate_verdict(
                         if _overrides.get("temperature") is not None
                         else 0.3
                     ),
-                    timeout=_RESULT_VERDICT_TIMEOUT_SECONDS,
+                    timeout=request_timeout,
                 ),
-                timeout=_RESULT_VERDICT_TIMEOUT_SECONDS,
+                timeout=total_timeout,
             )
 
         parsed = _parse_result_verdict_json(raw_text)
@@ -5119,12 +5254,14 @@ async def _generate_verdict(
             ),
         }
     except Exception as exc:
-        logger.debug(
-            "result verdict generation failed (non-blocking): %s: %s",
+        payload = _result_verdict_failure_payload(exc)
+        logger.warning(
+            "result verdict generation failed (non-blocking): code=%s %s: %s",
+            payload["verdict_error_code"],
             type(exc).__name__,
             _scrub_sensitive_text(str(exc)),
         )
-        return None
+        return payload
 
 
 def _persist_result_quality_verdict(
@@ -5169,6 +5306,35 @@ def _persist_result_quality_verdict(
             session.commit()
     except Exception:
         logger.debug("result verdict persistence failed (non-blocking)", exc_info=True)
+
+
+def _persist_result_quality_verdict_failure(
+    engine,
+    scenario_id: str,
+    payload: dict[str, object],
+) -> None:
+    try:
+        reason = str(payload.get("verdict_missing_reason") or "").strip()
+        if not reason:
+            return
+        code = str(payload.get("verdict_error_code") or "LLM_FAILED").strip()
+        with Session(engine) as session:
+            session.exec(
+                update(Scenario)
+                .where(Scenario.id == scenario_id)
+                .values(
+                    parsed_context=_json_set_parsed_context_expr(
+                        _json_path("result_quality", "verdict_error_code"),
+                        _json_value(code[:80]),
+                        _json_path("result_quality", "verdict_missing_reason"),
+                        _json_value(reason[:240]),
+                        base_expr=_json_result_quality_object_expr(),
+                    )
+                )
+            )
+            session.commit()
+    except Exception:
+        logger.debug("result verdict failure persistence failed (non-blocking)", exc_info=True)
 
 
 async def _compress_round_memory(

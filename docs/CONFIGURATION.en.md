@@ -5,7 +5,7 @@ English | [中文](CONFIGURATION.md)
 All configuration is provided through environment variables. There are two templates:
 
 - **Local development**: copy `.env.example` to `backend/.env`, then edit `backend/.env`. Editing `.env.example` directly does not change your running app.
-- **Docker deployment**: edit `.env.docker`; `docker compose` reads it automatically.
+- **Docker deployment**: copy `.env.docker.example` to `.env.docker` first (`cp .env.docker.example .env.docker`; the file is gitignored), then edit `.env.docker`; `docker compose` reads it automatically.
 
 This page lists user-facing configuration. More tuning options are documented as comments in the template files.
 
@@ -29,7 +29,7 @@ SwarmOracle works with any OpenAI-compatible API, including OpenAI, Google Gemin
 
 > Security note: `your-api-key-here` is only a placeholder. If `LLM_RESPONSES_URL` is not a local address, the backend refuses to start with a placeholder key. Replace it with your real key. If you use a local gateway such as Ollama, the placeholder is allowed.
 
-Optional LLM tuning usually does not need changes: `LLM_REASONING_EFFORT` (`none/low/medium/high`), `LLM_REQUESTS_PER_MINUTE`, `LLM_TOKENS_PER_MINUTE` (`0` means unlimited), and `LLM_CONCURRENCY`.
+Optional LLM tuning usually does not need changes: `LLM_REASONING_EFFORT` (`none/low/medium/high`), `LLM_REQUESTS_PER_MINUTE`, `LLM_TOKENS_PER_MINUTE` (`0` means unlimited), and `LLM_CONCURRENCY` (global concurrency cap; `0` disables the cap entirely — it does not pause calls).
 
 Server defaults and request-level BYOK use different trust boundaries:
 
@@ -112,6 +112,9 @@ Common report-generation settings:
 | `REPORT_MAX_TOOL_CALLS_PER_SECTION` / `REPORT_MIN_TOOL_CALLS_PER_SECTION` | Per-section ReACT tool-call bounds; no-progress sections converge early | `3` / `2` |
 | `REPORT_SECTION_TIMEOUT_SECONDS` | LLM-call timeout for one section, interview, or indicator step | `120` |
 | `REPORT_RUNTIME_LOCK_LEASE_SECONDS` | Result-report runtime-lock lease; live generation refreshes it, and a killed worker blocks retries for at most this TTL | `120` |
+| `RESULT_VERDICT_REQUEST_TIMEOUT_SECONDS` / `RESULT_VERDICT_TOTAL_TIMEOUT_SECONDS` | Per-request / total wait limits for the one-sentence result verdict; timeout records a visible missing reason without blocking the result page | `45` / `50` |
+| `NARRATION_REQUEST_TIMEOUT_SECONDS` / `NARRATION_TOTAL_TIMEOUT_SECONDS` | Per-request / total wait limits for ending narration; failures fall back to a completable narration path | `35` / `40` |
+| `NARRATION_STREAM_PROBE_TIMEOUT_SECONDS` | Wait limit for deciding whether narration streaming has produced content | `8` |
 
 > Restart the backend after changing feature flags. The frontend reads `/api/capabilities` and hides disabled entries or shows unavailable states instead of failing.
 
@@ -166,6 +169,8 @@ Docker Compose stores the database and Chroma data in the `/data` volume so they
 | `SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS` | Stale-activity window used by polling reads and startup recovery | `900` |
 
 These values drive background simulation liveness. A running simulation holds and refreshes a runtime lock; as long as WebSocket content frames, round / turn progress, checkpoints, or other durable activity continue, a slow LLM is not killed just because total wall-clock time is long. Only a run with no activity past the stall timeout converges to an error terminal state. Polling reads also avoid fail-forwarding newly created runs or runs that still hold an active lock, so slow parse and first-round warmup are not mistaken for interruption.
+
+If a short LLM call for an Agent turn, narration, or verdict returns empty content, it is normalized to the stable `LLM_EMPTY` code. A round aborts only when every turn in that batch fails; partial failures keep successful messages and write safe placeholders for failed Agents.
 
 ---
 

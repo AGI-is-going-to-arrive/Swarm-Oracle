@@ -44,6 +44,9 @@ export default function AgentSelectionStrip({
     // (one per scenario/continuity key). The quick-select strip shows one pill per
     // name — the full attach panel still lists every identity for precise picking.
     const groupsByName = new Map<string, AgentNameGroup>();
+    if (!identities || typeof identities[Symbol.iterator] !== 'function') {
+      return [];
+    }
     for (const agent of identities) {
       if (agent.kind !== 'custom') continue;
       const nameKey = agent.display_name.trim();

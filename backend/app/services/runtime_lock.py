@@ -181,6 +181,18 @@ def _is_sqlite_locked_error(exc: sqlite3.OperationalError) -> bool:
     )
 
 
+def runtime_lock_error_is_transient_busy(exc: BaseException) -> bool:
+    if isinstance(exc, RuntimeLockBusyError):
+        return True
+    if isinstance(exc, sqlite3.OperationalError):
+        return _is_sqlite_locked_error(exc)
+    return False
+
+
+def runtime_lock_lease_is_alive(lease: RuntimeLockLease | None) -> bool:
+    return lease is not None and lease.expires_at > time.time()
+
+
 def _discard_ensured_schema_cache(db_path: str | None) -> None:
     if db_path is None:
         return

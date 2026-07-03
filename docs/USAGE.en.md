@@ -2,7 +2,7 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md); you can also save and test a model profile from `/admin/setup`, reusing its rate limits, concurrency, structured-output / native-search capability overrides, and native-search upstream declaration. Known official providers with bare `/v1` are probed as the Responses form, while proxy forwarding still needs an explicit upstream declaration; if the proxy rejects native-search tools, the runtime retries once without native tools and continues with ordinary LLM output. The home page treats profiles with a key as usable LLM access, and simulations, debates, and result-page chambers can reuse them. Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
+This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md) (local development: backend on port `18927`, frontend on port `18928`; open `http://localhost:18928` in your browser). You can also save and test a model profile from `/admin/setup`: the home page treats profiles with a key as usable LLM access, and simulations, debates, and result-page chambers can reuse them. For advanced options such as native search and proxy upstream declarations, see [CONFIGURATION](CONFIGURATION.en.md).
 
 For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
 
@@ -44,13 +44,13 @@ The result page also lets you export Markdown, generate sharing copy, copy a per
 
 ### 1. Multi-Branch Simulation
 
-Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. The simulation page shows segmented progress, current round, in-round speaking progress, ETA, and first-round warmup elapsed time; after completion, only terminal leaf worldlines form the result probability distribution. Advanced settings can change input cleanup mode (Blackboard / Raw), display mode (Classic / Pixel Theater), reasoning effort, and simulation mode (Conservative / Balanced / Exploratory).
+Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. The simulation page shows segmented progress, current round, in-round speaking progress, ETA, and first-round warmup elapsed time; after completion, only terminal leaf worldlines form the result probability distribution. Advanced Settings can change Context Mode (Collaborative (recommended) / Full context), Visualization Mode (Classic / Pixel Theater), Reasoning Effort, and Simulation Mode (Conservative / Balanced / Exploratory).
 
 If you choose multi-run on the home page, the app opens a waiting panel first: the first worldline is the full simulation and has **Watch simulation** for live `/sim`, while later worldlines use quick verdicts and show **View results** after they finish. After all runs finish, the result page shows the run-group outcome distribution and histogram.
 
 ### 2. Debate Arena
 
-After typing a question, select **Enter Debate Arena**. The app creates affirmative, opposing, and judge roles, then moves through debate phases. On the result page, select **Load map** to view claims, evidence, rebuttals, and rulings as a connected argument map.
+After typing a question, select **Start Debate Arena**. The app creates affirmative, opposing, and judge roles, then moves through debate phases. On the result page, select **Load map** to view claims, evidence, rebuttals, and rulings as a connected argument map.
 
 ### 3. Oracle Chambers
 

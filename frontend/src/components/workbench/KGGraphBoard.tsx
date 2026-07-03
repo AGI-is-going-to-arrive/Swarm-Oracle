@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { Eye, EyeOff, Info, Maximize2, Minus, Plus, RotateCcw, Search, X, MessageSquare, Zap, ArrowLeftRight, GitBranch, Clock, FileCheck, Gavel, Flag, ShieldAlert, Swords } from 'lucide-react';
 import { useG6Graph } from '../../hooks/useG6Graph';
 import useReducedMotion from '../../hooks/useReducedMotion';
@@ -612,6 +613,28 @@ export default function KGGraphBoard({
           >
             {t('common.loading', 'Loading...')}
           </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Only a real FEATURE_DISABLED code means the feature is off; other 404s
+  // (SCENARIO_NOT_FOUND / BRANCH_NOT_FOUND), 403, and 5xx fall through to the
+  // localized retry surface below instead of the "feature disabled" panel.
+  const isFeatureDisabled = graphError && graphError.code === 'FEATURE_DISABLED';
+
+  if (isFeatureDisabled) {
+    return (
+      <div
+        data-testid="kg-graph-board"
+        className={wrapperClassName}
+        style={{ display: 'flex', flexDirection: 'column', minHeight: 320, justifyContent: 'center', alignItems: 'center' }}
+      >
+        <div className="kg-status-stack" style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+          <p role="alert" className="kg-status-error">{t('kg_explorer.feature_disabled', 'KG Explorer is not enabled on this server.')}</p>
+          <Link to="/" style={{ color: 'var(--text-link, #8ab4f8)', textDecoration: 'underline', fontSize: '0.875rem' }}>
+            {t('common.back_home', 'Back to home')}
+          </Link>
         </div>
       </div>
     );

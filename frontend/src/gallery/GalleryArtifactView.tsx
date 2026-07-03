@@ -34,7 +34,7 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
       <div className="section-grid">
         <div className="main-column">
           {/* Branches Section */}
-          <section className="artifact-section" aria-label="Branch Predictions">
+          <section className="artifact-section" aria-label={t('gallery.branch_predictions_aria')}>
             <h3>{t('common.branches', 'Timelines')}</h3>
             {sortedProbBars.length === 0 ? (
               <p>{t('common.empty', 'No branches available')}</p>
@@ -116,7 +116,7 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                                         borderRadius: '4px',
                                         color: 'var(--color-text-secondary)',
                                       }}
-                                      aria-label={`Round ${ex.round}`}
+                                      aria-label={t('gallery.round_aria', { round: ex.round })}
                                     >
                                       R{ex.round}
                                     </span>
@@ -138,7 +138,7 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
 
         <div className="side-column">
           {/* Participating Agents */}
-          <section className="artifact-section" aria-label="Participating Agents">
+          <section className="artifact-section" aria-label={t('gallery.agents_aria')}>
             <h3>{t('gallery.agents_title', 'Agent Swarm')}</h3>
             {display_agent_names.length === 0 ? (
               <p>{t('common.empty', 'None')}</p>
@@ -154,7 +154,7 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
           </section>
 
           {/* Sources Section */}
-          <section className="artifact-section" aria-label="Sources Summary" style={{ marginTop: '24px' }}>
+          <section className="artifact-section" aria-label={t('gallery.sources_aria')} style={{ marginTop: '24px' }}>
             <h3>{t('gallery.sources_title', 'Verified Sources')}</h3>
             {(!source_summary.domains || source_summary.domains.length === 0) ? (
               <p>{t('common.empty', 'None')}</p>

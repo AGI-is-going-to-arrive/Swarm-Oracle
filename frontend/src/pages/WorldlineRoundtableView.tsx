@@ -53,6 +53,7 @@ import { ORACLE_UI_ASSETS } from '../lib/themeRegistry';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { useWorldlineRoundtableWS } from '../hooks/useWorldlineRoundtableWS';
 import { useWorldlineRoundtableStore } from '../stores/worldlineRoundtableStore';
+import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   type AnchorAction,
   type AnchorSummary,
@@ -230,6 +231,7 @@ export default function WorldlineRoundtableView() {
   const [replayPayload, setReplayPayload] = useState<OracleReplayPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [permalinkCopied, setPermalinkCopied] = useState(false);
   const [localCopySaved, setLocalCopySaved] = useState(false);
   const [selectedRepresentativeId, setSelectedRepresentativeId] = useState<string | null>(null);
@@ -430,7 +432,7 @@ export default function WorldlineRoundtableView() {
 
     const applyReplay = (nextReplay: OracleReplayPayload) => {
       if (!nextReplay.scenarioReplay) {
-        throw new Error(tRef.current('roundtable.error_missing_scenario'));
+        throw new Error('roundtable.error_missing_scenario');
       }
       setReplayPayload(nextReplay);
       setScenario(nextReplay.scenarioReplay.scenario);
@@ -444,6 +446,7 @@ export default function WorldlineRoundtableView() {
     const load = async () => {
       setLoading(true);
       setError('');
+      setErrorCode(null);
       setImportError('');
 
       try {
@@ -456,7 +459,7 @@ export default function WorldlineRoundtableView() {
                 .then((artifact) => normalizeOracleReplayPayload(artifact.payload, 'worldline_roundtable_v1'))
               : await readOracleReplayPayload(searchParams, 'worldline_roundtable_v1');
           if (!rawReplay) {
-            throw new Error(tRef.current('roundtable.error_invalid_replay'));
+            throw new Error('roundtable.error_invalid_replay');
           }
           if (!cancelled) {
             applyReplay(rawReplay);
@@ -465,7 +468,7 @@ export default function WorldlineRoundtableView() {
         }
 
         if (!id) {
-          throw new Error(tRef.current('roundtable.error_missing_id'));
+          throw new Error('roundtable.error_missing_id');
         }
         setRestoredReadOnlyRoomId(null);
 
@@ -485,10 +488,10 @@ export default function WorldlineRoundtableView() {
         setAgents(nextAgents);
 
         if (nextScenario.status !== 'done') {
-          throw new Error(tRef.current('roundtable.error_not_done'));
+          throw new Error('roundtable.error_not_done');
         }
         if ((nextStoryData.branches?.length ?? 0) < 2) {
-          throw new Error(tRef.current('roundtable.error_too_few_branches'));
+          throw new Error('roundtable.error_too_few_branches');
         }
 
         // Revisit support: if this scenario already produced a completed roundtable in a
@@ -509,7 +512,7 @@ export default function WorldlineRoundtableView() {
             if (cancelled) return;
           }
         } catch {
-          throw new Error(tRef.current('roundtable.error_restore_failed'));
+          throw new Error('roundtable.error_restore_failed');
         }
 
         if (!cancelled) {
@@ -517,7 +520,15 @@ export default function WorldlineRoundtableView() {
         }
       } catch (nextError) {
         if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : String(nextError));
+          const code = getApiErrorCode(nextError);
+          setErrorCode(code);
+          if (code) {
+            setError('roundtable.error_restore_failed');
+          } else if (nextError instanceof Error) {
+            setError(nextError.message);
+          } else {
+            setError(String(nextError));
+          }
           setLoading(false);
         }
       }
@@ -1316,9 +1327,7 @@ export default function WorldlineRoundtableView() {
       navigate(`/sim/${imported.id}`);
     } catch (nextError) {
       setImportError(
-        nextError instanceof Error
-          ? nextError.message
-          : t('roundtable.import_error'),
+        getLocalizedApiErrorMessage(nextError, t, t('roundtable.import_error')),
       );
     } finally {
       setImportingReplay(false);
@@ -1484,6 +1493,7 @@ export default function WorldlineRoundtableView() {
     if (!scenario?.id || launchingRoom || selectedBranchIdsForLaunch.length === 0) return;
     setLaunchingRoom(true);
     setError('');
+    setErrorCode(null);
     try {
       reset();
       const roomId = await openRoom(scenario.id, {
@@ -1514,7 +1524,15 @@ export default function WorldlineRoundtableView() {
       await loadRoom(roomId);
       setEditingRepresentatives(false);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      const code = getApiErrorCode(nextError);
+      setErrorCode(code);
+      if (code) {
+        setError('roundtable.status_error');
+      } else if (nextError instanceof Error) {
+        setError(nextError.message);
+      } else {
+        setError(String(nextError));
+      }
     } finally {
       setLaunchingRoom(false);
     }
@@ -1646,7 +1664,10 @@ export default function WorldlineRoundtableView() {
       {
         route: window.location.pathname,
         kind: 'worldline_roundtable',
-        error: error ? { code: 'ROUNDTABLE_ERROR', label: error } : null,
+        error: error ? {
+          code: errorCode || 'ROUNDTABLE_ERROR',
+          label: errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, t(error) || error) : (t(error) || error)
+        } : null,
         controls: {
           can_send: composerEnabled,
           is_read_only: Boolean(replayPayload),
@@ -1719,6 +1740,8 @@ export default function WorldlineRoundtableView() {
     threadList.length,
     activeThread?.question_anchor_ids_json,
     activeThreadAnchorSummary,
+    errorCode,
+    t,
   ]);
 
   const handleBack = useCallback(() => {
@@ -1850,7 +1873,11 @@ export default function WorldlineRoundtableView() {
       </header>
 
       {loading && <div className="worldline-roundtable-empty">{t('roundtable.loading')}</div>}
-      {!loading && error && <div className="worldline-roundtable-empty worldline-roundtable-empty--error" role="alert">{error}</div>}
+      {!loading && error && (
+        <div className="worldline-roundtable-empty worldline-roundtable-empty--error" role="alert">
+          {errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, t(error) || error) : (t(error) || error)}
+        </div>
+      )}
       {!loading && !error && importError && <div className="worldline-roundtable-empty worldline-roundtable-empty--error" role="alert">{importError}</div>}
 
       {showRepresentativePicker && (

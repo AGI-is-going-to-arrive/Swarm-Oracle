@@ -41,7 +41,31 @@ const mockState = {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { count?: number; round?: number; defaultValue?: string }) => {
+      if (key === 'sim.timeline.jump_to_round') {
+        return `Jump to replay round ${options?.round}`;
+      }
+      const summaryTemplates: Record<string, string> = {
+        'sim.timeline.summary_forks': 'fork',
+        'sim.timeline.summary_cards': 'cards',
+        'sim.timeline.summary_bets': 'bets',
+        'sim.timeline.summary_results': 'results',
+      };
+      if (summaryTemplates[key] && options?.count !== undefined) {
+        return `${summaryTemplates[key]} ${options.count}`;
+      }
+      if (options?.defaultValue) {
+        let val = options.defaultValue;
+        if (options.count !== undefined) {
+          val = val.replace('{{count}}', String(options.count));
+        }
+        if (options.round !== undefined) {
+          val = val.replace('{{round}}', String(options.round));
+        }
+        return val;
+      }
+      return key;
+    },
   }),
 }));
 

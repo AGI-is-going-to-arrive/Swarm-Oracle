@@ -208,10 +208,32 @@ def _extra_cli_checks() -> list[PreflightCheckResult]:
     return [_check_port(port) for port in PORTS_TO_CHECK] + [_check_disk_space()]
 
 
-def _print_results(results: list[PreflightCheckResult]) -> None:
+def _stream_supports_text(stream, text: str) -> bool:
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding, errors="strict")
+    except UnicodeError:
+        return False
+    return True
+
+
+def _status_icon(status: str, stream=None) -> str:
+    stream = stream or sys.stdout
+    emoji = {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(status, "?")
+    if _stream_supports_text(stream, emoji):
+        return emoji
+    return {"pass": "[OK]", "warn": "[WARN]", "fail": "[FAIL]"}.get(status, "?")
+
+
+def _print(stream, text: str = "") -> None:
+    print(text, file=stream)
+
+
+def _print_results(results: list[PreflightCheckResult], *, stream=None) -> None:
+    stream = stream or sys.stdout
     for result in results:
-        icon = {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(result.status, "?")
-        print(f"{icon} [{result.name}] {result.status.upper()}: {result.message}")
+        icon = _status_icon(result.status, stream)
+        _print(stream, f"{icon} [{result.name}] {result.status.upper()}: {result.message}")
 
 
 def _exit_code_for_results(results: list[PreflightCheckResult]) -> int:
@@ -224,9 +246,9 @@ async def main() -> int:
 
     exit_code = _exit_code_for_results(results)
     if exit_code:
-        print("\n❌ Some checks failed. Please fix the issues above.")
+        print(f"\n{_status_icon('fail')} Some checks failed. Please fix the issues above.")
     else:
-        print("\n✅ All preflight checks passed!")
+        print(f"\n{_status_icon('pass')} All preflight checks passed!")
     return exit_code
 
 

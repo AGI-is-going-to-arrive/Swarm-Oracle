@@ -419,23 +419,26 @@ export default function ShareModal({
       writes (Safari < 16.4 / Firefox without permission etc.). */
   const handleCopyPredictionCard = useCallback(async () => {
     if (exportingPredictionCard) return;
-    if (!predictionCardRef.current) return;
+    const card = predictionCardRef.current;
+    if (!card) return;
     setPredictionCardError('');
     setPredictionCardCopied(false);
     setExportingPredictionCard(true);
-    try {
-      const result = await predictionCardRef.current.exportPng();
+
+    const ClipboardItemCtor = (window as unknown as {
+      ClipboardItem: new (items: Record<string, Promise<Blob> | Blob>) => ClipboardItem;
+    }).ClipboardItem;
+
+    const promise = (async () => {
+      const result = await card.exportPng();
       if (!result.success || !result.blob) {
-        setPredictionCardError(
-          t('prediction_card.copy_failed', 'Could not copy prediction card. Try downloading instead.'),
-        );
-        return;
+        throw new Error('Export failed');
       }
-      // Cast: ClipboardItem is feature-detected before we expose this button.
-      const ClipboardItemCtor = (window as unknown as {
-        ClipboardItem: new (items: Record<string, Blob>) => ClipboardItem;
-      }).ClipboardItem;
-      const item = new ClipboardItemCtor({ 'image/png': result.blob });
+      return result.blob;
+    })();
+
+    try {
+      const item = new ClipboardItemCtor({ 'image/png': promise });
       await navigator.clipboard.write([item]);
       if (!mountedRef.current) return;
       setPredictionCardCopied(true);
@@ -487,22 +490,26 @@ export default function ShareModal({
 
   const handleCopyHeadlineCard = useCallback(async () => {
     if (exportingHeadlineCard) return;
-    if (!headlineCardRef.current) return;
+    const card = headlineCardRef.current;
+    if (!card) return;
     setHeadlineCardError('');
     setHeadlineCardCopied(false);
     setExportingHeadlineCard(true);
-    try {
-      const result = await headlineCardRef.current.exportPng();
+
+    const ClipboardItemCtor = (window as unknown as {
+      ClipboardItem: new (items: Record<string, Promise<Blob> | Blob>) => ClipboardItem;
+    }).ClipboardItem;
+
+    const promise = (async () => {
+      const result = await card.exportPng();
       if (!result.success || !result.blob) {
-        setHeadlineCardError(
-          t('social_feed.copy_failed', 'Could not copy headline card. Try downloading instead.'),
-        );
-        return;
+        throw new Error('Export failed');
       }
-      const ClipboardItemCtor = (window as unknown as {
-        ClipboardItem: new (items: Record<string, Blob>) => ClipboardItem;
-      }).ClipboardItem;
-      const item = new ClipboardItemCtor({ 'image/png': result.blob });
+      return result.blob;
+    })();
+
+    try {
+      const item = new ClipboardItemCtor({ 'image/png': promise });
       await navigator.clipboard.write([item]);
       if (!mountedRef.current) return;
       setHeadlineCardCopied(true);

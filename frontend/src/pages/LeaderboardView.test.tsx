@@ -9,6 +9,16 @@ import {
 } from '../api/client';
 import LeaderboardView from './LeaderboardView';
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    loading: false,
+    enabled: true,
+    capabilities: { you_vs_oracle: { enabled: true } },
+    error: null,
+    reload: vi.fn(),
+  }),
+}));
+
 const { getLeaderboardMock, setLanguage, getLanguage, translate } = vi.hoisted(() => {
   const getLeaderboardMock = vi.fn();
   let language = 'en';

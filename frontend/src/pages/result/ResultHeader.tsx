@@ -183,12 +183,14 @@ export default function ResultHeader() {
           )}
         </div>
         <div className="result-actions__overflow">
-          <button
-            className="btn btn-ghost"
-            onClick={() => navigate('/leaderboard')}
-          >
-            {t('result.leaderboard_link')}
-          </button>
+          {capabilities?.you_vs_oracle?.enabled && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => navigate('/leaderboard')}
+            >
+              {t('result.leaderboard_link')}
+            </button>
+          )}
           {capabilities?.prediction_journal?.enabled && (
             <button
               className="btn btn-ghost"

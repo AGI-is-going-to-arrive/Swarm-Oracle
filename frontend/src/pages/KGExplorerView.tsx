@@ -60,6 +60,7 @@ interface CausalGraphPayload {
 
 type KGExplorerErrorState = {
   status: number | null;
+  code?: string | null;
 };
 
 type ViewportTier = 'mobile' | 'tablet' | 'desktop';
@@ -159,10 +160,16 @@ export default function KGExplorerView() {
   const { t } = useTranslation();
   const {
     loading: capLoading,
-    enabled: capEnabled,
+    enabled: explorerEnabled,
+    capabilities,
     error: capabilityError,
     reload: reloadCapability,
   } = useCapabilityCheck('kg_explorer');
+
+  const causalEnabled = capabilities
+    ? capabilities.causal_graph?.enabled === true
+    : explorerEnabled;
+  const capEnabled = explorerEnabled && causalEnabled;
   const tier = useViewportTier();
   const theme = useTheme();
 
@@ -197,7 +204,22 @@ export default function KGExplorerView() {
       );
       if (requestId !== loadRequestIdRef.current) return;
       if (!res.ok) {
-        setDataError({ status: res.status });
+        let code: string | null = null;
+        try {
+          const body = await res.json();
+          if (body && typeof body === 'object') {
+            const r = body as Record<string, unknown>;
+            if (r.detail && typeof r.detail === 'object') {
+              const dr = r.detail as Record<string, unknown>;
+              if (typeof dr.code === 'string') code = dr.code;
+            } else if (typeof r.code === 'string') {
+              code = r.code;
+            }
+          }
+        } catch {
+          // ignore error body parsing failures
+        }
+        setDataError({ status: res.status, code });
         return;
       }
       const payload = (await res.json()) as CausalGraphPayload;
@@ -401,7 +423,10 @@ export default function KGExplorerView() {
       </div>
     );
   }
-  if (!capEnabled) {
+  const isFeatureDisabled =
+    !capEnabled ||
+    Boolean(dataError && dataError.code === 'FEATURE_DISABLED');
+  if (isFeatureDisabled) {
     return (
       <div
         data-testid="kg-explorer-root"

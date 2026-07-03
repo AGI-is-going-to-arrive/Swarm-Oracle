@@ -490,6 +490,13 @@ async def get_leaderboard(
     so that clients can inspect ``active_filters``, the unsegmented
     ``total_count`` and the post-filter ``filtered_count``.
     """
+    if not settings.FEATURE_YOU_VS_ORACLE:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'you_vs_oracle' is not enabled",
+        )
+
     # ---- 1. Validate segment query params (HTTP 422 on bad input) --------
     active_filters: dict[str, object] = {}
 

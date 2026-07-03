@@ -218,6 +218,9 @@ function runCommand(command, args, options) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? FRONTEND_ROOT,
     stdio: "inherit",
+    // Windows needs a shell to resolve npm.cmd/npx.cmd; POSIX keeps shell:false so
+    // argv (e.g. --output-root) is never re-parsed by /bin/sh (no shell injection).
+    shell: process.platform === "win32",
     env: {
       ...process.env,
       ...options.env,
@@ -246,6 +249,8 @@ function captureCommand(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? FRONTEND_ROOT,
     encoding: "utf8",
+    // Windows-only shell (npm.cmd/npx.cmd resolution); POSIX stays shell:false.
+    shell: process.platform === "win32",
     env: {
       ...process.env,
       ...options.env,

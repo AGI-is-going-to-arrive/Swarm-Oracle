@@ -131,6 +131,16 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    loading: false,
+    enabled: true,
+    capabilities: { agent_conversation: { enabled: true } },
+    error: null,
+    reload: vi.fn(),
+  }),
+}));
+
 vi.mock('@xyflow/react', async () => {
   const React = await import('react');
 

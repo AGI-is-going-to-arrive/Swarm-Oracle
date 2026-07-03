@@ -140,7 +140,7 @@ Copy-Item ..\.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-The `your-api-key-here` value in `.env.example` is only a placeholder. If `LLM_RESPONSES_URL` is not a local address, the backend refuses to keep using the placeholder key.
+`.env.example` points to a local address by default, so the placeholder key `your-api-key-here` boots as-is (this is the Tier 2 keyless demo). Once `LLM_RESPONSES_URL` is a non-local address (e.g. OpenAI), the backend refuses the placeholder and you must supply a real key.
 
 Frontend (Node.js 20+):
 

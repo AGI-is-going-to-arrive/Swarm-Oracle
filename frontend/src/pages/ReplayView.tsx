@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders, getReplayTrace, isApiError, getScenario } from '../api/client';
 import type { ReplayTraceNode, ReplayTraceResponse, BranchInfo } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   useReplayTimeline,
   type PlaybackSpeed,
@@ -266,9 +267,7 @@ export function ReplayView() {
     } catch (err) {
       if (loadMoreSeqRef.current !== requestId) return;
       // Non-fatal: keep current trace; surface inline error so user may retry.
-      const message = err instanceof Error && err.message
-        ? err.message
-        : t('replay.load_more_error', 'Could not load more entries.');
+      const message = getLocalizedApiErrorMessage(err, t, t('replay.load_more_error'));
       setLoadMoreError(message);
     } finally {
       if (loadMoreSeqRef.current === requestId) {

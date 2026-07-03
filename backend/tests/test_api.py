@@ -405,6 +405,21 @@ class TestHealthEndpoint:
             "is_proxy": False,
         }
 
+    def test_capabilities_disable_kg_explorer_when_causal_graph_disabled(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_KG_EXPLORER", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_CAUSAL_GRAPH", False)
+
+        resp = client.get("/api/capabilities")
+
+        assert resp.status_code == 200
+        kg = resp.json()["kg_explorer"]
+        assert kg["enabled"] is False
+        assert kg["version"] == "0.0"
+
     @pytest.mark.asyncio
     async def test_scenario_background_wrapper_broadcasts_safe_llm_error(
         self,

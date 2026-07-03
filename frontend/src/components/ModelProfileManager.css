@@ -350,6 +350,7 @@
   font-size: var(--text-sm);
   color: var(--text-primary);
   cursor: pointer;
+  -webkit-user-select: none;
   user-select: none;
 }
 

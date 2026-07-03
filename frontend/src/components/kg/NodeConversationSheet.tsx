@@ -47,6 +47,7 @@ import { cn } from '../../lib/utils';
 import { useAgentConversation, type RegisteredStreamBubble } from '../../hooks/useAgentConversation';
 import { useDraftAutoSave } from '../../hooks/useDraftAutoSave';
 import { useNodeConversationTransport } from '../../hooks/useNodeConversationTransport';
+import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { SafeMarkdown } from '../SafeMarkdown';
 
 import { ConversationRecoveryBanner } from './ConversationRecoveryBanner';
@@ -187,6 +188,16 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   } = props;
   const { t } = useTranslation();
   const isMobile = useIsMobile(768);
+  const {
+    enabled: agentConversationEnabled,
+    loading: capCheckLoading,
+    error: capConversationError,
+  } = useCapabilityCheck('agent_conversation');
+  // Disable input/send while the probe is loading or the feature is genuinely
+  // off, but NOT when the probe itself errored — a probe failure shouldn't hard
+  // disable the sheet; let the user attempt (the transport surfaces the real
+  // FEATURE_DISABLED / error if the feature is actually unavailable).
+  const conversationHardDisabled = !agentConversationEnabled && !capConversationError;
   const [threadState, setThreadState] = useState<{
     initialThreadId: string | null;
     threadId: string | null;
@@ -264,6 +275,16 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     onTransportError: dispatchTransportError,
     onWsEvent: dispatchWsEvent,
   });
+
+  useEffect(() => {
+    // Only surface FEATURE_DISABLED when the probe succeeded and reported the
+    // feature off. A probe error (capConversationError) must NOT be masked as
+    // "feature disabled" — leave the sheet usable so a real attempt / retry can
+    // surface the actual transport error instead.
+    if (open && !capCheckLoading && !agentConversationEnabled && !capConversationError) {
+      dispatchTransportError('FEATURE_DISABLED');
+    }
+  }, [open, capCheckLoading, agentConversationEnabled, capConversationError, dispatchTransportError]);
 
   useEffect(() => {
     if (!open) {
@@ -611,6 +632,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleInputKeyDown}
             rows={2}
+            disabled={conversationHardDisabled}
             className="conv-input-textarea"
           />
           <div className="flex gap-1.5">
@@ -628,7 +650,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
                 type="button"
                 data-testid="node-conversation-send"
                 onClick={handleSubmit}
-                disabled={inputValue.trim().length === 0 || bootstrapPending || isStreaming}
+                disabled={inputValue.trim().length === 0 || bootstrapPending || isStreaming || conversationHardDisabled}
                 className="conv-btn conv-btn--send"
               >
                 {t('conversation.input.send')}

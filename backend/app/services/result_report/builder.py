@@ -12,7 +12,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from sqlalchemy import case, func, update
 from sqlmodel import Session, select
@@ -56,7 +56,9 @@ from app.services.runtime_lock import (
     acquire_runtime_lock,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lock_error_is_transient_busy,
     runtime_lock_is_active,
+    runtime_lock_lease_is_alive,
 )
 from app.services.web_context import _sanitize_url
 
@@ -89,6 +91,7 @@ _AUTO_REPORT_RETRY_MAX_DELAY_SECONDS = 8.0
 _INTERVIEW_AGENT_BUDGET = 3
 _INTERVIEW_CANDIDATE_LIMIT = 8
 _INTERVIEW_EVIDENCE_PER_AGENT_CAP = 5
+_SECTION_FAILURE_REASONS = frozenset(get_args(SectionFailureReason))
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +179,7 @@ def _classify_section_failure(exc: BaseException | None) -> SectionFailureReason
     if isinstance(exc, TimeoutError | asyncio.TimeoutError):
         return "timeout"
     reason = getattr(exc, "reason", None)
-    if reason is not None:
+    if isinstance(reason, str) and reason in _SECTION_FAILURE_REASONS:
         return reason
     return "other"
 
@@ -266,7 +269,15 @@ async def _run_report_runtime_lock_heartbeat(
                 current_lease,
                 lease_seconds=lease_seconds,
             )
-        except Exception:  # noqa: BLE001 - lock loss must stop report writes
+        except Exception as exc:  # noqa: BLE001 - lock loss must stop report writes
+            if runtime_lock_error_is_transient_busy(exc) and runtime_lock_lease_is_alive(
+                current_lease
+            ):
+                logger.warning(
+                    "Result report runtime lock refresh hit SQLite write-lock contention; "
+                    "retaining current lease",
+                )
+                continue
             lease_holder[0] = None
             logger.exception("Result report runtime lock lease refresh failed")
             return

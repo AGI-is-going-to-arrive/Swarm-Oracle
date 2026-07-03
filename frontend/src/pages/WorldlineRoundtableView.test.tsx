@@ -3521,6 +3521,159 @@ describe('WorldlineRoundtableView', () => {
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
 
+  it('shows a localized import error instead of a raw ApiError.message when import replay fails', async () => {
+    const replaySnapshot: EndingRoomSnapshot = {
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: null,
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      memory_partition_id: 'room-partition',
+      participants: [
+        {
+          id: 'rep-a',
+          room_id: 'room-1',
+          role_slot: 'representative',
+          display_name: 'Representative A',
+          source_branch_id: 'branch-a',
+          source_agent_id: 'agent-a',
+          persona_snapshot_json: { agent_role: 'Marshal' },
+        },
+        {
+          id: 'archivist',
+          room_id: 'room-1',
+          role_slot: 'archivist',
+          display_name: 'Archivist',
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-room',
+          room_id: 'room-1',
+          title: 'Main Desk',
+          mode: 'room',
+          interaction_mode: 'auto_recap',
+          participant_set_hash: 'hash-room',
+          memory_partition_id: 'room-partition',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-1',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 1,
+          phase: 'opening',
+          participant_id: 'rep-a',
+          content: 'The first hinge was delayed too long.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:00Z',
+        },
+      ],
+      result_ready: true,
+    };
+    const replayResult = {
+      summary: 'The roundtable converged on a single hinge.',
+      archivist_note: 'Summary-only crossline scope held.',
+      phase_insights: [
+        {
+          phase: 'verdict',
+          stakes: 'Archive the hinge.',
+          moderator_focus: 'Keep the scope narrow.',
+          commentary: 'Done.',
+        },
+      ],
+    };
+    loadOracleReplayLocalCopyMock.mockReturnValue({
+      kind: 'worldline_roundtable_v1',
+      scenarioReplay: {
+        scenario: {
+          id: 'scenario-1',
+          question: 'What if the empire forked?',
+          status: 'done',
+          agents: [],
+          language: 'en',
+        },
+        storyData: {
+          scenario_id: 'scenario-1',
+          question: 'What if the empire forked?',
+          status: 'done',
+          branches: [
+            {
+              id: 'branch-a',
+              title: 'Archive A',
+              probability: 0.6,
+              status: 'COMPLETED',
+              story: 'Story A',
+              insight: 'Insight A',
+              key_moments: ['A'],
+              parent_branch_id: null,
+              fork_reason: '',
+            },
+          ],
+        },
+        agents: [],
+        predictions: [],
+        scenarioMeta: {
+          director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+          cooldowns: {},
+          cards: { usageLog: [] },
+          betting: { bets: [] },
+          commitment: { active: false, branchId: null, branchTitle: null, committedAtRound: null, committedAt: null, outcome: null },
+          objectives: { generatedForQuestion: null, generatedForProfile: null, goals: [] },
+          archive: { keyMoments: [], branchSnapshots: [] },
+        },
+        campaignSummary: null,
+        campaignScenarioSummary: null,
+        isDailyChallenge: false,
+      },
+      roomSnapshot: replaySnapshot,
+      roomResult: replayResult,
+      activeThreadId: 'thread-room',
+      selectedAgentIds: ['agent-a'],
+    });
+
+    // ApiError is an Error subclass carrying a `.code`; the pre-fix catch stored
+    // `nextError.message` (raw `API 400 ...`) directly into the UI. The fix routes
+    // it through getLocalizedApiErrorMessage, which maps/falls back to localized copy.
+    const apiError = Object.assign(
+      new Error('API 400 IMPORT_BROKEN: raw backend detail leaked to user'),
+      { code: 'IMPORT_BROKEN', status: 400 },
+    );
+    importReplayScenarioMock.mockRejectedValueOnce(apiError);
+
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/roundtable/replay?local=replay-1']}>
+        <Routes>
+          <Route path="/roundtable/replay" element={<WorldlineRoundtableView />} />
+          <Route path="/sim/:id" element={<div>sim-import-destination</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('The first hinge was delayed too long.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: 'Import run' }));
+
+    // Localized fallback is shown; navigation did not occur.
+    expect(await screen.findByText('Failed to import roundtable replay')).toBeInTheDocument();
+    expect(screen.queryByText('sim-import-destination')).not.toBeInTheDocument();
+    // The raw ApiError.message must never reach the UI.
+    expect(
+      screen.queryByText((_, node) => Boolean(node?.textContent?.includes('IMPORT_BROKEN'))),
+    ).toBeNull();
+  });
+
   it('falls back to a local replay link when artifact and token replay links are both unavailable', async () => {
     const user = userEvent.setup();
     createReplayArtifactMock.mockRejectedValueOnce(new Error('artifact offline'));

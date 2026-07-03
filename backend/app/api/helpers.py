@@ -8,7 +8,6 @@ import hashlib
 import hmac
 import json
 import logging
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -45,11 +44,11 @@ from app.services.llm_resolution import (
 )
 from app.services.parser import parse_question
 from app.services.runtime_lock import (
-    RuntimeLockBusyError,
     RuntimeLockLease,
     acquire_runtime_lock,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lock_error_is_transient_busy,
     runtime_lock_is_active,
     simulation_lock_key,
 )
@@ -605,18 +604,7 @@ def _runtime_lock_refresh_interval(
 
 
 def _runtime_lock_error_is_transient_busy(exc: Exception) -> bool:
-    if isinstance(exc, RuntimeLockBusyError):
-        return True
-    if isinstance(exc, sqlite3.OperationalError):
-        message = str(exc).lower()
-        return (
-            "database is locked" in message
-            or "database is busy" in message
-            or "database table is locked" in message
-            or message.strip() == "busy"
-            or message.strip() == "locked"
-        )
-    return False
+    return runtime_lock_error_is_transient_busy(exc)
 
 
 def _start_runtime_lock_heartbeat(

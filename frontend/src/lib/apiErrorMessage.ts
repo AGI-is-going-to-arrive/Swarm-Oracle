@@ -98,6 +98,8 @@ export function getLocalizedApiErrorMessage(
     case 'DIRECTOR_STATE_REVISION_MISMATCH':
     case 'GAMEPLAY_STATE_REVISION_MISMATCH':
       return t('common.api_errors.sync_conflict');
+    case 'FEATURE_DISABLED':
+      return t('common.api_errors.feature_disabled');
     default:
       return fallback;
   }

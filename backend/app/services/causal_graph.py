@@ -40,7 +40,7 @@ INTER_AGENT_EDGE_TYPES = ("responds_to", "supports_stance", "opposes_stance")
 _LATIN_NAME_RE = re.compile(r"[A-Za-z]")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
-_FORK_REASON_QUOTE_RE = re.compile(r"[“\"']([^”\"']+)[”\"']")
+_FORK_REASON_QUOTE_RE = re.compile(r"[“\"]([^”\"]+)[”\"]")
 
 
 def _node_label_i18n(key: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -126,13 +126,23 @@ def _finish_sentence(text: str) -> str:
     return stripped if stripped[-1] in "。.!?" else stripped + "。"
 
 
-def _display_fork_reason(reason: str | None) -> str:
+def _fork_reason_is_chinese(language: str) -> bool:
+    normalized = str(language or "").strip().lower()
+    return normalized in {"zh", "zho", "chinese", "mandarin", "中文"} or not normalized
+
+
+def _display_fork_reason(reason: str | None, *, language: str = "Chinese") -> str:
     cleaned = _strip_diverge_marker(reason or "")
+    is_chinese = _fork_reason_is_chinese(language)
     if not cleaned:
-        return "Branch fork"
+        return "路线分岔" if is_chinese else "Branch fork"
 
     route_names = _fork_route_names(cleaned)
     if len(route_names) >= 2:
+        if not is_chinese:
+            if len(route_names) == 2:
+                return f"Route split: {route_names[0]}; another path {route_names[1]}."
+            return f"Route split: {', '.join(route_names[:3])}."
         if len(route_names) == 2:
             return f"路线分岔：{route_names[0]}；另一条{route_names[1]}。"
         return f"路线分岔：{'、'.join(route_names[:3])}。"
@@ -219,7 +229,8 @@ def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
     if node.node_type == "fork":
         source_reason = str(payload.get("reason") or payload.get("display_reason") or label)
         display_reason = _display_fork_reason(
-            source_reason
+            source_reason,
+            language=str(payload.get("language") or "Chinese"),
         )
         payload = {**payload, "display_reason": display_reason}
         display_summary = _display_fork_summary(source_reason)
@@ -1032,6 +1043,7 @@ def append_round_nodes(
     round_number: int,
     messages: list,
     fork_event: dict | None = None,
+    language: str = "Chinese",
 ) -> GraphDelta:
     """Append graph nodes/edges for a completed simulation round."""
     engine = get_engine()
@@ -1516,8 +1528,10 @@ def append_round_nodes(
                 fork_key = f"fork_r{round_number}_{fork_event.get('branch_id', '')}"
                 fork_payload = dict(fork_event)
                 fork_payload["source_branch_id"] = branch_id
+                fork_payload["language"] = language
                 fork_payload["display_reason"] = _display_fork_reason(
-                    str(fork_payload.get("reason", ""))
+                    str(fork_payload.get("reason", "")),
+                    language=language,
                 )
                 display_summary = _display_fork_summary(str(fork_payload.get("reason", "")))
                 if display_summary:

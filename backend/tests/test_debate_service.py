@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from datetime import timedelta
 
 import pytest
 from sqlmodel import Session
@@ -29,6 +30,7 @@ from app.services.debate_scoring import (
     _profile_dimension_bias,
 )
 from app.services.runtime_lock import (
+    RuntimeLockBusyError,
     RuntimeLockLease,
     acquire_runtime_lock,
     debate_lock_key,
@@ -136,6 +138,125 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert any(event["type"] == "debate_phase_change" for event in pushed_events)
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
     assert result["result"]["judge_summary"] != result["result"]["replay"][-1]["quote"]
+
+
+def test_mark_debate_error_does_not_overwrite_completed_result():
+    debate = create_debate_record("Should a completed debate stay completed?")
+    with Session(get_engine()) as session:
+        row = session.get(debate_module.Debate, debate.id)
+        row.status = debate_module.DebateStatus.DONE
+        row.winner = "proposition"
+        row.verdict_tone = "order"
+        row.judge_summary = "The proposition carried the burden."
+        row.breakdown_json = {"dimensions": {"coherence": {"proposition": 1, "opposition": 0}}}
+        session.add(row)
+        session.commit()
+
+    debate_module._mark_debate_error(debate.id)
+
+    with Session(get_engine()) as session:
+        row = session.get(debate_module.Debate, debate.id)
+        assert row.status == debate_module.DebateStatus.DONE
+        assert row.winner == "proposition"
+        assert row.judge_summary == "The proposition carried the burden."
+        assert row.breakdown_json == {
+            "dimensions": {"coherence": {"proposition": 1, "opposition": 0}}
+        }
+
+
+def test_debate_runtime_lock_heartbeat_retains_live_lease_on_transient_busy(monkeypatch):
+    lease = RuntimeLockLease(
+        lock_key="debate:busy",
+        owner_id="owner",
+        db_path="/tmp/runtime-lock.db",
+        expires_at=time.time() + 30,
+    )
+    lease_holder = [lease]
+    attempted = threading.Event()
+
+    def _busy_refresh(_lease, *, lease_seconds):
+        attempted.set()
+        raise RuntimeLockBusyError("database is locked")
+
+    monkeypatch.setattr(debate_module, "refresh_runtime_lock", _busy_refresh)
+
+    stop_event, thread = debate_module._start_runtime_lock_heartbeat(
+        lease_holder,
+        lease_seconds=0.02,
+        lock_label="Debate test",
+    )
+    try:
+        assert attempted.wait(timeout=0.2)
+        assert lease_holder[0] is lease
+    finally:
+        debate_module._stop_runtime_lock_heartbeat(stop_event, thread)
+
+
+def test_reconcile_orphaned_live_debates_marks_live_without_runtime_lock():
+    debate = create_debate_record("Should startup mark orphaned live debates?")
+
+    marked = debate_module.reconcile_orphaned_live_debates(get_engine())
+
+    assert marked == 1
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert snapshot["status"] == "error"
+
+
+def test_reconcile_orphaned_live_debates_preserves_active_runtime_lock():
+    debate = create_debate_record("Should startup preserve actively locked debates?")
+    lease = acquire_runtime_lock(debate_lock_key(debate.id), lease_seconds=60)
+    assert lease is not None
+    try:
+        marked = debate_module.reconcile_orphaned_live_debates(get_engine())
+        assert marked == 0
+        snapshot = load_debate_snapshot(debate.id)
+        assert snapshot is not None
+        assert snapshot["status"] == "live"
+    finally:
+        release_runtime_lock(lease)
+
+
+def test_load_debate_snapshot_marks_stale_live_without_runtime_lock_error():
+    debate = create_debate_record("Should GET self-heal stale live debates?")
+    with Session(get_engine()) as session:
+        row = session.get(debate_module.Debate, debate.id)
+        row.updated_at = debate_module._now() - timedelta(seconds=10)
+        session.add(row)
+        session.commit()
+
+    snapshot = load_debate_snapshot(debate.id)
+
+    assert snapshot is not None
+    assert snapshot["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_marks_live_error_on_cancelled_error(monkeypatch):
+    debate = create_debate_record("Should cancellation leave a live debate?")
+    pushed_events: list[dict] = []
+
+    async def _cancelled_turn(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _cancelled_turn)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_debate_background(debate.id, ws_callback=_push)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert snapshot["status"] == "error"
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -673,6 +794,92 @@ def test_create_debate_record_keeps_scene_compatible_with_existing_debate_assets
         "debate_arena_judicial",
         "debate_arena_civic",
     }
+
+
+def test_judge_analysis_rejects_wrong_quote_attribution():
+    debate = create_debate_record("引用归属错了时裁判词应该降级吗？")
+    pro_turn = DebateTurn(
+        debate_id=debate.id,
+        sequence=5,
+        phase=DebatePhase.CROSSFIRE,
+        speaker_side=DebateSide.PROPOSITION,
+        speaker_name="云澈",
+        content="关键不是扔网上不管，而是把责任链留在现场。",
+    )
+    opp_turn = DebateTurn(
+        debate_id=debate.id,
+        sequence=8,
+        phase=DebatePhase.REBUTTAL,
+        speaker_side=DebateSide.OPPOSITION,
+        speaker_name="岚止",
+        content="真正的问题是执行成本会拖垮整套制度。",
+    )
+    fallback = {
+        "summary": "fallback summary",
+        "winner_reason": "fallback winner",
+        "loser_gap": "fallback gap",
+        "swing_factor": "fallback swing",
+        "closing_note": "fallback closing",
+        "dimension_rationales": {
+            "coherence": "fallback coherence",
+            "evidence": "fallback evidence",
+            "adaptability": "fallback adaptability",
+            "impact": "fallback impact",
+        },
+        "counterplay_explanation": "",
+        "adjudication": None,
+    }
+
+    result = debate_module._coerce_judge_analysis_payload(
+        {
+            "summary": "反方那句「不是扔网上不管」决定了全场。",
+            "winner_reason": "Winner reason",
+            "loser_gap": "Loser gap",
+            "swing_factor": "反方凭「不是扔网上不管」完成转折。",
+            "closing_note": "Closing",
+            "dimension_rationales": {},
+            "counterplay_explanation": "",
+        },
+        fallback,
+        language="zh",
+        debate=debate,
+        turns=[pro_turn, opp_turn],
+    )
+
+    assert result["summary"] == "fallback summary"
+    assert result["swing_factor"] == "fallback swing"
+    assert result["winner_reason"] == "Winner reason"
+
+
+def test_judge_quote_attribution_short_aliases_require_word_boundaries():
+    debate = create_debate_record("Should short side aliases match only as words?")
+    with Session(get_engine()) as session:
+        stored = session.get(debate_module.Debate, debate.id)
+        assert stored is not None
+        stored.proposition_name = "Pro Team"
+        stored.opposition_name = "Opp Team"
+        session.add(stored)
+        session.commit()
+        session.refresh(stored)
+
+        pro_turn = DebateTurn(
+            debate_id=stored.id,
+            sequence=1,
+            phase=DebatePhase.OPENING,
+            speaker_side=DebateSide.PROPOSITION,
+            speaker_name="Pro Team",
+            content="Publish the audit trail before the vote.",
+        )
+
+    assert debate_module._claimed_side_for_text(
+        "The opportunity is appropriate for quoting evidence.",
+        stored,
+    ) is None
+    assert debate_module._has_quote_attribution_conflict(
+        'The opportunity around "Publish the audit trail" mattered.',
+        debate=stored,
+        turns=[pro_turn],
+    ) is False
 
 
 @pytest.mark.asyncio

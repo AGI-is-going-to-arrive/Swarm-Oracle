@@ -198,7 +198,7 @@
       <h2 class="section__title" id="video-title" data-zh="放映开始" data-en="The screening begins">放映开始</h2>
     </div>
     <figure class="theater reveal" id="theater">
-      <video id="introVideo" class="theater__video" controls preload="metadata" playsinline poster="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-zh="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-en="assets/swarmoracle-promo-v1.en.hook.png" data-src-zh="assets/video/swarmoracle-intro-zh-1080p.mp4" data-src-en="assets/video/swarmoracle-intro-en-1080p.mp4" width="1600" height="900" aria-label="SwarmOracle 介绍视频" data-aria-zh="SwarmOracle 介绍视频" data-aria-en="SwarmOracle intro video">
+      <video id="introVideo" class="theater__video" controls preload="metadata" playsinline poster="assets/swarmoracle-intro-zh.poster.jpg" data-poster-zh="assets/swarmoracle-intro-zh.poster.jpg" data-poster-en="assets/swarmoracle-intro-en.poster.jpg" data-src-zh="assets/video/swarmoracle-intro-zh-1080p.mp4" data-src-en="assets/video/swarmoracle-intro-en-1080p.mp4" width="1600" height="900" aria-label="SwarmOracle 介绍视频" data-aria-zh="SwarmOracle 介绍视频" data-aria-en="SwarmOracle intro video">
         <source src="assets/video/swarmoracle-intro-zh-1080p.mp4" type="video/mp4">
         <!-- 字幕已烧录进视频画面，故不挂 VTT <track>，避免与硬字幕重复叠加成双层字幕。VTT 文件保留在 assets/video/，留待将来改用无烧录字幕的干净视频时再启用。 -->
         <span data-zh="你的浏览器不支持嵌入视频。" data-en="Your browser does not support embedded video.">你的浏览器不支持嵌入视频。</span>
@@ -263,7 +263,7 @@
       <p class="kicker" data-zh="快速开始" data-en="Quick start">快速开始</p>
       <h2 class="section__title" id="qs-title" data-zh="本地运行步骤" data-en="Run it locally">本地运行步骤</h2>
     </div>
-    <p class="qs__declare reveal" data-zh="以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；sk-… 仅占位，请勿在页面填入真实密钥。" data-en="These are local run steps; this page is static and connects to no backend. Commands are verbatim; sk-… is a placeholder only.">以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；sk-… 仅占位，请勿在页面填入真实密钥。</p>
+    <p class="qs__declare reveal" data-zh="以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；模板里的 key 只是占位，请勿在页面填入真实密钥。" data-en="These are local run steps; this page is static and connects to no backend. Commands are verbatim; template keys are placeholders only.">以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；模板里的 key 只是占位，请勿在页面填入真实密钥。</p>
     <div class="reveal">
       <div class="qs__tabs" role="tablist">
         <button type="button" class="qs__tab on" id="tab-docker" data-tab="docker" role="tab" aria-selected="true" aria-controls="panel-docker">Docker</button>
@@ -274,7 +274,7 @@
           <div class="code__head"><span class="code__title">docker-compose</span><button type="button" class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">docker compose</span> up --build -d</code></pre>
         </div>
-        <p class="qs__note" data-zh="先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令；也可启动后到 /admin/setup 测试连接并保存模型 profile。带 key 的 profile 可在首页、辩论入口和结果页会客厅里选择。代理转发与原生搜索的细节见 README。" data-en="First edit .env.docker with LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME, then run the command; after startup you can also test the connection and save a model profile at /admin/setup. Profiles with a key can be selected from the home page, debate entry, and result-page chambers. Proxy and native-search details are in the README.">先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令；也可启动后到 /admin/setup 测试连接并保存模型 profile。带 key 的 profile 可在首页、辩论入口和结果页会客厅里选择。代理转发与原生搜索的细节见 README。</p>
+        <p class="qs__note" data-zh="先把 .env.docker.example 复制成 .env.docker；有本地 LLM 网关时可沿用默认地址，没有网关时填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME。也可启动后到 /admin/setup 测试连接并保存模型 profile。带 key 的 profile 可在首页、辩论入口和结果页会客厅里选择。代理转发与原生搜索的细节见 README。" data-en="Copy .env.docker.example to .env.docker first. Keep the default endpoint if you have a local LLM gateway; otherwise fill LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME. After startup you can also test the connection and save a model profile at /admin/setup. Profiles with a key can be selected from the home page, debate entry, and result-page chambers. Proxy and native-search details are in the README.">先把 .env.docker.example 复制成 .env.docker；有本地 LLM 网关时可沿用默认地址，没有网关时填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME。也可启动后到 /admin/setup 测试连接并保存模型 profile。带 key 的 profile 可在首页、辩论入口和结果页会客厅里选择。代理转发与原生搜索的细节见 README。</p>
       </div>
       <div class="qs__panel" id="panel-local" data-panel="local" role="tabpanel" aria-labelledby="tab-local" hidden>
         <div class="code">
@@ -290,10 +290,10 @@ uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload"><span data-zh="复�
 <span class="cmd">uvicorn</span> app.main:app --host 127.0.0.1 --port 18927 --reload</code></pre>
         </div>
         <div class="code" style="margin-top: 1rem;">
-          <div class="code__head"><span class="code__title">Frontend</span><button type="button" class="copy" data-copy="cd ../frontend
+          <div class="code__head"><span class="code__title">Frontend</span><button type="button" class="copy" data-copy="cd frontend
 npm install
 npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
-          <pre><code><span class="cmd">cd</span> ../frontend
+          <pre><code><span class="cmd">cd</span> frontend
 <span class="cmd">npm</span> install
 <span class="cmd">npm</span> run dev</code></pre>
         </div>
@@ -306,9 +306,9 @@ npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
         </div>
       </div>
       <div class="qs__config">
-        <p class="kicker qs__config-title" data-zh="必填配置（占位，非真实密钥）" data-en="Required config (placeholders, not real keys)">必填配置（占位，非真实密钥）</p>
-        <div class="qs__config-row"><code>LLM_RESPONSES_URL</code><span>https://api.openai.com/v1</span></div>
-        <div class="qs__config-row"><code>LLM_API_KEY</code><span>sk-…</span></div>
+        <p class="kicker qs__config-title" data-zh="常用配置（占位，非真实密钥）" data-en="Common config (placeholders, not real keys)">常用配置（占位，非真实密钥）</p>
+        <div class="qs__config-row"><code>LLM_RESPONSES_URL</code><span>http://127.0.0.1:8317/v1</span></div>
+        <div class="qs__config-row"><code>LLM_API_KEY</code><span>your-api-key-here</span></div>
         <div class="qs__config-row"><code>LLM_MODEL_NAME</code><span data-zh="示例：gpt-5.4-mini；其它服务请填实际模型 ID" data-en="e.g. gpt-5.4-mini; use the provider's actual model ID for other services">示例：gpt-5.4-mini；其它服务请填实际模型 ID</span></div>
       </div>
     </div>

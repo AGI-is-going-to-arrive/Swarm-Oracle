@@ -245,8 +245,8 @@ Entry: `/result/:id` -> "Social Feed"
 
 ### F47 Document Seed
 **Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The home page lets you upload a PDF, TXT, or Markdown file; the app distills it into background context for the simulation, so agents build on your material instead of a one-line question. Unsupported file types are rejected with a message telling you to use PDF, TXT, or Markdown.
-Entry: `/` home -> upload a document as background
+Entry: `/` home -> `Advanced Settings` -> `Document Seed Context` (drag in or pick a PDF / TXT / Markdown file)
 
 ### F48 Local Packs
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs" on the home page bundle preset scenarios (bilingual, with prompts, stakes, and materials). The picker now filters with genre segments and a single search box, with tag text folded into search; the current result auto-selects and previews on the right, while active filters show the result count and a clear action. One template click fills the question box with the pack's question and suggested settings, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
-Entry: `/` home -> Local Packs -> pick a pack / Manage all
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** "Local Packs", inside the collapsed "Advanced Settings" section on the home page, bundles preset scenarios (bilingual, with prompts, stakes, and materials). The picker now filters with genre segments and a single search box, with tag text folded into search; the current result auto-selects and previews on the right, while active filters show the result count and a clear action. One template click fills the question box with the pack's question and suggested settings, which is handy for getting started or for classroom demos. Packs live in the repo's `packs/` directory, so you can add or remove your own.
+Entry: `/` home -> Advanced Settings -> Local Packs -> pick a pack / Use This Template

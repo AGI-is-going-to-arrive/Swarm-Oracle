@@ -1125,6 +1125,7 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--bg-base);
+  -webkit-user-select: none;
   user-select: none;
 }
 .report-doc .report-console__summary::-webkit-details-marker {

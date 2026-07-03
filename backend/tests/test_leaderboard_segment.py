@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from app.config import settings
 from app.main import app
 from app.models import (
     Agent,
@@ -214,6 +215,18 @@ def test_leaderboard_no_filter_is_backwards_compatible(client):
     if isinstance(payload, list) and payload:
         for row in payload:
             assert "segment_metadata" not in row
+
+
+def test_leaderboard_respects_you_vs_oracle_feature_gate(client, monkeypatch):
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", False, raising=False)
+
+    plain = client.get("/api/leaderboard")
+    segmented = client.get("/api/leaderboard?scenario_type=debate")
+
+    assert plain.status_code == 404
+    assert plain.json()["detail"]["code"] == "FEATURE_DISABLED"
+    assert segmented.status_code == 404
+    assert segmented.json()["detail"]["code"] == "FEATURE_DISABLED"
 
 
 def test_leaderboard_scenario_type_filter_returns_only_matching_users(client):

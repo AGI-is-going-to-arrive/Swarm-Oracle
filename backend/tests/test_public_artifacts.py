@@ -342,6 +342,22 @@ def test_sanitizer_whitelist_excludes_each_forbidden_field() -> None:
     assert "private_memory" not in payload
 
 
+def test_explicit_language_names_override_question_heuristic() -> None:
+    english_question_chinese_artifact = build_public_artifact_from_mapping({
+        **_dirty_mapping(),
+        "question": "Will the compact hold?",
+        "language": "Chinese",
+    })
+    chinese_question_english_artifact = build_public_artifact_from_mapping({
+        **_dirty_mapping(),
+        "question": "中文问题会不会误判？",
+        "language": "English",
+    })
+
+    assert english_question_chinese_artifact["language"] == "zh"
+    assert chinese_question_english_artifact["language"] == "en"
+
+
 def test_source_summary_keeps_domains_without_raw_urls_or_queries() -> None:
     artifact = build_public_artifact_from_mapping(_dirty_mapping())
     payload = _serialized(artifact)

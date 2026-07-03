@@ -154,9 +154,9 @@ def _clean_text(value: Any, *, max_chars: int) -> str:
 
 def _clean_language(value: Any, question: str) -> str:
     raw = _clean_text(value, max_chars=MAX_LANGUAGE_CHARS).lower()
-    if raw.startswith("zh"):
+    if raw.startswith("zh") or raw in {"chinese", "mandarin", "中文"}:
         return "zh"
-    if raw.startswith("en"):
+    if raw.startswith("en") or raw in {"english", "英文"}:
         return "en"
     if re.search(r"[\u3400-\u9fff]", question):
         return "zh"

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { getRunGroupDistribution } from '../../api/client';
+import { getApiErrorCode, getApiErrorStatus } from '../../lib/apiErrorMessage';
+import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import type { RunGroupDistributionResponse } from '../../types';
 import './MultiRunWaitingPanel.css';
 
@@ -31,9 +33,17 @@ const MAX_POLLS = 200;
 export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaitingPanelProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { reload: reloadCapabilities } = useCapabilityCheck('multi_run');
+  const reloadCapabilitiesRef = useRef(reloadCapabilities);
+  useEffect(() => {
+    reloadCapabilitiesRef.current = reloadCapabilities;
+  }, [reloadCapabilities]);
+
   const [data, setData] = useState<RunGroupDistributionResponse | null>(null);
   const [slow, setSlow] = useState(false);
   const [exhausted, setExhausted] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [featureDisabled, setFeatureDisabled] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const pollCountRef = useRef(0);
 
@@ -49,6 +59,8 @@ export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaiting
       if (active) {
         setSlow(false);
         setExhausted(false);
+        setNotFound(false);
+        setFeatureDisabled(false);
       }
     }, 0);
 
@@ -74,8 +86,24 @@ export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaiting
           // 达到轮询上限仍未收束：停止轮询并给出显式“仍在运行 / 可刷新”态，不再静默冻结。
           setExhausted(true);
         }
-      } catch {
+      } catch (err) {
         if (!active) return;
+        const code = getApiErrorCode(err);
+        const status = getApiErrorStatus(err);
+        if (code === 'FEATURE_DISABLED') {
+          // Feature genuinely turned off — refresh capabilities AND drop into a
+          // local terminal state so we never sit on the spinner if the parent
+          // capability state does not immediately flip us out of this panel.
+          setFeatureDisabled(true);
+          void reloadCapabilitiesRef.current?.();
+          return;
+        }
+        if (code === 'RUN_GROUP_NOT_FOUND' || status === 404) {
+          // The run group is gone (killed / expired). Stop polling and show a
+          // terminal not-found state instead of the "still running" exhausted hint.
+          setNotFound(true);
+          return;
+        }
         if (pollCountRef.current < MAX_POLLS) {
           timer = window.setTimeout(poll, POLL_BACKOFF_MS);
         } else {
@@ -203,11 +231,11 @@ export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaiting
         </div>
       )}
 
-      {slow && !exhausted && (
+      {slow && !exhausted && !featureDisabled && (
         <p className="multi-run-waiting__slow-hint">{t('multi_run.waiting_slow_hint')}</p>
       )}
 
-      {exhausted && (
+      {exhausted && !notFound && (
         <div className="multi-run-waiting__exhausted">
           <p className="multi-run-waiting__slow-hint">{t('multi_run.waiting_exhausted')}</p>
           <button
@@ -217,6 +245,25 @@ export function MultiRunWaitingPanel({ runGroupId, firstRunId }: MultiRunWaiting
           >
             {t('common.retry')}
           </button>
+        </div>
+      )}
+
+      {notFound && (
+        <div className="multi-run-waiting__exhausted" role="alert">
+          <p className="multi-run-waiting__slow-hint">{t('multi_run.waiting_not_found')}</p>
+          <button
+            type="button"
+            className="btn btn-ghost multi-run-waiting__retry"
+            onClick={() => setRetryNonce((n) => n + 1)}
+          >
+            {t('common.retry')}
+          </button>
+        </div>
+      )}
+
+      {featureDisabled && (
+        <div className="multi-run-waiting__exhausted" role="alert">
+          <p className="multi-run-waiting__slow-hint">{t('multi_run.feature_disabled')}</p>
         </div>
       )}
     </div>

@@ -34,6 +34,27 @@ def _is_chinese(language: str) -> bool:
     return language == "Chinese"
 
 
+def _positive_float_setting(name: str, default: float) -> float:
+    try:
+        value = float(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _narration_timeouts() -> tuple[float, float, float]:
+    request_timeout = _positive_float_setting(
+        "NARRATION_REQUEST_TIMEOUT_SECONDS",
+        _NARRATION_TIMEOUT_SECONDS,
+    )
+    total_timeout = _positive_float_setting(
+        "NARRATION_TOTAL_TIMEOUT_SECONDS",
+        max(request_timeout + 1.0, _NARRATION_TIMEOUT_SECONDS),
+    )
+    probe_timeout = _positive_float_setting("NARRATION_STREAM_PROBE_TIMEOUT_SECONDS", 8.0)
+    return request_timeout, max(total_timeout, request_timeout), probe_timeout
+
+
 def _build_narration_prompt(
     *,
     branch_title_block: str,
@@ -251,6 +272,7 @@ async def narrate_branch(
     )
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
+    request_timeout, total_timeout, probe_timeout = _narration_timeouts()
     try:
         # Pass-1: natural narrative text
         with llm_request_scope(purpose="scenario_narration"):
@@ -262,8 +284,9 @@ async def narrate_branch(
                     base_url=base_url,
                     temperature=temperature if temperature is not None else 0.8,
                     model=model,
+                    timeout=request_timeout,
                 ),
-                timeout=_NARRATION_TIMEOUT_SECONDS,
+                timeout=total_timeout,
             )
     except Exception as exc:
         logger.warning("Narration fallback for %s: %s", branch_title, exc)
@@ -326,8 +349,10 @@ async def narrate_branch(
                         base_url=base_url,
                         temperature=0.2,
                         model=model,
+                        timeout=request_timeout,
+                        probe_timeout=probe_timeout,
                     ),
-                    timeout=_NARRATION_TIMEOUT_SECONDS,
+                    timeout=total_timeout,
                 )
             result = _normalize_narration_result(raw_result)
             if not result.get("story"):

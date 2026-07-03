@@ -70,6 +70,19 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 - sweep is best-effort; never block startup
         logging.getLogger(__name__).exception("Startup orphan sweep failed (non-fatal)")
     try:
+        from app.models.database import get_engine
+        from app.services.debate import reconcile_orphaned_live_debates
+
+        orphaned_debates = reconcile_orphaned_live_debates(get_engine())
+        logging.getLogger(__name__).info(
+            "Startup debate orphan sweep: %d stale debate(s) marked ERROR",
+            orphaned_debates,
+        )
+    except Exception:  # noqa: BLE001 - sweep is best-effort; never block startup
+        logging.getLogger(__name__).exception(
+            "Startup debate orphan sweep failed (non-fatal)"
+        )
+    try:
         from app.services.runtime_lock import reconcile_orphaned_report_locks
 
         cleared_report_locks = reconcile_orphaned_report_locks()

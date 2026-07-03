@@ -18,6 +18,16 @@ const streamingAriaLiveMockState = vi.hoisted(() => ({
   useStreamingAriaLiveMock: vi.fn(),
   realUseStreamingAriaLive: null as null | ((...args: unknown[]) => unknown),
 }));
+vi.mock('../../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    loading: false,
+    enabled: true,
+    capabilities: { agent_conversation: { enabled: true } },
+    error: null,
+    reload: vi.fn(),
+  }),
+}));
+
 const historyPickerMockState = vi.hoisted(() => ({
   detail: null as ConversationDetail | null,
 }));

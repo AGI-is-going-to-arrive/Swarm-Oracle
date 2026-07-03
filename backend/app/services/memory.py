@@ -200,8 +200,8 @@ def _memory_copy(language: str) -> dict[str, str]:
             "roleplay_intro": "你是{name}。你正坐在一场关于未来走向的讨论桌前，旁边坐着其他几个人，每个人都在为自己关心的事情说话。",  # noqa: E501
             "crowd_instruction_title": "轮到你开口了。",
             "full_instruction_title": "轮到你开口了。",
-            "crowd_instructions": "最高优先级：每次发言都要绕回上面的推演核心议题，不要只对气氛表态。用这个人自己的说话节奏和习惯说一两句就好——可以附议、打断、反问、冷笑，也可以插一句具体的事，但别端着架子写小作文。提例子时，只引用本场核心问题里的人、事件、地点、物件、风险或上一轮刚出现的具体点，不要搬固定例子；接上一轮时只接具体观点，别泛泛续气氛。禁止使用这类公文腔和万能套话：「总的来说」「综上所述」「值得注意的是」「让我们来看看」「不得不说」「首先...其次...最后」「从某种角度来说」「这背后的机制是」「执行后果」「责任链」「整体来看」「长期来看」「多方协同」；也禁止空心口语套话：「钉死了」「稳稳站住」「板上钉钉」「铁了心」「妥妥的」「稳了」「跑不了」以及英文同类 “locked in”, “rock-solid”, “done deal”, “dead certain”, “for sure”, “safe bet”, “can't miss”。这里只禁空心套话，不禁具体、带信息量的口语。别开口就给结论。如果你感觉到讨论里冒出来一个真正会让局面分裂的关键分歧（不是普通的意见不合），就在回复最后单独写一行 [DIVERGE: 用一句话说清楚这个分裂点是什么]。{intervention_instruction}",  # noqa: E501
-            "full_instructions": "最高优先级：每次发言都要绕回上面的推演核心议题；不要只表态、抒情或离题找例子。按这个人的说话节奏和习惯说两到四句——他会先抓什么细节、会用什么参照系、会避开什么说法，都要听得出来。说具体的事：提例子时，只引用本场核心问题里的人、事件、地点、物件、风险或上一轮刚出现的具体观点；不要搬固定例子，也不要讲抽象大道理。接上一轮时，只处理具体观点，并说明你是接住、反驳还是改写它；不要把上一轮当成泛泛气氛。可以附议、反驳、追问，或者把话题拐到别人没想到但仍贴着核心问题的角度上去。禁止使用这类公文腔和万能套话：「总的来说」「综上所述」「值得注意的是」「让我们来看看」「不得不说」「首先...其次...最后」「从某种角度来说」「这背后的机制是」「执行后果」「责任链」「整体来看」「长期来看」「多方协同」；也禁止空心口语套话：「钉死了」「稳稳站住」「板上钉钉」「铁了心」「妥妥的」「稳了」「跑不了」以及英文同类 “locked in”, “rock-solid”, “done deal”, “dead certain”, “for sure”, “safe bet”, “can't miss”。这里只禁空心套话，不禁具体、带信息量的口语。如果你真的察觉到这场讨论里出现了一个会让历史分岔的关键分裂点（不是温和的分歧，是那种「接下来走哪条路完全取决于这一点」的事），就在最后单独写一行 [DIVERGE: 这个分裂点的具体描述]。{intervention_instruction}",  # noqa: E501
+            "crowd_instructions": "最高优先级：每次发言都要绕回上面的推演核心议题，不要只对气氛表态。用这个人自己的说话节奏和习惯说一两句就好——可以附议、打断、反问、冷笑，也可以插一句具体的事，但别端着架子写小作文。提例子时，只引用本场核心问题里的人、事件、地点、物件、风险或上一轮刚出现的具体点，不要搬固定例子；回应上一轮时只处理具体观点，可选择反驳、延伸、质疑、换角度或短引，别泛泛续气氛。禁止套用高频模板：「我接住」「再往前推一步」「不是X而是Y」「不是 X 而是 Y」。禁止使用这类公文腔和万能套话：「总的来说」「综上所述」「值得注意的是」「让我们来看看」「不得不说」「首先...其次...最后」「从某种角度来说」「这背后的机制是」「执行后果」「责任链」「整体来看」「长期来看」「多方协同」；也禁止空心口语套话：「钉死了」「稳稳站住」「板上钉钉」「铁了心」「妥妥的」「稳了」「跑不了」以及英文同类 “locked in”, “rock-solid”, “done deal”, “dead certain”, “for sure”, “safe bet”, “can't miss”。这里只禁空心套话，不禁具体、带信息量的口语。别开口就给结论。如果你感觉到讨论里冒出来一个真正会让局面分裂的关键分歧（不是普通的意见不合），就在回复最后单独写一行 [DIVERGE: 用一句话说清楚这个分裂点是什么]。{intervention_instruction}",  # noqa: E501
+            "full_instructions": "最高优先级：每次发言都要绕回上面的推演核心议题；不要只表态、抒情或离题找例子。按这个人的说话节奏和习惯说两到四句——他会先抓什么细节、会用什么参照系、会避开什么说法，都要听得出来。说具体的事：提例子时，只引用本场核心问题里的人、事件、地点、物件、风险或上一轮刚出现的具体观点；不要搬固定例子，也不要讲抽象大道理。回应上一轮时，只处理具体观点，并说明你是在反驳、延伸、质疑、换角度还是短引；不要把上一轮当成泛泛气氛。可以附议、反驳、追问，或者把话题拐到别人没想到但仍贴着核心问题的角度上去。禁止套用高频模板：「我接住」「再往前推一步」「不是X而是Y」「不是 X 而是 Y」。禁止使用这类公文腔和万能套话：「总的来说」「综上所述」「值得注意的是」「让我们来看看」「不得不说」「首先...其次...最后」「从某种角度来说」「这背后的机制是」「执行后果」「责任链」「整体来看」「长期来看」「多方协同」；也禁止空心口语套话：「钉死了」「稳稳站住」「板上钉钉」「铁了心」「妥妥的」「稳了」「跑不了」以及英文同类 “locked in”, “rock-solid”, “done deal”, “dead certain”, “for sure”, “safe bet”, “can't miss”。这里只禁空心套话，不禁具体、带信息量的口语。如果你真的察觉到这场讨论里出现了一个会让历史分岔的关键分裂点（不是温和的分歧，是那种「接下来走哪条路完全取决于这一点」的事），就在最后单独写一行 [DIVERGE: 这个分裂点的具体描述]。{intervention_instruction}",  # noqa: E501
             "json_format": '回复格式 (严格 JSON):\n{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}',  # noqa: E501
             "intervention_note_crowd": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）",  # noqa: E501
             "intervention_note_full": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）",  # noqa: E501
@@ -615,17 +615,18 @@ def _format_reflection_anchor(agent: dict, language: str) -> str:
 def _format_response_first_constraint(language: str) -> str:
     if _is_chinese(language):
         return (
-            "硬约束：如果上文已有上一轮具体发言，第一句先引用并回应上一轮一个具体观点，"
-            "并把它扣回上面的推演核心议题：点名这位发言者，短引原话或观点，"
-            "再说明你如何承接、反驳或改写；"
-            "没有可引用原话时，先回应原始问题或当前世界线锚点。"
+            "硬约束：如果上文已有上一轮具体发言，第一句要点名上一轮发言者或短引其一个具体观点，"
+            "并立刻扣回上面的推演核心议题；回应动作要开放：反驳、延伸、质疑、换角度或短引，"
+            "例如可以质疑、补充、追问某人的某点；"
+            "不要套用「我接住」「再往前推一步」「不是X而是Y」这类脚手架。"
         )
     return (
-        "Hard constraint: if the context contains a concrete prior-round point, "
-        "your first sentence must name that prior agent, quote the specific point, "
-        "and tie it back to the core simulation question before developing your own claim; "
-        "if there is no quotable prior line, respond first to the original question or "
-        "current worldline anchor."
+        "Hard constraint: if the context contains a concrete prior-round point, the first "
+        "sentence must name the prior speaker or briefly quote one concrete prior point, "
+        "then tie it back to the core simulation question. Keep the response move open: "
+        "for example, question, add to, or follow up on someone's specific point, reframe, "
+        "or briefly quote. Do not use scaffolding lines "
+        "like 'I will build on that', 'take it one step further', or 'not X but Y'."
     )
 
 

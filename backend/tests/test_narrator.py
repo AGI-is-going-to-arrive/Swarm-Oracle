@@ -45,6 +45,51 @@ class TestNarrateBranch:
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_narration_uses_configured_request_and_probe_timeouts(
+        self,
+        mock_extract,
+        mock_pass1,
+        monkeypatch,
+    ):
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "一个关于勇气的故事",
+            "insight": "勇气是成功的关键",
+            "key_moments": [],
+        }
+        monkeypatch.setattr(
+            narrator_module.settings,
+            "NARRATION_REQUEST_TIMEOUT_SECONDS",
+            11.0,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            narrator_module.settings,
+            "NARRATION_TOTAL_TIMEOUT_SECONDS",
+            13.0,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            narrator_module.settings,
+            "NARRATION_STREAM_PROBE_TIMEOUT_SECONDS",
+            2.0,
+            raising=False,
+        )
+
+        await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="A(角色1)",
+            raw_rounds="[R1 A]: 发言内容",
+        )
+
+        assert mock_pass1.call_args.kwargs["timeout"] == 11.0
+        assert mock_extract.call_args.kwargs["timeout"] == 11.0
+        assert mock_extract.call_args.kwargs["probe_timeout"] == 2.0
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_question_answer_is_returned(self, mock_extract, mock_pass1):
         """Structured question_answer must survive the narrator boundary."""
         mock_pass1.return_value = _FAKE_PASS1_TEXT

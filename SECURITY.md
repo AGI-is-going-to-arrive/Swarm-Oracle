@@ -1,6 +1,16 @@
 # Security Notes
 
-This document covers the LLM SSRF and BYOK boundaries that matter for operating SwarmOracle.
+## Reporting a Vulnerability / 报告漏洞
+
+Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests. Use GitHub's private vulnerability reporting instead (this repository's **Security** tab -> **Report a vulnerability**) so the report stays private while a fix is prepared. You can expect an acknowledgement within 7 days.
+
+请勿通过公开 issue、discussion 或 PR 披露安全漏洞。请使用 GitHub 私密漏洞报告（仓库 **Security** 标签页 -> **Report a vulnerability**），以便在修复完成前保持报告私密。我们会在 7 天内确认收到。
+
+## Scope of This Document / 本文件范围
+
+The rest of this document covers the LLM SSRF and BYOK trust boundaries that matter for operating SwarmOracle. It is deployment guidance for operators, not an exhaustive description of the project's security properties.
+
+以下内容说明与运维部署相关的 LLM SSRF 与 BYOK 信任边界，供部署者参考，并非本项目安全属性的完整清单。
 
 ## LLM Endpoint Trust Boundaries
 

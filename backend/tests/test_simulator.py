@@ -29,7 +29,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.models.model_profile import ModelProfile
 from app.services.blackboard import Blackboard
-from app.services.llm_client import llm_request_scope
+from app.services.llm_client import LLMError, llm_request_scope
 from app.services.replay import write_checkpoint
 from app.services.simulator import (
     _agent_to_dict,
@@ -55,6 +55,7 @@ from app.services.simulator import (
     _parse_result_verdict_json,
     _persist_native_citations,
     _persist_result_quality_verdict,
+    _persist_result_quality_verdict_failure,
     _pick_theater_ending_payload,
     _resolve_hierarchical_agent_sets,
     _result_branch_summaries,
@@ -168,6 +169,187 @@ async def test_gather_agent_messages_times_out_hung_turn_llm(monkeypatch):
         saved = session.exec(select(AgentMessage)).all()
         assert len(saved) == 1
         assert saved[0].content == "（SlowAgent 沉默了）"
+
+
+@pytest.mark.asyncio
+async def test_gather_agent_messages_aborts_repeated_fatal_llm_failures(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Fatal branch")
+    round_id = _create_round(engine, branch_id, 1)
+    first_id = _make_agent(engine, scenario_id, name="Alpha", tier=AgentTier.CROWD)
+    second_id = _make_agent(engine, scenario_id, name="Beta", tier=AgentTier.CROWD)
+    agents = [_load_agent_dict(engine, first_id), _load_agent_dict(engine, second_id)]
+    events: list[dict] = []
+
+    async def fatal_llm_call(*_args, **_kwargs):
+        raise LLMError(code="LLM_AUTH_FAILED")
+
+    async def push(event: dict) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(simulator_module, "llm_call", fatal_llm_call)
+    monkeypatch.setattr(simulator_module, "get_runtime_parallelism_limit", lambda: 2)
+
+    with pytest.raises(simulator_module.AgentTurnBatchFailure):
+        await simulator_module._gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            agents,
+            "",
+            "Will a provider outage be visible?",
+            push=push,
+            language="English",
+        )
+
+    assert [event["type"] for event in events].count("agent_speak_start") == 2
+    degraded = [event for event in events if event["type"] == "simulation_degraded"]
+    assert degraded
+    assert degraded[0]["data"]["code"] == "LLM_AUTH_FAILED"
+    assert degraded[0]["data"]["failed_agents"] == ["Alpha", "Beta"]
+    assert all(event["type"] != "agent_speak" for event in events)
+    with Session(engine) as session:
+        assert session.exec(select(AgentMessage)).all() == []
+
+
+@pytest.mark.asyncio
+async def test_gather_agent_messages_keeps_partial_success_when_one_agent_fatal(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Mixed branch")
+    round_id = _create_round(engine, branch_id, 1)
+    first_id = _make_agent(engine, scenario_id, name="Alpha", tier=AgentTier.CROWD)
+    second_id = _make_agent(engine, scenario_id, name="Beta", tier=AgentTier.CROWD)
+    agents = [_load_agent_dict(engine, first_id), _load_agent_dict(engine, second_id)]
+    events: list[dict] = []
+
+    async def mixed_llm_call(prompt: str, *_args, **_kwargs):
+        if "Beta" in prompt:
+            raise LLMError(code="LLM_AUTH_FAILED")
+        return "Alpha carries the round with a durable answer."
+
+    async def push(event: dict) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(simulator_module, "llm_call", mixed_llm_call)
+    monkeypatch.setattr(simulator_module, "get_runtime_parallelism_limit", lambda: 2)
+
+    messages = await simulator_module._gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        agents,
+        "",
+        "Should partial provider failures abort the whole round?",
+        push=push,
+        language="English",
+    )
+
+    assert [msg["agent_name"] for msg in messages] == ["Alpha", "Beta"]
+    assert messages[0]["content"] == "Alpha carries the round with a durable answer."
+    assert messages[1]["content"] == "(Beta stays silent)"
+    degraded = [event for event in events if event["type"] == "simulation_degraded"]
+    assert degraded
+    assert degraded[0]["data"]["code"] == "LLM_AUTH_FAILED"
+    assert degraded[0]["data"]["failed_agents"] == ["Beta"]
+    assert degraded[0]["data"]["failed_count"] == 1
+    assert degraded[0]["data"]["total"] == 2
+
+    with Session(engine) as session:
+        saved = session.exec(select(AgentMessage)).all()
+        assert [row.content for row in saved] == [
+            "Alpha carries the round with a durable answer.",
+            "(Beta stays silent)",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_gather_agent_messages_aborts_when_all_agents_return_llm_empty(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Empty branch")
+    round_id = _create_round(engine, branch_id, 1)
+    first_id = _make_agent(engine, scenario_id, name="Alpha", tier=AgentTier.CROWD)
+    second_id = _make_agent(engine, scenario_id, name="Beta", tier=AgentTier.CROWD)
+    agents = [_load_agent_dict(engine, first_id), _load_agent_dict(engine, second_id)]
+    events: list[dict] = []
+
+    async def empty_llm_call(*_args, **_kwargs):
+        raise LLMError("Empty non-stream content", code="LLM_EMPTY")
+
+    async def push(event: dict) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(simulator_module, "llm_call", empty_llm_call)
+    monkeypatch.setattr(simulator_module, "get_runtime_parallelism_limit", lambda: 2)
+
+    with pytest.raises(simulator_module.AgentTurnBatchFailure) as exc_info:
+        await simulator_module._gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            agents,
+            "",
+            "Will all-empty provider output degrade the round?",
+            push=push,
+            language="English",
+        )
+
+    assert exc_info.value.code == "LLM_EMPTY"
+    degraded = [event for event in events if event["type"] == "simulation_degraded"]
+    assert degraded
+    assert degraded[0]["data"]["code"] == "LLM_EMPTY"
+    assert degraded[0]["data"]["failed_agents"] == ["Alpha", "Beta"]
+    with Session(engine) as session:
+        assert session.exec(select(AgentMessage)).all() == []
+
+
+@pytest.mark.asyncio
+async def test_gather_agent_messages_cancels_siblings_on_unhandled_error(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Cancel branch")
+    round_id = _create_round(engine, branch_id, 1)
+    first_id = _make_agent(engine, scenario_id, name="Canceller", tier=AgentTier.CROWD)
+    second_id = _make_agent(engine, scenario_id, name="SlowPeer", tier=AgentTier.CROWD)
+    agents = [_load_agent_dict(engine, first_id), _load_agent_dict(engine, second_id)]
+    slow_started = asyncio.Event()
+    slow_cleaned_up = asyncio.Event()
+
+    async def llm_call_with_cancel(prompt: str, *_args, **_kwargs):
+        if "Canceller" in prompt:
+            await asyncio.wait_for(slow_started.wait(), timeout=0.2)
+            raise simulator_module.SimulationCancelled("cancelled")
+        slow_started.set()
+        try:
+            await asyncio.sleep(10)
+        finally:
+            slow_cleaned_up.set()
+
+    monkeypatch.setattr(simulator_module, "llm_call", llm_call_with_cancel)
+    monkeypatch.setattr(simulator_module, "get_runtime_parallelism_limit", lambda: 2)
+
+    with pytest.raises(simulator_module.SimulationCancelled):
+        await simulator_module._gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            agents,
+            "",
+            "Will cancellation clean up sibling work?",
+            language="English",
+        )
+
+    await asyncio.wait_for(slow_cleaned_up.wait(), timeout=0.2)
 
 
 @pytest.mark.asyncio
@@ -2725,7 +2907,10 @@ class TestGatherHierarchicalMessages:
             "app.services.simulator._gather_agent_messages",
             _fake_gather_agent_messages,
         )
-        monkeypatch.setattr("app.services.simulator._save_messages", lambda *_args, **_kwargs: ["worker-message-id"])
+        monkeypatch.setattr(
+            "app.services.simulator._save_messages",
+            lambda *_args, **_kwargs: ["worker-message-id"],
+        )
         monkeypatch.setattr("app.services.simulator.store_memory", lambda **_kwargs: None)
 
         await _gather_hierarchical_messages(
@@ -3996,6 +4181,45 @@ class TestResultVerdictInputs:
         assert "story_excerpt" in captured["prompt"]
         assert "branch-8-specific-detail" in captured["prompt"]
 
+    @pytest.mark.asyncio
+    async def test_generate_verdict_uses_configured_timeout_and_reports_failure(
+        self,
+        monkeypatch,
+    ):
+        captured: dict[str, float] = {}
+
+        async def _fake_llm_call(_prompt: str, **kwargs):
+            captured["timeout"] = kwargs["timeout"]
+            raise TimeoutError("provider was too slow")
+
+        monkeypatch.setattr(simulator_module, "llm_call", _fake_llm_call)
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "RESULT_VERDICT_REQUEST_TIMEOUT_SECONDS",
+            2.5,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            simulator_module.settings,
+            "RESULT_VERDICT_TOTAL_TIMEOUT_SECONDS",
+            3.5,
+            raising=False,
+        )
+
+        result = await _generate_verdict(
+            "Will the result verdict fail visibly?",
+            [{"title": "A", "insight": "B", "probability": 0.8, "story": "C"}],
+            "",
+            "English",
+        )
+
+        assert captured["timeout"] == 2.5
+        assert result == {
+            "_verdict_generation_failed": True,
+            "verdict_error_code": "LLM_TIMEOUT",
+            "verdict_missing_reason": "result verdict generation timed out",
+        }
+
     def test_result_branch_summaries_each_entry_has_story_excerpt_key(self):
         """Every branch summary must expose a `story_excerpt` key.
 
@@ -4200,6 +4424,33 @@ class TestSaveNarration:
             assert result_quality["question_answer"] == "供应链风险最高。"
             assert result_quality["branch_question_answers"][bid] == (
                 "这条线说明风险会先集中在供应链。"
+            )
+
+    def test_persist_verdict_failure_reason_preserves_existing_quality(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            scenario.parsed_context = {"result_quality": {"branch_question_answers": {"b1": "A"}}}
+            session.add(scenario)
+            session.commit()
+
+        _persist_result_quality_verdict_failure(
+            engine,
+            sid,
+            {
+                "verdict_error_code": "LLM_TIMEOUT",
+                "verdict_missing_reason": "result verdict generation timed out",
+            },
+        )
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            result_quality = scenario.parsed_context["result_quality"]
+            assert result_quality["branch_question_answers"] == {"b1": "A"}
+            assert result_quality["verdict_error_code"] == "LLM_TIMEOUT"
+            assert result_quality["verdict_missing_reason"] == (
+                "result verdict generation timed out"
             )
 
     def test_save_question_answer_tolerates_malformed_parsed_context(self):

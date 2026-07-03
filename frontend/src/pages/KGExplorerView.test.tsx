@@ -578,4 +578,18 @@ describe('KGExplorerView happy path', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(await screen.findByTestId('kg-explorer-g6-canvas')).toBeInTheDocument();
   });
+
+  it('shows a retryable localized error for non-feature-disabled 403 responses', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      json: async () => ({ detail: { code: 'KG_FORBIDDEN' } }),
+    } as Response);
+
+    renderAt();
+
+    expect(await screen.findByText('You do not have permission to view this knowledge graph.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('Knowledge graph view is turned off on this server. Ask the admin to enable it.')).toBeNull();
+  });
 });

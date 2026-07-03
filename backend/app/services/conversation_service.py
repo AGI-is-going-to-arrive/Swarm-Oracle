@@ -1707,35 +1707,44 @@ async def _stream_with_cancel_signal(
 
         next_chunk_task = asyncio.create_task(anext(iterator))
         cancel_wait_task = asyncio.create_task(cancel_event.wait())
-        done, _pending = await asyncio.wait(
-            {next_chunk_task, cancel_wait_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-
-        if cancel_wait_task in done:
-            if next_chunk_task not in done:
-                next_chunk_task.cancel()
-                try:
-                    await next_chunk_task
-                except (asyncio.CancelledError, StopAsyncIteration):
-                    pass
-            else:
-                try:
-                    next_chunk_task.result()
-                except StopAsyncIteration:
-                    pass
-            raise asyncio.CancelledError
-
-        cancel_wait_task.cancel()
         try:
-            await cancel_wait_task
-        except asyncio.CancelledError:
-            pass
+            done, _pending = await asyncio.wait(
+                {next_chunk_task, cancel_wait_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        try:
-            yield next_chunk_task.result()
-        except StopAsyncIteration:
-            return
+            if cancel_wait_task in done:
+                if next_chunk_task not in done:
+                    next_chunk_task.cancel()
+                    try:
+                        await next_chunk_task
+                    except (asyncio.CancelledError, StopAsyncIteration):
+                        pass
+                else:
+                    try:
+                        next_chunk_task.result()
+                    except StopAsyncIteration:
+                        pass
+                raise asyncio.CancelledError
+
+            cancel_wait_task.cancel()
+            try:
+                await cancel_wait_task
+            except asyncio.CancelledError:
+                pass
+
+            try:
+                yield next_chunk_task.result()
+            except StopAsyncIteration:
+                return
+        finally:
+            for task in (next_chunk_task, cancel_wait_task):
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, StopAsyncIteration):
+                        pass
 
 
 def _is_turn_cancel_requested(turn_id: str, cancel_event: asyncio.Event | None) -> bool:

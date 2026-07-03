@@ -179,6 +179,7 @@
   font-weight: 600;
   font-size: 0.9rem;
   background: rgba(64, 48, 40, 0.03);
+  -webkit-user-select: none;
   user-select: none;
 }
 

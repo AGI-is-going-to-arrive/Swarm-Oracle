@@ -33,6 +33,7 @@ export type RecoveryCode =
   | 'network'
   | 'ws_lost'
   | 'byok_invalid'
+  | 'feature_disabled'
   | 'server_error';
 
 export interface ConversationState {
@@ -146,6 +147,8 @@ export function mapBackendErrorCode(backendCode: string): RecoveryCode {
       return 'rate_limit';
     case 'BYOK_INVALID':
       return 'byok_invalid';
+    case 'FEATURE_DISABLED':
+      return 'feature_disabled';
     default:
       return 'server_error';
   }

@@ -1017,7 +1017,11 @@ def test_reduce_answer_branch_fallback_prefers_later_terminal_quality_match():
         )
         session.commit()
 
-    result = reduce(engine, "scenario-answer-branch-ranked", dominant_branch_id="branch-root-ranked")
+    result = reduce(
+        engine,
+        "scenario-answer-branch-ranked",
+        dominant_branch_id="branch-root-ranked",
+    )
 
     assert result.target_branch_id == "branch-high-answer"
     assert result.likelihood.probability == pytest.approx(0.62)

@@ -2084,6 +2084,7 @@
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
   padding: 6px 0;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -4139,6 +4140,7 @@
   font-size: 0.75rem;
   color: var(--text-secondary, #58554f);
   margin-left: 8px;
+  -webkit-user-select: none;
   user-select: none;
 }
 

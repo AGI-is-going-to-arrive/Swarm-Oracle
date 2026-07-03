@@ -10,8 +10,8 @@ client GETs it, so the UI stops spinning. A genuinely live run needs both an
 These tests use real SQLite test databases (conftest's autouse fixture).
 """
 
-from datetime import datetime, timedelta, timezone
 import time
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 

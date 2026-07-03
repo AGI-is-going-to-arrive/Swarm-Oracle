@@ -93,14 +93,15 @@ cd frontend; npm test
 - Include what changed, why it changed, and the exact commands you ran.
 - Do not commit secrets, local `.env` files, generated caches, or bulky media
   captures unless the PR explicitly owns those artifacts.
-- If another lane owns a file, leave it untouched and add a handoff note.
+- If your change touches files that an open PR is already modifying, coordinate
+  in that issue or PR first instead of editing the same files in parallel.
 
 - 分支名应说明目的，例如 `fix/snapshot-import-copy` 或
   `docs/release-surface`。
 - 每个 PR 只处理一个行为或文档目标。
 - PR 描述中写清楚改了什么、为什么改、实际跑过哪些命令。
 - 不要提交密钥、本地 `.env`、缓存产物或大体积录屏，除非该 PR 明确负责这些资产。
-- 如果某个文件属于其他 lane，请不要修改，改为留下 handoff。
+- 如果你的改动会碰到其他进行中 PR 正在修改的文件，请先在对应 issue / PR 里沟通，不要并行修改同一文件。
 
 ## Content Policy / 内容政策
 

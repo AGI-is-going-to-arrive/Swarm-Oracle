@@ -28,8 +28,8 @@
     {
       "id": "shared-time",
       "question": {
-        "zh": "如果城市先把标准时间作为公共服务，会怎样改变劳动、司法和商业信任？",
-        "en": "What if a city made standard time a public service before it became an industrial mandate?"
+        "zh": "如果城市在工厂与铁路强制统一时间之前，先把标准时间做成公共服务，会怎样改变劳动、司法和商业信任？",
+        "en": "What if a city made standard time a public service before it became an industrial mandate, changing labor, courts, and commercial trust?"
       },
       "context": {
         "zh": "钟楼报时免费开放，迟到罚款、学校作息和集市合约都想引用这套时间。",

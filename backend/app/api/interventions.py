@@ -234,6 +234,28 @@ def _scenario_runtime_language(scenario: Scenario) -> str:
     return "Chinese"
 
 
+def _runtime_language_is_chinese(language: str) -> bool:
+    normalized = str(language or "").strip().lower()
+    return normalized in {"zh", "zho", "chinese", "mandarin", "中文"} or not normalized
+
+
+def _retrospective_branch_title(round_number: int, language: str) -> str:
+    return (
+        f"回溯 R{round_number}"
+        if _runtime_language_is_chinese(language)
+        else f"Retrospective R{round_number}"
+    )
+
+
+def _retrospective_fork_reason(text: str, language: str) -> str:
+    prefix = (
+        "回溯干预"
+        if _runtime_language_is_chinese(language)
+        else "Retrospective intervention"
+    )
+    return f"{prefix}: {text.strip()[:50]}"
+
+
 def _build_pending_intervention_payload(
     req: InterveneRequest,
     branch: Branch,
@@ -726,14 +748,20 @@ async def intervene_retrospective(
                 req.branch_id,
                 clone_until,
                 replay_kind="retrospective",
-                title=f"Retrospective R{req.round_number}",
+                title=_retrospective_branch_title(
+                    req.round_number,
+                    _scenario_runtime_language(scenario),
+                ),
                 session=session,
                 replay_source_round=req.round_number,
             )
             new_branch = session.get(Branch, new_branch_id)
             if new_branch is None:  # pragma: no cover - defensive guard
                 raise RuntimeError("Retrospective branch clone did not return a branch")
-            new_branch.fork_reason = f"回溯干预: {req.text.strip()[:50]}"
+            new_branch.fork_reason = _retrospective_fork_reason(
+                req.text,
+                _scenario_runtime_language(scenario),
+            )
             session.add(new_branch)
 
             # Log the intervention

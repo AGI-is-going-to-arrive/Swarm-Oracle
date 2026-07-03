@@ -21,6 +21,8 @@
       "watch_first_run": "Watch the first worldline unfold",
       "waiting_slow_hint": "Multiple runs on a local model can take a few minutes. The simulation is running in the background — please wait.",
       "waiting_exhausted": "The simulation is still running in the background, but live updates have paused. Tap retry to resume fetching progress.",
+      "waiting_not_found": "This multi-run could not be found — it may have been removed or expired. Tap retry, or go back to start a new one.",
+      "feature_disabled": "Multi-worldline runs are not enabled right now.",
       "run_full_sim_badge": "Full simulation",
       "run_quick_verdict_badge": "Quick verdict",
       "watch_worldline": "Watch simulation",
@@ -118,6 +120,9 @@
       "copy_json_action": "Copy JSON",
       "refresh_action": "Refresh Packs",
       "diagnostics_title": "Pack Diagnostics",
+      "error_load_failed": "Failed to load local packs.",
+      "error_detail_failed": "Failed to load pack details.",
+      "error_refresh_failed": "Failed to refresh packs from disk.",
       "diagnostics_none": "No diagnostic issues found.",
       "diagnostics_explanation_label": "Explanation",
       "copysuccess_prompt": "Prompt copied to clipboard!",
@@ -406,6 +411,11 @@
         "tooltip_bets": "Bets",
         "tooltip_results": "Endings",
         "tooltip_no_events": "No extra events this round",
+        "summary_forks": "fork {{count}}",
+        "summary_cards": "cards {{count}}",
+        "summary_bets": "bets {{count}}",
+        "summary_results": "results {{count}}",
+        "jump_to_round": "Jump to replay round {{round}}",
         "elapsed": "Running {{time}}",
         "preparing_slow": "Still working — this round is taking longer than usual…",
         "simulating_slow": "Still processing — inference is taking longer than usual",
@@ -2931,7 +2941,8 @@
         "simulation_start_failed": "Failed to start the simulation.",
         "scenario_load_failed": "Failed to load the scenario.",
         "debate_start_failed": "Failed to start the debate.",
-        "debate_load_failed": "Failed to load the debate."
+        "debate_load_failed": "Failed to load the debate.",
+        "feature_disabled": "This feature is currently disabled."
       },
       "theme_hooks_aria": "Theme hooks",
       "daily_challenge_art_alt": "Daily challenge pixel illustration",
@@ -2941,6 +2952,8 @@
       "collapse": "Collapse",
       "expand": "Expand",
       "you": "You",
+      "language": "Language",
+      "context": "Context",
       "unknown_speaker": "Unknown"
     },
     "factions": {
@@ -3137,6 +3150,7 @@
         "network": "Network error. Check your connection and retry.",
         "ws_lost": "Lost real-time connection. Reconnecting…",
         "byok_invalid": "The provider rejected this request (401). Please check your API key; if you are using a proxy endpoint, it might also be a temporary upstream issue. Please wait and retry.",
+        "feature_disabled": "This feature is currently disabled.",
         "server_error": "Server error. Please retry in a moment.",
         "retry_cta": "Retry",
         "discard_cta": "Dismiss"
@@ -3224,6 +3238,8 @@
         "title": "Finance",
         "subtitle": "Market & macro indicators",
         "empty": "No finance signals matched this question.",
+        "rate_limited": "Finance rate limit reached. Retry shortly.",
+        "network_error": "Could not reach finance signals.",
         "failed": "Finance source search failed for this run.",
         "unsupported_provider": "The current search provider does not support finance signals.",
         "fallback_unconstrained": "Finance scope expanded — domain filtering unavailable for this provider.",
@@ -3234,6 +3250,8 @@
         "subtitle": "Peer-reviewed research",
         "empty": "No academic papers matched this question.",
         "citations": "{{count}} citations",
+        "rate_limited": "Academic rate limit reached. Retry shortly.",
+        "network_error": "Could not reach academic sources.",
         "failed": "Academic source search failed for this run.",
         "unsupported_provider": "The current search provider does not support academic sources.",
         "fallback_unconstrained": "Academic scope expanded — domain filtering unavailable for this provider.",
@@ -3243,11 +3261,14 @@
         "title": "Deep News",
         "subtitle": "Long-tail news signals",
         "empty": "No deep-news signals matched this question.",
+        "rate_limited": "Deep-news rate limit reached. Retry shortly.",
+        "network_error": "Could not reach deep-news sources.",
         "failed": "Deep-news source search failed for this run.",
         "unsupported_provider": "The current search provider does not support deep-news sources.",
         "fallback_unconstrained": "Deep-news scope expanded — domain filtering unavailable for this provider.",
         "search_skipped": "Deep-news lookup skipped for this run."
-      }
+      },
+      "loading": "Loading sources..."
     },
     "result_action": {
       "continue_conversation_cta": "Continue the conversation",
@@ -3311,7 +3332,8 @@
     },
     "timeline_galaxy": {
       "title": "Timeline Galaxy",
-      "canvas_aria": "Timeline galaxy visualization canvas"
+      "canvas_aria": "Timeline galaxy visualization canvas",
+      "load_error": "Unable to load the timeline right now. Please retry."
     },
     "replay": {
       "title": "Replay Trace",
@@ -3329,6 +3351,7 @@
       "feature_unavailable_title": "Replay availability could not be checked",
       "feature_unavailable_description": "Unable to confirm whether replay trace is available right now. Please retry.",
       "load_more": "Load more",
+      "load_more_error": "Could not load more replay entries. Please try again.",
       "filter_branch": "Filter by branch",
       "all_branches": "All branches",
       "no_more": "No more entries",
@@ -3456,11 +3479,11 @@
     },
     "onboarding": {
       "welcome_title": "Welcome to SwarmOracle",
-      "welcome_desc": "Pose any \"what if\" question and watch a swarm of AI agents debate, deliberate, and surface alternate worldlines. Here are the four core gameplay modes plus a peek at the advanced toolkit.",
+      "welcome_desc": "Pose any \"what if\" question and watch a swarm of AI agents debate, deliberate, and surface alternate worldlines. Here are the three core gameplay modes plus a peek at the advanced toolkit.",
       "roundtable_title": "Worldline Roundtable",
       "roundtable_desc": "Multiple representatives gather around a virtual table to debate divergent futures. Steer the conversation, switch panelists, and watch consensus form (or fracture) in real time.",
-      "chamber_title": "Oracle Chamber",
-      "chamber_desc": "Step into a private room with a single agent for a deep, focused dialogue. Ask follow-ups, anchor quotes, and excavate the reasoning behind a chosen worldline.",
+      "chamber_title": "Ending Chamber",
+      "chamber_desc": "Step into the Ending Chamber hosted by the Archivist: interview a specific character or have the current lineup respond one by one to excavate the reasoning behind your chosen worldline.",
       "one_move_title": "One Move Only",
       "one_move_desc": "Change just one decision and replay the simulation to feel the butterfly effect. Compare branches side by side to see how a single nudge ripples across timelines.",
       "advanced_title": "Advanced Toolkit",
@@ -3713,7 +3736,11 @@
       "sources_title": "Verified Sources",
       "agents_title": "Participating Agent Swarm",
       "transcript_title": "Branch Transcript Excerpts",
-      "disclaimer_public": "This page is a public de-identified snapshot and does not contain private configurations or credentials."
+      "disclaimer_public": "This page is a public de-identified snapshot and does not contain private configurations or credentials.",
+      "branch_predictions_aria": "Branch Predictions",
+      "round_aria": "Round {{round}}",
+      "agents_aria": "Participating Agents",
+      "sources_aria": "Sources Summary"
     },
     "public_artifacts": {
       "section_title": "Public Artifact Sharing (De-identified)",
