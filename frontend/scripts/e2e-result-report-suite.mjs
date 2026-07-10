@@ -22,16 +22,23 @@
  *   SWARM_E2E_MODE=live node scripts/e2e-result-report-suite.mjs full --url http://127.0.0.1:18928
  */
 import fs from "node:fs";
-import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, devices, firefox, webkit } from "playwright";
+import {
+  closePlaywrightBrowser,
+  closePlaywrightContext,
+  closePlaywrightPage,
+} from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const LIVE_MODE = process.env.SWARM_E2E_MODE === "live";
 
@@ -454,8 +461,7 @@ function storyWithReport(report) {
   };
 }
 
-// Local SSE server for report:generate.
-function startToolTraceSseServer() {
+function buildToolTraceSseBody() {
   const sectionComplete = {
     event: "report_section_complete",
     section_id: "timeline",
@@ -464,40 +470,16 @@ function startToolTraceSseServer() {
       { tool: "vector_lookup", query: "", item_count: 3, elapsed_ms: 56 },
     ],
   };
-  const openSockets = new Set();
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
-    });
-    res.write(`data: ${JSON.stringify({ event: "report_started", scenario_id: FIXTURE_SCENARIO_ID })}\n\n`);
-    res.write(`data: ${JSON.stringify(sectionComplete)}\n\n`);
-    // Intentionally hold open (safety close after 20s).
-    const holdTimer = setTimeout(() => { try { res.end(); } catch { /* noop */ } }, 20000);
-    res.on("close", () => clearTimeout(holdTimer));
-  });
-  server.on("connection", (sock) => {
-    openSockets.add(sock);
-    sock.on("close", () => openSockets.delete(sock));
-  });
-  const PORT = Number(process.env.SWARM_BACKEND_PORT || 18927);
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(PORT, "127.0.0.1", () => {
-      resolve({
-        port: PORT,
-        close: () => new Promise((done) => {
-          for (const s of openSockets) { try { s.destroy(); } catch { /* noop */ } }
-          server.close(() => done());
-        }),
-      });
-    });
-  });
+  const events = [
+    { event: "report_started", scenario_id: FIXTURE_SCENARIO_ID },
+    sectionComplete,
+    { event: "report_complete", scenario_id: FIXTURE_SCENARIO_ID },
+  ];
+  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}`;
 }
 
 async function installFixtures(page, state, report, options = {}) {
+  const generationState = { complete: false };
   const json = (body, status = 200) => ({
     status,
     contentType: "application/json",
@@ -515,8 +497,27 @@ async function installFixtures(page, state, report, options = {}) {
   await page.route((url) => url.pathname.startsWith("/api/"), (route) => {
     const parsed = new URL(route.request().url());
     if (parsed.pathname.endsWith("/report:generate")) {
-      if (options.passThroughReportGenerate) {
-        return route.continue();
+      if (options.fulfillReportGenerate) {
+        state.reportGenerateRequests.push({
+          method: route.request().method(),
+          path: parsed.pathname,
+        });
+        if (route.request().method() !== "POST") {
+          state.unhandledApiRequests.push({
+            method: route.request().method(),
+            url: route.request().url(),
+          });
+          return route.fulfill(json({ detail: "Unexpected report fixture method" }, 405));
+        }
+        generationState.complete = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream; charset=utf-8",
+          headers: {
+            "Cache-Control": "no-cache",
+          },
+          body: buildToolTraceSseBody(),
+        });
       }
       return route.fulfill(json({ detail: "no report stream fixture" }, 404));
     }
@@ -532,10 +533,15 @@ async function installFixtures(page, state, report, options = {}) {
     route.fulfill(json(capabilityBody, capabilityStatus))
   ));
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/story`, (route) => {
+    state.storyRequests.push({
+      method: route.request().method(),
+      path: new URL(route.request().url()).pathname,
+    });
     if (options.forbidScenarioDataFetch) {
       return recordDisabledScenarioRequest(route);
     }
-    return route.fulfill(json(storyWithReport(report)));
+    const storyReport = generationState.complete ? reportFixture("complete") : report;
+    return route.fulfill(json(storyWithReport(storyReport)));
   });
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/replay-trace**`, (route) => (
     route.fulfill(json(REPLAY_TRACE_FIXTURE))
@@ -600,7 +606,7 @@ async function assertReportRenders(page, steps, isZh) {
   ));
 
   // Confidence badge: localized level word (medium), NEVER the raw lowercase enum.
-  const badge = page.locator(".report-confidence-badge");
+  const badge = page.locator(".report-hero");
   const badgeText = await badge.first().textContent().catch(() => "");
   const expectedLabel = isZh ? "分析置信度" : "Analytic Confidence";
   let levelOk = false;
@@ -744,100 +750,97 @@ async function assertChartsRender(page, steps, isZh) {
   ));
 }
 
-async function runToolTraceE2ETest(page, steps, isZh, state, locale) {
-  const chipTriggerSel = "#report-tool-trace-trigger";
+function parseSseJsonFrames(body) {
+  return String(body)
+    .trim()
+    .split(/\r?\n\r?\n/u)
+    .map((frame) => frame
+      .split(/\r?\n/u)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n"))
+    .filter(Boolean)
+    .map((data) => JSON.parse(data));
+}
 
-  // Before retry: no tool-trace chip.
-  const beforeCount = await page.locator(chipTriggerSel).count().catch(() => 0);
-  steps.push(createStep(`tooltrace-absent-before-retry-${locale}`, beforeCount === 0, beforeCount));
+async function waitForCondition(predicate, timeoutMs = 5000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return predicate();
+}
 
-  // Click Retry
+async function runToolTraceSseLifecycleTest(page, steps, isZh, state, locale) {
   const expectedRetryName = isZh ? "重试生成" : "Retry Generation";
   const retryBtn = page.getByRole("button", { name: new RegExp(expectedRetryName, "i") }).first();
   const retryVisible = await retryBtn.isVisible().catch(() => false);
   steps.push(createStep(`tooltrace-retry-button-visible-${locale}`, retryVisible));
 
-  if (retryVisible) {
-    await retryBtn.click().catch(() => {});
-
-    // Chip should appear once the SSE tool_trace frame is read
-    const chipTrigger = page.locator(chipTriggerSel).first();
-    await chipTrigger.waitFor({ state: "visible", timeout: 12000 }).catch(() => {});
-    const chipAppeared = await chipTrigger.isVisible().catch(() => false);
-    steps.push(createStep(`tooltrace-chip-appears-${locale}`, chipAppeared));
-
-    const chipText = await chipTrigger.textContent().catch(() => "") || "";
-    const expectedLabel = isZh ? "工具活动（2）" : "Tool activity (2)";
-    steps.push(createStep(`tooltrace-chip-label-${locale}`, chipText.includes(expectedLabel), chipText));
-
-    // Default collapsed
-    steps.push(createStep(`tooltrace-default-collapsed-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "false"));
-
-    // Collapsed state has no dangling aria-controls target (Approach B: aria-controls should be absent).
-    const ariaControlsVal = await chipTrigger.getAttribute("aria-controls").catch(() => null);
-    steps.push(createStep(`tooltrace-collapsed-no-aria-controls-${locale}`, !ariaControlsVal, ariaControlsVal));
-    steps.push(createStep(`tooltrace-region-hidden-collapsed-${locale}`, (await page.locator("#report-tool-trace-details").count().catch(() => 0)) === 0));
-
-    // Click → expand
-    const expectedExpandLabel = isZh ? "显示工具活动详情" : "Show tool activity details";
-    const ariaLabelBeforeClick = await chipTrigger.getAttribute("aria-label").catch(() => "");
-    steps.push(createStep(`tooltrace-aria-label-expand-${locale}`, ariaLabelBeforeClick === expectedExpandLabel, ariaLabelBeforeClick));
-
-    await chipTrigger.click().catch(() => {});
-    await page.locator("#report-tool-trace-details").first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
-    steps.push(createStep(`tooltrace-expanded-after-click-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "true"));
-
-    // Expanded state should have aria-controls referencing the region which is in DOM
-    const ariaControlsAfterClick = await chipTrigger.getAttribute("aria-controls").catch(() => null);
-    steps.push(createStep(`tooltrace-expanded-has-aria-controls-${locale}`, ariaControlsAfterClick === "report-tool-trace-details", ariaControlsAfterClick));
-    steps.push(createStep(`tooltrace-region-visible-expanded-${locale}`, (await page.locator("#report-tool-trace-details").count().catch(() => 0)) === 1));
-
-    const expectedCollapseLabel = isZh ? "隐藏工具活动详情" : "Hide tool activity details";
-    const ariaLabelAfterClick = await chipTrigger.getAttribute("aria-label").catch(() => "");
-    steps.push(createStep(`tooltrace-aria-label-collapse-${locale}`, ariaLabelAfterClick === expectedCollapseLabel, ariaLabelAfterClick));
-
-    const regionText = await page.locator("#report-tool-trace-details").first().textContent().catch(() => "") || "";
-    steps.push(createStep(`tooltrace-tool-row-web_search-${locale}`, regionText.includes("web_search"), regionText));
-    steps.push(createStep(`tooltrace-tool-row-vector-${locale}`, regionText.includes("vector_lookup"), regionText));
-
-    const expectedElapsed = isZh ? "1234 毫秒" : "1234 ms";
-    steps.push(createStep(`tooltrace-elapsed-ms-${locale}`, regionText.includes(expectedElapsed), regionText));
-
-    const expectedItemCount = isZh ? "8 条结果" : "8 items";
-    steps.push(createStep(`tooltrace-item-count-${locale}`, regionText.includes(expectedItemCount), regionText));
-
-    const expectedEmptyQuery = isZh ? "（无查询）" : "(no query)";
-    steps.push(createStep(`tooltrace-empty-query-${locale}`, regionText.includes(expectedEmptyQuery), regionText));
-
-    // Keyboard: focus trigger, press Enter to collapse, Space to expand.
-    await chipTrigger.focus().catch(() => {});
-    await page.keyboard.press("Enter").catch(() => {});
-    await page.waitForTimeout(200);
-    steps.push(createStep(`tooltrace-keyboard-enter-collapse-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "false"));
-
-    await page.keyboard.press("Space").catch(() => {});
-    await page.waitForTimeout(200);
-    steps.push(createStep(`tooltrace-keyboard-space-expand-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "true"));
-  } else {
-    // push dummy steps
-    steps.push(createStep(`tooltrace-chip-appears-${locale}`, false));
-    steps.push(createStep(`tooltrace-chip-label-${locale}`, false));
-    steps.push(createStep(`tooltrace-default-collapsed-${locale}`, false));
-    steps.push(createStep(`tooltrace-collapsed-no-aria-controls-${locale}`, false));
-    steps.push(createStep(`tooltrace-region-hidden-collapsed-${locale}`, false));
-    steps.push(createStep(`tooltrace-aria-label-expand-${locale}`, false));
-    steps.push(createStep(`tooltrace-expanded-after-click-${locale}`, false));
-    steps.push(createStep(`tooltrace-expanded-has-aria-controls-${locale}`, false));
-    steps.push(createStep(`tooltrace-region-visible-expanded-${locale}`, false));
-    steps.push(createStep(`tooltrace-aria-label-collapse-${locale}`, false));
-    steps.push(createStep(`tooltrace-tool-row-web_search-${locale}`, false));
-    steps.push(createStep(`tooltrace-tool-row-vector-${locale}`, false));
-    steps.push(createStep(`tooltrace-elapsed-ms-${locale}`, false));
-    steps.push(createStep(`tooltrace-item-count-${locale}`, false));
-    steps.push(createStep(`tooltrace-empty-query-${locale}`, false));
-    steps.push(createStep(`tooltrace-keyboard-enter-collapse-${locale}`, false));
-    steps.push(createStep(`tooltrace-keyboard-space-expand-${locale}`, false));
+  if (!retryVisible) {
+    steps.push(createStep(`tooltrace-sse-tool-trace-${locale}`, false));
+    steps.push(createStep(`tooltrace-sse-report-complete-${locale}`, false));
+    steps.push(createStep(`tooltrace-refresh-count-bounded-${locale}`, false));
+    steps.push(createStep(`tooltrace-report-recovers-${locale}`, false));
+    return;
   }
+
+  const generateCountBefore = state.reportGenerateRequests.length;
+  const storyCountBefore = state.storyRequests.length;
+  const responsePromise = page.waitForResponse(
+    (response) => new URL(response.url()).pathname.endsWith(
+      `/api/scenario/${FIXTURE_SCENARIO_ID}/report:generate`,
+    ),
+    { timeout: 8000 },
+  ).catch(() => null);
+
+  await retryBtn.click();
+  const response = await responsePromise;
+  const frames = response ? parseSseJsonFrames(await response.text()) : [];
+  const traceFrame = frames.find((frame) => frame.event === "report_section_complete");
+  const terminalFrame = frames.at(-1);
+
+  steps.push(createStep(
+    `tooltrace-sse-tool-trace-${locale}`,
+    response?.status() === 200
+      && Array.isArray(traceFrame?.tool_trace)
+      && traceFrame.tool_trace.length === 2,
+    frames,
+  ));
+  steps.push(createStep(
+    `tooltrace-sse-report-complete-${locale}`,
+    terminalFrame?.event === "report_complete",
+    terminalFrame ?? null,
+  ));
+
+  const refreshed = await waitForCondition(
+    () => state.storyRequests.length >= storyCountBefore + 1,
+    8000,
+  );
+  await page.waitForTimeout(100);
+  const generateCount = state.reportGenerateRequests.length - generateCountBefore;
+  const refreshCount = state.storyRequests.length - storyCountBefore;
+  steps.push(createStep(
+    `tooltrace-refresh-count-bounded-${locale}`,
+    generateCount === 1 && refreshCount === 1,
+    { generateCount, refreshCount },
+  ));
+
+  const sectionTitle = isZh ? /关键驱动力/ : /Key Drivers/;
+  const sectionHeading = page.getByRole("heading", { name: sectionTitle }).first();
+  await sectionHeading.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+  steps.push(createStep(
+    `tooltrace-report-recovers-${locale}`,
+    refreshed
+      && await sectionHeading.isVisible().catch(() => false)
+      && !(await page.locator(".report-partial-banner").first().isVisible().catch(() => false)),
+  ));
+
+  // The finite SSE truthfully reaches EOF, so standalone onRefresh remounts the
+  // panel and its transient ToolTraceChip state is intentionally not asserted
+  // here. Chip expansion and keyboard behavior remain covered by
+  // ResultReportPanel.test.tsx.
 }
 
 async function runEvidenceDeepLink(page, steps) {
@@ -927,6 +930,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
     apiRequests: [],
     unhandledApiRequests: [],
     disabledScenarioApiRequests: [],
+    reportGenerateRequests: [],
+    storyRequests: [],
     consoleErrors: [],
     pageErrors: [],
     requestFailures: [],
@@ -935,12 +940,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
   let fatalError = null;
   let context = null;
   let page = null;
-  let sseServer = null;
 
   try {
-    if (!LIVE_MODE) {
-      sseServer = await startToolTraceSseServer();
-    }
     // ── Locale loop: complete report in en, then zh ──
     for (const locale of ["en", "zh"]) {
       const isZh = locale === "zh";
@@ -984,8 +985,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
         await runForcedColorsReducedMotionSmoke(page, steps);
       }
 
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await closePlaywrightPage(page, `result-report-${mode}-${browserName}-${locale}-page`);
+      await closePlaywrightContext(context, `result-report-${mode}-${browserName}-${locale}-context`);
       page = null;
       context = null;
     }
@@ -998,7 +999,7 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
       page.on("console", (msg) => { if (msg.type() === "error") state.consoleErrors.push(msg.text()); });
       page.on("pageerror", (err) => state.pageErrors.push(err.message));
 
-      if (!LIVE_MODE) await installFixtures(page, state, partialReportFixture(), { passThroughReportGenerate: true });
+      if (!LIVE_MODE) await installFixtures(page, state, partialReportFixture(), { fulfillReportGenerate: true });
       await page.goto(`${args.baseUrl}/result/${FIXTURE_SCENARIO_ID}/report`, { waitUntil: "domcontentloaded" });
       await page.locator(".report-panel-container").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
       if (!LIVE_MODE) {
@@ -1016,11 +1017,11 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
             && await retryButton.isVisible().catch(() => false),
         ));
 
-        await runToolTraceE2ETest(page, steps, isZh, state, locale);
+        await runToolTraceSseLifecycleTest(page, steps, isZh, state, locale);
       }
       await saveScreenshot(page, path.join(outputDir, `report-partial-${locale}.png`));
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await closePlaywrightPage(page, `result-report-${mode}-${browserName}-partial-${locale}-page`);
+      await closePlaywrightContext(context, `result-report-${mode}-${browserName}-partial-${locale}-context`);
       page = null;
       context = null;
     }
@@ -1044,8 +1045,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
       ));
     }
     await saveScreenshot(page, path.join(outputDir, "report-failed.png"));
-    await page.close().catch(() => {});
-    await context.close().catch(() => {});
+    await closePlaywrightPage(page, `result-report-${mode}-${browserName}-failed-page`);
+    await closePlaywrightContext(context, `result-report-${mode}-${browserName}-failed-context`);
     page = null;
     context = null;
 
@@ -1065,7 +1066,7 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
       await disabledPanel.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
 
       const sectionHeading = page.getByRole("heading", { name: /Key Drivers/ }).first();
-      const confidenceBadge = page.locator(".report-confidence-badge").first();
+      const confidenceBadge = page.locator(".report-hero").first();
       const featureNotEnabledHeader = page.getByRole("heading", { name: /Feature Not Enabled/i }).first();
       const backToOverviewButton = page.getByRole("button", { name: /Back to Result Overview/i }).first();
 
@@ -1082,8 +1083,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
         disabledScenarioRequests.length === 0,
         disabledScenarioRequests,
       ));
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await closePlaywrightPage(page, `result-report-${mode}-${browserName}-capability-disabled-page`);
+      await closePlaywrightContext(context, `result-report-${mode}-${browserName}-capability-disabled-context`);
       page = null;
       context = null;
 
@@ -1097,8 +1098,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
         "capability-error-shows-retry",
         await retryButton.isVisible().catch(() => false),
       ));
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
+      await closePlaywrightPage(page, `result-report-${mode}-${browserName}-capability-error-page`);
+      await closePlaywrightContext(context, `result-report-${mode}-${browserName}-capability-error-context`);
       page = null;
       context = null;
     }
@@ -1120,12 +1121,9 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
     }));
     if (page) await saveScreenshot(page, path.join(outputDir, "crash.png"));
   } finally {
-    if (page) await page.close().catch(() => {});
-    if (context) await context.close().catch(() => {});
-    await browser.close().catch(() => {});
-    if (sseServer) {
-      await sseServer.close().catch(() => {});
-    }
+    if (page) await closePlaywrightPage(page, `result-report-${mode}-${browserName}-final-page`);
+    if (context) await closePlaywrightContext(context, `result-report-${mode}-${browserName}-final-context`);
+    await closePlaywrightBrowser(browser, `result-report-${mode}-${browserName}-browser`);
   }
 
   const result = {
@@ -1211,7 +1209,14 @@ async function main() {
   console.log(JSON.stringify({ overall }));
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+export const __test__ = {
+  buildToolTraceSseBody,
+  installFixtures,
+};
+
+if (IS_MAIN_MODULE) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

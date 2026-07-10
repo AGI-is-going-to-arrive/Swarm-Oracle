@@ -37,7 +37,7 @@ async function loadCapabilities(force = false): Promise<CapabilitiesResponse> {
   if (capabilitiesPromise) {
     return capabilitiesPromise;
   }
-  if (nextCapabilityRetryAt > now) {
+  if (!force && nextCapabilityRetryAt > now) {
     throw new Error('Capability check is temporarily throttled. Please retry shortly.');
   }
 

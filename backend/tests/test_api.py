@@ -1,8 +1,10 @@
 """Tests for app.api — REST API endpoints via FastAPI TestClient."""
 
 import asyncio
+import io
 import json
 import time
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -2240,6 +2242,97 @@ class TestReplayArtifactEndpoints:
         assert data["branches"][0]["title"] == "Imported Branch"
         assert len(data["messages"]) == 1
         assert data["messages"][0]["message"] == "Imported message"
+
+    @pytest.mark.parametrize("token", ["abc123", "bonds"])
+    def test_import_replay_scenario_redacts_short_bearer_assignment(
+        self,
+        client,
+        token,
+    ):
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "question": f"Local gateway token: Bearer {token}",
+                "status": "done",
+                "agents": [],
+                "branches": [],
+                "messages": [],
+            },
+        })
+
+        assert resp.status_code == 200
+        response_question = resp.json()["question"]
+        scenario_id = resp.json()["id"]
+        with Session(get_engine()) as session:
+            imported = session.get(Scenario, scenario_id)
+            assert imported is not None
+            stored_question = imported.question
+
+        assert response_question == "Local gateway token=[redacted]"
+        assert stored_question == response_question
+        assert token not in response_question
+        assert token not in stored_question
+
+    def test_import_replay_scenario_redacts_article_bearer_token_through_snapshot(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_SNAPSHOT_EXPORT", True)
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "question": "Use the bearer abc123",
+                "status": "done",
+                "agents": [],
+                "branches": [],
+                "messages": [],
+            },
+        })
+
+        assert resp.status_code == 200
+        scenario_id = resp.json()["id"]
+        response_question = resp.json()["question"]
+        with Session(get_engine()) as session:
+            imported = session.get(Scenario, scenario_id)
+            assert imported is not None
+            stored_question = imported.question
+
+        assert response_question == "Use the [redacted-bearer]"
+        assert stored_question == response_question
+        assert "abc123" not in response_question
+        assert "abc123" not in stored_question
+
+        snapshot_resp = client.get(f"/api/scenario/{scenario_id}/snapshot")
+        assert snapshot_resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(snapshot_resp.content)) as zf:
+            archive_content = b"\n".join(zf.read(name) for name in zf.namelist())
+        assert b"abc123" not in archive_content
+
+    def test_import_replay_scenario_preserves_natural_bearer_language(self, client):
+        question = (
+            "Bearer bonds remain transferable. "
+            "The bearer presented the document. "
+            "The standard bearer carried the flag. "
+            "They called him the bearer of bad news."
+        )
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "question": question,
+                "status": "done",
+                "agents": [],
+                "branches": [],
+                "messages": [],
+            },
+        })
+
+        assert resp.status_code == 200
+        scenario_id = resp.json()["id"]
+        with Session(get_engine()) as session:
+            imported = session.get(Scenario, scenario_id)
+            assert imported is not None
+            stored_question = imported.question
+
+        assert resp.json()["question"] == question
+        assert stored_question == question
 
     def test_import_replay_scenario_sanitizes_backend_owned_context(self, client):
         resp = client.post("/api/scenario/import-replay", json={

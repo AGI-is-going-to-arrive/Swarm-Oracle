@@ -245,18 +245,78 @@ def _is_replay_sensitive_key(key: Any) -> bool:
 
 _REPLAY_SECRET_ASSIGNMENT_RE = re.compile(
     r"\b(?P<name>(?:(?:llm|web[_-]?search)[_-]?)?(?:api[_-]?key|base[_-]?url)"
-    r"|authorization|password|passwd|token|secret)\b\s*[:=]\s*[\"']?[^\"'\s,;)}\]]+",
+    r"|authorization|password|passwd|token|secret)\b\s*[:=]\s*[\"']?"
+    r"(?:bearer\s+)?[^\"'\s,;)}\]]+",
     re.IGNORECASE,
+)
+_REPLAY_BEARER_CANDIDATE_RE = re.compile(
+    r"\bbearer\s+(?P<candidate>[A-Za-z0-9._~+/=-]+)",
+    re.IGNORECASE,
+)
+_REPLAY_BEARER_CREDENTIAL_CONTEXT_RE = re.compile(
+    r"\b(?:authorization|auth|credential|header|key|secret|token)\b[^\n.!?]{0,24}$",
+    re.IGNORECASE,
+)
+_REPLAY_BEARER_SIGNAL_CHARS = frozenset("0123456789._~+/=-")
+_REPLAY_BEARER_LONG_CANDIDATE_LENGTH = 24
+_REPLAY_NATURAL_BEARER_FOLLOWERS = frozenset(
+    {
+        "bond",
+        "bonds",
+        "carried",
+        "certificate",
+        "certificates",
+        "check",
+        "checks",
+        "cheque",
+        "cheques",
+        "instrument",
+        "instruments",
+        "of",
+        "presented",
+        "security",
+        "securities",
+        "share",
+        "shares",
+    }
 )
 
 
 def _sanitize_replay_text(value: Any) -> str:
     text = str(value)
+    natural_bearer_phrases: list[str] = []
+
+    def _protect_natural_bearer_candidate(match: re.Match[str]) -> str:
+        candidate = match.group("candidate")
+        prefix = text[max(0, match.start() - 48) : match.start()]
+        has_credential_context = bool(
+            _REPLAY_BEARER_CREDENTIAL_CONTEXT_RE.search(prefix)
+        )
+        has_credential_shape = (
+            any(char in _REPLAY_BEARER_SIGNAL_CHARS for char in candidate)
+            or len(candidate) >= _REPLAY_BEARER_LONG_CANDIDATE_LENGTH
+        )
+        if (
+            has_credential_context
+            or has_credential_shape
+            or candidate.casefold() not in _REPLAY_NATURAL_BEARER_FOLLOWERS
+        ):
+            return match.group(0)
+        natural_bearer_phrases.append(match.group(0))
+        return f"\ue200{len(natural_bearer_phrases) - 1}\ue201"
+
+    text = _REPLAY_BEARER_CANDIDATE_RE.sub(
+        _protect_natural_bearer_candidate,
+        text,
+    )
     text = _REPLAY_SECRET_ASSIGNMENT_RE.sub(
         lambda match: f"{match.group('name')}=[redacted]",
         text,
     )
-    return _scrub_sensitive_text(text)
+    text = _scrub_sensitive_text(text)
+    for index, phrase in enumerate(natural_bearer_phrases):
+        text = text.replace(f"\ue200{index}\ue201", phrase)
+    return text
 
 
 def _sanitize_replay_parsed_context(value: Any) -> dict[str, Any]:
@@ -2946,6 +3006,73 @@ async def import_scenario_snapshot(
         ) from exc
 
     return {"scenario_id": new_scenario_id, "status": "imported"}
+
+
+def _official_sample_catalog():
+    from app.services.official_samples import (
+        OfficialSampleCatalogError,
+        load_official_sample_catalog,
+    )
+
+    try:
+        return load_official_sample_catalog(settings.SAMPLES_DIR)
+    except OfficialSampleCatalogError as exc:
+        logger.warning("Official samples are unavailable: %s", exc)
+        raise api_error(
+            503,
+            "OFFICIAL_SAMPLES_UNAVAILABLE",
+            "Built-in samples are unavailable on this installation",
+        ) from exc
+
+
+@router.get("/samples")
+async def list_official_samples():
+    """Return bounded display metadata for locally bundled official samples."""
+    _require_snapshot_export_feature()
+    return _official_sample_catalog().to_public_dict()
+
+
+@router.post("/samples/{sample_id}/import")
+async def import_official_sample(
+    sample_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Import one exact catalog-whitelisted sample into the local owner scope."""
+    _require_snapshot_export_feature()
+    from app.services.official_samples import (
+        OfficialSampleCatalogError,
+        read_official_sample_bundle,
+    )
+    from app.services.snapshot_export import SnapshotImportError, import_snapshot_zip
+
+    catalog = _official_sample_catalog()
+    sample = catalog.get(sample_id)
+    if sample is None:
+        raise api_error(
+            404,
+            "OFFICIAL_SAMPLE_NOT_FOUND",
+            "Built-in sample not found",
+        )
+    try:
+        blob = read_official_sample_bundle(sample)
+        with Session(get_engine()) as session:
+            scenario_id = import_snapshot_zip(
+                blob,
+                principal.subject if principal is not None else None,
+                session,
+            )
+    except (OfficialSampleCatalogError, SnapshotImportError) as exc:
+        logger.warning("Official sample import failed for %s: %s", sample.id, exc)
+        raise api_error(
+            503,
+            "OFFICIAL_SAMPLE_IMPORT_FAILED",
+            "Built-in sample could not be imported",
+        ) from exc
+    return {
+        "scenario_id": scenario_id,
+        "sample_id": sample.id,
+        "status": "imported",
+    }
 
 
 # Prediction / leaderboard routes now live exclusively in app.api.predictions.

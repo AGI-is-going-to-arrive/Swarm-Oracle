@@ -385,8 +385,8 @@ class TestBuildAgentContextSharedBriefing:
         assert "【全局态势】三方对峙" in ctx
         assert "原始消息" not in ctx
 
-    def test_shared_briefing_hides_memories(self):
-        """When shared_briefing is provided, memories section is omitted."""
+    def test_shared_briefing_keeps_agent_memories_separate(self):
+        """Shared context must not replace the current agent's own memories."""
         ctx = build_agent_context(
             agent=self.AGENT,
             setting_background="三国时代",
@@ -395,8 +395,8 @@ class TestBuildAgentContextSharedBriefing:
             retrieved_memories="some memories",
             shared_briefing="briefing text",
         )
-        assert "记忆碎片" not in ctx
-        assert "some memories" not in ctx
+        assert "记忆碎片" in ctx
+        assert "some memories" in ctx
 
     def test_no_shared_briefing_shows_messages_and_memories(self):
         """Without shared_briefing, behaves as before."""

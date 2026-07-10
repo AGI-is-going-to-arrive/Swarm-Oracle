@@ -2,7 +2,16 @@
    SwarmOracle — SimulationView (Main Simulation Page)
    ═══════════════════════════════════════════════════════════ */
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -20,6 +29,7 @@ import {
 import {
   cancelScenario,
   createReplayArtifact,
+  getSessionBoundUserId,
   importReplayScenario,
 } from '../api/client';
 import {
@@ -58,6 +68,9 @@ const LazyClassicBranchTree = lazy(() =>
 const LazyAgentPanel = lazy(() =>
   import('../components/AgentPanel').then((mod) => ({ default: mod.AgentPanel }))
 );
+const LazyAgentProfileSheet = lazy(() =>
+  import('../components/result/AgentProfileSheet').then((mod) => ({ default: mod.AgentProfileSheet }))
+);
 const LazyTimelineBar = lazy(() =>
   import('../components/TimelineBar').then((mod) => ({ default: mod.TimelineBar }))
 );
@@ -91,8 +104,11 @@ import {
   matchScenarioRuntimePreset,
 } from '../lib/runtimePreset';
 import type {
+  AgentInfo,
+  AgentMessage,
   BranchInfo,
 } from '../types';
+import type { AgentProfileObservation } from '../components/result/AgentProfileSheet';
 import {
   THEATER_SCENE_LABELS,
   THEATER_WEATHER_LABELS,
@@ -112,7 +128,251 @@ function SimulationSlotFallback({ label }: { label: string }) {
   return <div className="sim-slot-fallback">{label}</div>;
 }
 
+function findLatestLiveAgentMessage(
+  messages: AgentMessage[],
+  agentId: string,
+): AgentMessage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].agent_id === agentId) return messages[index];
+  }
+  return null;
+}
+
+function findLatestReplayAgentMessage(
+  messages: AgentMessage[],
+  branches: BranchInfo[],
+  agentId: string,
+  selectedBranchId: string,
+  selectedRound: number | null,
+): AgentMessage | null {
+  const branchById = new Map(branches.map((branch) => [branch.id, branch]));
+  const branchPriority = new Map<string, number>();
+  const seen = new Set<string>();
+  let currentBranchId: string | null | undefined = selectedBranchId;
+  let priority = branches.length;
+  while (currentBranchId && !seen.has(currentBranchId)) {
+    branchPriority.set(currentBranchId, priority);
+    seen.add(currentBranchId);
+    currentBranchId = branchById.get(currentBranchId)?.parent_branch_id;
+    priority -= 1;
+  }
+
+  let best: { message: AgentMessage; index: number } | null = null;
+  const replayMessages = filterReplayMessages(messages, branches, selectedBranchId, selectedRound);
+  for (let index = 0; index < replayMessages.length; index += 1) {
+    const message = replayMessages[index];
+    if (message.agent_id !== agentId) continue;
+    if (!best) {
+      best = { message, index };
+      continue;
+    }
+    const bestPriority = branchPriority.get(best.message.branch) ?? -1;
+    const messagePriority = branchPriority.get(message.branch) ?? -1;
+    if (
+      message.round > best.message.round
+      || (
+        message.round === best.message.round
+        && (
+          messagePriority > bestPriority
+          || (messagePriority === bestPriority && index > best.index)
+        )
+      )
+    ) {
+      best = { message, index };
+    }
+  }
+  return best?.message ?? null;
+}
+
+function buildAgentProfileObservation({
+  agent,
+  messages,
+  branches,
+  selectedBranchId,
+  selectedRound,
+}: {
+  agent: AgentInfo;
+  messages: AgentMessage[];
+  branches: BranchInfo[];
+  selectedBranchId: string | null;
+  selectedRound: number | null;
+}): AgentProfileObservation {
+  const branchById = new Map(branches.map((branch) => [branch.id, branch]));
+  if (selectedBranchId) {
+    const message = findLatestReplayAgentMessage(
+      messages,
+      branches,
+      agent.id,
+      selectedBranchId,
+      selectedRound,
+    );
+    if (message) {
+      return {
+        emotion: message.emotion,
+        source: 'replay',
+        branchId: message.branch,
+        branchTitle: message.branch_title ?? branchById.get(message.branch)?.title ?? null,
+        round: message.round,
+        selectedBranchId,
+        selectedBranchTitle: branchById.get(selectedBranchId)?.title ?? null,
+        selectedRound,
+      };
+    }
+    return {
+      emotion: null,
+      source: 'replay_unavailable',
+      branchId: null,
+      branchTitle: null,
+      round: null,
+      selectedBranchId,
+      selectedBranchTitle: branchById.get(selectedBranchId)?.title ?? null,
+      selectedRound,
+    };
+  } else {
+    const message = findLatestLiveAgentMessage(messages, agent.id);
+    if (message) {
+      return {
+        emotion: message.emotion,
+        source: 'live',
+        branchId: message.branch,
+        branchTitle: message.branch_title ?? branchById.get(message.branch)?.title ?? null,
+        round: message.round,
+      };
+    }
+  }
+
+  return {
+    emotion: agent.emotion,
+    source: 'baseline',
+    branchId: null,
+    branchTitle: null,
+    round: null,
+  };
+}
+
+interface SimulationAutomationRouteIntent {
+  scenarioId: string | null;
+  replayIntent: boolean;
+}
+
+interface SimulationAutomationRouteIntentRef {
+  current: SimulationAutomationRouteIntent;
+}
+
+interface SimulationSceneAutomationSourceIntent {
+  routeIntent: SimulationAutomationRouteIntent;
+  renderedScenarioId: string | null;
+  replayApplied: boolean;
+}
+
+function readBrowserAutomationRouteIntent(): SimulationAutomationRouteIntent | null {
+  if (typeof window === 'undefined') return null;
+  const search = new URLSearchParams(window.location.search);
+  if (search.get('replay') || search.get('share')) {
+    return { scenarioId: null, replayIntent: true };
+  }
+  const match = window.location.pathname.match(/^\/sim\/([^/]+)\/?$/);
+  if (!match || match[1] === 'replay') return null;
+  try {
+    return { scenarioId: decodeURIComponent(match[1]), replayIntent: false };
+  } catch {
+    return { scenarioId: match[1], replayIntent: false };
+  }
+}
+
+function getAutomationRouteIntents(
+  routeIntent: SimulationAutomationRouteIntent,
+): SimulationAutomationRouteIntent[] {
+  const browserIntent = readBrowserAutomationRouteIntent();
+  return browserIntent ? [routeIntent, browserIntent] : [routeIntent];
+}
+
+function shouldIsolateAutomationAtCall(
+  routeIntent: SimulationAutomationRouteIntent,
+  renderedScenarioId: string | null,
+  replayApplied: boolean,
+): boolean {
+  return getAutomationRouteIntents(routeIntent).some(
+    (intent) => intent.replayIntent
+      ? !replayApplied
+      : Boolean(
+          intent.scenarioId
+          && renderedScenarioId !== intent.scenarioId
+        ),
+  );
+}
+
+function renderIsolatedReplayAutomation(): string {
+  return stringifyAutomationPayload(
+    {
+      question: null,
+      status: 'loading',
+      currentRound: 0,
+      totalRounds: null,
+      viewMode: 'classic',
+      visualizationEnabled: false,
+      isSimulationComplete: false,
+      messageCount: 0,
+      agentCount: 0,
+      branchCount: 0,
+      thinkingAgentCount: 0,
+      thinkingAgents: [],
+    },
+    null,
+    {
+      route: window.location.pathname,
+      kind: 'simulation',
+      replay_source: 'token',
+      controls: {
+        can_go_back: false,
+        can_toggle_view_mode: false,
+        can_open_gameplay_cards: false,
+        can_preview_gameplay_cards: false,
+        can_open_prediction: false,
+        can_view_results: false,
+        can_copy_replay_link: false,
+        can_capture_screenshot: false,
+        can_capture_gif: false,
+        can_capture_modal: false,
+        can_toggle_sidebar: false,
+        active_modal: null,
+        modal_state: null,
+      },
+      branches: [],
+    },
+  );
+}
+
 export function SimulationView() {
+  const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  const replayIntent = Boolean(
+    new URLSearchParams(location.search).get('replay')
+    || new URLSearchParams(location.search).get('share'),
+  );
+  const routeIntentRef = useRef<SimulationAutomationRouteIntent>({
+    scenarioId: id ?? null,
+    replayIntent,
+  });
+  useLayoutEffect(() => {
+    routeIntentRef.current = {
+      scenarioId: id ?? null,
+      replayIntent,
+    };
+  }, [id, replayIntent]);
+  return (
+    <SimulationViewContent
+      key={`${id ?? 'replay'}:${location.search}`}
+      routeIntentRef={routeIntentRef}
+    />
+  );
+}
+
+function SimulationViewContent({
+  routeIntentRef,
+}: {
+  routeIntentRef: SimulationAutomationRouteIntentRef;
+}) {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
@@ -120,28 +380,155 @@ export function SimulationView() {
   const [searchParams] = useSearchParams();
   const replayToken = searchParams.get('replay');
   const replayShareId = searchParams.get('share');
+  const hasReplayIntent = Boolean(replayToken || replayShareId);
+  const [replayApplied, setReplayApplied] = useState(false);
+  const replayAppliedRef = useRef(replayApplied);
+  replayAppliedRef.current = replayApplied;
+  const replayScenarioIdRef = useRef<string | null>(null);
+  const replaySceneSourceRef = useRef<AutomationWindow['__swarmGetSceneAutomation']>(undefined);
+  const replaySceneSourceIntentRef = useRef<SimulationSceneAutomationSourceIntent | null>(null);
+  const replaySceneGuardRef = useRef<AutomationWindow['__swarmGetSceneAutomation']>(undefined);
+  const replaySceneGuardInstallerRef = useRef<(() => void) | null>(null);
+  const shouldIsolateReplayIntent = hasReplayIntent && !replayApplied;
   const [useDomBubbles] = useState(() => (
     searchParams.get('domBubbles') !== '0' && searchParams.get('useDomBubbles') !== 'false'
   ));
   const isZh = i18n.language.startsWith('zh');
-  const scenario = useSimulationStore((s) => s.scenario);
-  const agents = useSimulationStore((s) => s.agents);
-  const branches = useSimulationStore((s) => s.branches);
-  const messages = useSimulationStore((s) => s.messages);
-  const thinkingAgents = useSimulationStore((s) => s.thinkingAgents);
-  const status = useSimulationStore((s) => s.status);
-  const error = useSimulationStore((s) => s.error);
-  const errorCode = useSimulationStore((s) => s.errorCode);
+  const activeScenarioId = useSimulationStore((s) => s.activeScenarioId);
+  const storeScenario = useSimulationStore((s) => s.scenario);
+  const storeAgents = useSimulationStore((s) => s.agents);
+  const storeBranches = useSimulationStore((s) => s.branches);
+  const storeMessages = useSimulationStore((s) => s.messages);
+  const storeThinkingAgents = useSimulationStore((s) => s.thinkingAgents);
+  const storeStatus = useSimulationStore((s) => s.status);
+  const storeError = useSimulationStore((s) => s.error);
+  const storeErrorCode = useSimulationStore((s) => s.errorCode);
   const loadScenario = useSimulationStore((s) => s.loadScenario);
-  const isSimulationComplete = useSimulationStore((s) => s.isSimulationComplete);
-  const visualizationEnabled = useSimulationStore((s) => s.visualizationEnabled);
-  const viewMode = useSimulationStore((s) => s.viewMode);
-  const currentRound = useSimulationStore((s) => s.currentRound);
-  const interventionLifecycle = useSimulationStore((s) => s.interventionLifecycle);
+  const storeIsSimulationComplete = useSimulationStore((s) => s.isSimulationComplete);
+  const storeVisualizationEnabled = useSimulationStore((s) => s.visualizationEnabled);
+  const storeViewMode = useSimulationStore((s) => s.viewMode);
+  const storeCurrentRound = useSimulationStore((s) => s.currentRound);
+  const storeInterventionLifecycle = useSimulationStore((s) => s.interventionLifecycle);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
   const setScenario = useSimulationStore((s) => s.setScenario);
   const { enabled: youVsOracleEnabled } = useCapabilityCheck('you_vs_oracle');
-  const lastContentEventAt = useSimulationStore((s) => s.lastContentEventAt);
+  const storeLastContentEventAt = useSimulationStore((s) => s.lastContentEventAt);
+  const routeStateMatches = !shouldIsolateReplayIntent && (
+    !id || (
+      activeScenarioId === id
+      && (!storeScenario || storeScenario.id === id)
+    )
+  );
+  const scenario = routeStateMatches ? storeScenario : null;
+  replayScenarioIdRef.current = scenario?.id ?? null;
+  const agents = useMemo(
+    () => (routeStateMatches ? storeAgents : []),
+    [routeStateMatches, storeAgents],
+  );
+  const branches = useMemo(
+    () => (routeStateMatches ? storeBranches : []),
+    [routeStateMatches, storeBranches],
+  );
+  const messages = useMemo(
+    () => (routeStateMatches ? storeMessages : []),
+    [routeStateMatches, storeMessages],
+  );
+  const thinkingAgents = useMemo(
+    () => (routeStateMatches ? storeThinkingAgents : []),
+    [routeStateMatches, storeThinkingAgents],
+  );
+  const status = routeStateMatches ? storeStatus : 'idle';
+  const error = routeStateMatches ? storeError : null;
+  const errorCode = routeStateMatches ? storeErrorCode : null;
+  const isSimulationComplete = routeStateMatches ? storeIsSimulationComplete : false;
+  const visualizationEnabled = routeStateMatches ? storeVisualizationEnabled : false;
+  const viewMode = routeStateMatches ? storeViewMode : 'classic';
+  const currentRound = routeStateMatches ? storeCurrentRound : 0;
+  const interventionLifecycle = useMemo(
+    () => (routeStateMatches ? storeInterventionLifecycle : new Map()),
+    [routeStateMatches, storeInterventionLifecycle],
+  );
+  const lastContentEventAt = routeStateMatches ? storeLastContentEventAt : 0;
+
+  useLayoutEffect(() => {
+    const win = window as AutomationWindow;
+    const captureSource = (source: AutomationWindow['__swarmGetSceneAutomation']) => {
+      if (!source || source === replaySceneGuardRef.current) return;
+      replaySceneSourceRef.current = source;
+      replaySceneSourceIntentRef.current = {
+        routeIntent: { ...routeIntentRef.current },
+        renderedScenarioId: replayScenarioIdRef.current,
+        replayApplied: replayAppliedRef.current,
+      };
+    };
+    const guard: NonNullable<AutomationWindow['__swarmGetSceneAutomation']> = () => {
+      if (shouldIsolateAutomationAtCall(
+        routeIntentRef.current,
+        replayScenarioIdRef.current,
+        replayAppliedRef.current,
+      )) return null;
+      const sourceIntent = replaySceneSourceIntentRef.current;
+      const currentIntent = routeIntentRef.current;
+      if (
+        !sourceIntent
+        || sourceIntent.routeIntent.replayIntent !== currentIntent.replayIntent
+        || sourceIntent.replayApplied !== replayAppliedRef.current
+        || (
+          currentIntent.replayIntent
+            ? sourceIntent.renderedScenarioId !== replayScenarioIdRef.current
+            : sourceIntent.routeIntent.scenarioId !== currentIntent.scenarioId
+        )
+      ) {
+        return null;
+      }
+      const routeIntents = getAutomationRouteIntents(routeIntentRef.current);
+      const sceneState = replaySceneSourceRef.current?.() ?? null;
+      if (!sceneState) return null;
+      const sourceScenarioId = sceneState.scenario_id;
+      const expectedScenarioIds = routeIntents.flatMap((intent) => {
+        const expectedScenarioId = intent.replayIntent
+          ? replayScenarioIdRef.current
+          : intent.scenarioId;
+        return expectedScenarioId ? [expectedScenarioId] : [];
+      });
+      if (
+        typeof sourceScenarioId === 'string'
+        && expectedScenarioIds.some((expected) => sourceScenarioId !== expected)
+      ) {
+        return null;
+      }
+      return sceneState;
+    };
+    replaySceneGuardRef.current = guard;
+    const guardGetter = () => guard;
+    const installGuard = () => {
+      const descriptor = Object.getOwnPropertyDescriptor(win, '__swarmGetSceneAutomation');
+      const current = win.__swarmGetSceneAutomation;
+      if (current !== guard) captureSource(current);
+      Object.defineProperty(win, '__swarmGetSceneAutomation', {
+        configurable: true,
+        enumerable: descriptor?.enumerable ?? true,
+        get: guardGetter,
+        set: captureSource,
+      });
+    };
+    replaySceneGuardInstallerRef.current = installGuard;
+    installGuard();
+    return () => {
+      const descriptor = Object.getOwnPropertyDescriptor(win, '__swarmGetSceneAutomation');
+      if (descriptor?.get === guardGetter) {
+        delete win.__swarmGetSceneAutomation;
+      }
+      replaySceneGuardInstallerRef.current = null;
+      replaySceneGuardRef.current = undefined;
+      replaySceneSourceRef.current = undefined;
+      replaySceneSourceIntentRef.current = null;
+    };
+  }, [routeIntentRef]);
+
+  useEffect(() => {
+    replaySceneGuardInstallerRef.current?.();
+  }, [replayApplied, viewMode]);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
   const scenarioRuntimePreset = useMemo(
     () => matchScenarioRuntimePreset(scenario?.fork_debug?.round_checks ?? null),
@@ -181,6 +568,7 @@ export function SimulationView() {
 
   // Detail modal state
   const [detailBranch, setDetailBranch] = useState<BranchInfo | null>(null);
+  const [profileTargetId, setProfileTargetId] = useState<string | null>(null);
 
   // Prediction modal state (P5-B)
   const [showPrediction, setShowPrediction] = useState(false);
@@ -249,6 +637,7 @@ export function SimulationView() {
     panelCollapsed,
     playbackMode,
     replayBranchOptions,
+    replayLoadStatus,
     replayPayload,
     replayRounds,
     replaySpeed,
@@ -266,8 +655,27 @@ export function SimulationView() {
     isSimulationComplete,
     navigate,
   });
+  const profileTargetAgent = agents.find((agent) => agent.id === profileTargetId) ?? null;
+  const profileObservation = profileTargetAgent
+    ? buildAgentProfileObservation({
+        agent: profileTargetAgent,
+        messages,
+        branches,
+        selectedBranchId: selectedReplayBranchId,
+        selectedRound: selectedReplayRound,
+      })
+    : null;
+  const isTerminal = status === 'error' || status === 'cancelled' || status === 'done';
   // Interventions are live-only actions: replay, terminal, parsing, and narrating views are read-only.
   const canIntervene = status === 'simulating' && !isReplayMode && !isSimulationComplete;
+  const canOpenPrediction = youVsOracleEnabled
+    && !isReplayMode
+    && (status === 'parsing' || status === 'simulating');
+  useEffect(() => {
+    if (canOpenPrediction) return;
+    setShowPrediction(false);
+    setPredictionAutomation(null);
+  }, [canOpenPrediction]);
   const canInterveneOnBranch = useCallback(
     (branch: BranchInfo) => canIntervene && branch.status === 'ACTIVE',
     [canIntervene],
@@ -278,8 +686,6 @@ export function SimulationView() {
     const normalized = Math.floor(value);
     return normalized > 0 ? normalized : null;
   }, [scenario?.total_rounds]);
-  const isTerminal = status === 'error' || status === 'cancelled' || status === 'done';
-
   const displayStatus = useMemo(() => {
     if (isTerminal) return status;
     if (
@@ -349,10 +755,14 @@ export function SimulationView() {
     currentRound,
   });
   useEffect(() => {
-    if (!replayPayload) return;
+    if (!replayPayload) {
+      setReplayApplied(false);
+      return;
+    }
     setScenario(replayPayload.scenario, { replayMode: true });
     setBackendDirectorState(replayPayload.scenario.director_state ?? null);
     setBackendGameplayState(replayPayload.scenario.gameplay_state ?? null);
+    setReplayApplied(true);
   }, [replayPayload, setBackendDirectorState, setBackendGameplayState, setScenario]);
   const gameplayProfile = useMemo(
     () => (scenario ? inferGameplayProfile(scenario.question, scenario.scene_theme) : null),
@@ -781,7 +1191,15 @@ export function SimulationView() {
     const win = window as AutomationWindow;
     const canOpenGameplayCards = canUseGameplayCards;
     const canPreviewGameplayCardsNow = canPreviewGameplayCards;
-    const render = () => stringifyAutomationPayload(
+    const render = () => {
+      if (shouldIsolateAutomationAtCall(
+        routeIntentRef.current,
+        scenario?.id ?? null,
+        replayApplied,
+      )) {
+        return renderIsolatedReplayAutomation();
+      }
+      return stringifyAutomationPayload(
       {
         question: scenario?.question ?? null,
         status,
@@ -801,7 +1219,7 @@ export function SimulationView() {
           round: agent.round,
         })),
       },
-      win.__swarmGetSceneAutomation?.() ?? null,
+      shouldIsolateReplayIntent ? null : (win.__swarmGetSceneAutomation?.() ?? null),
       {
         route: window.location.pathname,
         kind: 'simulation',
@@ -860,7 +1278,7 @@ export function SimulationView() {
           can_toggle_view_mode: canToggleViewMode,
           can_open_gameplay_cards: canOpenGameplayCards,
           can_preview_gameplay_cards: canPreviewGameplayCardsNow,
-          can_open_prediction: !isReplayMode && !isSimulationComplete,
+          can_open_prediction: canOpenPrediction,
           can_view_results: !isReplayMode && isSimulationComplete,
           can_copy_replay_link: canCopyReplayLink,
           can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
@@ -902,8 +1320,9 @@ export function SimulationView() {
           can_view_detail: true,
           can_intervene: canInterveneOnBranch(branch),
         })),
-      },
-    );
+        },
+      );
+    };
 
     win.render_game_to_text = render;
     return () => {
@@ -916,6 +1335,7 @@ export function SimulationView() {
     archiveKeyMoments.length,
     branches,
     canCopyReplayLink,
+    canOpenPrediction,
     canInterveneOnBranch,
     captureStatus,
     captureMode,
@@ -942,6 +1362,8 @@ export function SimulationView() {
     replayBranchOptions,
     replayRounds,
     replaySpeed,
+    replayApplied,
+    routeIntentRef,
     activeRuntimePreset,
     activeRuntimePresetConfig.branchSensitivity,
     activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
@@ -957,6 +1379,7 @@ export function SimulationView() {
     isReplayMode,
     showGameplayCards,
     showPrediction,
+    shouldIsolateReplayIntent,
     status,
     hasActiveModal,
     isWarmupPhase,
@@ -972,7 +1395,10 @@ export function SimulationView() {
     }
     const replayScenarioMeta = scenarioMeta ?? storedScenarioMeta;
     if (!scenario || !replayScenarioMeta) return;
-    const { buildSimulationReplayUrl } = await loadSimulationReplayHelpers();
+    const {
+      buildSimulationReplayUrl,
+      sanitizeSimulationReplayPayload,
+    } = await loadSimulationReplayHelpers();
     const { compactScenarioMetaForReplay } = await loadScenarioReplayHelpers();
     const snapshot = {
       ...scenario,
@@ -993,21 +1419,18 @@ export function SimulationView() {
       replaySpeed,
       panelCollapsed,
     };
+    const publicReplayPayload = sanitizeSimulationReplayPayload({
+      scenario: snapshot,
+      scenarioMeta: compactReplayMeta,
+      uiState,
+    });
     const artifact = await Promise.resolve()
-      .then(() => createReplayArtifact('simulation_view_v1', {
-        scenario: snapshot,
-        scenarioMeta: compactReplayMeta,
-        uiState,
-      }))
+      .then(() => createReplayArtifact('simulation_view_v1', { ...publicReplayPayload }))
       .catch(() => null);
     try {
       const url = artifact
         ? `${window.location.origin.replace(/\/$/, '')}/sim/replay?share=${artifact.id}`
-        : await buildSimulationReplayUrl(window.location.origin, {
-          scenario: snapshot,
-          scenarioMeta: compactReplayMeta,
-          uiState,
-        });
+        : await buildSimulationReplayUrl(window.location.origin, publicReplayPayload);
       setReplayUrl(url);
       setReplayLinkUnavailable(false);
       await copyText(url);
@@ -1233,7 +1656,15 @@ export function SimulationView() {
     if (!replayAutomationState) return;
 
     const win = window as AutomationWindow;
-    const render = () => stringifyAutomationPayload(
+    const render = () => {
+      if (shouldIsolateAutomationAtCall(
+        routeIntentRef.current,
+        scenario?.id ?? null,
+        replayApplied,
+      )) {
+        return renderIsolatedReplayAutomation();
+      }
+      return stringifyAutomationPayload(
       {
         question: scenario?.question ?? null,
         status,
@@ -1246,7 +1677,7 @@ export function SimulationView() {
         agentCount: agents.length,
         branchCount: branches.length,
       },
-      win.__swarmGetSceneAutomation?.() ?? null,
+      shouldIsolateReplayIntent ? null : (win.__swarmGetSceneAutomation?.() ?? null),
       {
         route: window.location.pathname,
         kind: 'simulation',
@@ -1305,7 +1736,7 @@ export function SimulationView() {
           can_toggle_view_mode: canToggleViewMode,
           can_open_gameplay_cards: canUseGameplayCards,
           can_preview_gameplay_cards: canPreviewGameplayCards,
-          can_open_prediction: !isReplayMode && !isSimulationComplete,
+          can_open_prediction: canOpenPrediction,
           can_view_results: !isReplayMode && isSimulationComplete,
           can_copy_replay_link: canCopyReplayLink,
           can_capture_screenshot: viewMode === 'theater' && captureStatus === 'idle',
@@ -1338,8 +1769,9 @@ export function SimulationView() {
           can_view_detail: true,
           can_intervene: canInterveneOnBranch(branch),
         })),
-      },
-    );
+        },
+      );
+    };
 
     win.render_game_to_text = render;
     return () => {
@@ -1368,9 +1800,12 @@ export function SimulationView() {
     canPreviewGameplayCards,
     canUseGameplayCards,
     canCopyReplayLink,
+    canOpenPrediction,
     gameplayAutomation,
     predictionAutomation,
     replayAutomationState,
+    replayApplied,
+    routeIntentRef,
     activeRuntimePreset,
     activeRuntimePresetConfig.branchSensitivity,
     activeRuntimePresetConfig.forkDetectorActiveBranchLimit,
@@ -1383,6 +1818,7 @@ export function SimulationView() {
     scenarioRuntimePreset,
     showGameplayCards,
     showPrediction,
+    shouldIsolateReplayIntent,
     status,
     systemTracks,
     canToggleViewMode,
@@ -1400,6 +1836,31 @@ export function SimulationView() {
   const backTo =
     (location.state as { backTo?: string } | null)?.backTo ??
     (scenario?.run_group_id ? `/result/${scenario.id ?? id ?? ''}` : '/');
+
+  if (
+    isReplayMode
+    && (
+      replayLoadStatus === 'idle'
+      || replayLoadStatus === 'loading'
+      || (replayLoadStatus === 'ready' && !replayApplied)
+    )
+  ) {
+    return (
+      <div className="simulation-view" aria-busy="true">
+        <p role="status">{t('sim.status.loading')}</p>
+      </div>
+    );
+  }
+
+  if (isReplayMode && replayLoadStatus === 'error') {
+    return (
+      <div className="simulation-view">
+        <div className="sim-error" role="alert">
+          <p>⚠️ {t('sim.status.error')}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`simulation-view ${viewMode === 'theater' ? 'simulation-view--theater' : ''} ${canUseReplayControls ? 'simulation-view--replay-ready' : ''}`}>
@@ -1463,7 +1924,7 @@ export function SimulationView() {
               {t('simulation.cancel_button')}
             </button>
           )}
-          {!isSimulationComplete && !cancelledStatus && youVsOracleEnabled && (
+          {canOpenPrediction && !cancelledStatus && (
             <button
               className="btn btn-ghost"
               onClick={() => setShowPrediction(true)}
@@ -1823,7 +2284,7 @@ export function SimulationView() {
         {/* Agent Panel */}
         <div className={`sim-content__panel ${panelCollapsed ? 'sim-content__panel--collapsed' : ''}`}>
           <Suspense fallback={<SimulationSlotFallback label={t('sim.panel.waiting')} />}>
-            <LazyAgentPanel onBranchDetail={handleDetail} />
+            <LazyAgentPanel onBranchDetail={handleDetail} onViewProfile={setProfileTargetId} />
           </Suspense>
         </div>
       </div>
@@ -1881,7 +2342,7 @@ export function SimulationView() {
       )}
 
       {/* Prediction Modal (P5-B) */}
-      {showPrediction && id && !isReplayMode && (
+      {showPrediction && id && canOpenPrediction && (
         <Suspense fallback={null}>
           <LazyPredictionModal
             scenarioId={id}
@@ -1915,6 +2376,17 @@ export function SimulationView() {
           />
         </Suspense>
       )}
+
+      {profileTargetAgent && profileObservation ? (
+        <Suspense fallback={null}>
+          <LazyAgentProfileSheet
+            agent={profileTargetAgent}
+            observation={profileObservation}
+            userId={getSessionBoundUserId()}
+            onClose={() => setProfileTargetId(null)}
+          />
+        </Suspense>
+      ) : null}
 
       {gameplayActiveMarker && !isReplayMode && (
         <div

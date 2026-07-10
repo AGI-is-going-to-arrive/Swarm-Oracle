@@ -12,7 +12,12 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { importScenarioSnapshot } from '../../api/client';
+import {
+  getOfficialSamples,
+  importOfficialSample,
+  importScenarioSnapshot,
+  type OfficialSampleSummary,
+} from '../../api/client';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import './SnapshotExport.css';
@@ -45,7 +50,7 @@ export default function SnapshotImportDialog({
   onClose,
   onImported,
 }: SnapshotImportDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const titleId = useId();
   const inputId = useId();
   const [file, setFile] = useState<File | null>(null);
@@ -53,23 +58,67 @@ export default function SnapshotImportDialog({
   const [errorMessage, setErrorMessage] = useState('');
   const [newScenarioId, setNewScenarioId] = useState<string>('');
   const [dragActive, setDragActive] = useState(false);
+  const [officialSamples, setOfficialSamples] = useState<OfficialSampleSummary[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState(false);
+  const [sampleImportingId, setSampleImportingId] = useState<string | null>(null);
+  const [sampleImportError, setSampleImportError] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
-  const requestControllerRef = useRef<AbortController | null>(null);
+  const catalogControllerRef = useRef<AbortController | null>(null);
+  const importControllerRef = useRef<AbortController | null>(null);
 
   useFocusTrap(dialogRef, isOpen);
 
+  const loadOfficialCatalog = useCallback(async () => {
+    catalogControllerRef.current?.abort();
+    const controller = new AbortController();
+    catalogControllerRef.current = controller;
+    setCatalogLoading(true);
+    setCatalogError(false);
+    try {
+      const response = await getOfficialSamples({ signal: controller.signal });
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setOfficialSamples(response.samples);
+    } catch {
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setOfficialSamples([]);
+      setCatalogError(true);
+    } finally {
+      if (mountedRef.current && catalogControllerRef.current === controller) {
+        setCatalogLoading(false);
+        catalogControllerRef.current = null;
+      }
+    }
+  }, []);
+
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      mountedRef.current = false;
+      catalogControllerRef.current?.abort();
+      importControllerRef.current?.abort();
+      return;
+    }
     mountedRef.current = true;
+    setFile(null);
+    setStep('select');
+    setErrorMessage('');
+    setNewScenarioId('');
+    setDragActive(false);
+    setOfficialSamples([]);
+    setSampleImportingId(null);
+    setSampleImportError('');
+    void loadOfficialCatalog();
     return () => {
       mountedRef.current = false;
-      requestControllerRef.current?.abort();
-      requestControllerRef.current = null;
+      catalogControllerRef.current?.abort();
+      catalogControllerRef.current = null;
+      importControllerRef.current?.abort();
+      importControllerRef.current = null;
     };
-  }, [isOpen]);
+  }, [isOpen, loadOfficialCatalog]);
 
   // Parent guarantees the dialog is unmounted when closed, so state
   // resets naturally on the next open.
@@ -155,10 +204,10 @@ export default function SnapshotImportDialog({
   }, []);
 
   const handleImport = useCallback(async () => {
-    if (!file) return;
-    requestControllerRef.current?.abort();
+    if (!file || importControllerRef.current) return;
     const controller = new AbortController();
-    requestControllerRef.current = controller;
+    importControllerRef.current = controller;
+    setSampleImportingId(null);
     setStep('importing');
     setErrorMessage('');
     try {
@@ -176,11 +225,38 @@ export default function SnapshotImportDialog({
       setErrorMessage(message);
       setStep('error');
     } finally {
-      if (requestControllerRef.current === controller) {
-        requestControllerRef.current = null;
+      if (importControllerRef.current === controller) {
+        importControllerRef.current = null;
       }
     }
   }, [file, t]);
+
+  const handleOfficialSampleImport = useCallback(async (sampleId: string) => {
+    if (importControllerRef.current) return;
+    const controller = new AbortController();
+    importControllerRef.current = controller;
+    setSampleImportingId(sampleId);
+    setSampleImportError('');
+    setStep('importing');
+    try {
+      const result = await importOfficialSample(sampleId, { signal: controller.signal });
+      if (!mountedRef.current || controller.signal.aborted) return;
+      onImported(result.scenario_id);
+    } catch (err) {
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setSampleImportError(getLocalizedApiErrorMessage(
+        err,
+        t,
+        t('snapshot.sample_import_failed', 'Built-in sample import failed. Please try again.'),
+      ));
+      setSampleImportingId(null);
+      setStep('select');
+    } finally {
+      if (importControllerRef.current === controller) {
+        importControllerRef.current = null;
+      }
+    }
+  }, [onImported, t]);
 
   const handleViewScenario = useCallback(() => {
     if (newScenarioId) onImported(newScenarioId);
@@ -191,6 +267,11 @@ export default function SnapshotImportDialog({
   }, [step, onClose]);
 
   if (!isOpen) return null;
+
+  const sampleLanguage = i18n.language.startsWith('zh') ? 'zh' : 'en';
+  const importingSample = sampleImportingId
+    ? officialSamples.find((sample) => sample.id === sampleImportingId) ?? null
+    : null;
 
   return (
     <div
@@ -223,6 +304,88 @@ export default function SnapshotImportDialog({
         <div className="snapshot-export-dialog__body">
           {(step === 'select' || step === 'ready' || step === 'error') && (
             <>
+              {step !== 'ready' ? (
+                <section className="snapshot-samples" aria-labelledby={`${titleId}-samples`}>
+                  <div className="snapshot-samples__header">
+                    <div>
+                      <h3 id={`${titleId}-samples`}>
+                        {t('snapshot.samples_title', 'Try an official sample')}
+                      </h3>
+                      <p>{t(
+                        'snapshot.samples_hint',
+                        'No model or API key needed. Import a complete run and explore it immediately.',
+                      )}</p>
+                    </div>
+                    {catalogError ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost snapshot-samples__retry"
+                        onClick={() => void loadOfficialCatalog()}
+                      >
+                        {t('snapshot.sample_catalog_retry', 'Retry samples')}
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {catalogLoading ? (
+                    <p className="snapshot-samples__status" role="status">
+                      {t('snapshot.sample_catalog_loading', 'Loading built-in samples…')}
+                    </p>
+                  ) : null}
+                  {catalogError ? (
+                    <p className="snapshot-samples__error" role="alert">
+                      {t(
+                        'snapshot.sample_catalog_failed',
+                        'Built-in samples are unavailable. You can still import a local file.',
+                      )}
+                    </p>
+                  ) : null}
+                  {sampleImportError ? (
+                    <p className="snapshot-samples__error" role="alert">
+                      {sampleImportError}
+                    </p>
+                  ) : null}
+                  {officialSamples.length > 0 ? (
+                    <div className="snapshot-samples__grid">
+                      {officialSamples.map((sample) => {
+                        const title = sample.title[sampleLanguage];
+                        const summary = sample.summary[sampleLanguage];
+                        return (
+                          <article className="snapshot-sample-card" key={sample.id}>
+                            <div className="snapshot-sample-card__copy">
+                              <h4>{title}</h4>
+                              <p>{summary}</p>
+                              <span>{t('snapshot.sample_scope', {
+                                agents: sample.agent_count,
+                                outcomes: sample.outcome_count,
+                                defaultValue: '{{agents}} agents · {{outcomes}} outcomes',
+                              })}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn snapshot-sample-card__action"
+                              onClick={() => void handleOfficialSampleImport(sample.id)}
+                              aria-label={t('snapshot.sample_use_aria', {
+                                title,
+                                defaultValue: `Explore ${title}`,
+                              })}
+                            >
+                              {t('snapshot.sample_use', 'Explore now')}
+                            </button>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {step !== 'ready' ? (
+                <div className="snapshot-import-divider" role="separator">
+                  <span>{t('snapshot.import_own_file', 'Or import your own file')}</span>
+                </div>
+              ) : null}
+
               <div
                 className={`snapshot-import-dropzone${dragActive ? ' snapshot-import-dropzone--active' : ''}`}
                 onDrop={handleDrop}
@@ -288,9 +451,21 @@ export default function SnapshotImportDialog({
               aria-live="polite"
             >
               <div className="snapshot-export-spinner" aria-hidden="true" />
-              <p>{t('snapshot.import_in_progress', 'Importing snapshot…')}</p>
+              <p>
+                {importingSample
+                  ? t('snapshot.sample_import_in_progress', {
+                      title: importingSample.title[sampleLanguage],
+                      defaultValue: `Opening ${importingSample.title[sampleLanguage]}…`,
+                    })
+                  : t('snapshot.import_in_progress', 'Importing snapshot…')}
+              </p>
               <p className="snapshot-export-step__subtle">
-                {t('snapshot.import_in_progress_hint', 'Validating archive and rebuilding scenario.')}
+                {importingSample
+                  ? t(
+                      'snapshot.sample_import_in_progress_hint',
+                      'Rebuilding the complete local run. No model call is made.',
+                    )
+                  : t('snapshot.import_in_progress_hint', 'Validating archive and rebuilding scenario.')}
               </p>
             </div>
           )}

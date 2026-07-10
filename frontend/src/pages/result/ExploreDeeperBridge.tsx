@@ -12,8 +12,12 @@ export default function ExploreDeeperBridge() {
     t,
     branches,
     capLoading,
+    capError,
+    reloadCapabilities,
     activeScenarioId,
     capabilities,
+    scenario,
+    storyData,
     analysisBranch,
     isReplayMode,
     replayUrl,
@@ -51,10 +55,38 @@ export default function ExploreDeeperBridge() {
     return null;
   }
 
+  if (capError) {
+    return (
+      <section id="result-bridge" className="result-bridge">
+        <h2 className="result-bridge__heading">{t('result.next_steps_heading')}</h2>
+        <div className="result-bridge__availability-error">
+          <p role="alert">
+            {t(
+              'result.bridge_capabilities_unavailable',
+              'Could not confirm which analysis tools are available. Please retry.',
+            )}
+          </p>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void reloadCapabilities?.()}
+          >
+            {t('result.bridge_capabilities_retry', 'Retry availability check')}
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
   const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
   const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
-  const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
+  const hasCausalGraph = Boolean(scenario?.causal_graph_id);
+  const hasReplayLineage = branches.some((branch) => Boolean(branch.replay_source_branch_id));
+  const hasReplayData = hasReplayLineage || (causalEnabled && hasCausalGraph);
+  const hasFullReport = Boolean(storyData?.full_report);
+  const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false)
+    && branches.length > 1;
   const agentConvEnabled = !!capabilities?.agent_conversation?.enabled;
   const agentsAvailable = agents.length > 0;
   const agentEntryEnabled = agentConvEnabled && agentsAvailable && !isReplayMode;
@@ -107,10 +139,16 @@ export default function ExploreDeeperBridge() {
       key: 'full-report',
       kind: 'link',
       icon: '\u{1F4D1}',
-      titleKey: 'result.bridge_full_report_title',
-      titleDefault: 'Full Report',
-      descKey: 'result.bridge_full_report_desc',
-      descDefault: 'Read the comprehensive scenario report',
+      titleKey: hasFullReport
+        ? 'result.bridge_full_report_read_title'
+        : 'result.bridge_full_report_generate_title',
+      titleDefault: hasFullReport ? 'Read Full Report' : 'Generate Full Report',
+      descKey: hasFullReport
+        ? 'result.bridge_full_report_read_desc'
+        : 'result.bridge_full_report_generate_desc',
+      descDefault: hasFullReport
+        ? 'Read the full report for this run.'
+        : 'Generate a full report for this run.',
       enabled: (capabilities?.result_report?.enabled ?? false) && !isReplayMode,
       href: `/result/${scenarioId}/report`,
       disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
@@ -124,10 +162,18 @@ export default function ExploreDeeperBridge() {
       titleDefault: 'Causal Graph',
       descKey: 'result.next_understand_why_desc',
       descDefault: 'Trace how events led to each ending.',
-      enabled: causalEnabled,
+      enabled: causalEnabled && hasCausalGraph && !isReplayMode,
       href: `/sim/${scenarioId}/causal-map`,
-      disabledKey: 'result.bridge_not_enabled',
-      disabledDefault: 'Not enabled on this server.',
+      disabledKey: isReplayMode
+        ? 'result.bridge_replay_unavailable'
+        : causalEnabled
+          ? 'result.bridge_causal_data_unavailable'
+          : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode
+        ? 'Not available in replay mode.'
+        : causalEnabled
+          ? 'No causal graph data is available for this scenario.'
+          : 'Not enabled on this server.',
     },
     {
       key: 'replay',
@@ -137,10 +183,18 @@ export default function ExploreDeeperBridge() {
       titleDefault: 'Replay Trace',
       descKey: 'result.next_replay_trace_desc',
       descDefault: 'Step through the simulation round by round.',
-      enabled: replayEnabled && !isReplayMode,
+      enabled: replayEnabled && hasReplayData && !isReplayMode,
       href: `/replay/${scenarioId}`,
-      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
-      disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
+      disabledKey: isReplayMode
+        ? 'result.bridge_replay_unavailable'
+        : replayEnabled
+          ? 'result.bridge_replay_data_unavailable'
+          : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode
+        ? 'Not available in replay mode.'
+        : replayEnabled
+          ? 'No replay trace is available for this scenario.'
+          : 'Not enabled on this server.',
     },
     {
       key: 'compare',
@@ -154,8 +208,16 @@ export default function ExploreDeeperBridge() {
       href: analysisBranch && branches.length > 1
         ? `/result/${scenarioId}/compare?branch_a=${encodeURIComponent(analysisBranch.id)}&branch_b=${encodeURIComponent((branches.find(b => b.id !== analysisBranch.id) ?? branches[0]).id)}`
         : '#',
-      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : (branches.length <= 1 ? 'result.bridge_single_branch' : 'result.bridge_not_enabled'),
-      disabledDefault: isReplayMode ? 'Not available in replay mode.' : (branches.length <= 1 ? 'Only one branch — nothing to compare.' : 'Not enabled on this server.'),
+      disabledKey: isReplayMode
+        ? 'result.bridge_replay_unavailable'
+        : branches.length <= 1
+          ? 'result.bridge_single_branch'
+          : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode
+        ? 'Not available in replay mode.'
+        : branches.length <= 1
+          ? 'Only one branch — nothing to compare.'
+          : 'Not enabled on this server.',
     },
     {
       key: 'workbench',
@@ -165,10 +227,18 @@ export default function ExploreDeeperBridge() {
       titleDefault: 'Open Graph Workbench',
       descKey: 'result.bridge_workbench_desc',
       descDefault: 'Compare causal and knowledge graphs side by side',
-      enabled: (causalEnabled || kgEnabled) && !isReplayMode,
+      enabled: (causalEnabled || kgEnabled) && hasCausalGraph && !isReplayMode,
       href: `/workbench/${scenarioId}?view=${workbenchView}${workbenchBranchQuery}`,
-      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
-      disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
+      disabledKey: isReplayMode
+        ? 'result.bridge_replay_unavailable'
+        : (causalEnabled || kgEnabled)
+          ? 'result.bridge_causal_data_unavailable'
+          : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode
+        ? 'Not available in replay mode.'
+        : (causalEnabled || kgEnabled)
+          ? 'No causal graph data is available for this scenario.'
+          : 'Not enabled on this server.',
     },
     {
       key: 'kg-explorer',
@@ -178,10 +248,18 @@ export default function ExploreDeeperBridge() {
       titleDefault: 'Knowledge Graph Explorer',
       descKey: 'result.bridge_kg_explorer_desc',
       descDefault: 'See how characters, events, and claims connect',
-      enabled: kgEnabled && !isReplayMode,
+      enabled: kgEnabled && hasCausalGraph && !isReplayMode,
       href: `/kg-explorer/${scenarioId}`,
-      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
-      disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
+      disabledKey: isReplayMode
+        ? 'result.bridge_replay_unavailable'
+        : kgEnabled
+          ? 'result.bridge_causal_data_unavailable'
+          : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode
+        ? 'Not available in replay mode.'
+        : kgEnabled
+          ? 'No causal graph data is available for this scenario.'
+          : 'Not enabled on this server.',
     },
     {
       key: 'timeline-galaxy',
@@ -191,10 +269,18 @@ export default function ExploreDeeperBridge() {
       titleDefault: 'Timeline Galaxy',
       descKey: 'result.bridge_timeline_galaxy_desc',
       descDefault: 'All the worldlines laid out on one timeline',
-      enabled: kgEnabled && !isReplayMode,
+      enabled: kgEnabled && hasCausalGraph && !isReplayMode,
       href: `/timeline-galaxy/${scenarioId}`,
-      disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
-      disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
+      disabledKey: isReplayMode
+        ? 'result.bridge_replay_unavailable'
+        : kgEnabled
+          ? 'result.bridge_causal_data_unavailable'
+          : 'result.bridge_not_enabled',
+      disabledDefault: isReplayMode
+        ? 'Not available in replay mode.'
+        : kgEnabled
+          ? 'No causal graph data is available for this scenario.'
+          : 'Not enabled on this server.',
     },
     {
       key: 'agents',

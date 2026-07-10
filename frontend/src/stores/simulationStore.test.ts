@@ -25,6 +25,33 @@ vi.mock("../i18n/config", () => ({
 import { useSimulationStore } from "./simulationStore";
 import type { Scenario, WSEvent } from "../types";
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function makeScenario(id: string, overrides: Partial<Scenario> = {}): Scenario {
+  return {
+    id,
+    question: `Scenario ${id}`,
+    status: "simulating",
+    created_at: new Date().toISOString(),
+    total_rounds: 3,
+    mode: "blackboard",
+    agents: [],
+    branches: [],
+    groups: [],
+    hierarchical: false,
+    messages: [],
+    ...overrides,
+  };
+}
+
 // Helper: reset store before each test
 beforeEach(() => {
   useSimulationStore.getState().reset();
@@ -1143,6 +1170,136 @@ describe("simulationStore — reset", () => {
 });
 
 describe("simulationStore — scenario hydration", () => {
+  it("clears the previous scenario immediately when a different scenario starts loading", async () => {
+    const deferred = createDeferred<Scenario>();
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-a", {
+      agents: [{ id: "agent-a", name: "A", role: "A", tier: "CORE", emotion: "neutral" }],
+      branches: [{
+        id: "branch-a",
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: "Branch A",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 1,
+        status: "ACTIVE",
+      }],
+      messages: [{
+        agent: "A",
+        agent_id: "agent-a",
+        branch: "branch-a",
+        round: 1,
+        message: "A-only message",
+        emotion: "neutral",
+      }],
+    }));
+    store.getState().handleWSEvent({
+      type: "agent_speak_start",
+      data: { agent: "A", agent_id: "agent-a", branch: "branch-a", round: 2 },
+    } as WSEvent);
+    getScenarioMock.mockReturnValueOnce(deferred.promise);
+
+    const pendingLoad = store.getState().loadScenario("scenario-b");
+
+    expect(getScenarioMock).toHaveBeenCalledWith("scenario-b");
+    expect(store.getState()).toMatchObject({
+      activeScenarioId: "scenario-b",
+      scenario: null,
+      agents: [],
+      branches: [],
+      messages: [],
+      thinkingAgents: [],
+      status: "idle",
+      currentRound: 0,
+    });
+
+    deferred.resolve(makeScenario("scenario-b"));
+    await pendingLoad;
+  });
+
+  it("ignores an older scenario response that resolves after the new route response", async () => {
+    const scenarioAResponse = createDeferred<Scenario>();
+    const scenarioBResponse = createDeferred<Scenario>();
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-a", { question: "Scenario A" }));
+    getScenarioMock
+      .mockReturnValueOnce(scenarioAResponse.promise)
+      .mockReturnValueOnce(scenarioBResponse.promise);
+
+    const staleLoad = store.getState().loadScenario("scenario-a");
+    const currentLoad = store.getState().loadScenario("scenario-b");
+    scenarioBResponse.resolve(makeScenario("scenario-b", { question: "Scenario B" }));
+    await currentLoad;
+    scenarioAResponse.resolve(makeScenario("scenario-a", {
+      question: "Late Scenario A",
+      status: "done",
+    }));
+    await staleLoad;
+
+    expect(store.getState().activeScenarioId).toBe("scenario-b");
+    expect(store.getState().scenario?.id).toBe("scenario-b");
+    expect(store.getState().scenario?.question).toBe("Scenario B");
+  });
+
+  it("treats same-scenario empty message and branch arrays as authoritative", () => {
+    const store = useSimulationStore;
+    const base = makeScenario("scenario-authoritative-empty");
+    store.getState().setScenario(makeScenario("scenario-authoritative-empty", {
+      branches: [{
+        id: "stale-branch",
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: "",
+        title: "Stale branch",
+        summary: "",
+        story: "",
+        insight: "",
+        key_moments: [],
+        probability: 1,
+        status: "ACTIVE",
+      }],
+      messages: [{
+        agent: "Stale",
+        agent_id: "stale-agent",
+        branch: "stale-branch",
+        round: 1,
+        message: "Stale message",
+        emotion: "neutral",
+      }],
+    }));
+
+    store.getState().setScenario({ ...base, branches: [], messages: [] });
+
+    expect(store.getState().branches).toEqual([]);
+    expect(store.getState().messages).toEqual([]);
+    expect(store.getState().scenario?.branches).toEqual([]);
+    expect(store.getState().scenario?.messages).toEqual([]);
+  });
+
+  it("ignores websocket events tagged for a different scenario", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-b"));
+
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "Late A",
+        agent_id: "agent-a",
+        branch: "branch-a",
+        round: 2,
+        message: "Late A message",
+        emotion: "neutral",
+      },
+    } as WSEvent, "scenario-a");
+
+    expect(store.getState().messages).toEqual([]);
+    expect(store.getState().thinkingAgents).toEqual([]);
+  });
+
   it("defaults to classic mode for completed scenarios even with visualization enabled", () => {
     const store = useSimulationStore;
 

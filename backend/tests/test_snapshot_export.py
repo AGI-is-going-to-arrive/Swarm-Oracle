@@ -516,7 +516,7 @@ def test_export_redacts_causal_graph_payload_json_strings():
             snapshot_id=snapshot.id,
             node_key="secret-node-a",
             node_type="event",
-            label="safe label",
+            label="Node OPENAI_API_KEY=node-label-secret",
             round_number=1,
             payload_json=json.dumps(
                 {
@@ -545,7 +545,7 @@ def test_export_redacts_causal_graph_payload_json_strings():
                 target_node_id=node_b.id,
                 edge_type="caused",
                 weight=0.8,
-                label="edge label api_key=edge-secret-123456",
+                label="Edge ANTHROPIC_API_KEY=edge-label-secret",
                 payload_json=json.dumps(
                     {
                         "summary": "visible",
@@ -553,7 +553,10 @@ def test_export_redacts_causal_graph_payload_json_strings():
                     }
                 ),
                 confidence_tier="high",
-                source_ref="https://edge-user:edge-pass@example.com/v1",
+                source_ref=(
+                    "http://edge-user:edge-pass@localhost:11434/v1"
+                    "?access_token=edge-query-secret&model=local"
+                ),
                 source_round_number=1,
                 evidence_json=json.dumps(
                     {
@@ -581,17 +584,337 @@ def test_export_redacts_causal_graph_payload_json_strings():
     assert edge_payload == {"summary": "visible"}
     assert edge_evidence["quote"] == "[redacted-key]"
     assert edge_evidence["nested"] == {}
-    assert graph["edges"][0]["source_ref"] == "https://example.com/v1"
+    assert graph["nodes"][0]["label"] == "Node api key [redacted]"
+    assert graph["edges"][0]["label"] == "Edge api key [redacted]"
+    assert graph["edges"][0]["source_ref"] == (
+        "http://localhost:11434/v1?access_token=[redacted]&model=local"
+    )
     for needle in (
         b"sk-node-secret",
         b"user:pass",
         b"xai-node-secret",
-        b"api_key=edge-secret",
+        b"node-label-secret",
+        b"edge-label-secret",
         b"edge-user:edge-pass",
+        b"edge-query-secret",
         b"sk-ant-edge-secret",
         b"sk-edge-secret",
     ):
         assert needle not in raw
+
+
+def test_export_scrubs_credentials_from_free_text_without_changing_normal_content():
+    scenario = Scenario(
+        question="Ordinary question; api_key=sk-question-secret-123456",
+        status=ScenarioStatus.DONE,
+        user_id="owner-1",
+        parsed_context={"safe_note": "ordinary context"},
+    )
+    with Session(get_engine()) as session:
+        session.add(scenario)
+        session.flush()
+        branch = Branch(
+            scenario_id=scenario.id,
+            fork_reason="Ordinary fork reason",
+            title="Ordinary branch title",
+            description="Credential URL https://branch-user:branch-pass@example.com/v1",
+            summary="Ordinary summary",
+            story="Ordinary story with Bearer story-token-123456",
+            insight="Ordinary insight",
+            probability=1.0,
+            status=BranchStatus.COMPLETED,
+        )
+        agent = Agent(
+            scenario_id=scenario.id,
+            name="Ordinary agent",
+            role="Ordinary role",
+            persona="Ordinary persona with sk-persona-secret-123456",
+            tier=AgentTier.CORE,
+            stance="Ordinary stance",
+            emotion="calm",
+        )
+        session.add_all([branch, agent])
+        session.flush()
+        round_row = Round(branch_id=branch.id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        session.add(
+            AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content="Ordinary message; Bearer message-token-123456",
+                emotion="calm",
+                diverge="Ordinary divergence api-key=sk-diverge-secret-123456",
+            )
+        )
+        session.add(
+            InterventionLog(
+                scenario_id=scenario.id,
+                branch_id=branch.id,
+                round_number=1,
+                user_input="Ordinary intervention api_key=sk-intervention-secret-123456",
+            )
+        )
+        graph_snapshot = GraphSnapshot(
+            owner_type="scenario",
+            owner_id=scenario.id,
+            graph_kind="causal_review",
+            metadata_json=json.dumps(
+                {
+                    "safe_note": "ordinary graph metadata",
+                    "auth_note": "Bearer graph-token-123456",
+                    "credential_url": "https://graph-user:graph-pass@example.com/meta",
+                }
+            ),
+        )
+        session.add(graph_snapshot)
+        session.commit()
+        scenario_id = scenario.id
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+        branch_payload = json.loads(zf.read("branches.jsonl").decode("utf-8"))
+        agent_payload = json.loads(zf.read("agents.jsonl").decode("utf-8"))
+        message_payload = json.loads(zf.read("messages.jsonl").decode("utf-8"))
+        intervention_payload = json.loads(
+            zf.read("intervention_receipts.jsonl").decode("utf-8")
+        )
+        graph_payload = json.loads(zf.read("causal_graph.json"))
+
+    assert scenario_payload["question"] == "Ordinary question; api key [redacted]"
+    assert branch_payload["title"] == "Ordinary branch title"
+    assert branch_payload["fork_reason"] == "Ordinary fork reason"
+    assert branch_payload["summary"] == "Ordinary summary"
+    assert branch_payload["story"] == "Ordinary story with [redacted-bearer]"
+    assert branch_payload["description"] == "Credential URL https://example.com/v1"
+    assert agent_payload["name"] == "Ordinary agent"
+    assert agent_payload["role"] == "Ordinary role"
+    assert agent_payload["persona"] == "Ordinary persona with [redacted-key]"
+    assert message_payload["content"] == "Ordinary message; [redacted-bearer]"
+    assert message_payload["diverge"] == "Ordinary divergence api key [redacted]"
+    assert intervention_payload["user_input"] == (
+        "Ordinary intervention api key [redacted]"
+    )
+    graph_metadata = json.loads(graph_payload["snapshot"]["metadata_json"])
+    assert graph_metadata == {
+        "safe_note": "ordinary graph metadata",
+        "auth_note": "[redacted-bearer]",
+        "credential_url": "https://example.com/meta",
+    }
+
+
+def test_export_scrubber_is_context_sensitive_and_keeps_localhost_urls():
+    scenario = Scenario(
+        question=(
+            "The bearer of bad news kept http://localhost:11434/v1?model=local; "
+            "OPENAI_API_KEY=foo123 and ANTHROPIC_API_KEY=secret123; "
+            "credential URL http://localhost:11434/v1?access_token=querysecret&model=local"
+        ),
+        status=ScenarioStatus.DONE,
+        parsed_context={
+            "natural_phrase": "The bearer of bad news",
+            "provider_assignment": "OPENAI_API_KEY=foo123",
+            "local_credential_url": (
+                "http://localhost:11434/v1?access_token=querysecret&model=local"
+            ),
+        },
+    )
+    with Session(get_engine()) as session:
+        session.add(scenario)
+        session.flush()
+        session.add(
+            GraphSnapshot(
+                owner_type="scenario",
+                owner_id=scenario.id,
+                graph_kind="causal_review",
+                metadata_json=json.dumps(
+                    {
+                        "natural_phrase": "The bearer of bad news",
+                        "provider_assignment": "ANTHROPIC_API_KEY=secret123",
+                    }
+                ),
+            )
+        )
+        session.commit()
+        scenario_id = scenario.id
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+        graph_payload = json.loads(zf.read("causal_graph.json"))
+
+    assert scenario_payload["question"] == (
+        "The bearer of bad news kept http://localhost:11434/v1?model=local; "
+        "api key [redacted] and api key [redacted]; "
+        "credential URL "
+        "http://localhost:11434/v1?access_token=[redacted]&model=local"
+    )
+    assert "foo123" not in scenario_payload["question"]
+    assert "secret123" not in scenario_payload["question"]
+    assert "querysecret" not in scenario_payload["question"]
+    assert scenario_payload["parsed_context"] == {
+        "natural_phrase": "The bearer of bad news",
+        "provider_assignment": "api key [redacted]",
+        "local_credential_url": (
+            "http://localhost:11434/v1?access_token=[redacted]&model=local"
+        ),
+    }
+    assert json.loads(graph_payload["snapshot"]["metadata_json"]) == {
+        "natural_phrase": "The bearer of bad news",
+        "provider_assignment": "api key [redacted]",
+    }
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    ["secret", "sig", "signature", "key", "client_secret", "X-Amz-Signature"],
+)
+def test_export_scrubs_common_short_query_credentials(parameter: str):
+    credential = "abc123"
+    url = f"https://api.example.test/v1?{parameter}={credential}&model=local"
+    scenario = Scenario(
+        question=f"Credential URL {url}",
+        status=ScenarioStatus.DONE,
+        web_context_json=json.dumps({"url": url}),
+    )
+    with Session(get_engine()) as session:
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    redacted_url = (
+        f"https://api.example.test/v1?{parameter}=[redacted]&model=local"
+    )
+    assert scenario_payload["question"] == f"Credential URL {redacted_url}"
+    assert json.loads(scenario_payload["web_context_json"]) == {"url": redacted_url}
+    assert credential.encode() not in raw
+
+
+def test_export_bearer_scrubbing_requires_credential_shaped_token():
+    scenario_id = _seed_scenario(
+        question=(
+            "Bearer bonds remain transferable. "
+            "The bearer presented the document. "
+            "The standard bearer carried the flag. "
+            "They called him the bearer of bad news. "
+            "Authorization used Bearer opaque-token-123456 before continuing."
+        ),
+        api_key_in_context=False,
+    )
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    assert scenario_payload["question"] == (
+        "Bearer bonds remain transferable. "
+        "The bearer presented the document. "
+        "The standard bearer carried the flag. "
+        "They called him the bearer of bad news. "
+        "Authorization used [redacted-bearer] before continuing."
+    )
+    assert b"opaque-token-123456" not in raw
+
+
+def test_export_scrubs_short_bearer_token_in_authorization_context():
+    scenario_id = _seed_scenario(
+        question="Authorization: Bearer abc123",
+        api_key_in_context=False,
+    )
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    assert scenario_payload["question"] == "Authorization: [redacted-bearer]"
+    assert b"abc123" not in raw
+
+
+def test_export_scrubs_credential_shaped_candidate_after_article_bearer():
+    scenario_id = _seed_scenario(
+        question="Use the bearer abc123",
+        api_key_in_context=False,
+    )
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    assert scenario_payload["question"] == "Use the [redacted-bearer]"
+    assert b"abc123" not in raw
+
+
+@pytest.mark.parametrize("token", ["abc123", "localsecret", "bonds"])
+def test_export_scrubs_short_bearer_token_without_authorization_label(token: str):
+    scenario_id = _seed_scenario(
+        question=f"Local gateway token: Bearer {token}",
+        api_key_in_context=False,
+    )
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    assert scenario_payload["question"] == "Local gateway token: [redacted-bearer]"
+    assert token.encode() not in raw
+
+
+def test_export_scrubs_credentials_from_quoted_json_text():
+    scenario_id = _seed_scenario(
+        question=(
+            'Embedded {"OPENAI_API_KEY":"dummysecret123"} and '
+            '{"Authorization":"Bearer abc123"}'
+        ),
+        api_key_in_context=False,
+    )
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        archive_content = b"\n".join(zf.read(name) for name in zf.namelist())
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    assert scenario_payload["question"] == (
+        'Embedded {"OPENAI_API_KEY":"[redacted]"} and '
+        '{"Authorization":"[redacted-bearer]"}'
+    )
+    assert b"dummysecret123" not in archive_content
+    assert b"abc123" not in archive_content
+
+
+def test_export_preserves_multiline_natural_language_bearer():
+    scenario_id = _seed_scenario(
+        question="The bearer\npresented the document.",
+        api_key_in_context=False,
+    )
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    assert scenario_payload["question"] == "The bearer\npresented the document."
 
 
 def test_export_includes_intervention_receipts_and_redacts_summary_secrets():
@@ -979,6 +1302,81 @@ def test_import_creates_new_scenario_with_remapped_ids():
         assert edges[0].target_node_id in node_ids
 
 
+@pytest.mark.parametrize(
+    ("ref_model", "source_ref_id", "expected_target"),
+    [
+        ("agent_message", "message-old", "message"),
+        ("branch", "branch-old", "branch"),
+        ("agent_message", "missing-message", None),
+        ("branch", "missing-branch", None),
+    ],
+    ids=("message", "branch", "missing-message", "missing-branch"),
+)
+def test_import_remaps_or_clears_causal_graph_direct_ref_id(
+    ref_model: str,
+    source_ref_id: str,
+    expected_target: str | None,
+):
+    graph_payload = {
+        "snapshot": {
+            "graph_kind": "causal_review",
+        },
+        "nodes": [
+            {
+                "id": "node-old",
+                "node_key": "direct-ref-node",
+                "node_type": "event",
+                "ref_model": ref_model,
+                "ref_id": source_ref_id,
+            }
+        ],
+        "edges": [],
+    }
+    payloads = {
+        "scenario.json": json.dumps(
+            {"question": "direct graph reference", "status": "done"}
+        ).encode("utf-8"),
+        "branches.jsonl": b'{"id":"branch-old","status":"COMPLETED"}',
+        "agents.jsonl": b'{"id":"agent-old","name":"Agent"}',
+        "messages.jsonl": (
+            b'{"id":"message-old","round_id":"round-old",'
+            b'"branch_id":"branch-old","round_number":1,'
+            b'"agent_id":"agent-old","content":"evidence"}'
+        ),
+        "causal_graph.json": json.dumps(graph_payload).encode("utf-8"),
+    }
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        new_scenario_id = import_snapshot_zip(blob, "importer-graph-ref", session)
+
+    with Session(get_engine()) as session:
+        imported_branch = session.exec(
+            select(Branch).where(Branch.scenario_id == new_scenario_id)
+        ).one()
+        imported_round = session.exec(
+            select(Round).where(Round.branch_id == imported_branch.id)
+        ).one()
+        imported_message = session.exec(
+            select(AgentMessage).where(AgentMessage.round_id == imported_round.id)
+        ).one()
+        imported_snapshot = session.exec(
+            select(GraphSnapshot).where(
+                GraphSnapshot.owner_type == "scenario",
+                GraphSnapshot.owner_id == new_scenario_id,
+            )
+        ).one()
+        imported_node = session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id == imported_snapshot.id)
+        ).one()
+
+    expected_ref_id = {
+        "message": imported_message.id,
+        "branch": imported_branch.id,
+    }.get(expected_target)
+    assert imported_node.ref_id == expected_ref_id
+
+
 def test_import_restores_intervention_receipts_with_remapped_branch_ids():
     scenario_id = _seed_scenario(api_key_in_context=False)
     root_id, _ = _seed_branch_tree(scenario_id)
@@ -1353,6 +1751,60 @@ def test_import_rejects_malformed_numeric_fields():
             import_snapshot_zip(blob, "importer-number", session)
 
     assert "probability" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("branch_rows", "error_pattern"),
+    [
+        (
+            [{"title": "missing id"}],
+            "has no branch id",
+        ),
+        (
+            [{"id": "duplicate"}, {"id": "duplicate"}],
+            "Duplicate branch id",
+        ),
+        (
+            [{"id": "child", "parent_branch_id": "missing"}],
+            "unknown parent branch",
+        ),
+        (
+            [{"id": "self", "parent_branch_id": "self"}],
+            "cannot be its own parent",
+        ),
+        (
+            [
+                {"id": "branch-a", "parent_branch_id": "branch-b"},
+                {"id": "branch-b", "parent_branch_id": "branch-a"},
+            ],
+            "cycle",
+        ),
+    ],
+    ids=("missing-id", "duplicate-id", "missing-parent", "self-parent", "cycle"),
+)
+def test_import_rejects_invalid_branch_graph_before_persisting(
+    branch_rows: list[dict[str, Any]],
+    error_pattern: str,
+):
+    payloads = {
+        "scenario.json": json.dumps({"question": "invalid branch graph"}).encode(),
+        "branches.jsonl": "\n".join(
+            json.dumps(row) for row in branch_rows
+        ).encode(),
+        "agents.jsonl": b"",
+        "messages.jsonl": b"",
+        "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+    }
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        before_ids = set(session.exec(select(Scenario.id)).all())
+        with pytest.raises(SnapshotImportError, match=error_pattern):
+            import_snapshot_zip(blob, "importer-invalid-graph", session)
+        session.expire_all()
+        after_ids = set(session.exec(select(Scenario.id)).all())
+
+    assert after_ids == before_ids
 
 
 def test_build_snapshot_manifest_lists_expected_files():

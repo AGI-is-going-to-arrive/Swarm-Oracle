@@ -666,6 +666,40 @@ export async function importScenarioSnapshot(
   );
 }
 
+export interface OfficialSampleSummary {
+  id: string;
+  question: string;
+  scene_theme: string | null;
+  title: { zh: string; en: string };
+  summary: { zh: string; en: string };
+  agent_count: number;
+  outcome_count: number;
+}
+
+export interface OfficialSamplesResponse {
+  catalog_version: string;
+  count: number;
+  samples: OfficialSampleSummary[];
+}
+
+/** List local, server-bundled sample scenarios. */
+export async function getOfficialSamples(
+  options?: RequestOptions,
+): Promise<OfficialSamplesResponse> {
+  return safeGet<OfficialSamplesResponse>('/samples', options);
+}
+
+/** Import one exact catalog sample without requiring a local file picker. */
+export async function importOfficialSample(
+  sampleId: string,
+  options?: RequestOptions,
+): Promise<{ scenario_id: string; sample_id: string; status: string }> {
+  return request(
+    `/samples/${encodeURIComponent(sampleId)}/import`,
+    { method: 'POST', signal: options?.signal },
+  );
+}
+
 /** Native-search static probe result for a model profile's base_url + override.
  *  Distinct from `web_search` (which is a server-level external-search hint). */
 export interface NativeSearchProbe {

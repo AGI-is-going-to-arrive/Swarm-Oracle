@@ -60,6 +60,7 @@ type ActiveSimulationStatus = Exclude<SimulationState['status'], 'idle'>;
 
 export interface SimulationState {
   // Data
+  activeScenarioId: string | null;
   scenario: Scenario | null;
   agents: AgentInfo[];
   branches: BranchInfo[];
@@ -104,9 +105,9 @@ export interface SimulationState {
   abortStartSimulation: () => void;
   setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => void;
   loadScenario: (id: string) => Promise<void>;
-  handleWSEvent: (event: WSEvent) => void;
+  handleWSEvent: (event: WSEvent, sourceScenarioId?: string) => void;
   toggleViewMode: () => void;
-  setCancelled: (reason?: string) => void;
+  setCancelled: (reason?: string, sourceScenarioId?: string) => void;
   reset: () => void;
 }
 
@@ -117,6 +118,7 @@ interface InterventionLogEntry {
 }
 
 const initialState = {
+  activeScenarioId: null as string | null,
   scenario: null,
   agents: [] as AgentInfo[],
   branches: [] as BranchInfo[],
@@ -151,6 +153,16 @@ const initialState = {
 };
 
 let activeStartSimulationController: AbortController | null = null;
+let activeScenarioLoadController: AbortController | null = null;
+let activeScenarioLoadId: string | null = null;
+let scenarioLoadEpoch = 0;
+
+function invalidateScenarioLoad() {
+  activeScenarioLoadController?.abort();
+  activeScenarioLoadController = null;
+  activeScenarioLoadId = null;
+  scenarioLoadEpoch += 1;
+}
 
 function appendInterventionLog(
   current: InterventionLogEntry[],
@@ -168,8 +180,8 @@ function mergeMessages(
   incoming: AgentMessage[],
   scenarioId: string | null | undefined,
 ): AgentMessage[] {
+  if (incoming.length === 0) return [];
   if (current.length === 0) return incoming.slice(-MAX_MESSAGES);
-  if (incoming.length === 0) return current.slice(-MAX_MESSAGES);
 
   const merged = [...incoming];
   const seen = new Set(incoming.map((message) => messageDedupKey(message, scenarioId)));
@@ -194,8 +206,8 @@ function mergeBranch(current: BranchInfo, incoming: BranchInfo): BranchInfo {
 }
 
 function mergeBranches(current: BranchInfo[], incoming: BranchInfo[]): BranchInfo[] {
+  if (incoming.length === 0) return [];
   if (current.length === 0) return incoming;
-  if (incoming.length === 0) return current;
 
   const currentById = new Map(current.map((branch) => [branch.id, branch]));
   const merged = incoming.map((branch) => {
@@ -257,6 +269,7 @@ function applyScenarioSnapshot(
   }
 
   return {
+    activeScenarioId: scenario.id,
     scenario: {
       ...scenario,
       status: nextScenarioStatus,
@@ -299,6 +312,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   ...initialState,
 
   startSimulation: async (options: CreateScenarioOptions) => {
+    invalidateScenarioLoad();
     activeStartSimulationController?.abort();
     const controller = new AbortController();
     activeStartSimulationController = controller;
@@ -326,6 +340,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       }
       const resolvedVisualizationEnabled = scenario.visualization_enabled ?? options.visualizationEnabled ?? false;
       set({
+        activeScenarioId: scenario.id,
         scenario,
         agents: scenario.agents as AgentInfo[],
         branches: scenario.branches as BranchInfo[],
@@ -376,14 +391,43 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   },
 
   setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {
+    if (activeScenarioLoadId && activeScenarioLoadId !== s.id) {
+      invalidateScenarioLoad();
+    }
     set((state) => applyScenarioSnapshot(state, s, options));
   },
 
   loadScenario: async (id: string) => {
+    activeScenarioLoadController?.abort();
+    const controller = new AbortController();
+    activeScenarioLoadController = controller;
+    activeScenarioLoadId = id;
+    const loadEpoch = scenarioLoadEpoch + 1;
+    scenarioLoadEpoch = loadEpoch;
+    const isCurrentLoad = () => (
+      !controller.signal.aborted
+      && activeScenarioLoadController === controller
+      && activeScenarioLoadId === id
+      && scenarioLoadEpoch === loadEpoch
+    );
+
+    set((state) => {
+      if (state.activeScenarioId === id && state.scenario?.id === id) {
+        return state;
+      }
+      rebuildSeenMessageKeys([], id);
+      return {
+        ...initialState,
+        activeScenarioId: id,
+      };
+    });
+
     try {
       const s = await getScenario(id);
+      if (!isCurrentLoad() || s.id !== id) return;
       set((state) => applyScenarioSnapshot(state, s));
     } catch (err) {
+      if (!isCurrentLoad()) return;
       set({
         errorCode: getApiErrorCode(err),
         error: getLocalizedApiErrorMessage(
@@ -392,11 +436,20 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           translate('common.api_errors.scenario_load_failed'),
         ),
       });
+    } finally {
+      if (activeScenarioLoadController === controller) {
+        activeScenarioLoadController = null;
+        activeScenarioLoadId = null;
+      }
     }
   },
 
-  handleWSEvent: (event: WSEvent) => {
-    const currentScenarioId = useSimulationStore.getState().scenario?.id ?? null;
+  handleWSEvent: (event: WSEvent, sourceScenarioId?: string) => {
+    const currentState = useSimulationStore.getState();
+    const currentScenarioId = currentState.activeScenarioId ?? currentState.scenario?.id ?? null;
+    if (sourceScenarioId && currentScenarioId !== sourceScenarioId) {
+      return;
+    }
     if (currentScenarioId && currentScenarioId !== _seenScenarioId) {
       seenMessageKeys = new Set<string>();
       _seenScenarioId = currentScenarioId;
@@ -852,16 +905,22 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       };
     }),
 
-  setCancelled: (reason?: string) =>
-    set(() => ({
-      status: 'cancelled',
-      cancelReason: reason ?? 'user_cancelled',
-      thinkingAgents: [],
-      error: null,
-      errorCode: null,
-    })),
+  setCancelled: (reason?: string, sourceScenarioId?: string) =>
+    set((state) => {
+      if (sourceScenarioId && state.activeScenarioId !== sourceScenarioId) {
+        return state;
+      }
+      return {
+        status: 'cancelled',
+        cancelReason: reason ?? 'user_cancelled',
+        thinkingAgents: [],
+        error: null,
+        errorCode: null,
+      };
+    }),
 
   reset: () => {
+    invalidateScenarioLoad();
     seenMessageKeys = new Set<string>();
     _seenScenarioId = null;
     set(initialState);

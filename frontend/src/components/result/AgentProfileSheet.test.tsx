@@ -50,6 +50,19 @@ void i18n.init({
             source_replay: 'Replay',
             source_generated: 'AI-generated',
             start_conversation: 'Start conversation',
+            state_reference_title: 'State reference',
+            baseline_stance_label: 'Configured stance',
+            observed_emotion_label: 'Observed emotion',
+            configured_emotion_label: 'Configured starting emotion',
+            snapshot_emotion_label: 'Scenario emotion snapshot',
+            live_observation_source: 'Latest observed on {{branch}} · R{{round}}',
+            replay_observation_source: 'Replay selection {{selectedBranch}} · R{{selectedRound}}; latest matching observation {{branch}} · R{{round}}',
+            replay_no_observation_source: 'No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.',
+            no_observation_value: 'No matching observation',
+            baseline_emotion_source: 'No message observation yet; showing the configured starting emotion.',
+            snapshot_emotion_source: 'No branch and round observation context is available for this snapshot.',
+            knowledge_domains_title: 'Knowledge domains',
+            decision_bias_title: 'Decision style',
           },
         },
       },
@@ -82,7 +95,23 @@ function makeResponse(overrides?: Partial<ScenarioAgentProfileResponse>): Scenar
   };
 }
 
-function renderSheet(agent: AgentInfo | null, onClose = vi.fn(), onStartConversation?: (agent: AgentInfo) => void) {
+interface TestProfileObservation {
+  emotion: string | null;
+  source: 'live' | 'replay' | 'replay_unavailable' | 'baseline' | 'snapshot';
+  branchId: string | null;
+  branchTitle: string | null;
+  round: number | null;
+  selectedBranchId?: string | null;
+  selectedBranchTitle?: string | null;
+  selectedRound?: number | null;
+}
+
+function renderSheet(
+  agent: AgentInfo | null,
+  onClose = vi.fn(),
+  onStartConversation?: (agent: AgentInfo) => void,
+  observation?: TestProfileObservation,
+) {
   return render(
     <I18nextProvider i18n={i18n}>
       <AgentProfileSheet
@@ -90,6 +119,7 @@ function renderSheet(agent: AgentInfo | null, onClose = vi.fn(), onStartConversa
         userId="user-1"
         onClose={onClose}
         onStartConversation={onStartConversation}
+        observation={observation}
       />
     </I18nextProvider>,
   );
@@ -257,6 +287,134 @@ describe('AgentProfileSheet', () => {
       'Shifted towards diplomacy',
     );
     expect(screen.queryByTestId('agent-profile-sheet-empty')).not.toBeInTheDocument();
+  });
+
+  it('shows configured stance and a sourced observation instead of the mutable agent emotion', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(
+      makeResponse({
+        profile: {
+          id: 'identity-1',
+          user_id: 'user-1',
+          kind: 'generated',
+          display_name: 'Ada',
+          role: 'Systems analyst',
+          continuity_key: 'ada',
+          decision_bias: {
+            caution: 0.8,
+            optimism: 'not-a-number',
+            creativity: 2,
+            unsafe_extra: '<script>',
+          },
+          knowledge_domains: ['technology', 'law'],
+          created_at: null,
+          updated_at: null,
+        },
+      }),
+    );
+
+    renderSheet(
+      makeAgent({ stance: 'Protect the audit trail', emotion: 'stale-global-value' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: 'focused',
+        source: 'live',
+        branchId: 'branch-a',
+        branchTitle: 'Audit survives',
+        round: 4,
+      },
+    );
+
+    expect(await screen.findByTestId('agent-profile-sheet-current-state')).toHaveTextContent(
+      'Configured stanceProtect the audit trail',
+    );
+    expect(screen.getByTestId('agent-profile-sheet-current-state')).toHaveTextContent(
+      'Observed emotionfocused',
+    );
+    expect(screen.getByTestId('agent-profile-sheet-current-state')).toHaveTextContent(
+      'Latest observed on Audit survives · R4',
+    );
+    expect(screen.getByTestId('agent-profile-sheet-current-state')).not.toHaveTextContent(
+      'stale-global-value',
+    );
+    expect(screen.getByTestId('agent-profile-sheet-domains')).toHaveTextContent('technology');
+    expect(screen.getByTestId('agent-profile-sheet-domains')).toHaveTextContent('law');
+    const bias = screen.getByTestId('agent-profile-sheet-decision-bias');
+    expect(bias).toHaveTextContent('Caution');
+    expect(bias).toHaveTextContent('80%');
+    expect(bias).toHaveTextContent('Creativity');
+    expect(bias).toHaveTextContent('100%');
+    expect(bias).not.toHaveTextContent('Optimism');
+    expect(bias).not.toHaveTextContent('unsafe_extra');
+    expect(bias).not.toHaveTextContent('<script>');
+  });
+
+  it('labels an unscoped caller value as a scenario snapshot rather than a current or configured emotion', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(makeAgent({ emotion: 'calm-snapshot' }));
+
+    const state = await screen.findByTestId('agent-profile-sheet-current-state');
+    expect(state).toHaveTextContent('Scenario emotion snapshotcalm-snapshot');
+    expect(state).toHaveTextContent(
+      'No branch and round observation context is available for this snapshot.',
+    );
+    expect(state).not.toHaveTextContent('Configured starting emotion');
+  });
+
+  it('labels replay emotion with both the selected context and actual matching observation', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(
+      makeAgent({ emotion: 'stale-other-branch' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: 'cautious',
+        source: 'replay',
+        branchId: 'root',
+        branchTitle: 'Shared history',
+        round: 1,
+        selectedBranchId: 'child',
+        selectedBranchTitle: 'Diplomatic fork',
+        selectedRound: 2,
+      },
+    );
+
+    expect(await screen.findByTestId('agent-profile-sheet-current-state')).toHaveTextContent(
+      'Replay selection Diplomatic fork · R2; latest matching observation Shared history · R1',
+    );
+    expect(screen.getByTestId('agent-profile-sheet-current-state')).toHaveTextContent('cautious');
+    expect(screen.getByTestId('agent-profile-sheet-current-state')).not.toHaveTextContent(
+      'stale-other-branch',
+    );
+  });
+
+  it('does not fall back to a cross-branch agent emotion when replay has no matching observation', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(
+      makeAgent({ emotion: 'emotion-from-another-branch' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: null,
+        source: 'replay_unavailable',
+        branchId: null,
+        branchTitle: null,
+        round: null,
+        selectedBranchId: 'child',
+        selectedBranchTitle: 'Diplomatic fork',
+        selectedRound: 2,
+      },
+    );
+
+    const state = await screen.findByTestId('agent-profile-sheet-current-state');
+    expect(state).toHaveTextContent('No matching observation');
+    expect(state).toHaveTextContent(
+      'No matching observation in replay selection Diplomatic fork · R2.',
+    );
+    expect(state).not.toHaveTextContent('emotion-from-another-branch');
   });
 
   it('race-guards: ignores stale fetch resolutions when agent changes mid-flight', async () => {

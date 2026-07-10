@@ -600,6 +600,7 @@ test("release signoff includes the graph-focused vitest gate", () => {
       "src/pages/CausalReviewView.test.tsx",
       "src/pages/ReplayEmptyState.test.tsx",
       "src/pages/ResultView.test.tsx",
+      "src/scripts/releaseSignoff.test.ts",
       "src/i18n/locales.test.ts",
     ],
   );

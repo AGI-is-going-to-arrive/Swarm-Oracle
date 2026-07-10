@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -90,6 +91,9 @@ except ImportError:
 
 # Phase 3 F5: Faction detection hook (non-blocking)
 try:
+    from app.services.factions import (
+        build_previous_round_relationship_contexts as _factions_relationship_contexts,
+    )
     from app.services.factions import process_round as _factions_process
     _FACTIONS_AVAILABLE = True
 except ImportError:
@@ -179,6 +183,7 @@ _FATAL_AGENT_TURN_LLM_CODES = frozenset({
     "LLM_EMPTY",
 })
 _AGENT_TURN_PROMPT_PREFIX_MARKER = "SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT"
+_BLACKBOARD_OWN_MEMORY_TOP_K = 3
 _FORK_TITLE_REWRITE_MARKER = "FORK_TITLE_REWRITE"
 _FORK_TITLE_FORBIDDEN_JARGON = (
     "page-fault-terminal",
@@ -2307,6 +2312,84 @@ async def clear_pending_interventions_for_branch(scenario_id: str, branch_id: st
         pending_interventions.pop(key, None)
 
 
+def _clone_agent_states(
+    agents: list[dict[str, Any]],
+    *,
+    checkpoint_states: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Deep-copy agent runtime state and optionally overlay a checkpoint."""
+    cloned = copy.deepcopy(agents)
+    if not checkpoint_states:
+        return cloned
+
+    checkpoint_by_agent = {
+        str(state.get("agent_id") or ""): state
+        for state in checkpoint_states
+        if str(state.get("agent_id") or "")
+    }
+    for agent in cloned:
+        checkpoint = checkpoint_by_agent.get(str(agent.get("id") or ""))
+        if checkpoint is None:
+            continue
+        if "stance" in checkpoint:
+            agent["stance"] = checkpoint["stance"]
+        if "emotion" in checkpoint:
+            agent["emotion"] = checkpoint["emotion"]
+    return cloned
+
+
+def _branch_memory_round_limits(
+    engine: Any,
+    branch_id: str,
+    *,
+    current_round: int,
+    agent_id: str | None = None,
+) -> dict[str, int]:
+    """Return branch lineage with per-branch causal round ceilings.
+
+    A replay child may point at a source branch that continued after the
+    selected fork. Its memory scope must stop at the actual cloned fork round,
+    otherwise later source knowledge leaks into the counterfactual.
+    """
+    root_id = str(branch_id or "").strip()
+    if not root_id:
+        return {}
+
+    limits: dict[str, int] = {}
+    seen: set[str] = set()
+    current_id = root_id
+    root_limit = max(0, int(current_round) - 1)
+    current_limit = root_limit
+    normalized_agent_id = str(agent_id or "").strip()
+    with Session(engine) as session:
+        while current_id:
+            if current_id in seen:
+                logger.warning(
+                    "Cyclic branch memory lineage detected at %s; ancestry ignored",
+                    current_id,
+                )
+                return {root_id: root_limit}
+            seen.add(current_id)
+            branch = session.get(Branch, current_id)
+            if branch is None:
+                break
+            limits[branch.id] = current_limit
+            parent_id = str(branch.parent_branch_id or "").strip()
+            if not parent_id:
+                break
+            fork_limit = int(branch.fork_round or 0)
+            if (
+                branch.replay_kind == "counterfactual"
+                and normalized_agent_id
+                and str(branch.replay_source_agent_id or "").strip()
+                == normalized_agent_id
+            ):
+                fork_limit -= 1
+            current_limit = min(current_limit, max(0, fork_limit))
+            current_id = parent_id
+    return limits
+
+
 def _resolve_hierarchical_agent_sets(
     agents: list[dict[str, Any]],
     group_leaders: dict[str, str],
@@ -2876,22 +2959,10 @@ async def _run_simulation_impl(
         logger.info("Hierarchical mode: %d groups, %d agents mapped",
                     len(group_leaders), len(agent_to_group))
 
-    # Separate leaders from workers for hierarchical sim
-    leader_agents = []
-    worker_agents = []
-    if hierarchical:
-        leader_agents, worker_agents, group_leaders = _resolve_hierarchical_agent_sets(
-            agents,
-            group_leaders,
-            agent_to_group,
-        )
-        logger.info("Leaders: %d, Workers: %d", len(leader_agents), len(worker_agents))
-
     await push({"type": "status", "data": {"status": "simulating", "hierarchical": hierarchical}})
 
     # V2: Build visualization broadcaster
     viz_mapper = None
-    agent_prev_emotions: dict[str, str] = {}   # track emotion changes per agent
     last_card_round: int | None = None          # card event cooldown tracker
     if viz_enabled and _VIZ_AVAILABLE:
         viz_mapper = VisualizationMapper()
@@ -2925,10 +2996,6 @@ async def _run_simulation_impl(
         viz_scene_evt = viz_mapper.map_scene_change(resolved_theme)
         await push(viz_scene_evt)
 
-        # Initialize emotion baselines from agent data
-        for a in agents:
-            agent_prev_emotions[a["id"]] = a.get("emotion", "neutral") or "neutral"
-
         logger.info("V2 Visualization enabled: theme=%s, %d sprites", resolved_theme, len(sprite_assignments))  # noqa: E501
 
     async def viz_push(event: dict):
@@ -2939,6 +3006,7 @@ async def _run_simulation_impl(
     start_round = 1
     resume_parent_branch_id: str | None = None
     _resume_replay_kind: str | None = None
+    resume_checkpoint_agents: list[dict[str, Any]] | None = None
     active_branch_id: str
     if branch_id is None:
         root_title = ctx.get("initial_title", "问题起点")
@@ -2988,20 +3056,25 @@ async def _run_simulation_impl(
                 "probability": target_branch.probability,
             }]
 
-        # Restore resume branch stance/emotion from the parent checkpoint.
-        # Modifies in-memory dicts only — does NOT write to Agent DB rows.
+        # Restore only the active resume branch from its parent checkpoint.
         if _resume_replay_kind == "resume" and resume_parent_branch_id:
             from app.services.replay import load_checkpoint_agent_states
-            cp_agents = load_checkpoint_agent_states(
+            resume_checkpoint_agents = load_checkpoint_agent_states(
                 scenario_id, resume_parent_branch_id, start_round - 1,
             )
-            if cp_agents:
-                _state_map = {a["agent_id"]: a for a in cp_agents}
-                for ag in agents:
-                    cp = _state_map.get(ag["id"])
-                    if cp:
-                        ag["stance"] = cp.get("stance", ag["stance"])
-                        ag["emotion"] = cp.get("emotion", ag["emotion"])
+
+    branch_agent_states: dict[str, list[dict[str, Any]]] = {
+        active_branch_id: _clone_agent_states(
+            agents,
+            checkpoint_states=resume_checkpoint_agents,
+        )
+    }
+    branch_emotion_states: dict[str, dict[str, str]] = {
+        active_branch_id: {
+            str(agent["id"]): str(agent.get("emotion") or "neutral")
+            for agent in branch_agent_states[active_branch_id]
+        }
+    }
 
     # ── Blackboard per branch (only in blackboard mode) ─
     mode = ctx.get("mode", "blackboard")
@@ -3081,6 +3154,21 @@ async def _run_simulation_impl(
         for branch_info in active_branches:
             _check_cancelled(scenario_id)
             current_branch_id = branch_info["id"]
+            current_agents = branch_agent_states[current_branch_id]
+            current_emotion_state = branch_emotion_states[current_branch_id]
+            current_leaders: list[dict[str, Any]] = []
+            current_workers: list[dict[str, Any]] = []
+            effective_group_leaders = group_leaders
+            if hierarchical:
+                (
+                    current_leaders,
+                    current_workers,
+                    effective_group_leaders,
+                ) = _resolve_hierarchical_agent_sets(
+                    current_agents,
+                    dict(group_leaders),
+                    agent_to_group,
+                )
 
             # 0) Check for pending user interventions (Butterfly Effect)
             intervention_key = f"{scenario_id}:{current_branch_id}"
@@ -3136,12 +3224,13 @@ async def _run_simulation_impl(
                 if bb is None:
                     bb = Blackboard()  # ephemeral — discarded each round in RAW mode
 
-                if hierarchical and leader_agents:
+                if hierarchical and current_leaders:
                     # P3-A: hierarchical mode — only Leaders call LLM
                     _check_cancelled(scenario_id)
                     messages = await _gather_hierarchical_messages(
                         engine, scenario_id, current_branch_id, round_id, round_num,
-                        leader_agents, worker_agents, agent_to_group, group_leaders,
+                        current_leaders, current_workers, agent_to_group,
+                        effective_group_leaders,
                         setting_bg, key_variable,
                         intervention_text=intervention_text,
                         intervention_metadata=intervention_metadata,
@@ -3150,7 +3239,7 @@ async def _run_simulation_impl(
                         llm_overrides=llm_overrides,
                         language=detected_language,
                         viz_mapper=viz_mapper,
-                        agent_prev_emotions=agent_prev_emotions,
+                        agent_prev_emotions=current_emotion_state,
                         web_context_block=web_context_block,
                         document_reference_context=document_reference_context,
                         scenario_user_id=scenario_user_id,
@@ -3160,7 +3249,8 @@ async def _run_simulation_impl(
                 else:
                     _check_cancelled(scenario_id)
                     messages = await _gather_agent_messages(
-                        engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,  # noqa: E501
+                        engine, scenario_id, current_branch_id, round_id, round_num,
+                        current_agents, setting_bg, key_variable,
                         intervention_text=intervention_text,
                         intervention_metadata=intervention_metadata,
                         push=push,
@@ -3168,7 +3258,7 @@ async def _run_simulation_impl(
                         llm_overrides=llm_overrides,
                         language=detected_language,
                         viz_mapper=viz_mapper,
-                        agent_prev_emotions=agent_prev_emotions,
+                        agent_prev_emotions=current_emotion_state,
                         web_context_block=web_context_block,
                         document_reference_context=document_reference_context,
                         scenario_user_id=scenario_user_id,
@@ -3301,7 +3391,7 @@ async def _run_simulation_impl(
                         bb_snapshot = _cp_bb.export_snapshot()
                     await asyncio.to_thread(
                         _checkpoint_write,
-                        scenario_id, current_branch_id, round_num, agents, bb_snapshot,
+                        scenario_id, current_branch_id, round_num, current_agents, bb_snapshot,
                     )
                     _check_cancelled(scenario_id)
                 except SimulationCancelled:
@@ -3428,6 +3518,8 @@ async def _run_simulation_impl(
                             # Fork blackboard for the new branch (only in blackboard mode)
                             if current_branch_id in blackboards:
                                 blackboards[new_id] = blackboards[current_branch_id].fork()
+                            branch_agent_states[new_id] = _clone_agent_states(current_agents)
+                            branch_emotion_states[new_id] = dict(current_emotion_state)
                             new_branch_infos.append({
                                 "id": new_id,
                                 "title": fb["title"],
@@ -3563,7 +3655,7 @@ async def _run_simulation_impl(
                 narration = await _narrate_branch_data_fail_soft(
                     engine,
                     b["id"],
-                    agents,
+                    branch_agent_states[b["id"]],
                     language=detected_language,
                     llm_overrides=llm_overrides,
                     web_context_block=web_context_block,
@@ -4028,6 +4120,7 @@ async def _gather_agent_messages(
     progress_total: int | None = None,
     progress_counter: list[int] | None = None,
     progress_lock: asyncio.Lock | None = None,
+    relationship_agents: list[dict[str, Any]] | None = None,
 ) -> list[dict]:
     """Gather messages from all agents for this round.
 
@@ -4069,6 +4162,44 @@ async def _gather_agent_messages(
         recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=2)
     emotion_state = agent_prev_emotions if agent_prev_emotions is not None else {}
     worldline_context = _build_worldline_context(engine, branch_id, language)
+    memory_population = relationship_agents if relationship_agents is not None else agents
+    memory_agent_name_counts: dict[str, int] = {}
+    for candidate in memory_population:
+        candidate_name = str(candidate.get("name") or "").strip()
+        if candidate_name:
+            memory_agent_name_counts[candidate_name] = (
+                memory_agent_name_counts.get(candidate_name, 0) + 1
+            )
+    allowed_memory_rounds_by_agent: dict[str, dict[str, int]] = {}
+    for candidate in agents:
+        if candidate.get("tier", "") not in ("CORE", "IMPORTANT"):
+            continue
+        candidate_id = str(candidate.get("id") or "").strip()
+        if not candidate_id:
+            continue
+        allowed_memory_rounds_by_agent[candidate_id] = _branch_memory_round_limits(
+            engine,
+            branch_id,
+            current_round=round_num,
+            agent_id=candidate_id,
+        )
+    relationship_contexts: dict[str, str] = {}
+    if _FACTIONS_AVAILABLE and settings.FEATURE_FACTIONS and round_num > 1:
+        try:
+            relationship_contexts = _factions_relationship_contexts(
+                engine,
+                scenario_id,
+                branch_id,
+                round_num,
+                relationship_agents if relationship_agents is not None else agents,
+                language=language,
+            )
+        except Exception:
+            logger.debug(
+                "Previous-round relationship context load failed for branch %s",
+                branch_id,
+                exc_info=True,
+            )
 
     async def push_event(event: dict):
         """Push event if callback is available."""
@@ -4097,14 +4228,31 @@ async def _gather_agent_messages(
 
             # L2 vector memory: retrieve relevant memories for CORE/IMPORTANT
             l2_memories = ""
-            if agent_tier in ("CORE", "IMPORTANT") and not has_usable_shared_briefing:
-                query = f"{effective_topic} {agent.get('name', '')} {agent.get('role', '')}"
+            agent_id = str(agent.get("id") or "").strip()
+            agent_name = str(agent.get("name") or "").strip()
+            if agent_tier in ("CORE", "IMPORTANT") and agent_id:
+                query = f"{effective_topic} {agent_name} {agent.get('role', '')}"
                 l2_memories = retrieve_relevant_memories(
                     scenario_id,
                     query,
-                    top_k=5,
-                    branch_id=branch_id,
+                    top_k=(
+                        _BLACKBOARD_OWN_MEMORY_TOP_K
+                        if has_usable_shared_briefing
+                        else 5
+                    ),
+                    allowed_branch_rounds=allowed_memory_rounds_by_agent.get(
+                        agent_id,
+                        {branch_id: max(0, round_num - 1)},
+                    ),
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    allow_legacy_name_fallback=(
+                        bool(agent_name)
+                        and memory_agent_name_counts.get(agent_name, 0) == 1
+                    ),
                 )
+
+            relationship_context = relationship_contexts.get(str(agent.get("id") or ""), "")
 
             # Phase 4C: Cross-scenario hint from identity memories
             cross_hint = ""
@@ -4161,6 +4309,7 @@ async def _gather_agent_messages(
                     document_reference_context=document_reference_context,
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
+                    relationship_context=relationship_context,
                 )
             else:
                 # Fallback: format DB messages per-tier (first round or no blackboard)
@@ -4181,6 +4330,7 @@ async def _gather_agent_messages(
                     document_reference_context=document_reference_context,
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
+                    relationship_context=relationship_context,
                 )
 
             ctx = _append_agent_debate_coherence_guidance(ctx, agent_tier, language)
@@ -4387,6 +4537,13 @@ async def _gather_agent_messages(
                 emotion = "neutral"
                 diverge = None
 
+            emotion = str(emotion or "neutral").strip() or "neutral"
+            previous_emotion = str(
+                emotion_state.get(agent["id"], agent.get("emotion") or "neutral")
+            )
+            agent["emotion"] = emotion
+            emotion_state[agent["id"]] = emotion
+
             msg = {
                 "agent_id": agent["id"],
                 "agent_name": agent["name"],
@@ -4456,15 +4613,13 @@ async def _gather_agent_messages(
                 await push_event(viz_move)
 
                 # V2-P2: Broadcast viz:emotion_change when emotion shifts
-                prev_em = emotion_state.get(agent["id"], "neutral")
-                if emotion != prev_em:
+                if emotion != previous_emotion:
                     viz_emo = viz_mapper.map_emotion_change(
                         agent_id=agent["id"],
-                        old_emotion=prev_em,
+                        old_emotion=previous_emotion,
                         new_emotion=emotion,
                     )
                     await push_event(viz_emo)
-                    emotion_state[agent["id"]] = emotion
 
             return msg
 
@@ -4551,6 +4706,7 @@ async def _gather_agent_messages(
     for msg in results:
         store_memory(
             scenario_id=scenario_id,
+            agent_id=msg["agent_id"],
             agent_name=msg["agent_name"],
             content=msg["content"],
             round_num=round_num,
@@ -4691,6 +4847,7 @@ async def _gather_hierarchical_messages(
     progress_total = len(leader_agents) + len(worker_agents)
     progress_counter = [0]
     progress_lock = asyncio.Lock()
+    emotion_state = agent_prev_emotions if agent_prev_emotions is not None else {}
 
     # Step 1: Gather Leader messages (with LLM calls)
     _check_cancelled(scenario_id)
@@ -4712,6 +4869,7 @@ async def _gather_hierarchical_messages(
         progress_total=progress_total,
         progress_counter=progress_counter,
         progress_lock=progress_lock,
+        relationship_agents=[*leader_agents, *worker_agents],
     )
     _check_cancelled(scenario_id)
 
@@ -4752,6 +4910,10 @@ async def _gather_hierarchical_messages(
                 else f"({worker['name']} stays silent)"
             )
             emotion = "neutral"
+
+        emotion = str(emotion or "neutral").strip() or "neutral"
+        worker["emotion"] = emotion
+        emotion_state[worker["id"]] = emotion
 
         msg = {
             "agent_id": worker["id"],
@@ -4825,6 +4987,7 @@ async def _gather_hierarchical_messages(
     for msg in worker_messages:
         store_memory(
             scenario_id=scenario_id,
+            agent_id=msg["agent_id"],
             agent_name=msg["agent_name"],
             content=msg["content"],
             round_num=round_num,

@@ -159,7 +159,12 @@ export default function ResultView() {
   const directorIdentity = getDirectorIdentity();
   const apiUserId = getSessionBoundUserId();
 
-  const { capabilities, loading: capLoading } = useCapabilityCheck('causal_graph');
+  const {
+    capabilities,
+    loading: capLoading,
+    error: capError = null,
+    reload: reloadCapabilities,
+  } = useCapabilityCheck('causal_graph');
   const resultVerdictEnabled = capabilities?.result_verdict?.enabled ?? false;
   const resultViewMode = useUIPreferencesStore((state) => state.resultViewMode);
   const setResultViewMode = useUIPreferencesStore((state) => state.setResultViewMode);
@@ -1916,6 +1921,8 @@ export default function ResultView() {
     isReplayMode,
     capabilities,
     capLoading,
+    capError,
+    reloadCapabilities,
     scenario,
     storyData,
     agents,

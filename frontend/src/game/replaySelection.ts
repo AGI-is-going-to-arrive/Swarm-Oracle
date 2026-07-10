@@ -7,24 +7,42 @@ export interface ReplayBranchOption {
   messageCount: number;
 }
 
-function collectReplayBranchIds(
+function collectReplayBranchScopes(
   branches: BranchInfo[],
   branchId: string | null | undefined,
-) {
-  if (!branchId) return [];
+): Map<string, number | null> {
+  const scopes = new Map<string, number | null>();
+  if (!branchId) return scopes;
 
   const branchById = new Map(branches.map((branch) => [branch.id, branch]));
-  const lineage: string[] = [];
   const seen = new Set<string>();
   let currentBranchId: string | null | undefined = branchId;
+  let maxRound: number | null = null;
 
   while (currentBranchId && !seen.has(currentBranchId)) {
-    lineage.unshift(currentBranchId);
+    scopes.set(currentBranchId, maxRound);
     seen.add(currentBranchId);
-    currentBranchId = branchById.get(currentBranchId)?.parent_branch_id;
+    const currentBranch = branchById.get(currentBranchId);
+    if (!currentBranch || currentBranch.replay_kind) break;
+
+    const parentBranchId = currentBranch.parent_branch_id;
+    if (!parentBranchId) break;
+    maxRound = maxRound === null
+      ? currentBranch.fork_round
+      : Math.min(maxRound, currentBranch.fork_round);
+    currentBranchId = parentBranchId;
   }
 
-  return lineage;
+  return scopes;
+}
+
+function isMessageInReplayScope(
+  message: AgentMessage,
+  scopes: Map<string, number | null>,
+): boolean {
+  if (!scopes.has(message.branch)) return false;
+  const maxRound = scopes.get(message.branch);
+  return maxRound === null || maxRound === undefined || message.round <= maxRound;
 }
 
 export function buildReplayBranchOptions(
@@ -51,10 +69,10 @@ export function getReplayRounds(
   branchId: string | null | undefined,
 ): number[] {
   if (!branchId) return [];
-  const replayBranchIds = new Set(collectReplayBranchIds(branches, branchId));
+  const replayBranchScopes = collectReplayBranchScopes(branches, branchId);
   return [...new Set(
     messages
-      .filter((message) => replayBranchIds.has(message.branch))
+      .filter((message) => isMessageInReplayScope(message, replayBranchScopes))
       .map((message) => message.round),
   )].sort((a, b) => a - b);
 }
@@ -65,9 +83,9 @@ export function filterReplayMessages(
   branchId: string | null | undefined,
   roundNumber?: number | null,
 ): AgentMessage[] {
-  const replayBranchIds = branchId ? new Set(collectReplayBranchIds(branches, branchId)) : null;
+  const replayBranchScopes = branchId ? collectReplayBranchScopes(branches, branchId) : null;
   return messages.filter((message) => {
-    if (replayBranchIds && !replayBranchIds.has(message.branch)) return false;
+    if (replayBranchScopes && !isMessageInReplayScope(message, replayBranchScopes)) return false;
     if (roundNumber != null && message.round > roundNumber) return false;
     return true;
   });

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorldlineRoundtableView from './WorldlineRoundtableView';
 import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
+import type { OracleReplayPayload } from '../lib/oracleReplay';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
   ORACLE_TEXT_LAYOUT_CONTRACTS,
@@ -3406,7 +3407,7 @@ describe('WorldlineRoundtableView', () => {
         },
       ],
     };
-    loadOracleReplayLocalCopyMock.mockReturnValue({
+    const rawReplayPayload = {
       kind: 'worldline_roundtable_v1',
       scenarioReplay: {
         scenario: {
@@ -3464,7 +3465,7 @@ describe('WorldlineRoundtableView', () => {
       roomResult: replayResult,
       activeThreadId: 'thread-hotseat',
       selectedAgentIds: ['agent-a'],
-    });
+    } as unknown as OracleReplayPayload;
     replaySnapshot.threads.push({
       id: 'thread-hotseat',
       room_id: 'room-1',
@@ -3489,6 +3490,13 @@ describe('WorldlineRoundtableView', () => {
       emotion: 'focused',
       created_at: '2026-03-29T00:00:02Z',
     });
+    const actualOracleReplay = await vi.importActual<typeof import('../lib/oracleReplay')>(
+      '../lib/oracleReplay',
+    );
+    const sanitizedReplayPayload = actualOracleReplay.sanitizeOracleReplayPayload(
+      rawReplayPayload,
+    );
+    loadOracleReplayLocalCopyMock.mockReturnValue(sanitizedReplayPayload);
 
     const user = userEvent.setup();
 
@@ -3505,6 +3513,7 @@ describe('WorldlineRoundtableView', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
     expect(screen.getAllByText('Using the active roundtable thread only').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /Representative A.*Archive A/ })).toBeDisabled();
     const threadRail = screen.getByRole('tablist', { name: 'Topics' });
     expect(within(threadRail).getByText('Discussion result')).toBeInTheDocument();
     expect(screen.getByText((_, node) => node?.textContent === 'Discussion resultDiscussion result')).toBeInTheDocument();

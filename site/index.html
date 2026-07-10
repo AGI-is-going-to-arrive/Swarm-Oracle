@@ -81,7 +81,7 @@
       <p class="kicker hero__eyebrow reveal" data-zh="AI 假设推演游乐场" data-en="AI What-If Prediction Playground">AI 假设推演游乐场</p>
       <h1 class="hero__title reveal" id="hero-title" style="--d:90ms" data-zh="群体预言机 — 一个问题，<em>多条世界线</em>" data-en="SwarmOracle — one question, <em>many worldlines</em>">群体预言机 — 一个问题，<em>多条世界线</em></h1>
       <p class="hero__lead reveal" style="--d:180ms" data-zh="提出假设性问题（“如果……会怎样？”），由 AI 代理群体模拟多条故事线，展示不同可能性。" data-en="Ask hypothetical questions (&ldquo;What if...?&rdquo;). A group of AI agents simulates multiple storylines and shows different possible outcomes.">提出假设性问题（“如果……会怎样？”），由 AI 代理群体模拟多条故事线，展示不同可能性。</p>
-      <p class="hero__note reveal" style="--d:260ms" data-zh="这是静态介绍页，不连接后端。完整应用需要本地 FastAPI 后端（18927）；导入脱敏 Snapshot 可离线浏览，生成新推演则需要 OpenAI-compatible LLM。" data-en="This static showcase connects to no backend. The full app needs the local FastAPI backend (18927); sanitized snapshots work for offline review, while new live runs need an OpenAI-compatible LLM.">这是静态介绍页，不连接后端。完整应用需要本地 FastAPI 后端（18927）；导入脱敏 Snapshot 可离线浏览，生成新推演则需要 OpenAI-compatible LLM。</p>
+      <p class="hero__note reveal" style="--d:260ms" data-zh="这是静态介绍页，不连接后端。完整应用需要本地 FastAPI 后端（18927）；未配置模型时可一键打开三套官方样例，无需 API Key、选择文件或模型调用；生成新推演仍需 OpenAI-compatible LLM。" data-en="This static showcase connects to no backend. The full app needs the local FastAPI backend (18927). With no model configured, open one of three official samples with one click—no API key, file selection, or model call. New live runs still need an OpenAI-compatible LLM.">这是静态介绍页，不连接后端。完整应用需要本地 FastAPI 后端（18927）；未配置模型时可一键打开三套官方样例，无需 API Key、选择文件或模型调用；生成新推演仍需 OpenAI-compatible LLM。</p>
       <div class="hero__cta reveal" style="--d:340ms">
         <a class="btn btn--primary" href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle" target="_blank" rel="noopener">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -142,7 +142,7 @@
       </li>
     </ol>
     <div class="how__notes reveal" style="--d:120ms">
-      <p class="how__note" data-zh="脱敏 Snapshot 演示无需真实 LLM；新推演、辩论、会客厅和报告需要可用的 OpenAI-compatible LLM。搜索增强仍需单独配置 provider。" data-en="The sanitized Snapshot demo needs no real LLM. New simulations, debates, chambers, and reports need a working OpenAI-compatible LLM. Search augmentation still needs a separate provider.">脱敏 Snapshot 演示无需真实 LLM；新推演、辩论、会客厅和报告需要可用的 OpenAI-compatible LLM。搜索增强仍需单独配置 provider。</p>
+      <p class="how__note" data-zh="三套内置官方样例无需真实 LLM：首页可一键打开推荐样例，也可从导入面板选择其余样例或本地 Snapshot。新推演、辩论、会客厅和报告仍需要可用的 OpenAI-compatible LLM；搜索增强仍需单独配置 provider。" data-en="The three built-in official samples need no real LLM: open the recommended sample from the home page with one click, or choose another sample or local snapshot in the import panel. New simulations, debates, chambers, and reports still need a working OpenAI-compatible LLM; search augmentation still needs a separate provider.">三套内置官方样例无需真实 LLM：首页可一键打开推荐样例，也可从导入面板选择其余样例或本地 Snapshot。新推演、辩论、会客厅和报告仍需要可用的 OpenAI-compatible LLM；搜索增强仍需单独配置 provider。</p>
       <p class="how__note" data-zh="LLM 可由 .env、/admin/setup 保存的 model profile，或首页独立 BYOK 区提供。代理边界见 README，模型原生搜索见配置说明。" data-en="Provide LLM access through .env, a model profile saved at /admin/setup, or the separate home-page BYOK section. See the README for proxy boundaries and Configuration for model-native search.">LLM 可由 .env、/admin/setup 保存的 model profile，或首页独立 BYOK 区提供。代理边界见 README，模型原生搜索见配置说明。</p>
     </div>
   </div>
@@ -219,7 +219,7 @@
     <div class="section__head reveal">
       <div class="rule" aria-hidden="true"></div>
       <p class="kicker" data-zh="功能图鉴" data-en="Feature archive">功能图鉴</p>
-      <h2 class="section__title" id="features-title" data-zh="二十件真实功能" data-en="Twenty real features">二十件真实功能</h2>
+      <h2 class="section__title" id="features-title" data-zh="二十三件真实功能" data-en="Twenty-three real features">二十三件真实功能</h2>
     </div>
     <div class="fgrid" id="fgrid"></div>
   </div>
@@ -274,7 +274,7 @@
           <div class="code__head"><span class="code__title">docker-compose</span><button type="button" class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">docker compose</span> up --build -d</code></pre>
         </div>
-        <p class="qs__note" data-zh="先复制 .env.docker.example。只浏览脱敏 Snapshot 时可保留占位配置；生成新内容时填写 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，或在 /admin/setup 保存带 key 的 model profile。" data-en="Copy .env.docker.example first. Placeholder settings are enough for sanitized Snapshot review; for new generation, fill LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME or save a model profile with a key at /admin/setup.">先复制 .env.docker.example。只浏览脱敏 Snapshot 时可保留占位配置；生成新内容时填写 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，或在 /admin/setup 保存带 key 的 model profile。</p>
+        <p class="qs__note" data-zh="先复制 .env.docker.example。三套官方样例无需真实 key：首页可一键打开推荐样例，或在导入面板选择其他样例与本地 Snapshot；生成新内容时填写 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，或在 /admin/setup 保存带 key 的 model profile。" data-en="Copy .env.docker.example first. The three official samples need no real key: open the recommended sample from the home page with one click, or choose another sample or local snapshot in the import panel. For new generation, fill LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME or save a model profile with a key at /admin/setup.">先复制 .env.docker.example。三套官方样例无需真实 key：首页可一键打开推荐样例，或在导入面板选择其他样例与本地 Snapshot；生成新内容时填写 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，或在 /admin/setup 保存带 key 的 model profile。</p>
       </div>
       <div class="qs__panel" id="panel-local" data-panel="local" role="tabpanel" aria-labelledby="tab-local" hidden>
         <div class="code">

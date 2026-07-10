@@ -2419,6 +2419,21 @@
   margin-bottom: 16px;
 }
 
+.result-bridge__availability-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 45%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger, #ef4444) 8%, transparent);
+}
+
+.result-bridge__availability-error p {
+  margin: 0;
+}
+
 .result-bridge__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

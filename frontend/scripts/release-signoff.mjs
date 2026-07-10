@@ -18,6 +18,10 @@ const IS_MAIN_MODULE = process.argv[1]
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
 const FIXTURE_BLACKHOLE_BACKEND_URL = process.env.SWARM_E2E_FIXTURE_BACKEND_URL || "http://127.0.0.1:9";
+const COMMAND_TIMEOUT_MS = 45 * 60_000;
+const CAPTURE_TIMEOUT_MS = 15_000;
+const CMD_R_TEST_FILE = "src/components/kg/NodeConversationSheet.test.tsx";
+const CMD_R_TEST_NAME = "Cmd+R fires onResend and preventDefault blocks browser refresh";
 const VALID_DEBATE_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);
 const GRAPH_FOCUSED_VITEST_TESTS = [
   "src/lib/manualChunks.test.ts",
@@ -30,6 +34,7 @@ const GRAPH_FOCUSED_VITEST_TESTS = [
   "src/pages/CausalReviewView.test.tsx",
   "src/pages/ReplayEmptyState.test.tsx",
   "src/pages/ResultView.test.tsx",
+  "src/scripts/releaseSignoff.test.ts",
   "src/i18n/locales.test.ts",
 ];
 const GRAPH_E2E_STEP_IDS = [
@@ -59,6 +64,18 @@ const ROUND7_GRAPH_LIVE_STEP_IDS = [
 ];
 const PREDICTION_FOCUSED_STEP_IDS = [
   "prediction_modal_late_branches",
+];
+const SCRIPT_CONTRACT_TESTS = [
+  "scripts/e2e-debate-suite.test.mjs",
+  "scripts/e2e-frontend-preflight.test.mjs",
+  "scripts/e2e-ending-room-followup-suite.test.mjs",
+  "scripts/e2e-web-search-suite.test.mjs",
+  "scripts/e2e-new-source-ingestion-live.test.mjs",
+  "scripts/e2e-capability-matrix.test.mjs",
+  "scripts/e2e-native-search-suite.test.mjs",
+  "scripts/e2eFixtureNet.test.mjs",
+  "scripts/e2e-prediction-modal.test.mjs",
+  "scripts/e2e-result-report-suite.test.mjs",
 ];
 const BACKEND_SIGNOFF_TESTS = [
   "tests/test_campaign_api.py",
@@ -210,26 +227,80 @@ function formatCommand(command, args) {
   return [command, ...args].join(" ");
 }
 
-function runCommand(command, args, options) {
-  const rendered = formatCommand(command, args);
-  console.log(`\n$ ${rendered}`);
-  if (options.dryRun) return;
+function escapeRegexLiteral(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
 
-  const result = spawnSync(command, args, {
+function buildFocusedVitestSpec(testFile, testName) {
+  const testNamePattern = `${escapeRegexLiteral(testName)}$`;
+  return {
+    testFile,
+    testName,
+    testNamePattern,
+    listArgs: [
+      "vitest",
+      "list",
+      testFile,
+      "--testNamePattern",
+      testNamePattern,
+      "--json",
+    ],
+    runArgs: [
+      "test",
+      "--",
+      "--run",
+      testFile,
+      "--testNamePattern",
+      testNamePattern,
+    ],
+  };
+}
+
+function parseVitestListOutput(stdout, stepId) {
+  let selected;
+  try {
+    selected = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(`${stepId} produced invalid Vitest list JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!Array.isArray(selected) || selected.length === 0) {
+    throw new Error(`${stepId} selected zero tests`);
+  }
+  return selected;
+}
+
+function buildSpawnSyncOptions(options = {}, capture = false) {
+  return {
     cwd: options.cwd ?? FRONTEND_ROOT,
-    stdio: "inherit",
+    ...(capture ? { encoding: "utf8" } : { stdio: "inherit" }),
     // Windows needs a shell to resolve npm.cmd/npx.cmd; POSIX keeps shell:false so
-    // argv (e.g. --output-root) is never re-parsed by /bin/sh (no shell injection).
+    // argv is never re-parsed by /bin/sh.
     shell: process.platform === "win32",
     env: {
       ...process.env,
       ...options.env,
     },
-  });
+    timeout: options.timeoutMs ?? (capture ? CAPTURE_TIMEOUT_MS : COMMAND_TIMEOUT_MS),
+    killSignal: "SIGKILL",
+  };
+}
 
-  if (result.error) {
-    throw result.error;
+function throwSpawnSyncError(result, rendered, timeoutMs) {
+  if (!result.error) return;
+  if (result.error.code === "ETIMEDOUT") {
+    throw new Error(`Command timed out after ${timeoutMs}ms: ${rendered}`);
   }
+  throw result.error;
+}
+
+function runCommand(command, args, options) {
+  const rendered = formatCommand(command, args);
+  console.log(`\n$ ${rendered}`);
+  if (options.dryRun) return;
+
+  const spawnOptions = buildSpawnSyncOptions(options, false);
+  const result = spawnSync(command, args, spawnOptions);
+  throwSpawnSyncError(result, rendered, spawnOptions.timeout);
 
   if (result.status !== 0) {
     throw new Error(`Command failed (${result.status ?? "unknown"}): ${rendered}`);
@@ -246,26 +317,32 @@ function serializeError(error) {
 }
 
 function captureCommand(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd ?? FRONTEND_ROOT,
-    encoding: "utf8",
-    // Windows-only shell (npm.cmd/npx.cmd resolution); POSIX stays shell:false.
-    shell: process.platform === "win32",
-    env: {
-      ...process.env,
-      ...options.env,
-    },
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
+  const rendered = formatCommand(command, args);
+  const spawnOptions = buildSpawnSyncOptions(options, true);
+  const result = spawnSync(command, args, spawnOptions);
+  throwSpawnSyncError(result, rendered, spawnOptions.timeout);
 
   return {
     status: result.status ?? 0,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
+}
+
+function verifyFocusedVitestSelection(command, spec, runArgs, stepId) {
+  if (runArgs.dryRun) {
+    console.log(`\n$ ${formatCommand(command, spec.listArgs)}`);
+    return [];
+  }
+  const result = captureCommand(command, spec.listArgs);
+  if (result.status !== 0) {
+    throw new Error(
+      `${stepId} Vitest selection failed (${result.status}): ${result.stderr.trim() || "no stderr"}`,
+    );
+  }
+  const selected = parseVitestListOutput(result.stdout, stepId);
+  console.log(`[release-signoff] ${stepId} selected ${selected.length} test(s)`);
+  return selected;
 }
 
 function readGitMetadata() {
@@ -595,8 +672,10 @@ function ensureBackendPythonExists(pythonPath) {
 }
 
 export const __test__ = {
+  buildFocusedVitestSpec,
   buildGraphPreflightPaths,
   buildGraphFocusedVitestArgs,
+  buildSpawnSyncOptions,
   buildRound7GraphLiveStepSpecs,
   buildFixtureSuiteStepSpecs,
   buildPredictionFocusedStepSpecs,
@@ -606,8 +685,13 @@ export const __test__ = {
   graphFocusedVitestTests: GRAPH_FOCUSED_VITEST_TESTS,
   predictionFocusedStepIds: PREDICTION_FOCUSED_STEP_IDS,
   fixtureBlackholeBackendUrl: FIXTURE_BLACKHOLE_BACKEND_URL,
+  commandTimeoutMs: COMMAND_TIMEOUT_MS,
+  captureTimeoutMs: CAPTURE_TIMEOUT_MS,
+  parseVitestListOutput,
   round7CheckStepIds: ROUND7_CHECK_STEP_IDS,
   round7GraphLiveStepIds: ROUND7_GRAPH_LIVE_STEP_IDS,
+  scriptContractTests: SCRIPT_CONTRACT_TESTS,
+  throwSpawnSyncError,
 };
 
 async function main() {
@@ -722,14 +806,7 @@ async function main() {
       nodeCommand,
       [
         "--test",
-        "scripts/e2e-debate-suite.test.mjs",
-        "scripts/e2e-frontend-preflight.test.mjs",
-        "scripts/e2e-ending-room-followup-suite.test.mjs",
-        "scripts/e2e-web-search-suite.test.mjs",
-        "scripts/e2e-new-source-ingestion-live.test.mjs",
-        "scripts/e2e-capability-matrix.test.mjs",
-        "scripts/e2e-native-search-suite.test.mjs",
-        "scripts/e2eFixtureNet.test.mjs",
+        ...SCRIPT_CONTRACT_TESTS,
       ],
     );
     if (args.includeBackendChecks) {
@@ -774,19 +851,14 @@ async function main() {
         { cwd: BACKEND_ROOT },
       );
     }
+    const cmdRTestSpec = buildFocusedVitestSpec(CMD_R_TEST_FILE, CMD_R_TEST_NAME);
+    verifyFocusedVitestSelection(npxCommand, cmdRTestSpec, args, "cmd_r_suppress_reload");
     runStep(
       summary,
       args,
       "cmd_r_suppress_reload",
       npmCommand,
-      [
-        "test",
-        "--",
-        "--run",
-        "src/components/kg/NodeConversationSheet.test.tsx",
-        "-t",
-        "Cmd+R fires onResend and preventDefault blocks browser refresh",
-      ],
+      cmdRTestSpec.runArgs,
     );
     runStep(
       summary,

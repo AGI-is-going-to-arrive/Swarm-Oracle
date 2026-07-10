@@ -1,0 +1,776 @@
+{
+  "catalog_version": "1.0",
+  "bundles": [
+    {
+      "filename": "early-printing-republics.swarm",
+      "prefix": "print",
+      "scenario_id": "sample-early-printing",
+      "created_at": "2026-06-12T00:00:00+00:00",
+      "question": "如果活字印刷提前两百年普及到欧洲 / What if movable type spread across Europe two centuries earlier?",
+      "scene_theme": "archive",
+      "title": {
+        "zh": "提前到来的印刷共和国",
+        "en": "The Early Printing Republics"
+      },
+      "summary": {
+        "zh": "知识复制成本提前下降，行会质量控制、大学开放网络与城邦大众政治形成三条可比较的制度路径。",
+        "en": "Cheaper copying arrives early, producing three comparable institutional paths: guild quality control, open university networks, and mass civic politics."
+      },
+      "agents": [
+        {
+          "key": "scribe",
+          "name": "抄写员 / Scribe",
+          "role": "文本校勘与印坊质量守门人 / Proofing and press quality keeper",
+          "stance": "主张慢扩散、强校勘 / Favors controlled circulation and strict proofing",
+          "initial_emotion": "concerned"
+        },
+        {
+          "key": "lecturer",
+          "name": "讲师 / Lecturer",
+          "role": "跨城课程与学术交流组织者 / Organizer of intercity teaching and scholarship",
+          "stance": "主张开放流通与公开辩论 / Favors open circulation and public debate",
+          "initial_emotion": "curious"
+        },
+        {
+          "key": "councilor",
+          "name": "议员 / Councilor",
+          "role": "城市议会与公共秩序代表 / Voice of the city council and civic order",
+          "stance": "主张城市监督与可问责传播 / Favors civic oversight and accountable publishing",
+          "initial_emotion": "alert"
+        }
+      ],
+      "round1": [
+        {
+          "agent": "scribe",
+          "content": "印得快不等于传得准，第一批印坊必须公开校勘规则。 / Faster printing does not guarantee cleaner knowledge; the first presses need public proofing rules.",
+          "emotion": "focused"
+        },
+        {
+          "agent": "lecturer",
+          "content": "同一份讲义跨城出现，学生和教师就能在同一问题上累积争论。 / Shared lectures let students and teachers build debate around the same questions across cities.",
+          "emotion": "curious"
+        },
+        {
+          "agent": "councilor",
+          "content": "短册会把议会门外的人带进议题，但署名和更正也必须跟上。 / Pamphlets bring outsiders into civic debate, but attribution and corrections must keep pace.",
+          "emotion": "alert"
+        }
+      ],
+      "outcomes": [
+        {
+          "key": "guilds",
+          "title": "行会印坊 / Guild Presses",
+          "description": "印刷行会掌握准入、培训与校勘标准。 / Printing guilds control entry, training, and proofing standards.",
+          "summary": "可靠文本缓慢扩散，政治变化受控。 / Reliable texts spread slowly and political change remains measured.",
+          "story": "行会用共同字模、校勘章程和学徒制度降低错误率，同时限制匿名短册。识字率稳步上升，改革因传播门槛而保持渐进。 / Guilds reduce errors through shared type, proofing charters, and apprenticeships while restricting anonymous pamphlets. Literacy rises steadily and reform remains gradual.",
+          "insight": "质量标准建立信任，却把新声音挡在高门槛之外。 / Quality standards build trust while keeping new voices behind a high barrier.",
+          "probability": 0.42,
+          "round2": [
+            {
+              "agent": "scribe",
+              "content": "统一校样让跨城重印终于可核对，这是行会最强的公共价值。 / Standard proofs make intercity reprints verifiable, the guilds' strongest public value.",
+              "emotion": "confident"
+            },
+            {
+              "agent": "lecturer",
+              "content": "可靠不应等于封闭，大学需要为新作者保留快速通道。 / Reliability should not mean closure; universities need a fast lane for new authors.",
+              "emotion": "skeptical"
+            },
+            {
+              "agent": "councilor",
+              "content": "只要章程公开且处罚可申诉，城市可以接受行会自治。 / Cities can accept guild self-rule if charters are public and penalties can be appealed.",
+              "emotion": "cautious"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "scribe",
+              "content": "错误率下降证明慢一点值得，但我同意公开申诉名册。 / Falling error rates justify the slower pace, and I accept a public appeals register.",
+              "emotion": "relieved"
+            },
+            {
+              "agent": "lecturer",
+              "content": "被拒稿件仍在私下流通，过严准入正在制造另一套地下网络。 / Rejected texts still circulate privately; strict entry is creating an underground network.",
+              "emotion": "frustrated"
+            },
+            {
+              "agent": "councilor",
+              "content": "行会同意季度公开更正后，议会获得了可检查的责任链。 / Quarterly correction rolls give the council an inspectable chain of responsibility.",
+              "emotion": "reassured"
+            }
+          ]
+        },
+        {
+          "key": "universities",
+          "title": "大学网络 / University Network",
+          "description": "大学以课程、译本和通信社群连接不同城市。 / Universities connect cities through courses, translations, and correspondence.",
+          "summary": "知识扩散最快，争论也更频繁。 / Knowledge spreads fastest and disputes multiply with it.",
+          "story": "大学联合发布课程版本并承认跨城学分，教师社群迅速形成。新理论得到早期检验，但宗教与政治争论也同步放大。 / Universities publish shared course editions and recognize study across cities. New theories are tested early, while religious and political disputes scale just as quickly.",
+          "insight": "开放网络提高发现速度，也把协调成本推向制度前台。 / Open networks accelerate discovery and push coordination costs to the center of governance.",
+          "probability": 0.37,
+          "round2": [
+            {
+              "agent": "scribe",
+              "content": "不同学院改动同一文本却不标版本，错误会披着学术自由的外衣扩散。 / Unmarked revisions let errors spread under the banner of academic freedom.",
+              "emotion": "uneasy"
+            },
+            {
+              "agent": "lecturer",
+              "content": "首个跨城书目已经让三所大学复现实验，开放正在产生回报。 / The first intercity catalog lets three universities replicate an experiment; openness is paying off.",
+              "emotion": "energized"
+            },
+            {
+              "agent": "councilor",
+              "content": "城市愿意资助公共书库，但煽动性短册必须留下出版责任人。 / Cities will fund public libraries, but inflammatory pamphlets need accountable publishers.",
+              "emotion": "cautious"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "scribe",
+              "content": "版本号和勘误表被大学采用后，我愿意支持更开放的重印许可。 / With version numbers and errata adopted, I can support broader reprint licenses.",
+              "emotion": "vigilant"
+            },
+            {
+              "agent": "lecturer",
+              "content": "跨城评议把错误变成可见问题，而不是阻止传播的理由。 / Intercity review makes errors visible instead of using them as a reason to stop circulation.",
+              "emotion": "hopeful"
+            },
+            {
+              "agent": "councilor",
+              "content": "争论速度已经超过议会回应速度，我们需要固定的公开答辩日。 / Debate now outruns council response, so we need scheduled public answer days.",
+              "emotion": "concerned"
+            }
+          ]
+        },
+        {
+          "key": "cities",
+          "title": "城邦传单 / Civic Pamphlets",
+          "description": "城市中的廉价短册推动大众参与和政治动员。 / Cheap civic pamphlets drive mass participation and political mobilization.",
+          "summary": "公共参与提前扩大，治理波动明显上升。 / Public participation expands early and governance becomes markedly more volatile.",
+          "story": "商贩、工匠和街区社群开始改写议会公告并公开回应。公共议程更包容，但谣言、派系动员和政策摇摆也更常见。 / Merchants, artisans, and neighborhoods rewrite council notices and answer them publicly. The agenda broadens, while rumors, factional mobilization, and policy swings become common.",
+          "insight": "低门槛传播让权力更可见，也让信任更脆弱。 / Low-barrier publishing makes power more visible and trust more fragile.",
+          "probability": 0.21,
+          "round2": [
+            {
+              "agent": "scribe",
+              "content": "伪造的议会公告已经出现，没有可追溯印记就无法维持公共信任。 / Forged council notices have appeared; public trust needs traceable press marks.",
+              "emotion": "alarmed"
+            },
+            {
+              "agent": "lecturer",
+              "content": "街区读书会让不识字者也能参与，知识不再只属于学院。 / Neighborhood readings include people who cannot read; knowledge no longer belongs only to colleges.",
+              "emotion": "hopeful"
+            },
+            {
+              "agent": "councilor",
+              "content": "公开请愿迫使预算会议直播宣读，这是议会第一次真正面对城市多数。 / Public petitions force budget sessions into open readings, the council's first direct encounter with the city majority.",
+              "emotion": "energized"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "scribe",
+              "content": "我支持普通人出版，但每份政治短册都应保留原版供人核验。 / I support popular publishing, but every political pamphlet should preserve an original for verification.",
+              "emotion": "defensive"
+            },
+            {
+              "agent": "lecturer",
+              "content": "动员已压过讨论，我们必须训练主持人区分证据与口号。 / Mobilization is overtaking deliberation; facilitators must separate evidence from slogans.",
+              "emotion": "concerned"
+            },
+            {
+              "agent": "councilor",
+              "content": "即使政策更摇摆，公开回应已经不可逆，议会必须学会在透明中治理。 / Even with greater policy swings, public reply is irreversible; the council must learn to govern transparently.",
+              "emotion": "determined"
+            }
+          ]
+        }
+      ],
+      "replay": {
+        "outcome": "cities",
+        "source": "guilds",
+        "round": 2,
+        "agent": "councilor",
+        "kind": "branch_replay"
+      },
+      "report": {
+        "headline": "行会印坊最可能稳定胜出，但大学网络提供更高的长期知识收益。 / Guild presses are the likeliest stable outcome, while the university network offers greater long-run knowledge gains.",
+        "confidence_basis": "三条路径的制度成本清晰可比，但大众政治的长期反馈仍高度不确定。 / Institutional costs are clearly comparable across the three paths, but long-run feedback from mass politics remains uncertain.",
+        "sections": [
+          {
+            "id": "timeline",
+            "title": {
+              "zh": "三轮关键转折",
+              "en": "Three-Round Turning Points"
+            },
+            "intent": "解释校勘、开放评议与大众动员如何改变分支排序。 / Explain how proofing, open review, and mass mobilization change the branch ranking.",
+            "body": {
+              "zh": "第一轮建立传播规则，第二轮暴露开放与可靠性的冲突，第三轮形成可问责出版这一共同底线。",
+              "en": "Round one establishes circulation rules, round two exposes the conflict between openness and reliability, and round three converges on accountable publishing."
+            }
+          },
+          {
+            "id": "institutions",
+            "title": {
+              "zh": "制度取舍",
+              "en": "Institutional Trade-offs"
+            },
+            "intent": "比较行会、大学与议会分别如何管理传播风险。 / Compare how guilds, universities, and councils govern publishing risk.",
+            "body": {
+              "zh": "行会以准入换可靠，大学以评议换速度，城邦以透明换参与；没有一条路径能同时最大化三者。",
+              "en": "Guilds trade entry for reliability, universities trade review for speed, and cities trade transparency for participation; no path maximizes all three."
+            }
+          },
+          {
+            "id": "risks",
+            "title": {
+              "zh": "脆弱点",
+              "en": "Failure Modes"
+            },
+            "intent": "识别封闭、失真与动员过热的早期信号。 / Identify early signs of closure, distortion, and overheated mobilization.",
+            "body": {
+              "zh": "地下出版、无版本重印和伪造公告分别是三条路径最需要监测的失效模式。",
+              "en": "Underground presses, unversioned reprints, and forged notices are the central failure modes to monitor across the three paths."
+            }
+          }
+        ],
+        "indicator": {
+          "signal": "公开更正与版本标识的采用率 / Adoption of public corrections and version marks",
+          "direction": "up",
+          "note": "采用率上升意味着开放传播正在获得可靠性支撑。 / Rising adoption means open circulation is gaining a reliability layer.",
+          "threshold": "主要城市和大学均公开勘误记录 / Major cities and universities publish correction registers",
+          "observation": "观察重印本是否携带可核验版本号。 / Check whether reprints carry verifiable version numbers.",
+          "time_horizon": "未来两个出版周期 / Next two publishing cycles",
+          "rationale": "该信号同时回应三位角色对质量、开放与问责的核心关切。 / The signal addresses the three agents' core concerns about quality, openness, and accountability."
+        },
+        "follow_ups": [
+          "谁应为跨城勘误记录提供长期资金？ / Who should fund intercity correction registers over time?",
+          "匿名政治短册应保留哪些最低问责信息？ / What minimum accountability should anonymous political pamphlets retain?"
+        ],
+        "limitations": "推演压缩了宗教权威、战争和材料供应等外部冲击，概率仅表示三条叙事路径的相对权重。 / The simulation compresses external shocks such as religious authority, war, and material supply; probabilities express only relative narrative weight."
+      },
+      "intervention": {
+        "branch": "universities",
+        "round": 2,
+        "agent": "lecturer",
+        "user_input": "要求大学采用统一版本号并公开勘误记录。 / Require universities to use common version numbers and publish errata.",
+        "effect": "开放网络保留传播速度，同时缓解抄写员对失真的担忧。 / The open network keeps its speed while reducing the scribe's concern about distortion."
+      }
+    },
+    {
+      "filename": "zheng-he-americas.swarm",
+      "prefix": "zheng",
+      "scenario_id": "sample-zheng-he-americas",
+      "created_at": "2026-06-12T00:00:00+00:00",
+      "question": "如果郑和比哥伦布先发现了美洲大陆 / What if Zheng He reached the Americas before Columbus?",
+      "scene_theme": "archive",
+      "title": {
+        "zh": "太平洋先至的世界",
+        "en": "A Pacific-First Encounter"
+      },
+      "summary": {
+        "zh": "首次接触从太平洋一侧展开，港口互市、礼制外交和常驻据点形成稳定性、互惠性与扩张速度不同的三条路径。",
+        "en": "First contact begins from the Pacific, producing three paths with different balances of stability, reciprocity, and speed: harbor exchange, court diplomacy, and a permanent outpost."
+      },
+      "agents": [
+        {
+          "key": "navigator",
+          "name": "航海官 / Navigator",
+          "role": "航线、水文与船队安全规划者 / Planner of routes, coastal knowledge, and fleet safety",
+          "stance": "主张谨慎接触与可撤回承诺 / Favors cautious contact and reversible commitments",
+          "initial_emotion": "focused"
+        },
+        {
+          "key": "interpreter",
+          "name": "译员 / Interpreter",
+          "role": "语言、礼仪与条款协调者 / Mediator of language, ceremony, and terms",
+          "stance": "主张对等解释与共同词表 / Favors reciprocal interpretation and shared vocabulary",
+          "initial_emotion": "curious"
+        },
+        {
+          "key": "merchant",
+          "name": "市舶商 / Merchant",
+          "role": "港口贸易与补给网络组织者 / Organizer of harbor trade and supply networks",
+          "stance": "主张稳定互市与有限常驻 / Favors durable exchange and a limited permanent presence",
+          "initial_emotion": "hopeful"
+        }
+      ],
+      "round1": [
+        {
+          "agent": "navigator",
+          "content": "先测水文、季风和补给距离，再决定接触规模。 / Chart currents, winds, and supply distances before deciding the scale of contact.",
+          "emotion": "focused"
+        },
+        {
+          "agent": "interpreter",
+          "content": "共同词表比武力更快建立信任，第一份协议必须让双方都能复述。 / A shared vocabulary builds trust faster than force; both sides must be able to restate the first agreement.",
+          "emotion": "curious"
+        },
+        {
+          "agent": "merchant",
+          "content": "互市要从可替代的货物开始，不能让任何一方立刻依赖单一港口。 / Exchange should begin with replaceable goods so neither side immediately depends on one harbor.",
+          "emotion": "hopeful"
+        }
+      ],
+      "outcomes": [
+        {
+          "key": "harbor",
+          "title": "港口联盟 / Harbor League",
+          "description": "沿海城市以译员馆和季节性互市建立松散联盟。 / Coastal cities build a loose league around interpreters and seasonal exchange.",
+          "summary": "冲突最低、扩散最慢，互惠关系最耐久。 / Conflict is lowest and diffusion slowest, producing the most durable reciprocity.",
+          "story": "船队把接触限制在数个港口，双方共享航图、作物和医疗经验。内陆变化缓慢，但港口规则在多次航季后仍能被遵守。 / The fleet limits contact to several harbors, sharing charts, crops, and medical knowledge. Inland change is slow, but harbor rules endure across repeated sailing seasons.",
+          "insight": "可撤回的小承诺比宏大宣言更容易累积跨文化信用。 / Small reversible commitments accumulate cross-cultural trust more reliably than grand declarations.",
+          "probability": 0.46,
+          "round2": [
+            {
+              "agent": "navigator",
+              "content": "季节性航线让船队能在局势变化时撤回，安全边界仍然清楚。 / Seasonal routes let the fleet withdraw as conditions change, keeping safety boundaries clear.",
+              "emotion": "reassured"
+            },
+            {
+              "agent": "interpreter",
+              "content": "译员馆开始记录双方误解，这比一次完美翻译更有价值。 / The interpreter house now records misunderstandings, which is more valuable than a single perfect translation.",
+              "emotion": "encouraged"
+            },
+            {
+              "agent": "merchant",
+              "content": "多港轮换降低垄断风险，却让仓储和计量成本持续上升。 / Rotating among harbors lowers monopoly risk but keeps storage and measurement costs high.",
+              "emotion": "cautious"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "navigator",
+              "content": "共享航标减少了事故，我支持把联盟扩展到下一条海岸线。 / Shared navigation marks reduce accidents, so I support extending the league to the next coast.",
+              "emotion": "confident"
+            },
+            {
+              "agent": "interpreter",
+              "content": "互惠条款已能被双方公开复述，关系不再依赖单个译员。 / Both sides can publicly restate reciprocal terms, so the relationship no longer depends on one interpreter.",
+              "emotion": "hopeful"
+            },
+            {
+              "agent": "merchant",
+              "content": "利润没有据点方案高，但低冲突让贸易连续性更可预测。 / Profits trail the outpost path, but low conflict makes continuity more predictable.",
+              "emotion": "satisfied"
+            }
+          ]
+        },
+        {
+          "key": "court",
+          "title": "礼制使团 / Court Embassy",
+          "description": "双方以正式使团、礼物与对等文书定义首次接触。 / Formal embassies, gifts, and reciprocal documents define the encounter.",
+          "summary": "政治承认来得快，实际交流受礼制节奏约束。 / Political recognition arrives quickly while practical exchange follows a ceremonial pace.",
+          "story": "译员把贡礼语言改写为对等承诺，双方宫廷迅速承认彼此。威望提高，但每次调整都要经过冗长礼仪，地方港口缺少自主空间。 / Interpreters recast tribute language as reciprocal commitments, winning rapid mutual recognition. Prestige rises, but every adjustment passes through lengthy ceremony and local harbors retain little autonomy.",
+          "insight": "外交框架能稳定意义，却可能把现实问题变成礼仪排队。 / Diplomatic framing stabilizes meaning but can turn practical problems into ceremonial queues.",
+          "probability": 0.34,
+          "round2": [
+            {
+              "agent": "navigator",
+              "content": "正式航书明确了安全港，但临时避风仍需层层请示。 / Formal sailing letters identify safe harbors, yet emergency shelter still requires layers of approval.",
+              "emotion": "uneasy"
+            },
+            {
+              "agent": "interpreter",
+              "content": "把贡礼改写成互赠后，双方终于在同一条款上点头。 / Recasting tribute as mutual gifts finally lets both sides assent to the same terms.",
+              "emotion": "proud"
+            },
+            {
+              "agent": "merchant",
+              "content": "宫廷许可提升信誉，但货物在等待仪式时已经错过市场。 / Court approval raises credibility, but goods miss their market while ceremonies proceed.",
+              "emotion": "impatient"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "navigator",
+              "content": "若使团授权港口处理紧急情况，礼制与航海安全可以兼容。 / Ceremony can coexist with safety if embassies authorize harbors to handle emergencies.",
+              "emotion": "cautious"
+            },
+            {
+              "agent": "interpreter",
+              "content": "对等文书成为共同记忆，但我担心地方声音仍未进入谈判。 / Reciprocal documents create shared memory, though local voices remain outside negotiation.",
+              "emotion": "reflective"
+            },
+            {
+              "agent": "merchant",
+              "content": "固定使团带来稳定订单，我仍要求缩短货物审批周期。 / Permanent embassies bring stable orders, but I still demand shorter cargo approvals.",
+              "emotion": "determined"
+            }
+          ]
+        },
+        {
+          "key": "frontier",
+          "title": "远洋据点 / Ocean Outpost",
+          "description": "船队把补给站扩成常驻工坊和贸易据点。 / A supply station grows into a permanent workshop and trading outpost.",
+          "summary": "知识和货物流动最快，地方抵触与治理压力最高。 / Knowledge and goods move fastest, while local resistance and governance pressure peak.",
+          "story": "常驻工坊快速交换造船、作物和金属技术，并吸引远距离商路。扩张速度超过协商能力，土地、劳役和司法争议让据点持续脆弱。 / A permanent workshop rapidly exchanges shipbuilding, crops, and metalworking and draws long-distance trade. Expansion outruns negotiation, leaving the outpost vulnerable to disputes over land, labor, and justice.",
+          "insight": "高密度接触放大收益，也把每个未解决的不对称迅速政治化。 / Dense contact magnifies gains and rapidly politicizes every unresolved asymmetry.",
+          "probability": 0.2,
+          "round2": [
+            {
+              "agent": "navigator",
+              "content": "补给站正在消耗原定返航储备，扩建速度已经越过安全线。 / The station is consuming return reserves; expansion has crossed the safety line.",
+              "emotion": "alarmed"
+            },
+            {
+              "agent": "interpreter",
+              "content": "工坊合同没有对应本地土地观念，误解正变成公开抵触。 / Workshop contracts do not match local ideas of land, and misunderstanding is becoming open resistance.",
+              "emotion": "concerned"
+            },
+            {
+              "agent": "merchant",
+              "content": "常驻仓库让交换量翻倍，但我们必须把收益分配写进协议。 / Permanent warehouses double exchange, but benefit sharing must be written into the agreement.",
+              "emotion": "energized"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "navigator",
+              "content": "缩小防御圈并保留撤离航线后，据点才重新具备可控风险。 / The outpost becomes manageable only after shrinking its perimeter and preserving an evacuation route.",
+              "emotion": "guarded"
+            },
+            {
+              "agent": "interpreter",
+              "content": "共同仲裁席首次让地方代表否决工坊扩建，冲突暂时降温。 / A joint arbitration seat lets local representatives veto expansion for the first time, cooling conflict.",
+              "emotion": "relieved"
+            },
+            {
+              "agent": "merchant",
+              "content": "让出扩建速度换来长期经营权，收益更慢却不再随一次冲突归零。 / Trading expansion speed for long-term operating rights slows gains but prevents one clash from erasing them.",
+              "emotion": "resolved"
+            }
+          ]
+        }
+      ],
+      "replay": {
+        "outcome": "frontier",
+        "source": "harbor",
+        "round": 2,
+        "agent": "merchant",
+        "kind": "branch_replay"
+      },
+      "report": {
+        "headline": "港口联盟最可能形成耐久接触，礼制使团居次；常驻据点收益最高但风险也最集中。 / The harbor league is most likely to sustain contact, followed by court diplomacy; the outpost offers the greatest upside and the most concentrated risk.",
+        "confidence_basis": "三条路径在承诺可撤回性、地方参与和扩张速度上的差异稳定，但疾病与生态冲击未被完整建模。 / The paths differ consistently in reversibility, local participation, and expansion speed, while disease and ecological shocks remain under-modeled.",
+        "sections": [
+          {
+            "id": "contact",
+            "title": {
+              "zh": "接触节奏",
+              "en": "Pace of Contact"
+            },
+            "intent": "比较季节互市、正式外交与常驻接触的承诺强度。 / Compare commitment intensity across seasonal exchange, formal diplomacy, and permanent contact.",
+            "body": {
+              "zh": "港口联盟通过小步承诺积累信用，礼制使团用正式承认稳定关系，据点则一次性承担更高不可逆成本。",
+              "en": "The harbor league compounds trust through small commitments, embassies stabilize relations through recognition, and the outpost assumes a much larger irreversible cost at once."
+            }
+          },
+          {
+            "id": "translation",
+            "title": {
+              "zh": "翻译与对等",
+              "en": "Translation and Reciprocity"
+            },
+            "intent": "说明共同词表和可复述条款为何决定冲突水平。 / Show why shared vocabulary and restatable terms determine conflict levels.",
+            "body": {
+              "zh": "当协议能被双方公开复述时，误解可被修正；当合同只符合一方制度时，经济摩擦会迅速政治化。",
+              "en": "When both sides can publicly restate an agreement, misunderstandings can be repaired; when contracts fit only one side's institutions, economic friction quickly becomes political."
+            }
+          },
+          {
+            "id": "governance",
+            "title": {
+              "zh": "扩张治理",
+              "en": "Governing Expansion"
+            },
+            "intent": "识别常驻活动越过协商能力的时点。 / Identify when permanent activity outruns negotiating capacity.",
+            "body": {
+              "zh": "土地、劳役和司法争议同时出现，是扩张速度超过共同治理能力的明确信号。",
+              "en": "Simultaneous disputes over land, labor, and justice are a clear sign that expansion has outrun shared governance."
+            }
+          }
+        ],
+        "indicator": {
+          "signal": "双方可公开复述的共同条款数量 / Number of jointly restatable public terms",
+          "direction": "up",
+          "note": "共同条款增加意味着关系不再依赖少数中介。 / More shared terms mean the relationship depends less on a few intermediaries.",
+          "threshold": "港口、使团和地方代表均采用同一版本协议 / Harbors, embassies, and local representatives use the same agreement version",
+          "observation": "比较双方公告对权利、撤回和仲裁的表述。 / Compare both sides' public language on rights, withdrawal, and arbitration.",
+          "time_horizon": "未来三个航季 / Next three sailing seasons",
+          "rationale": "可复述条款直接衡量翻译是否转化为稳定制度。 / Restatable terms directly measure whether translation has become a stable institution."
+        },
+        "follow_ups": [
+          "哪些交换品最适合作为低依赖的首批贸易？ / Which goods best support low-dependency early exchange?",
+          "地方代表应如何获得对据点扩建的否决权？ / How should local representatives gain veto power over outpost expansion?"
+        ],
+        "limitations": "推演未完整表示疾病传播、人口冲击和跨洋生态交换，结论只比较所列制度路径。 / The simulation does not fully represent disease, demographic shocks, or transoceanic ecological exchange; conclusions compare only the listed institutional paths."
+      },
+      "intervention": {
+        "branch": "court",
+        "round": 2,
+        "agent": "interpreter",
+        "user_input": "把贡礼措辞改写为双方都能撤回的对等互赠条款。 / Reframe tribute language as reciprocal gifts that either side may withdraw from.",
+        "effect": "礼制使团保留正式承认，同时减少单向臣属解释。 / The embassy retains formal recognition while reducing one-sided interpretations of submission."
+      }
+    },
+    {
+      "filename": "river-city-pact.swarm",
+      "prefix": "river",
+      "scenario_id": "sample-river-pact",
+      "created_at": "2026-06-12T00:00:00+00:00",
+      "question": "如果古代河流城市先建立跨区域防洪协议 / What if ancient river cities formed an early regional flood pact?",
+      "scene_theme": "archive",
+      "title": {
+        "zh": "大河盟约",
+        "en": "The Great River Pact"
+      },
+      "summary": {
+        "zh": "城市先共享水位记录，再在共同账本、联储粮仓和迁徙通道之间选择不同的韧性与公平路径。",
+        "en": "Cities first share river observations, then choose among a common ledger, shared granaries, and safe-passage corridors, each balancing resilience and fairness differently."
+      },
+      "agents": [
+        {
+          "key": "engineer",
+          "name": "治水匠 / Engineer",
+          "role": "堤坝、水位与工程协调者 / Coordinator of levees, gauges, and river works",
+          "stance": "主张共享记录与可验证预警 / Favors shared records and verifiable warnings",
+          "initial_emotion": "focused"
+        },
+        {
+          "key": "granary",
+          "name": "仓吏 / Granary Keeper",
+          "role": "粮食储备、借贷与配给管理者 / Manager of reserves, grain loans, and rationing",
+          "stance": "主张明确偿还规则和谨慎调拨 / Favors explicit repayment rules and cautious allocation",
+          "initial_emotion": "watchful"
+        },
+        {
+          "key": "envoy",
+          "name": "盟约使 / Envoy",
+          "role": "跨城承诺与争端协调者 / Mediator of intercity commitments and disputes",
+          "stance": "主张持久盟约与最低救灾义务 / Favors a durable pact and minimum relief duties",
+          "initial_emotion": "steady"
+        }
+      ],
+      "round1": [
+        {
+          "agent": "engineer",
+          "content": "同一套刻度比十封急信可靠，所有城市必须先统一水位标记。 / One shared scale beats ten urgent letters; every city must standardize river marks first.",
+          "emotion": "focused"
+        },
+        {
+          "agent": "granary",
+          "content": "借粮要写清归还季节和损耗，否则信任会比洪水退得更快。 / Grain loans need clear return seasons and loss rules, or trust will recede faster than the flood.",
+          "emotion": "watchful"
+        },
+        {
+          "agent": "envoy",
+          "content": "盟约必须先保证预警、过境和最低口粮，才有资格谈更大的联盟。 / The pact must first guarantee warnings, passage, and minimum rations before claiming a larger alliance.",
+          "emotion": "steady"
+        }
+      ],
+      "outcomes": [
+        {
+          "key": "ledger",
+          "title": "水位账本 / River Ledger",
+          "description": "城市公开统一刻度的水位、降雨和堤坝记录。 / Cities publish water, rainfall, and levee records on a common scale.",
+          "summary": "共同事实降低猜疑，工程协作最稳定。 / Shared facts reduce suspicion and make engineering cooperation most stable.",
+          "story": "各城每日抄录水位并交叉核验，上游预警开始被下游信任。工程决策更早、更协调，但没有粮食与安置承诺时，弱城仍承担较大损失。 / Cities record and cross-check daily water levels, making upstream warnings credible downstream. Engineering becomes earlier and coordinated, though weaker cities still bear losses without food or shelter commitments.",
+          "insight": "共享测量能建立事实共同体，却不能自动分配救灾成本。 / Shared measurement creates a community of facts but does not automatically distribute relief costs.",
+          "probability": 0.44,
+          "round2": [
+            {
+              "agent": "engineer",
+              "content": "统一水位碑让上游泄洪提前两日可见，堤坝队终于能共同排班。 / Common gauges reveal upstream releases two days early, allowing levee crews to coordinate shifts.",
+              "emotion": "encouraged"
+            },
+            {
+              "agent": "granary",
+              "content": "预警准确了，但账本没有说明哪座城应承担紧急粮食成本。 / Warnings are accurate, but the ledger does not say which city bears emergency grain costs.",
+              "emotion": "concerned"
+            },
+            {
+              "agent": "envoy",
+              "content": "共同数字让争议从真假转向责任，这是盟约可以处理的问题。 / Shared numbers move disputes from truth to responsibility, which the pact can actually negotiate.",
+              "emotion": "hopeful"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "engineer",
+              "content": "三次预警都被复核后，我支持把维修记录也纳入公开账本。 / After three verified warnings, I support adding maintenance records to the public ledger.",
+              "emotion": "confident"
+            },
+            {
+              "agent": "granary",
+              "content": "按受益比例设立小额储备后，共同事实终于开始对应共同成本。 / A small benefit-based reserve finally links shared facts to shared costs.",
+              "emotion": "reassured"
+            },
+            {
+              "agent": "envoy",
+              "content": "公开账本让违约无处隐藏，盟约信用第一次可以被外城观察。 / The public ledger makes breaches visible, letting outside cities observe pact credibility for the first time.",
+              "emotion": "proud"
+            }
+          ]
+        },
+        {
+          "key": "granary",
+          "title": "联储粮仓 / Shared Granary",
+          "description": "城市按洪水风险和收成共同储粮、借粮与归还。 / Cities pool, lend, and repay grain according to flood risk and harvests.",
+          "summary": "直接提高生存韧性，但公平争议最持续。 / Survival resilience rises directly, while fairness disputes persist.",
+          "story": "丰收城市先向受灾城市借出粮食，联盟避免了第一轮饥荒。随后关于贡献、损耗和偿还季节的争论成为盟约核心。 / Surplus cities lend grain to flooded neighbors, preventing the first famine. Debate over contributions, losses, and repayment seasons then becomes the pact's central struggle.",
+          "insight": "共同储备把团结变成可计算义务，也让每次例外都成为政治争议。 / Shared reserves turn solidarity into measurable duties and every exception into a political dispute.",
+          "probability": 0.36,
+          "round2": [
+            {
+              "agent": "engineer",
+              "content": "粮仓选址若忽略支流风险，一场局部洪水就会摧毁共同储备。 / A granary sited without tributary risk can lose the common reserve to one local flood.",
+              "emotion": "uneasy"
+            },
+            {
+              "agent": "granary",
+              "content": "首批借粮救下了下游城，但必须记录损耗而不是假装每粒粮都能归还。 / The first loan saves the downstream city, but losses must be recorded rather than pretending every grain returns.",
+              "emotion": "determined"
+            },
+            {
+              "agent": "envoy",
+              "content": "贡献公式若只看人口，大城会认为自己被惩罚，弱城则仍得不到保障。 / A population-only formula makes large cities feel punished while leaving weak cities exposed.",
+              "emotion": "concerned"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "engineer",
+              "content": "分散三座粮仓并共享水位预警后，单点失效风险已经下降。 / Splitting reserves across three granaries and sharing warnings reduces single-point failure.",
+              "emotion": "relieved"
+            },
+            {
+              "agent": "granary",
+              "content": "风险、收成和既往借贷共同计价后，归还规则终于能被多数城市接受。 / Pricing risk, harvests, and loan history together makes repayment acceptable to most cities.",
+              "emotion": "satisfied"
+            },
+            {
+              "agent": "envoy",
+              "content": "争端仍多，但公开公式让谈判围绕参数而不是互相指责。 / Disputes remain, but a public formula turns blame into negotiation over parameters.",
+              "emotion": "measured"
+            }
+          ]
+        },
+        {
+          "key": "migration",
+          "title": "迁徙通道 / Safe Passage",
+          "description": "城市承认洪水季临时过境、安置与返乡权。 / Cities recognize temporary passage, shelter, and return rights during floods.",
+          "summary": "救人最快，承载城市的资源和政治压力最高。 / Lives are saved fastest, while host cities bear the greatest resource and political pressure.",
+          "story": "标记道路和临时营地让大量居民避开洪峰，盟约获得最直观的公共支持。接纳城市随后面对粮价、治安和返乡安排的持续压力。 / Marked roads and temporary camps move many residents away from flood peaks, earning broad support. Host cities then face sustained pressure over food prices, order, and return arrangements.",
+          "insight": "通行权把救灾置于边界之前，却要求接纳成本有明确分担机制。 / Passage rights put relief before borders but require an explicit way to share hosting costs.",
+          "probability": 0.2,
+          "round2": [
+            {
+              "agent": "engineer",
+              "content": "两条高地道路避开洪峰，但营地排水不足会制造新的风险。 / Two upland roads avoid the flood peak, but poor camp drainage creates a new hazard.",
+              "emotion": "vigilant"
+            },
+            {
+              "agent": "granary",
+              "content": "临时人口让粮价急升，没有预置口粮就会把救援变成冲突。 / Temporary arrivals drive grain prices up; without prepositioned rations, relief will become conflict.",
+              "emotion": "alarmed"
+            },
+            {
+              "agent": "envoy",
+              "content": "首批居民安全过境证明盟约有用，现在必须保证他们有权返乡。 / The first safe crossing proves the pact's value; now it must guarantee the right to return.",
+              "emotion": "resolved"
+            }
+          ],
+          "round3": [
+            {
+              "agent": "engineer",
+              "content": "营地按水位预警分阶段开放后，道路和排水不再同时过载。 / Phased camp openings tied to river warnings prevent roads and drainage from overloading together.",
+              "emotion": "reassured"
+            },
+            {
+              "agent": "granary",
+              "content": "接纳成本按人日结算并由联盟储备补贴后，粮价开始稳定。 / Per-person-day hosting credits backed by alliance reserves begin to stabilize grain prices.",
+              "emotion": "cautiously_hopeful"
+            },
+            {
+              "agent": "envoy",
+              "content": "返乡期限和财产登记写入盟约后，接纳城市不再担心临时义务永久化。 / Return deadlines and property records reassure host cities that temporary duties will not become permanent.",
+              "emotion": "hopeful"
+            }
+          ]
+        }
+      ],
+      "replay": {
+        "outcome": "migration",
+        "source": "ledger",
+        "round": 2,
+        "agent": "envoy",
+        "kind": "branch_replay"
+      },
+      "report": {
+        "headline": "水位账本最可能成为盟约核心，联储粮仓提供更直接韧性，迁徙通道则以最高承载压力换取最快救援。 / The river ledger is most likely to anchor the pact, shared granaries provide more direct resilience, and safe passage buys faster relief at the highest hosting cost.",
+        "confidence_basis": "水位、储备和接纳成本形成清晰权衡，但长期气候变化与战争冲击未纳入。 / Water data, reserves, and hosting costs create a clear trade-off, while long-run climate shifts and warfare are not included.",
+        "sections": [
+          {
+            "id": "warnings",
+            "title": {
+              "zh": "共同预警",
+              "en": "Shared Warnings"
+            },
+            "intent": "解释统一刻度如何把信息转化为跨城行动。 / Explain how a common scale turns information into coordinated action.",
+            "body": {
+              "zh": "交叉核验的水位记录降低真假争论，让城市能更早协调泄洪、堤防和营地开放。",
+              "en": "Cross-checked river records reduce disputes over truth and let cities coordinate releases, levees, and camp openings earlier."
+            }
+          },
+          {
+            "id": "burden",
+            "title": {
+              "zh": "成本分担",
+              "en": "Sharing the Burden"
+            },
+            "intent": "比较粮食借贷与接纳补贴如何分配救灾成本。 / Compare how grain loans and hosting credits distribute relief costs.",
+            "body": {
+              "zh": "公开公式能把互相指责变成参数谈判，但任何公式都必须同时考虑风险、能力和既往贡献。",
+              "en": "Public formulas turn blame into negotiation over parameters, but must account for risk, capacity, and prior contributions together."
+            }
+          },
+          {
+            "id": "durability",
+            "title": {
+              "zh": "盟约耐久性",
+              "en": "Durability of the Pact"
+            },
+            "intent": "识别一次性合作转化为长期制度的条件。 / Identify when one-off cooperation becomes a durable institution.",
+            "body": {
+              "zh": "当预警可核验、成本可计算、临时权利有终点时，城市更愿意在下一次洪水前继续履约。",
+              "en": "Cities are more willing to comply before the next flood when warnings are verifiable, costs calculable, and temporary rights have clear endpoints."
+            }
+          }
+        ],
+        "indicator": {
+          "signal": "跨城预警被按时确认的比例 / Share of intercity warnings acknowledged on time",
+          "direction": "up",
+          "note": "确认率上升表示共同账本正在转化为实际协调。 / A rising acknowledgement rate shows that the common ledger is becoming real coordination.",
+          "threshold": "连续三次预警在一个日周期内由全部成员确认 / All members acknowledge three consecutive warnings within one day cycle",
+          "observation": "比较预警时间、确认时间和实际堤防行动。 / Compare warning times, acknowledgement times, and actual levee actions.",
+          "time_horizon": "下一个完整洪水季 / Next full flood season",
+          "rationale": "及时确认同时检验数据可信度、行政响应和盟约意愿。 / Timely acknowledgement tests data credibility, administrative response, and willingness to honor the pact."
+        },
+        "follow_ups": [
+          "共同储备应按风险、人口还是财政能力筹资？ / Should shared reserves be funded by risk, population, or fiscal capacity?",
+          "临时迁徙权如何在洪水结束后公平终止？ / How should temporary passage rights end fairly after floodwaters recede?"
+        ],
+        "limitations": "推演没有纳入长期河道改道、战争和多季歉收，概率只比较三种合作制度的叙事可行性。 / The simulation excludes long-term river shifts, warfare, and multi-season crop failure; probabilities compare only the narrative viability of the three cooperative institutions."
+      },
+      "intervention": {
+        "branch": "granary",
+        "round": 2,
+        "agent": "granary",
+        "user_input": "把粮食损耗、风险和既往贡献同时写入公开偿还公式。 / Put losses, risk, and prior contributions into one public repayment formula.",
+        "effect": "争端从互相指责转向可审议参数，联储粮仓的可接受度提高。 / Disputes shift from blame to negotiable parameters, increasing acceptance of the shared granary."
+      }
+    }
+  ]
+}

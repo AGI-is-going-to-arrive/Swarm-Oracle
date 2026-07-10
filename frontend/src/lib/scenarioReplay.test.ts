@@ -241,6 +241,201 @@ describe('scenarioReplay helpers', () => {
     expect(raw?.agents[0]).not.toHaveProperty('persona');
   });
 
+  it('removes local identity fields while preserving public prediction and campaign data', async () => {
+    const privatePrediction = {
+      id: 'prediction-1',
+      scenario_id: scenario.id,
+      user_name: 'Local Director',
+      prediction_text: 'The archive remains stable.',
+      confidence: 0.72,
+      score: 0.64,
+      score_reason: 'Close to the terminal branch.',
+      created_at: '2026-03-19T00:01:00Z',
+    } satisfies PredictionInfo;
+    Object.assign(privatePrediction, {
+      user_id: 'local-user-1',
+      owner_id: 'local-owner-1',
+    });
+    const privateScenario = { ...scenario };
+    Object.assign(privateScenario, {
+      user_id: 'local-user-1',
+      ownerId: 'local-owner-1',
+    });
+    const privateCampaignSummary = {
+      ...campaignSummary,
+      profile: { ...campaignSummary.profile },
+    };
+    Object.assign(privateCampaignSummary.profile, {
+      owner_user_id: 'local-owner-1',
+    });
+    const privatePayload: ScenarioResultReplayPayload = {
+      ...replayPayload,
+      scenario: privateScenario,
+      predictions: [privatePrediction],
+      campaignSummary: privateCampaignSummary,
+    };
+    const expectedPrediction = {
+      id: 'prediction-1',
+      scenario_id: scenario.id,
+      prediction_text: 'The archive remains stable.',
+      confidence: 0.72,
+      score: 0.64,
+      score_reason: 'Close to the terminal branch.',
+      created_at: '2026-03-19T00:01:00Z',
+    };
+
+    const sanitized = sanitizeScenarioResultReplayPayload(privatePayload);
+    expect(sanitized.predictions[0]).toEqual(expectedPrediction);
+    expect(sanitized.scenario).not.toHaveProperty('user_id');
+    expect(sanitized.scenario).not.toHaveProperty('ownerId');
+    expect(sanitized.campaignSummary?.profile).toMatchObject({
+      total_runs: 1,
+      total_bets: 0,
+      hit_bets: 0,
+      highest_archive_grade: 'A',
+    });
+    expect(sanitized.campaignSummary?.profile).not.toHaveProperty('user_id');
+    expect(sanitized.campaignSummary?.profile).not.toHaveProperty('user_name');
+    expect(sanitized.campaignSummary?.profile).not.toHaveProperty('owner_user_id');
+
+    const token = await encodeScenarioReplayToken(privatePayload);
+    const raw = await decodeReplayEnvelope<ScenarioResultReplayPayload>(token, 'scenario_result_v1');
+    expect(raw?.predictions[0]).toEqual(expectedPrediction);
+    expect(raw?.campaignSummary?.profile).not.toHaveProperty('user_id');
+    expect(raw?.campaignSummary?.profile).not.toHaveProperty('user_name');
+
+    const decoded = await decodeScenarioReplayToken(token);
+    expect(decoded?.predictions[0]).toEqual(expectedPrediction);
+
+    const normalized = normalizeScenarioResultReplayPayload(privatePayload);
+    expect(normalized?.predictions[0]).toEqual(expectedPrediction);
+  });
+
+  it('removes gameplay bet identities while preserving public gameplay details', async () => {
+    const backendBet = {
+      bet_id: 'backend-bet-1',
+      kind: 'branch_winner' as const,
+      target_id: 'branch-1',
+      target_label: 'Archive Branch',
+      confidence: 0.81,
+      user_name: 'Remote Director',
+      placed_at_round: 2,
+      placed_at: '2026-03-19T00:02:00Z',
+      resolved: true,
+    };
+    Object.assign(backendBet, {
+      user_id: 'remote-user-1',
+      owner_user_id: 'remote-owner-1',
+    });
+    const localBet = {
+      betId: 'local-bet-1',
+      kind: 'ending_tone' as const,
+      targetId: 'order',
+      targetLabel: 'Order',
+      confidence: 0.67,
+      userName: 'Local Director',
+      placedAtRound: 2,
+      placedAt: '2026-03-19T00:02:01Z',
+      resolved: false,
+    };
+    Object.assign(localBet, {
+      userId: 'local-user-1',
+      ownerId: 'local-owner-1',
+    });
+    const privatePayload: ScenarioResultReplayPayload = {
+      ...replayPayload,
+      scenario: {
+        ...scenario,
+        gameplay_state: {
+          revision: 4,
+          cards: { usage_log: [] },
+          betting: { bets: [backendBet] },
+          archive: {
+            key_moments: ['Visible backend moment'],
+            branch_snapshots: [{
+              branch_id: 'branch-1',
+              title: 'Archive Branch',
+              probability: 1,
+            }],
+          },
+        },
+      },
+      scenarioMeta: {
+        ...scenarioMeta,
+        betting: { bets: [localBet] },
+      },
+      campaignScenarioSummary: null,
+      campaignSummary: null,
+    };
+    const expectedBackendBet = {
+      bet_id: 'backend-bet-1',
+      kind: 'branch_winner',
+      target_id: 'branch-1',
+      target_label: 'Archive Branch',
+      confidence: 0.81,
+      placed_at_round: 2,
+      placed_at: '2026-03-19T00:02:00Z',
+      resolved: true,
+    };
+    const expectedLocalBet = {
+      betId: 'local-bet-1',
+      kind: 'ending_tone',
+      targetId: 'order',
+      targetLabel: 'Order',
+      confidence: 0.67,
+      placedAtRound: 2,
+      placedAt: '2026-03-19T00:02:01Z',
+      resolved: false,
+    };
+
+    const sanitized = sanitizeScenarioResultReplayPayload(privatePayload);
+    expect(sanitized.scenario.gameplay_state?.betting.bets[0]).toEqual(expectedBackendBet);
+    expect(sanitized.scenario.gameplay_state?.revision).toBe(4);
+    expect(sanitized.scenario.gameplay_state?.archive.key_moments).toEqual(['Visible backend moment']);
+    expect(sanitized.scenarioMeta.betting.bets[0]).toEqual(expectedLocalBet);
+    expect(sanitized.scenarioMeta.cards).toEqual(scenarioMeta.cards);
+
+    const token = await encodeScenarioReplayToken(privatePayload);
+    const raw = await decodeReplayEnvelope<ScenarioResultReplayPayload>(token, 'scenario_result_v1');
+    expect(raw?.scenario.gameplay_state?.betting.bets[0]).toEqual(expectedBackendBet);
+    expect(raw?.scenarioMeta.betting.bets[0]).toEqual(expectedLocalBet);
+  });
+
+  it('strips live-only graph and checkpoint metadata from public replay payloads', async () => {
+    const liveScenario: Scenario = {
+      ...scenario,
+      causal_graph_id: 'owner-only-graph',
+      faction_timeline_id: 'owner-only-faction-timeline',
+      checkpoints: Array.from({ length: 200 }, (_, index) => ({
+        id: `checkpoint-${index}`,
+        scenario_id: scenario.id,
+        branch_id: 'branch-1',
+        round_number: index + 1,
+        created_at: '2026-03-19T00:00:00Z',
+      })),
+    };
+    const livePayload: ScenarioResultReplayPayload = {
+      ...replayPayload,
+      scenario: liveScenario,
+    };
+
+    const sanitized = sanitizeScenarioResultReplayPayload(livePayload);
+    expect(sanitized.scenario).not.toHaveProperty('causal_graph_id');
+    expect(sanitized.scenario).not.toHaveProperty('checkpoints');
+    expect(sanitized.scenario).not.toHaveProperty('faction_timeline_id');
+
+    const token = await encodeScenarioReplayToken(livePayload);
+    const raw = await decodeReplayEnvelope<ScenarioResultReplayPayload>(token, 'scenario_result_v1');
+    expect(raw?.scenario).not.toHaveProperty('causal_graph_id');
+    expect(raw?.scenario).not.toHaveProperty('checkpoints');
+    expect(raw?.scenario).not.toHaveProperty('faction_timeline_id');
+
+    const normalized = normalizeScenarioResultReplayPayload(livePayload);
+    expect(normalized?.scenario).not.toHaveProperty('causal_graph_id');
+    expect(normalized?.scenario).not.toHaveProperty('checkpoints');
+    expect(normalized?.scenario).not.toHaveProperty('faction_timeline_id');
+  });
+
   it('strips full_report from the sanitized story data and replay token', async () => {
     const fullReport = {
       version: '1',

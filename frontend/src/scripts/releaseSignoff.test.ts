@@ -4,6 +4,68 @@ import { describe, expect, it } from 'vitest';
 import { __test__ } from '../../scripts/release-signoff.mjs';
 
 describe('release-signoff round7 checks', () => {
+  it('builds a literal-safe Cmd+R pattern and list command', () => {
+    const spec = __test__.buildFocusedVitestSpec(
+      'src/components/kg/NodeConversationSheet.test.tsx',
+      'Cmd+R fires onResend and preventDefault blocks browser refresh',
+    );
+
+    expect(spec.testNamePattern).toBe('Cmd\\+R fires onResend and preventDefault blocks browser refresh$');
+    expect(new RegExp(spec.testNamePattern).test(
+      'NodeConversationSheet — keyboard shortcuts > Cmd+R fires onResend and preventDefault blocks browser refresh',
+    )).toBe(true);
+    expect(new RegExp(spec.testNamePattern).test(
+      'NodeConversationSheet — keyboard shortcuts > CmddR fires onResend and preventDefault blocks browser refresh',
+    )).toBe(false);
+    expect(new RegExp(spec.testNamePattern).test(
+      'NodeConversationSheet — keyboard shortcuts > Cmd+R fires onResend and preventDefault blocks browser refresh extra',
+    )).toBe(false);
+    expect(spec.listArgs).toEqual([
+      'vitest',
+      'list',
+      'src/components/kg/NodeConversationSheet.test.tsx',
+      '--testNamePattern',
+      'Cmd\\+R fires onResend and preventDefault blocks browser refresh$',
+      '--json',
+    ]);
+  });
+
+  it('rejects a focused Vitest filter that selects zero tests', () => {
+    expect(__test__.parseVitestListOutput(
+      '[{"name":"suite > Cmd+R fires","file":"target.test.tsx"}]',
+      'cmd_r_suppress_reload',
+    )).toHaveLength(1);
+    expect(() => __test__.parseVitestListOutput('[]', 'cmd_r_suppress_reload'))
+      .toThrow('cmd_r_suppress_reload selected zero tests');
+  });
+
+  it('sets bounded spawn timeouts and reports timeout failures explicitly', () => {
+    expect(__test__.commandTimeoutMs).toBeGreaterThanOrEqual(60_000);
+    expect(__test__.captureTimeoutMs).toBeGreaterThanOrEqual(5_000);
+    expect(__test__.buildSpawnSyncOptions({}, false)).toMatchObject({
+      timeout: __test__.commandTimeoutMs,
+      killSignal: 'SIGKILL',
+    });
+    expect(__test__.buildSpawnSyncOptions({}, true)).toMatchObject({
+      timeout: __test__.captureTimeoutMs,
+      killSignal: 'SIGKILL',
+    });
+
+    const timeoutError = Object.assign(new Error('spawnSync npm ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    expect(() => __test__.throwSpawnSyncError(
+      { error: timeoutError },
+      'npm test',
+      12_345,
+    )).toThrow('Command timed out after 12345ms: npm test');
+  });
+
+  it('keeps the new fixture contracts in release signoff', () => {
+    expect(__test__.scriptContractTests).toEqual(expect.arrayContaining([
+      'scripts/e2e-prediction-modal.test.mjs',
+      'scripts/e2e-result-report-suite.test.mjs',
+    ]));
+  });
+
   it('exports the five required round7 check step ids', () => {
     expect(__test__.round7CheckStepIds).toEqual([
       'agent_conversation_ws_endpoint',

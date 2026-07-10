@@ -1,22 +1,50 @@
 import { readFileSync } from 'node:fs';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, type ReactNode } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  createMemoryRouter,
+  MemoryRouter,
+  Route,
+  RouterProvider,
+  Routes,
+  useLocation,
+} from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
 
+function SimulationAutomationCommitProbe({
+  onCommit,
+}: {
+  onCommit: (route: string, renderer: (() => string) | undefined) => void;
+}) {
+  const location = useLocation();
+  useLayoutEffect(() => {
+    onCommit(
+      `${location.pathname}${location.search}`,
+      (window as Window & { render_game_to_text?: () => string }).render_game_to_text,
+    );
+  }, [location.pathname, location.search, onCommit]);
+  return <SimulationView />;
+}
+
+const { capabilityState } = vi.hoisted(() => ({
+  capabilityState: { youVsOracleEnabled: true },
+}));
+
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: () => ({
     loading: false,
-    enabled: true,
-    capabilities: { you_vs_oracle: { enabled: true } },
+    enabled: capabilityState.youVsOracleEnabled,
+    capabilities: {
+      you_vs_oracle: { enabled: capabilityState.youVsOracleEnabled },
+    },
     error: null,
     reload: vi.fn(),
   }),
 }));
-import type { BranchInfo, Scenario, ScenarioDirectorState, ScenarioGameplayState } from '../types';
+import type { AgentInfo, BranchInfo, Scenario, ScenarioDirectorState, ScenarioGameplayState } from '../types';
 import { encodeSimulationReplayToken } from '../lib/simulationReplay';
 import { ApiError } from '../api/client';
 import {
@@ -52,6 +80,7 @@ const {
 	  gameplayCardsModalRenderMock,
 	  interventionReceiptCardRenderMock,
 	  interventionModalRenderMock,
+	  agentProfileSheetRenderMock,
 	} = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
@@ -91,15 +120,23 @@ const {
     id: 'imported-sim-1',
   })),
   cancelScenarioMock: vi.fn(async () => ({ status: 'cancelled' })),
-  createReplayArtifactMock: vi.fn(async () => ({
-    id: 'share-sim-1',
-    kind: 'simulation_view_v1',
-    created_at: '2026-03-19T00:00:00Z',
-  })),
+  createReplayArtifactMock: vi.fn(async (
+    kind: string,
+    payload: Record<string, unknown>,
+  ) => {
+    void kind;
+    void payload;
+    return {
+      id: 'share-sim-1',
+      kind: 'simulation_view_v1',
+      created_at: '2026-03-19T00:00:00Z',
+    };
+  }),
 	  getReplayArtifactMock: vi.fn(async (): Promise<ReplayArtifactMock | null> => null),
 	  gameplayCardsModalRenderMock: vi.fn(),
 	  interventionReceiptCardRenderMock: vi.fn(),
 	  interventionModalRenderMock: vi.fn(),
+	  agentProfileSheetRenderMock: vi.fn(),
 	}));
 
 const emptyDirectorState: ScenarioDirectorState = {
@@ -145,6 +182,7 @@ const baseScenario: Scenario = {
 };
 
 const mockStore = {
+  activeScenarioId: 'scenario-1' as string | null,
   scenario: baseScenario,
   agents: [
     { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
@@ -168,7 +206,7 @@ const mockStore = {
     { agent: '奥勒留斯', agent_id: 'a1', message: '稳定秩序。', emotion: 'calm', branch: 'b1', round: 1 },
   ],
   thinkingAgents: [] as Array<{ agent: string; agent_id: string; branch: string; round: number }>,
-  status: 'done' as Scenario['status'],
+  status: 'done' as Scenario['status'] | 'idle',
   error: null as string | null,
   errorCode: null as string | null,
   loadScenario: vi.fn(),
@@ -179,6 +217,7 @@ const mockStore = {
 	  interventionLifecycle: new Map<string, 'queued' | 'injected' | 'observed' | 'receipt_ready'>(),
 	  toggleViewMode: vi.fn(),
   setScenario: vi.fn((scenario: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {
+    mockStore.activeScenarioId = scenario.id;
     mockStore.scenario = scenario;
     mockStore.agents = scenario.agents as typeof mockStore.agents;
     mockStore.branches = scenario.branches as typeof mockStore.branches;
@@ -269,7 +308,35 @@ vi.mock('../components/ClassicBranchTree', () => ({
 }));
 
 vi.mock('../components/AgentPanel', () => ({
-  AgentPanel: () => <div>agent-panel</div>,
+  AgentPanel: ({ onViewProfile }: { onViewProfile?: (agentId: string) => void }) => (
+    <div>
+      agent-panel
+      <button type="button" onClick={() => onViewProfile?.('a1')}>open-agent-profile</button>
+    </div>
+  ),
+}));
+
+vi.mock('../components/result/AgentProfileSheet', () => ({
+  AgentProfileSheet: (props: {
+    agent: AgentInfo | null;
+    observation?: {
+      emotion: string | null;
+      source: 'live' | 'replay' | 'replay_unavailable' | 'baseline' | 'snapshot';
+      branchId: string | null;
+      branchTitle: string | null;
+      round: number | null;
+      selectedBranchId?: string | null;
+      selectedBranchTitle?: string | null;
+      selectedRound?: number | null;
+    };
+  }) => {
+    agentProfileSheetRenderMock(props);
+    return (
+      <div data-testid="agent-profile-sheet-mock">
+        {JSON.stringify({ agent: props.agent, observation: props.observation })}
+      </div>
+    );
+  },
 }));
 
 vi.mock('../components/TimelineBar', () => ({
@@ -346,6 +413,7 @@ vi.mock('react-router-dom', async () => {
 
 describe('SimulationView replay automation output', () => {
   beforeEach(() => {
+    capabilityState.youVsOracleEnabled = true;
     delete (window as Window & { render_game_to_text?: () => string }).render_game_to_text;
     delete (window as Window & { capture_game_screenshot?: () => Promise<string | null> }).capture_game_screenshot;
     const store = new Map<string, string>();
@@ -411,8 +479,10 @@ describe('SimulationView replay automation output', () => {
 	    gameplayCardsModalRenderMock.mockClear();
 	    interventionReceiptCardRenderMock.mockClear();
 	    interventionModalRenderMock.mockClear();
+	    agentProfileSheetRenderMock.mockClear();
     mockStore.loadScenario.mockReset();
     mockStore.setScenario.mockClear();
+    mockStore.activeScenarioId = 'scenario-1';
     mockStore.scenario = { ...baseScenario };
     mockStore.status = 'done';
     mockStore.error = null;
@@ -470,6 +540,177 @@ describe('SimulationView replay automation output', () => {
     window.localStorage.clear();
   });
 
+  it('keeps an open profile keyed by agent id and refreshes its live observation from current store state', async () => {
+    const firstAgent = {
+      id: 'a1',
+      name: '奥勒留斯',
+      role: '初始角色',
+      stance: '守住制度',
+      tier: 'CORE' as const,
+      emotion: 'stale-global-value',
+    };
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.scenario = {
+      ...baseScenario,
+      status: 'simulating',
+      agents: [firstAgent],
+    };
+    mockStore.agents = [firstAgent];
+    mockStore.branches = [
+      { ...mockStore.branches[0], id: 'b1', title: '制度线' },
+      { ...mockStore.branches[0], id: 'b2', title: '冲突线' },
+    ];
+    mockStore.messages = [
+      { agent: '奥勒留斯', agent_id: 'a1', message: '先观察。', emotion: 'calm', branch: 'b1', round: 1 },
+      { agent: '奥勒留斯', agent_id: 'a1', message: '冲突升级。', emotion: 'agitated', branch: 'b2', round: 2 },
+    ];
+
+    const view = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'open-agent-profile' }));
+
+    const sheet = await screen.findByTestId('agent-profile-sheet-mock');
+    expect(sheet).toHaveTextContent('"role":"初始角色"');
+    expect(sheet).toHaveTextContent('"source":"live"');
+    expect(sheet).toHaveTextContent('"emotion":"agitated"');
+    expect(sheet).toHaveTextContent('"branchId":"b2"');
+    expect(sheet).toHaveTextContent('"round":2');
+
+    const refreshedAgent = {
+      ...firstAgent,
+      role: '实时更新角色',
+      emotion: 'another-stale-global-value',
+    };
+    mockStore.agents = [refreshedAgent];
+    mockStore.messages = [
+      ...mockStore.messages,
+      { agent: '奥勒留斯', agent_id: 'a1', message: '制度线恢复。', emotion: 'focused', branch: 'b1', round: 3 },
+    ];
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-profile-sheet-mock')).toHaveTextContent('"role":"实时更新角色"');
+      expect(screen.getByTestId('agent-profile-sheet-mock')).toHaveTextContent('"emotion":"focused"');
+      expect(screen.getByTestId('agent-profile-sheet-mock')).toHaveTextContent('"branchId":"b1"');
+      expect(screen.getByTestId('agent-profile-sheet-mock')).toHaveTextContent('"round":3');
+    });
+  });
+
+  it('scopes profile emotion to the selected replay branch and round instead of another branch latest value', async () => {
+    mockStore.status = 'done';
+    mockStore.isSimulationComplete = true;
+    mockStore.agents = [
+      {
+        id: 'a1',
+        name: '奥勒留斯',
+        role: '皇帝',
+        tier: 'CORE' as const,
+        emotion: 'future-or-other-branch-value',
+      },
+    ];
+    mockStore.branches = [
+      {
+        ...mockStore.branches[0],
+        id: 'b1',
+        title: '共同历史',
+        probability: 0.2,
+      },
+      {
+        ...mockStore.branches[0],
+        id: 'b2',
+        parent_branch_id: 'b1',
+        fork_round: 2,
+        title: '外交支线',
+        probability: 0.7,
+      },
+      {
+        ...mockStore.branches[0],
+        id: 'b3',
+        title: '无关支线',
+        probability: 0.1,
+      },
+    ];
+    mockStore.messages = [
+      { agent: '奥勒留斯', agent_id: 'a1', message: '共同历史。', emotion: 'cautious', branch: 'b1', round: 1 },
+      { agent: '奥勒留斯', agent_id: 'a1', message: '外交启动。', emotion: 'focused', branch: 'b2', round: 2 },
+      { agent: '奥勒留斯', agent_id: 'a1', message: '外交未来。', emotion: 'hopeful', branch: 'b2', round: 3 },
+      { agent: '奥勒留斯', agent_id: 'a1', message: '无关分支。', emotion: 'furious', branch: 'b3', round: 9 },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'game.round_label' }), '1');
+    await user.click(screen.getByRole('button', { name: 'open-agent-profile' }));
+
+    const sheet = await screen.findByTestId('agent-profile-sheet-mock');
+    expect(sheet).toHaveTextContent('"source":"replay"');
+    expect(sheet).toHaveTextContent('"emotion":"cautious"');
+    expect(sheet).toHaveTextContent('"branchId":"b1"');
+    expect(sheet).toHaveTextContent('"round":1');
+    expect(sheet).toHaveTextContent('"selectedBranchId":"b2"');
+    expect(sheet).toHaveTextContent('"selectedRound":1');
+    expect(sheet).not.toHaveTextContent('furious');
+  });
+
+  it('marks replay emotion unavailable when the selected path has no observation for that agent', async () => {
+    mockStore.status = 'done';
+    mockStore.isSimulationComplete = true;
+    mockStore.agents = [
+      {
+        id: 'a1',
+        name: '奥勒留斯',
+        role: '皇帝',
+        tier: 'CORE' as const,
+        emotion: 'other-branch-global-value',
+      },
+    ];
+    mockStore.branches = [
+      { ...mockStore.branches[0], id: 'b1', title: '选中路径', probability: 0.8 },
+      { ...mockStore.branches[0], id: 'b2', title: '其他路径', probability: 0.2 },
+    ];
+    mockStore.messages = [
+      { agent: '其他人', agent_id: 'a2', message: '选中路径发言。', emotion: 'calm', branch: 'b1', round: 1 },
+      { agent: '奥勒留斯', agent_id: 'a1', message: '仅存在于其他路径。', emotion: 'furious', branch: 'b2', round: 4 },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'open-agent-profile' }));
+
+    const sheet = await screen.findByTestId('agent-profile-sheet-mock');
+    expect(sheet).toHaveTextContent('"source":"replay_unavailable"');
+    expect(sheet).toHaveTextContent('"emotion":null');
+    expect(sheet).toHaveTextContent('"selectedBranchId":"b1"');
+    expect(sheet).not.toHaveTextContent('furious');
+  });
+
   it('renders the question and runtime preset badge in separate header rows so long prompts wrap independently', async () => {
     const longQuestion = '如果一个跨国合作的人工智能治理委员会突然在五年内瓦解，全球的科研合作、商业部署节奏、以及监管框架会被推向什么样的世界线，'
       + '并且每条主要世界线会在哪些关键时间点暴露出最大的争议与转折？';
@@ -514,6 +755,168 @@ describe('SimulationView replay automation output', () => {
     const backBtn = await screen.findByRole('button', { name: 'sim.status.back' });
     backBtn.click();
     expect(navigateMock).toHaveBeenCalledWith('/result/scenario-1');
+  });
+
+  it('isolates scenario A immediately and loads scenario B after an in-app route change', async () => {
+    mockStore.activeScenarioId = 'scenario-a';
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-a',
+      question: 'Scenario A only',
+      status: 'simulating',
+    };
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    Object.assign(window, {
+      __swarmGetSceneAutomation: () => ({
+        scene: 'WorldScene',
+        scenario_id: 'scenario-a',
+        question: 'Scenario A only',
+      }),
+    });
+    let commitWindowRaw: string | undefined;
+    const router = createMemoryRouter(
+      [{
+        path: '/sim/:id',
+        element: (
+          <SimulationAutomationCommitProbe
+            onCommit={(route, renderer) => {
+              if (route === '/sim/scenario-b') commitWindowRaw = renderer?.();
+            }}
+          />
+        ),
+      }],
+      { initialEntries: ['/sim/scenario-a'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByText('Scenario A only')).toBeInTheDocument();
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.(),
+    ).toMatchObject({ scenario_id: 'scenario-a' });
+
+    await act(async () => {
+      await router.navigate('/sim/scenario-b');
+    });
+
+    const commitWindowPayload = commitWindowRaw ? JSON.parse(commitWindowRaw) : null;
+    expect(commitWindowPayload?.simulation).toMatchObject({
+      question: null,
+      messageCount: 0,
+      agentCount: 0,
+      branchCount: 0,
+    });
+    expect(commitWindowPayload?.scene).toBeNull();
+    expect(commitWindowRaw).not.toContain('Scenario A only');
+    expect(commitWindowRaw).not.toContain('scenario-a');
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.() ?? null,
+    ).toBeNull();
+
+    await waitFor(() => {
+      expect(mockStore.loadScenario).toHaveBeenCalledWith('scenario-b');
+    });
+    expect(screen.queryByText('Scenario A only')).not.toBeInTheDocument();
+    expect(screen.getByText('sim.status.loading')).toBeInTheDocument();
+  });
+
+  it('fails closed when browser history changes before React rerenders the route', async () => {
+    mockStore.activeScenarioId = 'scenario-a';
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-a',
+      question: 'Scenario A browser history guard',
+      status: 'simulating',
+    };
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    Object.assign(window, {
+      __swarmGetSceneAutomation: () => ({
+        scene: 'WorldScene',
+        question: 'Scenario A browser history guard',
+      }),
+    });
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-a']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const renderer = await waitFor(() => {
+      const current = (
+        window as Window & { render_game_to_text?: () => string }
+      ).render_game_to_text;
+      expect(typeof current).toBe('function');
+      return current;
+    });
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.(),
+    ).toMatchObject({
+      scene: 'WorldScene',
+      question: 'Scenario A browser history guard',
+    });
+
+    window.history.replaceState({}, '', '/sim/scenario-b');
+    const raw = renderer?.();
+    const payload = raw ? JSON.parse(raw) : null;
+
+    expect(payload?.simulation).toMatchObject({
+      question: null,
+      messageCount: 0,
+      agentCount: 0,
+      branchCount: 0,
+    });
+    expect(payload?.scene).toBeNull();
+    expect(raw).not.toContain('Scenario A browser history guard');
+    expect(raw).not.toContain('scenario-a');
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.() ?? null,
+    ).toBeNull();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('clears scenario-local modal state when the route changes to another scenario', async () => {
+    const user = userEvent.setup();
+    mockStore.activeScenarioId = 'scenario-a';
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-a',
+      status: 'simulating',
+    };
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    const router = createMemoryRouter(
+      [{ path: '/sim/:id', element: <SimulationView /> }],
+      { initialEntries: ['/sim/scenario-a'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    await user.click(await screen.findByRole('button', { name: 'sim.predict_btn' }));
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      expect(raw ? JSON.parse(raw).page.controls.active_modal : null).toBe('prediction');
+    });
+
+    await act(async () => {
+      await router.navigate('/sim/scenario-b');
+    });
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const controls = raw ? JSON.parse(raw).page.controls : null;
+      expect(controls).toMatchObject({
+        active_modal: null,
+        modal_state: null,
+        can_open_prediction: false,
+        can_open_gameplay_cards: false,
+        can_capture_modal: false,
+      });
+    });
   });
 
   it('back button honors an explicit backTo passed via navigation state', async () => {
@@ -598,6 +1001,81 @@ describe('SimulationView replay automation output', () => {
       });
     });
   });
+
+  it('keeps prediction DOM and automation closed when capability is disabled', async () => {
+    capabilityState.youVsOracleEnabled = false;
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-1',
+      status: 'simulating',
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('button', { name: 'sim.predict_btn' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      const raw = (
+        window as Window & { render_game_to_text?: () => string }
+      ).render_game_to_text?.();
+      expect(raw ? JSON.parse(raw).page.controls.can_open_prediction : null).toBe(false);
+    });
+  });
+
+  it.each(['narrating', 'done', 'cancelled', 'error', 'idle'] as const)(
+    'closes an open prediction modal when the live scenario becomes %s',
+    async (closedStatus) => {
+    const user = userEvent.setup();
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-1',
+      status: 'simulating',
+    };
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'sim.predict_btn' }));
+    expect(await screen.findByTestId('prediction-modal')).toBeInTheDocument();
+
+    mockStore.status = closedStatus;
+    mockStore.isSimulationComplete = closedStatus === 'done';
+    mockStore.scenario = {
+      ...mockStore.scenario,
+      status: closedStatus === 'idle' ? 'simulating' : closedStatus,
+    };
+    rerender(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('prediction-modal')).not.toBeInTheDocument();
+      const raw = (
+        window as Window & { render_game_to_text?: () => string }
+      ).render_game_to_text?.();
+      expect(raw ? JSON.parse(raw).page.controls.active_modal : null).toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: 'sim.predict_btn' })).not.toBeInTheDocument();
+    },
+  );
 
   it('publishes classic streaming thinking agents inside render_game_to_text', async () => {
     mockStore.status = 'simulating';
@@ -838,9 +1316,27 @@ describe('SimulationView replay automation output', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.replay_source).toBe('token');
     });
+    expect(await screen.findByRole('button', { name: 'sim.replay.import_local' })).toBeInTheDocument();
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.() ?? null,
+    ).toBeNull();
+    Object.assign(window, {
+      __swarmGetSceneAutomation: () => ({
+        scene: 'WorldScene',
+      }),
+    });
+    await waitFor(() => {
+      const raw = (
+        window as Window & { render_game_to_text?: () => string }
+      ).render_game_to_text?.();
+      expect(raw ? JSON.parse(raw).scene : null).toMatchObject({
+        scene: 'WorldScene',
+      });
+    });
 
     expect(screen.queryByRole('button', { name: 'sim.predict_btn' })).not.toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole('button', { name: 'sim.replay.import_local' }));
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'sim.replay.import_local' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/sim/imported-sim-1');
   });
@@ -876,7 +1372,93 @@ describe('SimulationView replay automation output', () => {
     expect(mockStore.viewMode).toBe('classic');
   });
 
-  it('ignores an invalid replay share artifact without crashing the page', async () => {
+  it('never renders the previous scenario while a replay share is loading', async () => {
+    mockStore.activeScenarioId = 'scenario-a';
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-a',
+      question: 'Scenario A must stay isolated',
+    };
+    Object.assign(window, {
+      __swarmGetSceneAutomation: () => ({
+        scene: 'WorldScene',
+        scenario_id: 'scenario-a',
+        question: 'Scenario A must stay isolated',
+      }),
+    });
+    getReplayArtifactMock.mockImplementationOnce(
+      () => new Promise<ReplayArtifactMock | null>(() => {}),
+    );
+    let commitWindowRaw: string | undefined;
+    const replayCommitProbe = (
+      <SimulationAutomationCommitProbe
+        onCommit={(route, renderer) => {
+          if (route === '/sim/replay?share=share-slow') commitWindowRaw = renderer?.();
+        }}
+      />
+    );
+    const router = createMemoryRouter(
+      [
+        { path: '/sim/replay', element: replayCommitProbe },
+        { path: '/sim/:id', element: replayCommitProbe },
+      ],
+      { initialEntries: ['/sim/scenario-a'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByText('Scenario A must stay isolated')).toBeInTheDocument();
+
+    await act(async () => {
+      await router.navigate('/sim/replay?share=share-slow');
+    });
+
+    const commitWindowPayload = commitWindowRaw ? JSON.parse(commitWindowRaw) : null;
+    expect(commitWindowPayload?.simulation).toMatchObject({
+      question: null,
+      messageCount: 0,
+      agentCount: 0,
+      branchCount: 0,
+    });
+    expect(commitWindowPayload?.scene).toBeNull();
+    expect(commitWindowRaw).not.toContain('Scenario A must stay isolated');
+    expect(commitWindowRaw).not.toContain('scenario-a');
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.() ?? null,
+    ).toBeNull();
+
+    expect(screen.queryByText('Scenario A must stay isolated')).not.toBeInTheDocument();
+    expect(screen.getByText('sim.status.loading')).toBeInTheDocument();
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.simulation).toMatchObject({
+        question: null,
+        messageCount: 0,
+        agentCount: 0,
+        branchCount: 0,
+      });
+      expect(payload?.page?.branches).toEqual([]);
+      expect(payload?.scene).toBeNull();
+      expect(raw).not.toContain('Scenario A must stay isolated');
+      expect(raw).not.toContain('scenario-a');
+    });
+  });
+
+  it('shows an error without rendering the previous scenario for an invalid replay share', async () => {
+    mockStore.activeScenarioId = 'scenario-a';
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-a',
+      question: 'Scenario A must stay isolated',
+    };
+    Object.assign(window, {
+      __swarmGetSceneAutomation: () => ({
+        scene: 'WorldScene',
+        scenario_id: 'scenario-a',
+        question: 'Scenario A must stay isolated',
+      }),
+    });
     getReplayArtifactMock.mockResolvedValue({
       id: 'share-invalid',
       kind: 'simulation_view_v1',
@@ -901,8 +1483,27 @@ describe('SimulationView replay automation output', () => {
       expect(getReplayArtifactMock).toHaveBeenCalledWith('share-invalid');
     });
 
-    expect(await screen.findByLabelText('sim.panel_expand')).toBeInTheDocument();
+    expect(screen.queryByText('Scenario A must stay isolated')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('sim.status.error');
     expect(mockStore.setScenario).not.toHaveBeenCalled();
+    expect(
+      (window as Window & { __swarmGetSceneAutomation?: () => unknown })
+        .__swarmGetSceneAutomation?.() ?? null,
+    ).toBeNull();
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.simulation).toMatchObject({
+        question: null,
+        messageCount: 0,
+        agentCount: 0,
+        branchCount: 0,
+      });
+      expect(payload?.page?.branches).toEqual([]);
+      expect(payload?.scene).toBeNull();
+      expect(raw).not.toContain('Scenario A must stay isolated');
+      expect(raw).not.toContain('scenario-a');
+    });
   });
 
   it('falls back to the live scenario URL when artifact storage fails and the token is too large', async () => {
@@ -938,6 +1539,45 @@ describe('SimulationView replay automation output', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/sim\/scenario-1$/));
     });
+  });
+
+  it('omits live-only graph metadata from stored simulation replay artifacts', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    mockStore.scenario = {
+      ...baseScenario,
+      causal_graph_id: 'owner-only-graph',
+      faction_timeline_id: 'owner-only-faction-timeline',
+      checkpoints: [{
+        id: 'checkpoint-1',
+        scenario_id: baseScenario.id,
+        branch_id: 'b1',
+        round_number: 1,
+        created_at: '2026-03-15T00:00:00Z',
+      }],
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const button = await screen.findByRole('button', { name: 'share.copy_permalink_btn' });
+    await user.click(button);
+
+    await waitFor(() => expect(createReplayArtifactMock).toHaveBeenCalledTimes(1));
+    const artifactPayload = createReplayArtifactMock.mock.calls[0]![1];
+    expect(artifactPayload.scenario).not.toHaveProperty('causal_graph_id');
+    expect(artifactPayload.scenario).not.toHaveProperty('checkpoints');
+    expect(artifactPayload.scenario).not.toHaveProperty('faction_timeline_id');
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/sim/replay?share=share-sim-1'));
   });
 
   it('announces cancel progress while the cancel request is in flight', async () => {

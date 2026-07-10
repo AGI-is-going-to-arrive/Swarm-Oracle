@@ -151,15 +151,44 @@ function installPageIssueGuards(page) {
   return issues;
 }
 
-async function installFixtures(page) {
+function resolveFixtureRequest({ method, pathname }) {
+  if (String(method).toUpperCase() !== "GET") return null;
+  if (pathname === "/api/capabilities") {
+    return { status: 200, json: CAPABILITIES_FIXTURE };
+  }
+  if (pathname === `/api/scenario/${FIXTURE_SCENARIO_ID}/predictions`) {
+    return { status: 200, json: [] };
+  }
+  return null;
+}
+
+async function installFixtures(page, state) {
   if (LIVE_MODE) return;
-  await page.route(/\/api\/capabilities(?:\?.*)?$/, (route) =>
-    route.fulfill({
-      status: 200,
+  await page.route((url) => url.pathname.startsWith("/api/"), (route) => {
+    state.unhandledApiRequests.push({
+      method: route.request().method(),
+      url: route.request().url(),
+    });
+    return route.fulfill({
+      status: 404,
       contentType: "application/json",
-      body: JSON.stringify(CAPABILITIES_FIXTURE),
-    }),
-  );
+      body: JSON.stringify({ detail: "Unhandled prediction preview fixture API request" }),
+    });
+  });
+  await page.route("**/api/**", (route) => {
+    const request = route.request();
+    const parsed = new URL(request.url());
+    const fixture = resolveFixtureRequest({
+      method: request.method(),
+      pathname: parsed.pathname,
+    });
+    if (!fixture) return route.fallback();
+    return route.fulfill({
+      status: fixture.status,
+      contentType: "application/json",
+      body: JSON.stringify(fixture.json),
+    });
+  });
 }
 
 async function isVisible(locator) {
@@ -340,7 +369,8 @@ async function runSurface(mode, contextOptions, args) {
     window.localStorage.setItem("swarmoracle:language:v1", "en");
   });
   const pageIssues = installPageIssueGuards(page);
-  await installFixtures(page);
+  const fixtureState = { unhandledApiRequests: [] };
+  await installFixtures(page, fixtureState);
 
   const allResults = {
     mode,
@@ -348,6 +378,7 @@ async function runSurface(mode, contextOptions, args) {
     viewport: contextOptions.viewport ?? null,
     live: LIVE_MODE,
     baseUrl: args.baseUrl,
+    diagnostics: fixtureState,
     tests: {},
   };
 
@@ -370,8 +401,9 @@ async function runSurface(mode, contextOptions, args) {
       Object.assign(createTestResult(), {
         steps: [{
           name: "no-console-pageerror-requestfailure-or-http-error",
-          passed: pageIssues.length === 0,
+          passed: pageIssues.length === 0 && fixtureState.unhandledApiRequests.length === 0,
           issues: pageIssues,
+          unhandledApiRequests: fixtureState.unhandledApiRequests,
         }],
       }),
     );
@@ -433,6 +465,8 @@ function buildSurfaceRuns(args) {
 export const __test__ = {
   CAPABILITIES_FIXTURE,
   buildSurfaceRuns,
+  installFixtures,
+  resolveFixtureRequest,
   resolveSurfaceOutputDir,
 };
 

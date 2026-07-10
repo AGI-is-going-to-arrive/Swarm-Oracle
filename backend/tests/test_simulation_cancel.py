@@ -215,9 +215,13 @@ async def test_agent_speak_is_persisted_before_broadcast(monkeypatch):
         round_id = round_row.id
         agent_id = agent.id
 
+    async def _fake_llm_call(*_args, **_kwargs):
+        return "Persist me first"
+
     async def _fake_llm_call_json(*_args, **_kwargs):
         return {"content": "Persist me first", "emotion": "calm", "diverge": None}
 
+    monkeypatch.setattr(simulator_module, "llm_call", _fake_llm_call)
     monkeypatch.setattr(simulator_module, "llm_call_json", _fake_llm_call_json)
     monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *_a, **_k: "")
     monkeypatch.setattr(simulator_module, "store_memory", lambda **_kwargs: None)

@@ -64,6 +64,7 @@ vi.mock('react-i18next', () => ({
         'sim.panel.no_agent_messages': '该 Agent 暂无发言',
         'sim.panel.worldline_group': `世界线：${vars?.title ?? ''}`,
         'sim.panel.worldline_round_range': `R${vars?.start ?? ''}-R${vars?.end ?? ''}`,
+        'sim.panel.view_agent_profile': `查看 ${vars?.name ?? ''} 的档案`,
       };
       return labels[key] ?? key;
     },
@@ -90,10 +91,25 @@ beforeEach(() => {
 });
 
 describe('AgentPanel', () => {
+  it('opens an explicit profile action without changing the message filter', async () => {
+    const onViewProfile = vi.fn();
+    render(<AgentPanel onViewProfile={onViewProfile} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '查看 周鸿祎 的档案' }));
+
+    expect(onViewProfile).toHaveBeenCalledWith('zhou');
+    expect(screen.queryByTestId('agent-worldline-group')).not.toBeInTheDocument();
+  });
+
   it('groups selected-agent messages by worldline and sorts rounds inside each worldline', async () => {
     render(<AgentPanel />);
 
-    await userEvent.click(screen.getByTitle('筛选 周鸿祎 的消息'));
+    const filterButton = screen.getByTitle('筛选 周鸿祎 的消息');
+    expect(filterButton).toHaveAttribute('aria-pressed', 'false');
+
+    await userEvent.click(filterButton);
+
+    expect(filterButton).toHaveAttribute('aria-pressed', 'true');
 
     const groups = screen.getAllByTestId('agent-worldline-group');
     expect(groups).toHaveLength(2);

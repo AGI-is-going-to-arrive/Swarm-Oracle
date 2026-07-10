@@ -211,9 +211,10 @@ function MessageText({
 // ── Main Component ──────────────────────────────────────────
 interface AgentPanelProps {
   onBranchDetail?: (branchId: string) => void;
+  onViewProfile?: (agentId: string) => void;
 }
 
-export function AgentPanel({ onBranchDetail }: AgentPanelProps) {
+export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
   const { t } = useTranslation();
   const agents = useSimulationStore((s) => s.agents);
   const messages = useSimulationStore((s) => s.messages);
@@ -322,23 +323,37 @@ export function AgentPanel({ onBranchDetail }: AgentPanelProps) {
               key={agent.id}
               ref={(el) => { if (el) agentCardRefs.current.set(agent.id, el); else agentCardRefs.current.delete(agent.id); }}
               className={`agent-card ${filterAgentId === agent.id ? 'agent-card--active' : ''}`}
-              onClick={() => handleAgentClick(agent.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleAgentClick(agent.id); }}
-              title={filterAgentId === agent.id ? t('sim.panel.show_all') : t('sim.panel.filter_agent', { name: agent.name })}
             >
-              <PixelAvatar name={agent.name} size={36} />
-              <div className="agent-info">
-                <span className="agent-name">{agent.name}</span>
-                <span className="agent-role">{agent.role}{agent.stance ? ` · ${agent.stance}` : ''}</span>
-                <span className="agent-meta">
-                  <span className={`tier-badge tier-${agent.tier.toLowerCase()}`}>
-                    {tierLabel(agent.tier)}
+              <button
+                type="button"
+                className="agent-card__filter"
+                aria-pressed={filterAgentId === agent.id}
+                onClick={() => handleAgentClick(agent.id)}
+                title={filterAgentId === agent.id ? t('sim.panel.show_all') : t('sim.panel.filter_agent', { name: agent.name })}
+              >
+                <PixelAvatar name={agent.name} size={36} />
+                <span className="agent-info">
+                  <span className="agent-name">{agent.name}</span>
+                  <span className="agent-role">{agent.role}{agent.stance ? ` · ${agent.stance}` : ''}</span>
+                  <span className="agent-meta">
+                    <span className={`tier-badge tier-${agent.tier.toLowerCase()}`}>
+                      {tierLabel(agent.tier)}
+                    </span>
+                    <EmotionDot emotion={agent.emotion} />
                   </span>
-                  <EmotionDot emotion={agent.emotion} />
                 </span>
-              </div>
+              </button>
+              {onViewProfile ? (
+                <button
+                  type="button"
+                  className="agent-card__profile"
+                  aria-label={t('sim.panel.view_agent_profile', { name: agent.name })}
+                  title={t('sim.panel.view_agent_profile', { name: agent.name })}
+                  onClick={() => onViewProfile(agent.id)}
+                >
+                  ⌕
+                </button>
+              ) : null}
             </div>
           ))}
         </div>

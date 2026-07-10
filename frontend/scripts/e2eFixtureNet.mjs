@@ -346,6 +346,7 @@ function capabilitiesFixture() {
     graph_analysis: off,
     roundtable_survey: off,
     roundtable_analyst: off,
+    you_vs_oracle: on,
     snapshot_export: on,
     result_verdict: off,
   };

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { OfficialSampleSummary } from '../api/client';
 import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
 import { useAgentStore } from '../stores/agentStore';
 import { InputView } from './InputView';
@@ -10,7 +11,9 @@ import { InputView } from './InputView';
 const {
   createDebateMock,
   getCapabilitiesMock,
+  getOfficialSamplesMock,
   identityPreflightMock,
+  importOfficialSampleMock,
   importScenarioSnapshotMock,
   testLlmConnectionMock,
   startSimulationMock,
@@ -146,7 +149,9 @@ const {
     createDebateMock: vi.fn(),
     createMultiRunMock: vi.fn(),
     getCapabilitiesMock: vi.fn(),
+    getOfficialSamplesMock: vi.fn(),
     identityPreflightMock: vi.fn(),
+    importOfficialSampleMock: vi.fn(),
     importScenarioSnapshotMock: vi.fn(),
     testLlmConnectionMock: vi.fn(),
     startSimulationMock: vi.fn(async () => 'scenario-1'),
@@ -216,7 +221,9 @@ vi.mock('../api/client', () => ({
   createDebate: createDebateMock,
   createMultiRun: createMultiRunMock,
   getCapabilities: getCapabilitiesMock,
+  getOfficialSamples: getOfficialSamplesMock,
   identityContinuityPreflight: identityPreflightMock,
+  importOfficialSample: importOfficialSampleMock,
   importScenarioSnapshot: importScenarioSnapshotMock,
   testLlmConnection: testLlmConnectionMock,
   getCampaignProfile: getCampaignProfileMock,
@@ -420,6 +427,9 @@ describe('InputView campaign progress', () => {
     startSimulationMock.mockClear();
     abortStartSimulationMock.mockClear();
     identityPreflightMock.mockReset();
+    getOfficialSamplesMock.mockReset();
+    getOfficialSamplesMock.mockResolvedValue({ catalog_version: '1.0', count: 0, samples: [] });
+    importOfficialSampleMock.mockReset();
     importScenarioSnapshotMock.mockReset();
     testLlmConnectionMock.mockReset();
     getCapabilitiesMock.mockReset();
@@ -3492,12 +3502,29 @@ describe('InputView apiUserId wiring (P1)', () => {
 });
 
 describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
+  const officialSample = {
+    id: 'zheng-he-first-contact',
+    question: 'What if Zheng He reached the Americas first?',
+    scene_theme: 'alternate_history',
+    title: { zh: '郑和先抵美洲', en: 'Zheng He Reaches the Americas' },
+    summary: { zh: '样例摘要', en: 'Sample summary' },
+    agent_count: 4,
+    outcome_count: 3,
+  } satisfies OfficialSampleSummary;
+
   beforeEach(() => {
     window.sessionStorage.clear();
     window.localStorage.clear();
     window.localStorage.setItem('swarm_onboarding_completed', 'true');
     __resetCapabilityCacheForTests();
     getCapabilitiesMock.mockReset();
+    getOfficialSamplesMock.mockReset();
+    getOfficialSamplesMock.mockResolvedValue({
+      catalog_version: '1.0',
+      count: 1,
+      samples: [officialSample],
+    });
+    importOfficialSampleMock.mockReset();
     getSessionBoundUserIdMock.mockReset();
     getSessionBoundUserIdMock.mockReturnValue('default_user');
     getCampaignProfileMock.mockResolvedValue(null);
@@ -3515,6 +3542,7 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
     getCapabilitiesMock.mockResolvedValue({
       llm_configured: false,
       custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
     });
 
     render(
@@ -3535,6 +3563,287 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
     // Confirm that the degraded helper / view sample result entry is present
     expect(screen.getByText(/degraded_hints\.sample_hint/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /degraded_hints\.view_sample_result/i })).toBeInTheDocument();
+  });
+
+  it('distinguishes an explicitly disabled sample capability from an unknown probe state', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: false },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('llm_banner.not_configured');
+    expect(screen.getByText('snapshot.capability_disabled')).toBeInTheDocument();
+    expect(screen.queryByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    })).not.toBeInTheDocument();
+  });
+
+  it('imports the first recommended official sample and navigates from one CTA click', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    importOfficialSampleMock.mockResolvedValue({
+      scenario_id: 'sample/result id',
+      sample_id: officialSample.id,
+      status: 'imported',
+    });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/result/:id" element={<div>Official sample result</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    }));
+
+    expect(await screen.findByText('Official sample result')).toBeInTheDocument();
+    expect(getOfficialSamplesMock).toHaveBeenCalledTimes(1);
+    expect(getOfficialSamplesMock).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
+    });
+    expect(importOfficialSampleMock).toHaveBeenCalledTimes(1);
+    expect(importOfficialSampleMock).toHaveBeenCalledWith(officialSample.id, {
+      signal: expect.any(AbortSignal),
+    });
+    expect(screen.queryByRole('dialog', { name: 'snapshot.import_title' })).not.toBeInTheDocument();
+  });
+
+  it('dedupes rapid clicks while the recommended sample import is in flight', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    let resolveCatalog!: (value: {
+      catalog_version: string;
+      count: number;
+      samples: (typeof officialSample)[];
+    }) => void;
+    getOfficialSamplesMock.mockReturnValue(new Promise((resolve) => {
+      resolveCatalog = resolve;
+    }));
+    importOfficialSampleMock.mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const cta = await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    });
+    const navImport = screen.getByRole('button', { name: 'snapshot.import_btn' });
+    act(() => {
+      cta.click();
+      cta.click();
+      navImport.click();
+    });
+    expect(getOfficialSamplesMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'snapshot.import_title' })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveCatalog({ catalog_version: '1.0', count: 1, samples: [officialSample] });
+    });
+    await waitFor(() => expect(importOfficialSampleMock).toHaveBeenCalledTimes(1));
+    expect(navImport).toBeDisabled();
+  });
+
+  it('aborts an in-flight recommended sample import when the homepage unmounts', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    let importSignal: AbortSignal | undefined;
+    importOfficialSampleMock.mockImplementation((
+      _sampleId: string,
+      options?: { signal?: AbortSignal },
+    ) => {
+      importSignal = options?.signal;
+      return new Promise(() => {});
+    });
+    const { unmount } = render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    }));
+    await waitFor(() => expect(importOfficialSampleMock).toHaveBeenCalledTimes(1));
+
+    unmount();
+    expect(importSignal?.aborted).toBe(true);
+  });
+
+  it('aborts an in-flight recommended sample catalog request when the homepage unmounts', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    let catalogSignal: AbortSignal | undefined;
+    getOfficialSamplesMock.mockImplementation((options?: { signal?: AbortSignal }) => {
+      catalogSignal = options?.signal;
+      return new Promise(() => {});
+    });
+    const { unmount } = render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    }));
+    await waitFor(() => expect(getOfficialSamplesMock).toHaveBeenCalledTimes(1));
+
+    unmount();
+    expect(catalogSignal?.aborted).toBe(true);
+    expect(importOfficialSampleMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed capability probe visible and recovers through Retry', async () => {
+    getCapabilitiesMock
+      .mockRejectedValueOnce(new Error('Capability probe failed'))
+      .mockResolvedValue({
+        llm_configured: false,
+        custom_agents: { enabled: false },
+        snapshot_export: { enabled: true },
+      });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('snapshot.capability_error')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'snapshot.capability_retry' }));
+
+    expect(await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    })).toBeInTheDocument();
+    expect(getCapabilitiesMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('snapshot.capability_error')).not.toBeInTheDocument();
+  });
+
+  it('shows a distinct availability state while the capability probe is loading', async () => {
+    getCapabilitiesMock.mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('snapshot.capability_loading')).toBeInTheDocument();
+    expect(screen.queryByText('snapshot.capability_disabled')).not.toBeInTheDocument();
+  });
+
+  it('keeps the one-click sample action retryable after an import failure', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    importOfficialSampleMock
+      .mockRejectedValueOnce(new Error('Import failed'))
+      .mockResolvedValueOnce({
+        scenario_id: 'recovered-sample',
+        sample_id: officialSample.id,
+        status: 'imported',
+      });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/result/:id" element={<div>Recovered sample result</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const cta = await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    });
+    await user.click(cta);
+    expect(await screen.findByText('snapshot.sample_import_failed')).toBeInTheDocument();
+    expect(cta).toBeEnabled();
+
+    await user.click(cta);
+    expect(await screen.findByText('Recovered sample result')).toBeInTheDocument();
+    expect(importOfficialSampleMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not POST when the official sample catalog is empty and keeps both recovery actions', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    getOfficialSamplesMock.mockResolvedValue({
+      catalog_version: '1.0',
+      count: 0,
+      samples: [],
+    });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const cta = await screen.findByRole('button', {
+      name: /degraded_hints\.view_sample_result/i,
+    });
+    await user.click(cta);
+
+    expect(await screen.findByText('snapshot.sample_import_failed')).toBeInTheDocument();
+    expect(importOfficialSampleMock).not.toHaveBeenCalled();
+    expect(cta).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'snapshot.choose_other_samples' })).toBeEnabled();
+  });
+
+  it('keeps choosing another official sample as a separate dialog action', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', {
+      name: 'snapshot.choose_other_samples',
+    }));
+    expect(screen.getByRole('dialog', { name: 'snapshot.import_title' })).toBeInTheDocument();
+    expect(importOfficialSampleMock).not.toHaveBeenCalled();
   });
 
   it('renders LlmErrorHint when simulation submission fails with an LLM error code', async () => {

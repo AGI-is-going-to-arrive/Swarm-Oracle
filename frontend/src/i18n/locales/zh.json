@@ -176,8 +176,8 @@
       }
     },
     "degraded_hints": {
-      "view_sample_result": "看示例结果（如果郑和比哥伦布先发现了美洲大陆）",
-      "sample_hint": "内置的演示快照文件存放在 samples/snapshots/ 目录下，您可以通过导入快照功能来免密钥导入并查看只读推演结果。"
+      "view_sample_result": "一键体验官方样例",
+      "sample_hint": "还没配置模型？无需 API Key、无需选文件，点击一次即可打开完整的内置推演。"
     },
     "app_title": "SwarmOracle",
     "home": {
@@ -447,6 +447,7 @@
         "worldline_group": "世界线：{{title}}",
         "worldline_round_range": "R{{start}}-R{{end}}",
         "clear_filter": "清除筛选",
+        "view_agent_profile": "查看 {{name}} 的档案和记忆",
         "emotion_label": "情绪：{{emotion}}"
       },
       "tree": {
@@ -953,8 +954,12 @@
       "bridge_not_enabled": "服务器未开启此功能。",
       "bridge_replay_unavailable": "回放模式下不可用。",
       "bridge_single_branch": "需要多个分支。",
+      "bridge_causal_data_unavailable": "当前场景暂无因果图数据。",
+      "bridge_replay_data_unavailable": "当前场景暂无回放轨迹。",
       "bridge_disabled_replay": "回放模式下不可用。",
       "bridge_disabled_loading": "分享链接准备中…",
+      "bridge_capabilities_unavailable": "暂时无法确认可用的分析工具，请重试。",
+      "bridge_capabilities_retry": "重新检查可用性",
       "next_steps_heading": "下一步",
       "next_understand_why": "看懂为什么",
       "next_understand_why_desc": "探索因果图谱，了解事件如何关联",
@@ -978,6 +983,10 @@
       "mode_toggle_label": "结果视图模式",
       "bridge_full_report_title": "完整报告",
       "bridge_full_report_desc": "阅读这次推演的完整报告",
+      "bridge_full_report_generate_title": "生成完整报告",
+      "bridge_full_report_generate_desc": "为本次推演生成完整报告。",
+      "bridge_full_report_read_title": "阅读完整报告",
+      "bridge_full_report_read_desc": "阅读这次推演的完整报告。",
       "bridge_workbench_title": "打开图谱工作台",
       "bridge_workbench_desc": "把因果、知识图谱和节点追问放到同一视图",
       "bridge_kg_explorer_title": "知识图谱浏览器",
@@ -1065,6 +1074,19 @@
         "events_title": "成长事件",
         "empty_history": "暂无记录的记忆或成长事件。",
         "start_conversation": "发起对话",
+        "state_reference_title": "状态参考",
+        "baseline_stance_label": "配置立场",
+        "observed_emotion_label": "观察到的情绪",
+        "configured_emotion_label": "初始配置情绪",
+        "snapshot_emotion_label": "场景情绪快照",
+        "live_observation_source": "最近一次观察：{{branch}} · R{{round}}",
+        "replay_observation_source": "回放选择 {{selectedBranch}} · R{{selectedRound}}；最近匹配观察 {{branch}} · R{{round}}",
+        "replay_no_observation_source": "回放选择 {{selectedBranch}} · R{{selectedRound}} 中没有该 Agent 的匹配观察。",
+        "no_observation_value": "无匹配观察",
+        "baseline_emotion_source": "尚无发言观察，当前展示初始配置情绪。",
+        "snapshot_emotion_source": "该快照不包含可定位到世界线和轮次的观察上下文。",
+        "knowledge_domains_title": "知识领域",
+        "decision_bias_title": "决策风格",
         "close": "关闭"
       }
     },
@@ -3309,6 +3331,8 @@
       "error_fetch": "当前无法加载知识图谱，请稍后重试。",
       "error_missing": "当前场景没有可用的知识图谱数据。",
       "error_forbidden": "你没有权限查看这个知识图谱。",
+      "empty_title": "知识图谱为空",
+      "empty_description": "当前场景暂未生成知识图谱数据。",
       "search_placeholder": "按 ID 或名称搜索节点",
       "search_aria": "搜索知识图谱节点",
       "filter_aria": "按类型筛选节点",
@@ -3640,7 +3664,25 @@
       "import_success": "快照导入成功。",
       "import_success_hint": "已从快照创建新场景。",
       "import_view_scenario": "查看场景",
-      "import_failed": "快照导入失败，请重试。"
+      "import_failed": "快照导入失败，请重试。",
+      "samples_title": "一键体验官方样例",
+      "samples_hint": "无需模型或 API Key，直接导入完整推演并开始探索。",
+      "sample_catalog_loading": "正在加载内置样例…",
+      "sample_catalog_failed": "内置样例暂不可用，你仍可导入本地文件。",
+      "sample_catalog_retry": "重新加载样例",
+      "sample_scope": "{{agents}} 个 Agent · {{outcomes}} 条结局",
+      "sample_use": "立即体验",
+      "sample_use_aria": "体验「{{title}}」",
+      "sample_import_in_progress": "正在打开「{{title}}」…",
+      "sample_import_in_progress_hint": "正在本地重建完整推演，不会调用模型。",
+      "sample_import_failed": "官方样例导入失败，请重试。",
+      "sample_quick_start_loading": "正在打开推荐样例…",
+      "choose_other_samples": "选择其他样例",
+      "capability_loading": "正在检查官方样例是否可用…",
+      "capability_error": "暂时无法确认官方样例是否可用。请重试检查，以便在未配置模型时继续体验。",
+      "capability_retry": "重新检查样例可用性",
+      "capability_disabled": "本服务器已禁用官方样例。",
+      "import_own_file": "或导入你自己的文件"
     },
     "director_objectives": {
       "next_signature_card": "下一张题材连锁牌",

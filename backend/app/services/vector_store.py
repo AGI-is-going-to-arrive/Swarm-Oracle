@@ -325,6 +325,7 @@ class VectorStore:
         agent_name: str,
         content: str,
         *,
+        agent_id: str = "",
         round_num: int = 0,
         emotion: str = "neutral",
         branch_id: str = "",
@@ -344,14 +345,18 @@ class VectorStore:
             try:
                 import uuid
                 doc_id = str(uuid.uuid4())
+                metadata: dict[str, Any] = {
+                    "agent_name": str(agent_name or "").strip(),
+                    "round": round_num,
+                    "emotion": emotion,
+                    "branch_id": branch_id,
+                }
+                normalized_agent_id = str(agent_id or "").strip()
+                if normalized_agent_id:
+                    metadata["agent_id"] = normalized_agent_id
                 collection.add(
                     documents=[content],
-                    metadatas=[{
-                        "agent_name": agent_name,
-                        "round": round_num,
-                        "emotion": emotion,
-                        "branch_id": branch_id,
-                    }],
+                    metadatas=[metadata],
                     ids=[doc_id],
                 )
             except Exception as exc:
@@ -372,8 +377,12 @@ class VectorStore:
         *,
         branch_id: str | None = None,
         allowed_branch_ids: list[str] | None = None,
+        allowed_branch_rounds: dict[str, int] | None = None,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        allow_legacy_name_fallback: bool = False,
     ) -> list[dict[str, Any]]:
-        """Retrieve Top-K semantically similar memories.
+        """Retrieve Top-K semantically similar memories within an explicit scope.
 
         Returns list of dicts: [{content, agent_name, round, emotion}, ...]
         Returns empty list on any failure.
@@ -382,31 +391,66 @@ class VectorStore:
             return []
         if branch_id is not None:
             branch_id = branch_id.strip() or None
+        if agent_id is not None:
+            agent_id = agent_id.strip() or None
+        if agent_name is not None:
+            agent_name = agent_name.strip() or None
+        if agent_name is not None and agent_id is None and not allow_legacy_name_fallback:
+            return []
 
         collection = self._get_collection(scenario_id)
         if collection is None:
             return []
+
+        normalized_round_limits: dict[str, int] = {}
+        for candidate, raw_limit in (allowed_branch_rounds or {}).items():
+            normalized_candidate = str(candidate or "").strip()
+            if not normalized_candidate:
+                continue
+            try:
+                normalized_round_limits[normalized_candidate] = max(0, int(raw_limit))
+            except (TypeError, ValueError):
+                continue
 
         normalized_allowed_branch_ids = [
             candidate.strip()
             for candidate in (allowed_branch_ids or [])
             if candidate and candidate.strip()
         ]
+        if normalized_round_limits:
+            normalized_allowed_branch_ids = list(normalized_round_limits)
         if branch_id is not None:
             normalized_allowed_branch_ids = [branch_id]
+            normalized_round_limits = {
+                branch_id: normalized_round_limits[branch_id]
+            } if branch_id in normalized_round_limits else {}
         if not normalized_allowed_branch_ids:
             return []
 
         allowed_branch_set = set(normalized_allowed_branch_ids)
         where: dict[str, Any] | None = None
         if len(normalized_allowed_branch_ids) == 1:
-            where = {"branch_id": normalized_allowed_branch_ids[0]}
+            branch_where = {"branch_id": normalized_allowed_branch_ids[0]}
+            if agent_id is not None and not allow_legacy_name_fallback:
+                where = {"$and": [branch_where, {"agent_id": agent_id}]}
+            elif agent_id is None and agent_name is not None:
+                where = {"$and": [branch_where, {"agent_name": agent_name}]}
+            else:
+                where = branch_where
+        elif agent_id is not None and not allow_legacy_name_fallback:
+            where = {"agent_id": agent_id}
+        elif agent_id is None and agent_name is not None:
+            where = {"agent_name": agent_name}
 
         try:
             count = collection.count()
             if count == 0:
                 return []
-            effective_k = count if len(normalized_allowed_branch_ids) > 1 else min(top_k, count)
+            effective_k = count if (
+                len(normalized_allowed_branch_ids) > 1
+                or normalized_round_limits
+                or allow_legacy_name_fallback
+            ) else min(top_k, count)
 
             results = collection.query(
                 query_texts=[query_text],
@@ -419,11 +463,37 @@ class VectorStore:
                 docs = results["documents"][0]  # first query
                 metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
                 for doc, meta in zip(docs, metas):
+                    if not isinstance(meta, dict):
+                        continue
                     if (allowed_branch_set
                             and str(meta.get("branch_id", "")).strip() not in allowed_branch_set):
                         continue
+                    memory_agent_id = str(meta.get("agent_id") or "").strip()
+                    if agent_id is not None:
+                        if memory_agent_id:
+                            if memory_agent_id != agent_id:
+                                continue
+                        elif not (
+                            allow_legacy_name_fallback
+                            and agent_name is not None
+                            and meta.get("agent_name") == agent_name
+                        ):
+                            continue
+                    elif agent_name is not None and meta.get("agent_name") != agent_name:
+                        continue
+                    memory_branch_id = str(meta.get("branch_id", "")).strip()
+                    if memory_branch_id in normalized_round_limits:
+                        if "round" not in meta:
+                            continue
+                        try:
+                            memory_round = int(meta["round"])
+                        except (TypeError, ValueError):
+                            continue
+                        if memory_round > normalized_round_limits[memory_branch_id]:
+                            continue
                     memories.append({
                         "content": doc,
+                        "agent_id": memory_agent_id,
                         "agent_name": meta.get("agent_name", ""),
                         "round": meta.get("round", 0),
                         "emotion": meta.get("emotion", ""),

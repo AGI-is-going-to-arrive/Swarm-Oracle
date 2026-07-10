@@ -11,6 +11,17 @@ import {
 } from "./e2eFixtureNet.mjs";
 import { __test__ as releaseSignoffTest } from "./release-signoff.mjs";
 
+test("fixture capabilities enable the You-vs-Oracle prediction surface", () => {
+  const capabilities = createFixtureStore().capabilitiesFixture();
+
+  assert.deepEqual(capabilities.you_vs_oracle, {
+    enabled: true,
+    version: "1.0.0",
+    server_only: false,
+    degraded_mode: null,
+  });
+});
+
 test("resolveApiFixture fail-closes wrong HTTP methods instead of returning 200", () => {
   const store = createFixtureStore();
   const scenarioId = FIXTURE_SCENARIO_IDS.governance;
@@ -129,4 +140,11 @@ test("release-signoff fixture suite specs use a blackhole backend URL", () => {
     assert.equal(spec.commandArgs.includes("--scenario-id"), true);
     assert.equal(spec.commandArgs.includes("scenario-42"), true);
   }
+});
+
+test("release-signoff executes its own focused contract tests", () => {
+  assert.equal(
+    releaseSignoffTest.graphFocusedVitestTests.includes("src/scripts/releaseSignoff.test.ts"),
+    true,
+  );
 });

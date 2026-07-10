@@ -9,6 +9,12 @@
   var FEATURES = [
     { id: "F01", img: "01-home.png", hero: false, zt: "首页提问框与开始推演", et: "Home Question Box and Start Simulation",
       zd: "在首页输入一个「如果……会怎样？」问题，确认设置后开始多 Agent 推演；开始按钮不可用时会直接说明原因（缺问题、未配置 LLM 或预算受限）。", ed: "Type a “what if?” question on the home page, confirm the settings, and start the multi-agent simulation; when the start button is unavailable, it says why (missing question, no LLM, or a budget limit)." },
+    { id: "F49", img: "01-home.png", hero: false, zt: "官方样例一键体验", et: "One-Click Official Samples",
+      zd: "未配置模型也能在首页一键打开推荐的完整官方样例：无需 API Key、无需选择文件，也不会调用模型；导入面板还可选择另外两套样例或本地 Snapshot。", ed: "Even without a configured model, open the recommended complete official sample from the home page with one click—no API key, file selection, or model call. The import panel also offers two more samples or a local snapshot." },
+    { id: "F50", img: "21-simulation.png", hero: false, zt: "导演玩法与因果档案", et: "Director Play and Causal Archive",
+      zd: "在 live 推演里使用玩法卡、锁定一次预测押注或承诺一条世界线；结局后，因果档案把出牌、判断、关键时刻与最终落点放进同一份复盘。", ed: "During a live run, play gameplay cards, lock one prediction bet, or commit to a worldline. After the ending, the Causal Archive brings cards, calls, key moments, and the final landing point into one debrief." },
+    { id: "F51", img: "21-simulation.png", hero: false, zt: "Agent 状态与分支感知记忆", et: "Agent State and Branch-Aware Memory",
+      zd: "从推演中的 Agent 卡打开档案，区分配置立场与已观察情绪，并标明对应世界线和轮次；记忆沿当前分支谱系承接，不混入其他分支的后续经历。", ed: "Open an agent profile from the simulation roster to separate configured stance from observed emotion and see the matching worldline and round. Memory follows the current branch lineage instead of mixing in later experience from another branch." },
     { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
       zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
     { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",

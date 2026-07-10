@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -16,7 +17,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.models import Branch, Scenario, ScenarioStatus
+from app.models import Branch, BranchStatus, Round, Scenario, ScenarioStatus
 from app.models.campaign import (
     DirectorBadgeUnlock,
     DirectorProfile,
@@ -24,7 +25,9 @@ from app.models.campaign import (
     ScenarioCampaignLog,
 )
 from app.models.database import get_engine
+from app.services.gameplay_contract import load_gameplay_contract
 from app.services.lang_detect import detect_language, get_anonymous_director_name
+from app.services.result_report.reducer import _is_completed_terminal_leaf
 from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
 
 logger = logging.getLogger(__name__)
@@ -180,18 +183,6 @@ def _normalize_profile_resonance(profile_resonance: str | None) -> str:
 
 def _has_resolved_bet(bet_count: int, betting_hit: bool | None) -> bool:
     return bet_count > 0 or betting_hit is not None
-
-
-def _resolve_finalize_betting_inputs(
-    *,
-    scenario: Scenario,
-    bet_count: int,
-    betting_hit: bool | None,
-) -> tuple[int, bool | None]:
-    effective_bet_count = max(bet_count, _scenario_bet_count(scenario.gameplay_state_json))
-    if effective_bet_count > 0 and betting_hit is None:
-        raise CampaignError("betting_hit is required when the scenario has bets")
-    return effective_bet_count, betting_hit
 
 
 def _normalize_objective_counts(
@@ -782,23 +773,6 @@ def _scenario_bet_count(gameplay_state_json: dict[str, Any] | None) -> int:
     return len(state["betting"]["bets"])
 
 
-def _has_meaningful_gameplay_state(state: dict[str, Any]) -> bool:
-    return bool(
-        state["cards"]["usage_log"]
-        or state["archive"]["key_moments"]
-        or state["archive"]["branch_snapshots"]
-    )
-
-
-def _has_meaningful_director_state(state: dict[str, Any]) -> bool:
-    commitment = state["commitment"]
-    return bool(
-        state["objectives"]["goals"]
-        or commitment["active"]
-        or commitment["outcome"]
-    )
-
-
 def _normalize_archive_bet_value(value: str | None) -> str:
     normalized = (value or "").lower()
     normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
@@ -812,8 +786,8 @@ def _matches_archive_bet_option(
     option: dict[str, str],
 ) -> bool:
     normalized_target_id = _normalize_archive_bet_value(target_id)
-    if normalized_target_id == option_id:
-        return True
+    if normalized_target_id:
+        return normalized_target_id == option_id
 
     normalized_target_label = _normalize_archive_bet_value(target_label)
     return bool(
@@ -826,35 +800,25 @@ def _matches_archive_bet_option(
     )
 
 
-def _scenario_archive_branches(
+def _scenario_terminal_branch_rows(
     session: Session,
     *,
     scenario_id: str,
-    gameplay_state: dict[str, Any],
-) -> list[dict[str, Any]]:
+) -> list[Branch]:
     rows = list(session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all())
-    rows_by_id = {row.id: row for row in rows}
+    parent_branch_ids = {
+        row.parent_branch_id for row in rows if row.parent_branch_id
+    }
+    return [
+        row
+        for row in rows
+        if _is_completed_terminal_leaf(row, parent_branch_ids)
+    ]
 
-    snapshot_branches: list[dict[str, Any]] = []
-    for snapshot in gameplay_state["archive"]["branch_snapshots"]:
-        branch_id = snapshot["branch_id"]
-        row = rows_by_id.get(branch_id)
-        snapshot_branches.append(
-            {
-                "id": branch_id,
-                "title": snapshot["title"] or (row.title if row else ""),
-                "story": row.story if row else "",
-                "insight": row.insight if row else "",
-                "probability": float(snapshot["probability"]),
-            }
-        )
 
-    if snapshot_branches:
-        return sorted(
-            snapshot_branches,
-            key=lambda item: (-item["probability"], item["title"], item["id"]),
-        )
-
+def _scenario_archive_branches(
+    rows: list[Branch],
+) -> list[dict[str, Any]]:
     return sorted(
         [
             {
@@ -874,6 +838,26 @@ def _pick_dominant_archive_branch(
     branches: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     return branches[0] if branches else None
+
+
+def _scenario_key_moment_count(branches: list[Branch]) -> int:
+    moments: set[str] = set()
+    for branch in branches:
+        value = branch.key_moments
+        if not isinstance(value, str) or not value.strip():
+            continue
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(parsed, list):
+            continue
+        moments.update(
+            moment.strip()
+            for moment in parsed
+            if isinstance(moment, str) and moment.strip()
+        )
+    return len(moments)
 
 
 def _infer_dominant_tone(branch: dict[str, Any] | None) -> str | None:
@@ -921,34 +905,38 @@ def _resolve_archive_betting_hit(
     if not bets:
         return None
 
+    outcomes: list[bool] = []
     for bet in bets:
         if bet["kind"] == "branch_winner":
-            if dominant_branch and (
-                bet["target_id"] == dominant_branch["id"]
-                or bet["target_label"] == dominant_branch["title"]
-            ):
-                return True
+            outcomes.append(
+                bool(dominant_branch and bet["target_id"] == dominant_branch["id"])
+            )
             continue
 
         if bet["kind"] == "profile_resonance":
-            if _matches_archive_bet_option(
-                bet["target_id"],
-                bet["target_label"],
-                profile_resonance,
-                PROFILE_RESONANCE_OPTIONS[profile_resonance],
-            ):
-                return True
+            outcomes.append(
+                _matches_archive_bet_option(
+                    bet["target_id"],
+                    bet["target_label"],
+                    profile_resonance,
+                    PROFILE_RESONANCE_OPTIONS[profile_resonance],
+                )
+            )
             continue
 
-        if dominant_tone and _matches_archive_bet_option(
-            bet["target_id"],
-            bet["target_label"],
-            dominant_tone,
-            ENDING_TONE_OPTIONS[dominant_tone],
-        ):
-            return True
+        outcomes.append(
+            bool(
+                dominant_tone
+                and _matches_archive_bet_option(
+                    bet["target_id"],
+                    bet["target_label"],
+                    dominant_tone,
+                    ENDING_TONE_OPTIONS[dominant_tone],
+                )
+            )
+        )
 
-    return False
+    return all(outcomes)
 
 
 def _pick_most_used_card_from_state(gameplay_state: dict[str, Any]) -> str | None:
@@ -1066,33 +1054,12 @@ def _resolve_finalize_authority_inputs(
 ) -> dict[str, Any]:
     gameplay_state = normalize_scenario_gameplay_state(scenario.gameplay_state_json)
     director_state = normalize_scenario_director_state(scenario.director_state_json)
-    has_authority = (
-        _has_meaningful_gameplay_state(gameplay_state)
-        or _has_meaningful_director_state(director_state)
-    )
 
-    if not has_authority:
-        effective_bet_count, effective_betting_hit = _resolve_finalize_betting_inputs(
-            scenario=scenario,
-            bet_count=bet_count,
-            betting_hit=betting_hit,
-        )
-        return {
-            "archive_grade": archive_grade,
-            "profile_resonance": profile_resonance,
-            "bet_count": effective_bet_count,
-            "betting_hit": effective_betting_hit,
-            "most_used_card": (most_used_card or "").strip() or None,
-            "objective_completed_count": objective_completed_count,
-            "objective_total_count": objective_total_count,
-            "commitment_outcome": commitment_outcome,
-        }
-
-    branches = _scenario_archive_branches(
+    terminal_branch_rows = _scenario_terminal_branch_rows(
         session,
         scenario_id=scenario.id,
-        gameplay_state=gameplay_state,
     )
+    branches = _scenario_archive_branches(terminal_branch_rows)
     dominant_branch = _pick_dominant_archive_branch(branches)
     dominant_tone = _infer_dominant_tone(dominant_branch)
     effective_profile_resonance = _resolve_archive_profile_resonance(
@@ -1120,7 +1087,7 @@ def _resolve_finalize_authority_inputs(
         bet_count=effective_bet_count,
         betting_hit=effective_betting_hit,
         branch_count=len(branches),
-        key_moment_count=len(gameplay_state["archive"]["key_moments"]),
+        key_moment_count=_scenario_key_moment_count(terminal_branch_rows),
         completed_daily_challenge=bool(
             finalize_context.get("completed_daily_challenge_intent")
         ),
@@ -2564,6 +2531,10 @@ def save_scenario_director_state(
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             raise CampaignNotFoundError("Scenario not found")
+        if scenario.status not in {ScenarioStatus.PARSING, ScenarioStatus.SIMULATING}:
+            raise CampaignStateError(
+                "Scenario no longer accepts director changes"
+            )
 
         current_state = normalize_scenario_director_state(scenario.director_state_json)
         expected_revision = _normalize_state_revision(director_state)
@@ -2573,6 +2544,78 @@ def save_scenario_director_state(
         next_state = normalize_scenario_director_state(
             _with_state_revision(director_state, current_state["revision"] + 1)
         )
+        contract = load_gameplay_contract()
+        valid_card_ids = {
+            str(card.get("id"))
+            for card in contract.get("cards", [])
+            if isinstance(card, dict) and card.get("id")
+        }
+        profiles_by_id = {
+            str(profile.get("id")): profile
+            for profile in contract.get("profiles", [])
+            if isinstance(profile, dict) and profile.get("id")
+        }
+        objectives = next_state["objectives"]
+        goals = objectives["goals"]
+        goal_kinds = [goal["kind"] for goal in goals]
+        if len(goal_kinds) != len(set(goal_kinds)):
+            raise CampaignError("Director objectives allow only one goal per kind")
+        if len({goal["id"] for goal in goals}) != len(goals):
+            raise CampaignError("Director objective ids must be unique")
+        if current_state["objectives"]["goals"] and objectives != current_state["objectives"]:
+            raise CampaignError("Director objectives are immutable after creation")
+        objective_profile_id = str(objectives.get("generated_for_profile") or "").strip()
+        objective_profile = profiles_by_id.get(objective_profile_id)
+        if goals and objective_profile is None:
+            raise CampaignError("Director objective profile is not in the gameplay catalog")
+        if goals and objectives.get("generated_for_question") != scenario.question:
+            raise CampaignError("Director objectives must match the current scenario question")
+        signature_sequence = set(
+            (objective_profile or {}).get("signature_arc", {}).get("sequence", [])
+        )
+        for goal in goals:
+            target_card_id = goal.get("target_card_id")
+            if target_card_id is not None and target_card_id not in valid_card_ids:
+                raise CampaignError("Director objective card is not in the gameplay catalog")
+            if goal["kind"] == "signature_arc_step":
+                if target_card_id is None or target_card_id not in signature_sequence:
+                    raise CampaignError(
+                        "Director objective card must belong to the profile signature arc"
+                    )
+            elif goal["kind"] == "branch_commitment":
+                if target_card_id is not None:
+                    raise CampaignError(
+                        "Branch commitment objective cannot target a gameplay card"
+                    )
+            else:
+                raise CampaignError("Unsupported director objective kind")
+        commitment = next_state["commitment"]
+        if commitment["active"]:
+            branch = session.exec(
+                select(Branch).where(
+                    Branch.id == commitment["branch_id"],
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch is None:
+                raise CampaignError(
+                    "Director commitment branch must belong to the current scenario"
+                )
+            commitment["branch_title"] = branch.title
+            committed_at_round = commitment.get("committed_at_round")
+            max_branch_round = session.exec(
+                select(func.max(Round.round_number)).where(Round.branch_id == branch.id)
+            ).one_or_none()
+            if committed_at_round is not None and (
+                committed_at_round < 1
+                or (
+                    max_branch_round is not None
+                    and committed_at_round > int(max_branch_round)
+                )
+            ):
+                raise CampaignError(
+                    "Director commitment round must belong to persisted branch rounds"
+                )
         result = session.exec(
             update(Scenario)
             .where(Scenario.id == scenario_id)
@@ -2616,22 +2659,114 @@ def save_scenario_gameplay_state(
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             raise CampaignNotFoundError("Scenario not found")
+        if scenario.status not in {
+            ScenarioStatus.PARSING,
+            ScenarioStatus.SIMULATING,
+            ScenarioStatus.DONE,
+        }:
+            raise CampaignStateError(
+                "Scenario no longer accepts gameplay changes"
+            )
 
         current_state = normalize_scenario_gameplay_state(scenario.gameplay_state_json)
         expected_revision = _normalize_state_revision(gameplay_state)
         if expected_revision != current_state["revision"]:
             raise CampaignConflictError("Gameplay state revision mismatch")
 
-        scenario_branch_ids: set[str] = set(
-            session.exec(
-                select(Branch.id).where(Branch.scenario_id == scenario_id)
-            ).all()
+        scenario_branches = list(
+            session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
         )
+        scenario_branches_by_id = {branch.id: branch for branch in scenario_branches}
+        scenario_branch_ids = set(scenario_branches_by_id)
         next_state = normalize_scenario_gameplay_state(
             _with_state_revision(gameplay_state, current_state["revision"] + 1),
             strict=True,
             valid_branch_ids=scenario_branch_ids,
         )
+        current_archive = current_state["archive"]
+        terminal_archive_is_frozen = bool(
+            current_archive["key_moments"]
+            or current_archive["branch_snapshots"]
+        )
+        if scenario.status == ScenarioStatus.DONE and (
+            next_state["cards"] != current_state["cards"]
+            or next_state["betting"] != current_state["betting"]
+            or (
+                terminal_archive_is_frozen
+                and next_state["archive"] != current_archive
+            )
+        ):
+            raise CampaignStateError(
+                "Completed scenario gameplay settlement state is immutable"
+            )
+        if next_state["cards"] != current_state["cards"]:
+            raise CampaignError(
+                "Gameplay card usage is server-managed and cannot be changed via state sync"
+            )
+        for snapshot in next_state["archive"]["branch_snapshots"]:
+            branch = scenario_branches_by_id.get(snapshot["branch_id"])
+            if branch is None:
+                raise CampaignError(
+                    "Gameplay archive branch must belong to the current scenario"
+                )
+            snapshot["title"] = branch.title
+            snapshot["probability"] = float(branch.probability)
+        next_state["archive"]["branch_snapshots"].sort(
+            key=lambda item: (-item["probability"], item["title"], item["branch_id"])
+        )
+        current_bets_by_id = {
+            bet["bet_id"]: bet for bet in current_state["betting"]["bets"]
+        }
+        next_bets_by_id = {
+            bet["bet_id"]: bet for bet in next_state["betting"]["bets"]
+        }
+        if len(next_bets_by_id) != len(next_state["betting"]["bets"]):
+            raise CampaignError("Gameplay bet ids must be unique")
+        if any(
+            next_bets_by_id.get(bet_id) != current_bet
+            for bet_id, current_bet in current_bets_by_id.items()
+        ):
+            raise CampaignError("Placed gameplay bets are immutable")
+        current_bet_ids = set(current_bets_by_id)
+        new_bets = [
+            bet
+            for bet in next_state["betting"]["bets"]
+            if bet["bet_id"] not in current_bet_ids
+        ]
+        if new_bets and len(next_bets_by_id) > 1:
+            raise CampaignBetValidationError(
+                "GAMEPLAY_BET_LIMIT_REACHED",
+                "Only one gameplay bet may be placed per scenario",
+                bet_id=new_bets[0]["bet_id"],
+            )
+        for bet in new_bets:
+            if bet["kind"] != "branch_winner":
+                continue
+            target_branch = scenario_branches_by_id[bet["target_id"]]
+            if target_branch.status != BranchStatus.ACTIVE:
+                raise CampaignBetValidationError(
+                    "GAMEPLAY_BET_BRANCH_NOT_ACTIVE",
+                    "A new branch_winner bet must target an active branch",
+                    bet_id=bet["bet_id"],
+                )
+        max_persisted_round = None
+        if scenario_branch_ids:
+            max_persisted_round = session.exec(
+                select(func.max(Round.round_number)).where(
+                    Round.branch_id.in_(scenario_branch_ids)
+                )
+            ).one_or_none()
+        if max_persisted_round is not None:
+            for bet in next_state["betting"]["bets"]:
+                if (
+                    bet["bet_id"] not in current_bet_ids
+                    and bet["placed_at_round"] > int(max_persisted_round)
+                ):
+                    raise CampaignBetValidationError(
+                        "GAMEPLAY_BET_INVALID_ROUND",
+                        "Bet placed_at_round cannot be later than persisted scenario rounds",
+                        bet_id=bet["bet_id"],
+                    )
         result = session.exec(
             update(Scenario)
             .where(Scenario.id == scenario_id)

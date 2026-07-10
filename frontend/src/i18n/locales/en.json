@@ -176,8 +176,8 @@
       }
     },
     "degraded_hints": {
-      "view_sample_result": "View sample result (If Zheng He discovered the Americas before Columbus)",
-      "sample_hint": "Bundled demo snapshot files live under the samples/snapshots/ directory. You can use the Import Snapshot flow to load and view read-only results without an API key."
+      "view_sample_result": "Explore official samples",
+      "sample_hint": "No model configured yet? Open any complete built-in simulation with one click—no API key or file selection needed."
     },
     "app_title": "SwarmOracle",
     "home": {
@@ -447,6 +447,7 @@
         "worldline_group": "Worldline: {{title}}",
         "worldline_round_range": "R{{start}}-R{{end}}",
         "clear_filter": "Clear filter",
+        "view_agent_profile": "View {{name}}'s profile and memory",
         "emotion_label": "Emotion: {{emotion}}"
       },
       "tree": {
@@ -953,8 +954,12 @@
       "bridge_not_enabled": "Not enabled on this server.",
       "bridge_replay_unavailable": "Not available in replay mode.",
       "bridge_single_branch": "Requires multiple branches.",
+      "bridge_causal_data_unavailable": "No causal graph data is available for this scenario.",
+      "bridge_replay_data_unavailable": "No replay trace is available for this scenario.",
       "bridge_disabled_replay": "Not available in replay mode.",
       "bridge_disabled_loading": "Share link is being prepared…",
+      "bridge_capabilities_unavailable": "Could not confirm which analysis tools are available. Please retry.",
+      "bridge_capabilities_retry": "Retry availability check",
       "next_steps_heading": "What's Next",
       "next_understand_why": "Understand Why",
       "next_understand_why_desc": "Explore the causal graph to see how events connect",
@@ -978,6 +983,10 @@
       "mode_toggle_label": "Result view mode",
       "bridge_full_report_title": "Full report",
       "bridge_full_report_desc": "Read the full report for this run.",
+      "bridge_full_report_generate_title": "Generate Full Report",
+      "bridge_full_report_generate_desc": "Generate a full report for this run.",
+      "bridge_full_report_read_title": "Read Full Report",
+      "bridge_full_report_read_desc": "Read the full report for this run.",
       "bridge_workbench_title": "Open Graph Workbench",
       "bridge_workbench_desc": "Inspect causality, knowledge graph, and node questions together",
       "bridge_kg_explorer_title": "Knowledge Graph Explorer",
@@ -1065,6 +1074,19 @@
         "events_title": "Growth Events",
         "empty_history": "No memories or growth events recorded yet.",
         "start_conversation": "Start conversation",
+        "state_reference_title": "State reference",
+        "baseline_stance_label": "Configured stance",
+        "observed_emotion_label": "Observed emotion",
+        "configured_emotion_label": "Configured starting emotion",
+        "snapshot_emotion_label": "Scenario emotion snapshot",
+        "live_observation_source": "Latest observed on {{branch}} · R{{round}}",
+        "replay_observation_source": "Replay selection {{selectedBranch}} · R{{selectedRound}}; latest matching observation {{branch}} · R{{round}}",
+        "replay_no_observation_source": "No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.",
+        "no_observation_value": "No matching observation",
+        "baseline_emotion_source": "No message observation yet; showing the configured starting emotion.",
+        "snapshot_emotion_source": "No branch and round observation context is available for this snapshot.",
+        "knowledge_domains_title": "Knowledge domains",
+        "decision_bias_title": "Decision style",
         "close": "Close"
       }
     },
@@ -3309,6 +3331,8 @@
       "error_fetch": "Unable to load the knowledge graph right now. Please retry.",
       "error_missing": "Knowledge graph data is not available for this scenario.",
       "error_forbidden": "You do not have permission to view this knowledge graph.",
+      "empty_title": "Knowledge graph is empty",
+      "empty_description": "No knowledge graph data is available for this scenario yet.",
       "search_placeholder": "Search nodes by id or label",
       "search_aria": "Search knowledge graph nodes",
       "filter_aria": "Filter nodes by type",
@@ -3640,7 +3664,25 @@
       "import_success": "Snapshot imported successfully.",
       "import_success_hint": "A new scenario has been created from your snapshot.",
       "import_view_scenario": "View scenario",
-      "import_failed": "Snapshot import failed. Please try again."
+      "import_failed": "Snapshot import failed. Please try again.",
+      "samples_title": "Try an official sample",
+      "samples_hint": "No model or API key needed. Import a complete run and explore it immediately.",
+      "sample_catalog_loading": "Loading built-in samples…",
+      "sample_catalog_failed": "Built-in samples are unavailable. You can still import a local file.",
+      "sample_catalog_retry": "Retry samples",
+      "sample_scope": "{{agents}} agents · {{outcomes}} outcomes",
+      "sample_use": "Explore now",
+      "sample_use_aria": "Explore {{title}}",
+      "sample_import_in_progress": "Opening {{title}}…",
+      "sample_import_in_progress_hint": "Rebuilding the complete local run. No model call is made.",
+      "sample_import_failed": "Built-in sample import failed. Please try again.",
+      "sample_quick_start_loading": "Opening recommended sample…",
+      "choose_other_samples": "Choose another sample",
+      "capability_loading": "Checking official sample availability…",
+      "capability_error": "Could not confirm official sample availability. Retry the check to keep exploring without a model.",
+      "capability_retry": "Retry sample availability",
+      "capability_disabled": "Official samples are disabled on this server.",
+      "import_own_file": "Or import your own file"
     },
     "director_objectives": {
       "next_signature_card": "Next signature-arc card",

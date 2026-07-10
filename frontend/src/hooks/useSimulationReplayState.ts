@@ -12,6 +12,14 @@ import {
 
 const loadSimulationReplayHelpers = () => import('../lib/simulationReplay');
 
+type ReplayLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+interface ReplayLoadState {
+  intentKey: string | null;
+  status: ReplayLoadStatus;
+  payload: SimulationReplayPayload | null;
+}
+
 export function useSimulationReplayState(params: {
   replayToken: string | null;
   replayShareId: string | null;
@@ -30,12 +38,21 @@ export function useSimulationReplayState(params: {
     isSimulationComplete,
     navigate,
   } = params;
+  const replayIntentKey = replayShareId
+    ? `share:${replayShareId}`
+    : replayToken
+      ? `token:${replayToken}`
+      : null;
   const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 4>(1);
   const [playbackMode, setPlaybackMode] = useState<'replay' | 'skip'>('replay');
   const [theaterMountKey, setTheaterMountKey] = useState(0);
   const [selectedReplayBranchId, setSelectedReplayBranchId] = useState<string | null>(null);
   const [selectedReplayRound, setSelectedReplayRound] = useState<number | null>(null);
-  const [replayPayload, setReplayPayload] = useState<SimulationReplayPayload | null>(null);
+  const [replayLoadState, setReplayLoadState] = useState<ReplayLoadState>(() => ({
+    intentKey: replayIntentKey,
+    status: replayIntentKey ? 'loading' : 'idle',
+    payload: null,
+  }));
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState(viewMode === 'theater');
@@ -47,50 +64,74 @@ export function useSimulationReplayState(params: {
   useEffect(() => {
     let cancelled = false;
 
+    setReplayLoadState({
+      intentKey: replayIntentKey,
+      status: replayIntentKey ? 'loading' : 'idle',
+      payload: null,
+    });
+
     const hydrateReplay = async () => {
-      if (replayShareId) {
-        const artifact = await getReplayArtifact(replayShareId).catch(() => null);
-        if (cancelled || !artifact || artifact.kind !== 'simulation_view_v1' || !artifact.payload) return;
-        const { coerceSimulationReplayPayload } = await loadSimulationReplayHelpers();
-        const replay = coerceSimulationReplayPayload(artifact.payload);
-        if (!replay) {
-          console.warn('[SimulationView] Ignoring invalid replay artifact payload');
-          return;
+      if (!replayIntentKey) return;
+
+      try {
+        let replay: SimulationReplayPayload | null = null;
+        if (replayShareId) {
+          const artifact = await getReplayArtifact(replayShareId);
+          if (cancelled) return;
+          if (!artifact || artifact.kind !== 'simulation_view_v1' || !artifact.payload) {
+            throw new Error('Invalid replay artifact');
+          }
+          const { coerceSimulationReplayPayload } = await loadSimulationReplayHelpers();
+          replay = coerceSimulationReplayPayload(artifact.payload);
+        } else if (replayToken) {
+          const params = new URLSearchParams();
+          params.set('replay', replayToken);
+          const { readSimulationReplayPayload } = await loadSimulationReplayHelpers();
+          replay = await readSimulationReplayPayload(params);
         }
-        setReplayPayload(replay);
+
+        if (cancelled) return;
+        if (!replay) {
+          throw new Error('Invalid replay payload');
+        }
+
+        setReplayLoadState({
+          intentKey: replayIntentKey,
+          status: 'ready',
+          payload: replay,
+        });
         setSelectedReplayBranchId(replay.uiState?.selectedReplayBranchId ?? null);
         setSelectedReplayRound(replay.uiState?.selectedReplayRound ?? null);
         setPlaybackMode(replay.uiState?.playbackMode ?? 'replay');
         setReplaySpeed(replay.uiState?.replaySpeed ?? 1);
         setPanelCollapsed(replay.uiState?.panelCollapsed ?? true);
-        return;
+      } catch (error) {
+        if (cancelled) return;
+        console.warn('[SimulationView] Failed to load replay payload', error);
+        setReplayLoadState({
+          intentKey: replayIntentKey,
+          status: 'error',
+          payload: null,
+        });
       }
-
-      if (!replayToken) {
-        setReplayPayload(null);
-        return;
-      }
-
-      const params = new URLSearchParams();
-      params.set('replay', replayToken);
-      const { readSimulationReplayPayload } = await loadSimulationReplayHelpers();
-      const replay = await readSimulationReplayPayload(params);
-      if (cancelled || !replay) return;
-      setReplayPayload(replay);
-      setSelectedReplayBranchId(replay.uiState?.selectedReplayBranchId ?? null);
-      setSelectedReplayRound(replay.uiState?.selectedReplayRound ?? null);
-      setPlaybackMode(replay.uiState?.playbackMode ?? 'replay');
-      setReplaySpeed(replay.uiState?.replaySpeed ?? 1);
-      setPanelCollapsed(replay.uiState?.panelCollapsed ?? true);
     };
 
     void hydrateReplay();
     return () => {
       cancelled = true;
     };
-  }, [replayShareId, replayToken]);
+  }, [replayIntentKey, replayShareId, replayToken]);
 
-  const isReplayMode = Boolean(replayPayload);
+  const activeReplayLoadState = replayLoadState.intentKey === replayIntentKey
+    ? replayLoadState
+    : {
+        intentKey: replayIntentKey,
+        status: replayIntentKey ? 'loading' as const : 'idle' as const,
+        payload: null,
+      };
+  const replayPayload = activeReplayLoadState.payload;
+  const replayLoadStatus = activeReplayLoadState.status;
+  const isReplayMode = Boolean(replayIntentKey);
   const replayBranchOptions = useMemo(
     () => buildReplayBranchOptions(branches, messages),
     [branches, messages],
@@ -186,6 +227,7 @@ export function useSimulationReplayState(params: {
     panelCollapsed,
     playbackMode,
     replayBranchOptions,
+    replayLoadStatus,
     replayPayload,
     replayRounds,
     replaySpeed,

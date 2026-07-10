@@ -45,14 +45,52 @@
 .agent-card {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 4px;
   border-radius: var(--radius-md);
   transition: background var(--transition-fast), border-color var(--transition-fast);
-  cursor: pointer;
   border: 2px solid transparent;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.agent-card__filter {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.agent-card__filter:focus-visible,
+.agent-card__profile:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.agent-card__profile {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.agent-card__profile:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--bg-hover);
 }
 
 .agent-card:hover {

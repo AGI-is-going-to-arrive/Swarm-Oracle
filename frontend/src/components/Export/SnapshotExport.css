@@ -212,6 +212,124 @@
 
 /* Import dropzone */
 
+.snapshot-samples {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.snapshot-samples__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.snapshot-samples__header h3,
+.snapshot-sample-card h4 {
+  margin: 0;
+  color: var(--text-primary, #181611);
+}
+
+.snapshot-samples__header h3 {
+  font-size: 0.98rem;
+}
+
+.snapshot-samples__header p {
+  margin: 4px 0 0;
+  color: var(--text-muted, #928f88);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.snapshot-samples__retry {
+  flex: 0 0 auto;
+}
+
+.snapshot-samples__status,
+.snapshot-samples__error {
+  margin: 0;
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 0.84rem;
+}
+
+.snapshot-samples__status {
+  color: var(--text-muted, #928f88);
+  background: var(--bg-deep, #f3f1ee);
+}
+
+.snapshot-samples__error {
+  color: #b91c1c;
+  border: 1px solid rgba(185, 28, 28, 0.2);
+  background: rgba(185, 28, 28, 0.06);
+}
+
+.snapshot-samples__grid {
+  display: grid;
+  gap: 9px;
+}
+
+.snapshot-sample-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle, #e1ddd7);
+  border-radius: 12px;
+  background: var(--bg-surface, #fcfcfa);
+}
+
+.snapshot-sample-card__copy {
+  min-width: 0;
+}
+
+.snapshot-sample-card h4 {
+  font-size: 0.9rem;
+}
+
+.snapshot-sample-card p {
+  display: -webkit-box;
+  margin: 4px 0;
+  overflow: hidden;
+  color: var(--text-secondary, #58554f);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.snapshot-sample-card span {
+  color: var(--text-muted, #928f88);
+  font-size: 0.72rem;
+}
+
+.snapshot-sample-card__action {
+  flex: 0 0 auto;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.snapshot-import-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+  color: var(--text-muted, #928f88);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.snapshot-import-divider::before,
+.snapshot-import-divider::after {
+  height: 1px;
+  flex: 1;
+  background: var(--border-subtle, #e1ddd7);
+  content: '';
+}
+
 .snapshot-import-dropzone {
   border: 2px dashed var(--border-default, #d1cdc7);
   border-radius: 12px;
@@ -308,6 +426,14 @@
   }
   .snapshot-export-preview__row dt {
     min-width: 80px;
+  }
+  .snapshot-samples__header,
+  .snapshot-sample-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .snapshot-sample-card__action {
+    width: 100%;
   }
 }
 

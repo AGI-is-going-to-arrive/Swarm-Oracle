@@ -16,7 +16,11 @@ import {
   encodeReplayEnvelope,
   normalizeReplayOrigin,
 } from './replayCodec';
-import { coerceSimulationReplayPayload } from './simulationReplay';
+import {
+  coerceSimulationReplayPayload,
+  sanitizeSimulationReplayPayload,
+  stripPublicReplayLocalIdentityFields,
+} from './simulationReplay';
 
 const REPLAY_QUERY_KEY = 'replay';
 const REPLAY_KIND = 'scenario_result_v1';
@@ -98,8 +102,17 @@ function sanitizeScenarioReplayAgent(agent: AgentInfo): ScenarioReplayAgentInfo 
 }
 
 function sanitizeScenarioReplayScenario(scenario: Scenario): Scenario {
+  const {
+    causal_graph_id: _omitCausalGraphId,
+    checkpoints: _omitCheckpoints,
+    faction_timeline_id: _omitFactionTimelineId,
+    ...publicScenario
+  } = scenario;
+  void _omitCausalGraphId;
+  void _omitCheckpoints;
+  void _omitFactionTimelineId;
   return {
-    ...scenario,
+    ...publicScenario,
     agents: scenario.agents.map(sanitizeScenarioReplayAgent),
   };
 }
@@ -112,6 +125,20 @@ function sanitizeScenarioReplayStoryData(storyData: StoryData): StoryData {
   const { full_report: _omitFullReport, ...rest } = storyData;
   void _omitFullReport;
   return rest;
+}
+
+function sanitizeScenarioReplayPrediction(prediction: PredictionInfo): PredictionInfo {
+  return stripPublicReplayLocalIdentityFields(prediction);
+}
+
+function sanitizeScenarioReplayCampaignSummary(
+  summary: CampaignFinalizeResult | null | undefined,
+): CampaignFinalizeResult | null | undefined {
+  if (!summary) return summary;
+  return {
+    ...summary,
+    profile: stripPublicReplayLocalIdentityFields(summary.profile),
+  };
 }
 
 function isStoryBranchPayload(value: unknown): boolean {
@@ -156,7 +183,7 @@ function isPredictionPayload(value: unknown): value is PredictionInfo {
   return (
     typeof value.id === 'string'
     && typeof value.scenario_id === 'string'
-    && typeof value.user_name === 'string'
+    && (value.user_name === undefined || typeof value.user_name === 'string')
     && typeof value.prediction_text === 'string'
     && isFiniteNumber(value.confidence)
     && (value.score === null || value.score === undefined || isFiniteNumber(value.score))
@@ -274,11 +301,18 @@ export function compactScenarioMetaForReplay(
 export function sanitizeScenarioResultReplayPayload(
   payload: ScenarioResultReplayPayload,
 ): ScenarioResultReplayPayload {
+  const simulationPayload = sanitizeSimulationReplayPayload({
+    scenario: payload.scenario,
+    scenarioMeta: payload.scenarioMeta,
+  });
   return {
     ...payload,
-    scenario: sanitizeScenarioReplayScenario(payload.scenario),
+    scenario: sanitizeScenarioReplayScenario(simulationPayload.scenario),
     storyData: sanitizeScenarioReplayStoryData(payload.storyData),
     agents: payload.agents.map(sanitizeScenarioReplayAgent),
+    predictions: payload.predictions.map(sanitizeScenarioReplayPrediction),
+    scenarioMeta: simulationPayload.scenarioMeta,
+    campaignSummary: sanitizeScenarioReplayCampaignSummary(payload.campaignSummary),
   };
 }
 
@@ -332,7 +366,7 @@ export function normalizeScenarioResultReplayPayload(
     return null;
   }
 
-  return {
+  return sanitizeScenarioResultReplayPayload({
     scenario: sanitizeScenarioReplayScenario(simulationPayload.scenario),
     storyData: sanitizeScenarioReplayStoryData(payload.storyData),
     agents: payload.agents.map(sanitizeScenarioReplayAgent),
@@ -341,7 +375,7 @@ export function normalizeScenarioResultReplayPayload(
     campaignScenarioSummary: (payload.campaignScenarioSummary ?? null) as CampaignScenarioSummary | null,
     campaignSummary: (payload.campaignSummary ?? null) as CampaignFinalizeResult | null,
     isDailyChallenge: payload.isDailyChallenge as boolean | undefined,
-  };
+  });
 }
 
 export async function encodeScenarioReplayToken(payload: ScenarioResultReplayPayload): Promise<string> {

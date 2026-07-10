@@ -16,19 +16,22 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 ## 能做什么
 
 - 多分支推演、Classic 分支树与 Pixel Theater
+- 玩法卡、预测押注、世界线承诺和赛后因果档案
 - 辩论竞技场、结局会客厅和世界线圆桌
 - 反事实续跑、分支对比、Replay Trace
 - 因果图谱、知识图谱与时间线视图
-- 自定义 Agent、人物备份、预测日志与 Snapshot
+- 推演内 Agent 档案、分支记忆、自定义 Agent、人物备份、预测日志与 Snapshot
 - 结果结论、完整报告、分享卡片与可选搜索增强
+
+推演内的 Agent 档案会区分配置立场与已观察情绪，并标明观察来自哪条世界线、哪一轮；回放中没有匹配观察时会明确提示。
 
 类别级能力与路由见 [功能索引](docs/FEATURES.md)，操作步骤见 [使用指南](docs/USAGE.md)。
 
 ## 两种使用方式
 
-### 离线 Snapshot 演示
+### 内置官方样例与 Snapshot 演示
 
-真实 LLM 未配置时，前后端仍可启动。你可以从首页导入 `samples/snapshots/` 中脱敏的 `*.swarm` 文件，浏览已保存的推演、结果和回放。占位 key 只用于启动这条演示路径，不能生成新的实时推演。
+真实 LLM 未配置时，前后端仍可启动。首页提供 3 个随附的官方样例：无需 API Key、无需选择文件，也不会发起模型调用，任选一个即可导入完整推演并浏览结果、回放和关联视图。你也可以继续导入 `samples/snapshots/` 中脱敏的 `*.swarm` 文件。内置样例和 Snapshot 导入不能生成新的实时推演。
 
 ### 实时 LLM 推演
 
@@ -49,7 +52,7 @@ cp .env.docker.example .env.docker
 docker compose up -d
 ```
 
-打开 http://127.0.0.1:18928 。默认端口只发布到 loopback：前端 `18928`，后端 `18927`。如需从源码重建镜像，运行 `docker compose up --build -d`。
+打开 http://127.0.0.1:18928 。默认端口只发布到 loopback：前端 `18928`，后端 `18927`。后端镜像随附 `packs/` 和 `samples/`，容器内可直接使用 Local Packs 与官方样例。如需从源码重建镜像，运行 `docker compose up --build -d`。
 
 ### 本地开发
 
@@ -64,7 +67,7 @@ cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-另开终端启动前端（Node.js 20+，npm）：
+另开终端启动前端（Node.js 20.19+ 或 22.12+，npm）：
 
 ```bash
 cd frontend

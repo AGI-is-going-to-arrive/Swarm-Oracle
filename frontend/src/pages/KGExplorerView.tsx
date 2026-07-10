@@ -465,6 +465,34 @@ export default function KGExplorerView() {
       </div>
     );
   }
+  if (
+    graphData
+    && graphData.nodes.length === 0
+    && graphData.edges.length === 0
+    && !dataLoading
+  ) {
+    return (
+      <main
+        data-testid="kg-explorer-root"
+        className="kg-explorer p-6 text-sm"
+      >
+        <section data-testid="kg-explorer-empty" role="status">
+          <h1 className="text-lg font-semibold mb-2">
+            {t('kg_explorer.empty_title', 'Knowledge graph is empty')}
+          </h1>
+          <p>
+            {t(
+              'kg_explorer.empty_description',
+              'No knowledge graph data is available for this scenario yet.',
+            )}
+          </p>
+          <Link to="/" className="underline">
+            {t('common.back_home', 'Back to home')}
+          </Link>
+        </section>
+      </main>
+    );
+  }
 
   // Available node types for filter pills.
   const availableTypes = Array.from(new Set(graphData?.nodes.map((n) => n.type) ?? [])).sort();

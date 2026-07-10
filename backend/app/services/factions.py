@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -47,7 +48,11 @@ def process_round(
     # Derive stance scores for each agent
     agent_stances: list[tuple[str, float]] = []
     for msg in messages:
-        agent_id = getattr(msg, "agent_id", "unknown")
+        agent_id = (
+            msg.get("agent_id", "unknown")
+            if isinstance(msg, dict)
+            else getattr(msg, "agent_id", "unknown")
+        )
         stance = derive_stance_score(msg)
         agent_stances.append((agent_id, stance))
 
@@ -354,6 +359,92 @@ def get_faction_relations(
         "top_k": top_k,
         "total_before_filter": total_before_filter,
     }
+
+
+def build_previous_round_relationship_contexts(
+    engine: Any,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+    agents: list[dict[str, Any]],
+    *,
+    language: str = "Chinese",
+    max_edges_per_agent: int = 4,
+    max_chars_per_agent: int = 700,
+) -> dict[str, str]:
+    """Build bounded, agent-perspective relation observations from the prior round."""
+    previous_round = int(round_number) - 1
+    if previous_round < 1 or not agents:
+        return {}
+
+    agent_names = {
+        str(agent.get("id") or ""): str(agent.get("name") or agent.get("id") or "")
+        for agent in agents
+        if str(agent.get("id") or "")
+    }
+    if not agent_names:
+        return {}
+
+    with Session(engine) as session:
+        edges = list(
+            session.exec(
+                select(AgentRelationEdge).where(
+                    AgentRelationEdge.scenario_id == scenario_id,
+                    AgentRelationEdge.branch_id == branch_id,
+                    AgentRelationEdge.round_number == previous_round,
+                )
+            ).all()
+        )
+
+    adjacent: dict[str, list[tuple[float, str, AgentRelationEdge]]] = {
+        agent_id: [] for agent_id in agent_names
+    }
+    for edge in edges:
+        source_id = str(edge.source_agent_id or "")
+        target_id = str(edge.target_agent_id or "")
+        trust = min(max(float(edge.trust_score), 0.0), 1.0)
+        opposition = min(max(float(edge.opposition_score), 0.0), 1.0)
+        weight = max(trust, opposition)
+        if source_id in adjacent:
+            adjacent[source_id].append((weight, target_id, edge))
+        if target_id in adjacent:
+            adjacent[target_id].append((weight, source_id, edge))
+
+    edge_limit = max(1, int(max_edges_per_agent))
+    char_limit = max(80, int(max_chars_per_agent))
+    is_chinese = language == "Chinese"
+    contexts: dict[str, str] = {}
+    for agent_id, candidates in adjacent.items():
+        ranked = sorted(
+            candidates,
+            key=lambda item: (-item[0], agent_names.get(item[1], item[1]), item[2].id),
+        )[:edge_limit]
+        lines: list[str] = []
+        for _weight, other_id, edge in ranked:
+            trust = min(max(float(edge.trust_score), 0.0), 1.0)
+            opposition = min(max(float(edge.opposition_score), 0.0), 1.0)
+            other_name = agent_names.get(other_id, other_id or "unknown")
+            evidence = " ".join(str(edge.evidence_summary or "").split())
+            if len(evidence) > 160:
+                evidence = evidence[:159].rstrip() + "…"
+            if is_chinese:
+                line = f"- 与 {other_name}: 信任={trust:.2f}, 对立={opposition:.2f}"
+                if evidence:
+                    line += f"；依据={evidence}"
+            else:
+                line = f"- With {other_name}: trust={trust:.2f}, opposition={opposition:.2f}"
+                if evidence:
+                    line += f"; evidence={evidence}"
+            lines.append(line)
+
+        if not lines:
+            continue
+        rendered = "\n".join(lines)
+        if len(rendered) > char_limit:
+            rendered = rendered[: char_limit - 1].rstrip() + "…"
+        contexts[agent_id] = rendered
+
+    return contexts
 
 
 # ── Helpers ────────────────────────────────────────────────

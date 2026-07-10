@@ -16,6 +16,7 @@ const SCENARIO_STATUSES = new Set<Scenario['status']>([
   'simulating',
   'narrating',
   'done',
+  'cancelled',
   'error',
 ]);
 const SCENARIO_MODES = new Set<NonNullable<Scenario['mode']>>([
@@ -32,6 +33,43 @@ const COMMITMENT_OUTCOMES = new Set(['hit', 'miss', 'pending']);
 
 type JsonRecord = Record<string, unknown>;
 
+const PUBLIC_REPLAY_LOCAL_IDENTITY_KEYS = new Set([
+  'username',
+  'userid',
+  'ownerid',
+  'owneruserid',
+]);
+const PUBLIC_REPLAY_QUERY_CREDENTIAL_RE = /([?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|client[_-]?secret|x-amz-(?:credential|signature|security-token)|x-goog-(?:credential|signature)|awsaccesskeyid|token|secret|sig|signature|key)=)([^&#\s]+)/gi;
+
+export function stripPublicReplayLocalIdentityFields<T extends object>(value: T): T {
+  const sanitized = { ...value } as T & JsonRecord;
+  for (const key of Object.keys(sanitized)) {
+    const normalizedKey = key.toLowerCase().replace(/[_-]/g, '');
+    if (PUBLIC_REPLAY_LOCAL_IDENTITY_KEYS.has(normalizedKey)) {
+      delete sanitized[key];
+    }
+  }
+  return sanitized;
+}
+
+function sanitizePublicReplayWebSearchValue<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replace(PUBLIC_REPLAY_QUERY_CREDENTIAL_RE, '$1[redacted]') as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizePublicReplayWebSearchValue) as T;
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        sanitizePublicReplayWebSearchValue(entry),
+      ]),
+    ) as T;
+  }
+  return value;
+}
+
 export interface SimulationReplayUiState {
   selectedReplayBranchId?: string | null;
   selectedReplayRound?: number | null;
@@ -44,6 +82,122 @@ export interface SimulationReplayPayload {
   scenario: Scenario;
   scenarioMeta: ScenarioMeta;
   uiState?: SimulationReplayUiState;
+}
+
+function sanitizeSimulationReplayAgent(
+  agent: Scenario['agents'][number],
+): Scenario['agents'][number] {
+  const replayAgent: Scenario['agents'][number] = {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    tier: agent.tier,
+    emotion: agent.emotion,
+  };
+  if (typeof agent.stance === 'string') replayAgent.stance = agent.stance;
+  if (typeof agent.group_id === 'string') replayAgent.group_id = agent.group_id;
+  if (typeof agent.group_name === 'string') replayAgent.group_name = agent.group_name;
+  if (
+    agent.source_type === 'generated'
+    || agent.source_type === 'custom'
+    || agent.source_type === 'replay'
+    || agent.source_type === null
+  ) {
+    replayAgent.source_type = agent.source_type;
+  }
+  if (typeof agent.is_returning === 'boolean') {
+    replayAgent.is_returning = agent.is_returning;
+  }
+  return replayAgent;
+}
+
+function sanitizeSimulationReplayGameplayState(
+  state: Scenario['gameplay_state'],
+): Scenario['gameplay_state'] {
+  if (!state) return state;
+
+  type ReplayGameplayState = NonNullable<Scenario['gameplay_state']>;
+  const source = state as unknown as JsonRecord;
+  const cards = isRecord(source.cards) ? source.cards : null;
+  const betting = isRecord(source.betting) ? source.betting : null;
+  const archive = isRecord(source.archive) ? source.archive : null;
+  const sanitized: ReplayGameplayState = {
+    cards: {
+      usage_log: Array.isArray(cards?.usage_log)
+        ? cards.usage_log
+            .filter(isGameplayCardUsage)
+            .map((usage) => stripPublicReplayLocalIdentityFields(
+              usage as ReplayGameplayState['cards']['usage_log'][number],
+            ))
+        : [],
+    },
+    betting: {
+      bets: Array.isArray(betting?.bets)
+        ? betting.bets
+            .filter(isGameplayBet)
+            .map((bet) => stripPublicReplayLocalIdentityFields(
+              bet as ReplayGameplayState['betting']['bets'][number],
+            ))
+        : [],
+    },
+    archive: {
+      key_moments: Array.isArray(archive?.key_moments)
+        ? archive.key_moments.filter((value): value is string => typeof value === 'string')
+        : [],
+      branch_snapshots: Array.isArray(archive?.branch_snapshots)
+        ? archive.branch_snapshots
+            .filter(isArchiveBranchSnapshot)
+            .map((snapshot) => stripPublicReplayLocalIdentityFields(
+              snapshot as ReplayGameplayState['archive']['branch_snapshots'][number],
+            ))
+        : [],
+    },
+  };
+  if (isFiniteNumber(source.revision)) {
+    sanitized.revision = source.revision;
+  }
+  return sanitized;
+}
+
+function sanitizeSimulationReplayScenarioMeta(meta: ScenarioMeta): ScenarioMeta {
+  return {
+    ...meta,
+    betting: {
+      ...meta.betting,
+      bets: meta.betting.bets.map(stripPublicReplayLocalIdentityFields),
+    },
+  };
+}
+
+function stripLiveScenarioMetadata(scenario: Scenario): Scenario {
+  const {
+    causal_graph_id: _omitCausalGraphId,
+    checkpoints: _omitCheckpoints,
+    faction_timeline_id: _omitFactionTimelineId,
+    ...replayScenario
+  } = scenario;
+  void _omitCausalGraphId;
+  void _omitCheckpoints;
+  void _omitFactionTimelineId;
+  const sanitizedScenario = stripPublicReplayLocalIdentityFields(replayScenario);
+  return {
+    ...sanitizedScenario,
+    agents: scenario.agents.map(sanitizeSimulationReplayAgent),
+    gameplay_state: sanitizeSimulationReplayGameplayState(scenario.gameplay_state),
+    web_search_context: scenario.web_search_context
+      ? sanitizePublicReplayWebSearchValue(scenario.web_search_context)
+      : scenario.web_search_context,
+  };
+}
+
+export function sanitizeSimulationReplayPayload(
+  payload: SimulationReplayPayload,
+): SimulationReplayPayload {
+  return {
+    ...payload,
+    scenario: stripLiveScenarioMetadata(payload.scenario),
+    scenarioMeta: sanitizeSimulationReplayScenarioMeta(payload.scenarioMeta),
+  };
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -373,12 +527,18 @@ function backfillLegacyReplayPayload(payload: unknown): unknown {
         );
       })
     : scenario.branches;
+  const gameplayState = isRecord(scenario.gameplay_state)
+    ? sanitizeSimulationReplayGameplayState(
+        scenario.gameplay_state as unknown as Scenario['gameplay_state'],
+      )
+    : scenario.gameplay_state;
 
   return {
     ...payload,
     scenario: {
       ...scenario,
       branches,
+      gameplay_state: gameplayState,
     },
   };
 }
@@ -445,10 +605,10 @@ export function normalizeSimulationReplayPayload(
     throw new Error('Invalid simulation replay payload');
   }
 
-  return {
+  return sanitizeSimulationReplayPayload({
     ...payload,
     scenarioMeta: hydrateScenarioMetaSnapshot(payload.scenarioMeta),
-  };
+  });
 }
 
 export function coerceSimulationReplayPayload(payload: unknown): SimulationReplayPayload | null {
@@ -462,7 +622,7 @@ export function coerceSimulationReplayPayload(payload: unknown): SimulationRepla
 }
 
 export async function encodeSimulationReplayToken(payload: SimulationReplayPayload): Promise<string> {
-  return encodeReplayEnvelope(REPLAY_KIND, payload);
+  return encodeReplayEnvelope(REPLAY_KIND, sanitizeSimulationReplayPayload(payload));
 }
 
 export async function decodeSimulationReplayToken(token: string): Promise<SimulationReplayPayload | null> {

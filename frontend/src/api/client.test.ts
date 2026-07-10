@@ -11,6 +11,7 @@ import {
   exportScenarioSnapshot,
   generateReport,
   generateSocialCopy,
+  getOfficialSamples,
   getAgentIdentityProfile,
   getAgentProfileData,
   getIdentityMemories,
@@ -19,6 +20,7 @@ import {
   getSessionBoundUserId,
   identityContinuityPreflight,
   importScenarioSnapshot,
+  importOfficialSample,
   normalizeScenarioAgentSource,
   pinIdentityMemory,
   testLlmConnection,
@@ -321,6 +323,44 @@ describe('api client request parsing', () => {
       2,
       '/api/scenario/scenario-1/social/x',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('lists and imports exact built-in samples with session-bound requests', async () => {
+    const responses = [
+      {
+        ok: true,
+        headers: { get: () => 'application/json' },
+        text: vi.fn().mockResolvedValue('{"catalog_version":"1.0","count":0,"samples":[]}'),
+      },
+      {
+        ok: true,
+        headers: { get: () => 'application/json' },
+        text: vi.fn().mockResolvedValue(
+          '{"scenario_id":"imported-1","sample_id":"sample/a b","status":"imported"}',
+        ),
+      },
+    ];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responses[0])
+      .mockResolvedValueOnce(responses[1]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const signal = new AbortController().signal;
+    await expect(getOfficialSamples({ signal })).resolves.toMatchObject({ count: 0 });
+    await expect(importOfficialSample('sample/a b', { signal })).resolves.toMatchObject({
+      scenario_id: 'imported-1',
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/samples',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/samples/sample%2Fa%20b/import',
+      expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
     );
   });
 });

@@ -26,8 +26,10 @@ from app.models import (
     AgentGroupMember,
     AgentTier,
     Branch,
+    GraphSnapshot,
     Round,
     Scenario,
+    ScenarioCheckpoint,
     ScenarioStatus,
 )
 from app.models.database import get_engine
@@ -68,6 +70,7 @@ from app.services.simulator import (
 
 logger = logging.getLogger(__name__)
 _SESSION_AUTH_CACHE_KEY = "_session_auth_cache"
+_SCENARIO_RESPONSE_CHECKPOINT_LIMIT = 200
 _UNTRUSTED_AGENT_PROVENANCE_KEYS = frozenset({
     "identity_id",
     "agent_identity_id",
@@ -2024,6 +2027,70 @@ def _scenario_total_rounds(parsed_context: dict | None, branches) -> int | None:
     return max_round if max_round > 0 else None
 
 
+def _load_scenario_additive_graph_fields(
+    session: Session,
+    scenario_id: str,
+) -> tuple[str | None, list[dict]]:
+    """Load bounded, scenario-scoped graph metadata for ``ScenarioResponse``."""
+    if session.connection().dialect.name == "sqlite":
+        snapshot_row = session.connection().exec_driver_sql(
+            """
+            SELECT id
+            FROM graph_snapshot
+            WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            ("scenario", scenario_id, "causal_review"),
+        ).fetchone()
+        causal_graph_id = snapshot_row[0] if snapshot_row is not None else None
+    else:
+        causal_graph_id = session.exec(
+            select(GraphSnapshot.id)
+            .where(
+                GraphSnapshot.owner_type == "scenario",
+                GraphSnapshot.owner_id == scenario_id,
+                GraphSnapshot.graph_kind == "causal_review",
+            )
+            .order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
+            .limit(1)
+        ).first()
+
+    checkpoint_rows = session.exec(
+        select(
+            ScenarioCheckpoint.id,
+            ScenarioCheckpoint.scenario_id,
+            ScenarioCheckpoint.branch_id,
+            ScenarioCheckpoint.round_number,
+            ScenarioCheckpoint.created_at,
+        )
+        .where(ScenarioCheckpoint.scenario_id == scenario_id)
+        .order_by(
+            ScenarioCheckpoint.round_number,
+            ScenarioCheckpoint.branch_id,
+            ScenarioCheckpoint.id,
+        )
+        .limit(_SCENARIO_RESPONSE_CHECKPOINT_LIMIT)
+    ).all()
+    checkpoints = [
+        {
+            "id": checkpoint_id,
+            "scenario_id": checkpoint_scenario_id,
+            "branch_id": branch_id,
+            "round_number": round_number,
+            "created_at": created_at.isoformat() if created_at else None,
+        }
+        for (
+            checkpoint_id,
+            checkpoint_scenario_id,
+            branch_id,
+            round_number,
+            created_at,
+        ) in checkpoint_rows
+    ]
+    return causal_graph_id, checkpoints
+
+
 def load_scenario_response(
     engine,
     scenario_id: str,
@@ -2159,6 +2226,10 @@ def load_scenario_response(
             ],
             "round_checks": fork_round_checks,
         }
+        causal_graph_id, checkpoints = _load_scenario_additive_graph_fields(
+            session,
+            scenario_id,
+        )
 
         return ScenarioResponse(
             id=s.id,
@@ -2207,4 +2278,6 @@ def load_scenario_response(
             director_state=normalize_scenario_director_state(s.director_state_json),
             gameplay_state=normalize_scenario_gameplay_state(s.gameplay_state_json),
             fork_debug=fork_debug,
+            causal_graph_id=causal_graph_id,
+            checkpoints=checkpoints,
         )

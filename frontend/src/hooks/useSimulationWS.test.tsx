@@ -200,7 +200,7 @@ describe('useSimulationWS', () => {
       type: 'status',
       data: { status: 'done' },
       meta: { stream_id: 'scenario-2', sequence: 1, event_id: 'scenario-2:1' },
-    });
+    }, 'scenario-2');
     expect(storeState.setScenario).not.toHaveBeenCalled();
   });
 
@@ -282,6 +282,23 @@ describe('useSimulationWS', () => {
     });
 
     expect(storeState.handleWSEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops an event whose stream identity belongs to a different scenario', () => {
+    render(<Harness scenarioId="scenario-b" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'status',
+          data: { status: 'done' },
+          meta: { stream_id: 'scenario-a', sequence: 1, event_id: 'scenario-a:1' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.handleWSEvent).not.toHaveBeenCalled();
   });
 
   it('polls the latest scenario snapshot when a sequence gap is detected', async () => {
@@ -453,7 +470,7 @@ describe('useSimulationWS', () => {
       } as MessageEvent<string>);
     });
 
-    expect(storeState.setCancelled).toHaveBeenCalledWith('user_cancelled');
+    expect(storeState.setCancelled).toHaveBeenCalledWith('user_cancelled', 'scenario-cancel');
 
     // Socket was closed cleanly by the cancel handler — emitClose(1006) should
     // not trigger a reconnect because cleanedUp guard is set.

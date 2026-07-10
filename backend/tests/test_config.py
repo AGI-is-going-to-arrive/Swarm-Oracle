@@ -31,6 +31,14 @@ def test_settings_defaults():
     assert s.PORT > 0
 
 
+def test_relative_samples_dir_resolves_from_repository_root():
+    from app.config import REPO_ROOT, Settings
+
+    s = Settings(_env_file=None, SAMPLES_DIR="local-samples")
+
+    assert s.SAMPLES_DIR == (REPO_ROOT / "local-samples").resolve()
+
+
 @pytest.mark.parametrize("sim_rounds", [3, 4])
 def test_short_branch_compression_keeps_default_cadence(monkeypatch, sim_rounds):
     """Short simulations should not trigger extra LLM compression calls by default."""

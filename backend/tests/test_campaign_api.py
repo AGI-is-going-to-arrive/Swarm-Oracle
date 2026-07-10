@@ -29,6 +29,16 @@ def _seed_completed_scenario(question: str = "API campaign 测试") -> str:
         return scenario.id
 
 
+def _seed_active_scenario(question: str = "API active campaign 测试") -> str:
+    engine = get_engine()
+    scenario = Scenario(question=question, status=ScenarioStatus.SIMULATING)
+    with Session(engine) as session:
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        return scenario.id
+
+
 def _seed_branch(scenario_id: str, branch_id: str, title: str = "Branch") -> None:
     engine = get_engine()
     with Session(engine) as session:
@@ -58,36 +68,25 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     )
     assert finalize.status_code == 200
     finalize_data = finalize.json()
-    assert finalize_data["campaign_score_delta"] == 11
+    assert finalize_data["campaign_score_delta"] == 2
     assert sum(
         item["points"] for item in finalize_data["score_breakdown"] if item["applied"]
     ) == finalize_data["campaign_score_delta"]
     assert [
-        item["id"] for item in finalize_data["score_breakdown"] if item["applied"]
+        item["id"]
+        for item in finalize_data["score_breakdown"]
+        if item["applied"] and item["points"] != 0
     ] == [
         "completed_run",
         "daily_challenge",
-        "profile_signature",
-        "bet_placed",
-        "bet_hit",
-        "archive_s",
-        "objectives_complete",
-        "commitment_hit",
     ]
     assert finalize_data["profile"]["user_id"] == "director-api"
     assert finalize_data["profile"]["last_daily_challenge_profile_id"] == "governance"
     assert finalize_data["mastery"]["profile_id"] == "governance"
-    # Phase 3 registry: the legacy three-badge tuple has been replaced with a
-    # registry-driven sweep. An S-grade run with bet_hit=True and a daily-
-    # challenge completion unlocks ``first_daily``, ``archive_a``, ``archive_s``,
-    # ``bet_first``, plus ``objective_finisher`` (objectives complete) and
-    # ``weekly_finisher`` only if the run actually carried a weekly track.
-    assert {badge["badge_id"] for badge in finalize_data["badges"]} >= {
-        "first_daily",
-        "archive_a",
-        "archive_s",
-        "bet_first",
-        "objective_finisher",
+    # Only the legacy daily flag is independently server-accounted here. The
+    # forged grade/card/bet/objective/commitment claims must not unlock badges.
+    assert {badge["badge_id"] for badge in finalize_data["badges"]} == {
+        "first_daily"
     }
 
     profile = client.get("/api/campaign/profile/director-api")
@@ -100,21 +99,12 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert mastery.status_code == 200
     mastery_data = mastery.json()
     assert len(mastery_data) == 1
-    assert mastery_data[0]["campaign_score"] == 11
+    assert mastery_data[0]["campaign_score"] == 2
 
     badges = client.get("/api/campaign/profile/director-api/badges")
     assert badges.status_code == 200
-    # Phase 3 registry: legacy three-badge tuple is replaced by a finer
-    # registry sweep — an S-grade run with bet_hit + completed_daily +
-    # objectives_complete fires at least five distinct badges.
     badge_ids = {row["badge_id"] for row in badges.json()}
-    assert {
-        "first_daily",
-        "archive_a",
-        "archive_s",
-        "bet_first",
-        "objective_finisher",
-    } <= badge_ids
+    assert badge_ids == {"first_daily"}
 
     scenario_summary = client.get(f"/api/campaign/scenario/{scenario_id}/summary")
     assert scenario_summary.status_code == 200
@@ -122,15 +112,15 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert scenario_summary_data["has_campaign"] is True
     assert scenario_summary_data["scenario_id"] == scenario_id
     assert scenario_summary_data["profile_id"] == "governance"
-    assert scenario_summary_data["archive_grade"] == "S"
-    assert scenario_summary_data["profile_resonance"] == "signature"
-    assert scenario_summary_data["betting_hit"] is True
-    assert scenario_summary_data["most_used_card"] == "civilization_debate"
+    assert scenario_summary_data["archive_grade"] == "C"
+    assert scenario_summary_data["profile_resonance"] == "offbeat"
+    assert scenario_summary_data["betting_hit"] is None
+    assert scenario_summary_data["most_used_card"] is None
     assert scenario_summary_data["completed_daily_challenge"] is True
-    assert scenario_summary_data["objective_completed_count"] == 2
-    assert scenario_summary_data["objective_total_count"] == 2
-    assert scenario_summary_data["commitment_outcome"] == "hit"
-    assert scenario_summary_data["campaign_score_delta"] == 11
+    assert scenario_summary_data["objective_completed_count"] == 0
+    assert scenario_summary_data["objective_total_count"] == 0
+    assert scenario_summary_data["commitment_outcome"] is None
+    assert scenario_summary_data["campaign_score_delta"] == 2
     assert scenario_summary_data["score_breakdown"] == finalize_data["score_breakdown"]
     assert scenario_summary_data["finalized_at"] is not None
 
@@ -156,7 +146,7 @@ def test_finalize_endpoint_is_idempotent(client: TestClient):
     assert second.status_code == 200
     assert first.json()["already_finalized"] is False
     assert second.json()["already_finalized"] is True
-    assert first.json()["campaign_score_delta"] == second.json()["campaign_score_delta"] == 4
+    assert first.json()["campaign_score_delta"] == second.json()["campaign_score_delta"] == 1
 
 
 def test_finalize_uses_language_aware_default_name_when_user_name_blank(client: TestClient):
@@ -211,7 +201,7 @@ def test_daily_status_endpoint_returns_backend_truth_for_today(client: TestClien
     data = daily.json()
     assert data["completed"] is True
     assert data["scenario_id"] == scenario_id
-    assert data["most_used_card"] == "public_hearing"
+    assert data["most_used_card"] is None
 
 
 def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient):
@@ -376,14 +366,15 @@ def test_weekly_summary_endpoint_returns_aggregated_progress(client: TestClient)
     assert data["user_id"] == "director-api-week"
     assert data["total_runs"] == 1
     assert data["completed_daily_challenges"] == 1
-    assert data["hit_bets"] == 1
-    assert data["best_archive_grade"] == "A"
+    assert data["hit_bets"] == 0
+    assert data["best_archive_grade"] == "C"
     assert data["top_profile_id"] == "governance"
     assert data["profile_runs"] == {"governance": 1}
 
 
 def test_director_state_endpoint_round_trip_and_scenario_readback(client: TestClient):
-    scenario_id = _seed_completed_scenario("director state api")
+    scenario_id = _seed_active_scenario("director state api")
+    _seed_branch(scenario_id, "branch-2", "Trade Branch")
 
     initial = client.get(f"/api/campaign/scenario/{scenario_id}/director-state")
     assert initial.status_code == 200
@@ -466,7 +457,7 @@ def test_director_state_endpoint_rejects_incomplete_active_commitment(client: Te
 
 
 def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay state api")
+    scenario_id = _seed_active_scenario("gameplay state api")
     _seed_branch(scenario_id, "branch-1", "Judicial Review")
 
     initial = client.get(f"/api/campaign/scenario/{scenario_id}/gameplay-state")
@@ -480,20 +471,7 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
     update = client.put(
         f"/api/campaign/scenario/{scenario_id}/gameplay-state",
         json={
-            "cards": {
-                "usage_log": [
-                    {
-                        "card_id": "public_hearing",
-                        "profile_id": "law",
-                        "branch_id": "branch-1",
-                        "branch_title": "Judicial Review",
-                        "round": 2,
-                        "cost": 1,
-                        "directive": "Open the ruling to public scrutiny.",
-                        "used_at": "2026-03-19T01:00:00Z",
-                    },
-                ],
-            },
+            "cards": {"usage_log": []},
             "betting": {
                 "bets": [
                     {
@@ -527,20 +505,50 @@ def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestCl
     assert update.status_code == 200
     update_data = update.json()
     assert update_data["revision"] == 1
-    assert update_data["cards"]["usage_log"][0]["card_id"] == "public_hearing"
+    assert update_data["cards"]["usage_log"] == []
     assert update_data["betting"]["bets"][0]["bet_id"] == "bet-1"
     assert update_data["archive"]["key_moments"] == ["Opened the ruling to public scrutiny."]
 
     scenario = client.get(f"/api/scenario/{scenario_id}")
     assert scenario.status_code == 200
     scenario_data = scenario.json()
-    assert scenario_data["gameplay_state"]["cards"]["usage_log"][0]["branch_title"] == "Judicial Review"  # noqa: E501
+    assert scenario_data["gameplay_state"]["cards"]["usage_log"] == []
     assert scenario_data["gameplay_state"]["betting"]["bets"][0]["target_label"] == "Judicial Review"  # noqa: E501
     assert scenario_data["gameplay_state"]["archive"]["branch_snapshots"][0]["branch_id"] == "branch-1"  # noqa: E501
 
 
+def test_gameplay_state_endpoint_returns_closed_conflict_after_done(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay state done conflict")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json={
+            "revision": 0,
+            "cards": {"usage_log": []},
+            "betting": {
+                "bets": [
+                    {
+                        "bet_id": "late-bet",
+                        "kind": "ending_tone",
+                        "target_id": "order",
+                        "target_label": "Order",
+                        "confidence": 0.5,
+                        "placed_at_round": 1,
+                        "placed_at": "2026-03-20T00:00:00Z",
+                        "resolved": False,
+                    }
+                ]
+            },
+            "archive": {"key_moments": [], "branch_snapshots": []},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "GAMEPLAY_STATE_CLOSED"
+
+
 def test_director_state_endpoint_rejects_stale_revision_conflict(client: TestClient):
-    scenario_id = _seed_completed_scenario("director state stale api")
+    scenario_id = _seed_active_scenario("director state stale api")
 
     first = client.put(
         f"/api/campaign/scenario/{scenario_id}/director-state",
@@ -589,7 +597,7 @@ def test_director_state_endpoint_rejects_stale_revision_conflict(client: TestCli
 
 
 def test_gameplay_state_endpoint_rejects_stale_revision_conflict(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay state stale api")
+    scenario_id = _seed_active_scenario("gameplay state stale api")
 
     first = client.put(
         f"/api/campaign/scenario/{scenario_id}/gameplay-state",
@@ -639,7 +647,7 @@ def _gameplay_state_with_bet(bet: dict) -> dict:
 
 
 def test_gameplay_state_endpoint_accepts_valid_branch_winner_bet(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay valid branch_winner")
+    scenario_id = _seed_active_scenario("gameplay valid branch_winner")
     _seed_branch(scenario_id, "branch-real-1", "Real Branch")
 
     response = client.put(
@@ -662,7 +670,7 @@ def test_gameplay_state_endpoint_accepts_valid_branch_winner_bet(client: TestCli
 
 
 def test_gameplay_state_endpoint_rejects_branch_winner_with_unknown_target(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay unknown branch_winner")
+    scenario_id = _seed_active_scenario("gameplay unknown branch_winner")
     _seed_branch(scenario_id, "branch-real-1", "Real Branch")
 
     response = client.put(
@@ -685,7 +693,7 @@ def test_gameplay_state_endpoint_rejects_branch_winner_with_unknown_target(clien
 
 
 def test_gameplay_state_endpoint_rejects_branch_winner_missing_target(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay branch_winner missing target")
+    scenario_id = _seed_active_scenario("gameplay branch_winner missing target")
     _seed_branch(scenario_id, "branch-real-1", "Real Branch")
 
     response = client.put(
@@ -708,13 +716,12 @@ def test_gameplay_state_endpoint_rejects_branch_winner_missing_target(client: Te
 
 
 def test_gameplay_state_endpoint_accepts_valid_ending_tone_bet(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay valid ending_tone")
-
     for tone in ("order", "balance", "rupture"):
+        scenario_id = _seed_active_scenario(f"gameplay valid ending_tone {tone}")
         response = client.put(
             f"/api/campaign/scenario/{scenario_id}/gameplay-state",
             json={
-                "revision": (tone != "order") * 1 + (tone == "rupture") * 1,
+                "revision": 0,
                 "cards": {"usage_log": []},
                 "betting": {
                     "bets": [
@@ -737,7 +744,7 @@ def test_gameplay_state_endpoint_accepts_valid_ending_tone_bet(client: TestClien
 
 
 def test_gameplay_state_endpoint_rejects_unknown_ending_tone_target(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay invalid ending_tone")
+    scenario_id = _seed_active_scenario("gameplay invalid ending_tone")
 
     response = client.put(
         f"/api/campaign/scenario/{scenario_id}/gameplay-state",
@@ -759,7 +766,7 @@ def test_gameplay_state_endpoint_rejects_unknown_ending_tone_target(client: Test
 
 
 def test_gameplay_state_endpoint_accepts_valid_profile_resonance_bet(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay valid profile_resonance")
+    scenario_id = _seed_active_scenario("gameplay valid profile_resonance")
 
     response = client.put(
         f"/api/campaign/scenario/{scenario_id}/gameplay-state",
@@ -780,7 +787,7 @@ def test_gameplay_state_endpoint_accepts_valid_profile_resonance_bet(client: Tes
 
 
 def test_gameplay_state_endpoint_rejects_unknown_profile_resonance_target(client: TestClient):
-    scenario_id = _seed_completed_scenario("gameplay invalid profile_resonance")
+    scenario_id = _seed_active_scenario("gameplay invalid profile_resonance")
 
     response = client.put(
         f"/api/campaign/scenario/{scenario_id}/gameplay-state",
@@ -1373,9 +1380,7 @@ def test_user_unlocks_endpoint_mirrors_badges(client: TestClient):
     )
     assert unlocks.status_code == 200
     badge_ids = {row["badge_id"] for row in unlocks.json()}
-    assert "first_daily" in badge_ids
-    assert "archive_a" in badge_ids
-    assert "archive_s" in badge_ids
+    assert badge_ids == {"first_daily"}
     # Compatibility: legacy /badges endpoint returns the same payload.
     legacy = client.get("/api/campaign/profile/director-unlocks-endpoint/badges")
     assert legacy.status_code == 200

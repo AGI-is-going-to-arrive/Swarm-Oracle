@@ -220,6 +220,7 @@ class Settings(BaseSettings):
     MULTI_RUN_DEFAULT_COUNT: int = Field(default=5, ge=1)
     MULTI_RUN_MAX_COUNT: int = Field(default=10, ge=1)
     PACKS_DIR: Path = Field(default_factory=lambda: (REPO_ROOT / "packs").resolve())
+    SAMPLES_DIR: Path = Field(default_factory=lambda: (REPO_ROOT / "samples").resolve())
     REPORT_MAX_SECTIONS: int = Field(default=5, ge=1)
     REPORT_MIN_SECTIONS: int = Field(default=2, ge=1)
     # ReACT iteration ceiling per section. The section tool (``query_branch_messages``)
@@ -321,6 +322,14 @@ class Settings(BaseSettings):
         if packs_dir.is_absolute():
             return packs_dir
         return (REPO_ROOT / packs_dir).resolve()
+
+    @field_validator("SAMPLES_DIR", mode="after")
+    @classmethod
+    def normalize_samples_dir(cls, value: Path) -> Path:
+        samples_dir = Path(value)
+        if samples_dir.is_absolute():
+            return samples_dir
+        return (REPO_ROOT / samples_dir).resolve()
 
     @field_validator("CORS_ORIGINS", mode="after")
     @classmethod

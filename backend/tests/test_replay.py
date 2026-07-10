@@ -5,6 +5,7 @@ import json
 import pytest
 from sqlmodel import Session, select
 
+import app.services.memory as memory_module
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import (
     Agent,
@@ -302,6 +303,73 @@ class TestSeedCounterfactual:
 
             branch = session.get(Branch, bid)
             assert branch.replay_source_agent_id == aid
+
+    def test_stores_replacement_memory_after_database_commit(self, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        aid = _seed_agent(engine, sid, name="Target Agent")
+        round_id = _seed_round(engine, bid, 2)
+        message_id = _seed_message(
+            engine,
+            round_id,
+            aid,
+            content="Original stance",
+            emotion="focused",
+        )
+        calls: list[dict] = []
+        committed_contents: list[str] = []
+
+        def capture_store_memory(**kwargs):
+            calls.append(dict(kwargs))
+            with Session(engine) as verification_session:
+                committed_message = verification_session.get(AgentMessage, message_id)
+                assert committed_message is not None
+                committed_contents.append(committed_message.content)
+
+        monkeypatch.setattr(memory_module, "store_memory", capture_store_memory)
+
+        seed_counterfactual(bid, aid, "Replacement stance")
+
+        assert committed_contents == ["Replacement stance"]
+        assert calls == [{
+            "scenario_id": sid,
+            "agent_id": aid,
+            "agent_name": "Target Agent",
+            "content": "Replacement stance",
+            "round_num": 2,
+            "emotion": "focused",
+            "branch_id": bid,
+        }]
+
+    def test_replacement_memory_failure_does_not_undo_database_seed(self, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        aid = _seed_agent(engine, sid, name="Target Agent")
+        round_id = _seed_round(engine, bid, 2)
+        message_id = _seed_message(
+            engine,
+            round_id,
+            aid,
+            content="Original stance",
+            emotion="focused",
+        )
+
+        def fail_store_memory(**_kwargs):
+            raise RuntimeError("vector backend unavailable")
+
+        monkeypatch.setattr(memory_module, "store_memory", fail_store_memory)
+
+        seed_counterfactual(bid, aid, "Replacement stance")
+
+        with Session(engine) as session:
+            message = session.get(AgentMessage, message_id)
+            branch = session.get(Branch, bid)
+        assert message is not None
+        assert message.content == "Replacement stance"
+        assert branch is not None
+        assert branch.replay_source_agent_id == aid
 
     def test_raises_on_no_rounds(self):
         """seed_counterfactual should raise ValueError if branch has no rounds."""

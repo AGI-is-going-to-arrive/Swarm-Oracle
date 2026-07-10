@@ -18,13 +18,30 @@ import type {
   AgentMemoryEntry,
 } from '../../types';
 import { getAgentProfileData, normalizeScenarioAgentSource } from '../../api/client';
+import {
+  DECISION_BIAS_KEYS,
+  clampBias,
+  type DecisionBiasKey,
+} from '../Controls/decisionBias';
 import './AgentProfileSheet.css';
 
 export interface AgentProfileSheetProps {
   agent: AgentInfo | null;
+  observation?: AgentProfileObservation;
   userId: string;
   onClose: () => void;
   onStartConversation?: (agent: AgentInfo) => void;
+}
+
+export interface AgentProfileObservation {
+  emotion: string | null;
+  source: 'live' | 'replay' | 'replay_unavailable' | 'baseline' | 'snapshot';
+  branchId: string | null;
+  branchTitle: string | null;
+  round: number | null;
+  selectedBranchId?: string | null;
+  selectedBranchTitle?: string | null;
+  selectedRound?: number | null;
 }
 
 function nameInitial(name?: string | null): string {
@@ -43,8 +60,29 @@ function formatDate(value: string | null | undefined, locale: string): string {
   }
 }
 
+const DECISION_BIAS_LABELS: Record<DecisionBiasKey, [string, string]> = {
+  caution: ['agent_workshop.bias_caution', 'Caution'],
+  optimism: ['agent_workshop.bias_optimism', 'Optimism'],
+  conservatism: ['agent_workshop.bias_conservatism', 'Conservatism'],
+  risk_tolerance: ['agent_workshop.bias_risk_tolerance', 'Risk Tolerance'],
+  creativity: ['agent_workshop.bias_creativity', 'Creativity'],
+};
+
+function visibleDecisionBias(
+  value: Record<string, unknown> | null | undefined,
+): Array<{ key: DecisionBiasKey; value: number }> {
+  if (!value) return [];
+  return DECISION_BIAS_KEYS.flatMap((key) => {
+    const raw = value[key];
+    return typeof raw === 'number' && Number.isFinite(raw)
+      ? [{ key, value: clampBias(raw) }]
+      : [];
+  });
+}
+
 export function AgentProfileSheet({
   agent,
+  observation,
   userId,
   onClose,
   onStartConversation,
@@ -121,6 +159,54 @@ export function AgentProfileSheet({
   const initial = nameInitial(agent.name);
   const tier = agent.tier ?? 'CROWD';
   const tierKey = tier.toLowerCase();
+  const knowledgeDomains = Array.isArray(profile?.knowledge_domains)
+    ? profile.knowledge_domains
+        .filter((domain): domain is string => typeof domain === 'string')
+        .slice(0, 5)
+    : [];
+  const decisionBias = visibleDecisionBias(profile?.decision_bias);
+  const observationSource = observation?.source ?? 'snapshot';
+  const displayedEmotion = observationSource === 'replay_unavailable'
+    ? t('result.agent_profile_sheet.no_observation_value', {
+        defaultValue: 'No matching observation',
+      })
+    : observation?.emotion ?? agent.emotion;
+  const branchLabel = observation?.branchTitle
+    ?? observation?.branchId
+    ?? t('common.unknown', { defaultValue: 'Unknown' });
+  const roundLabel = observation?.round
+    ?? t('common.unknown', { defaultValue: 'Unknown' });
+  const selectedBranchLabel = observation?.selectedBranchTitle
+    ?? observation?.selectedBranchId
+    ?? branchLabel;
+  const selectedRoundLabel = observation?.selectedRound ?? roundLabel;
+  const observationSourceLabel = observationSource === 'live'
+    ? t('result.agent_profile_sheet.live_observation_source', {
+        defaultValue: 'Latest observed on {{branch}} · R{{round}}',
+        branch: branchLabel,
+        round: roundLabel,
+      })
+    : observationSource === 'replay'
+      ? t('result.agent_profile_sheet.replay_observation_source', {
+          defaultValue: 'Replay selection {{selectedBranch}} · R{{selectedRound}}; latest matching observation {{branch}} · R{{round}}',
+          selectedBranch: selectedBranchLabel,
+          selectedRound: selectedRoundLabel,
+          branch: branchLabel,
+          round: roundLabel,
+        })
+      : observationSource === 'replay_unavailable'
+        ? t('result.agent_profile_sheet.replay_no_observation_source', {
+            defaultValue: 'No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.',
+            selectedBranch: selectedBranchLabel,
+            selectedRound: selectedRoundLabel,
+          })
+        : observationSource === 'snapshot'
+          ? t('result.agent_profile_sheet.snapshot_emotion_source', {
+              defaultValue: 'No branch and round observation context is available for this snapshot.',
+            })
+          : t('result.agent_profile_sheet.baseline_emotion_source', {
+              defaultValue: 'No message observation yet; showing the configured starting emotion.',
+            });
   const sourceLabel =
     sourceType === 'custom'
       ? t('result.agent_profile_sheet.source_custom', { defaultValue: 'Custom' })
@@ -161,6 +247,47 @@ export function AgentProfileSheet({
         </div>
 
         <div className="agent-profile-sheet__body">
+          <section
+            className="agent-profile-sheet__section agent-profile-sheet__current-state"
+            data-testid="agent-profile-sheet-current-state"
+          >
+            <h3>{t('result.agent_profile_sheet.state_reference_title', { defaultValue: 'State reference' })}</h3>
+            <dl>
+              {agent.stance ? (
+                <div>
+                  <dt>{t('result.agent_profile_sheet.baseline_stance_label', { defaultValue: 'Configured stance' })}</dt>
+                  <dd>{agent.stance}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt>
+                  {t(
+                    observationSource === 'baseline'
+                      ? 'result.agent_profile_sheet.configured_emotion_label'
+                      : observationSource === 'snapshot'
+                        ? 'result.agent_profile_sheet.snapshot_emotion_label'
+                        : 'result.agent_profile_sheet.observed_emotion_label',
+                    {
+                      defaultValue: observationSource === 'baseline'
+                        ? 'Configured starting emotion'
+                        : observationSource === 'snapshot'
+                          ? 'Scenario emotion snapshot'
+                          : 'Observed emotion',
+                    },
+                  )}
+                </dt>
+                <dd>{displayedEmotion}</dd>
+              </div>
+            </dl>
+            <p
+              className="agent-profile-sheet__observation-source"
+              data-testid="agent-profile-sheet-observation-source"
+              aria-live="polite"
+            >
+              {observationSourceLabel}
+            </p>
+          </section>
+
           {agent.persona ? (
             <details className="agent-profile-sheet__persona">
               <summary>{t('result.agent_profile_sheet.persona', { defaultValue: 'Persona' })}</summary>
@@ -201,13 +328,30 @@ export function AgentProfileSheet({
 
           {identityId && !loading && !error ? (
             <>
-              {profile && (profile.decision_bias || profile.knowledge_domains) ? (
-                <section className="agent-profile-sheet__section">
-                  {Array.isArray(profile.knowledge_domains) && profile.knowledge_domains.length > 0 ? (
-                    <p className="agent-profile-sheet__profile-meta">
-                      {(profile.knowledge_domains as string[]).slice(0, 5).join(' · ')}
-                    </p>
-                  ) : null}
+              {knowledgeDomains.length > 0 ? (
+                <section className="agent-profile-sheet__section" data-testid="agent-profile-sheet-domains">
+                  <h3>{t('result.agent_profile_sheet.knowledge_domains_title', { defaultValue: 'Knowledge domains' })}</h3>
+                  <p className="agent-profile-sheet__profile-meta">{knowledgeDomains.join(' · ')}</p>
+                </section>
+              ) : null}
+
+              {decisionBias.length > 0 ? (
+                <section className="agent-profile-sheet__section" data-testid="agent-profile-sheet-decision-bias">
+                  <h3>{t('result.agent_profile_sheet.decision_bias_title', { defaultValue: 'Decision style' })}</h3>
+                  <ul className="agent-profile-sheet__bias-list">
+                    {decisionBias.map(({ key, value }) => {
+                      const [labelKey, defaultValue] = DECISION_BIAS_LABELS[key];
+                      const label = t(labelKey, { defaultValue });
+                      const percentage = Math.round(value * 100);
+                      return (
+                        <li key={key}>
+                          <span>{label}</span>
+                          <meter min={0} max={100} value={percentage} aria-label={label} />
+                          <span>{percentage}%</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </section>
               ) : null}
 

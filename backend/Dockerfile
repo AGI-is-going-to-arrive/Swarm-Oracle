@@ -44,6 +44,8 @@ COPY --from=builder /app/backend/alembic/ /app/backend/alembic/
 COPY --from=builder /app/backend/alembic.ini /app/backend/alembic.ini
 COPY --from=builder /app/backend/pyproject.toml /app/backend/pyproject.toml
 COPY --from=builder /app/shared/ /app/shared/
+COPY packs/ /app/packs/
+COPY samples/ /app/samples/
 
 # W-10: provision a non-root runtime user and grant ownership of the data
 # roots before the volume is mounted, so the container does not run as

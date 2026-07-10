@@ -48,15 +48,19 @@ export default function ResultHeader() {
   const subtitleKey = hasResultVerdict ? 'result.subtitle_prediction' : 'result.subtitle';
   const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
   const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
+  const hasCausalGraph = Boolean(scenario?.causal_graph_id);
   const encodedScenarioId = activeScenarioId ? encodeURIComponent(activeScenarioId) : null;
-  const causalGraphHref = encodedScenarioId && causalEnabled
+  const causalGraphHref = encodedScenarioId && causalEnabled && hasCausalGraph && !isReplayMode
     ? `/sim/${encodedScenarioId}/causal-map`
     : null;
   const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
   const workbenchBranchQuery = analysisBranch
     ? `&branch=${encodeURIComponent(analysisBranch.id)}`
     : '';
-  const graphWorkbenchHref = encodedScenarioId && !isReplayMode && (causalEnabled || kgEnabled)
+  const graphWorkbenchHref = encodedScenarioId
+    && !isReplayMode
+    && hasCausalGraph
+    && (causalEnabled || kgEnabled)
     ? `/workbench/${encodedScenarioId}?view=${workbenchView}${workbenchBranchQuery}`
     : null;
 

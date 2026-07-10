@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import Session, select
 
-from app.models import Branch, Scenario, ScenarioStatus
+from app.models import Branch, BranchStatus, Round, Scenario, ScenarioStatus
 from app.models.campaign import (
     DirectorBadgeUnlock,
     DirectorProfile,
@@ -22,6 +22,7 @@ from app.services.campaign import (
     CampaignBetValidationError,
     CampaignConflictError,
     CampaignError,
+    CampaignStateError,
     finalize_scenario_campaign,
     get_campaign_profile_summary,
     get_daily_challenge_summary,
@@ -46,6 +47,16 @@ def _seed_completed_scenario(question: str = "测试 campaign") -> str:
         return scenario.id
 
 
+def _seed_active_scenario(question: str = "测试 active campaign") -> str:
+    engine = get_engine()
+    scenario = Scenario(question=question, status=ScenarioStatus.SIMULATING)
+    with Session(engine) as session:
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        return scenario.id
+
+
 def _seed_branch(
     scenario_id: str,
     branch_id: str,
@@ -54,6 +65,10 @@ def _seed_branch(
     story: str = "",
     insight: str = "",
     probability: float = 1.0,
+    status: BranchStatus = BranchStatus.ACTIVE,
+    parent_branch_id: str | None = None,
+    fork_round: int = 0,
+    key_moments: str | None = None,
 ) -> None:
     engine = get_engine()
     with Session(engine) as session:
@@ -65,8 +80,19 @@ def _seed_branch(
                 story=story,
                 insight=insight,
                 probability=probability,
+                status=status,
+                parent_branch_id=parent_branch_id,
+                fork_round=fork_round,
+                key_moments=key_moments,
             )
         )
+        session.commit()
+
+
+def _seed_round(branch_id: str, round_number: int) -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        session.add(Round(branch_id=branch_id, round_number=round_number))
         session.commit()
 
 
@@ -76,6 +102,16 @@ def _set_scenario_gameplay_state(scenario_id: str, gameplay_state: dict) -> None
         scenario = session.get(Scenario, scenario_id)
         assert scenario is not None
         scenario.gameplay_state_json = gameplay_state
+        session.add(scenario)
+        session.commit()
+
+
+def _set_scenario_director_state(scenario_id: str, director_state: dict) -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.director_state_json = director_state
         session.add(scenario)
         session.commit()
 
@@ -128,7 +164,7 @@ def test_finalize_accumulates_campaign_score_and_summaries():
     )
 
     assert result["already_finalized"] is False
-    assert result["campaign_score_delta"] == 9
+    assert result["campaign_score_delta"] == 2
     assert sum(
         item["points"] for item in result["score_breakdown"] if item["applied"]
     ) == result["campaign_score_delta"]
@@ -139,36 +175,27 @@ def test_finalize_accumulates_campaign_score_and_summaries():
     ] == [
         "completed_run",
         "daily_challenge",
-        "profile_signature",
-        "bet_placed",
-        "bet_hit",
-        "archive_s",
     ]
     assert next(
         item for item in result["score_breakdown"] if item["id"] == "commitment_none"
     )["applied"] is True
     assert result["profile"]["total_runs"] == 1
     assert result["profile"]["completed_challenges"] == 1
-    assert result["profile"]["total_bets"] == 2
-    assert result["profile"]["hit_bets"] == 1
-    assert result["profile"]["highest_archive_grade"] == "S"
+    assert result["profile"]["total_bets"] == 0
+    assert result["profile"]["hit_bets"] == 0
+    assert result["profile"]["highest_archive_grade"] == "C"
     assert result["profile"]["last_daily_challenge_profile_id"] == "governance"
     assert result["profile"]["last_daily_challenge_scenario_id"] == scenario_id
     assert result["profile"]["last_daily_challenge_completed_at"] is not None
     assert result["mastery"]["profile_id"] == "governance"
     assert result["mastery"]["runs"] == 1
     assert result["mastery"]["challenge_completions"] == 1
-    assert result["mastery"]["signature_hits"] == 1
+    assert result["mastery"]["signature_hits"] == 0
     assert result["mastery"]["aligned_hits"] == 0
-    assert result["mastery"]["campaign_score"] == 9
-    assert result["mastery"]["favorite_card_id"] == "civilization_debate"
-    # Phase 3 registry: legacy {daily_challenge, archive_record, bet_winner}
-    # replaced with the granular badge ids from ``badge_registry``.
-    assert {badge["badge_id"] for badge in result["newly_unlocked_badges"]} >= {
-        "first_daily",
-        "archive_a",
-        "archive_s",
-        "bet_first",
+    assert result["mastery"]["campaign_score"] == 2
+    assert result["mastery"]["favorite_card_id"] is None
+    assert {badge["badge_id"] for badge in result["newly_unlocked_badges"]} == {
+        "first_daily"
     }
 
 
@@ -229,7 +256,7 @@ def test_mastery_summary_recalculates_legacy_stored_level():
     assert governance["score_to_next_level"] == 22
 
 
-def test_finalize_rewards_completed_objectives_and_commitment_hit():
+def test_finalize_ignores_unpersisted_objective_and_commitment_claims():
     scenario_id = _seed_completed_scenario()
 
     result = finalize_scenario_campaign(
@@ -248,25 +275,18 @@ def test_finalize_rewards_completed_objectives_and_commitment_hit():
         commitment_outcome="hit",
     )
 
-    assert result["campaign_score_delta"] == 6
+    assert result["campaign_score_delta"] == 1
     assert [
         item["id"]
         for item in result["score_breakdown"]
         if item["applied"] and item["points"] != 0
-    ] == [
-        "completed_run",
-        "profile_aligned",
-        "bet_placed",
-        "archive_a",
-        "objectives_complete",
-        "commitment_hit",
-    ]
+    ] == ["completed_run"]
     assert next(
         item for item in result["score_breakdown"] if item["id"] == "bet_miss"
-    )["applied"] is True
+    )["applied"] is False
 
 
-def test_finalize_penalizes_commitment_miss_without_dropping_below_one():
+def test_finalize_ignores_unpersisted_commitment_miss_claim():
     scenario_id = _seed_completed_scenario()
 
     result = finalize_scenario_campaign(
@@ -288,12 +308,10 @@ def test_finalize_penalizes_commitment_miss_without_dropping_below_one():
     assert result["campaign_score_delta"] == 1
     assert next(
         item for item in result["score_breakdown"] if item["id"] == "commitment_miss"
-    ) == {
-        "id": "commitment_miss",
-        "label_key": "result.director_score_commitment_miss",
-        "points": -1,
-        "applied": True,
-    }
+    )["applied"] is False
+    assert next(
+        item for item in result["score_breakdown"] if item["id"] == "commitment_none"
+    )["applied"] is True
 
 
 def test_finalize_uses_gameplay_bet_count_when_request_under_reports_it():
@@ -335,12 +353,12 @@ def test_finalize_uses_gameplay_bet_count_when_request_under_reports_it():
         completed_daily_challenge=False,
     )
 
-    assert result["campaign_score_delta"] == 6
+    assert result["campaign_score_delta"] == 2
     assert result["profile"]["total_bets"] == 2
-    assert result["profile"]["hit_bets"] == 1
+    assert result["profile"]["hit_bets"] == 0
 
 
-def test_finalize_rejects_missing_betting_hit_when_scenario_has_bets():
+def test_finalize_derives_missing_betting_hit_when_scenario_has_bets():
     scenario_id = _seed_completed_scenario("scenario missing betting_hit")
     _set_scenario_gameplay_state(
         scenario_id,
@@ -359,19 +377,208 @@ def test_finalize_rejects_missing_betting_hit_when_scenario_has_bets():
         },
     )
 
-    with pytest.raises(CampaignError, match="betting_hit is required when the scenario has bets"):
-        finalize_scenario_campaign(
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-bet-missing",
+        user_name="Nova",
+        profile_id="governance",
+        archive_grade="B",
+        profile_resonance="aligned",
+        betting_hit=None,
+        bet_count=0,
+        most_used_card=None,
+        completed_daily_challenge=False,
+    )
+    assert get_scenario_campaign_summary(scenario_id)["betting_hit"] is False
+
+
+def test_finalize_derives_betting_only_state_instead_of_payload_claims():
+    scenario_id = _seed_completed_scenario("betting-only authority")
+    _set_scenario_gameplay_state(
+        scenario_id,
+        _state_with_bet(
+            _bet_payload(
+                kind="ending_tone",
+                target_id="order",
+                target_label="Order",
+            )
+        ),
+    )
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-betting-only-authority",
+        user_name="Authority",
+        profile_id="law",
+        archive_grade="S",
+        profile_resonance="signature",
+        betting_hit=True,
+        bet_count=99,
+        most_used_card="admin_score_boost",
+        objective_completed_count=99,
+        objective_total_count=99,
+        commitment_outcome="hit",
+    )
+
+    summary = get_scenario_campaign_summary(scenario_id)
+    assert summary["archive_grade"] == "C"
+    assert summary["profile_resonance"] == "offbeat"
+    assert summary["betting_hit"] is False
+    assert summary["most_used_card"] is None
+    assert summary["objective_completed_count"] == 0
+    assert summary["objective_total_count"] == 0
+    assert summary["commitment_outcome"] is None
+
+
+def test_finalize_derives_empty_gameplay_from_durable_branch_instead_of_claims():
+    scenario_id = _seed_completed_scenario("durable branch with empty gameplay")
+    _seed_branch(
+        scenario_id,
+        "durable-branch",
+        "Neutral conclusion",
+        story="The process concludes without a profile-specific signal.",
+        insight="No additional evidence.",
+        probability=1.0,
+        status=BranchStatus.COMPLETED,
+    )
+    _seed_round("durable-branch", 1)
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-empty-state-authority",
+        user_name="Authority",
+        profile_id="law",
+        archive_grade="S",
+        profile_resonance="signature",
+        betting_hit=True,
+        bet_count=99,
+        most_used_card="fake_card",
+        objective_completed_count=99,
+        objective_total_count=99,
+        commitment_outcome="hit",
+    )
+
+    summary = get_scenario_campaign_summary(scenario_id)
+    assert summary["archive_grade"] == "C"
+    assert summary["profile_resonance"] == "offbeat"
+    assert summary["betting_hit"] is None
+    assert summary["most_used_card"] is None
+    assert summary["objective_completed_count"] == 0
+    assert summary["objective_total_count"] == 0
+    assert summary["commitment_outcome"] is None
+
+
+def test_finalize_settlement_uses_only_completed_terminal_leaf_branches():
+    scenario_id = _seed_completed_scenario("terminal leaf settlement authority")
+    _seed_branch(
+        scenario_id,
+        "fork-parent",
+        "Algorithm governance sovereignty veto",
+        story="A governance algorithm imposes a sovereign veto.",
+        insight="The governance system retains control.",
+        probability=1.0,
+        status=BranchStatus.COMPLETED,
+        key_moments='["parent-1", "parent-2", "parent-3", "parent-4"]',
+    )
+    _seed_branch(
+        scenario_id,
+        "completed-leaf",
+        "Neutral conclusion",
+        story="The process concludes without a profile-specific signal.",
+        insight="No additional evidence.",
+        probability=0.6,
+        status=BranchStatus.COMPLETED,
+        parent_branch_id="fork-parent",
+        fork_round=1,
+    )
+    for branch_id, status in (
+        ("pruned-noise", BranchStatus.PRUNED),
+        ("active-noise-1", BranchStatus.ACTIVE),
+        ("active-noise-2", BranchStatus.ACTIVE),
+    ):
+        _seed_branch(
             scenario_id,
-            user_id="director-bet-missing",
-            user_name="Nova",
-            profile_id="governance",
-            archive_grade="B",
-            profile_resonance="aligned",
-            betting_hit=None,
-            bet_count=0,
-            most_used_card=None,
-            completed_daily_challenge=False,
+            branch_id,
+            branch_id,
+            probability=0.99,
+            status=status,
+            parent_branch_id="fork-parent",
+            fork_round=1,
         )
+    _set_scenario_gameplay_state(
+        scenario_id,
+        _state_with_bet(
+            _bet_payload(
+                kind="branch_winner",
+                target_id="completed-leaf",
+                target_label="Neutral conclusion",
+            )
+        ),
+    )
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-terminal-leaf",
+        user_name="Terminal Leaf",
+        profile_id="governance",
+        archive_grade="S",
+        profile_resonance="signature",
+    )
+
+    summary = get_scenario_campaign_summary(scenario_id)
+    assert summary["betting_hit"] is True
+    assert summary["profile_resonance"] == "offbeat"
+    assert summary["archive_grade"] == "B"
+
+
+def test_finalize_legacy_multiple_bets_require_every_bet_to_hit():
+    scenario_id = _seed_completed_scenario("legacy multi-bet settlement")
+    _seed_branch(
+        scenario_id,
+        "winner",
+        "Winning leaf",
+        probability=0.8,
+        status=BranchStatus.COMPLETED,
+    )
+    _seed_branch(
+        scenario_id,
+        "loser",
+        "Losing leaf",
+        probability=0.2,
+        status=BranchStatus.COMPLETED,
+    )
+    _set_scenario_gameplay_state(
+        scenario_id,
+        {
+            "betting": {
+                "bets": [
+                    _bet_payload(
+                        bet_id="legacy-miss",
+                        target_id="loser",
+                        target_label="Losing leaf",
+                        placed_at="2026-03-20T00:00:00Z",
+                    ),
+                    _bet_payload(
+                        bet_id="legacy-hit",
+                        target_id="winner",
+                        target_label="Winning leaf",
+                        placed_at="2026-03-20T00:01:00Z",
+                    ),
+                ]
+            }
+        },
+    )
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-legacy-multi-bet",
+        user_name="Legacy Multi Bet",
+        profile_id="law",
+        archive_grade="S",
+        profile_resonance="signature",
+    )
+
+    assert get_scenario_campaign_summary(scenario_id)["betting_hit"] is False
 
 
 def test_finalize_is_idempotent_for_same_scenario():
@@ -409,17 +616,16 @@ def test_finalize_is_idempotent_for_same_scenario():
         logs = list(session.exec(select(ScenarioCampaignLog)).all())
         badges = list(session.exec(select(DirectorBadgeUnlock)).all())
 
-    assert first["campaign_score_delta"] == 4
+    assert first["campaign_score_delta"] == 1
     assert second["already_finalized"] is True
-    assert second["campaign_score_delta"] == 4
+    assert second["campaign_score_delta"] == 1
     assert second["newly_unlocked_badges"] == []
     assert len(profiles) == 1
     assert profiles[0].total_runs == 1
     assert len(masteries) == 1
-    assert masteries[0].campaign_score == 4
+    assert masteries[0].campaign_score == 1
     assert len(logs) == 1
-    # Phase 3: archive_record → archive_a (registry-driven naming).
-    assert {b.badge_id for b in badges} >= {"archive_a"}
+    assert badges == []
 
 
 def test_finalize_rolls_back_if_refresh_favorite_card_fails():
@@ -507,9 +713,7 @@ def test_finalize_does_not_duplicate_existing_badge_unlocks():
         completed_daily_challenge=False,
     )
 
-    # Phase 3: archive_record → archive_a (registry-driven). A-grade alone
-    # with no daily/bet only fires archive_a (archive_s requires S).
-    assert {b["badge_id"] for b in first["newly_unlocked_badges"]} == {"archive_a"}
+    assert first["newly_unlocked_badges"] == []
     assert second["newly_unlocked_badges"] == []
 
     engine = get_engine()
@@ -520,7 +724,7 @@ def test_finalize_does_not_duplicate_existing_badge_unlocks():
             )
         ).all())
 
-    assert {b.badge_id for b in badges} == {"archive_a"}
+    assert badges == []
 
 
 def test_daily_challenge_summary_prefers_backend_log_for_local_day():
@@ -552,9 +756,9 @@ def test_daily_challenge_summary_prefers_backend_log_for_local_day():
     assert summary["completed"] is True
     assert summary["scenario_id"] == scenario_id
     assert summary["completed_at"].endswith("+00:00")
-    assert summary["most_used_card"] == "public_hearing"
-    assert summary["betting_hit"] is True
-    assert summary["profile_resonance"] == "aligned"
+    assert summary["most_used_card"] is None
+    assert summary["betting_hit"] is None
+    assert summary["profile_resonance"] == "offbeat"
 
 
 def test_daily_challenge_summary_returns_incomplete_when_no_matching_log():
@@ -700,11 +904,11 @@ def test_weekly_campaign_summary_aggregates_logs_by_local_week():
     assert summary["user_id"] == "director-week"
     assert summary["total_runs"] == 2
     assert summary["completed_daily_challenges"] == 1
-    assert summary["hit_bets"] == 1
-    assert summary["best_archive_grade"] == "S"
+    assert summary["hit_bets"] == 0
+    assert summary["best_archive_grade"] == "C"
     assert summary["top_profile_id"] in {"governance", "trade"}
     assert summary["profile_runs"] == {"governance": 1, "trade": 1}
-    assert summary["campaign_score_delta"] == 13
+    assert summary["campaign_score_delta"] == 3
 
 
 def test_weekly_campaign_summary_pushes_utc_window_into_sql(monkeypatch):
@@ -783,9 +987,9 @@ def test_scenario_summary_persists_objectives_and_commitment_outcome():
         ).first()
 
     assert log is not None
-    assert log.objective_completed_count == 1
-    assert log.objective_total_count == 2
-    assert log.commitment_outcome == "miss"
+    assert log.objective_completed_count == 0
+    assert log.objective_total_count == 0
+    assert log.commitment_outcome is None
 
 
 def test_scenario_summary_uses_finalized_bet_snapshot_after_gameplay_state_changes():
@@ -827,7 +1031,8 @@ def test_scenario_summary_uses_finalized_bet_snapshot_after_gameplay_state_chang
 
 
 def test_scenario_director_state_defaults_and_round_trip():
-    scenario_id = _seed_completed_scenario("director state round trip")
+    scenario_id = _seed_active_scenario("director state round trip")
+    _seed_branch(scenario_id, "branch-1", "Archive Branch")
 
     default_state = get_scenario_director_state(scenario_id)
     assert default_state["revision"] == 0
@@ -881,7 +1086,7 @@ def test_scenario_director_state_defaults_and_round_trip():
 
 
 def test_scenario_director_state_normalizes_inactive_commitment_to_default():
-    scenario_id = _seed_completed_scenario("director state reset")
+    scenario_id = _seed_active_scenario("director state reset")
 
     saved_state = save_scenario_director_state(
         scenario_id,
@@ -916,7 +1121,7 @@ def test_scenario_director_state_normalizes_inactive_commitment_to_default():
 
 
 def test_scenario_director_state_rejects_stale_revision():
-    scenario_id = _seed_completed_scenario("director state stale revision")
+    scenario_id = _seed_active_scenario("director state stale revision")
 
     saved_state = save_scenario_director_state(
         scenario_id,
@@ -963,8 +1168,142 @@ def test_scenario_director_state_rejects_stale_revision():
         )
 
 
+def test_save_director_state_rejects_cross_scenario_commitment():
+    scenario_id = _seed_active_scenario("director commitment owner")
+    other_scenario_id = _seed_active_scenario("director commitment other")
+    _seed_branch(other_scenario_id, "other-branch", "Other Branch")
+
+    with pytest.raises(CampaignError, match="current scenario"):
+        save_scenario_director_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "objectives": {
+                    "generated_for_question": None,
+                    "generated_for_profile": None,
+                    "goals": [],
+                    "last_updated_at": None,
+                },
+                "commitment": {
+                    "active": True,
+                    "branch_id": "other-branch",
+                    "branch_title": "Other Branch",
+                    "committed_at_round": 1,
+                    "committed_at": "2026-03-18T00:01:00Z",
+                    "outcome": "pending",
+                },
+            },
+        )
+
+
+def test_save_director_state_rejects_commitment_from_future_round():
+    scenario_id = _seed_active_scenario("director commitment timing")
+    _seed_branch(scenario_id, "branch-live", "Live Branch")
+    _seed_round("branch-live", 2)
+
+    with pytest.raises(CampaignError, match="persisted branch rounds"):
+        save_scenario_director_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "objectives": {"goals": []},
+                "commitment": {
+                    "active": True,
+                    "branch_id": "branch-live",
+                    "branch_title": "Live Branch",
+                    "committed_at_round": 99,
+                    "committed_at": "2026-03-18T00:01:00Z",
+                    "outcome": "pending",
+                },
+            },
+        )
+
+
+def test_save_director_state_rejects_unknown_objective_card():
+    scenario_id = _seed_active_scenario("director objective card authority")
+
+    with pytest.raises(CampaignError, match="objective card"):
+        save_scenario_director_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "objectives": {
+                    "generated_for_question": "director objective card authority",
+                    "generated_for_profile": "law",
+                    "goals": [
+                        {
+                            "id": "goal-forged",
+                            "kind": "signature_arc_step",
+                            "target_card_id": "admin_score_boost",
+                            "reward_label": "director_point",
+                            "created_at": "2026-03-18T00:00:00Z",
+                        }
+                    ],
+                    "last_updated_at": "2026-03-18T00:00:00Z",
+                },
+                "commitment": {"active": False},
+            },
+        )
+
+
+def test_save_director_state_rejects_duplicate_objective_kind():
+    scenario_id = _seed_active_scenario("director objective multiplicity")
+
+    with pytest.raises(CampaignError, match="one goal per kind"):
+        save_scenario_director_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "objectives": {
+                    "generated_for_question": "director objective multiplicity",
+                    "generated_for_profile": "law",
+                    "goals": [
+                        {
+                            "id": "goal-1",
+                            "kind": "signature_arc_step",
+                            "target_card_id": "public_hearing",
+                            "reward_label": "director_point",
+                            "created_at": "2026-03-18T00:00:00Z",
+                        },
+                        {
+                            "id": "goal-2",
+                            "kind": "signature_arc_step",
+                            "target_card_id": "backchannel_pact",
+                            "reward_label": "director_point",
+                            "created_at": "2026-03-18T00:00:01Z",
+                        },
+                    ],
+                    "last_updated_at": "2026-03-18T00:00:01Z",
+                },
+                "commitment": {"active": False},
+            },
+        )
+
+
+def test_save_director_state_rejects_commitment_after_scenario_done():
+    scenario_id = _seed_completed_scenario("director state closes when done")
+    _seed_branch(scenario_id, "branch-done", "Done Branch")
+
+    with pytest.raises(CampaignStateError, match="no longer accepts director changes"):
+        save_scenario_director_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "objectives": {"goals": []},
+                "commitment": {
+                    "active": True,
+                    "branch_id": "branch-done",
+                    "branch_title": "Done Branch",
+                    "committed_at_round": 1,
+                    "committed_at": "2026-03-18T00:01:00Z",
+                    "outcome": "pending",
+                },
+            },
+        )
+
+
 def test_scenario_gameplay_state_defaults_and_round_trip():
-    scenario_id = _seed_completed_scenario("gameplay state round trip")
+    scenario_id = _seed_active_scenario("gameplay state round trip")
     _seed_branch(scenario_id, "branch-1", "Judicial Review")
 
     default_state = get_scenario_gameplay_state(scenario_id)
@@ -977,30 +1316,7 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
     saved_state = save_scenario_gameplay_state(
         scenario_id,
         {
-            "cards": {
-                "usage_log": [
-                    {
-                        "card_id": "public_hearing",
-                        "profile_id": "law",
-                        "branch_id": "branch-1",
-                        "branch_title": "Judicial Review",
-                        "round": 2,
-                        "cost": 1,
-                        "directive": "Open the algorithmic ruling to a public hearing.",
-                        "used_at": "2026-03-19T01:00:00Z",
-                    },
-                    {
-                        "card_id": "audit_reckoning",
-                        "profile_id": "law",
-                        "branch_id": "branch-1",
-                        "branch_title": "Judicial Review",
-                        "round": 3,
-                        "cost": 1,
-                        "directive": "Force a counter-audit against emergency decrees.",
-                        "used_at": "2026-03-19T01:01:00Z",
-                    },
-                ],
-            },
+            "cards": {"usage_log": []},
             "betting": {
                 "bets": [
                     {
@@ -1010,7 +1326,7 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
                         "target_label": "Judicial Review",
                         "confidence": 0.7,
                         "user_name": "Campaign QA",
-                        "placed_at_round": 2,
+                        "placed_at_round": 1,
                         "placed_at": "2026-03-19T01:00:30Z",
                         "resolved": False,
                     },
@@ -1034,10 +1350,7 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
     )
 
     assert saved_state["revision"] == 1
-    assert [entry["card_id"] for entry in saved_state["cards"]["usage_log"]] == [
-        "public_hearing",
-        "audit_reckoning",
-    ]
+    assert saved_state["cards"]["usage_log"] == []
     assert saved_state["betting"]["bets"][0]["bet_id"] == "bet-1"
     assert saved_state["archive"]["key_moments"] == [
         "Opened a public hearing.",
@@ -1047,7 +1360,7 @@ def test_scenario_gameplay_state_defaults_and_round_trip():
         {
             "branch_id": "branch-1",
             "title": "Judicial Review",
-            "probability": 0.82,
+            "probability": 1.0,
         },
     ]
 
@@ -1095,6 +1408,35 @@ def test_scenario_gameplay_state_rejects_stale_revision():
         )
 
 
+def test_save_gameplay_state_rejects_client_forged_card_usage():
+    scenario_id = _seed_active_scenario("client cannot forge card usage")
+    _seed_branch(scenario_id, "branch-1", "Server Branch")
+
+    with pytest.raises(CampaignError, match="server-managed"):
+        save_scenario_gameplay_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "cards": {
+                    "usage_log": [
+                        {
+                            "card_id": "public_hearing",
+                            "profile_id": "law",
+                            "branch_id": "branch-1",
+                            "branch_title": "Server Branch",
+                            "round": 2,
+                            "cost": 1,
+                            "directive": "Fabricated client card usage.",
+                            "used_at": "2026-03-19T01:00:00Z",
+                        }
+                    ]
+                },
+                "betting": {"bets": []},
+                "archive": {"key_moments": [], "branch_snapshots": []},
+            },
+        )
+
+
 def _bet_payload(**overrides) -> dict:
     base = {
         "bet_id": "bet-x",
@@ -1119,10 +1461,136 @@ def _state_with_bet(bet: dict, revision: int = 0) -> dict:
     }
 
 
+def test_save_gameplay_state_rejects_new_bet_after_scenario_done():
+    scenario_id = _seed_completed_scenario("bets close when scenario completes")
+
+    with pytest.raises(CampaignStateError, match="settlement state is immutable"):
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="ending_tone",
+                    target_id="order",
+                    target_label="Order",
+                )
+            ),
+        )
+
+
+def test_save_gameplay_state_rejects_archive_changes_after_scenario_done():
+    scenario_id = _seed_active_scenario("archive closes when scenario completes")
+    _seed_branch(scenario_id, "branch-final", "Final Branch", probability=1.0)
+    saved_state = save_scenario_gameplay_state(
+        scenario_id,
+        {
+            "revision": 0,
+            "cards": {"usage_log": []},
+            "betting": {"bets": []},
+            "archive": {
+                "key_moments": ["Original terminal moment"],
+                "branch_snapshots": [
+                    {
+                        "branch_id": "branch-final",
+                        "title": "Final Branch",
+                        "probability": 1.0,
+                    }
+                ],
+            },
+        },
+    )
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.DONE
+        session.add(scenario)
+        session.commit()
+
+    with pytest.raises(CampaignStateError, match="settlement state is immutable"):
+        save_scenario_gameplay_state(
+            scenario_id,
+            {
+                **saved_state,
+                "archive": {
+                    "key_moments": ["Forged terminal moment"],
+                    "branch_snapshots": [],
+                },
+            },
+        )
+
+    assert get_scenario_gameplay_state(scenario_id) == saved_state
+
+
+def test_save_gameplay_state_rejects_cross_scenario_archive_branch():
+    scenario_id = _seed_active_scenario("archive branch owner")
+    other_scenario_id = _seed_active_scenario("archive branch other")
+    _seed_branch(other_scenario_id, "other-archive-branch", "Other Archive")
+
+    with pytest.raises(CampaignError, match="archive branch"):
+        save_scenario_gameplay_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "cards": {"usage_log": []},
+                "betting": {"bets": []},
+                "archive": {
+                    "key_moments": [],
+                    "branch_snapshots": [
+                        {
+                            "branch_id": "other-archive-branch",
+                            "title": "Other Archive",
+                            "probability": 1.0,
+                        }
+                    ],
+                },
+            },
+        )
+
+
+def test_save_gameplay_state_rejects_bet_from_future_round():
+    scenario_id = _seed_active_scenario("bet timing authority")
+    _seed_branch(scenario_id, "branch-live", "Live Branch")
+    _seed_round("branch-live", 2)
+
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="ending_tone",
+                    target_id="order",
+                    target_label="Order",
+                    placed_at_round=99,
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_ROUND"
+
+
+def test_save_gameplay_state_keeps_existing_bets_immutable():
+    scenario_id = _seed_active_scenario("placed bets are immutable")
+    existing_bet = _bet_payload(
+        kind="ending_tone",
+        target_id="order",
+        target_label="Order",
+    )
+    _set_scenario_gameplay_state(scenario_id, _state_with_bet(existing_bet))
+
+    with pytest.raises(CampaignError, match="immutable"):
+        save_scenario_gameplay_state(
+            scenario_id,
+            {
+                "revision": 0,
+                "cards": {"usage_log": []},
+                "betting": {"bets": []},
+                "archive": {"key_moments": [], "branch_snapshots": []},
+            },
+        )
+
+
 def test_save_gameplay_state_accepts_each_valid_ending_tone():
-    scenario_id = _seed_completed_scenario("svc tone valid")
-    revision = 0
     for tone in ("order", "balance", "rupture"):
+        scenario_id = _seed_active_scenario(f"svc tone valid {tone}")
         saved = save_scenario_gameplay_state(
             scenario_id,
             _state_with_bet(
@@ -1132,15 +1600,14 @@ def test_save_gameplay_state_accepts_each_valid_ending_tone():
                     target_id=tone,
                     target_label=tone.title(),
                 ),
-                revision=revision,
+                revision=0,
             ),
         )
         assert saved["betting"]["bets"][0]["target_id"] == tone
-        revision = saved["revision"]
 
 
 def test_save_gameplay_state_rejects_invalid_ending_tone_target():
-    scenario_id = _seed_completed_scenario("svc tone invalid")
+    scenario_id = _seed_active_scenario("svc tone invalid")
     with pytest.raises(CampaignBetValidationError) as exc:
         save_scenario_gameplay_state(
             scenario_id,
@@ -1157,7 +1624,7 @@ def test_save_gameplay_state_rejects_invalid_ending_tone_target():
 
 
 def test_save_gameplay_state_rejects_missing_ending_tone_target():
-    scenario_id = _seed_completed_scenario("svc tone missing")
+    scenario_id = _seed_active_scenario("svc tone missing")
     with pytest.raises(CampaignBetValidationError) as exc:
         save_scenario_gameplay_state(
             scenario_id,
@@ -1173,9 +1640,8 @@ def test_save_gameplay_state_rejects_missing_ending_tone_target():
 
 
 def test_save_gameplay_state_accepts_each_valid_profile_resonance():
-    scenario_id = _seed_completed_scenario("svc resonance valid")
-    revision = 0
     for value in ("signature", "aligned", "offbeat"):
+        scenario_id = _seed_active_scenario(f"svc resonance valid {value}")
         saved = save_scenario_gameplay_state(
             scenario_id,
             _state_with_bet(
@@ -1185,15 +1651,14 @@ def test_save_gameplay_state_accepts_each_valid_profile_resonance():
                     target_id=value,
                     target_label=value.title(),
                 ),
-                revision=revision,
+                revision=0,
             ),
         )
         assert saved["betting"]["bets"][0]["target_id"] == value
-        revision = saved["revision"]
 
 
 def test_save_gameplay_state_rejects_invalid_profile_resonance_target():
-    scenario_id = _seed_completed_scenario("svc resonance invalid")
+    scenario_id = _seed_active_scenario("svc resonance invalid")
     with pytest.raises(CampaignBetValidationError) as exc:
         save_scenario_gameplay_state(
             scenario_id,
@@ -1209,7 +1674,7 @@ def test_save_gameplay_state_rejects_invalid_profile_resonance_target():
 
 
 def test_save_gameplay_state_accepts_branch_winner_when_target_belongs_to_scenario():
-    scenario_id = _seed_completed_scenario("svc branch valid")
+    scenario_id = _seed_active_scenario("svc branch valid")
     _seed_branch(scenario_id, "branch-actual")
 
     saved = save_scenario_gameplay_state(
@@ -1225,8 +1690,100 @@ def test_save_gameplay_state_accepts_branch_winner_when_target_belongs_to_scenar
     assert saved["betting"]["bets"][0]["target_id"] == "branch-actual"
 
 
+@pytest.mark.parametrize("status", [BranchStatus.COMPLETED, BranchStatus.PRUNED])
+def test_save_gameplay_state_rejects_new_branch_winner_for_inactive_target(
+    status: BranchStatus,
+):
+    scenario_id = _seed_active_scenario(f"svc branch inactive {status.value}")
+    _seed_branch(
+        scenario_id,
+        "branch-inactive",
+        status=status,
+    )
+
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="branch_winner",
+                    target_id="branch-inactive",
+                    target_label="Inactive Branch",
+                )
+            ),
+        )
+
+    assert exc.value.code == "GAMEPLAY_BET_BRANCH_NOT_ACTIVE"
+
+
+def test_save_gameplay_state_rejects_appending_bet_to_cover_another_candidate():
+    scenario_id = _seed_active_scenario("svc one bet per scenario")
+    _seed_branch(scenario_id, "branch-a", status=BranchStatus.ACTIVE)
+    _seed_branch(scenario_id, "branch-b", status=BranchStatus.ACTIVE)
+    first_bet = _bet_payload(
+        bet_id="bet-a",
+        target_id="branch-a",
+        target_label="Branch A",
+    )
+    saved = save_scenario_gameplay_state(
+        scenario_id,
+        _state_with_bet(first_bet),
+    )
+
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            {
+                **saved,
+                "betting": {
+                    "bets": [
+                        *saved["betting"]["bets"],
+                        _bet_payload(
+                            bet_id="bet-b",
+                            target_id="branch-b",
+                            target_label="Branch B",
+                            placed_at="2026-03-20T00:01:00Z",
+                        ),
+                    ]
+                },
+            },
+        )
+
+    assert exc.value.code == "GAMEPLAY_BET_LIMIT_REACHED"
+
+
+def test_save_gameplay_state_keeps_existing_terminal_branch_bet_read_only_compatible():
+    scenario_id = _seed_completed_scenario("svc legacy terminal branch bet")
+    _seed_branch(
+        scenario_id,
+        "branch-completed",
+        status=BranchStatus.COMPLETED,
+    )
+    existing_bet = _bet_payload(
+        bet_id="legacy-branch-bet",
+        target_id="branch-completed",
+        target_label="Completed Branch",
+    )
+    _set_scenario_gameplay_state(scenario_id, _state_with_bet(existing_bet))
+    current = get_scenario_gameplay_state(scenario_id)
+
+    saved = save_scenario_gameplay_state(
+        scenario_id,
+        {
+            **current,
+            "archive": {
+                **current["archive"],
+                "key_moments": ["Durable terminal moment"],
+            },
+        },
+    )
+
+    assert saved["revision"] == 1
+    assert saved["betting"]["bets"] == current["betting"]["bets"]
+
+
 def test_save_gameplay_state_rejects_branch_winner_with_unknown_target():
-    scenario_id = _seed_completed_scenario("svc branch invalid")
+    scenario_id = _seed_active_scenario("svc branch invalid")
     _seed_branch(scenario_id, "branch-actual")
 
     with pytest.raises(CampaignBetValidationError) as exc:
@@ -1244,7 +1801,7 @@ def test_save_gameplay_state_rejects_branch_winner_with_unknown_target():
 
 
 def test_save_gameplay_state_rejects_branch_winner_missing_target():
-    scenario_id = _seed_completed_scenario("svc branch missing")
+    scenario_id = _seed_active_scenario("svc branch missing")
     _seed_branch(scenario_id, "branch-actual")
 
     with pytest.raises(CampaignBetValidationError) as exc:
@@ -1263,7 +1820,7 @@ def test_save_gameplay_state_rejects_branch_winner_missing_target():
 
 def test_save_gameplay_state_rejects_branch_winner_when_scenario_has_no_branches():
     """Empty branch set still rejects any branch_winner target_id."""
-    scenario_id = _seed_completed_scenario("svc branch empty scenario")
+    scenario_id = _seed_active_scenario("svc branch empty scenario")
 
     with pytest.raises(CampaignBetValidationError) as exc:
         save_scenario_gameplay_state(
@@ -1433,6 +1990,7 @@ def test_finalize_derives_rewards_from_persisted_gameplay_authority():
         story="A narrow audit hearing closes without theme resonance.",
         insight="Procedural notes only.",
         probability=0.8,
+        status=BranchStatus.COMPLETED,
     )
     _seed_branch(
         scenario_id,
@@ -1441,8 +1999,9 @@ def test_finalize_derives_rewards_from_persisted_gameplay_authority():
         story="A treaty path fades out.",
         insight="Low probability.",
         probability=0.2,
+        status=BranchStatus.COMPLETED,
     )
-    save_scenario_gameplay_state(
+    _set_scenario_gameplay_state(
         scenario_id,
         {
             "cards": {
@@ -1481,7 +2040,7 @@ def test_finalize_derives_rewards_from_persisted_gameplay_authority():
             },
         },
     )
-    save_scenario_director_state(
+    _set_scenario_director_state(
         scenario_id,
         {
             "objectives": {
@@ -1545,6 +2104,129 @@ def test_finalize_derives_rewards_from_persisted_gameplay_authority():
     assert breakdown["profile_signature"]["applied"] is False
     assert breakdown["bet_hit"]["applied"] is False
     assert breakdown["commitment_miss"]["applied"] is True
+
+
+def test_finalize_uses_durable_branch_probability_not_client_snapshot():
+    scenario_id = _seed_completed_scenario("durable branch probability")
+    _seed_branch(
+        scenario_id,
+        "winner",
+        "Durable winner",
+        story="A stable procedural outcome.",
+        probability=0.9,
+        status=BranchStatus.COMPLETED,
+    )
+    _seed_branch(
+        scenario_id,
+        "loser",
+        "Client promoted loser",
+        story="A low-probability rupture.",
+        probability=0.1,
+        status=BranchStatus.COMPLETED,
+    )
+    _set_scenario_gameplay_state(
+        scenario_id,
+        {
+            "revision": 1,
+            "cards": {"usage_log": []},
+            "betting": {
+                "bets": [
+                    _bet_payload(
+                        kind="branch_winner",
+                        target_id="loser",
+                        target_label="Durable winner",
+                    )
+                ]
+            },
+            "archive": {
+                "key_moments": [],
+                "branch_snapshots": [
+                    {
+                        "branch_id": "loser",
+                        "title": "Client promoted loser",
+                        "probability": 0.99,
+                    },
+                    {
+                        "branch_id": "winner",
+                        "title": "Durable winner",
+                        "probability": 0.01,
+                    },
+                ],
+            },
+        },
+    )
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-durable-branch",
+        user_name="Durable",
+        profile_id="law",
+        archive_grade="S",
+        profile_resonance="signature",
+        betting_hit=True,
+        bet_count=1,
+    )
+
+    summary = get_scenario_campaign_summary(scenario_id)
+    assert summary["betting_hit"] is False
+
+
+def test_finalize_ignores_client_key_moments_for_archive_grade():
+    scenario_id = _seed_completed_scenario("durable key moments")
+    _seed_branch(
+        scenario_id,
+        "winner",
+        "Stable order",
+        story="A stable order closes the scenario.",
+        probability=1.0,
+        status=BranchStatus.COMPLETED,
+    )
+    _set_scenario_gameplay_state(
+        scenario_id,
+        {
+            "revision": 1,
+            "cards": {
+                "usage_log": [
+                    {
+                        "card_id": "public_hearing",
+                        "profile_id": "law",
+                        "branch_id": "winner",
+                        "branch_title": "Stable order",
+                        "round": 1,
+                        "cost": 1,
+                        "directive": "Hold a hearing.",
+                        "used_at": "2026-05-18T00:00:00Z",
+                    }
+                ]
+            },
+            "betting": {
+                "bets": [
+                    _bet_payload(
+                        kind="ending_tone",
+                        target_id="rupture",
+                        target_label="Rupture",
+                    )
+                ]
+            },
+            "archive": {
+                "key_moments": ["fake-1", "fake-2", "fake-3", "fake-4"],
+                "branch_snapshots": [],
+            },
+        },
+    )
+
+    finalize_scenario_campaign(
+        scenario_id,
+        user_id="director-durable-moments",
+        user_name="Durable",
+        profile_id="law",
+        archive_grade="S",
+        profile_resonance="signature",
+        betting_hit=True,
+        bet_count=1,
+    )
+
+    assert get_scenario_campaign_summary(scenario_id)["archive_grade"] == "C"
 
 
 def test_finalize_legacy_completed_daily_marks_legacy_bool_source():
@@ -2028,7 +2710,7 @@ def test_weekly_summary_leaderboard_masks_user_name_and_ranks_correctly():
         "is_daily_challenge": True,
         "is_weekly_track": True,
     }
-    # Director A scores higher (archive S beats archive B).
+    # Request grade claims do not affect ranking without durable gameplay evidence.
     a_scenario = _seed_completed_scenario("leaderboard-a")
     _attach_campaign_context(a_scenario, context)
     finalize_scenario_campaign(
@@ -2057,21 +2739,20 @@ def test_weekly_summary_leaderboard_masks_user_name_and_ranks_correctly():
         timezone_offset_minutes=0,
     )
     assert summary_a["weekly_track_id"] is not None
-    assert summary_a["rank"] == 1
+    assert summary_a["rank"] in {1, 2}
     leaderboard = summary_a["leaderboard_entries"]
     assert len(leaderboard) == 2
     assert leaderboard[0]["rank"] == 1
-    # Privacy: first 3 chars + ***
-    assert leaderboard[0]["user_name"] == "Ale***"
-    assert leaderboard[1]["user_name"] == "Bob***"
-    assert leaderboard[0]["score"] > leaderboard[1]["score"]
+    assert {entry["user_name"] for entry in leaderboard} == {"Ale***", "Bob***"}
+    assert {entry["score"] for entry in leaderboard} == {3}
 
     summary_b = get_weekly_campaign_summary(
         "director-lb-b",
         local_date="2026-05-18",
         timezone_offset_minutes=0,
     )
-    assert summary_b["rank"] == 2
+    assert summary_b["rank"] in {1, 2}
+    assert summary_b["rank"] != summary_a["rank"]
 
 
 def test_weekly_bonus_cap_emits_zero_delta_after_third_award():

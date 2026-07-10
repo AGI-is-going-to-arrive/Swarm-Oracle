@@ -132,6 +132,15 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
           return;
         }
 
+        if (raw.meta?.stream_id && raw.meta.stream_id !== currentScenarioId) {
+          logWsDebug('SimulationWS', 'drop_wrong_stream', {
+            type: raw.type,
+            streamId: raw.meta.stream_id,
+            expectedStreamId: currentScenarioId,
+          });
+          return;
+        }
+
         // S1-1: cancelled is a terminal state. Update store, suppress reconnect,
         // and close the socket cleanly so onclose does not schedule retries.
         if (raw.type === 'simulation_cancelled') {
@@ -140,7 +149,10 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
             reason: raw.reason ?? 'user_cancelled',
           });
           cleanedUp.current = true;
-          useSimulationStore.getState().setCancelled(raw.reason ?? 'user_cancelled');
+          useSimulationStore.getState().setCancelled(
+            raw.reason ?? 'user_cancelled',
+            currentScenarioId,
+          );
           if (reconnectTimerRef.current) {
             window.clearTimeout(reconnectTimerRef.current);
             reconnectTimerRef.current = null;
@@ -227,7 +239,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
         if (raw.type !== 'heartbeat') {
           stateMessageVersionRef.current += 1;
         }
-        useSimulationStore.getState().handleWSEvent(raw as WSEvent);
+        useSimulationStore.getState().handleWSEvent(raw as WSEvent, currentScenarioId);
       } catch (error) {
         console.error('[WS] Failed to parse message:', error);
       }

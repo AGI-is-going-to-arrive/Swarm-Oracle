@@ -140,6 +140,14 @@ export type UnifiedSourceRow =
       source_url: string;
     };
 
+export interface ScenarioCheckpointSummary {
+  id: string;
+  scenario_id: string;
+  branch_id: string;
+  round_number: number;
+  created_at: string | null;
+}
+
 export interface Scenario {
   id: string;
   question: string;
@@ -160,6 +168,9 @@ export interface Scenario {
   gameplay_state?: ScenarioGameplayState | null;
   fork_debug?: ScenarioForkDebug | null;
   run_group_id?: string | null;
+  causal_graph_id?: string | null;
+  checkpoints?: ScenarioCheckpointSummary[] | null;
+  faction_timeline_id?: string | null;
 }
 
 export interface AgentInfo {
@@ -1408,14 +1419,9 @@ export interface ReplayTraceResponse {
 
 // ── Phase 3: Checkpoints (P1-3 / counterfactual replay) ──
 
-export interface CheckpointInfo {
-  id: string;
-  scenario_id: string;
-  branch_id: string;
-  round_number: number;
+export interface CheckpointInfo extends ScenarioCheckpointSummary {
   compressed_summary: string | null;
   blackboard_json: string | null;
-  created_at: string | null;
 }
 
 // ── Type Aliases ─────────────────────────────────────────

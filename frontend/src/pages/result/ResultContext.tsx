@@ -48,6 +48,8 @@ export interface ResultViewContextValue {
   // capability registry
   capabilities: CapabilitiesResponse | null;
   capLoading: boolean;
+  capError: Error | null;
+  reloadCapabilities: (() => Promise<void>) | undefined;
 
   // top-level data
   scenario: Scenario | null;

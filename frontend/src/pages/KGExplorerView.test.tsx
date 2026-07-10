@@ -273,6 +273,22 @@ describe('KGExplorerView happy path', () => {
     expect(screen.getByTestId('kg-explorer-search')).toBeInTheDocument();
   });
 
+  it('shows an explicit empty state for a successful graph response with no nodes or edges', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'g-empty', nodes: [], edges: [] }),
+    } as Response);
+
+    renderAt('scenario-with-empty-graph');
+
+    expect(await screen.findByTestId('kg-explorer-empty')).toHaveTextContent(
+      'No knowledge graph data is available for this scenario yet.',
+    );
+    expect(screen.queryByTestId('kg-explorer-g6-canvas')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kg-explorer-dual-stack')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kg-explorer-minimap')).not.toBeInTheDocument();
+  });
+
   it('Canvas wrapper is keyboard-focusable (tabIndex=0)', async () => {
     renderAt();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));

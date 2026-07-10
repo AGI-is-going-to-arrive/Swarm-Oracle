@@ -26,6 +26,8 @@ import {
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
   createMultiRun,
+  getOfficialSamples,
+  importOfficialSample,
   listModelProfiles,
 } from '../api/client';
 import type { WebSearchFamily, CampaignContext, SuggestedSettings, ModelProfile } from '../types';
@@ -366,6 +368,8 @@ export function InputView() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [showWebSearchEndpoint, setShowWebSearchEndpoint] = useState(false);
   const [showSnapshotImport, setShowSnapshotImport] = useState(false);
+  const [recommendedSampleImporting, setRecommendedSampleImporting] = useState(false);
+  const [recommendedSampleImportError, setRecommendedSampleImportError] = useState<string | null>(null);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const [multiRunEnabled, setMultiRunEnabled] = useState(false);
@@ -378,6 +382,8 @@ export function InputView() {
   const {
     capabilities: caps,
     loading: customAgentsCapabilityLoading,
+    error: capabilitiesError,
+    reload: reloadCapabilities,
   } = useCapabilityCheck('custom_agents');
   const {
     capabilities: multiRunCaps,
@@ -446,6 +452,7 @@ export function InputView() {
   const launchInFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const launchAbortControllerRef = useRef<AbortController | null>(null);
   const launchAbortReasonRef = useRef<WeakMap<AbortSignal, 'timeout'>>(new WeakMap());
+  const recommendedSampleControllerRef = useRef<AbortController | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const continuityDialogRef = useRef<HTMLDivElement>(null);
@@ -550,6 +557,12 @@ export function InputView() {
 
   useEffect(() => resetLaunchInFlight, [resetLaunchInFlight]);
 
+  useEffect(() => () => {
+    const controller = recommendedSampleControllerRef.current;
+    recommendedSampleControllerRef.current = null;
+    controller?.abort();
+  }, []);
+
   const syncQuestionFromInputValue = useCallback((value: string) => {
     const nextQuestion = clampScenarioQuestion(value);
     setQuestion((currentQuestion) => (
@@ -632,6 +645,60 @@ export function InputView() {
   const llmNotConfigured =
     !hasUsableLlmCredential &&
     (caps?.llm_configured === false || profileOnlyLlmConfigured);
+  const snapshotImportCapabilityState = customAgentsCapabilityLoading
+    ? 'loading'
+    : capabilitiesError
+      ? 'error'
+      : caps?.snapshot_export?.enabled === true
+        ? 'enabled'
+        : caps?.snapshot_export?.enabled === false
+          ? 'disabled'
+          : 'unknown';
+  const showOfficialSampleEntry = llmNotConfigured ||
+    snapshotImportCapabilityState === 'loading' ||
+    snapshotImportCapabilityState === 'error' ||
+    snapshotImportCapabilityState === 'unknown';
+
+  const handleOpenSnapshotImport = useCallback(() => {
+    if (recommendedSampleControllerRef.current) return;
+    setRecommendedSampleImportError(null);
+    setShowSnapshotImport(true);
+  }, []);
+
+  const handleRecommendedSampleImport = useCallback(async () => {
+    if (showSnapshotImport || recommendedSampleControllerRef.current) return;
+
+    const controller = new AbortController();
+    recommendedSampleControllerRef.current = controller;
+    setRecommendedSampleImporting(true);
+    setRecommendedSampleImportError(null);
+
+    try {
+      const catalog = await getOfficialSamples({ signal: controller.signal });
+      if (controller.signal.aborted || recommendedSampleControllerRef.current !== controller) return;
+
+      const recommendedSample = catalog.samples[0];
+      if (!recommendedSample) {
+        throw new Error('Official sample catalog is empty');
+      }
+
+      const result = await importOfficialSample(recommendedSample.id, { signal: controller.signal });
+      if (controller.signal.aborted || recommendedSampleControllerRef.current !== controller) return;
+      navigate(`/result/${encodeURIComponent(result.scenario_id)}`);
+    } catch (error) {
+      if (controller.signal.aborted || recommendedSampleControllerRef.current !== controller) return;
+      setRecommendedSampleImportError(getLocalizedApiErrorMessage(
+        error,
+        t,
+        t('snapshot.sample_import_failed', 'Built-in sample import failed. Please try again.'),
+      ));
+    } finally {
+      if (recommendedSampleControllerRef.current === controller) {
+        recommendedSampleControllerRef.current = null;
+        setRecommendedSampleImporting(false);
+      }
+    }
+  }, [navigate, showSnapshotImport, t]);
 
   const {
     campaignProfile,
@@ -2107,7 +2174,8 @@ export function InputView() {
                     <button
                       type="button"
                       className="btn btn-ghost"
-                      onClick={() => setShowSnapshotImport(true)}
+                      onClick={handleOpenSnapshotImport}
+                      disabled={recommendedSampleImporting}
                     >
                       {t('snapshot.import_btn')}
                     </button>
@@ -2241,21 +2309,68 @@ export function InputView() {
                 </div>
               )}
 
-              {/* Degraded sample entry stays below the CTA; the LLM-required warning itself is the CTA disabled reason above. */}
-              {llmNotConfigured && (
-                <div className="degraded-llm-warning" style={{ marginTop: '12px', textAlign: 'left' }}>
-                  <div className="degraded-demo-entry" style={{ padding: '12px', border: '1px dashed var(--color-border-default)', borderRadius: 'var(--radius-lg, 8px)', backgroundColor: 'var(--color-base, oklch(98% 0.005 80))' }}>
-                    <p style={{ margin: '0 0 8px 0', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-                      💡 {t('degraded_hints.sample_hint')}
-                    </p>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setShowSnapshotImport(true)}
-                      style={{ width: '100%', justifyContent: 'center' }}
-                    >
-                      📂 {t('degraded_hints.view_sample_result')}
-                    </button>
+              {/* Keep official samples discoverable even while capability availability is unknown. */}
+              {showOfficialSampleEntry && (
+                <div className="degraded-llm-warning">
+                  <div className={`degraded-demo-entry degraded-demo-entry--${snapshotImportCapabilityState}`}>
+                    {snapshotImportCapabilityState === 'loading' ? (
+                      <p className="degraded-demo-entry__status" role="status" aria-live="polite">
+                        {t('snapshot.capability_loading')}
+                      </p>
+                    ) : snapshotImportCapabilityState === 'error' || snapshotImportCapabilityState === 'unknown' ? (
+                      <>
+                        <p
+                          className="degraded-demo-entry__status degraded-demo-entry__status--error"
+                          role="status"
+                          aria-live="polite"
+                        >
+                          {t('snapshot.capability_error')}
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => void reloadCapabilities?.()}
+                        >
+                          {t('snapshot.capability_retry')}
+                        </button>
+                      </>
+                    ) : snapshotImportCapabilityState === 'disabled' ? (
+                      <p className="degraded-demo-entry__status" role="status">
+                        {t('snapshot.capability_disabled')}
+                      </p>
+                    ) : (
+                      <>
+                        <p className="degraded-demo-entry__copy">
+                          💡 {t('degraded_hints.sample_hint')}
+                        </p>
+                        <div className="degraded-demo-entry__actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => void handleRecommendedSampleImport()}
+                            disabled={recommendedSampleImporting}
+                            aria-busy={recommendedSampleImporting}
+                          >
+                            {recommendedSampleImporting
+                              ? t('snapshot.sample_quick_start_loading')
+                              : `📂 ${t('degraded_hints.view_sample_result')}`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={handleOpenSnapshotImport}
+                            disabled={recommendedSampleImporting}
+                          >
+                            {t('snapshot.choose_other_samples')}
+                          </button>
+                        </div>
+                        {recommendedSampleImportError && (
+                          <p className="degraded-demo-entry__status degraded-demo-entry__status--error" role="alert">
+                            {recommendedSampleImportError}
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
               )}

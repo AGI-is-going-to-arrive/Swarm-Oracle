@@ -771,6 +771,8 @@ async def put_director_state(
         state = save_scenario_director_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
         raise api_error_from_exception(404, "DIRECTOR_STATE_NOT_FOUND", exc) from exc
+    except CampaignStateError as exc:
+        raise api_error_from_exception(409, "DIRECTOR_STATE_CLOSED", exc) from exc
     except CampaignConflictError as exc:
         raise api_error_from_exception(409, "DIRECTOR_STATE_CONFLICT", exc) from exc
     except CampaignError as exc:
@@ -810,6 +812,8 @@ async def put_gameplay_state(
         state = save_scenario_gameplay_state(scenario_id, req.model_dump())
     except CampaignNotFoundError as exc:
         raise api_error_from_exception(404, "GAMEPLAY_STATE_NOT_FOUND", exc) from exc
+    except CampaignStateError as exc:
+        raise api_error_from_exception(409, "GAMEPLAY_STATE_CLOSED", exc) from exc
     except CampaignConflictError as exc:
         raise api_error_from_exception(409, "GAMEPLAY_STATE_CONFLICT", exc) from exc
     except CampaignBetValidationError as exc:

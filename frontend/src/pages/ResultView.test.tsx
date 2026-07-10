@@ -314,6 +314,25 @@ describe('ResultView locale contracts', () => {
     expect(zh.translation.sim.replay.import_local).toBe('导入为本地运行');
     expect(zh.translation.sim.replay.importing).toBe('导入中...');
   });
+
+  it('keeps data-gate and full-report bridge labels in both locale resources', () => {
+    expect(en.translation.result.bridge_causal_data_unavailable).toBe(
+      'No causal graph data is available for this scenario.',
+    );
+    expect(zh.translation.result.bridge_causal_data_unavailable).toBe(
+      '当前场景暂无因果图数据。',
+    );
+    expect(en.translation.result.bridge_replay_data_unavailable).toBe(
+      'No replay trace is available for this scenario.',
+    );
+    expect(zh.translation.result.bridge_replay_data_unavailable).toBe(
+      '当前场景暂无回放轨迹。',
+    );
+    expect(en.translation.result.bridge_full_report_generate_title).toBe('Generate Full Report');
+    expect(zh.translation.result.bridge_full_report_generate_title).toBe('生成完整报告');
+    expect(en.translation.result.bridge_full_report_read_title).toBe('Read Full Report');
+    expect(zh.translation.result.bridge_full_report_read_title).toBe('阅读完整报告');
+  });
 });
 
 vi.mock('../components/EndingChatModal', () => ({
@@ -391,6 +410,7 @@ vi.mock('../api/client', async () => {
     question: 'What if the archive had to sync?',
     status: 'done',
     created_at: '2026-03-17T00:00:00Z',
+    causal_graph_id: 'graph-default',
     scene_theme: 'law_court',
     agents: [],
     branches: [],
@@ -626,12 +646,17 @@ beforeEach(() => {
     agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
     causal_graph: { enabled: false },
+    kg_explorer: { enabled: false },
     replay_trace: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
+    result_report: { enabled: false },
+    you_vs_oracle: { enabled: false },
     web_search: { providers: {} },
   });
   setMockCapabilityLoading(false);
+  setMockCapabilityError(null);
+  reloadCapabilityMock.mockClear();
   shareModalMock.mockClear();
   importReplayScenarioMock.mockReset();
   importReplayScenarioMock.mockImplementation(async (scenario: { id: string }) => ({
@@ -2118,7 +2143,7 @@ describe('ResultView campaign summary', () => {
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
-    expect(screen.getAllByText('result.causal_graph_link').length).toBeGreaterThan(0);
+    expect(screen.queryByText('result.causal_graph_link')).not.toBeInTheDocument();
     expect(screen.queryByTestId('result-conversation-cta')).not.toBeInTheDocument();
     expect(screen.queryByTestId('result-action-conversation')).not.toBeInTheDocument();
     expect(screen.queryByText('counterfactual.title')).not.toBeInTheDocument();
@@ -4307,6 +4332,18 @@ describe('ResultView explore deeper bridge', () => {
       counterfactual_replay: { enabled: true },
       agent_identity: { enabled: true },
     });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-ordinary-run',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
     vi.mocked(apiClient.getStory).mockResolvedValueOnce({
       scenario_id: 'scenario-1',
       question: 'What if the archive had to sync?',
@@ -4357,7 +4394,180 @@ describe('ResultView explore deeper bridge', () => {
     expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(7);
     expect(within(bridgeSection as HTMLElement).getByText('result.bridge_kg_explorer_title')).toBeInTheDocument();
     expect(within(bridgeSection as HTMLElement).getByText('result.bridge_timeline_galaxy_title')).toBeInTheDocument();
+    expect(within(bridgeSection as HTMLElement).getByRole('link', { name: /result.next_replay_trace/ }))
+      .toHaveAttribute('href', '/replay/scenario-1');
     expect(within(bridgeSection as HTMLElement).getByRole('button', { name: /result.next_ask_agent/ })).toBeInTheDocument();
+  });
+
+  it('requires scenario data for graph/replay links and the backend compare capability', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+      kg_explorer: { enabled: true },
+      replay_trace: { enabled: true },
+      counterfactual_replay: { enabled: false },
+      result_report: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: null,
+      checkpoints: [],
+      faction_timeline_id: null,
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      full_report: null,
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Primary branch.',
+          insight: 'Primary insight.',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_source_branch_id: null,
+        },
+        {
+          id: 'branch-2',
+          title: 'Static Rival Branch',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Static rival branch.',
+          insight: 'Static comparison remains useful.',
+          key_moments: [],
+          parent_branch_id: 'branch-1',
+          fork_reason: 'Static fork',
+          replay_source_branch_id: null,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridge = (await screen.findByRole('heading', { name: 'result.next_steps_heading' }))
+      .closest('section') as HTMLElement;
+    for (const title of [
+      'result.next_understand_why',
+      'result.bridge_workbench_title',
+      'result.bridge_kg_explorer_title',
+      'result.bridge_timeline_galaxy_title',
+    ]) {
+      const entry = within(bridge).getByText(title).closest('[role="link"]');
+      expect(entry).toHaveAttribute('aria-disabled', 'true');
+      expect(entry).toHaveTextContent('result.bridge_causal_data_unavailable');
+    }
+    const replayEntry = within(bridge).getByText('result.next_replay_trace').closest('[role="link"]');
+    expect(replayEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(replayEntry).toHaveTextContent('result.bridge_replay_data_unavailable');
+    const compareEntry = within(bridge).getByText('result.next_replay_different').closest('a,[role="link"]');
+    expect(compareEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(compareEntry).toHaveTextContent('result.bridge_not_enabled');
+    expect(within(bridge).getByRole('link', { name: /result.bridge_full_report_generate_title/ }))
+      .toHaveAttribute('href', '/result/scenario-1/report');
+    expect(bridge).not.toHaveTextContent('result.bridge_full_report_read_title');
+    expect(screen.queryByRole('link', { name: 'result.causal_graph_link' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'result.open_workbench_link' })).not.toBeInTheDocument();
+  });
+
+  it('enables data-backed graph and replay links and labels an existing report as readable', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+      kg_explorer: { enabled: true },
+      replay_trace: { enabled: true },
+      counterfactual_replay: { enabled: false },
+      result_report: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-current',
+      checkpoints: [],
+      faction_timeline_id: null,
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      full_report: { status: 'partial', truncated: true },
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Source Branch',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Source branch.',
+          insight: 'Source insight.',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_source_branch_id: null,
+        },
+        {
+          id: 'branch-2',
+          title: 'Replay Branch',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Replay branch.',
+          insight: 'Replay insight.',
+          key_moments: [],
+          parent_branch_id: 'branch-1',
+          fork_reason: 'Replay fork',
+          replay_source_branch_id: 'branch-1',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridge = (await screen.findByRole('heading', { name: 'result.next_steps_heading' }))
+      .closest('section') as HTMLElement;
+    expect(within(bridge).getByRole('link', { name: /result.next_understand_why/ })).toBeInTheDocument();
+    expect(within(bridge).getByRole('link', { name: /result.next_replay_trace/ })).toBeInTheDocument();
+    expect(within(bridge).getByRole('link', { name: /result.bridge_workbench_title/ })).toBeInTheDocument();
+    expect(within(bridge).getByRole('link', { name: /result.bridge_kg_explorer_title/ })).toBeInTheDocument();
+    expect(within(bridge).getByRole('link', { name: /result.bridge_timeline_galaxy_title/ })).toBeInTheDocument();
+    expect(within(bridge).getByRole('link', { name: /result.bridge_full_report_read_title/ }))
+      .toHaveAttribute('href', '/result/scenario-1/report');
+    expect(bridge).not.toHaveTextContent('result.bridge_full_report_generate_title');
+    expect(screen.getAllByRole('link', { name: 'result.causal_graph_link' })).not.toHaveLength(0);
+    for (const link of screen.getAllByRole('link', { name: 'result.causal_graph_link' })) {
+      expect(link).toHaveAttribute('href', '/sim/scenario-1/causal-map');
+    }
+    expect(screen.getByRole('link', { name: 'result.open_workbench_link' })).toHaveAttribute(
+      'href',
+      '/workbench/scenario-1?view=graph&branch=branch-1',
+    );
   });
 
   it('passes only populated source families into share image artifacts', async () => {
@@ -4469,6 +4679,32 @@ describe('ResultView explore deeper bridge', () => {
     expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).not.toBeInTheDocument();
   });
 
+  it('shows a retryable availability error instead of false disabled capability cards', async () => {
+    const user = userEvent.setup();
+    setMockCapabilityError(new Error('capability endpoint offline'));
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridge = (await screen.findByRole('heading', { name: 'result.next_steps_heading' }))
+      .closest('section') as HTMLElement;
+    expect(within(bridge).getByRole('alert')).toHaveTextContent(
+      'result.bridge_capabilities_unavailable',
+    );
+    expect(within(bridge).queryByText('result.bridge_not_enabled')).not.toBeInTheDocument();
+    expect(within(bridge).queryByText('result.next_understand_why')).not.toBeInTheDocument();
+
+    await user.click(within(bridge).getByRole('button', {
+      name: 'result.bridge_capabilities_retry',
+    }));
+    expect(reloadCapabilityMock).toHaveBeenCalledTimes(1);
+  });
+
   it('builds the causal entry href from the active scenario id and encoded branch id', async () => {
     const scenarioId = 'scenario A&B';
     const branchId = 'branch 1&2';
@@ -4480,6 +4716,7 @@ describe('ResultView explore deeper bridge', () => {
       question: 'What if the archive had to sync?',
       status: 'done',
       created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-encoded-causal',
       scene_theme: 'law_court',
       agents: [],
       branches: [],
@@ -4535,6 +4772,7 @@ describe('ResultView explore deeper bridge', () => {
       question: 'What if the archive had to sync?',
       status: 'done',
       created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-encoded-causal',
       scene_theme: 'law_court',
       agents: [],
       branches: [],
@@ -4594,6 +4832,7 @@ describe('ResultView explore deeper bridge', () => {
         question: 'What if the archive had to sync?',
         status: 'done',
         created_at: '2026-03-17T00:00:00Z',
+        causal_graph_id: 'graph-private-to-owner',
         total_rounds: 5,
         mode: 'blackboard',
         visualization_enabled: false,
@@ -4691,6 +4930,9 @@ describe('ResultView explore deeper bridge', () => {
     const replayEntry = await screen.findByRole('link', { name: /result.next_replay_trace/ });
     expect(replayEntry).toHaveAttribute('aria-disabled', 'true');
     expect(replayEntry).toHaveTextContent('result.bridge_replay_unavailable');
+    const causalEntry = screen.getByText('result.next_understand_why').closest('a,[role="link"]');
+    expect(causalEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(causalEntry).toHaveTextContent('result.bridge_replay_unavailable');
   });
 
   it('disables the compare bridge entry when there is only one branch', async () => {
@@ -4758,7 +5000,7 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
-    // causal + replay + compare + workbench + kg-explorer + timeline-galaxy, all gated off.
+    // Every server-backed entry stays gated off when its capability is unavailable.
     expect(entries).toHaveLength(7);
     for (const entry of entries) {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
@@ -4919,6 +5161,18 @@ describe('ResultView workbench bridge gate', () => {
       causal_graph: { enabled: false },
       kg_explorer: { enabled: true },
     });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-workbench-kg',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
     vi.mocked(apiClient.getStory).mockResolvedValueOnce({
       scenario_id: 'scenario-1',
       question: 'What if the archive had to sync?',
@@ -5007,6 +5261,7 @@ describe('ResultView workbench bridge gate', () => {
       question: 'What if the archive had to sync?',
       status: 'done',
       created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-encoded-workbench',
       scene_theme: 'law_court',
       agents: [],
       branches: [],
@@ -5062,6 +5317,7 @@ describe('ResultView KG explorer / timeline galaxy bridge gate', () => {
       question: 'What if the archive had to sync?',
       status: 'done',
       created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-encoded-kg',
       scene_theme: 'law_court',
       agents: [],
       branches: [],
@@ -5352,6 +5608,18 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
   });
 
   const renderResult = (scenarioId = 'scenario-1') => {
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: scenarioId,
+      question: 'What if?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      causal_graph_id: 'graph-reader-mode',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
     vi.mocked(apiClient.getStory).mockResolvedValueOnce({
       scenario_id: scenarioId,
       question: 'What if?',

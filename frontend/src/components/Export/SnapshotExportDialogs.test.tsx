@@ -5,25 +5,38 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SnapshotExportWizard from './SnapshotExportWizard';
 import SnapshotImportDialog from './SnapshotImportDialog';
 
-const { exportScenarioSnapshotMock, importScenarioSnapshotMock } = vi.hoisted(() => ({
+const {
+  exportScenarioSnapshotMock,
+  getOfficialSamplesMock,
+  importOfficialSampleMock,
+  importScenarioSnapshotMock,
+} = vi.hoisted(() => ({
   exportScenarioSnapshotMock: vi.fn(),
+  getOfficialSamplesMock: vi.fn(),
+  importOfficialSampleMock: vi.fn(),
   importScenarioSnapshotMock: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
+    i18n: { language: 'en' },
   }),
 }));
 
 vi.mock('../../api/client', () => ({
   exportScenarioSnapshot: exportScenarioSnapshotMock,
+  getOfficialSamples: getOfficialSamplesMock,
+  importOfficialSample: importOfficialSampleMock,
   importScenarioSnapshot: importScenarioSnapshotMock,
 }));
 
 describe('Snapshot export/import dialogs', () => {
   beforeEach(() => {
     exportScenarioSnapshotMock.mockReset();
+    getOfficialSamplesMock.mockReset();
+    getOfficialSamplesMock.mockResolvedValue({ catalog_version: '1.0', count: 0, samples: [] });
+    importOfficialSampleMock.mockReset();
     importScenarioSnapshotMock.mockReset();
   });
 
@@ -116,6 +129,39 @@ describe('Snapshot export/import dialogs', () => {
       expect(requestSignal).toBeDefined();
     });
     unmount();
+
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it('aborts an in-flight built-in sample import when the dialog unmounts', async () => {
+    let requestSignal: AbortSignal | undefined;
+    getOfficialSamplesMock.mockResolvedValueOnce({
+      catalog_version: '1.0',
+      count: 1,
+      samples: [{
+        id: 'sample-1',
+        question: 'Question',
+        scene_theme: null,
+        title: { zh: '样例', en: 'Sample' },
+        summary: { zh: '摘要', en: 'Summary' },
+        agent_count: 3,
+        outcome_count: 3,
+      }],
+    });
+    importOfficialSampleMock.mockImplementation(
+      (_sampleId: string, options?: { signal?: AbortSignal }) => {
+        requestSignal = options?.signal;
+        return new Promise<{ scenario_id: string }>(() => undefined);
+      },
+    );
+    const view = render(
+      <SnapshotImportDialog isOpen onClose={() => {}} onImported={() => {}} />,
+    );
+
+    await screen.findByText('Sample');
+    await userEvent.click(screen.getByRole('button', { name: 'snapshot.sample_use_aria' }));
+    await waitFor(() => expect(requestSignal).toBeDefined());
+    view.unmount();
 
     expect(requestSignal?.aborted).toBe(true);
   });

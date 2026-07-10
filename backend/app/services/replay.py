@@ -363,6 +363,7 @@ def seed_counterfactual(
     agent's message content with the replacement text.
     Also sets replay_source_agent_id on the branch.
     """
+    memory_payload: dict[str, object] | None = None
     with Session(get_engine()) as session:
         if ensure_lock is not None:
             ensure_lock()
@@ -400,6 +401,17 @@ def seed_counterfactual(
         if branch:
             branch.replay_source_agent_id = agent_id
             session.add(branch)
+            agent = session.get(Agent, agent_id)
+            if agent is not None and agent.scenario_id == branch.scenario_id:
+                memory_payload = {
+                    "scenario_id": branch.scenario_id,
+                    "agent_id": agent.id,
+                    "agent_name": agent.name,
+                    "content": replacement_content,
+                    "round_num": last_round.round_number,
+                    "emotion": message.emotion,
+                    "branch_id": branch.id,
+                }
 
         if ensure_lock is not None:
             ensure_lock()
@@ -408,6 +420,19 @@ def seed_counterfactual(
             "Seeded counterfactual: branch=%s agent=%s round=%d",
             branch_id, agent_id, last_round.round_number,
         )
+
+    if memory_payload is not None:
+        if ensure_lock is not None:
+            ensure_lock()
+        try:
+            from app.services.memory import store_memory
+
+            store_memory(**memory_payload)
+        except Exception as exc:
+            logger.warning(
+                "Counterfactual replacement memory store failed (non-fatal): %s",
+                type(exc).__name__,
+            )
 
 
 def _jaccard_similarity(set_a: set, set_b: set) -> float:

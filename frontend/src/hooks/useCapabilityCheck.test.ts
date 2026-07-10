@@ -167,7 +167,7 @@ describe('useCapabilityCheck — flat behavior (1-arg, backward compatible)', ()
     retried.unmount();
   });
 
-  it('backs off manual reloads after a failed probe', async () => {
+  it('lets an explicit manual reload bypass automatic probe backoff', async () => {
     let now = 1_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
     mockGetCapabilities
@@ -183,9 +183,9 @@ describe('useCapabilityCheck — flat behavior (1-arg, backward compatible)', ()
       await probe.result.current.reload?.();
     });
 
-    expect(probe.result.current.enabled).toBe(false);
-    expect(probe.result.current.error?.message).toContain('temporarily throttled');
-    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    expect(probe.result.current.enabled).toBe(true);
+    expect(probe.result.current.error).toBeNull();
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(2);
     probe.unmount();
   });
 

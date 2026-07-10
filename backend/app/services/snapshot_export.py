@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import math
+import re
 import stat
 import zipfile
 from datetime import datetime, timezone
@@ -91,6 +92,58 @@ _DATA_FILES = (
     "causal_graph.json",
     "intervention_receipts.jsonl",
 )
+_EXPORT_API_KEY_ASSIGNMENT_RE = re.compile(
+    r"\b(?:[A-Za-z0-9]+[_-]+)*api[_-]?key\s*[:=]\s*"
+    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;)}\]]+)",
+    re.IGNORECASE,
+)
+_EXPORT_QUOTED_API_KEY_ASSIGNMENT_RE = re.compile(
+    r"(?P<prefix>[\"'](?:[A-Za-z0-9]+[_-]+)*api[_-]?key[\"']"
+    r"[ \t]*:[ \t]*[\"'])[^\"'\r\n]*(?P<suffix>[\"'])",
+    re.IGNORECASE,
+)
+_EXPORT_QUERY_CREDENTIAL_RE = re.compile(
+    r"([?&](?:access[_-]?token|auth[_-]?token|api[_-]?key|client[_-]?secret|"
+    r"x-amz-(?:credential|signature)|x-goog-(?:credential|signature)|"
+    r"awsaccesskeyid|token|secret|sig|signature|key)=)([^&#\s]+)",
+    re.IGNORECASE,
+)
+_EXPORT_AUTHORIZATION_BEARER_RE = re.compile(
+    r"(?P<prefix>\bauthorization[\"']?[ \t]*:[ \t]*[\"']?[ \t]*)"
+    r"bearer[ \t]+(?P<token>[A-Za-z0-9._~+/=-]+)",
+    re.IGNORECASE,
+)
+_EXPORT_BEARER_CANDIDATE_RE = re.compile(
+    r"\bbearer\s+(?P<token>[A-Za-z0-9._~+/=-]+)",
+    re.IGNORECASE,
+)
+_EXPORT_BEARER_CREDENTIAL_CONTEXT_RE = re.compile(
+    r"\b(?:authorization|auth|credential|header|key|secret|token)\b[^\n.!?]{0,24}$",
+    re.IGNORECASE,
+)
+_EXPORT_BEARER_SIGNAL_CHARS = frozenset("0123456789._~+/=-")
+_EXPORT_BEARER_LONG_CANDIDATE_LENGTH = 24
+_EXPORT_NATURAL_BEARER_FOLLOWERS = frozenset(
+    {
+        "bond",
+        "bonds",
+        "carried",
+        "certificate",
+        "certificates",
+        "check",
+        "checks",
+        "cheque",
+        "cheques",
+        "instrument",
+        "instruments",
+        "of",
+        "presented",
+        "security",
+        "securities",
+        "share",
+        "shares",
+    }
+)
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -136,15 +189,11 @@ def _redact_dict(value: Any) -> Any:
     ``api_key``, ``apiKey``, ``API-KEY``, ``Authorization`` are all stripped.
     """
     if isinstance(value, dict):
-        return {
-            k: _redact_dict(v)
-            for k, v in value.items()
-            if not _is_sensitive_key(k)
-        }
+        return {k: _redact_dict(v) for k, v in value.items() if not _is_sensitive_key(k)}
     if isinstance(value, list):
         return [_redact_dict(item) for item in value]
     if isinstance(value, str):
-        return _scrub_sensitive_text(value)
+        return _scrub_export_text(value)
     return value
 
 
@@ -166,6 +215,64 @@ def _redact_json_string(raw: Any) -> Any:
     return json.dumps(_redact_dict(decoded), ensure_ascii=False, default=str)
 
 
+def _scrub_export_text(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    protected_bearer_phrases: list[str] = []
+    protected_queries: list[str] = []
+
+    def _scrub_authorization_bearer(match: re.Match[str]) -> str:
+        return f"{match.group('prefix')}[redacted-bearer]"
+
+    def _scrub_quoted_api_key(match: re.Match[str]) -> str:
+        return f"{match.group('prefix')}[redacted]{match.group('suffix')}"
+
+    def _scrub_bearer_candidate(match: re.Match[str]) -> str:
+        token = match.group("token")
+        candidate = token.rstrip(".,;:!?")
+        trailing_punctuation = token[len(candidate) :]
+        prefix = value[max(0, match.start() - 48) : match.start()]
+        has_credential_context = bool(
+            _EXPORT_BEARER_CREDENTIAL_CONTEXT_RE.search(prefix)
+        )
+        has_credential_shape = (
+            any(char in _EXPORT_BEARER_SIGNAL_CHARS for char in candidate)
+            or len(candidate) >= _EXPORT_BEARER_LONG_CANDIDATE_LENGTH
+        )
+        is_natural_language = (
+            not has_credential_context
+            and not has_credential_shape
+            and candidate.casefold() in _EXPORT_NATURAL_BEARER_FOLLOWERS
+        )
+        if is_natural_language:
+            protected_bearer_phrases.append(match.group(0))
+            return f"\ue000{len(protected_bearer_phrases) - 1}\ue001"
+        return f"[redacted-bearer]{trailing_punctuation}"
+
+    def _protect_query(match: re.Match[str]) -> str:
+        protected_queries.append(f"{match.group(1)}[redacted]")
+        return f"\ue100{len(protected_queries) - 1}\ue101"
+
+    cleaned = _EXPORT_QUOTED_API_KEY_ASSIGNMENT_RE.sub(
+        _scrub_quoted_api_key,
+        value,
+    )
+    cleaned = _EXPORT_AUTHORIZATION_BEARER_RE.sub(
+        _scrub_authorization_bearer,
+        cleaned,
+    )
+    cleaned = _EXPORT_BEARER_CANDIDATE_RE.sub(_scrub_bearer_candidate, cleaned)
+    cleaned = _EXPORT_QUERY_CREDENTIAL_RE.sub(_protect_query, cleaned)
+    cleaned = _EXPORT_API_KEY_ASSIGNMENT_RE.sub("api key [redacted]", cleaned)
+    cleaned = _scrub_sensitive_text(cleaned)
+    for index, query in enumerate(protected_queries):
+        cleaned = cleaned.replace(f"\ue100{index}\ue101", query)
+    for index, phrase in enumerate(protected_bearer_phrases):
+        cleaned = cleaned.replace(f"\ue000{index}\ue001", phrase)
+    return cleaned
+
+
 def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -180,9 +287,7 @@ def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
 def _normalize_parsed_context_for_snapshot(value: Any) -> Any:
     if not isinstance(value, dict) or "full_report" not in value:
         return value
-    normalized_report = _normalize_full_report_status_for_snapshot(
-        value.get("full_report")
-    )
+    normalized_report = _normalize_full_report_status_for_snapshot(value.get("full_report"))
     if normalized_report is value.get("full_report"):
         return value
     normalized = dict(value)
@@ -207,11 +312,11 @@ def _serialize_scenario(scenario: Scenario, *, include_private: bool) -> dict[st
 
     payload: dict[str, Any] = {
         "id": scenario.id,
-        "question": scenario.question,
+        "question": _scrub_export_text(scenario.question),
         "status": scenario.status.value,
         "created_at": scenario.created_at.isoformat() if scenario.created_at else None,
         "visualization_enabled": bool(scenario.visualization_enabled),
-        "scene_theme": scenario.scene_theme,
+        "scene_theme": _scrub_export_text(scenario.scene_theme),
         "parsed_context": parsed_context,
         "director_state_json": director_state,
         "gameplay_state_json": gameplay_state,
@@ -228,12 +333,12 @@ def _serialize_branch(branch: Branch) -> dict[str, Any]:
         "scenario_id": branch.scenario_id,
         "parent_branch_id": branch.parent_branch_id,
         "fork_round": branch.fork_round,
-        "fork_reason": branch.fork_reason,
-        "title": branch.title,
-        "description": branch.description,
-        "summary": branch.summary,
-        "story": branch.story,
-        "insight": branch.insight,
+        "fork_reason": _scrub_export_text(branch.fork_reason),
+        "title": _scrub_export_text(branch.title),
+        "description": _scrub_export_text(branch.description),
+        "summary": _scrub_export_text(branch.summary),
+        "story": _scrub_export_text(branch.story),
+        "insight": _scrub_export_text(branch.insight),
         "key_moments": _redact_json_string(branch.key_moments),
         "probability": branch.probability,
         "status": branch.status.value,
@@ -248,12 +353,12 @@ def _serialize_agent(agent: Agent) -> dict[str, Any]:
     return {
         "id": agent.id,
         "scenario_id": agent.scenario_id,
-        "name": agent.name,
-        "role": agent.role,
-        "persona": agent.persona,
+        "name": _scrub_export_text(agent.name),
+        "role": _scrub_export_text(agent.role),
+        "persona": _scrub_export_text(agent.persona),
         "tier": agent.tier.value,
-        "stance": agent.stance,
-        "emotion": agent.emotion,
+        "stance": _scrub_export_text(agent.stance),
+        "emotion": _scrub_export_text(agent.emotion),
         "group_id": agent.group_id,
         "agent_identity_id": agent.agent_identity_id,
         "source_type": agent.source_type,
@@ -271,9 +376,9 @@ def _serialize_message(
         "branch_id": branch_id,
         "round_number": round_number,
         "agent_id": message.agent_id,
-        "content": message.content,
-        "emotion": message.emotion,
-        "diverge": message.diverge,
+        "content": _scrub_export_text(message.content),
+        "emotion": _scrub_export_text(message.emotion),
+        "diverge": _scrub_export_text(message.diverge),
         "tokens_used": message.tokens_used,
     }
 
@@ -284,7 +389,7 @@ def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
         "snapshot_id": node.snapshot_id,
         "node_key": node.node_key,
         "node_type": node.node_type,
-        "label": _scrub_sensitive_text(node.label) if isinstance(node.label, str) else node.label,
+        "label": _scrub_export_text(node.label),
         "round_number": node.round_number,
         "ref_model": node.ref_model,
         "ref_id": node.ref_id,
@@ -300,14 +405,10 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
         "target_node_id": edge.target_node_id,
         "edge_type": edge.edge_type,
         "weight": edge.weight,
-        "label": _scrub_sensitive_text(edge.label) if isinstance(edge.label, str) else edge.label,
+        "label": _scrub_export_text(edge.label),
         "payload_json": _redact_json_string(edge.payload_json),
         "confidence_tier": edge.confidence_tier,
-        "source_ref": (
-            _scrub_sensitive_text(edge.source_ref)
-            if isinstance(edge.source_ref, str)
-            else edge.source_ref
-        ),
+        "source_ref": _scrub_export_text(edge.source_ref),
         "source_round_number": edge.source_round_number,
         "evidence_json": _redact_json_string(edge.evidence_json),
     }
@@ -319,7 +420,7 @@ def _serialize_intervention_receipt(row: InterventionLog) -> dict[str, Any]:
         "scenario_id": row.scenario_id,
         "branch_id": row.branch_id,
         "round_number": row.round_number,
-        "user_input": row.user_input,
+        "user_input": _scrub_export_text(row.user_input),
         "effect_summary_json": _redact_json_string(row.effect_summary_json),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
@@ -344,9 +445,7 @@ def _collect_messages(
     round_ids = [r.id for r in rounds]
     round_meta = {r.id: (r.branch_id, r.round_number) for r in rounds}
     messages = list(
-        session.exec(
-            select(AgentMessage).where(AgentMessage.round_id.in_(round_ids))
-        ).all()
+        session.exec(select(AgentMessage).where(AgentMessage.round_id.in_(round_ids))).all()
     )
     serialized = []
     for msg in messages:
@@ -391,16 +490,8 @@ def _collect_causal_graph(
     if snapshot is None:
         return {"snapshot": None, "nodes": [], "edges": []}
 
-    nodes = list(
-        session.exec(
-            select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
-        ).all()
-    )
-    edges = list(
-        session.exec(
-            select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
-        ).all()
-    )
+    nodes = list(session.exec(select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)).all())
+    edges = list(session.exec(select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)).all())
     return {
         "snapshot": {
             "id": snapshot.id,
@@ -409,10 +500,8 @@ def _collect_causal_graph(
             "graph_kind": snapshot.graph_kind,
             "branch_id": snapshot.branch_id,
             "round_number": snapshot.round_number,
-            "metadata_json": snapshot.metadata_json,
-            "created_at": (
-                snapshot.created_at.isoformat() if snapshot.created_at else None
-            ),
+            "metadata_json": _redact_json_string(snapshot.metadata_json),
+            "created_at": (snapshot.created_at.isoformat() if snapshot.created_at else None),
         },
         "nodes": [_serialize_graph_node(n) for n in nodes],
         "edges": [_serialize_graph_edge(e) for e in edges],
@@ -438,12 +527,8 @@ def build_snapshot_manifest(
     if scenario is None:
         raise SnapshotImportError(f"Scenario not found: {scenario_id}")
 
-    branches = list(
-        session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
-    )
-    agents = list(
-        session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
-    )
+    branches = list(session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all())
+    agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
     messages = _collect_messages(session, branches)
     graph = _collect_causal_graph(session, scenario_id)
     intervention_receipts = _collect_intervention_receipts(session, scenario_id)
@@ -453,9 +538,9 @@ def build_snapshot_manifest(
     agents_payload = [_serialize_agent(a) for a in agents]
 
     payloads: dict[str, bytes] = {
-        "scenario.json": json.dumps(
-            scenario_payload, ensure_ascii=False, default=str
-        ).encode("utf-8"),
+        "scenario.json": json.dumps(scenario_payload, ensure_ascii=False, default=str).encode(
+            "utf-8"
+        ),
         "branches.jsonl": (
             "\n".join(
                 json.dumps(b, ensure_ascii=False, default=str) for b in branches_payload
@@ -471,19 +556,16 @@ def build_snapshot_manifest(
             else b""
         ),
         "messages.jsonl": (
-            "\n".join(
-                json.dumps(m, ensure_ascii=False, default=str) for m in messages
-            ).encode("utf-8")
+            "\n".join(json.dumps(m, ensure_ascii=False, default=str) for m in messages).encode(
+                "utf-8"
+            )
             if messages
             else b""
         ),
-        "causal_graph.json": json.dumps(
-            graph, ensure_ascii=False, default=str
-        ).encode("utf-8"),
+        "causal_graph.json": json.dumps(graph, ensure_ascii=False, default=str).encode("utf-8"),
         "intervention_receipts.jsonl": (
             "\n".join(
-                json.dumps(row, ensure_ascii=False, default=str)
-                for row in intervention_receipts
+                json.dumps(row, ensure_ascii=False, default=str) for row in intervention_receipts
             ).encode("utf-8")
             if intervention_receipts
             else b""
@@ -491,8 +573,7 @@ def build_snapshot_manifest(
     }
 
     file_index = {
-        name: {"sha256": _sha256_bytes(data), "size": len(data)}
-        for name, data in payloads.items()
+        name: {"sha256": _sha256_bytes(data), "size": len(data)} for name, data in payloads.items()
     }
     manifest = {
         "version": SNAPSHOT_VERSION,
@@ -513,9 +594,7 @@ def export_snapshot_zip(
     include_private: bool = False,
 ) -> io.BytesIO:
     """Serialize ``scenario_id`` as a ZIP byte stream."""
-    bundle = build_snapshot_manifest(
-        scenario_id, session, include_private=include_private
-    )
+    bundle = build_snapshot_manifest(scenario_id, session, include_private=include_private)
     manifest = bundle["manifest"]
     payloads: dict[str, bytes] = bundle["payloads"]
 
@@ -579,6 +658,49 @@ def _load_json(blob: bytes, filename: str = "JSON") -> Any:
         raise SnapshotImportError(f"{filename} is not valid UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise SnapshotImportError(f"Malformed {filename}: {exc}") from exc
+
+
+def _validate_snapshot_branch_graph(branch_rows: list[dict[str, Any]]) -> None:
+    """Reject ambiguous or cyclic branch ancestry before creating DB rows."""
+    parents: dict[str, str] = {}
+    for index, row in enumerate(branch_rows, start=1):
+        branch_id = str(row.get("id") or "").strip()
+        if not branch_id:
+            raise SnapshotImportError(
+                f"branches.jsonl row {index} has no branch id"
+            )
+        if branch_id in parents:
+            raise SnapshotImportError(f"Duplicate branch id: {branch_id!r}")
+        parents[branch_id] = str(row.get("parent_branch_id") or "").strip()
+
+    for branch_id, parent_id in parents.items():
+        if not parent_id:
+            continue
+        if parent_id == branch_id:
+            raise SnapshotImportError(
+                f"Branch {branch_id!r} cannot be its own parent"
+            )
+        if parent_id not in parents:
+            raise SnapshotImportError(
+                f"Branch {branch_id!r} references unknown parent branch {parent_id!r}"
+            )
+
+    states: dict[str, int] = {}
+    for start_id in parents:
+        if states.get(start_id) == 2:
+            continue
+        path: list[str] = []
+        current_id = start_id
+        while current_id and states.get(current_id, 0) == 0:
+            states[current_id] = 1
+            path.append(current_id)
+            current_id = parents[current_id]
+        if current_id and states.get(current_id) == 1:
+            raise SnapshotImportError(
+                f"Branch parent graph contains a cycle at {current_id!r}"
+            )
+        for path_id in path:
+            states[path_id] = 2
 
 
 def _is_safe_zip_member_name(name: str) -> bool:
@@ -665,9 +787,7 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
           omission.
     """
     if len(zip_bytes) > MAX_IMPORT_ZIP_BYTES:
-        raise SnapshotImportError(
-            f"ZIP too large (max {MAX_IMPORT_ZIP_BYTES} bytes)"
-        )
+        raise SnapshotImportError(f"ZIP too large (max {MAX_IMPORT_ZIP_BYTES} bytes)")
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
@@ -689,15 +809,12 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
         total_uncompressed = 0
         for info in infos:
             if info.filename in info_by_name:
-                raise SnapshotImportError(
-                    f"Duplicate ZIP member name: {info.filename!r}"
-                )
+                raise SnapshotImportError(f"Duplicate ZIP member name: {info.filename!r}")
             _validate_zip_member_info(info)
             total_uncompressed += info.file_size
             if total_uncompressed > MAX_UNCOMPRESSED_TOTAL_BYTES:
                 raise SnapshotImportError(
-                    "ZIP uncompressed total too large "
-                    f"(> {MAX_UNCOMPRESSED_TOTAL_BYTES} bytes)"
+                    f"ZIP uncompressed total too large (> {MAX_UNCOMPRESSED_TOTAL_BYTES} bytes)"
                 )
             info_by_name[info.filename] = info
 
@@ -707,18 +824,14 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
         try:
             manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise SnapshotImportError(
-                f"Manifest is not valid JSON: {exc}"
-            ) from exc
+            raise SnapshotImportError(f"Manifest is not valid JSON: {exc}") from exc
 
         if not isinstance(manifest, dict):
             raise SnapshotImportError("Manifest must be a JSON object")
 
         version = manifest.get("version")
         if version != SNAPSHOT_VERSION:
-            raise SnapshotImportError(
-                f"Unsupported snapshot version: {version!r}"
-            )
+            raise SnapshotImportError(f"Unsupported snapshot version: {version!r}")
 
         files_index = manifest.get("files")
         if not isinstance(files_index, dict):
@@ -740,9 +853,7 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
         contents: dict[str, bytes] = {}
         for name, meta in files_index.items():
             if not isinstance(meta, dict):
-                raise SnapshotImportError(
-                    f"Manifest entry for {name!r} must be an object"
-                )
+                raise SnapshotImportError(f"Manifest entry for {name!r} must be an object")
             if not _is_safe_zip_member_name(name):
                 raise SnapshotImportError(f"Unsafe manifest file name: {name!r}")
             if name not in info_by_name:
@@ -772,13 +883,10 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
                 raise SnapshotImportError(f"checksums.sha256 mismatch for {name}")
             if len(blob) != expected_size:
                 raise SnapshotImportError(
-                    f"File size mismatch for {name}: "
-                    f"expected {expected_size}, got {len(blob)}"
+                    f"File size mismatch for {name}: expected {expected_size}, got {len(blob)}"
                 )
             if _sha256_bytes(blob) != expected_sha:
-                raise SnapshotImportError(
-                    f"Checksum mismatch for {name}"
-                )
+                raise SnapshotImportError(f"Checksum mismatch for {name}")
             contents[name] = blob
 
     return contents
@@ -984,6 +1092,26 @@ def _remap_full_report_coordinates(
     return report
 
 
+def _remap_result_quality_coordinates(
+    value: Any,
+    *,
+    branch_id_map: dict[str, str],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    result_quality = json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    branch_answers = result_quality.get("branch_question_answers")
+    if isinstance(branch_answers, dict):
+        result_quality["branch_question_answers"] = {
+            mapped_branch_id: answer
+            for original_branch_id, answer in branch_answers.items()
+            if (mapped_branch_id := branch_id_map.get(str(original_branch_id)))
+        }
+    else:
+        result_quality.pop("branch_question_answers", None)
+    return result_quality
+
+
 def import_snapshot_zip(
     zip_data: bytes | io.BytesIO,
     user_id: str | None,
@@ -1001,16 +1129,20 @@ def import_snapshot_zip(
         raise SnapshotImportError("scenario.json must be a JSON object")
 
     branches_rows = _load_jsonl(contents.get("branches.jsonl", b""), "branches.jsonl")
+    _validate_snapshot_branch_graph(branches_rows)
     agents_rows = _load_jsonl(contents.get("agents.jsonl", b""), "agents.jsonl")
     messages_rows = _load_jsonl(contents.get("messages.jsonl", b""), "messages.jsonl")
     intervention_receipt_rows = _load_jsonl(
         contents.get("intervention_receipts.jsonl", b""),
         "intervention_receipts.jsonl",
     )
-    graph_payload = _load_json(
-        contents.get("causal_graph.json", b""),
-        "causal_graph.json",
-    ) or {}
+    graph_payload = (
+        _load_json(
+            contents.get("causal_graph.json", b""),
+            "causal_graph.json",
+        )
+        or {}
+    )
 
     from app.models import (
         AgentTier as _AgentTier,
@@ -1055,14 +1187,15 @@ def import_snapshot_zip(
         else None
     )
     deferred_full_report = None
+    deferred_result_quality = None
     if isinstance(parsed_context, dict):
         deferred_full_report = _normalize_full_report_status_for_snapshot(
             parsed_context.pop("full_report", None)
         )
+        deferred_result_quality = parsed_context.pop("result_quality", None)
 
     scenario = Scenario(
-        question=str(scenario_payload.get("question", "")).strip()
-        or "Imported snapshot",
+        question=str(scenario_payload.get("question", "")).strip() or "Imported snapshot",
         parsed_context=parsed_context or None,
         director_state_json=_redact_dict(scenario_payload.get("director_state_json"))
         if isinstance(scenario_payload.get("director_state_json"), dict)
@@ -1089,7 +1222,10 @@ def import_snapshot_zip(
             scenario_id=new_scenario_id,
             parent_branch_id=None,
             fork_round=_coerce_int_field(
-                raw.get("fork_round"), "branches.fork_round", default=0, min_value=0,
+                raw.get("fork_round"),
+                "branches.fork_round",
+                default=0,
+                min_value=0,
             ),
             fork_reason=str(raw.get("fork_reason") or ""),
             title=str(raw.get("title") or "Imported Branch"),
@@ -1172,6 +1308,17 @@ def import_snapshot_zip(
         if original_id:
             agent_id_map[original_id] = agent.id
 
+    # Branch rows are created before agents, so replay agent coordinates need
+    # a second pass. Unknown source ids are cleared to prevent cross-scenario
+    # ownership leaks or dangling replay links.
+    for new_id in branch_id_map.values():
+        branch = session.get(Branch, new_id)
+        if branch is None or not branch.replay_source_agent_id:
+            continue
+        source_orig = str(branch.replay_source_agent_id)
+        branch.replay_source_agent_id = agent_id_map.get(source_orig)
+        session.add(branch)
+
     round_lookup: dict[tuple[str, int], str] = {}
     round_id_map: dict[str, str] = {}
     message_id_map: dict[str, str] = {}
@@ -1181,7 +1328,10 @@ def import_snapshot_zip(
         if not new_branch_id:
             continue
         round_number = _coerce_int_field(
-            raw.get("round_number"), "messages.round_number", default=1, min_value=1,
+            raw.get("round_number"),
+            "messages.round_number",
+            default=1,
+            min_value=1,
         )
         if round_number is None:
             round_number = 1
@@ -1189,7 +1339,8 @@ def import_snapshot_zip(
         round_id = round_lookup.get(round_key)
         if round_id is None:
             round_row = Round(
-                branch_id=new_branch_id, round_number=round_number,
+                branch_id=new_branch_id,
+                round_number=round_number,
             )
             session.add(round_row)
             session.flush()
@@ -1264,7 +1415,19 @@ def import_snapshot_zip(
         new_scenario_id=new_scenario_id,
         branch_id_map=branch_id_map,
         agent_id_map=agent_id_map,
+        message_id_map=message_id_map,
     )
+
+    if deferred_result_quality is not None:
+        remapped_result_quality = _remap_result_quality_coordinates(
+            deferred_result_quality,
+            branch_id_map=branch_id_map,
+        )
+        if remapped_result_quality is not None:
+            parsed = dict(scenario.parsed_context or {})
+            parsed["result_quality"] = remapped_result_quality
+            scenario.parsed_context = parsed
+            session.add(scenario)
 
     if deferred_full_report is not None:
         remapped_report = _remap_full_report_coordinates(
@@ -1302,6 +1465,7 @@ def _import_causal_graph(
     new_scenario_id: str,
     branch_id_map: dict[str, str],
     agent_id_map: dict[str, str],
+    message_id_map: dict[str, str],
 ) -> None:
     if not isinstance(graph_payload, dict):
         return
@@ -1343,7 +1507,16 @@ def _import_causal_graph(
             payload_json,
             branch_id_map=branch_id_map,
             agent_id_map=agent_id_map,
+            message_id_map=message_id_map,
         )
+        ref_model = str(raw.get("ref_model") or "").strip() or None
+        source_ref_id = str(raw.get("ref_id") or "").strip()
+        if ref_model == "agent_message":
+            remapped_ref_id = message_id_map.get(source_ref_id)
+        elif ref_model == "branch":
+            remapped_ref_id = branch_id_map.get(source_ref_id)
+        else:
+            remapped_ref_id = None
         node = GraphNode(
             snapshot_id=new_snapshot_id,
             node_key=str(raw.get("node_key") or original_id or ""),
@@ -1355,8 +1528,8 @@ def _import_causal_graph(
                 default=None,
                 min_value=1,
             ),
-            ref_model=raw.get("ref_model"),
-            ref_id=raw.get("ref_id"),
+            ref_model=ref_model,
+            ref_id=remapped_ref_id,
             payload_json=remapped_payload,
         )
         session.add(node)
@@ -1391,6 +1564,7 @@ def _import_causal_graph(
                 raw.get("payload_json"),
                 branch_id_map=branch_id_map,
                 agent_id_map=agent_id_map,
+                message_id_map=message_id_map,
             ),
             confidence_tier=raw.get("confidence_tier"),
             source_ref=raw.get("source_ref"),
@@ -1404,6 +1578,7 @@ def _import_causal_graph(
                 raw.get("evidence_json"),
                 branch_id_map=branch_id_map,
                 agent_id_map=agent_id_map,
+                message_id_map=message_id_map,
             ),
         )
         session.add(edge)
@@ -1414,8 +1589,9 @@ def _remap_payload_json(
     *,
     branch_id_map: dict[str, str],
     agent_id_map: dict[str, str],
+    message_id_map: dict[str, str],
 ) -> Any:
-    """Best-effort branch/agent id remap inside graph node payloads."""
+    """Best-effort branch, agent, and message id remap in graph payloads."""
     if payload_json is None:
         return None
     if not isinstance(payload_json, str):
@@ -1434,11 +1610,13 @@ def _remap_payload_json(
                     new_dict[key] = branch_id_map.get(sub, sub)
                 elif key == "agent_id" and isinstance(sub, str):
                     new_dict[key] = agent_id_map.get(sub, sub)
+                elif key == "message_id" and isinstance(sub, str):
+                    mapped_message_id = message_id_map.get(sub)
+                    if mapped_message_id:
+                        new_dict[key] = mapped_message_id
                 elif key == "children" and isinstance(sub, list):
                     new_dict[key] = [
-                        branch_id_map.get(child, child)
-                        if isinstance(child, str)
-                        else _walk(child)
+                        branch_id_map.get(child, child) if isinstance(child, str) else _walk(child)
                         for child in sub
                     ]
                 else:
@@ -1462,7 +1640,9 @@ def export_scenario_to_zip_bytes(
     """Convenience wrapper that opens its own session and returns ZIP bytes."""
     with Session(get_engine()) as session:
         buffer = export_snapshot_zip(
-            scenario_id, session, include_private=include_private,
+            scenario_id,
+            session,
+            include_private=include_private,
         )
         return buffer.getvalue()
 

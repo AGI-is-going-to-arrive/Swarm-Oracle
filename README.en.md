@@ -16,19 +16,22 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 ## What It Does
 
 - Multi-branch simulation, Classic branch tree, and Pixel Theater
+- Gameplay Cards, prediction bets, worldline commitments, and a post-run Causal Archive
 - Debate Arena, Ending Chambers, and Worldline Roundtable
 - Counterfactual reruns, branch comparison, and Replay Trace
 - Causal graph, knowledge graph, and timeline views
-- Custom Agents, persona backups, prediction journal, and snapshots
+- In-run Agent profiles, branch-scoped memory, Custom Agents, persona backups, prediction journal, and snapshots
 - Result verdicts, full reports, share cards, and optional search augmentation
+
+In-run Agent profiles separate configured stance from observed emotion and identify the worldline and round behind that observation; replay explicitly says when no matching observation exists.
 
 See the [feature index](docs/FEATURES.en.md) for capability groups and routes, and the [usage guide](docs/USAGE.en.md) for operation.
 
 ## Two Ways to Use It
 
-### Offline Snapshot Demo
+### Built-in Official Samples and Snapshot Demo
 
-The backend and frontend can start without a real LLM. Import a sanitized `*.swarm` file from `samples/snapshots/` on the home page to inspect a saved simulation, result, and replay. The placeholder key only boots this demo path; it cannot generate a new live run.
+The backend and frontend can start without a real LLM. The home page offers three bundled official samples: no API key, file selection, or model call is needed, and any sample opens as a complete imported run with results, replay, and related views. You can also keep importing sanitized `*.swarm` files from `samples/snapshots/`. Built-in samples and Snapshot imports cannot generate a new live run.
 
 ### Live LLM Runs
 
@@ -49,7 +52,7 @@ cp .env.docker.example .env.docker
 docker compose up -d
 ```
 
-Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. To rebuild the images from source, run `docker compose up --build -d`.
+Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. The backend image bundles `packs/` and `samples/`, so Local Packs and official samples are available inside the container. To rebuild the images from source, run `docker compose up --build -d`.
 
 ### Local Development
 
@@ -64,7 +67,7 @@ cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Start the frontend in another terminal (Node.js 20+, npm):
+Start the frontend in another terminal (Node.js 20.19+ or 22.12+, npm):
 
 ```bash
 cd frontend

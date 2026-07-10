@@ -1401,6 +1401,54 @@
   transition: color 0.2s ease;
 }
 
+.degraded-llm-warning {
+  margin-top: 12px;
+  text-align: left;
+}
+
+.degraded-demo-entry {
+  padding: 12px;
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-lg, 8px);
+  background: var(--color-base, oklch(98% 0.005 80));
+}
+
+.degraded-demo-entry--error,
+.degraded-demo-entry--unknown {
+  border-color: var(--color-warning, #b7791f);
+}
+
+.degraded-demo-entry__copy,
+.degraded-demo-entry__status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.degraded-demo-entry__copy {
+  margin-bottom: 8px;
+}
+
+.degraded-demo-entry__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.degraded-demo-entry__actions .btn {
+  flex: 1 1 0;
+  justify-content: center;
+}
+
+.degraded-demo-entry__status--error {
+  margin-bottom: 8px;
+  color: var(--color-danger, #b42318);
+}
+
+.degraded-demo-entry__actions + .degraded-demo-entry__status--error {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
 .iv-hero__launch-error {
   display: flex;
   align-items: flex-start;
@@ -1929,6 +1977,10 @@
 }
 
 @media (max-width: 520px) {
+  .degraded-demo-entry__actions {
+    flex-direction: column;
+  }
+
   .weekly-challenge-card {
     flex-direction: column;
     gap: 12px;

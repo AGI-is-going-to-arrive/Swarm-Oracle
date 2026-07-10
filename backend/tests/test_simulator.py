@@ -224,6 +224,7 @@ async def test_gather_agent_messages_keeps_partial_success_when_one_agent_fatal(
     first_id = _make_agent(engine, scenario_id, name="Alpha", tier=AgentTier.CROWD)
     second_id = _make_agent(engine, scenario_id, name="Beta", tier=AgentTier.CROWD)
     agents = [_load_agent_dict(engine, first_id), _load_agent_dict(engine, second_id)]
+    agents[1]["emotion"] = "worried"
     events: list[dict] = []
 
     async def mixed_llm_call(prompt: str, *_args, **_kwargs):
@@ -231,10 +232,18 @@ async def test_gather_agent_messages_keeps_partial_success_when_one_agent_fatal(
             raise LLMError(code="LLM_AUTH_FAILED")
         return "Alpha carries the round with a durable answer."
 
+    async def fake_metadata(*_args, **_kwargs):
+        return {
+            "content": "Alpha carries the round with a durable answer.",
+            "emotion": "focused",
+            "diverge": None,
+        }
+
     async def push(event: dict) -> None:
         events.append(event)
 
     monkeypatch.setattr(simulator_module, "llm_call", mixed_llm_call)
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_metadata)
     monkeypatch.setattr(simulator_module, "get_runtime_parallelism_limit", lambda: 2)
 
     messages = await simulator_module._gather_agent_messages(
@@ -253,6 +262,7 @@ async def test_gather_agent_messages_keeps_partial_success_when_one_agent_fatal(
     assert [msg["agent_name"] for msg in messages] == ["Alpha", "Beta"]
     assert messages[0]["content"] == "Alpha carries the round with a durable answer."
     assert messages[1]["content"] == "(Beta stays silent)"
+    assert agents[1]["emotion"] == "neutral"
     degraded = [event for event in events if event["type"] == "simulation_degraded"]
     assert degraded
     assert degraded[0]["data"]["code"] == "LLM_AUTH_FAILED"
@@ -2820,6 +2830,14 @@ class TestGatherHierarchicalMessages:
     @pytest.mark.asyncio
     async def test_synthesized_worker_messages_are_stored_in_vector_memory(self, monkeypatch):
         captured: list[dict] = []
+        worker = {
+            "id": "worker-1",
+            "name": "Worker Beta",
+            "role": "Analyst",
+            "stance": "반대",
+            "emotion": "neutral",
+        }
+        emotion_state = {"worker-1": "neutral"}
 
         async def _fake_gather_agent_messages(*_args, **_kwargs):
             return [
@@ -2849,19 +2867,23 @@ class TestGatherHierarchicalMessages:
             round_id="round-1",
             round_num=3,
             leader_agents=[{"id": "leader-1", "name": "Leader Alpha", "role": "Coordinator"}],
-            worker_agents=[{"id": "worker-1", "name": "Worker Beta", "role": "Analyst", "stance": "반대"}],  # noqa: E501
+            worker_agents=[worker],
             agent_to_group={"Worker Beta": "alpha"},
             group_leaders={"alpha": "Leader Alpha"},
             setting_bg="bg",
             topic="topic",
+            agent_prev_emotions=emotion_state,
         )
 
         assert len(result) == 2
         assert len(captured) == 1
         assert captured[0]["scenario_id"] == "scenario-1"
+        assert captured[0]["agent_id"] == "worker-1"
         assert captured[0]["agent_name"] == "Worker Beta"
         assert captured[0]["branch_id"] == "branch-1"
         assert "Leader Alpha" in captured[0]["content"]
+        assert worker["emotion"] == "focused"
+        assert emotion_state["worker-1"] == "focused"
 
     @pytest.mark.asyncio
     async def test_turn_progress_counts_leaders_and_synthesized_workers(self, monkeypatch):
@@ -3465,7 +3487,10 @@ class TestGatherAgentMessages:
         assert results[0]["emotion"] == "neutral"
 
     @pytest.mark.asyncio
-    async def test_skips_db_recent_message_query_when_blackboard_has_context(self, monkeypatch):
+    async def test_blackboard_skips_recent_db_query_but_keeps_own_memory_lookup(
+        self,
+        monkeypatch,
+    ):
         engine = get_engine()
         sid = _make_scenario(engine)
         bid = _create_branch(engine, sid, title="主线", probability=1.0)
@@ -3507,12 +3532,15 @@ class TestGatherAgentMessages:
             _raise_on_recent_messages,
         )
 
-        def _raise_on_retrieve_memories(*args, **kwargs):
-            raise AssertionError("usable blackboard briefing should skip L2 memory lookup")
+        memory_calls: list[dict] = []
+
+        def _retrieve_own_memories(*args, **kwargs):
+            memory_calls.append(dict(kwargs))
+            return "[R1 姜维](calm): 坚守本阵"
 
         monkeypatch.setattr(
             "app.services.simulator.retrieve_relevant_memories",
-            _raise_on_retrieve_memories,
+            _retrieve_own_memories,
         )
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
@@ -3531,6 +3559,15 @@ class TestGatherAgentMessages:
 
         assert len(results) == 1
         assert results[0]["content"] == "保持阵线。"
+        assert memory_calls == [
+            {
+                "top_k": 3,
+                "allowed_branch_rounds": {bid: 0},
+                "agent_id": agent_dict["id"],
+                "agent_name": "姜维",
+                "allow_legacy_name_fallback": True,
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_visualization_path_handles_text_stance_and_emotion_change(self, monkeypatch):

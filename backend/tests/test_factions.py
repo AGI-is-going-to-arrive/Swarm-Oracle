@@ -89,6 +89,38 @@ class TestProcessRound:
         result = process_round("s1", "b1", 1, [])
         assert result is None
 
+    def test_accepts_simulator_message_dicts_and_preserves_agent_ids(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        messages = [
+            {
+                "agent_id": f"agent-{index}",
+                "emotion": emotion,
+                "diverge": None,
+                "content": f"message-{index}",
+            }
+            for index, emotion in enumerate(
+                ("aggressive", "anxious", "hopeful", "confident"),
+                start=1,
+            )
+        ]
+
+        process_round(scenario_id, branch_id, 1, messages)
+
+        with Session(get_engine()) as session:
+            edges = session.exec(
+                select(AgentRelationEdge).where(
+                    AgentRelationEdge.scenario_id == scenario_id,
+                    AgentRelationEdge.branch_id == branch_id,
+                    AgentRelationEdge.round_number == 1,
+                )
+            ).all()
+        adjacent_ids = {
+            agent_id
+            for edge in edges
+            for agent_id in (edge.source_agent_id, edge.target_agent_id)
+        }
+        assert adjacent_ids == {"agent-1", "agent-2", "agent-3", "agent-4"}
+
     def test_detects_all_neutral_degradation(self):
         """All agents with emotion=neutral → stance_score=0 → all_neutral."""
         msgs = [

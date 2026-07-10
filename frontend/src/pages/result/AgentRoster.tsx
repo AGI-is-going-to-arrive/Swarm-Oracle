@@ -43,6 +43,11 @@ export default function AgentRoster({
     return branches.find((branch) => branch.id === cfSourceBranchId) ?? analysisBranch;
   }, [analysisBranch, branches, cfSourceBranchId]);
   const counterfactualSourceBranchId = counterfactualSourceBranch?.id ?? '';
+  const causalGraphAvailable = Boolean(
+    capabilities?.causal_graph?.enabled
+      && scenario?.causal_graph_id
+      && !isReplayMode,
+  );
 
   return (
     <>
@@ -70,9 +75,9 @@ export default function AgentRoster({
       )}
 
       {/* ── Phase 3 Replay-Safe Integration ───────────────── */}
-      {isWorkbenchMode && activeScenarioId && (capabilities?.causal_graph?.enabled || capabilities?.factions?.enabled) && (
+      {isWorkbenchMode && activeScenarioId && (causalGraphAvailable || capabilities?.factions?.enabled) && (
         <section className="result-extension-section">
-          {capabilities?.causal_graph?.enabled && (
+          {causalGraphAvailable && (
             <div className="result-extension-section__item">
               <a
                 href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
