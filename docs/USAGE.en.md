@@ -2,114 +2,68 @@ English | [中文](USAGE.md)
 
 # SwarmOracle Usage Guide
 
-This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md) (local development: backend on port `18927`, frontend on port `18928`; open `http://localhost:18928` in your browser). You can also save and test a model profile from `/admin/setup`: the home page treats profiles with a key as usable LLM access, and simulations, debates, and result-page chambers can reuse them. For advanced options such as native search and proxy upstream declarations, see [CONFIGURATION](CONFIGURATION.en.md).
+## Before You Start
 
-For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
+Local development uses backend port `18927` and frontend port `18928`. Open http://127.0.0.1:18928 . See the [README](../README.en.md) for startup commands.
 
-> Tip: in local development, the backend must be running on `18927` before you open the frontend, otherwise the page will keep waiting or show an error.
+- **Offline demo**: no real LLM is required. Start both services, then import a `*.swarm` file from `samples/snapshots/` on the home page to inspect a saved run and result.
+- **Live generation**: new simulations, debates, chambers, and reports need a working LLM. Configure the server default, save a model profile with a key at `/admin/setup`, or use the separate **BYOK** disclosure on the home page.
 
----
+Agent count and rounds are sliders in the main home-page form. **Advanced Settings** and **BYOK** are separate disclosures: Advanced Settings controls mode, display, Local Packs, and search; BYOK controls the LLM connection for this run. See [Configuration](CONFIGURATION.en.md) for variables.
 
-## First Simulation: 3 Steps
+## Start a Live Simulation
 
-1. On the home page, type a "What if...?" question, for example, "What if Zhuge Liang had lived 10 more years?" You can also choose a Quick Start template, which fills in a question and suggested characters.
-2. Optional: adjust **simulation rounds** and **Agent count**. More rounds and more characters produce richer endings, but also take longer. The home page estimates runtime as you adjust them, and the simulation page continues to show current round, in-round speaking progress, overall progress, and ETA.
-3. Select **Start Simulation**, confirm the question and run settings in the dialog, wait for the run to finish, then select **View Results**. If you are using a Chinese, Japanese, or similar IME, commit the candidate text before launch.
+1. Enter a “What if...?” question on the home page, or choose a Quick Start, education template, or Local Pack.
+2. Set Agent count, rounds, and mode. Use Advanced Settings for Classic / Pixel Theater, search augmentation, and related options. Open BYOK separately when this run needs another LLM connection.
+3. Select **Start Simulation** and confirm the settings. If launch is unavailable, the page states whether the question is empty, LLM access is unconfigured, or the run is budget-blocked.
 
-During the run you will see the top **progress ledger** with current round, in-round Agent speaking progress, overall progress, ETA, and first-round warmup elapsed time; for slow local models it switches to a still-working hint while content, progress activity, or a live run signal continues, and labels the active branch when multiple branches are running. You will also see the **Agent list** on the left, the **branch tree** in the middle, and **live dialogue** on the right. Agents speak round by round and respond to each other. The bottom progress bar or Theater replay timeline reserves space for the message list, zoom controls, and language switcher. Intervention entries are available only during a live run; they disappear during narrative generation, completion, and replay. If the run produces no content, progress activity, or live run signal for a long time, the page shows an interrupted-run notice and can take you back home to retry with the original question preserved; truly failed, cancelled, or orphaned runs show unfinished branches as interrupted instead of keeping an in-progress node beside an error state. If the model returns an empty turn or something shaped like a prompt template / source snippet, the page shows a safe placeholder instead of exposing internal prompt content.
+Multi-run opens a waiting panel first. The first run can open live `/sim/:id`; after every run finishes, the result page summarizes the distribution.
 
----
+## During a Run
 
-## What You Can Do on the Result Page
+- The header shows round, in-round speaking progress, overall progress, and ETA. Slow models show elapsed time.
+- Classic renders the branch tree; Pixel Theater renders the stage and toolbar.
+- A live run can be cancelled or changed with interventions/gameplay cards. Narration, completed runs, and replay expose no writable intervention entry.
+- Interrupted, cancelled, and failed runs settle into explicit terminal states. Unfinished branches are not presented as successful outcomes.
 
-After a simulation finishes, the result page shows:
+## Result Page
 
-- **Prediction verdict**: a direct answer to your original question, with confidence and uncertainty notes when available.
-- **Worldline cards**: each ending has a title, probability, story, and answer to the original question; probabilities are normalized across terminal leaf worldlines, so fork parents do not rank as final endings.
-- **Next-step entries**: depending on the data and server settings, the page shows Oracle Chambers, Roundtable, branch comparison, graph workbench, Knowledge Graph Explorer, Timeline Galaxy, Agent follow-up, and sharing entries.
-- **Full report**: when a full report completes, the result page first shows confidence, real-field-derived takeaways, section links, and a link to open the full report. The report anchors verdict, evidence, dissent, and probability charts to the terminal answer leaf, while indicators / watch-list entries are generated from evidence by the LLM and filtered for filler. `/result/:id/report` shows every section, evidence item, and uncertainty note. The evidence drawer can jump back to the cited replay message. Report body content supports safe tables, strikethrough, and available probability / faction charts, and the disclaimer follows the current interface language.
+`/result/:id` starts with the original question, prediction verdict, and terminal worldlines. Probabilities normalize only across completed terminal leaves; fork parents do not count as final endings.
 
-Common buttons under an ending card:
+Common actions:
 
-- **Read Full Story**: expand the full narrative for that worldline.
-- **Enter Chamber**: pick 1-3 participants from the current worldline and ask follow-up questions; when model profiles are enabled, open Advanced settings to choose a profile for this chamber.
-- **One Move Only**: focus on one turning point without rerunning the main simulation.
-- **Other Worldline**: compare against another ending when multiple endings exist.
+- Expand a worldline story, inspect the causal archive and director debrief, or open the full report at `/result/:id/report`.
+- Enter a chamber, use One Move Only, or start a Worldline Roundtable. Crossline and roundtable entries require multiple endings.
+- Create a counterfactual branch from a real message, or continue from a checkpoint.
+- Open Graph Workbench, Knowledge Graph, Timeline, Replay Trace, or Agent follow-up.
+- Export Markdown, a snapshot, a share link, or a prediction card. Review the question and endings before publishing them.
 
-The result page also lets you export Markdown, generate sharing copy, copy a permalink, export a snapshot, open the causal graph, open the graph workbench, and view the leaderboard. The **What's Next** cards continue into branch comparison, the graph workbench, Knowledge Graph Explorer, Timeline Galaxy, Agent follow-up, and sharing.
+When a report, verdict, or graph is unavailable, the page shows an unavailable / partial / failed state. Failure of these enhancements does not erase existing worldline results.
 
----
+## Modes and Workspaces
 
-## Six Play Modes
+- **Debate Arena**: start it from home; live route `/debate/:id`; load the argument map on demand from the result.
+- **Ending Chamber**: enter from a worldline. Its model-profile selector lives in the chamber's own Advanced settings; leaving it blank uses the global default.
+- **Worldline Roundtable**: available with multiple endings; choose format and cast, then use 1:1 Interview, Research Analyst, or Cross-Examine after completion.
+- **Counterfactual and resume**: rewrite a real message or choose a checkpoint to create a new branch with provenance.
+- **Graphs**: `/workbench/:id` combines Causal, Split, and Knowledge Graph; `/kg-explorer/:id` and `/timeline-galaxy/:id` provide standalone views.
+- **Custom Agents**: manage Agents at `/agents`, create them manually or from PDF at `/agents/new`; backup import creates a new identity instead of overwriting one.
 
-### 1. Multi-Branch Simulation
+## Other Routes
 
-Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. The simulation page shows segmented progress, current round, in-round speaking progress, ETA, and first-round warmup elapsed time; after completion, only terminal leaf worldlines form the result probability distribution. Advanced Settings can change Context Mode (Collaborative (recommended) / Full context), Visualization Mode (Classic / Pixel Theater), Reasoning Effort, and Simulation Mode (Conservative / Balanced / Exploratory).
+- `/history`: simulation history
+- `/leaderboard`: prediction leaderboard
+- `/me/journal`: personal predictions and calibration
+- `/replay/:id`: replay-branch provenance
+- `/model-profiles`: model connection profiles
 
-If you choose multi-run on the home page, the app opens a waiting panel first: the first worldline is the full simulation and has **Watch simulation** for live `/sim`, while later worldlines use quick verdicts and show **View results** after they finish. After all runs finish, the result page shows the run-group outcome distribution and histogram.
+## Search Augmentation
 
-### 2. Debate Arena
-
-After typing a question, select **Start Debate Arena**. The app creates affirmative, opposing, and judge roles, then moves through debate phases. On the result page, select **Load map** to view claims, evidence, rebuttals, and rulings as a connected argument map.
-
-### 3. Oracle Chambers
-
-On a result card, select **Enter Chamber** and choose participants from that worldline. They answer using what already happened in that worldline, which works well for "Why did this happen?" and "What were you thinking then?" If model profiles are enabled, open the collapsed-by-default **Advanced settings** to choose a profile for this chamber; leave it blank to use the global default.
-
-### 4. Worldline Roundtable
-
-When multiple endings are available, the result page shows **Start Roundtable**. You can choose the roundtable style and participants, then let representatives from different worldlines discuss the outcome. Single-ending results do not show the roundtable entry.
-
-After the roundtable finishes, the **Deep Dive** workspace appears with three tabs: **1:1 Interview**, **Research Analyst**, and **Cross-Examine**. These are enabled by default. If the server disables a matching feature, the page shows an unavailable state. When you revisit the same completed roundtable later, the saved discussion result and Deep Dive load directly; the page does not send you back to the representative picker.
-
-### 5. Counterfactual Comparison
-
-From the graph workbench or participant analysis area, choose a real statement made by an Agent and rewrite it. The app creates a counterfactual worldline. When it finishes, open **Compare Branches** to see where the new and original worldlines first diverged.
-
-### 6. Causal Graph and Knowledge Graph
-
-Select **View Causal Graph** to see which events caused later events. Select **Graph Workbench** to switch between **Causal**, **Split**, and **Knowledge Graph** views. On narrow screens, Split view collapses to a single graph view, and graph pages keep zoom, search, and mobile navigation hints. When `FEATURE_KG_EXPLORER` is enabled, the result page also shows **Knowledge Graph Explorer** and **Timeline Galaxy** cards for filtering nodes, opening details, and asking node follow-up questions.
-
----
-
-## Advanced Features Enabled by Default
-
-- **Custom Agent Workshop**: select **Agents** on the home page to create, edit, favorite, export, or import Agents. Custom Agents can join simulations and debates; during simulations, persona, memory, and stance shape their voice, and they prioritize concrete prior-round points.
-- **Education templates**: select **Use template** on the home page to fill in a classroom-style question with suggested settings.
-- **Local Packs**: under home-page **Advanced settings**, Local Packs can be filtered by genre segments or by one search box for title, description, genre, and tags; the current result previews automatically, active filters show count and clear state, and choosing a template fills the question and suggested settings.
-- **Prediction Journal**: open `/me/journal` to record your probability forecast, mark the outcome later, and review calibration.
-- **Snapshot import / export**: import a scenario snapshot ZIP from the home page, or export the current scenario snapshot from the result page.
-- **Replay Trace**: open `/replay/:id` to inspect where counterfactual and continuation branches came from.
-- **Full report**: available by default on live result pages and at `/result/:id/report`; generating, partial, failed, and oversized reports show explicit states. A partial report with sections shows those sections instead of being summarized as complete. Retry generation uses the BYOK settings from the current tab and refreshes the report data in place instead of hard-reloading the whole result page; if the original profile cannot be recovered, reselect the profile or fill in a complete provider. Replay is read-only for an existing `full_report`; replay payloads without a report do not offer live generation or retry. If the server disables `FEATURE_RESULT_REPORT`, the entry is hidden or shown as unavailable.
-
----
-
-## Other Entries
-
-- `/history`: browse past simulations, filter by status, reopen results, or delete local scenarios.
-- `/leaderboard`: view the prediction leaderboard by scenario type, date, and Agent count.
-- `/agents`: manage custom Agents, identity profiles, and backups.
-- `/me/journal`: record and review your own predictions.
-
----
-
-## Search-Augmented Simulation (Optional)
-
-The home page has a **Search-Augmented Simulation** switch. When enabled, the app searches the web before simulation and injects relevant context into Agent prompts. This requires `ENABLE_WEB_SEARCH` and a configured search provider. See [CONFIGURATION.en.md](./CONFIGURATION.en.md). The recommended path reuses the server search configuration; the advanced path can provide a search provider, key, or base URL for the current run. This is still app-layer external search, not the native-search probe from Model Profiles.
-
----
-
-## Language Switch
-
-Use the **EN / 中文** switch in the lower-right corner. Interface text changes immediately. Agent dialogue follows the language used when you asked the question.
-
----
+Search augmentation is optional app-layer retrieval. A run can reuse the server search configuration or provide a search provider in the home-page search controls. Model-native search is a separate model-profile capability path. Both show citations only when a provider returns real sources. See [CONFIGURATION.en.md](CONFIGURATION.en.md).
 
 ## FAQ
 
-- **Start Simulation does nothing?** The page now shows the reason below the button. Make sure the question box is not empty, any IME candidate text is committed, an LLM is configured or a model profile with an API key is selected, and, in local development, the backend is running on `18927`. If the launch request stalls or the network fails, the page releases the launch lock and shows a retryable error.
-- **Cannot see Causal Graph / Argument Map / Deep Dive / Knowledge Graph Explorer / Timeline Galaxy / Full report?** These entries are controlled by `/api/capabilities`; the templates enable them by default. If you edited `.env`, confirm the related `FEATURE_*` values are `true`, then restart the backend.
-- **The result page says "No prediction verdict yet"?** The app could not produce a reliable single verdict for that run. The original question and worldline answers still remain visible.
-- **The run stays on "Preparing" or looks idle?** A local LLM can take a while to produce round 1, so the top progress ledger shows elapsed time; after that, content frames, in-round progress, or a live run signal keep the run in the still-working state. If the background task really was interrupted, the backend reconciles orphaned runs on startup or polling and shows unfinished branches as interrupted instead of still simulating; the frontend keeps the interrupted-run panel visible so you can return home and retry with the original question.
-- **The run stays on "generating narrative" for a long time?** With many branches, the app generates ending stories one by one, and the progress ledger switches into the narration stage. Completion follows terminal leaf worldlines; fork parents without their own story no longer block the done state, and completed entries can open their result page directly.
-- **Can I rely on the AI prediction?** No. SwarmOracle is for entertainment and exploration only. Do not use it for financial, medical, legal, or other real-world decisions.
+- **The app opens, but a new run cannot start?** Snapshot demo access does not mean an LLM is configured. Check `/admin/setup`, a model profile, or the server `LLM_*` settings.
+- **The frontend keeps waiting?** Confirm the backend is running at http://127.0.0.1:18927; the frontend depends on the `/api` and `/ws` proxies.
+- **A feature entry is missing?** Inspect `/api/capabilities` and the matching `FEATURE_*` value. Restart the backend after environment changes.
+- **Can I treat the prediction as fact?** No. Do not use it for financial, medical, legal, or other real-world decisions.

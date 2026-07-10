@@ -81,7 +81,7 @@
       <p class="kicker hero__eyebrow reveal" data-zh="AI 假设推演游乐场" data-en="AI What-If Prediction Playground">AI 假设推演游乐场</p>
       <h1 class="hero__title reveal" id="hero-title" style="--d:90ms" data-zh="群体预言机 — 一个问题，<em>多条世界线</em>" data-en="SwarmOracle — one question, <em>many worldlines</em>">群体预言机 — 一个问题，<em>多条世界线</em></h1>
       <p class="hero__lead reveal" style="--d:180ms" data-zh="提出假设性问题（“如果……会怎样？”），由 AI 代理群体模拟多条故事线，展示不同可能性。" data-en="Ask hypothetical questions (&ldquo;What if...?&rdquo;). A group of AI agents simulates multiple storylines and shows different possible outcomes.">提出假设性问题（“如果……会怎样？”），由 AI 代理群体模拟多条故事线，展示不同可能性。</p>
-      <p class="hero__note reveal" style="--d:260ms" data-zh="静态介绍页，非可运行应用。SwarmOracle 是全栈 SPA，需要 FastAPI 后端（18927）+ OpenAI 兼容 LLM 才能运行，无法在静态 GitHub Pages 上运行。" data-en="Static showcase page, not the running app. SwarmOracle is a full-stack SPA that needs the FastAPI backend (18927) + an OpenAI-compatible LLM to run.">静态介绍页，非可运行应用。SwarmOracle 是全栈 SPA，需要 FastAPI 后端（18927）+ OpenAI 兼容 LLM 才能运行，无法在静态 GitHub Pages 上运行。</p>
+      <p class="hero__note reveal" style="--d:260ms" data-zh="这是静态介绍页，不连接后端。完整应用需要本地 FastAPI 后端（18927）；导入脱敏 Snapshot 可离线浏览，生成新推演则需要 OpenAI-compatible LLM。" data-en="This static showcase connects to no backend. The full app needs the local FastAPI backend (18927); sanitized snapshots work for offline review, while new live runs need an OpenAI-compatible LLM.">这是静态介绍页，不连接后端。完整应用需要本地 FastAPI 后端（18927）；导入脱敏 Snapshot 可离线浏览，生成新推演则需要 OpenAI-compatible LLM。</p>
       <div class="hero__cta reveal" style="--d:340ms">
         <a class="btn btn--primary" href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle" target="_blank" rel="noopener">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -117,7 +117,7 @@
         </figure>
         <div class="how__body">
           <h3 data-zh="提出一个「如果……会怎样？」问题" data-en="Ask one &ldquo;what if?&rdquo; question">提出一个「如果……会怎样？」问题</h3>
-          <p data-zh="在首页输入框写下假设问题（如「如果诸葛亮多活10年？」），用滑块调推演轮数和 Agent 数量（默认各 5），点「开始推演」并确认。如果问题、LLM 或本轮预算还没就绪，按钮下方会直接说明原因。" data-en="Type your what-if question on the home page, set rounds and agent count with the sliders (default 5 each), then click Start Simulation and confirm. If the question, LLM access, or this run's budget is not ready, the button shows the reason below it.">在首页输入框写下假设问题（如「如果诸葛亮多活10年？」），用滑块调推演轮数和 Agent 数量（默认各 5），点「开始推演」并确认。如果问题、LLM 或本轮预算还没就绪，按钮下方会直接说明原因。</p>
+          <p data-zh="在首页写下假设问题，调整轮数与 Agent 数量，再点「开始推演」确认。高级设置与 BYOK 是两个独立折叠区；按钮不可用时会说明缺少问题、LLM 或预算。" data-en="Write a what-if question, adjust rounds and Agent count, then confirm Start Simulation. Advanced Settings and BYOK are separate disclosures; an unavailable button explains whether the question, LLM, or budget is missing.">在首页写下假设问题，调整轮数与 Agent 数量，再点「开始推演」确认。高级设置与 BYOK 是两个独立折叠区；按钮不可用时会说明缺少问题、LLM 或预算。</p>
         </div>
       </li>
       <li class="how__step reveal" style="--d:90ms">
@@ -142,8 +142,8 @@
       </li>
     </ol>
     <div class="how__notes reveal" style="--d:120ms">
-      <p class="how__note" data-zh="开箱即用：核心推演与多数功能（结果结论、完整报告、因果图谱、知识图谱、反事实对比、辩论、圆桌）默认开启；「搜索增强」可复用服务器搜索配置，也可自行配置本轮 provider。" data-en="Works out of the box: core simulation and most features (result verdict, full report, causal graph, knowledge graph, counterfactual compare, debate, roundtable) are on by default; Search-Augmented Simulation can reuse server search or use your own provider for the round.">开箱即用：核心推演与多数功能（结果结论、完整报告、因果图谱、知识图谱、反事实对比、辩论、圆桌）默认开启；「搜索增强」可复用服务器搜索配置，也可自行配置本轮 provider。</p>
-      <p class="how__note" data-zh="前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置、/admin/setup 保存模型 profile，或在首页高级设置里临时填入自己的 key）。代理转发与原生搜索的细节见 README。" data-en="Prerequisite: you need one OpenAI-compatible LLM endpoint (configured in .env, saved as a model profile from /admin/setup, or filled in temporarily under Advanced settings on the home page). Proxy and native-search details are in the README.">前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置、/admin/setup 保存模型 profile，或在首页高级设置里临时填入自己的 key）。代理转发与原生搜索的细节见 README。</p>
+      <p class="how__note" data-zh="脱敏 Snapshot 演示无需真实 LLM；新推演、辩论、会客厅和报告需要可用的 OpenAI-compatible LLM。搜索增强仍需单独配置 provider。" data-en="The sanitized Snapshot demo needs no real LLM. New simulations, debates, chambers, and reports need a working OpenAI-compatible LLM. Search augmentation still needs a separate provider.">脱敏 Snapshot 演示无需真实 LLM；新推演、辩论、会客厅和报告需要可用的 OpenAI-compatible LLM。搜索增强仍需单独配置 provider。</p>
+      <p class="how__note" data-zh="LLM 可由 .env、/admin/setup 保存的 model profile，或首页独立 BYOK 区提供。代理边界见 README，模型原生搜索见配置说明。" data-en="Provide LLM access through .env, a model profile saved at /admin/setup, or the separate home-page BYOK section. See the README for proxy boundaries and Configuration for model-native search.">LLM 可由 .env、/admin/setup 保存的 model profile，或首页独立 BYOK 区提供。代理边界见 README，模型原生搜索见配置说明。</p>
     </div>
   </div>
 </section>
@@ -274,7 +274,7 @@
           <div class="code__head"><span class="code__title">docker-compose</span><button type="button" class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">docker compose</span> up --build -d</code></pre>
         </div>
-        <p class="qs__note" data-zh="先把 .env.docker.example 复制成 .env.docker；有本地 LLM 网关时可沿用默认地址，没有网关时填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME。也可启动后到 /admin/setup 测试连接并保存模型 profile。带 key 的 profile 可在首页、辩论入口和结果页会客厅里选择。代理转发与原生搜索的细节见 README。" data-en="Copy .env.docker.example to .env.docker first. Keep the default endpoint if you have a local LLM gateway; otherwise fill LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME. After startup you can also test the connection and save a model profile at /admin/setup. Profiles with a key can be selected from the home page, debate entry, and result-page chambers. Proxy and native-search details are in the README.">先把 .env.docker.example 复制成 .env.docker；有本地 LLM 网关时可沿用默认地址，没有网关时填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME。也可启动后到 /admin/setup 测试连接并保存模型 profile。带 key 的 profile 可在首页、辩论入口和结果页会客厅里选择。代理转发与原生搜索的细节见 README。</p>
+        <p class="qs__note" data-zh="先复制 .env.docker.example。只浏览脱敏 Snapshot 时可保留占位配置；生成新内容时填写 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，或在 /admin/setup 保存带 key 的 model profile。" data-en="Copy .env.docker.example first. Placeholder settings are enough for sanitized Snapshot review; for new generation, fill LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME or save a model profile with a key at /admin/setup.">先复制 .env.docker.example。只浏览脱敏 Snapshot 时可保留占位配置；生成新内容时填写 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，或在 /admin/setup 保存带 key 的 model profile。</p>
       </div>
       <div class="qs__panel" id="panel-local" data-panel="local" role="tabpanel" aria-labelledby="tab-local" hidden>
         <div class="code">
@@ -297,7 +297,7 @@ npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
 <span class="cmd">npm</span> install
 <span class="cmd">npm</span> run dev</code></pre>
         </div>
-        <p class="qs__note" data-zh="提示：前端需要在项目根目录新开第二个终端运行（Windows PowerShell 用户请参考 README）。" data-en="Note: The frontend block runs in a second terminal from the repo root (Windows PowerShell users please refer to the README).">提示：前端需要在项目根目录新开第二个终端运行（Windows PowerShell 用户请参考 README）。</p>
+        <p class="qs__note" data-zh="提示：请从仓库根目录在第二个终端中运行前端命令。" data-en="Note: run the frontend commands from the repository root in a second terminal.">提示：请从仓库根目录在第二个终端中运行前端命令。</p>
       </div>
       <div class="qs__open">
         <div class="code">

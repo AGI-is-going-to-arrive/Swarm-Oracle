@@ -1,72 +1,57 @@
-# Security Notes
+# Security / 安全说明
 
-## Reporting a Vulnerability / 报告漏洞
+## Report a Vulnerability / 报告漏洞
 
-Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests. Use GitHub's private vulnerability reporting instead (this repository's **Security** tab -> **Report a vulnerability**) so the report stays private while a fix is prepared. You can expect an acknowledgement within 7 days.
+Do not disclose vulnerabilities in public issues, discussions, or pull requests. Use GitHub's private vulnerability reporting: **Security** tab → **Report a vulnerability**. Maintainers aim to acknowledge reports within 7 days.
 
-请勿通过公开 issue、discussion 或 PR 披露安全漏洞。请使用 GitHub 私密漏洞报告（仓库 **Security** 标签页 -> **Report a vulnerability**），以便在修复完成前保持报告私密。我们会在 7 天内确认收到。
+请勿在公开 issue、discussion 或 PR 披露漏洞。请使用 GitHub 私密漏洞报告：**Security** 标签页 → **Report a vulnerability**。维护者目标是在 7 天内确认收到。
 
-## Scope of This Document / 本文件范围
+## Deployment Baseline / 部署基线
 
-The rest of this document covers the LLM SSRF and BYOK trust boundaries that matter for operating SwarmOracle. It is deployment guidance for operators, not an exhaustive description of the project's security properties.
+Docker Compose binds frontend `18928` and backend `18927` to `127.0.0.1` by default. Local development may leave auth secrets empty, but it must stay on a trusted machine.
 
-以下内容说明与运维部署相关的 LLM SSRF 与 BYOK 信任边界，供部署者参考，并非本项目安全属性的完整清单。
+Docker Compose 默认把前端 `18928` 和后端 `18927` 绑定到 `127.0.0.1`。本地开发可以留空鉴权密钥，但只能在可信机器上使用。
 
-## LLM Endpoint Trust Boundaries
+Before any LAN or public exposure:
 
-SwarmOracle has two separate LLM endpoint paths:
+1. Set `ENV=production`. / 设置 `ENV=production`。
+2. Generate separate values for `SESSION_SECRET` and `ADMIN_TOKEN` with `openssl rand -hex 32`. / 使用该命令分别生成两个密钥。
+3. Change the Compose port bindings deliberately and restrict network access. / 明确修改 Compose 端口绑定并限制网络访问。
 
-- Deployment-level `LLM_RESPONSES_URL` is configured by the server operator. The backend resolves it with `_resolve_llm_api_url()` and treats it as server-default trust. It does not pass through the request-level BYOK allowlist.
-- Request-level BYOK `llm_base_url` comes from an API request. It is constrained by the request-level allowlist, URL shape checks, and the private/LAN opt-in controls described below.
+生产模式缺少 `SESSION_SECRET` 或 `ADMIN_TOKEN` 会拒绝启动。不要复用示例值。
 
-Do not put API keys in URLs. Request-level BYOK URLs with userinfo, query strings, fragments, or path parameters are rejected; send credentials through the dedicated API key field.
+## Authentication Boundary / 鉴权边界
 
-## SSRF Threat Model
+- `SESSION_SECRET` enables the coarse REST/WebSocket session gate.
+- `ADMIN_TOKEN` protects `/api/admin/*`; `/metrics` accepts the configured admin token and, when enabled, a valid session token.
+- This gate is not a complete multi-user authorization system. Public or multi-tenant deployment needs an external identity, authorization, TLS, proxy, logging, backup, and secret-management design.
 
-### Single-User Local
+- `SESSION_SECRET` 启用粗粒度 REST/WebSocket 会话门禁。
+- `ADMIN_TOKEN` 保护 `/api/admin/*`；`/metrics` 接受配置的管理 token，也可在会话门禁启用时接受有效 session token。
+- 这不是完整的多用户权限系统。公网或多租户部署还需外部身份、授权、TLS、代理、日志、备份和密钥管理方案。
 
-This is the lowest-risk mode: the backend and browser are run by the same person on one machine.
+## LLM and BYOK Trust Boundary / LLM 与 BYOK 信任边界
 
-- Local aliases such as `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, and `::1` remain allowed for request-level BYOK.
-- The bundled local default `http://127.0.0.1:8317/v1` is considered an unconfigured static capability unless a real key or another endpoint is set.
-- Keep admin diagnostics local unless you intentionally expose them.
+Deployment-level `LLM_RESPONSES_URL` is operator-controlled. Request-level BYOK `llm_base_url` is user input and passes host allowlisting, scheme checks, and URL-shape validation.
 
-### Trusted LAN
+部署级 `LLM_RESPONSES_URL` 由管理员控制。请求级 BYOK `llm_base_url` 属于用户输入，必须通过 host 白名单、scheme 和 URL 形状校验。
 
-This mode has more SSRF risk because a browser user can ask the backend to connect to other LAN hosts.
+- Never put API keys in URLs. Userinfo, query strings, fragments, and path parameters are rejected.
+- Hosted request-level endpoints require HTTPS.
+- `LLM_EXTRA_ALLOWED_HOSTS` accepts exact hosts only.
+- Keep `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false` for public or multi-user deployments.
+- Set `LLM_ALLOW_LOCAL_BYOK_HOSTS=false` for LAN, public, or multi-user deployments.
 
-- Add only the exact hosts you operate to `LLM_EXTRA_ALLOWED_HOSTS`.
-- Set `LLM_ALLOW_PRIVATE_BYOK_HOSTS=true` only when those hosts are trusted LLM gateways.
-- Prefer HTTPS where possible, even on a LAN.
-- Do not add broad internal hostnames or infrastructure addresses.
+- 不要把 API key 放进 URL；userinfo、query、fragment 和 path params 会被拒绝。
+- 托管请求级 endpoint 必须使用 HTTPS。
+- `LLM_EXTRA_ALLOWED_HOSTS` 只接受精确 host。
+- 公网或多用户部署保持 `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`。
+- LAN、公网或多用户部署设置 `LLM_ALLOW_LOCAL_BYOK_HOSTS=false`。
 
-### Multi-User Deployment
+## Data and Output / 数据与输出
 
-This is the highest-risk mode. Treat every request-level BYOK URL as attacker-controlled input.
+Model profiles may store API keys in local SQLite for a single-user installation. Keep the database, `.env`, `.env.docker`, snapshots, logs, and backups private. Public artifacts remove known secret fields, but the question and result content are intentionally shareable; review them before publishing.
 
-- Keep `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`.
-- Set `LLM_ALLOW_LOCAL_BYOK_HOSTS=false`; otherwise request-level BYOK can still ask the backend to call local aliases such as `127.0.0.1`, `localhost`, `0.0.0.0`, `host.docker.internal`, or `::1`.
-- Avoid `LLM_EXTRA_ALLOWED_HOSTS` unless there is a concrete hosted provider or tenant gateway that needs it.
-- Require `SESSION_SECRET`; protect admin endpoints with `ADMIN_TOKEN`.
-- Keep request logs and error responses free of provider bodies, Authorization headers, API keys, and credential-bearing URLs.
+单用户安装的 model profile 可能把 API key 存在本地 SQLite。请保护数据库、`.env`、`.env.docker`、Snapshot、日志和备份。公开 artifact 会移除已知密钥字段，但问题和结果本身会用于分享，发布前必须检查。
 
-## Request-Level BYOK Controls
-
-`LLM_EXTRA_ALLOWED_HOSTS` is a comma-separated host list. Hosts are normalized with IDNA and lowercase before being merged into the request-level allowlist. It accepts hosts only, not URLs or credentials.
-
-`LLM_ALLOW_PRIVATE_BYOK_HOSTS` defaults to `false`. When it is off, private, LAN, and loopback hosts supplied through the extra allowlist are rejected. When it is on, those hosts are permitted for request-level BYOK and may use local HTTP endpoints.
-
-`LLM_ALLOW_LOCAL_BYOK_HOSTS` defaults to `true` for single-user local development and Docker quickstarts. Set it to `false` for multi-user, exposed, or LAN deployments to reject built-in local aliases and equivalent loopback / unspecified IP forms at the request-level BYOK boundary. Deployment-level `LLM_RESPONSES_URL` is not affected.
-
-Hosted providers and other non-local request-level BYOK hosts still require HTTPS. Existing rejection of URL userinfo, query strings, fragments, and path parameters is preserved.
-
-## Safe LLM Error Surface
-
-The main user-facing LLM failure taxonomy is intentionally small:
-
-- `LLM_UNREACHABLE`
-- `LLM_AUTH_FAILED`
-- `LLM_MODEL_NOT_FOUND`
-- `LLM_RATE_LIMITED`
-
-Each code is returned with a short safe message only. Raw provider response bodies, HTML, stack traces, Authorization headers, API keys, and credential-bearing URLs must not be exposed to clients.
+Client-facing LLM errors use short safe codes. Provider bodies, stack traces, Authorization headers, keys, and credential-bearing URLs must not reach clients or logs. 面向客户端的 LLM 错误只使用简短安全码；provider 正文、堆栈、Authorization header、密钥和含凭据 URL 不得进入客户端响应或日志。

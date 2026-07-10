@@ -2,192 +2,109 @@
 
 # SwarmOracle 配置说明
 
-所有配置都通过环境变量提供。两个模板：
+## 1. 配置来源与优先级
 
-- **本地开发**：把 `.env.example` 复制成 `backend/.env`，编辑 `backend/.env`（注意：直接改 `.env.example` 不会生效，它只是模板）。
-- **Docker 部署**：先把 `.env.docker.example` 复制成 `.env.docker`（`cp .env.docker.example .env.docker`，该文件默认不入库），再编辑 `.env.docker`，`docker compose` 会自动读取。
+- 本地开发：复制 `.env.example` 到 `backend/.env`，编辑 `backend/.env`。
+- Docker：复制 `.env.docker.example` 到 `.env.docker`，Compose 自动读取。
+- `.env.example` 是公开默认值的权威；开发机上的 `backend/.env` 不是公开默认。
+- 未列出的运行时和报告调优项，以模板注释和 `backend/app/config.py` 为准。
 
-下面只列**面向用户**的常用配置；更细的调优项见模板文件里的注释。
+环境变量修改后需要重启后端。前端通过 `/api/capabilities` 读取实际能力。
 
-最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。Safari/iOS 16.2-16.3 会把 GFM 表格/删除线降级为普通 Markdown，但仍使用安全渲染。
+## 2. 运行路径
 
----
+| 路径 | 需要真实 LLM | 用途 |
+|---|---:|---|
+| Snapshot 演示 | 否 | 导入 `samples/snapshots/*.swarm`，查看已保存结果与 replay |
+| 实时生成 | 是 | 新建推演、辩论、会客厅、报告和其它 LLM 功能 |
+| Docker 本机部署 | 视用途 | 默认只发布到 `127.0.0.1:18927` / `127.0.0.1:18928` |
+| 生产或公网部署 | 是 | 还必须配置生产安全门禁 |
 
-## 1. LLM 配置（必填）
+占位 endpoint 和占位 key 能启动 Snapshot 演示，但会让 `llm_static_configured=false`。只有同时没有带 key 的 model profile、且本轮未提供 BYOK 时，才不能开始实时生成。
 
-SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、Google Gemini 的 OpenAI-compatible endpoint、各类代理、Ollama 等本地服务都可以）。Google Gemini 推荐 Base URL 为 `https://generativelanguage.googleapis.com/v1beta/openai`，并需要填写 Gemini API key。
-xAI / OpenRouter / SiliconFlow 的 `response_format` 能力目前仍按 OpenAI-compatible 假设处理；现有 fail-soft 会在 provider 拒绝时降级。Gemini 这条 OpenAI-compatible chat 路径不注入模型原生搜索工具；搜索增强仍按下方搜索 provider 配置。
+## 3. LLM 配置
 
-| 配置项 | 说明 | 示例 |
-|--------|------|------|
-| `LLM_RESPONSES_URL` | LLM 服务地址 | `https://api.openai.com/v1` |
-| `LLM_API_KEY` | API 密钥 | `sk-...` |
-| `LLM_MODEL_NAME` | 模型名称（取决于你的服务） | `gpt-5.4-mini` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
-| `LLM_EXTRA_ALLOWED_HOSTS` | 请求级 BYOK 额外允许的 host，逗号分隔 | `llm.example.com,192.168.1.25` |
-| `LLM_ALLOW_PRIVATE_BYOK_HOSTS` | 是否允许请求级 BYOK 使用额外配置的私网 / LAN / loopback host | `false`（默认） |
-| `LLM_ALLOW_LOCAL_BYOK_HOSTS` | 是否允许请求级 BYOK 使用内置本地别名 | `true`（默认） |
+公开模板当前值：
 
-> 安全提示：模板里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL` 不是本地地址，后端会拒绝用占位 key 继续运行，换成你的真实密钥即可。如果你用的是本地网关（如 Ollama），可以保持占位。
+| 变量 | `.env.example` 默认 | 含义 |
+|---|---|---|
+| `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | OpenAI-compatible Base URL |
+| `LLM_API_KEY` | `your-api-key-here` | 占位 key；非本地 endpoint 必须换成真实 key |
+| `LLM_MODEL_NAME` | `gpt-5.4-mini` | provider 的实际模型 ID |
+| `LLM_REASONING_EFFORT` | `none` | `none/low/medium/high` |
+| `LLM_REQUESTS_PER_MINUTE` | `0` | `0` 表示不设置 RPM 限制 |
+| `LLM_TOKENS_PER_MINUTE` | `0` | `0` 表示不设置 TPM 限制 |
+| `LLM_CONCURRENCY` | `5` | 全局并发上限；`0` 关闭该上限 |
+| `LLM_MAX_PENDING` | `24` | 全局等待队列上限；`0` 关闭该保护 |
+| `LLM_USER_MAX_PENDING` | `4` | 单用户等待上限；`0` 关闭该保护 |
 
-可选的 LLM 调优项（一般不用动）：`LLM_REASONING_EFFORT`（推理力度 `none/low/medium/high`）、`LLM_REQUESTS_PER_MINUTE`、`LLM_TOKENS_PER_MINUTE`（限速，`0` 表示不限）、`LLM_CONCURRENCY`（全局并发上限；`0` 表示不设上限、即关闭该保护，不是暂停调用）。
+服务端默认模型由以上变量决定。不要把某台机器的临时模型名、地址或 key 写成项目默认。模型 ID 必须由你的 provider 实际支持。
 
-服务端默认 LLM 与请求级 BYOK 是两条不同边界：
+## 4. Model Profile 与 BYOK
 
-- 部署级 `LLM_RESPONSES_URL` 是服务端管理员配置，运行时会通过 `_resolve_llm_api_url()` 解析成 OpenAI-compatible endpoint；它不走请求级 BYOK allowlist。
-- 请求级 `llm_base_url` 来自用户请求，只作用于当前请求，必须通过 allowlist、scheme 和 URL 形状校验；业务入口如果传 `llm_base_url`，必须把 API key 单独传入，不要把 key 放进 URL。
-- 请求级自定义 LLM base URL 只接受允许列表里的 host。官方托管 host 必须使用 `https`；已有本地开发别名（`localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal`、`::1`）可用 `http`。
-- `LLM_EXTRA_ALLOWED_HOSTS` 会把逗号分隔的 host 归一化为 IDNA + 小写后并入请求级 allowlist。它只接受 host，不接受 URL、端口、userinfo、query 或 fragment。
-- `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false` 时，通过 `LLM_EXTRA_ALLOWED_HOSTS` 加入的私网 / LAN / loopback host 仍会被拒绝；设为 `true` 后才允许这类 host，并应只在单机或可信 LAN 中使用。
-- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true` 是为了本地开发和 Docker quickstart 默认可用；多用户、暴露公网或 LAN 部署应设为 `false`，这样请求级 BYOK 会拒绝内置本地别名及等价 loopback / unspecified IP 形态。部署级 `LLM_RESPONSES_URL` 不受这个开关影响。
-- 带 `user:pass@host`、query、fragment 或 path params 的请求级 BYOK URL 一律拒绝。
+`/admin/setup` 可测试连接并保存 model profile；`/model-profiles` 可管理 provider、Base URL、模型、key、限速、并发和能力覆盖。带 key 的 profile 会参与 `llm_configured` 判断。
 
-`GET /api/capabilities` 会返回零成本字段 `llm_configured: boolean`。它等于服务端静态 LLM 配置或本地模型 profile 探测的合并结果：`llm_static_configured` 表示 `.env` / Docker 配置是否可用，`llm_profile_configured` 表示 `FEATURE_MODEL_PROFILES=true` 且当前用户有至少一个带 API key 的 profile。任一为 `true` 时，首页和辩论入口都不会再把 LLM 视为未配置。这个探测不会调用 `health_check()`，不会发起 LLM 或网络请求，也不会回显 profile 的 API key。
+首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。BYOK 只覆盖当前请求；高级设置负责推演、显示、主题包和搜索选项。请求级 Base URL 必须与 API key 一起提交，不能把凭据放进 URL。
 
-模型 profile 还可以保存 RPM/TPM、并发上限，以及结构化输出 / 原生搜索的三态能力覆盖（自动检测、强制开启、强制关闭）。自动检测会把字段保存为 `null`，运行时跟随 provider capability；只有强制开启 / 关闭才写入明确布尔值。这些字段会进入主推演、multi-run、辩论、会客厅、预测评分、社交文案、可生成式头条卡和报告生成等 LLM 调用链；profile 并发只会收紧有效上限，最终仍受全局并发、全局 pending、用户 pending 和用途 lane 限制。
+请求级 BYOK 的 host 控制：
 
-首页自动启动预检会用轻量 LLM 连通性检查，不跑 provider 并发压测；「测试连接」仍会同时跑普通 LLM 连通性、完整 provider probe 和一个更快的原生搜索探测。原生搜索探测只回答被测模型 / 上游是否会进入 native web-search tool 注入路径，不等同于 `/api/capabilities` 里的服务端默认 `web_search` hint，也不回显 Base URL 或 API key。已知官方 provider 的裸 `/v1` 入口会按 Responses 形态参与原生工具注入判断，探测只回显有效 API 形态，不回显完整派生 URL。本地、代理或未知 provider 的并发探测会 fail closed 为 `estimated_parallelism=1`、`tested_parallelism=1`，不发起额外 fan-out 压测；本地或自定义 Responses 代理默认仍按 proxy 保护处理，只有显式声明 `xai_responses` 或 `openai_responses` 上游时，才会按对应官方 native-search adapter 放行。实际 LLM 调用中，如果已注入的原生搜索工具被代理或上游拒绝，运行时会单次去掉原生工具重试，继续返回普通 LLM 输出；凭据、额度或限流错误不会被当作这类降级。`auto`、`off` 或未设置不会释放 proxy 保护；强制关闭原生搜索仍会一票否决工具注入。
+- `LLM_EXTRA_ALLOWED_HOSTS`：额外 host 白名单，只接受 host，不接受完整 URL。
+- `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`：默认拒绝通过额外白名单加入的 private/LAN host；它不控制内置本地别名。
+- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true`：控制 `localhost`、loopback 等内置本地别名；多用户、LAN 或公网部署应改为 `false`。
 
-保存过 `model_profile_id` 的 scenario 在报告、续跑 / 重放分支、分支标题重写、社交文案和评分等后续 LLM 调用里会尝试恢复同一个 profile。恢复只允许当前用户自己的 profile；缺少用户归属时只在本地单用户 profile 库里按 id 恢复。若 profile 已删除、归属不匹配或无法安全确认，后端会 fail closed，要求重新选择 profile，或在本次请求里同时提供 API key、Base URL 和模型。社交头条卡不满足安全恢复条件时会退回确定性卡片，而不是调用错误的 provider。
+完整 SSRF 与凭据边界见 [SECURITY.md](../SECURITY.md)。
 
-静态配置仍按原规则判断：当运行时仍是占位 URL（`http://127.0.0.1:8317/v1`、`http://localhost:8317/v1` 或 `http://host.docker.internal:8317/v1`），且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时，`llm_static_configured=false`；配置了真实 key，或显式改到其它 endpoint 时为 `true`。
+## 5. 搜索增强
 
-已知限制：如果你真实使用的本地 OpenAI-compatible 代理刚好也是 `:8317/v1` 且不需要 API key，静态配置探测会把它当作未配置；保存一个带 key 的 model profile 仍会让 `llm_configured` 变为 `true`。首页提示可以关闭，诊断按钮仍可用于确认实际连通性。
+app-layer 搜索默认关闭：
 
-主推演 / 辩论 / 会客厅主路径上的已识别 LLM provider 失败会暴露稳定机器码和短安全消息，不回显 provider body、HTML、stack trace、Authorization header、URL 凭据或 API key：
+| 变量 | 默认 | 说明 |
+|---|---:|---|
+| `ENABLE_WEB_SEARCH` | `false` | 外部搜索总开关 |
+| `WEB_SEARCH_PROVIDER` | `tavily` | `tavily/exa/firecrawl/xai/searxng` |
+| `WEB_SEARCH_API_KEY` | 空 | 托管 provider 的 key |
+| `SEARXNG_URL` | `http://localhost:8888` | 自建 SearXNG 地址 |
+| `FEATURE_NEW_SOURCES` | `false` | 来源家族筛选 |
+| `FEATURE_FAMILY_QUERY_OPTIMIZATION` | `false` | 来源查询词优化 |
 
-- `LLM_UNREACHABLE`：网络、DNS、连接拒绝、超时等连接错误。
-- `LLM_AUTH_FAILED`：HTTP `401` / `403`。
-- `LLM_MODEL_NOT_FOUND`：HTTP `404`，或 provider body 明确提示 model missing。
-- `LLM_RATE_LIMITED`：HTTP `429`。
+模型原生搜索属于 model profile / Responses adapter 路径，不通过 `WEB_SEARCH_PROVIDER=native` 开启。结果页只展示真实返回的 citations。
 
-其它失败继续走既有 generic error 路径。
+## 6. 功能开关
 
----
+`.env.example` 默认开启主要用户功能，包括：
 
-## 2. 功能开关（Feature Flags）
+- Agent 与身份：`FEATURE_CUSTOM_AGENTS`、`FEATURE_AGENT_IDENTITY`、`FEATURE_PERSONA_EXPORT`
+- 图谱与 replay：`FEATURE_CAUSAL_GRAPH`、`FEATURE_GRAPH_ANALYSIS`、`FEATURE_COUNTERFACTUAL_REPLAY`、`FEATURE_KG_EXPLORER`、`FEATURE_REPLAY_TRACE`
+- 结果与协作：`FEATURE_RESULT_VERDICT`、`FEATURE_RESULT_REPORT`、`FEATURE_AGENT_CONVERSATION`、`FEATURE_ROUNDTABLE_SURVEY`、`FEATURE_ROUNDTABLE_ANALYST`
+- 其它入口：`FEATURE_SNAPSHOT_EXPORT`、`FEATURE_PREDICTION_JOURNAL`、`FEATURE_EDUCATION_TEMPLATES`、`FEATURE_LOCAL_PACKS`、`FEATURE_MODEL_PROFILES`、`FEATURE_MULTI_RUN`
 
-`.env.example` 与 `.env.docker.example` 模板现在默认开启这组用户能直接看到的功能；本地启动后不需要再手动打开：
+类别与路由见 [FEATURES.md](FEATURES.md)。默认值变化时，以 `.env.example` 与运行中的 `/api/capabilities` 为准。
 
-| 开关 | 默认 | 打开后你会看到什么 |
-|------|------|------------------|
-| `FEATURE_CUSTOM_AGENTS` | ✅ 开 | 首页可以进入 Agent 库和自定义 Agent 工坊，把你自己做的 Agent 加进推演或辩论。 |
-| `FEATURE_AGENT_IDENTITY` | ✅ 开 | Agent 会有跨场景身份、记忆和成长记录，结果页也能看人物档案。 |
-| `FEATURE_CAUSAL_GRAPH` | ✅ 开 | 结果页可以打开因果图谱，看事件、分叉和结局之间的因果线。 |
-| `FEATURE_GRAPH_ANALYSIS` | ✅ 开 | 图谱页可以展开图谱分析，看关键节点、连线密度和跨分支关系。 |
-| `FEATURE_COUNTERFACTUAL_REPLAY` | ✅ 开 | 你可以改写某个 Agent 真实说过的一句话，重新推演并对比分支。 |
-| `FEATURE_FACTIONS` | ✅ 开 | 结果页和圆桌会显示阵营演化、结盟和对立关系。 |
-| `FEATURE_ARGUMENT_MAP` | ✅ 开 | 辩论结果页可以加载论点地图，把主张、证据、反驳和裁决连起来看。 |
-| `FEATURE_KG_EXPLORER` | ✅ 开 | 图谱工作台可以切到 Knowledge Graph；结果页的 **下一步 / What's Next** 会显示知识图谱浏览器 / Knowledge Graph Explorer 和时间线星系 / Timeline Galaxy。 |
-| `FEATURE_REPLAY_TRACE` | ✅ 开 | replay trace 页面可以按时间查看反事实、续跑等分支的来源轨迹。 |
-| `FEATURE_AGENT_CONVERSATION` | ✅ 开 | 圆桌 Deep Dive 里可以选一位代表做 1 对 1 访谈，图谱节点也能发起追问。 |
-| `FEATURE_ROUNDTABLE_SURVEY` | ✅ 开 | 圆桌 Deep Dive 里可以把同一个问题群发给多位代表，横向比较回答。 |
-| `FEATURE_ROUNDTABLE_ANALYST` | ✅ 开 | 圆桌 Deep Dive 里可以让研究分析师梳理因果图、角色记忆和搜索证据。 |
-| `FEATURE_SNAPSHOT_EXPORT` | ✅ 开 | 首页可以导入 scenario snapshot，结果页可以导出 ZIP snapshot。 |
-| `FEATURE_PUBLIC_ARTIFACTS` | ✅ 开 | 分享弹窗可以导出脱敏 public artifact JSON 或单文件 HTML gallery。 |
-| `FEATURE_PREDICTION_JOURNAL` | ✅ 开 | `/me/journal` 可以记录预测、标记结果，并查看校准曲线。 |
-| `FEATURE_RESULT_VERDICT` | ✅ 开 | 结果页会尽量给出一句话结论、置信度和每条世界线对原问题的回答。 |
-| `FEATURE_RESULT_REPORT` | ✅ 开 | 结果页会显示深读摘要入口，也可以在 `/result/:id/report` 单独查看完整报告或重试生成。 |
-| `FEATURE_MULTI_RUN` | ✅ 开 | 首页可以发起多次推演；等待面板会列出每条世界线，结果页会显示 run group 分布和终局直方图。 |
-| `FEATURE_YOU_VS_ORACLE` | ✅ 开 | 结果页可以把用户预测和 Oracle 结果做并排对比。 |
-| `FEATURE_SOCIAL_HEADLINES` | ✅ 开 | 结果页社交动态会生成可下载或复制的 headline cards。 |
-| `FEATURE_DOCUMENT_SEED` | ✅ 开 | 首页可以把上传文档整理成 scenario seed context。 |
-| `FEATURE_LOCAL_PACKS` | ✅ 开 | 首页可以加载本地场景包；选择器按类型分段和单一搜索框筛选，标签文本并入搜索，选中后可预览并把问题 / 推荐设置带入推演。 |
-| `FEATURE_MODEL_PROFILES` | ✅ 开 | 模型配置页和 `/admin/setup` 可以管理本地模型 profile；带 key 的 profile 会让首页和辩论入口视为已配置 LLM，并可在启动推演、辩论或结果页会客厅时选择。会客厅入口把选择器放在默认折叠的高级设置里，不选走全局默认。Profile 可保存限速、并发、结构化输出 / 原生搜索能力覆盖和原生搜索上游声明。 |
-| `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
-| `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
+## 7. 服务与数据
 
-`graph_analysis` 是组合能力：`FEATURE_GRAPH_ANALYSIS=true` 还不够，`FEATURE_CAUSAL_GRAPH=true` 也必须同时开启，前端才会把它当成可用。
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `ENV` | `development` | `production/prod` 启用生产 fail-fast |
+| `HOST` | `127.0.0.1` | 后端监听地址 |
+| `PORT` | `18927` | 后端端口 |
+| `DATABASE_URL` | `sqlite:///./swarmoracle.db` | SQLite |
+| `CHROMA_PERSIST_DIR` | `./chroma_data` | 向量数据 |
+| `CORS_ORIGINS` | 模板列表 | 允许的前端来源 |
 
-图谱工作台在窄屏上会把 Split 视图收成单图视图；知识图谱浏览器和时间线星系也会保留移动端提示或可访问的列表回退。
+前端开发服务器使用 `18928`，默认把 `/api` 与 `/ws` 代理到 `http://127.0.0.1:18927`；可用 `SWARM_BACKEND_URL` 覆盖。Docker 把数据库和 ChromaDB 放进 `/data` volume。
 
-还有几个后端内部/实验开关默认保持关闭，不作为普通用户入口介绍：`FEATURE_ROUNDTABLE_INSIGHT_LLM`、`FEATURE_HALLUCINATION_GATE`、`FEATURE_IDENTITY_COMPACTION`。
+## 8. 生产部署
 
-`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现深读摘要入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。完成态 inline 只展示置信度、真实字段派生的摘要、章节目录和独立报告链接；完整章节在 `/result/:id/report` 展开，replay 下没有 live 生成 / 重试入口。报告正文使用安全 Markdown 渲染；支持正则 lookbehind 的现代浏览器会启用 GFM 表格和删除线，Safari/iOS 16.2-16.3 等不支持 lookbehind 的引擎会降级为普通 Markdown，但仍不放行图片。报告的 verdict / 置信度 / 证据 / 异见 / 概率图锚定终局答案叶，观察指标 / watch-list 由 LLM 结合报告证据生成并经过空话过滤。只有存在可回答终局锚点，且报告提供 `probability_bar` / `faction_share` 数据时，才会显示概率与阵营图表。合法历史概率会被兼容规范化；缺少可回答分支锚点、非法概率 / 区间或语义无法确认时，前端会降级为定性文案，不伪造 `0.0%`。重试会沿用当前标签页的 BYOK provider policy，完成后只刷新报告数据，不硬刷新整页；超时或被中止的重试会保留可重试状态，不把未完成结果当成成功。`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
+Docker Compose 默认只绑定 loopback。改成 LAN 或公网绑定前：
 
-常用报告生成参数：
+```bash
+openssl rand -hex 32
+```
 
-| 配置项 | 说明 | 默认 |
-|--------|------|------|
-| `REPORT_MAX_SECTIONS` / `REPORT_MIN_SECTIONS` | 完整报告章节数上下限 | `5` / `2` |
-| `REPORT_MAX_TOOL_CALLS_PER_SECTION` / `REPORT_MIN_TOOL_CALLS_PER_SECTION` | 每个章节 ReACT 工具调用上下限；无新增证据时会提前收束 | `3` / `2` |
-| `REPORT_SECTION_TIMEOUT_SECONDS` | 单个章节、访谈或观察指标 LLM 调用超时 | `120` |
-| `REPORT_RUNTIME_LOCK_LEASE_SECONDS` | 报告生成 runtime lock 租期；运行中会续租，worker 被杀后最多阻塞这个 TTL | `120` |
-| `RESULT_VERDICT_REQUEST_TIMEOUT_SECONDS` / `RESULT_VERDICT_TOTAL_TIMEOUT_SECONDS` | 结果页一句话结论的单次请求 / 总体等待上限；超时后写入可显示的缺失原因，不阻断结果页 | `45` / `50` |
-| `NARRATION_REQUEST_TIMEOUT_SECONDS` / `NARRATION_TOTAL_TIMEOUT_SECONDS` | 结局叙事生成的单次请求 / 总体等待上限；失败时走可完成的 fallback | `35` / `40` |
-| `NARRATION_STREAM_PROBE_TIMEOUT_SECONDS` | 判断叙事流式输出是否有内容的等待上限 | `8` |
+分别生成并设置唯一的 `SESSION_SECRET` 和 `ADMIN_TOKEN`，同时设置 `ENV=production`。生产模式缺少任一密钥会拒绝启动。不要复用示例值；不要在日志、文档、URL 或分享 artifact 中放入密钥。
 
-> 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
+`SESSION_SECRET`、`ADMIN_TOKEN`、管理端点、`/metrics` 与多用户限制的权威说明见 [SECURITY.md](../SECURITY.md)。
 
-### 需要额外配置的搜索功能
+## 9. 高级调优
 
-下面三个功能默认关闭，因为它们需要外部搜索服务。托管搜索服务通常要配置 `WEB_SEARCH_PROVIDER` 和 `WEB_SEARCH_API_KEY`；如果你用 `searxng`，则需要提供可访问的 `SEARXNG_URL`，它本身不需要 API key。
-
-这里的搜索增强是 app-layer 外部检索：系统先调用 Tavily / Exa / Firecrawl / xAI / SearXNG，再把结果注入 prompt。模型原生搜索是另一条 LLM native path，由模型 profile、官方 Responses 形态识别和运行时 source family domains 决定，不通过 `WEB_SEARCH_PROVIDER=native` 开启。
-
-| 开关 | 默认 | 什么时候打开 |
-|------|------|--------------|
-| `ENABLE_WEB_SEARCH` | ❌ 关 | 想让推演在开始前先联网搜索资料时打开；需要一个可用的搜索 provider。 |
-| `FEATURE_NEW_SOURCES` | ❌ 关 | 想在首页高级设置里显示四个来源复选框时打开：预测市场（`polymarket`）、财经资讯（`finance`）、学术文献（`academic`）、深度报道（`news_deep`）。复选框只有在搜索增强已打开、且当前 provider 支持 domain filter 时才会真正生效。 |
-| `FEATURE_FAMILY_QUERY_OPTIMIZATION` | ❌ 关 | 已经使用来源复选框，并希望系统先为每类来源生成更合适的搜索词时再打开。 |
-
----
-
-## 3. 搜索增强推演（可选）
-
-打开后，推演前会自动联网搜索资料并注入角色提示，让结果更贴近现实信息。
-
-| 配置项 | 说明 | 示例 |
-|--------|------|------|
-| `ENABLE_WEB_SEARCH` | 总开关 | `false`（默认） |
-| `WEB_SEARCH_PROVIDER` | 搜索服务商 | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
-| `WEB_SEARCH_API_KEY` | 搜索服务密钥（`searxng` 不需要） | — |
-| `SEARXNG_URL` | 自建 SearXNG 地址（仅 `searxng` 时） | `http://localhost:8888` |
-
----
-
-## 4. 服务器与数据库
-
-| 配置项 | 说明 | 默认 |
-|--------|------|------|
-| `ENV` | 运行环境；`production` / `prod` 会要求安全密钥非空 | `development` |
-| `HOST` | 后端监听地址 | `127.0.0.1` |
-| `PORT` | 后端端口 | `18927` |
-| `DATABASE_URL` | SQLite 数据库路径 | `sqlite:///./swarmoracle.db` |
-| `CHROMA_PERSIST_DIR` | 向量库（角色记忆）目录 | `./chroma_data` |
-| `CORS_ORIGINS` | 允许的前端来源 | 已含 `http://localhost:18928` |
-
-> Docker 部署时，`docker-compose.yml` 会把数据库和向量库放到 `/data` 数据卷，便于持久化。
-
----
-
-## 5. 推演运行时与回收
-
-| 配置项 | 说明 | 默认 |
-|--------|------|------|
-| `SIMULATION_LOCK_LEASE_SECONDS` | 主推演后台任务的 runtime lock 租期；运行中会定期续租 | `120` |
-| `SIMULATION_STALL_TIMEOUT_SECONDS` | 后台推演完全没有内容、进度或持久化活动后，按 stall 收敛的等待秒数 | `900` |
-| `SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS` | 轮询读取和启动恢复判断 stale activity 的窗口 | `900` |
-
-这组值用于后台推演活性判断。正在运行的推演会持有 runtime lock 并定期续租；只要仍有 WebSocket 内容帧、轮次 / 发言进度、checkpoint 或其它持久化活动，慢 LLM 不会因为总墙钟时间长被杀掉。超过 stall timeout 完全没有活动时，后台任务才会收敛为错误终态；轮询读取也会避开刚创建和仍持有 active lock 的 run，避免把慢 parse 或首轮误判为中断。
-
-单个 Agent、叙事或 verdict 的短 LLM 调用如果返回空内容，会按稳定 `LLM_EMPTY` 码收口；只有同一批次全员失败时才会中止本轮，部分失败会保留成功发言并给失败 Agent 写入安全占位。
-
----
-
-## 6. 会话门禁与管理端点（可选，进阶）
-
-`SESSION_SECRET` 默认留空，表示本地开发不开鉴权。设置后，REST 接口需要 `X-Session-Token` 头、WebSocket 需要首帧鉴权，`/metrics` 也可以用同一个 session token 访问。这是一个**临时的全局粗粒度门禁**，适合给 demo 加一道简单口令，不是完整的多用户权限系统。
-
-`ADMIN_TOKEN` 默认也留空，此时 `/api/admin/*` 诊断端点和 `/metrics` 对本地开发开放。设置后，管理端点和 `/metrics` 都接受 `X-Admin-Token` 请求头；如果同时设置了 `SESSION_SECRET`，`/metrics` 也接受有效的 `X-Session-Token`。`ENV=production` / `prod` 时，`SESSION_SECRET` 和 `ADMIN_TOKEN` 留空会直接启动失败。Docker Compose 默认只把前端和后端端口绑定到 `127.0.0.1`；只要把 `ports` 改成可被本机以外访问，就必须同时设置 `ENV=production`、`SESSION_SECRET` 和 `ADMIN_TOKEN`。
-
-Scenario 问题和辩论题目的公开输入上限是 2000 字符。前端受控入口会限制或截断，后端 schema 仍按 2000 字符硬拒绝超长请求。
-
----
-
-## 7. 开发测试专用
-
-`SWARM_E2E_FIXTURE_MODE=1` 会启用前端离线 fixture harness，主要用于 release / E2E 签收。配合 `SWARM_BACKEND_URL=http://127.0.0.1:9` 这类黑洞后端地址时，未被 fixture 覆盖的 `/api`、node-side backend 调用和同源 `/ws/**` 会 fail-closed，并让测试失败。这个模式验证前端 fixture 零逃逸，不验证真实后端业务逻辑。
-
----
-
-更多未列出的调优参数（推演上限、记忆压缩预算等）见 `.env.example` 内的注释。记忆压缩当前有效间隔仍由 `MEMORY_COMPRESS_INTERVAL` 决定，short-branch 字段只保留为兼容配置。
+推演上限、memory、runtime lock、stall timeout、报告预算和 `REPORT_*` 参数不在这里复制。需要调优时直接阅读 `.env.example` 的注释，改动后先运行 `make preflight`。

@@ -5,122 +5,56 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![CI](https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/actions/workflows/ci.yml)
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED?logo=docker)](docker-compose.yml)
-[![GHCR](https://img.shields.io/badge/GHCR-workflow-24292f?logo=github)](.github/workflows/ghcr.yml)
 
-> AI "What-If" Prediction Playground - 群体预言机
-
-SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI 代理群体模拟多条故事线，展示不同可能性。旗舰示例场景是：**如果郑和比哥伦布先发现了美洲大陆**。
+SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出“如果……会怎样？”，一组 AI Agent 推演多条世界线，结果页给出结论、终局概率和可继续追问的入口。
 
 ![SwarmOracle 首页](docs/screenshots/01-home.png)
 
-## 在线介绍页 / Live Demo
+静态介绍页（截图与视频）：https://agi-is-going-to-arrive.github.io/Swarm-Oracle/
+中文介绍视频：https://www.bilibili.com/video/BV1Xh7168ECc
 
-打开就能看完整截图和一段介绍视频：**https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
+## 能做什么
 
-也可以直接在 B 站看中文介绍视频：**https://www.bilibili.com/video/BV1Xh7168ECc**
+- 多分支推演、Classic 分支树与 Pixel Theater
+- 辩论竞技场、结局会客厅和世界线圆桌
+- 反事实续跑、分支对比、Replay Trace
+- 因果图谱、知识图谱与时间线视图
+- 自定义 Agent、人物备份、预测日志与 Snapshot
+- 结果结论、完整报告、分享卡片与可选搜索增强
 
-## 功能亮点
+类别级能力与路由见 [功能索引](docs/FEATURES.md)，操作步骤见 [使用指南](docs/USAGE.md)。
 
-- **多分支推演**：一个问题，多条故事线；推演页实时显示轮次、发言进度和 ETA，慢模型会显示已运行时长，中断的分支明确标出；结果页按终局世界线给出归一化概率
-- **Pixel Theater + 导演/玩法卡**：用像素剧场观看推演，14 张导演/玩法卡可以改变当前世界线的节奏
-- **辩论竞技场**：AI 正反方激辩，帮你看清争议的两面
-- **神谕密室**：与当前世界线里的 AI 角色深度对话，追问细节
-- **世界线圆桌**：多方代表圆桌讨论，完成后可回到已保存结果并继续 Deep Dive
-- **反事实对比**："如果那句话说得不同，世界线会怎么变？"
-- **因果图谱 + 知识图谱**：从结果页进入图谱工作台、知识图谱浏览器和时间线星系
-- **自定义 Agent**：在 Agent 工坊里创建、导入、导出你自己的角色；加入推演后，人设、记忆和上一轮具体观点会约束它的发言口吻和关注点
-- **教学模板与本地主题包**：用课堂模板或仓库内 `packs/` 预设快速填入问题和推荐设置，本地包支持类型分段、搜索、预览和一键导入
-- **预测日志与排行榜**：记录预测、复盘校准，也能看全局排行榜
-- **Snapshot 导入 / 导出**：把一次推演打包保存，之后再导入继续查看
-- **完整报告与证据回放**：结果页先给深读摘要和章节入口；独立报告页展开结论、证据、观察指标、概率区间和图表。概率区间只在有可回答分支锚点时显示，证据能跳回对应回放
-- **模型配置与自带 LLM**：兼容任何 OpenAI 格式的 API，可保存多套模型 profile（地址、密钥、限速、并发等），在首页、辩论和结果页会客厅里直接选择
+## 两种使用方式
 
-> 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**；逐项功能图鉴见 **[FEATURES.md](docs/FEATURES.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
+### 离线 Snapshot 演示
 
-## 玩起来什么样
+真实 LLM 未配置时，前后端仍可启动。你可以从首页导入 `samples/snapshots/` 中脱敏的 `*.swarm` 文件，浏览已保存的推演、结果和回放。占位 key 只用于启动这条演示路径，不能生成新的实时推演。
 
-提一个问题，看一群 AI 推演出好几条故事线，拿到结论，再进各种房间接着追问。
+### 实时 LLM 推演
 
-| 推演中：轮次进度和分支实时长出来 | 结果：终局概率回答你的问题 |
-|:---:|:---:|
-| ![推演中](docs/screenshots/21-simulation.png) | ![结果页](docs/screenshots/02-result.png) |
-| **辩论竞技场：正反方开杠** | **因果图谱：看清来龙去脉** |
-| ![辩论竞技场](docs/screenshots/20-debate-arena.png) | ![因果图谱](docs/screenshots/06-causal-map.png) |
+新建推演、辩论、会客厅和报告需要可用的 OpenAI-compatible LLM。你可以：
 
-## 安装阶梯
+- 在 `backend/.env` 或 `.env.docker` 配置服务端默认模型；或
+- 启动后打开 `/admin/setup`，测试连接并保存带 key 的 model profile；或
+- 在首页独立的 **BYOK** 折叠区为本轮提供连接信息。
 
-### Tier 1：公共 Gallery
-
-公共在线 Gallery 尚未上线。当前请使用在线介绍页查看截图和视频，或使用下面的 Tier 2 / Tier 3 本地方式。
-
-### Tier 2：零密钥 Demo
-
-先按下方「快速开始」启动前后端（这一步不需要真实 LLM key），再在首页用 Snapshot 导入入口加载 `samples/snapshots/` 下的 sanitized snapshot（`*.swarm` 文件），即可查看离线演示。示例场景包含 **如果郑和比哥伦布先发现了美洲大陆**。
-
-### Tier 3：BYOK 完整运行
-
-用你自己的 OpenAI-compatible LLM 服务运行完整推演，两种配置方式任选其一：
-
-1. 在 `.env`（本地开发）或 `.env.docker`（Docker）里填入 `LLM_RESPONSES_URL` / `LLM_API_KEY` / `LLM_MODEL_NAME`；
-2. 启动后打开 `/admin/setup`，测试连接并保存一个带 key 的模型 profile，之后首页、辩论和结果页会客厅都可以直接选它。
-
-代理转发、原生搜索上游声明等高级行为见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
+首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。公开默认值以 [`.env.example`](.env.example) 为准，不以某台开发机的 `backend/.env` 为准。
 
 ## 快速开始
 
-### 运行要求
+### Docker Compose
 
-最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。Safari/iOS 16.2-16.3 会把 GFM 表格/删除线降级为普通 Markdown，但仍使用安全渲染。
+```bash
+cp .env.docker.example .env.docker
+docker compose up -d
+```
 
-### Docker 一键部署（推荐）
-
-1. 复制 Docker 配置模板：
-
-   macOS / Linux:
-   ```bash
-   cp .env.docker.example .env.docker
-   ```
-
-   Windows PowerShell:
-   ```powershell
-   Copy-Item .env.docker.example .env.docker
-   ```
-
-2. 编辑 `.env.docker`，填入你的 LLM API 信息。`.env.docker` 未提交时，Compose 仍能依靠 `docker-compose.yml` 的服务默认值启动；LLM 会回落到后端内置默认值：
-
-   macOS / Linux:
-   ```bash
-   ${EDITOR:-vi} .env.docker
-   ```
-
-   Windows PowerShell:
-   ```powershell
-   notepad .env.docker
-   ```
-
-   Docker Compose 默认只把前端和后端端口绑定到 `127.0.0.1`。如果不是只在本机访问，必须显式修改 `docker-compose.yml` 的 `ports` 绑定（例如把前端改成 `18928:80`），并在 `.env.docker` 中设置 `ENV=production`、`SESSION_SECRET` 和 `ADMIN_TOKEN`。`SESSION_SECRET` 保护普通 REST / WebSocket 访问；`ADMIN_TOKEN` 保护 `/api/admin/*`；`/metrics` 在设置 `ADMIN_TOKEN` 时接受 `X-Admin-Token`，在设置 `SESSION_SECRET` 时也接受 `X-Session-Token`。
-
-3. 启动：
-
-   macOS / Linux:
-   ```bash
-   docker compose up -d
-   ```
-
-   Windows PowerShell:
-   ```powershell
-   docker compose up -d
-   ```
-
-4. 打开浏览器访问 http://localhost:18928
-
-Docker 默认把前端映射到 `127.0.0.1:18928`，后端映射到 `127.0.0.1:18927`。前端容器会代理 `/api` 和 `/ws` 到后端，因此公开部署时不能只暴露前端端口而继续留空鉴权密钥。GHCR 镜像发布后，Compose 会优先使用 `image:` 指向的 backend/frontend 镜像，并保留 `build:` 作为本地回退。要强制从源码构建，运行 `docker compose up --build -d`。
+打开 http://127.0.0.1:18928 。默认端口只发布到 loopback：前端 `18928`，后端 `18927`。如需从源码重建镜像，运行 `docker compose up --build -d`。
 
 ### 本地开发
 
-后端（Python 3.11+，macOS/Linux）：
+后端（Python 3.11+）：
 
-macOS / Linux:
 ```bash
 cd backend
 python -m venv .venv
@@ -130,88 +64,29 @@ cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Windows PowerShell:
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-Copy-Item ..\.env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
-```
+另开终端启动前端（Node.js 20+，npm）：
 
-`.env.example` 默认指向本地地址，占位 key `your-api-key-here` 可以直接启动（对应 Tier 2 零密钥 Demo）。改成非本地地址（如 OpenAI）后，后端会拒绝占位 key，需要填入真实 key。
-
-前端（Node.js 20+）：
-
-macOS / Linux:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Windows PowerShell:
-```powershell
-cd frontend
-npm install
-npm run dev
-```
+打开 http://127.0.0.1:18928 。前端通过 `/api` 和 `/ws` 代理到 http://127.0.0.1:18927 。
 
-打开 http://localhost:18928 即可使用。
+## 公开部署
 
-> 前置条件：本地开发时请**先确保后端已在 18927 运行**，前端会把 `/api` 与 `/ws` 请求转发给它，否则页面会一直等待或报错。
+Docker Compose 默认仅供本机访问。改成公网或 LAN 绑定时，必须设置 `ENV=production`、唯一的 `SESSION_SECRET` 和 `ADMIN_TOKEN`；生产模式缺少任一密钥会拒绝启动。BYOK、SSRF 和管理端点边界以 [SECURITY.md](SECURITY.md) 为准，部署变量见 [配置说明](docs/CONFIGURATION.md)。
 
-## 配置说明
+## 文档
 
-核心配置在 `.env.example`（本地开发）或 `.env.docker`（Docker 部署）中：
+- [使用指南](docs/USAGE.md)：从首页到结果页的操作
+- [配置说明](docs/CONFIGURATION.md)：环境变量、部署与功能开关
+- [功能索引](docs/FEATURES.md)：类别级能力与主要路由
+- [贡献指南](CONTRIBUTING.md) · [安全说明](SECURITY.md) · [变更记录](CHANGELOG.md)
 
-| 配置项 | 说明 | 示例 |
-|--------|------|------|
-| `LLM_RESPONSES_URL` | LLM 服务地址 | `https://api.openai.com/v1` |
-| `LLM_API_KEY` | API 密钥 | `sk-...` |
-| `LLM_MODEL_NAME` | 模型名称 | `gpt-5.4-mini` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
-| `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
-| `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
+## 技术栈与许可证
 
-完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板、本地主题包、人物备份和完整报告在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
+后端：FastAPI、SQLModel、SQLite、ChromaDB。前端：React 19、TypeScript、Phaser 3、Vite。数据库迁移由后端 `init_db()` 在启动时负责。
 
-Docker Compose 会读取 `.env.docker`（如果存在），并把数据库和 Chroma 数据放到 `/data` volume。普通本地开发读取 `backend/.env`。
-
-首页 scenario 问题、辩论题目、分享挑战和模板/场景包导入链路都按 2000 字符上限收口。前端会在可控入口截断或限制输入，后端 schema 仍会拒绝超长请求。
-
-## 迁移策略
-
-数据库迁移 owner 保持为后端 `init_db()`。FastAPI lifespan 负责启动时 stamp/upgrade 到 head；镜像 entrypoint、Compose command 和发布脚本不新增 `alembic upgrade head`。除非后续单独批准迁移策略变更，否则 entrypoint Alembic 保持冻结。
-
-## 项目结构
-
-```text
-SwarmOracle/
-├── backend/          # FastAPI 后端 (Python)
-├── frontend/         # React + Phaser 前端 (TypeScript)
-├── docs/             # 使用指南 / 功能图鉴 / 配置说明
-├── packs/            # 本地主题包（双语预设场景）
-├── samples/          # 零密钥演示 snapshot
-├── docker-compose.yml
-├── .env.example      # 本地开发配置模板
-└── .env.docker       # Docker 部署本地配置，默认不提交
-```
-
-## 贡献与内容政策
-
-贡献流程、测试门禁和内容政策见 **[CONTRIBUTING.md](CONTRIBUTING.md)**。SwarmOracle 面向 AI 生成的假设性推演和 speculative fiction；请避免真实个人诽谤、骚扰、隐私泄露、仿冒身份、违法指导和把生成内容包装成事实新闻。
-
-## 技术栈
-
-- **后端**: FastAPI + SQLite + ChromaDB
-- **前端**: React 19 + TypeScript + Phaser 3
-- **部署**: Docker Compose + GHCR 镜像（发布 workflow）
-
-## 致谢
-
-感谢 [Linux.do](https://linux.do/) 社区的反馈与支持。
-
-## License
-
-SwarmOracle 使用 **[GNU Affero General Public License v3.0](LICENSE)**。
+SwarmOracle 使用 [GNU Affero General Public License v3.0](LICENSE)。生成内容只适合娱乐和探索，不应作为金融、医疗、法律或事实判断依据。

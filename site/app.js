@@ -5,14 +5,14 @@
   "use strict";
   var S = "assets/screenshots/";
 
-  /* ---- real content (verbatim) ---- */
+  /* ---- feature copy ---- */
   var FEATURES = [
     { id: "F01", img: "01-home.png", hero: false, zt: "首页提问框与开始推演", et: "Home Question Box and Start Simulation",
       zd: "在首页输入一个「如果……会怎样？」问题，确认设置后开始多 Agent 推演；开始按钮不可用时会直接说明原因（缺问题、未配置 LLM 或预算受限）。", ed: "Type a “what if?” question on the home page, confirm the settings, and start the multi-agent simulation; when the start button is unavailable, it says why (missing question, no LLM, or a budget limit)." },
     { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
       zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
     { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",
-      zd: "结果页先露深读摘要；完整报告展开证据、AI 扮演角色访谈、后续观察指标和概率/阵营图表。无可回答分支锚点时隐藏统计区间；重生成失败保留可重试状态，证据可跳回 replay。", ed: "The result page previews the deep read; the full report opens evidence, simulated-persona interviews, watch signals, and probability/faction charts. Without an answer-bearing branch anchor, statistical bands stay hidden; retry failures stay retryable, and evidence jumps back to replay." },
+      zd: "结果页先显示摘要和章节入口；完整报告展开证据、不确定性、观察指标和可用图表，证据可跳回 replay。", ed: "The result page starts with a digest and section links; the full report opens evidence, uncertainty, watch signals, and available charts, with evidence links back to replay." },
     { id: "F02", img: "20-debate-arena.png", hero: false, zt: "辩论竞技场", et: "Debate Arena",
       zd: "从首页直接进入辩论竞技场，创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；无可用 LLM 或启动失败时，页面会显示原因。", ed: "Jump straight into the Debate Arena, create affirmative, opposing and judge roles, and run a shorter staged adversarial debate; if no LLM is usable or launch fails, the page shows the reason." },
     { id: "F13", img: "14-roundtable.png", hero: false, zt: "世界线圆桌", et: "Worldline Roundtable",
@@ -36,32 +36,32 @@
     { id: "F48", img: "22-local-packs.png", hero: false, zt: "本地主题包", et: "Local Packs",
       zd: "首页的「本地主题包」收录一批双语预设场景，可按类型分段和关键词筛选；点一下模板即可填入问题和推荐设置。", ed: "The home page bundles bilingual preset scenario packs, filterable by genre and keyword; one click on a template fills in the question and suggested settings." },
     { id: "F44", img: "23-multi-run.png", hero: false, zt: "多次推演分布", et: "Multi-Run Distribution",
-      zd: "同一个问题可以连跑多次：等待面板列出每条世界线，首条可观看完整推演，后续快速结论完成后可直达结果页；结果页再用直方图汇总各次结局。", ed: "Run the same question several times: the waiting panel lists each worldline, the first can be watched as a full simulation, later quick verdicts open their result pages when done, and the result page summarizes endings in histograms." },
+      zd: "同一个问题可运行多次；等待面板显示进度，结果页汇总各次终局分布。", ed: "Run the same question several times; the waiting panel shows progress and the result page summarizes terminal outcomes." },
     { id: "F47", img: "24-document-seed.png", hero: false, zt: "文档种子", et: "Document Seed",
       zd: "首页可上传 PDF、TXT 或 Markdown，系统把内容提炼成推演背景，让 Agent 基于你的资料展开，而不只凭一句问题。", ed: "Upload a PDF, TXT or Markdown on the home page and the system distills it into the run’s backdrop, so agents build on your material rather than a single question." },
     { id: "F42", img: "25-model-profiles.png", hero: false, zt: "模型配置", et: "Model Profiles",
       zd: "保存多套模型接入配置（服务商、地址、模型、密钥、限速等），推演、辩论或结果页会客厅开局前一键切换。", ed: "Save several model setups (provider, URL, model, key, rate limits and more) and switch in one click before a simulation, debate, or result-page chamber." },
     { id: "F45", img: "28-you-vs-oracle.png", hero: false, zt: "你的预测 vs 预言机", et: "Your Prediction vs the Oracle",
-      zd: "在结果页提交你自己的预测，系统会和 AI 推演出的结局对比给出命中情况；无法判定对错时显示「暂不可评分」并说明原因，不硬凑分数。", ed: "Submit your own prediction on the result page and the system compares it with the AI’s ending; when a worldline can’t be judged it says “not scorable yet” and explains why instead of forcing a score." },
+      zd: "提交自己的预测，与 AI 终局对比；无法判定时显示不可评分原因。", ed: "Submit your own prediction and compare it with the AI outcome; unresolvable cases explain why they are not scorable." },
     { id: "F46", img: "27-social.png", hero: false, zt: "社交动态与头条卡", et: "Social Feed & Headline Cards",
       zd: "结果页的「社交动态」把推演结果改写成几条社交平台风格的头条卡片，可一键复制文字或下载图片，方便分享。", ed: "The result page’s Social Feed rewrites your outcome into a few platform-styled headline cards you can copy as text or download as images." },
     { id: "F43", img: "26-gallery.png", hero: false, zt: "公开分享与画廊", et: "Public Sharing & Gallery",
-      zd: "结果页分享弹窗可导出脱敏的公开 artifact——去掉密钥和私密字段的 JSON，或一个能离线打开的单文件 HTML 画廊，方便把你的世界线公开展示给别人。", ed: "The share dialog exports a redacted public artifact — a JSON with keys and private fields stripped, or a single-file HTML gallery that opens offline — to publish your worldline for others." }
+      zd: "分享弹窗可导出脱敏 JSON 或单文件 HTML；问题和结局仍属于公开内容。", ed: "The share dialog exports redacted JSON or a single-file HTML gallery; the question and endings remain public content." }
   ];
 
   var MODES = [
     { n: "01", img: ["21-simulation.png", "02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
-      zd: "一个「如果……会怎样？」，AI 代理群体推演出多条故事线：实时看轮次与发言，结果页一句话直接回答原问题，并给出每条世界线的概率和故事摘要。", ed: "One “what if?”, played out by a swarm of AI agents into multiple storylines: watch rounds and messages live, then the result page answers your question in one line, with a probability and story summary for each worldline." },
+      zd: "一个问题展开多条世界线：实时看轮次与发言，完成后查看结论、概率和故事摘要。", ed: "Expand one question into several worldlines, watch rounds and messages live, then inspect the verdict, probabilities, and story summaries." },
     { n: "02", img: ["20-debate-arena.png", "15-debate.png"], zt: "辩论竞技场", et: "Debate Arena",
-      zd: "辩论竞技场创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；辩论结果页展示比分、角色和裁判结论，可加载论点地图。", ed: "The Debate Arena creates affirmative, opposing and judge roles and runs a shorter staged debate; the result page shows the score, roles and the judge’s verdict, and can load the argument map." },
+      zd: "正方、反方和评委分阶段讨论；结果页展示结论并可加载论点地图。", ed: "Proposition, opposition, and judge debate in phases; the result shows the verdict and can load an argument map." },
     { n: "03", img: ["17-ending-chamber.png"], zt: "神谕密室 / 结局会客厅", et: "Oracle Chambers / Ending Chamber",
       zd: "从某条世界线进入结局会客厅追问当前结局的参与者；需要指定模型时，展开高级设置选择 profile，不选则走全局默认。", ed: "Enter the Ending Chamber from a worldline to question that ending’s participants; when you need a specific model, open Advanced settings and choose a profile, or leave it blank for the global default." },
     { n: "04", img: ["14-roundtable.png"], zt: "世界线圆桌", et: "Worldline Roundtable",
-      zd: "世界线圆桌让不同世界线的代表坐在同一张桌上讨论，支持深度剖析、快速过审和交锋三种模式，完成后可回到已保存结果并继续 Deep Dive。", ed: "The Worldline Roundtable seats representatives of different worldlines at one table in deep-dive, quick-review or clash modes; afterwards you can return to the saved result and continue Deep Dive." },
+      zd: "不同世界线的代表同桌讨论；完成后可恢复结果并继续 Deep Dive。", ed: "Representatives from different worldlines share one table; completed results can be restored for Deep Dive." },
     { n: "05", img: ["13-compare.png"], zt: "反事实对比", et: "Counterfactual compare",
-      zd: "反事实对比横向展示原分支和改写后的分支，逐条消息标出红绿差异，没有可对比数据时显示空态而不是伪造分支。", ed: "Counterfactual compare shows the original and rewritten branch side by side, marking per-message diffs in red and green, and shows an empty state rather than fabricating a branch." },
+      zd: "并排查看原分支和改写分支，定位它们从哪里开始分歧。", ed: "Compare the original and rewritten branches side by side and find where they diverge." },
     { n: "06", img: ["06-causal-map.png", "08-kg-explorer.png"], zt: "因果图谱 + 知识图谱", et: "Causal graph + knowledge graph",
-      zd: "从结果页进入图谱工作台、知识图谱浏览器和时间线星系：因果图谱把事件、分叉和结局连成有向图，知识图谱用实体、事件和主张组织结果，时间线星系把多条世界线放进同一张时间图。", ed: "From the result page, enter the graph workbench, knowledge graph explorer and timeline galaxy: the causal graph wires events, forks and endings into a directed graph, the knowledge graph organizes results by entities, events and claims, and the timeline galaxy places many worldlines on one time chart." }
+      zd: "用因果图、知识图谱和时间线查看事件、实体、主张与世界线关系。", ed: "Use causal, knowledge, and timeline views to inspect events, entities, claims, and worldline relationships." }
   ];
 
   function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }

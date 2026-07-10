@@ -1,13 +1,12 @@
 # Contributing / 贡献指南
 
-SwarmOracle welcomes focused, testable changes. Keep pull requests small,
-ground user-facing claims in the repository, and avoid unrelated refactors.
+Keep each change focused, testable, and grounded in current code or configuration. Avoid unrelated refactors and do not publish local secrets.
 
-SwarmOracle 欢迎范围清晰、可以验证的改动。请保持 PR 小而明确，面向用户的说法必须来自仓库里的真实代码、配置或文档，不要顺手重构无关部分。
+每次改动应范围清晰、可以验证，并以当前代码或配置为依据。不要顺手重构无关代码，也不要提交本地密钥。
 
-## Development Setup / 开发环境
+## Setup / 开发环境
 
-Backend:
+Backend / 后端：
 
 ```bash
 cd backend
@@ -18,114 +17,58 @@ cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Windows PowerShell:
+Frontend / 前端（Node.js 20+，npm）：
 
-```powershell
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open / 打开 http://127.0.0.1:18928 。The frontend proxies `/api` and `/ws` to backend port `18927`.
+
+## Gates / 门禁
+
+Run the smallest relevant check first. Expand only when the change crosses modules or release surfaces.
+
+先跑最相关的窄门禁；只有改动跨模块或发布面时再扩大。
+
+```bash
+# Backend
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-Copy-Item ..\.env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
-```
+.venv/bin/python -m pytest
+.venv/bin/ruff check app/
 
-Frontend:
-
-```bash
+# Frontend
 cd frontend
-npm install
-npm run dev
+npm test
+npm run lint
+npx tsc -b
+npm run build
 ```
 
-Windows PowerShell:
+`npx tsc -b` is the repository TypeScript gate. Do not replace it with a different no-emit command in release claims.
 
-```powershell
-cd frontend
-npm install
-npm run dev
-```
+`npx tsc -b` 是仓库的 TypeScript 门禁；发布签收不要用其它 no-emit 命令替代。
 
-## Test Gates / 测试门禁
+## Pull Requests / Pull Request
 
-Run the narrow gate that matches your change first, then broaden only when the
-change crosses backend/frontend or release surfaces.
+- One behavioral or documentation goal per PR; use a descriptive branch name.
+- Explain what changed, why, and the exact commands actually run.
+- Add or update tests for behavior changes. Do not claim checks you did not run.
+- Coordinate before editing files already owned by another active PR.
+- Do not commit `.env`, API keys, tokens, caches, databases, or generated captures unless the PR explicitly owns them.
 
-先跑与你的改动最相关的窄门禁；只有当改动跨后端、前端或发布面时再扩大范围。
-
-Backend pytest:
-
-```bash
-cd backend && .venv/bin/python -m pytest
-```
-
-```powershell
-# Windows PowerShell
-cd backend; .venv\Scripts\python.exe -m pytest
-```
-
-Frontend typecheck:
-
-```bash
-cd frontend && npx tsc --noEmit -p tsconfig.app.json
-```
-
-```powershell
-# Windows PowerShell
-cd frontend; npx tsc --noEmit -p tsconfig.app.json
-```
-
-Frontend tests:
-
-```bash
-cd frontend && npm test
-```
-
-```powershell
-# Windows PowerShell
-cd frontend; npm test
-```
-
-## Branch and PR Etiquette / 分支与 PR 规范
-
-- Use a descriptive branch name, such as `fix/snapshot-import-copy` or
-  `docs/release-surface`.
-- Keep each PR scoped to one behavioral or documentation goal.
-- Include what changed, why it changed, and the exact commands you ran.
-- Do not commit secrets, local `.env` files, generated caches, or bulky media
-  captures unless the PR explicitly owns those artifacts.
-- If your change touches files that an open PR is already modifying, coordinate
-  in that issue or PR first instead of editing the same files in parallel.
-
-- 分支名应说明目的，例如 `fix/snapshot-import-copy` 或
-  `docs/release-surface`。
-- 每个 PR 只处理一个行为或文档目标。
-- PR 描述中写清楚改了什么、为什么改、实际跑过哪些命令。
-- 不要提交密钥、本地 `.env`、缓存产物或大体积录屏，除非该 PR 明确负责这些资产。
-- 如果你的改动会碰到其他进行中 PR 正在修改的文件，请先在对应 issue / PR 里沟通，不要并行修改同一文件。
+- 每个 PR 只处理一个行为或文档目标，分支名应说明用途。
+- 写清改了什么、原因和实际运行的命令。
+- 行为变更应补测试；未运行的检查不得写成已通过。
+- 如果文件已由其它 PR 修改，先协调再编辑。
+- 不要提交 `.env`、API key、token、缓存、数据库或无关生成产物。
 
 ## Content Policy / 内容政策
 
-SwarmOracle produces AI-generated hypothetical simulations and speculative
-fiction. Outputs are not factual reporting, legal advice, medical advice,
-financial advice, or historical proof.
+SwarmOracle produces hypothetical AI simulations, not verified reporting or professional advice. Do not contribute material that defames or targets real people, exposes personal data or credentials, impersonates a real person, requests unlawful harm, or presents generated fiction as fact.
 
-SwarmOracle 生成的是 AI 假设性推演和 speculative fiction。输出不是事实报道、法律建议、医疗建议、财务建议或历史证明。
+SwarmOracle 生成假设性 AI 推演，不是事实报道或专业建议。不要贡献诽谤或定向攻击真实个人、泄露个人数据或凭据、冒充真实个人、请求违法伤害，或把生成内容包装成事实的材料。
 
-Do not contribute prompts, examples, templates, screenshots, or docs that:
-
-- Defame, harass, dox, or target real people.
-- Impersonate a real person or present generated fiction as verified fact.
-- Request instructions for violence, self-harm, cyber abuse, fraud, or other
-  unlawful conduct.
-- Include private credentials, API keys, authorization headers, user
-  identifiers, or personal data.
-- Compare the project against a named product without current, verifiable,
-  maintainer-approved evidence.
-
-请不要贡献以下内容：
-
-- 诽谤、骚扰、开盒或定向攻击真实个人。
-- 冒充真实个人，或把生成的虚构内容包装成已验证事实。
-- 请求暴力、自伤、网络滥用、欺诈或其他违法行为的操作指导。
-- 包含私有凭据、API key、Authorization header、用户标识符或个人数据。
-- 在没有当前、可验证、维护者批准证据的情况下，把项目与某个具名产品做对比。
+Security reports belong in private vulnerability reporting; see [SECURITY.md](SECURITY.md). 安全漏洞请通过私密漏洞报告提交。
