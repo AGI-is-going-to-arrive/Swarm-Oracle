@@ -996,6 +996,69 @@ class TestIdentityMemory:
         assert calls == ["id-timeout", "id-next"]
         assert completed_first_write.wait(timeout=0.2)
 
+    def test_profile_pending_wait_enters_after_gate_released(self, monkeypatch):
+        calls: list[str] = []
+
+        def _fake_store_identity_profile_sync(
+            _user_id: str,
+            identity_id: str,
+            _role: str,
+            _profile_text: str,
+            *,
+            replace_existing: bool,
+        ) -> None:
+            assert replace_existing is False
+            calls.append(identity_id)
+
+        monkeypatch.setattr(
+            vector_store_module,
+            "_store_identity_profile_sync",
+            _fake_store_identity_profile_sync,
+        )
+        gate = vector_store_module._CHROMA_IDENTITY_PROFILE_WRITE_PENDING
+        assert gate.acquire(blocking=False)
+        release_gate = threading.Timer(0.05, gate.release)
+        release_gate.start()
+        try:
+            store_identity_profile(
+                "user-wait",
+                "id-wait",
+                "Analyst",
+                "Waits for the real gate",
+                pending_wait_seconds=0.5,
+            )
+        finally:
+            release_gate.join(timeout=1)
+
+        assert calls == ["id-wait"]
+
+    def test_profile_pending_wait_timeout_skips_only_current_item(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        calls: list[str] = []
+        monkeypatch.setattr(
+            vector_store_module,
+            "_store_identity_profile_sync",
+            lambda *_args, **_kwargs: calls.append("entered"),
+        )
+        gate = vector_store_module._CHROMA_IDENTITY_PROFILE_WRITE_PENDING
+        assert gate.acquire(blocking=False)
+        try:
+            store_identity_profile(
+                "user-timeout",
+                "id-timeout-current",
+                "Analyst",
+                "Must not outlive the batch budget",
+                pending_wait_seconds=0.01,
+            )
+        finally:
+            gate.release()
+
+        assert calls == []
+        assert "pending gate wait timed out" in caplog.text
+
     def test_profile_write_skips_when_local_chroma_lock_stays_busy(self, monkeypatch):
         """A stuck Chroma critical section should not block the caller forever."""
         class _FakeStore:

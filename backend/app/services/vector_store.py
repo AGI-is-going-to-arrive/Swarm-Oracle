@@ -7,6 +7,7 @@ memory retrieval. Gracefully degrades when ChromaDB is unavailable.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -985,6 +986,7 @@ def store_identity_profile(
     persona: str | None,
     *,
     replace_existing: bool = False,
+    pending_wait_seconds: float = 0.0,
 ) -> None:
     """Store role+persona text as an embedding for L2 fuzzy matching.
 
@@ -993,17 +995,35 @@ def store_identity_profile(
 
     When ``replace_existing`` is true, removes any existing profile docs before
     writing the replacement profile.
+
+    Existing callers remain non-blocking. Internal batch callers may provide a
+    positive finite ``pending_wait_seconds`` to wait behind the shared profile
+    gate without outliving their remaining batch budget.
     """
     profile_text = f"{role} — {(persona or '')[:200]}".strip()
     if not profile_text:
         return
 
-    if not _CHROMA_IDENTITY_PROFILE_WRITE_PENDING.acquire(blocking=False):
-        logger.warning(
-            "L2 profile store skipped for %s: previous profile write still running",
-            user_id,
+    if pending_wait_seconds > 0 and math.isfinite(pending_wait_seconds):
+        gate_acquired = _CHROMA_IDENTITY_PROFILE_WRITE_PENDING.acquire(
+            timeout=pending_wait_seconds,
         )
-        return
+        if not gate_acquired:
+            logger.warning(
+                "L2 profile store skipped for %s: pending gate wait timed out "
+                "after %.3fs",
+                user_id,
+                pending_wait_seconds,
+            )
+            return
+    else:
+        gate_acquired = _CHROMA_IDENTITY_PROFILE_WRITE_PENDING.acquire(blocking=False)
+        if not gate_acquired:
+            logger.warning(
+                "L2 profile store skipped for %s: previous profile write still running",
+                user_id,
+            )
+            return
 
     error_holder: dict[str, BaseException] = {}
     pending_release_lock = threading.Lock()

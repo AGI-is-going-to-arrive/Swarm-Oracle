@@ -116,8 +116,26 @@ def _identity_parse_pipeline(monkeypatch, agents: list[dict], profile_writer):
     monkeypatch.setattr(helpers_api, "run_sim_background", fake_run_sim_background)
     monkeypatch.setattr(helpers_api, "schedule_background_task", track_schedule)
     monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", True)
-    monkeypatch.setattr(agent_identity, "store_identity_profile", profile_writer)
-    monkeypatch.setattr(vector_store, "store_identity_profile", profile_writer)
+
+    def compatible_profile_writer(
+        user_id,
+        identity_id,
+        role,
+        persona,
+        *,
+        replace_existing=False,
+        pending_wait_seconds=0.0,
+    ):
+        assert replace_existing is False
+        assert pending_wait_seconds >= 0
+        return profile_writer(user_id, identity_id, role, persona)
+
+    monkeypatch.setattr(
+        agent_identity, "store_identity_profile", compatible_profile_writer,
+    )
+    monkeypatch.setattr(
+        vector_store, "store_identity_profile", compatible_profile_writer,
+    )
     return helpers_api, handoffs, scheduled_tasks
 
 
@@ -1061,9 +1079,13 @@ class TestIdentityLifecycleHooks:
 
         now = [0.0]
         profile_calls: list[str] = []
+        remaining_budgets: list[float] = []
 
-        def controlled_writer(_user_id, identity_id, _role, _persona):
+        def controlled_writer(
+            _user_id, identity_id, _role, _persona, remaining_seconds,
+        ):
             profile_calls.append(identity_id)
+            remaining_budgets.append(remaining_seconds)
             now[0] = 11.0
 
         helpers_api._store_identity_profile_batch(
@@ -1078,6 +1100,61 @@ class TestIdentityLifecycleHooks:
         )
 
         assert profile_calls == ["identity-1"]
+        assert remaining_budgets == [10.0]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_profile_batches_wait_for_the_real_gate(self, monkeypatch):
+        from app.api import helpers as helpers_api
+        from app.services import vector_store as vector_store_module
+
+        first_started = threading.Event()
+        release_first = threading.Event()
+        profile_calls: list[str] = []
+
+        def controlled_sync_writer(
+            _user_id,
+            identity_id,
+            _role,
+            _profile_text,
+            *,
+            replace_existing,
+        ):
+            assert replace_existing is False
+            profile_calls.append(identity_id)
+            if identity_id == "identity-first":
+                first_started.set()
+                release_first.wait()
+
+        monkeypatch.setattr(
+            vector_store_module,
+            "_store_identity_profile_sync",
+            controlled_sync_writer,
+        )
+        first_batch = asyncio.create_task(
+            helpers_api._store_identity_profiles_background([
+                ("user", "identity-first", "Role", "First persona"),
+            ])
+        )
+        second_batch = None
+        try:
+            assert await asyncio.to_thread(first_started.wait, 1)
+            second_batch = asyncio.create_task(
+                helpers_api._store_identity_profiles_background([
+                    ("user", "identity-second", "Role", "Second persona"),
+                ])
+            )
+            await asyncio.sleep(0.05)
+            assert profile_calls == ["identity-first"]
+        finally:
+            release_first.set()
+            pending_batches = [first_batch]
+            if second_batch is not None:
+                pending_batches.append(second_batch)
+            await asyncio.wait_for(
+                asyncio.gather(*pending_batches), timeout=1,
+            )
+
+        assert profile_calls == ["identity-first", "identity-second"]
 
     @pytest.mark.asyncio
     async def test_profile_batch_uses_one_thread_submission(self, monkeypatch):

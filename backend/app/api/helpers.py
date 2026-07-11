@@ -1255,7 +1255,7 @@ def schedule_background_task(coro):
 
 def _store_identity_profile_batch(
     profiles: list[tuple[str, str, str, str | None]],
-    writer: Callable[[str, str, str, str | None], None],
+    writer: Callable[[str, str, str, str | None, float], None],
     *,
     budget_seconds: float = _IDENTITY_PROFILE_BATCH_BUDGET_SECONDS,
     monotonic: Callable[[], float] = time.monotonic,
@@ -1263,7 +1263,8 @@ def _store_identity_profile_batch(
     """Write profiles sequentially, stopping before starting work past the budget."""
     deadline = monotonic() + max(0.0, budget_seconds)
     for index, (user_id, identity_id, role, persona) in enumerate(profiles):
-        if monotonic() >= deadline:
+        remaining_seconds = deadline - monotonic()
+        if remaining_seconds <= 0:
             logger.warning(
                 "Post-commit identity profile batch deadline reached; "
                 "skipping %d remaining profile(s)",
@@ -1271,7 +1272,7 @@ def _store_identity_profile_batch(
             )
             return
         try:
-            writer(user_id, identity_id, role, persona)
+            writer(user_id, identity_id, role, persona, remaining_seconds)
         except Exception:
             logger.warning(
                 "Post-commit identity profile write failed for identity=%s",
@@ -1293,10 +1294,25 @@ async def _store_identity_profiles_background(
         )
         return
 
+    def _store_with_pending_wait(
+        user_id: str,
+        identity_id: str,
+        role: str,
+        persona: str | None,
+        remaining_seconds: float,
+    ) -> None:
+        store_identity_profile(
+            user_id,
+            identity_id,
+            role,
+            persona,
+            pending_wait_seconds=remaining_seconds,
+        )
+
     await asyncio.to_thread(
         _store_identity_profile_batch,
         profiles,
-        store_identity_profile,
+        _store_with_pending_wait,
     )
 
 
