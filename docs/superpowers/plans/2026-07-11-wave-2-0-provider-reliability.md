@@ -415,7 +415,18 @@ so the two root causes remain independently reviewable.
 
 ### Task 4: Configure Agent-turn request and total timeouts
 
-**Files:** Modify `backend/tests/test_config.py`, `backend/tests/test_simulator.py:123-172`, `backend/app/config.py:112-140`, `backend/app/services/simulator.py:164-168,4106-4139,4409-4495,5260-5277`, `.env.example:19-29`.
+**Files:** Modify `backend/tests/test_config.py`, `backend/tests/test_simulator.py`,
+`backend/app/config.py`, `backend/app/services/simulator.py`, `.env.example`, and
+`.env.docker.example`.
+
+**Evidence refinement (2026-07-11):** Pass 1 currently uses a 45-second request
+timeout while Pass 2 inherits the LLM client's 120-second default.  Preserve
+both defaults instead of regressing slow local metadata extraction.  The total
+budget must cover all generation attempts plus metadata extraction for one
+Agent; it is not renewed for every step.  All three values must be finite.
+When the total is lower than a per-request ceiling, the remaining total budget
+wins; this is a normal hierarchy of independent maxima, not a configuration
+error.
 
 - [ ] **Step 1: Add RED settings and simulator tests**
 
@@ -424,25 +435,64 @@ Add `from pydantic import ValidationError` to `test_config.py`, then:
 ```python
 def test_agent_turn_timeout_contract(monkeypatch):
     from app.config import Settings
+    for name in (
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
     defaults = Settings(_env_file=None)
-    assert (defaults.AGENT_TURN_REQUEST_TIMEOUT_SECONDS,
-            defaults.AGENT_TURN_TOTAL_TIMEOUT_SECONDS) == (45.0, 180.0)
-    monkeypatch.setenv("AGENT_TURN_REQUEST_TIMEOUT_SECONDS", "91.5")
+    assert (
+        defaults.AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS,
+        defaults.AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS,
+        defaults.AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+    ) == (45.0, 120.0, 180.0)
+    monkeypatch.setenv("AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS", "91.5")
+    monkeypatch.setenv("AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS", "121")
     monkeypatch.setenv("AGENT_TURN_TOTAL_TIMEOUT_SECONDS", "240")
     configured = Settings(_env_file=None)
-    assert (configured.AGENT_TURN_REQUEST_TIMEOUT_SECONDS,
-            configured.AGENT_TURN_TOTAL_TIMEOUT_SECONDS) == (91.5, 240.0)
+    assert (
+        configured.AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS,
+        configured.AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS,
+        configured.AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+    ) == (91.5, 121.0, 240.0)
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("field", [
+    "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+    "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+    "AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+])
+def test_agent_turn_timeouts_reject_non_positive_or_non_finite(field, value):
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, AGENT_TURN_REQUEST_TIMEOUT_SECONDS=0)
+        Settings(_env_file=None, **{field: value})
 ```
 
-In `test_gather_agent_messages_times_out_hung_turn_llm`, replace patches to `_AGENT_TURN_*` constants with patches to `simulator_module.settings.AGENT_TURN_REQUEST_TIMEOUT_SECONDS` and `AGENT_TURN_TOTAL_TIMEOUT_SECONDS`, both `0.01`. Add:
+In the simulator tests, capture both `llm_call()` and `llm_call_json()` kwargs
+and each surrounding `asyncio.wait_for()` timeout.  Prove the default first
+request receives 45 seconds, metadata receives 120 seconds, and both outer
+timeouts consume one shared 180-second deadline.  Add a deterministic fake
+monotonic clock so two rejected Pass-1 attempts reduce the budget available to
+Pass 2.  Also cover runtime monkeypatch bypasses:
 
 ```python
-def test_agent_turn_timeouts_resolve_settings_and_clamp_total(monkeypatch):
-    monkeypatch.setattr(simulator_module.settings, "AGENT_TURN_REQUEST_TIMEOUT_SECONDS", 91.0)
+def test_agent_turn_timeouts_resolve_settings_and_keep_independent_caps(monkeypatch):
+    monkeypatch.setattr(
+        simulator_module.settings,
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+        91.0,
+    )
+    monkeypatch.setattr(
+        simulator_module.settings,
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+        121.0,
+    )
     monkeypatch.setattr(simulator_module.settings, "AGENT_TURN_TOTAL_TIMEOUT_SECONDS", 30.0)
-    assert simulator_module._agent_turn_timeouts() == (91.0, 91.0)
+    assert simulator_module._agent_turn_timeouts() == (91.0, 121.0, 30.0)
+
+def test_agent_turn_timeouts_fall_back_from_runtime_non_finite_values(monkeypatch):
+    # inf/nan/negative runtime overrides must resolve to finite defaults.
+    ...
 ```
 
 Run one process:
@@ -459,30 +509,54 @@ Expected before implementation: missing-setting/helper failures.
 Add to `Settings`:
 
 ```python
-    AGENT_TURN_REQUEST_TIMEOUT_SECONDS: float = Field(default=45.0, gt=0)
-    AGENT_TURN_TOTAL_TIMEOUT_SECONDS: float = Field(default=180.0, gt=0)
+    AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=45.0, gt=0, allow_inf_nan=False
+    )
+    AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=120.0, gt=0, allow_inf_nan=False
+    )
+    AGENT_TURN_TOTAL_TIMEOUT_SECONDS: float = Field(
+        default=180.0, gt=0, allow_inf_nan=False
+    )
 ```
 
-Rename constants to `_DEFAULT_AGENT_TURN_REQUEST_TIMEOUT_SECONDS = 45.0` and `_DEFAULT_AGENT_TURN_TOTAL_TIMEOUT_SECONDS = 180.0`; add after `_positive_float_setting()`:
+Keep three private finite defaults and make `_positive_float_setting()` reject
+non-finite runtime values with `math.isfinite()`.  Add:
 
 ```python
-def _agent_turn_timeouts() -> tuple[float, float]:
-    request = _positive_float_setting("AGENT_TURN_REQUEST_TIMEOUT_SECONDS",
-                                      _DEFAULT_AGENT_TURN_REQUEST_TIMEOUT_SECONDS)
+def _agent_turn_timeouts() -> tuple[float, float, float]:
+    generation = _positive_float_setting(
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS", 45.0
+    )
+    metadata = _positive_float_setting(
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS", 120.0
+    )
     total = _positive_float_setting("AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
-                                    _DEFAULT_AGENT_TURN_TOTAL_TIMEOUT_SECONDS)
-    return request, max(request, total)
+                                    180.0)
+    return generation, metadata, total
 ```
 
-At `_gather_agent_messages()` entry resolve `request_timeout, total_timeout = _agent_turn_timeouts()`. Pass `timeout=request_timeout` to both `llm_call()` and `llm_call_json()`, and use `timeout=total_timeout` in both surrounding `asyncio.wait_for()` calls.
+Resolve the three limits once per `_gather_agent_messages()` invocation.  For
+each Agent, create one monotonic deadline immediately before Pass 1.  Before
+every generation or metadata request, compute the positive remaining budget;
+pass `min(phase_request_limit, remaining)` to the LLM client and `remaining` to
+`asyncio.wait_for()`.  Raise `asyncio.TimeoutError` without constructing a new
+coroutine when no budget remains.  Do not renew the deadline for retries or
+Pass 2.  `CancelledError` must continue to propagate.
 
 - [ ] **Step 3: Add exact environment examples, GREEN, commit**
 
 ```dotenv
-# 慢速本地模型可提高 Agent 单次请求及整个生成/解析步骤的超时（秒）。
-AGENT_TURN_REQUEST_TIMEOUT_SECONDS=45
+# 慢速本地模型可分别提高角色发言、元数据提取与两阶段总预算（秒）。
+AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS=45
+AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS=120
 AGENT_TURN_TOTAL_TIMEOUT_SECONDS=180
 ```
+
+Add the equivalent English explanation and values to `.env.docker.example`.
+Document that settings are global, apply equally to localhost and remote
+providers, require a backend restart, and remain bounded by the 900-second
+simulation stall watchdog.
 
 ```bash
 cd backend && source .venv/bin/activate
