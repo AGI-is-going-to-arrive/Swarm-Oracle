@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -745,6 +746,11 @@ async def test_story_full_report_oversize_returns_partial_metadata(monkeypatch):
 
     monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
     monkeypatch.setattr(scenarios_api.settings, "REPORT_FULL_REPORT_MAX_BYTES", 80)
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "report_generation_is_active",
+        lambda _scenario_id: True,
+    )
     result = await scenarios_api.get_story(sid, principal=None)
 
     assert result["full_report"] == {"status": "partial", "truncated": True}
@@ -752,13 +758,72 @@ async def test_story_full_report_oversize_returns_partial_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_story_full_report_downgrades_stale_generating_without_runtime_lease(
-    monkeypatch,
-):
+async def test_story_full_report_keeps_generating_with_active_runtime_lease(monkeypatch):
     import app.api.scenarios as scenarios_api
 
     payload = _legal_full_report()
     payload["status"] = "generating"
+    payload["generated_at"] = "invalid-but-lease-is-authoritative"
+    sid = _seed_scenario_with_branch(full_report=payload)
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "report_generation_is_active",
+        lambda _scenario_id: True,
+    )
+
+    result = await scenarios_api.get_story(sid, principal=None)
+
+    assert result["full_report"]["status"] == "generating"
+    assert result["full_report"]["version"] == "1.0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timestamp_case", "expected_status"),
+    [
+        ("age_0_z", "generating"),
+        ("age_29_9_z", "generating"),
+        ("age_30_offset", "generating"),
+        ("age_31_z", "failed"),
+        ("invalid", "failed"),
+        ("naive", "failed"),
+        ("future", "failed"),
+    ],
+)
+async def test_story_full_report_applies_fixed_grace_without_runtime_lease(
+    monkeypatch,
+    timestamp_case,
+    expected_status,
+):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report.schema import full_report_for_story
+
+    now = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+    timestamps = {
+        "age_0_z": now.isoformat().replace("+00:00", "Z"),
+        "age_29_9_z": (now - timedelta(seconds=29.9)).isoformat().replace(
+            "+00:00",
+            "Z",
+        ),
+        "age_30_offset": (now - timedelta(seconds=30))
+        .astimezone(timezone(timedelta(hours=10)))
+        .isoformat(),
+        "age_31_z": (now - timedelta(seconds=31)).isoformat().replace(
+            "+00:00",
+            "Z",
+        ),
+        "invalid": "not-a-timestamp",
+        "naive": "2026-06-08T11:59:59",
+        "future": (now + timedelta(microseconds=1)).isoformat().replace(
+            "+00:00",
+            "Z",
+        ),
+    }
+    payload = _legal_full_report()
+    payload["status"] = "generating"
+    payload["generated_at"] = timestamps[timestamp_case]
     sid = _seed_scenario_with_branch(full_report=payload)
 
     monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
@@ -766,13 +831,93 @@ async def test_story_full_report_downgrades_stale_generating_without_runtime_lea
         scenarios_api.result_report_builder,
         "report_generation_is_active",
         lambda _scenario_id: False,
+    )
+    monkeypatch.setattr(scenarios_api, "_report_story_utc_now", lambda: now, raising=False)
+
+    result = await scenarios_api.get_story(sid, principal=None)
+    normalized = full_report_for_story(payload)
+
+    assert result["full_report"]["status"] == expected_status
+    assert result["full_report"]["version"] == payload["version"]
+    assert normalized is not None
+    assert result["full_report"]["sections"] == normalized["sections"]
+    with Session(get_engine()) as session:
+        persisted = session.get(Scenario, sid)
+        assert persisted is not None
+        assert persisted.parsed_context["full_report"]["status"] == "generating"
+        assert persisted.parsed_context["full_report"]["generated_at"] == payload["generated_at"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lease_active", "expected_status"),
+    [(True, "generating"), (False, "partial")],
+)
+async def test_story_legacy_partial_report_only_rotates_with_active_lease(
+    monkeypatch,
+    lease_active,
+    expected_status,
+):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report.schema import full_report_for_story
+
+    payload = _legal_full_report()
+    payload["status"] = "partial"
+    payload["generated_at"] = "legacy-timestamp"
+    sid = _seed_scenario_with_branch(full_report=payload)
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "report_generation_is_active",
+        lambda _scenario_id: lease_active,
+    )
+
+    result = await scenarios_api.get_story(sid, principal=None)
+    normalized = full_report_for_story(payload)
+
+    assert result["full_report"]["status"] == expected_status
+    assert result["full_report"]["version"] == payload["version"]
+    assert normalized is not None
+    assert result["full_report"]["sections"] == normalized["sections"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["complete", "failed", "cancelled", "skipped"])
+@pytest.mark.parametrize("lease_active", [True, False])
+async def test_story_terminal_report_status_ignores_lease_and_grace(
+    monkeypatch,
+    status,
+    lease_active,
+):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report.schema import full_report_for_story
+
+    payload = _legal_full_report()
+    payload["status"] = status
+    payload["generated_at"] = "invalid-terminal-timestamp"
+    sid = _seed_scenario_with_branch(full_report=payload)
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "report_generation_is_active",
+        lambda _scenario_id: lease_active,
+    )
+    monkeypatch.setattr(
+        scenarios_api,
+        "_report_story_utc_now",
+        lambda: datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
         raising=False,
     )
 
     result = await scenarios_api.get_story(sid, principal=None)
+    normalized = full_report_for_story(payload)
 
-    assert result["full_report"]["status"] == "partial"
-    assert result["full_report"]["version"] == "1.0"
+    assert result["full_report"]["status"] == status
+    assert result["full_report"]["version"] == payload["version"]
+    assert normalized is not None
+    assert result["full_report"]["sections"] == normalized["sections"]
 
 
 def test_report_generate_sse_endpoint_contract(monkeypatch):

@@ -127,6 +127,7 @@ MAX_IMPORT_REPLAY_SCENARIO_BRANCHES = 256
 MAX_IMPORT_REPLAY_SCENARIO_MESSAGES = 5_000
 MAX_REPLAY_ARTIFACT_BYTES = 2_000_000
 _RESULT_VERDICT_CONFIDENCE_VALUES = {"high", "medium", "low"}
+_REPORT_GENERATING_GRACE_SECONDS = 30.0
 _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
     {
         "_language",
@@ -2401,6 +2402,48 @@ async def get_branches(
         ]
 
 
+def _report_story_utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_report_generated_at(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    timestamp = value.strip()
+    if timestamp.endswith("Z"):
+        timestamp = f"{timestamp[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_story_full_report_status(
+    scenario_id: str,
+    full_report: dict[str, Any],
+) -> dict[str, Any]:
+    if full_report.get("status") == "partial" and full_report.get("truncated") is True:
+        return full_report
+
+    status = full_report.get("status")
+    if status not in {"generating", "partial"}:
+        return full_report
+    if result_report_builder.report_generation_is_active(scenario_id):
+        return {**full_report, "status": "generating"}
+    if status == "partial":
+        return full_report
+
+    generated_at = _parse_report_generated_at(full_report.get("generated_at"))
+    if generated_at is not None:
+        age_seconds = (_report_story_utc_now() - generated_at).total_seconds()
+        if 0 <= age_seconds <= _REPORT_GENERATING_GRACE_SECONDS:
+            return full_report
+    return {**full_report, "status": "failed"}
+
+
 @router.get("/scenario/{scenario_id}/story")
 async def get_story(
     scenario_id: str,
@@ -2444,12 +2487,8 @@ async def get_story(
             if settings.FEATURE_RESULT_REPORT
             else None
         )
-        if (
-            isinstance(full_report, dict)
-            and full_report.get("status") == "generating"
-            and not result_report_builder.report_generation_is_active(scenario_id)
-        ):
-            full_report = {**full_report, "status": "partial"}
+        if isinstance(full_report, dict):
+            full_report = _normalize_story_full_report_status(scenario_id, full_report)
         raw_branch_answers = result_quality.get("branch_question_answers")
         branch_question_answers = (
             raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
