@@ -82,6 +82,40 @@ def _insert_relation(
 
 
 class TestProcessRound:
+    def test_first_faction_index_is_first_wins_and_visits_each_member_once(self):
+        from app.services import factions as factions_service
+
+        class CountingMembers:
+            def __init__(self, members: list[str]) -> None:
+                self.members = members
+                self.iterations = 0
+                self.visits: list[str] = []
+
+            def __iter__(self):
+                self.iterations += 1
+                for member in self.members:
+                    self.visits.append(member)
+                    yield member
+
+        first_members = CountingMembers(["agent-shared", "agent-first"])
+        second_members = CountingMembers(["agent-shared", "agent-second"])
+        factions = [
+            {"key": "faction-first", "members": first_members},
+            {"key": "faction-second", "members": second_members},
+        ]
+
+        faction_by_agent = factions_service._first_faction_by_agent(factions)
+
+        assert faction_by_agent == {
+            "agent-shared": "faction-first",
+            "agent-first": "faction-first",
+            "agent-second": "faction-second",
+        }
+        assert first_members.iterations == 1
+        assert first_members.visits == ["agent-shared", "agent-first"]
+        assert second_members.iterations == 1
+        assert second_members.visits == ["agent-shared", "agent-second"]
+
     def test_returns_none_for_fewer_than_4_agents(self):
         msgs = [
             MockMessage(agent_id="a1", emotion="calm"),
@@ -424,6 +458,81 @@ class TestProcessRound:
             assert len(db_events) >= 1
             assert db_events[0].event_type == "betrayal"
             assert db_events[0].actor_agent_id == "a1"
+
+    def test_betrayal_events_use_one_membership_index_with_unknown_fallback(
+        self,
+        monkeypatch,
+    ):
+        from app.services import factions as factions_service
+
+        scenario_id = "betrayal-membership-index"
+        branch_id = "betrayal-membership-branch"
+        round_one = [
+            MockMessage(agent_id="a1", emotion="cooperative", id="index-m1"),
+            MockMessage(agent_id="a2", emotion="cooperative", id="index-m2"),
+            MockMessage(agent_id="a3", emotion="cooperative", id="index-m3"),
+            MockMessage(agent_id="a4", emotion="cooperative", id="index-m4"),
+        ]
+        append_round_nodes(scenario_id, branch_id, 1, round_one)
+        index_calls: list[list[dict]] = []
+
+        def indexed_membership(factions: list[dict]) -> dict[str, str]:
+            index_calls.append(factions)
+            return {"a1": "indexed-first-faction"}
+
+        monkeypatch.setattr(
+            factions_service,
+            "_first_faction_by_agent",
+            indexed_membership,
+            raising=False,
+        )
+        round_two = [
+            MockMessage(agent_id="a1", emotion="aggressive", id="index-m5"),
+            MockMessage(agent_id="a2", emotion="aggressive", id="index-m6"),
+            MockMessage(agent_id="a3", emotion="cooperative", id="index-m7"),
+            MockMessage(agent_id="a4", emotion="cooperative", id="index-m8"),
+        ]
+
+        result = process_round(scenario_id, branch_id, 2, round_two)
+
+        assert result is not None
+        assert result["events"] == [
+            {
+                "type": "betrayal",
+                "agent_id": "a1",
+                "faction_key": "indexed-first-faction",
+                "shift": 1.2,
+            },
+            {
+                "type": "betrayal",
+                "agent_id": "a2",
+                "faction_key": "unknown",
+                "shift": 1.2,
+            },
+        ]
+        assert index_calls == [result["factions"]]
+
+        with Session(get_engine()) as session:
+            db_events = session.exec(
+                select(FactionEvent)
+                .where(
+                    FactionEvent.scenario_id == scenario_id,
+                    FactionEvent.branch_id == branch_id,
+                    FactionEvent.round_number == 2,
+                )
+                .order_by(FactionEvent.actor_agent_id)
+            ).all()
+        assert [
+            (event.event_type, event.actor_agent_id, event.faction_key)
+            for event in db_events
+        ] == [
+            ("betrayal", "a1", "indexed-first-faction"),
+            ("betrayal", "a2", "unknown"),
+        ]
+        assert [json.loads(event.payload_json or "{}") for event in db_events] == [
+            {"prev_stance": 0.5, "current_stance": -0.7, "shift": 1.2},
+            {"prev_stance": 0.5, "current_stance": -0.7, "shift": 1.2},
+        ]
 
 
 # ── get_faction_timeline ────────────────────────────────

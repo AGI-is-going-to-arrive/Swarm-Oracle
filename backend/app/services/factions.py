@@ -27,6 +27,16 @@ _MAJORITY_RATIO = 0.80  # >= 80% of agents = majority
 _BETRAYAL_SHIFT = 0.5  # stance shift > 0.5 = betrayal event
 
 
+def _first_faction_by_agent(
+    factions: list[dict[str, Any]],
+) -> dict[str, str]:
+    faction_by_agent: dict[str, str] = {}
+    for faction in factions:
+        for agent_id in faction["members"]:
+            faction_by_agent.setdefault(agent_id, faction["key"])
+    return faction_by_agent
+
+
 # ── Core API ───────────────────────────────────────────────
 
 
@@ -167,18 +177,14 @@ def process_round(
         # ── 6. Detect betrayal events ──────────────────────
         events: list[dict] = []
         prev_frames = _get_previous_frames(session, scenario_id, branch_id, round_number)
+        faction_by_agent = _first_faction_by_agent(factions)
 
         for agent_id, current_stance in agent_stances:
             prev_stance = prev_frames.get(agent_id)
             if prev_stance is not None:
                 shift = abs(current_stance - prev_stance)
                 if shift > _BETRAYAL_SHIFT:
-                    # Find which faction this agent belongs to now
-                    faction_key = "unknown"
-                    for f in factions:
-                        if agent_id in f["members"]:
-                            faction_key = f["key"]
-                            break
+                    faction_key = faction_by_agent.get(agent_id, "unknown")
 
                     event = FactionEvent(
                         scenario_id=scenario_id,
