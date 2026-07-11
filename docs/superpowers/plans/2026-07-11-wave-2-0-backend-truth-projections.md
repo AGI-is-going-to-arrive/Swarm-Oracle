@@ -197,6 +197,14 @@ git commit -m "fix(identity): persist fuzzy profiles after commit"
 - Modify: `backend/app/services/causal_graph.py:969-993`
 - Modify: `backend/app/services/factions.py:48-79`
 
+**Evidence refinement (2026-07-11):** The simulation prompt emits 21 paired
+Chinese/English emotion labels.  The original draft covered only 12 Chinese and
+5 English labels, so it would still silently map most real outputs to zero.
+Cover the complete prompt vocabulary and its bilingual aliases.  This remains a
+documented provisional **emotion-derived interaction proxy**, not a claim that
+emotion is a topic-grounded political stance.  A real evidence-anchored stance
+extractor is a separate Wave 2.1 design task.
+
 - [ ] **Step 1: Write failing multilingual and extreme-relation tests**
 
 Add focused cases:
@@ -259,13 +267,30 @@ Add `unicodedata` and keep the vocabulary explicit:
 
 ```python
 _EMOTION_STANCE_SCORES = {
-    "aggressive": -0.7, "angry": -0.5, "worried": -0.3,
-    "anxious": -0.3, "fearful": -0.2, "cautious": 0.0,
-    "calm": 0.1, "hopeful": 0.3, "cooperative": 0.5,
-    "confident": 0.7, "resolute": 0.7, "neutral": 0.0,
-    "激动": 0.3, "忧虑": -0.3, "冷静": 0.1, "愤怒": -0.5,
-    "期待": 0.3, "释然": 0.1, "坚定": 0.7, "犹豫": -0.1,
-    "警觉": -0.1, "振奋": 0.3, "焦躁": -0.3, "沉痛": -0.3,
+    "aggressive": -0.7, "anxious": -0.3, "fearful": -0.2,
+    "cautious": 0.0, "cooperative": 0.5, "confident": 0.7,
+    "neutral": 0.0,
+    "激动": 0.3, "excited": 0.3,
+    "忧虑": -0.3, "worried": -0.3,
+    "冷静": 0.1, "calm": 0.1,
+    "愤怒": -0.5, "angry": -0.5,
+    "期待": 0.3, "hopeful": 0.3,
+    "释然": 0.1, "relieved": 0.1,
+    "讽刺": -0.2, "sardonic": -0.2,
+    "无奈": -0.2, "resigned": -0.2,
+    "坚定": 0.7, "resolute": 0.7,
+    "犹豫": -0.1, "hesitant": -0.1,
+    "警觉": -0.1, "alert": -0.1,
+    "心寒": -0.3, "chilled": -0.3,
+    "振奋": 0.3, "energized": 0.3,
+    "焦躁": -0.3, "restless": -0.3,
+    "沉痛": -0.3, "grieving": -0.3,
+    "嘲弄": -0.3, "mocking": -0.3,
+    "恳切": 0.2, "earnest": 0.2,
+    "疲倦": -0.2, "weary": -0.2,
+    "隐忍": -0.1, "restraining": -0.1,
+    "得意": 0.2, "smug": 0.2,
+    "不屑": -0.2, "dismissive": -0.2,
 }
 
 def _normalized_emotion_tokens(value: object) -> list[str]:
@@ -299,6 +324,54 @@ git add backend/app/services/causal_graph.py backend/app/services/factions.py \
   backend/tests/test_causal_graph.py backend/tests/test_factions.py
 git commit -m "fix(factions): normalize multilingual stance signals"
 ```
+
+### Task 2b: Enforce the documented maximum faction stance range
+
+**Files:** Modify `backend/app/services/factions.py` and
+`backend/tests/test_factions.py`.
+
+- [ ] Add a chain regression whose adjacent deltas are below `0.3` but whose
+  first-to-last span is greater than `0.3`.  The old adjacent-link algorithm
+  must fail by merging the whole chain.
+- [ ] Sort deterministically by `(stance, agent_id)` and compare each candidate
+  against the current group's minimum/anchor, so every faction's total range is
+  below the documented threshold.  Preserve the strict boundary behavior.
+- [ ] Keep relation persistence and public payload shape unchanged; run the
+  complete faction suite and commit independently.
+
+### Task 2c: Preserve signed stance information in report probabilities
+
+**Files:** Modify `backend/app/services/result_report/reducer.py` and
+`backend/tests/test_result_report_reducer.py`.
+
+- [ ] RED: faction centers `-1`, `0`, and `1` must project to `0`, `0.5`, and
+  `1`; negative factions must not all collapse to zero.
+- [ ] Map signed centers with `(stance + 1) / 2` before the existing finite
+  probability clamp.  Do not change schema or field names.
+- [ ] Verify distribution, uncertainty, and legacy non-finite guards, then
+  commit independently.
+
+### Task 2d: Push faction read limits into SQLite without changing graph semantics
+
+**Files:** Modify `backend/app/services/factions.py`,
+`backend/tests/test_factions.py`, and `backend/tests/test_wave1_agent_state.py`.
+
+- [ ] For relation API reads, use `ROW_NUMBER() OVER (PARTITION BY round_number)`
+  with the exact current weight/tie ordering and fetch at most `top_k + 1` per
+  round; preserve raw-count, threshold, round limit, relation type, and
+  `truncated` semantics.
+- [ ] For previous-round prompt context, push the per-Agent strongest-edge
+  limit into one SQL window query while preserving runtime alias ordering,
+  bidirectional views, unknown-peer fallback, and input Agent order.
+- [ ] Replace betrayal faction membership scans with one first-write-wins map.
+  Assert the service query counts and bounded loaded-row counts rather than a
+  brittle wall-clock threshold.
+
+**Not authorized by this task:** replacing dense relation writes with a sampled
+graph.  At 1500 Agents the current writer emits 1,124,250 edges per round, but
+sampling changes report statistics, prompts, and graph coverage.  It requires
+an explicit product decision plus `sampled/possible_pair_count/coverage_ratio`
+transparency fields; do not silently ship it as a mere optimization.
 
 ### Task 3: Remove report lifecycle ambiguity and single-path statistical overclaiming
 
