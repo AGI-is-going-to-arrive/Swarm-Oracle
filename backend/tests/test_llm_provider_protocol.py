@@ -1,9 +1,12 @@
 """Protocol-level tests for the local scripted LLM provider harness."""
 
+import asyncio
 import json
 import socket
 import threading
 import time
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -16,6 +19,47 @@ from tests.fake_llm_provider import (
     ScriptedResponse,
     SSEEvent,
 )
+
+_FIXED_RETRY_AFTER_NOW = datetime(2026, 7, 11, 0, 0, tzinfo=UTC)
+
+
+def _chat_response(content: str) -> dict[str, object]:
+    return {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+
+
+async def _call_chat(provider: FakeLLMProvider, prompt: str = "retry probe") -> str:
+    return await llm_call(
+        prompt,
+        api_key="test-only-provider-key",
+        base_url=provider.base_url,
+        model="provider-harness-model",
+        timeout=2.0,
+    )
+
+
+async def _collect_chat_stream(
+    provider: FakeLLMProvider,
+    prompt: str = "stream retry probe",
+    *,
+    timeout: float = 2.0,
+) -> list[str]:
+    return [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            prompt,
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=timeout,
+        )
+    ]
 
 
 @pytest.fixture
@@ -86,6 +130,276 @@ async def test_real_http_harness_records_openai_request(isolated_llm_provider):
     assert json.loads(request.body) == request.json_body
     assert request.json_body["messages"] == [{"role": "user", "content": prompt}]
     assert provider.server_errors == ()
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_wait"),
+    [
+        ("10", 10.0),
+        ("0.25", 0.25),  # OpenAI-compatible extension to RFC integer seconds.
+        ("bad", 1.0),
+        ("", 1.0),
+        ("nan", 1.0),
+        ("inf", 1.0),
+        ("-1", 1.0),
+        ("1e1", 1.0),
+        ("7" * 129, 1.0),
+        ("30", 30.0),
+        ("31", 1.0),
+    ],
+)
+async def test_non_stream_429_honors_only_bounded_retry_after_seconds(
+    isolated_llm_provider,
+    monkeypatch,
+    retry_after,
+    expected_wait,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.json(
+            {"error": {"message": "limited"}},
+            status=429,
+            headers={"Retry-After": retry_after},
+        )
+    )
+    provider.enqueue(ScriptedResponse.json(_chat_response("retried")))
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    assert await _call_chat(provider) == "retried"
+    assert sleep_calls == [expected_wait]
+    assert len(provider.requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("offset_seconds", "expected_wait"),
+    [
+        (-10, 0.0),
+        (0, 0.0),
+        (10, 10.0),
+        (30, 30.0),
+        (31, 1.0),
+    ],
+)
+async def test_non_stream_429_honors_bounded_http_date_with_fixed_utc_clock(
+    isolated_llm_provider,
+    monkeypatch,
+    offset_seconds,
+    expected_wait,
+):
+    provider = isolated_llm_provider
+    retry_at = _FIXED_RETRY_AFTER_NOW + timedelta(seconds=offset_seconds)
+    provider.enqueue(
+        ScriptedResponse.json(
+            {"error": {"message": "limited"}},
+            status=429,
+            headers={"Retry-After": format_datetime(retry_at, usegmt=True)},
+        )
+    )
+    provider.enqueue(ScriptedResponse.json(_chat_response("dated retry")))
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(
+        llm_client,
+        "_retry_after_now",
+        lambda: _FIXED_RETRY_AFTER_NOW,
+        raising=False,
+    )
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    assert await _call_chat(provider) == "dated retry"
+    assert sleep_calls == [expected_wait]
+    assert len(provider.requests) == 2
+
+
+async def test_non_stream_503_honors_valid_short_retry_after(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.json(
+            {"error": {"message": "temporarily unavailable"}},
+            status=503,
+            headers={"Retry-After": "0.5"},
+        )
+    )
+    provider.enqueue(ScriptedResponse.json(_chat_response("service recovered")))
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    assert await _call_chat(provider) == "service recovered"
+    assert sleep_calls == [0.5]
+    assert len(provider.requests) == 2
+
+
+@pytest.mark.parametrize("status", [429, 503])
+async def test_stream_http_retry_honors_valid_retry_after_then_terminal(
+    isolated_llm_provider,
+    monkeypatch,
+    status,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.json(
+            {"error": {"message": "retry stream"}},
+            status=status,
+            headers={"Retry-After": "0.5"},
+        )
+    )
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "stream recovered"}}]}),
+                SSEEvent("[DONE]"),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    assert await _collect_chat_stream(provider) == ["stream recovered"]
+    assert sleep_calls == [0.5]
+    assert len(provider.requests) == 2
+
+
+@pytest.mark.parametrize("status", [400, 401])
+async def test_non_retryable_client_error_does_not_sleep_or_retry(
+    isolated_llm_provider,
+    monkeypatch,
+    status,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.json(
+            {"error": {"message": "request rejected"}},
+            status=status,
+            headers={"Retry-After": "0.25"},
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    with pytest.raises(llm_client.LLMError):
+        await _call_chat(provider)
+
+    assert sleep_calls == []
+    assert len(provider.requests) == 1
+
+
+async def test_cancellation_during_retry_after_sleep_is_not_retried(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.json(
+            {"error": {"message": "limited"}},
+            status=429,
+            headers={"Retry-After": "30"},
+        )
+    )
+    provider.enqueue(ScriptedResponse.json(_chat_response("must stay queued")))
+    sleep_entered = asyncio.Event()
+    keep_sleeping = asyncio.Event()
+    sleep_calls: list[float] = []
+
+    async def _controlled_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        sleep_entered.set()
+        await keep_sleeping.wait()
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _controlled_sleep)
+    call_task = asyncio.create_task(_call_chat(provider))
+
+    await asyncio.wait_for(sleep_entered.wait(), timeout=1.0)
+    call_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call_task
+
+    assert sleep_calls == [30.0]
+    assert len(provider.requests) == 1
+    assert provider.pending_response_count == 1
+
+
+async def test_pre_output_disconnect_retries_into_slow_terminal_stream(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(ScriptedResponse.disconnected())
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"choices": [{"delta": {"content": "slow recovery"}}]},
+                    delay_seconds=0.02,
+                ),
+                SSEEvent("[DONE]", delay_seconds=0.02),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    assert await _collect_chat_stream(provider, timeout=0.2) == ["slow recovery"]
+    assert sleep_calls == [1.0]
+    assert len(provider.requests) == 2
+
+
+async def test_closing_stream_after_first_delta_does_not_retry(isolated_llm_provider):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "first"}}]}),
+                SSEEvent("[DONE]", delay_seconds=2.0),
+            )
+        )
+    )
+    stream = llm_client.llm_call_stream(
+        "close after first delta",
+        api_key="test-only-provider-key",
+        base_url=provider.base_url,
+        model="provider-harness-model",
+        timeout=3.0,
+    )
+
+    assert await anext(stream) == "first"
+    await asyncio.wait_for(stream.aclose(), timeout=0.5)
+    assert len(provider.requests) == 1
+
+
+async def test_long_non_stream_prompt_arrives_intact(isolated_llm_provider):
+    provider = isolated_llm_provider
+    prompt = "context-" * 25_000
+    provider.enqueue(ScriptedResponse.json(_chat_response("long ok")))
+
+    assert await _call_chat(provider, prompt) == "long ok"
+    assert provider.requests[-1].json_body["messages"][0]["content"] == prompt
 
 
 async def test_chat_stream_accepts_optional_space_data_and_done_terminal(

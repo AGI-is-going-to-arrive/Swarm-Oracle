@@ -7,6 +7,7 @@ import html
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -18,6 +19,8 @@ from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from time import monotonic
 from typing import Any, Literal, cast
 from urllib.parse import urlparse, urlunparse
@@ -95,6 +98,36 @@ _MODEL_MISSING_BODY_RE = re.compile(
     r"|(?:\bmodel\b.{0,80}\b(?:does\s+not\s+exist|not\s+found|not\s+available)\b)",
     re.IGNORECASE | re.DOTALL,
 )
+_LLM_MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def _retry_after_now() -> datetime:
+    """Return the UTC wall clock used to resolve HTTP-date retry guidance."""
+    return datetime.now(UTC)
+
+
+def _bounded_retry_wait(response: httpx.Response, *, fallback: float) -> float:
+    """Resolve trusted, bounded Retry-After guidance or use exponential fallback."""
+    bounded_fallback = min(max(float(fallback), 0.0), _LLM_MAX_RETRY_AFTER_SECONDS)
+    raw = response.headers.get("Retry-After", "").strip()
+    if not raw or len(raw) > 128:
+        return bounded_fallback
+
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw):
+        # Fractional delay is a deliberate OpenAI-compatible extension to RFC 9110.
+        value = float(raw)
+    else:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, OverflowError):
+            return bounded_fallback
+        if retry_at.tzinfo is None:
+            return bounded_fallback
+        value = max(0.0, (retry_at - _retry_after_now()).total_seconds())
+
+    if math.isfinite(value) and value <= _LLM_MAX_RETRY_AFTER_SECONDS:
+        return value
+    return bounded_fallback
 
 
 def _is_local_base_url_hostname(hostname: str | None) -> bool:
@@ -2642,7 +2675,10 @@ async def llm_call(
                 if status_code == 429 or status_code >= 500:
                     last_exc = exc
                     if attempt < max_retries:
-                        wait = retry_delay * (2 ** attempt)
+                        wait = _bounded_retry_wait(
+                            exc.response,
+                            fallback=retry_delay * (2 ** attempt),
+                        )
                         logger.warning(
                             "LLM HTTP %d (attempt %d/%d), retrying in %.1fs",
                             status_code, attempt + 1, max_retries + 1, wait,
@@ -3646,7 +3682,10 @@ async def llm_call_stream(
                     and (status_code == 429 or status_code >= 500)
                     and attempt < max_retries
                 ):
-                    wait = retry_delay * (2 ** attempt)
+                    wait = _bounded_retry_wait(
+                        exc.response,
+                        fallback=retry_delay * (2 ** attempt),
+                    )
                     logger.warning(
                         "LLM stream HTTP %d (attempt %d/%d), retrying in %.1fs",
                         status_code,
