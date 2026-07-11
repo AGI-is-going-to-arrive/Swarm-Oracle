@@ -135,6 +135,21 @@ class Settings(BaseSettings):
     SIMULATION_LOCK_LEASE_SECONDS: float = Field(default=120.0, gt=0)
     SIMULATION_STALL_TIMEOUT_SECONDS: float = Field(default=900.0, gt=0)
     SIMULATION_STALE_ACTIVITY_LIMIT_SECONDS: float = Field(default=900.0, gt=0)
+    AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=45.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=120.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    AGENT_TURN_TOTAL_TIMEOUT_SECONDS: float = Field(
+        default=180.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
 
     # ── Concurrency ──────────────────────────────────────
     LLM_CONCURRENCY: int = 5

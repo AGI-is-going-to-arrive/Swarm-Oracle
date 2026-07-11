@@ -120,6 +120,264 @@ def _load_agent_dict(engine, agent_id: str) -> dict:
         return _agent_to_dict(agent)
 
 
+def _patch_agent_turn_timeout_settings(
+    monkeypatch,
+    *,
+    generation: float,
+    metadata: float,
+    total: float,
+) -> None:
+    values = {
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS": generation,
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS": metadata,
+        "AGENT_TURN_TOTAL_TIMEOUT_SECONDS": total,
+    }
+    for name, value in values.items():
+        monkeypatch.setitem(simulator_module.settings.__dict__, name, value)
+
+
+def test_agent_turn_timeouts_resolve_settings_and_keep_independent_caps(monkeypatch):
+    _patch_agent_turn_timeout_settings(monkeypatch, generation=91.0, metadata=121.0, total=30.0)
+
+    assert simulator_module._agent_turn_timeouts() == (91.0, 121.0, 30.0)
+
+
+def test_agent_turn_timeouts_fall_back_from_runtime_invalid_values(monkeypatch):
+    _patch_agent_turn_timeout_settings(
+        monkeypatch,
+        generation=float("inf"),
+        metadata=float("nan"),
+        total=-1.0,
+    )
+
+    assert simulator_module._agent_turn_timeouts() == (45.0, 120.0, 180.0)
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_timeout_defaults_propagate_through_both_passes(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Budget branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="BudgetAgent", tier=AgentTier.CROWD)
+    agent = _load_agent_dict(engine, agent_id)
+    clock = [100.0]
+    request_timeouts: dict[str, float] = {}
+    wait_for_timeouts: list[float] = []
+
+    async def fake_llm_call(*_args, **kwargs):
+        request_timeouts["generation"] = kwargs["timeout"]
+        clock[0] += 5.0
+        return "The council will publish its appeal rules."
+
+    async def fake_llm_call_json(*_args, **kwargs):
+        request_timeouts["metadata"] = kwargs["timeout"]
+        return {
+            "content": "The council will publish its appeal rules.",
+            "emotion": "calm",
+            "diverge": None,
+        }
+
+    async def capture_wait_for(awaitable, timeout):
+        wait_for_timeouts.append(timeout)
+        return await awaitable
+
+    _patch_agent_turn_timeout_settings(
+        monkeypatch,
+        generation=45.0,
+        metadata=120.0,
+        total=180.0,
+    )
+    monkeypatch.setattr(simulator_module, "_agent_turn_monotonic", lambda: clock[0], raising=False)
+    monkeypatch.setattr(simulator_module.asyncio, "wait_for", capture_wait_for)
+    monkeypatch.setattr(simulator_module, "llm_call", fake_llm_call)
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_llm_call_json)
+    monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
+
+    messages = await simulator_module._gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        [agent],
+        "",
+        "How should appeals work?",
+        language="English",
+    )
+
+    assert messages[0]["content"] == "The council will publish its appeal rules."
+    assert request_timeouts == {"generation": 45.0, "metadata": 120.0}
+    assert wait_for_timeouts == pytest.approx([180.0, 175.0])
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_timeout_retry_and_metadata_share_one_deadline(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Retry budget branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="RetryAgent", tier=AgentTier.CROWD)
+    agent = _load_agent_dict(engine, agent_id)
+    clock = [100.0]
+    raw_outputs = [
+        "export interface CharacterPromptContext { name: string }",
+        "The council will keep one narrow appeal route.",
+    ]
+    generation_costs = [7.0, 8.0]
+    generation_timeouts: list[float] = []
+    metadata_timeouts: list[float] = []
+    wait_for_timeouts: list[float] = []
+
+    async def fake_llm_call(*_args, **kwargs):
+        generation_timeouts.append(kwargs["timeout"])
+        clock[0] += generation_costs.pop(0)
+        return raw_outputs.pop(0)
+
+    async def fake_llm_call_json(*_args, **kwargs):
+        metadata_timeouts.append(kwargs["timeout"])
+        return {
+            "content": "The council will keep one narrow appeal route.",
+            "emotion": "calm",
+            "diverge": None,
+        }
+
+    async def capture_wait_for(awaitable, timeout):
+        wait_for_timeouts.append(timeout)
+        return await awaitable
+
+    _patch_agent_turn_timeout_settings(
+        monkeypatch,
+        generation=91.0,
+        metadata=121.0,
+        total=30.0,
+    )
+    monkeypatch.setattr(simulator_module, "_agent_turn_monotonic", lambda: clock[0], raising=False)
+    monkeypatch.setattr(simulator_module.asyncio, "wait_for", capture_wait_for)
+    monkeypatch.setattr(simulator_module, "llm_call", fake_llm_call)
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_llm_call_json)
+    monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
+
+    messages = await simulator_module._gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        [agent],
+        "",
+        "How should appeals work?",
+        language="English",
+    )
+
+    assert messages[0]["content"] == "The council will keep one narrow appeal route."
+    assert generation_timeouts == pytest.approx([30.0, 23.0])
+    assert metadata_timeouts == pytest.approx([15.0])
+    assert wait_for_timeouts == pytest.approx([30.0, 23.0, 15.0])
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_timeout_expiry_skips_generation_coroutine_construction(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Expired budget branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="ExpiredAgent", tier=AgentTier.CROWD)
+    agent = _load_agent_dict(engine, agent_id)
+    monotonic_values = iter([100.0, 130.0])
+    generation_constructions = 0
+
+    def forbidden_llm_call(*_args, **_kwargs):
+        nonlocal generation_constructions
+        generation_constructions += 1
+        raise AssertionError("expired generation request must not be constructed")
+
+    _patch_agent_turn_timeout_settings(
+        monkeypatch,
+        generation=91.0,
+        metadata=121.0,
+        total=30.0,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "_agent_turn_monotonic",
+        lambda: next(monotonic_values),
+        raising=False,
+    )
+    monkeypatch.setattr(simulator_module, "llm_call", forbidden_llm_call)
+    monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
+
+    messages = await simulator_module._gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        [agent],
+        "",
+        "Is any turn budget left?",
+        language="English",
+    )
+
+    assert generation_constructions == 0
+    assert messages[0]["content"] == "(ExpiredAgent stays silent)"
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_timeout_expiry_skips_metadata_coroutine_construction(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Metadata budget branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="MetadataAgent", tier=AgentTier.CROWD)
+    agent = _load_agent_dict(engine, agent_id)
+    monotonic_values = iter([100.0, 100.0, 130.0])
+    metadata_constructions = 0
+
+    async def fake_llm_call(*_args, **_kwargs):
+        return "The council has reached a decision."
+
+    def forbidden_llm_call_json(*_args, **_kwargs):
+        nonlocal metadata_constructions
+        metadata_constructions += 1
+        raise AssertionError("expired metadata request must not be constructed")
+
+    _patch_agent_turn_timeout_settings(
+        monkeypatch,
+        generation=91.0,
+        metadata=121.0,
+        total=30.0,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "_agent_turn_monotonic",
+        lambda: next(monotonic_values),
+        raising=False,
+    )
+    monkeypatch.setattr(simulator_module, "llm_call", fake_llm_call)
+    monkeypatch.setattr(simulator_module, "llm_call_json", forbidden_llm_call_json)
+    monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
+
+    messages = await simulator_module._gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        [agent],
+        "",
+        "Is any metadata budget left?",
+        language="English",
+    )
+
+    assert metadata_constructions == 0
+    assert messages[0]["content"] == "The council has reached a decision."
+
+
 @pytest.mark.asyncio
 async def test_gather_agent_messages_times_out_hung_turn_llm(monkeypatch):
     engine = get_engine()
@@ -142,8 +400,12 @@ async def test_gather_agent_messages_times_out_hung_turn_llm(monkeypatch):
     async def push(event: dict) -> None:
         events.append(event)
 
-    monkeypatch.setattr(simulator_module, "_AGENT_TURN_REQUEST_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(simulator_module, "_AGENT_TURN_TOTAL_TIMEOUT_SECONDS", 0.01)
+    _patch_agent_turn_timeout_settings(
+        monkeypatch,
+        generation=0.01,
+        metadata=0.01,
+        total=0.01,
+    )
     monkeypatch.setattr(simulator_module, "llm_call", hung_llm_call)
 
     messages = await simulator_module._gather_agent_messages(

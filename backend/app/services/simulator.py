@@ -13,6 +13,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -163,8 +164,9 @@ class AgentTurnBatchFailure(RuntimeError):
 
 
 _NARRATE_MAX_CHARS = 3000
-_AGENT_TURN_REQUEST_TIMEOUT_SECONDS = 45.0
-_AGENT_TURN_TOTAL_TIMEOUT_SECONDS = 180.0
+_DEFAULT_AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS = 45.0
+_DEFAULT_AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS = 120.0
+_DEFAULT_AGENT_TURN_TOTAL_TIMEOUT_SECONDS = 180.0
 _FORK_DEBUG_TRACE_KEY = "fork_debug_trace"
 _FORK_DEBUG_MAX_SIGNALS = 12
 _FORK_DEBUG_MAX_SIGNAL_CHARS = 240
@@ -4134,6 +4136,11 @@ async def _gather_agent_messages(
     """
     semaphore = asyncio.Semaphore(get_runtime_parallelism_limit())
     native_citation_lock = asyncio.Lock()
+    (
+        generation_request_timeout,
+        metadata_request_timeout,
+        agent_turn_total_timeout,
+    ) = _agent_turn_timeouts()
     turn_progress_total = len(agents) if progress_total is None else progress_total
     turn_progress_counter = progress_counter if progress_counter is not None else [0]
     turn_progress_lock = progress_lock if progress_lock is not None else asyncio.Lock()
@@ -4380,6 +4387,7 @@ async def _gather_agent_messages(
                             exc_info=True,
                         )
 
+                turn_deadline = _agent_turn_monotonic() + agent_turn_total_timeout
                 # H5 fix: per-agent cancel guard before each LLM call.
                 _check_cancelled(scenario_id)
                 # Pass-1: natural language generation (no JSON constraint)
@@ -4400,6 +4408,7 @@ async def _gather_agent_messages(
                         else min(base_temperature, 0.6)
                     )
                     _check_cancelled(scenario_id)
+                    remaining = _agent_turn_remaining(turn_deadline)
                     with llm_request_scope(
                         **_llm_scope_kwargs(
                             _overrides,
@@ -4414,10 +4423,10 @@ async def _gather_agent_messages(
                                 api_key=_overrides.get("api_key"),
                                 base_url=_overrides.get("base_url"),
                                 temperature=turn_temperature,
-                                timeout=_AGENT_TURN_REQUEST_TIMEOUT_SECONDS,
+                                timeout=min(generation_request_timeout, remaining),
                                 native_search_domains=native_search_domains,
                             ),
-                            timeout=_AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+                            timeout=remaining,
                         )
                     _check_cancelled(scenario_id)
                     await persist_native_citations_if_any()
@@ -4475,6 +4484,7 @@ async def _gather_agent_messages(
                             f'otherwise null"}}'
                         )
                     _check_cancelled(scenario_id)
+                    remaining = _agent_turn_remaining(turn_deadline)
                     with llm_request_scope(
                         **_llm_scope_kwargs(
                             _overrides,
@@ -4490,8 +4500,9 @@ async def _gather_agent_messages(
                                 base_url=_overrides.get("base_url"),
                                 temperature=0.2,
                                 fallback_mode="agent_message",
+                                timeout=min(metadata_request_timeout, remaining),
                             ),
-                            timeout=_AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+                            timeout=remaining,
                         )
                     # H5 fix: cancel guard after Pass-2 metadata extraction.
                     _check_cancelled(scenario_id)
@@ -5262,7 +5273,34 @@ def _positive_float_setting(name: str, default: float) -> float:
         value = float(getattr(settings, name, default))
     except (TypeError, ValueError):
         return default
-    return value if value > 0 else default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def _agent_turn_timeouts() -> tuple[float, float, float]:
+    generation = _positive_float_setting(
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+        _DEFAULT_AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS,
+    )
+    metadata = _positive_float_setting(
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+        _DEFAULT_AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS,
+    )
+    total = _positive_float_setting(
+        "AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+        _DEFAULT_AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+    )
+    return generation, metadata, total
+
+
+def _agent_turn_monotonic() -> float:
+    return monotonic()
+
+
+def _agent_turn_remaining(deadline: float) -> float:
+    remaining = deadline - _agent_turn_monotonic()
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise asyncio.TimeoutError("agent turn total timeout exhausted")
+    return remaining
 
 
 def _result_verdict_timeouts() -> tuple[float, float]:

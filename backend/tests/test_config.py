@@ -1,6 +1,7 @@
 """Tests for app.config — Settings loading."""
 
 import pytest
+from pydantic import ValidationError
 
 
 def test_settings_defaults():
@@ -80,6 +81,59 @@ def test_settings_from_env(monkeypatch):
     assert s.LLM_REASONING_EFFORT == "medium"
     assert s.LLM_REQUESTS_PER_MINUTE == 7
     assert s.LLM_TOKENS_PER_MINUTE == 12345
+
+
+def test_agent_turn_timeout_contract(monkeypatch):
+    from app.config import Settings
+
+    timeout_fields = (
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+    )
+    for name in timeout_fields:
+        monkeypatch.delenv(name, raising=False)
+
+    defaults = Settings(_env_file=None)
+    assert (
+        defaults.AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS,
+        defaults.AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS,
+        defaults.AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+    ) == (45.0, 120.0, 180.0)
+
+    monkeypatch.setenv("AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS", "91.5")
+    monkeypatch.setenv("AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS", "121")
+    monkeypatch.setenv("AGENT_TURN_TOTAL_TIMEOUT_SECONDS", "240")
+
+    configured = Settings(_env_file=None)
+    assert (
+        configured.AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS,
+        configured.AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS,
+        configured.AGENT_TURN_TOTAL_TIMEOUT_SECONDS,
+    ) == (91.5, 121.0, 240.0)
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+    ],
+)
+def test_agent_turn_timeouts_reject_non_positive_or_non_finite(monkeypatch, field, value):
+    from app.config import Settings
+
+    for name in (
+        "AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS",
+        "AGENT_TURN_TOTAL_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "api.example.com"])
