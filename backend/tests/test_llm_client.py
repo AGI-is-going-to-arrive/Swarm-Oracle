@@ -270,6 +270,53 @@ class TestSafeLlmErrorTaxonomy:
     def test_classifies_known_provider_failures(self, exc, expected):
         assert classify_llm_error_code(exc) == expected
 
+    @pytest.mark.parametrize(
+        "timeout_type",
+        [
+            httpx.ReadTimeout,
+            httpx.ConnectTimeout,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
+        ],
+    )
+    def test_classifies_httpx_timeouts_separately_from_connection_errors(
+        self,
+        timeout_type,
+    ):
+        request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+
+        assert (
+            classify_llm_error_code(timeout_type("provider timed out", request=request))
+            == "LLM_TIMEOUT"
+        )
+        assert classify_llm_error_code(httpx.ConnectError("connection refused")) == (
+            "LLM_UNREACHABLE"
+        )
+
+    def test_request_timeout_conversion_uses_safe_payload_without_request_details(self):
+        secret = "timeout-secret-header-value"
+        request = httpx.Request(
+            "POST",
+            "https://api.example.test/v1/chat/completions?trace=private-request",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        timeout_error = httpx.ReadTimeout(
+            f"read timed out while sending {secret}",
+            request=request,
+        )
+
+        error = llm_client._llm_error_from_request(timeout_error)
+
+        assert error.code == "LLM_TIMEOUT"
+        assert error.safe_payload() == {
+            "code": "LLM_TIMEOUT",
+            "message": "LLM provider timed out. Retry later or raise the configured timeout.",
+        }
+        rendered = json.dumps(error.safe_payload()) + f" {error!s} {error!r}"
+        assert secret not in rendered
+        assert "Authorization" not in rendered
+        assert "private-request" not in rendered
+
     def test_does_not_overclassify_other_provider_errors(self):
         assert classify_llm_error_code(self._http_status_error(500, "server error")) is None
         assert classify_llm_error_code(LLMError("Unexpected response structure")) is None

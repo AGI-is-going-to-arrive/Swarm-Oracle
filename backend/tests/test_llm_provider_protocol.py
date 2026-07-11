@@ -341,6 +341,127 @@ async def test_cancellation_during_retry_after_sleep_is_not_retried(
     assert provider.pending_response_count == 1
 
 
+async def test_non_stream_read_timeout_exhausts_retries_with_safe_timeout(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    for _ in range(4):
+        provider.enqueue(
+            ScriptedResponse.json(
+                _chat_response("too late"),
+                delay_seconds=0.5,
+            )
+        )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_THRESHOLD", 6)
+
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        await llm_call(
+            "non-stream timeout",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=0.1,
+        )
+
+    assert exc_info.value.code == "LLM_TIMEOUT"
+    assert exc_info.value.safe_payload() == {
+        "code": "LLM_TIMEOUT",
+        "message": "LLM provider timed out. Retry later or raise the configured timeout.",
+    }
+    assert sleep_calls == [1.0, 2.0, 4.0]
+    assert len(provider.requests) == 4
+    provider_key = llm_client._provider_key(f"{provider.base_url}/chat/completions")
+    assert llm_client._provider_failures == {provider_key: 1}
+    assert llm_client._provider_circuit_until == {}
+
+
+async def test_stream_read_timeout_exhausts_retries_with_safe_timeout(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    for _ in range(4):
+        provider.enqueue(
+            ScriptedResponse.sse(
+                (SSEEvent("[DONE]", delay_seconds=0.5),)
+            )
+        )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_THRESHOLD", 6)
+
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        await _collect_chat_stream(provider, "stream timeout", timeout=0.1)
+
+    assert exc_info.value.code == "LLM_TIMEOUT"
+    assert sleep_calls == [1.0, 2.0, 4.0]
+    assert len(provider.requests) == 4
+    provider_key = llm_client._provider_key(f"{provider.base_url}/chat/completions")
+    assert llm_client._provider_failures == {provider_key: 1}
+    assert llm_client._provider_circuit_until == {}
+
+
+async def test_stream_read_timeout_after_first_delta_does_not_replay(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "first"}}]}),
+                SSEEvent("[DONE]", delay_seconds=0.5),
+            )
+        )
+    )
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "must not replay"}}]}),
+                SSEEvent("[DONE]"),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_THRESHOLD", 6)
+    chunks: list[str] = []
+
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        async for chunk in llm_client.llm_call_stream(
+            "stream partial timeout",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=0.1,
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ["first"]
+    assert exc_info.value.code == "LLM_TIMEOUT"
+    assert sleep_calls == []
+    assert len(provider.requests) == 1
+    assert provider.pending_response_count == 1
+    provider_key = llm_client._provider_key(f"{provider.base_url}/chat/completions")
+    assert llm_client._provider_failures == {provider_key: 1}
+    assert llm_client._provider_circuit_until == {}
+
+
 async def test_pre_output_disconnect_retries_into_slow_terminal_stream(
     isolated_llm_provider,
     monkeypatch,

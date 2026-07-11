@@ -680,6 +680,8 @@ def classify_llm_error_code(exc: BaseException) -> str | None:
                 return code
             if _body_has_model_missing_signal(current.response.text[:4096]):
                 return "LLM_MODEL_NOT_FOUND"
+        if isinstance(current, httpx.TimeoutException):
+            return "LLM_TIMEOUT"
         if isinstance(current, httpx.RequestError):
             return "LLM_UNREACHABLE"
         if isinstance(current, (TimeoutError, asyncio.TimeoutError)):
@@ -705,9 +707,10 @@ def _llm_error_from_http_status(exc: httpx.HTTPStatusError) -> LLMError:
 
 
 def _llm_error_from_request(exc: httpx.RequestError) -> LLMError:
+    code = "LLM_TIMEOUT" if isinstance(exc, httpx.TimeoutException) else "LLM_UNREACHABLE"
     return LLMError(
-        _LLM_SAFE_ERROR_MESSAGES["LLM_UNREACHABLE"],
-        code="LLM_UNREACHABLE",
+        _LLM_SAFE_ERROR_MESSAGES[code],
+        code=code,
     )
 
 
