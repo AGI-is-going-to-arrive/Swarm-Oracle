@@ -89,6 +89,62 @@ class _NoopScope:
         return False
 
 
+def _identity_parse_pipeline(monkeypatch, agents: list[dict], profile_writer):
+    from app.api import helpers as helpers_api
+    from app.config import settings
+    from app.services import agent_identity, vector_store
+
+    async def fake_parse_question(*_args, **_kwargs):
+        return {"setting": {}, "agents": agents, "groups": []}
+
+    handoffs: list[str] = []
+
+    async def fake_run_sim_background(scenario_id: str, **_kwargs):
+        handoffs.append(scenario_id)
+
+    monkeypatch.setattr(helpers_api, "parse_question", fake_parse_question)
+    monkeypatch.setattr(helpers_api, "run_sim_background", fake_run_sim_background)
+    monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(agent_identity, "store_identity_profile", profile_writer)
+    monkeypatch.setattr(vector_store, "store_identity_profile", profile_writer)
+    return helpers_api, handoffs
+
+
+def _parsed_identity_agent(
+    name: str,
+    role: str = "Auditor",
+    persona: str = "Tracks evidence",
+) -> dict:
+    return {"name": name, "role": role, "persona": persona, "tier": "IMPORTANT"}
+
+
+async def _run_identity_parse(
+    helpers_api, scenario_id: str, user_id: str, num_agents: int, **kwargs,
+):
+    await helpers_api.parse_and_run_background(
+        scenario_id,
+        question="Can every decision retain evidence?",
+        num_agents=num_agents,
+        mode="blackboard",
+        hierarchical=False,
+        rounds=1,
+        visualization_enabled=False,
+        reasoning_effort=None,
+        temperature=None,
+        branch_sensitivity=None,
+        fork_prompt_variant=None,
+        fork_detector_active_branch_limit=None,
+        user_id=user_id,
+        llm_api_key=None,
+        llm_base_url=None,
+        llm_model=None,
+        llm_requests_per_minute=None,
+        llm_tokens_per_minute=None,
+        disable_user_quota=None,
+        **kwargs,
+    )
+
+
 # ═══════════════════════════════════════════════════════════
 # 1. Ownership validation (X-5) — through real guard logic
 # ═══════════════════════════════════════════════════════════
@@ -823,6 +879,119 @@ class TestIdentityLifecycleHooks:
             scenario_id = _create_scenario(session, user_id="persisted-user")
             sc = session.get(Scenario, scenario_id)
             assert sc.user_id == "persisted-user"
+
+    @pytest.mark.asyncio
+    async def test_parse_profile_callback_sees_committed_identity(
+        self,
+        monkeypatch,
+    ):
+        observations: list[str | None] = []
+
+        def observe_profile(_user_id, identity_id, _role, _persona):
+            with Session(get_engine()) as independent_session:
+                identity = independent_session.get(AgentIdentity, identity_id)
+            observations.append(identity.id if identity else None)
+
+        helpers_api, handoffs = _identity_parse_pipeline(
+            monkeypatch,
+            [_parsed_identity_agent("Trace Keeper")],
+            observe_profile,
+        )
+        with Session(get_engine()) as session:
+            scenario_id = _create_scenario(session, user_id="profile-after-commit")
+
+        await _run_identity_parse(
+            helpers_api, scenario_id, "profile-after-commit", num_agents=1,
+        )
+
+        with Session(get_engine()) as session:
+            agent = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).one()
+        assert observations == [agent.agent_identity_id]
+        assert handoffs == [scenario_id]
+
+    @pytest.mark.asyncio
+    async def test_parse_deduplicates_same_continuity_profile(
+        self,
+        monkeypatch,
+    ):
+        from app.services.agent_identity import build_continuity_key
+
+        profile_calls: list[str] = []
+        helpers_api, _handoffs = _identity_parse_pipeline(
+            monkeypatch,
+            [_parsed_identity_agent("Trace One"), _parsed_identity_agent("Trace Two")],
+            lambda _u, identity_id, _r, _p: profile_calls.append(identity_id),
+        )
+        with Session(get_engine()) as session:
+            scenario_id = _create_scenario(session, user_id="profile-dedup")
+
+        await _run_identity_parse(
+            helpers_api, scenario_id, "profile-dedup", num_agents=2,
+        )
+
+        with Session(get_engine()) as session:
+            agents = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).all()
+        identity_ids = {agent.agent_identity_id for agent in agents}
+        assert len(identity_ids) == 1 and None not in identity_ids
+        identity_id = agents[0].agent_identity_id
+        assert profile_calls == [identity_id]
+
+        with Session(get_engine()) as session:
+            reuse_scenario_id = _create_scenario(session, user_id="profile-dedup")
+        await _run_identity_parse(
+            helpers_api,
+            reuse_scenario_id,
+            "profile-dedup",
+            num_agents=2,
+            continuity_overrides=[{
+                "continuity_key": build_continuity_key("Auditor", "Tracks evidence"),
+                "action": "reuse_existing",
+                "identity_id": identity_id,
+            }],
+        )
+        assert profile_calls == [identity_id]
+
+    @pytest.mark.asyncio
+    async def test_profile_failure_isolated_and_handoff_continues(
+        self,
+        monkeypatch,
+    ):
+        profile_calls: list[str] = []
+
+        def fail_first_profile(_user_id, identity_id, _role, _persona):
+            profile_calls.append(identity_id)
+            if len(profile_calls) == 1:
+                raise RuntimeError("profile writer failed")
+
+        agents = [
+            _parsed_identity_agent("Trace Keeper"),
+            _parsed_identity_agent("Signal Keeper", "Analyst", "Tracks signals"),
+        ]
+        helpers_api, handoffs = _identity_parse_pipeline(
+            monkeypatch, agents, fail_first_profile,
+        )
+        with Session(get_engine()) as session:
+            scenario_id = _create_scenario(session, user_id="profile-failure")
+
+        await _run_identity_parse(
+            helpers_api, scenario_id, "profile-failure", num_agents=2,
+        )
+
+        with Session(get_engine()) as session:
+            persisted_agents = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).all()
+            identities = session.exec(
+                select(AgentIdentity).where(AgentIdentity.user_id == "profile-failure")
+            ).all()
+        identity_ids = {identity.id for identity in identities}
+        assert {agent.agent_identity_id for agent in persisted_agents} == identity_ids
+        assert set(profile_calls) == identity_ids
+        assert handoffs == [scenario_id]
 
     def test_record_growth_event_per_agent(self):
         """Each agent with identity should get a growth event."""

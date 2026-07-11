@@ -158,7 +158,11 @@ def resolve_identity(
 
     Layer 1: exact hash match on continuity_key.
     Layer 2: ChromaDB cosine similarity fallback (> 0.85) when L1 misses.
-    On create, stores L2 profile embedding for future fuzzy matching.
+
+    A supplied ``session`` keeps transaction ownership with the caller. In that
+    mode this function never writes an L2 profile; the caller must schedule the
+    profile only after its outer commit succeeds. Self-owned paths keep the
+    existing commit-visible profile backfill behavior.
     """
     key = _continuity_key(role, persona)
     own_session = session is None
@@ -172,7 +176,8 @@ def resolve_identity(
         existing = session_obj.exec(stmt).first()
         if existing is not None:
             # Ensure L2 profile exists (backfill for pre-L2 identities)
-            store_identity_profile(user_id, existing.id, role, persona)
+            if own_session:
+                store_identity_profile(user_id, existing.id, role, persona)
             logger.debug(
                 "L1 resolved identity %s for user=%s key=%s",
                 existing.id, user_id, key,
@@ -195,7 +200,8 @@ def resolve_identity(
                     session_obj.commit()
                 else:
                     session_obj.flush()
-                store_identity_profile(user_id, legacy_match.id, role, persona)
+                if own_session:
+                    store_identity_profile(user_id, legacy_match.id, role, persona)
                 logger.info(
                     "L1b legacy-migrated identity %s key %s→%s",
                     legacy_match.id, legacy_key, key,
@@ -231,7 +237,8 @@ def resolve_identity(
         else:
             session_obj.flush()
 
-        store_identity_profile(user_id, identity.id, role, persona)
+        if own_session:
+            store_identity_profile(user_id, identity.id, role, persona)
         logger.info(
             "Created new identity %s for user=%s key=%s",
             identity.id, user_id, key,

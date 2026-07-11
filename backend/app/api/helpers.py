@@ -1514,6 +1514,7 @@ async def parse_and_run_background(
         for agent_data in parsed.get("agents", [])
     ]
 
+    pending_identity_profiles: dict[str, tuple[str, str, str | None]] = {}
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
@@ -1672,6 +1673,7 @@ async def parse_and_run_background(
                 try:
                     role = agent_data.get("role", "")
                     persona = agent_data.get("persona")
+                    resolved_profile_identity_id: str | None = None
                     continuity_key = (
                         _build_continuity_key(role, persona)
                         if _build_continuity_key
@@ -1714,6 +1716,7 @@ async def parse_and_run_background(
                             )
                             agent.agent_identity_id = identity_id
                             agent.source_type = "generated"
+                            resolved_profile_identity_id = identity_id
                     else:
                         identity_id = _resolve_id(
                             user_id,
@@ -1728,6 +1731,13 @@ async def parse_and_run_background(
                         )
                         agent.agent_identity_id = identity_id
                         agent.source_type = "generated"
+                        resolved_profile_identity_id = identity_id
+                    if resolved_profile_identity_id:
+                        pending_identity_profiles[resolved_profile_identity_id] = (
+                            user_id,
+                            role,
+                            persona,
+                        )
                 except Exception:
                     logger.debug(
                         "resolve_identity failed for %s",
@@ -1792,6 +1802,31 @@ async def parse_and_run_background(
                 session.add(group)
 
         session.commit()
+
+    if pending_identity_profiles:
+        try:
+            from app.services.vector_store import store_identity_profile
+        except ImportError:
+            logger.warning(
+                "Post-commit identity profile writer import failed",
+                exc_info=True,
+            )
+        else:
+            for identity_id, profile in pending_identity_profiles.items():
+                profile_user_id, role, persona = profile
+                try:
+                    store_identity_profile(
+                        profile_user_id,
+                        identity_id,
+                        role,
+                        persona,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Post-commit identity profile write failed for identity=%s",
+                        identity_id,
+                        exc_info=True,
+                    )
 
     llm_overrides: dict | None = None
     if llm_api_key or llm_base_url or llm_model or temperature is not None:

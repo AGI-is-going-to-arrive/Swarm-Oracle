@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
@@ -108,6 +109,135 @@ class TestResolveIdentity:
             persona=None,
         )
         assert identity_id is not None
+
+    @pytest.mark.parametrize("resolution_path", ["create", "l1", "legacy"])
+    def test_caller_owned_resolution_never_writes_profile(
+        self,
+        monkeypatch,
+        resolution_path,
+    ):
+        from app.services import agent_identity as identity_service
+
+        user_id = f"external-profile-{resolution_path}"
+        role, persona = "Auditor", "Tracks evidence"
+        if resolution_path != "create":
+            continuity_key = build_continuity_key(role, persona)
+            if resolution_path == "legacy":
+                continuity_key = identity_service._legacy_continuity_keys(
+                    role, persona,
+                )[0]
+            with Session(get_engine()) as session:
+                session.add(AgentIdentity(
+                    user_id=user_id,
+                    kind="generated",
+                    display_name="Trace Keeper",
+                    role=role,
+                    persona=persona,
+                    continuity_key=continuity_key,
+                ))
+                session.commit()
+
+        profile_calls: list[str] = []
+        monkeypatch.setattr(identity_service, "search_identity_candidates", lambda *_a: [])
+        monkeypatch.setattr(
+            identity_service,
+            "store_identity_profile",
+            lambda _u, identity_id, _r, _p: profile_calls.append(identity_id),
+        )
+
+        with Session(get_engine()) as caller_session:
+            identity_id = resolve_identity(
+                user_id, "Trace Keeper", role, persona,
+                allow_l2=False,
+                session=caller_session,
+            )
+            assert identity_id
+            caller_session.rollback()
+
+        assert profile_calls == []
+
+    @pytest.mark.parametrize("resolution_path", ["create", "l1", "legacy"])
+    def test_self_owned_profile_backfill_sees_committed_identity(
+        self,
+        monkeypatch,
+        resolution_path,
+    ):
+        from app.services import agent_identity as identity_service
+
+        user_id = f"owned-profile-{resolution_path}"
+        role, persona = "Auditor", "Tracks evidence"
+        canonical_key = build_continuity_key(role, persona)
+        if resolution_path != "create":
+            continuity_key = canonical_key
+            if resolution_path == "legacy":
+                continuity_key = identity_service._legacy_continuity_keys(
+                    role, persona,
+                )[0]
+            with Session(get_engine()) as session:
+                session.add(AgentIdentity(
+                    user_id=user_id,
+                    kind="generated",
+                    display_name="Trace Keeper",
+                    role=role,
+                    persona=persona,
+                    continuity_key=continuity_key,
+                ))
+                session.commit()
+
+        observations: list[tuple[str, str] | None] = []
+
+        def observe_profile(_user_id, identity_id, _role, _persona):
+            with Session(get_engine()) as independent_session:
+                identity = independent_session.get(AgentIdentity, identity_id)
+            observations.append(
+                (identity.id, identity.continuity_key) if identity else None
+            )
+
+        monkeypatch.setattr(identity_service, "search_identity_candidates", lambda *_a: [])
+        monkeypatch.setattr(identity_service, "store_identity_profile", observe_profile)
+
+        identity_id = resolve_identity(
+            user_id, "Trace Keeper", role, persona, allow_l2=False,
+        )
+
+        assert observations == [(identity_id, canonical_key)]
+
+    @pytest.mark.parametrize("failure_mode", ["commit", "rollback"])
+    def test_failed_caller_transaction_never_writes_profile(
+        self,
+        monkeypatch,
+        failure_mode,
+    ):
+        from app.services import agent_identity as identity_service
+
+        profile_calls: list[str] = []
+        monkeypatch.setattr(identity_service, "search_identity_candidates", lambda *_a: [])
+        monkeypatch.setattr(
+            identity_service,
+            "store_identity_profile",
+            lambda _u, identity_id, _r, _p: profile_calls.append(identity_id),
+        )
+
+        with Session(get_engine()) as caller_session:
+            resolve_identity(
+                f"failed-profile-{failure_mode}",
+                "Trace Keeper",
+                "Auditor",
+                "Tracks evidence",
+                allow_l2=False,
+                session=caller_session,
+            )
+            if failure_mode == "commit":
+                monkeypatch.setattr(
+                    caller_session,
+                    "commit",
+                    lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
+                )
+                with pytest.raises(RuntimeError, match="commit failed"):
+                    caller_session.commit()
+            caller_session.rollback()
+
+        assert profile_calls == []
 
 
 class TestContinuityKey:
