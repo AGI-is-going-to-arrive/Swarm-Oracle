@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
 import { assertReplayCoverage } from "../src/lib/e2eReplayGuards.js";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -1158,19 +1159,19 @@ async function runDebateFlow(page, {
 
 async function runSurface(args, mode) {
   const { browser, launchProfile } = await launchBrowserWithEngine(args.browser, args.headless);
-  const outputDir = args.outputDir;
-  ensureDir(outputDir);
-  writeJson(path.join(outputDir, "browser-launch.json"), launchProfile);
-
-  const surfaceConfig = buildSurfaceConfig(args, mode);
-  const context = await browser.newContext({
-    viewport: surfaceConfig.viewport,
-    isMobile: surfaceConfig.isMobile,
-    hasTouch: surfaceConfig.hasTouch,
-  });
-  const page = await context.newPage();
-
   try {
+    const outputDir = args.outputDir;
+    ensureDir(outputDir);
+    writeJson(path.join(outputDir, "browser-launch.json"), launchProfile);
+
+    const surfaceConfig = buildSurfaceConfig(args, mode);
+    const context = await browser.newContext({
+      viewport: surfaceConfig.viewport,
+      isMobile: surfaceConfig.isMobile,
+      hasTouch: surfaceConfig.hasTouch,
+    });
+    const page = await context.newPage();
+
     const result = await runDebateFlow(page, {
       baseUrl: args.baseUrl,
       outputDir,
@@ -1185,8 +1186,7 @@ async function runSurface(args, mode) {
       ...result,
     };
   } finally {
-    await context.close();
-    await browser.close();
+    await closePlaywrightBrowser(browser, `debate-${mode}-browser`);
   }
 }
 
@@ -1215,13 +1215,7 @@ async function main() {
   console.log(`artifacts: ${outputDir}`);
 }
 
-main()
-  .then(() => {
-    // Playwright can leave lingering handles even after best-effort teardown.
-    // This script is CLI-only, so exit explicitly once all artifacts are written.
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

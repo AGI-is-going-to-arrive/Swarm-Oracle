@@ -371,13 +371,25 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     setLocalGenerating(false);
     setRetrying(false);
     setRetryError(false);
-    setToolTrace([]);
+    const persistedReport = storyData?.full_report;
+    setToolTrace(
+      isFullReport(persistedReport) ? (persistedReport.tool_trace ?? []) : [],
+    );
     setStreamInterrupted(false);
     setPollStalled(false);
     setActiveSectionId(null);
     setSectionProgress([]);
     setPollRevision((revision) => revision + 1);
   }, [storyData, beginAuthorityAttempt]);
+
+  // Tool activity is part of report evidence, not merely live progress. Sync
+  // from persisted story authority after polling/refetch so reopening a report
+  // shows the same bounded trace as the generation stream did.
+  useEffect(() => {
+    if (report?.tool_trace !== undefined) {
+      setToolTrace(report.tool_trace);
+    }
+  }, [report?.generated_at, report?.status, report?.tool_trace]);
 
   useEffect(() => {
     isMountedRef.current = true;

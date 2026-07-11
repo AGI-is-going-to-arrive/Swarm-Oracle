@@ -37,6 +37,11 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.agent_message_metadata import (
+    encode_metadata_unavailable_emotion,
+    message_metadata_failure_code,
+    public_emotion_metadata,
+)
 from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
@@ -177,13 +182,6 @@ _RESULT_VERDICT_TIMEOUT_SECONDS = 10.0
 _FORK_TITLE_REWRITE_TIMEOUT_SECONDS = 8.0
 _FORK_TITLE_REWRITE_MAX_CONCURRENCY = 4
 _TURN_MAX_CHARS = 3000
-_FATAL_AGENT_TURN_LLM_CODES = frozenset({
-    "LLM_AUTH_FAILED",
-    "LLM_RATE_LIMITED",
-    "LLM_UNREACHABLE",
-    "LLM_MODEL_NOT_FOUND",
-    "LLM_EMPTY",
-})
 _AGENT_TURN_PROMPT_PREFIX_MARKER = "SWARMORACLE_AGENT_TURN_OUTPUT_CONTRACT"
 _BLACKBOARD_OWN_MEMORY_TOP_K = 3
 _FORK_TITLE_REWRITE_MARKER = "FORK_TITLE_REWRITE"
@@ -4359,6 +4357,7 @@ async def _gather_agent_messages(
             raw_text = ""
             clean_raw_text: str | None = None
             turn_failure_code: str | None = None
+            metadata_failure_code: str | None = None
             try:
                 _overrides = llm_overrides or {}
                 base_temperature = _coerce_turn_temperature(
@@ -4445,6 +4444,7 @@ async def _gather_agent_messages(
                         attempt + 1,
                     )
                 if clean_raw_text is None:
+                    turn_failure_code = "LLM_INVALID_OUTPUT"
                     content = _silent_turn_placeholder(agent["name"], language)
                     emotion = "neutral"
                     diverge = None
@@ -4507,21 +4507,10 @@ async def _gather_agent_messages(
                     # H5 fix: cancel guard after Pass-2 metadata extraction.
                     _check_cancelled(scenario_id)
 
-                    content_candidate = result.get("content", "") or clean_raw_text
-                    clean_content, reject_reason = validate_and_sanitize_turn(
-                        content_candidate,
-                        agent["name"],
-                        language,
-                    )
-                    if clean_content is None:
-                        logger.warning(
-                            "Rejected agent turn content after metadata extraction "
-                            "agent=%s reason=%s",
-                            agent["name"],
-                            reject_reason,
-                        )
-                        clean_content = clean_raw_text
-                    content = clean_content
+                    # Pass-2 is metadata-only.  Never let a compatibility
+                    # model's JSON paraphrase replace the validated Pass-1
+                    # speech that users saw and that replay evidence records.
+                    content = clean_raw_text
                     emotion = result.get("emotion", "neutral")
                     diverge = result.get("diverge")
                     if diverge and diverge.lower() in ("null", "none", ""):
@@ -4529,31 +4518,36 @@ async def _gather_agent_messages(
             except SimulationCancelled:
                 raise
             except Exception as exc:
-                turn_failure_code = classify_llm_error_code(exc)
+                failure_code = classify_llm_error_code(exc) or "LLM_FAILED"
                 logger.warning(
                     "Agent %s failed: %s: %s",
                     agent["name"],
                     type(exc).__name__,
                     _scrub_sensitive_text(str(exc)),
                 )
-                if turn_failure_code in _FATAL_AGENT_TURN_LLM_CODES:
+                if clean_raw_text is None:
+                    # Pass-1 never produced validated speech. Any provider or
+                    # response-shape failure is generation-fatal for this turn.
+                    turn_failure_code = failure_code
                     content = _silent_turn_placeholder(agent["name"], language)
+                    emotion = "neutral"
                 else:
-                    fallback_content, _reject_reason = validate_and_sanitize_turn(
-                        raw_text,
-                        agent["name"],
-                        language,
-                    )
-                    content = fallback_content or _silent_turn_placeholder(agent["name"], language)
-                emotion = "neutral"
+                    # Pass-2 metadata is optional. Preserve the validated raw
+                    # speech and disclose a metadata-only degradation instead
+                    # of discarding a real Agent turn.
+                    metadata_failure_code = failure_code
+                    content = clean_raw_text
+                    emotion = ""
                 diverge = None
 
-            emotion = str(emotion or "neutral").strip() or "neutral"
+            emotion = str(emotion or "").strip()
             previous_emotion = str(
                 emotion_state.get(agent["id"], agent.get("emotion") or "neutral")
             )
-            agent["emotion"] = emotion
-            emotion_state[agent["id"]] = emotion
+            if metadata_failure_code is None:
+                emotion = emotion or "neutral"
+                agent["emotion"] = emotion
+                emotion_state[agent["id"]] = emotion
 
             msg = {
                 "agent_id": agent["id"],
@@ -4564,8 +4558,11 @@ async def _gather_agent_messages(
             }
             if turn_failure_code:
                 msg["_turn_failure_code"] = turn_failure_code
+            if metadata_failure_code:
+                msg["_metadata_failure_code"] = metadata_failure_code
+                msg.update(public_emotion_metadata(msg))
 
-            if turn_failure_code in _FATAL_AGENT_TURN_LLM_CODES:
+            if turn_failure_code:
                 return msg
 
             saved_message_ids = _save_messages(
@@ -4575,7 +4572,11 @@ async def _gather_agent_messages(
                         "round_id": round_id,
                         "agent_id": msg["agent_id"],
                         "content": msg["content"],
-                        "emotion": msg["emotion"],
+                        "emotion": (
+                            encode_metadata_unavailable_emotion(metadata_failure_code)
+                            if metadata_failure_code
+                            else msg["emotion"]
+                        ),
                         "diverge": msg.get("diverge"),
                     }
                 ],
@@ -4585,17 +4586,17 @@ async def _gather_agent_messages(
             _check_cancelled(scenario_id)
 
             # Push final parsed message only after it is durable.
-            await push_event({
-                "type": "agent_speak",
-                "data": {
-                    "agent": agent["name"],
-                    "agent_id": agent["id"],
-                    "message": content,
-                    "emotion": emotion,
-                    "branch": branch_id,
-                    "round": round_num,
-                },
-            })
+            event_data = {
+                "agent": agent["name"],
+                "agent_id": agent["id"],
+                "message": content,
+                "emotion": emotion,
+                "branch": branch_id,
+                "round": round_num,
+            }
+            if metadata_failure_code:
+                event_data.update(public_emotion_metadata(msg))
+            await push_event({"type": "agent_speak", "data": event_data})
             _check_cancelled(scenario_id)
             await push_turn_progress()
 
@@ -4609,6 +4610,8 @@ async def _gather_agent_messages(
                     emotion=emotion,
                     stance=agent_stance,
                 )
+                if metadata_failure_code:
+                    viz_bubble.update(public_emotion_metadata(msg))
                 await push_event(viz_bubble)
 
                 # V2-P2: Broadcast viz:agent_move (stance-based positioning)
@@ -4624,7 +4627,7 @@ async def _gather_agent_messages(
                 await push_event(viz_move)
 
                 # V2-P2: Broadcast viz:emotion_change when emotion shifts
-                if emotion != previous_emotion:
+                if metadata_failure_code is None and emotion != previous_emotion:
                     viz_emo = viz_mapper.map_emotion_change(
                         agent_id=agent["id"],
                         old_emotion=previous_emotion,
@@ -4649,7 +4652,7 @@ async def _gather_agent_messages(
     fatal_turn_failures = [
         msg
         for msg in results
-        if msg.get("_turn_failure_code") in _FATAL_AGENT_TURN_LLM_CODES
+        if str(msg.get("_turn_failure_code") or "").strip()
     ]
     if fatal_turn_failures:
         code_counts: dict[str, int] = {}
@@ -4663,6 +4666,7 @@ async def _gather_agent_messages(
             "data": {
                 "branch_id": branch_id,
                 "round": round_num,
+                "stage": "generation",
                 "code": code,
                 "failed_agents": failed_agents,
                 "failed_count": len(fatal_turn_failures),
@@ -4703,6 +4707,34 @@ async def _gather_agent_messages(
                 },
             })
             await push_turn_progress()
+
+    metadata_turn_failures = [
+        msg
+        for msg in results
+        if str(msg.get("_metadata_failure_code") or "").strip()
+    ]
+    if metadata_turn_failures:
+        code_counts: dict[str, int] = {}
+        for msg in metadata_turn_failures:
+            code = str(msg.get("_metadata_failure_code") or "LLM_FAILED")
+            code_counts[code] = code_counts.get(code, 0) + 1
+        code = max(code_counts.items(), key=lambda item: item[1])[0]
+        await push_event({
+            "type": "simulation_degraded",
+            "data": {
+                "branch_id": branch_id,
+                "round": round_num,
+                "stage": "metadata",
+                "partial": True,
+                "code": code,
+                "failed_agents": [
+                    str(msg.get("agent_name") or "")
+                    for msg in metadata_turn_failures
+                ],
+                "failed_count": len(metadata_turn_failures),
+                "total": len(results),
+            },
+        })
 
     if blackboard is not None:
         for msg in results:
@@ -4901,6 +4933,9 @@ async def _gather_hierarchical_messages(
         worker_group = agent_to_group.get(worker["name"], "")
         leader_name = group_leaders.get(worker_group, "")
         leader_msg = leader_msg_map.get(leader_name)
+        metadata_failure_code = (
+            message_metadata_failure_code(leader_msg) if leader_msg else None
+        )
 
         if leader_msg:
             # Synthesize: persona-aware, sentence-aware, deterministic-but-varied
@@ -4912,7 +4947,9 @@ async def _gather_hierarchical_messages(
                 language=language,
                 round_number=round_num,
             )
-            emotion = leader_msg.get("emotion", "neutral")
+            emotion = (
+                "" if metadata_failure_code else leader_msg.get("emotion", "neutral")
+            )
         else:
             is_chinese = _is_chinese_language(language)
             synth_content = (
@@ -4922,9 +4959,10 @@ async def _gather_hierarchical_messages(
             )
             emotion = "neutral"
 
-        emotion = str(emotion or "neutral").strip() or "neutral"
-        worker["emotion"] = emotion
-        emotion_state[worker["id"]] = emotion
+        if metadata_failure_code is None:
+            emotion = str(emotion or "neutral").strip() or "neutral"
+            worker["emotion"] = emotion
+            emotion_state[worker["id"]] = emotion
 
         msg = {
             "agent_id": worker["id"],
@@ -4934,21 +4972,59 @@ async def _gather_hierarchical_messages(
             "diverge": None,
             "synthesized": True,  # Mark as non-LLM
         }
+        if metadata_failure_code:
+            msg["_metadata_failure_code"] = metadata_failure_code
+            msg.update(public_emotion_metadata(msg))
 
         worker_messages.append(msg)
 
-        # Push to frontend (but NO agent_speak_start — instant, no "thinking")
+    # Persist the complete synthesized batch before any worker speech becomes
+    # externally visible. This keeps broadcast and durable replay consistent
+    # even when cancellation arrives after the first worker event.
+    _check_cancelled(scenario_id)
+    saved_message_ids = _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": msg["agent_id"],
+                "content": msg["content"],
+                "emotion": (
+                    encode_metadata_unavailable_emotion(
+                        msg["_metadata_failure_code"]
+                    )
+                    if msg.get("_metadata_failure_code")
+                    else msg["emotion"]
+                ),
+                "diverge": msg.get("diverge"),
+            }
+            for msg in worker_messages
+        ],
+    ) or []
+    for msg, message_id in zip(worker_messages, saved_message_ids):
+        if message_id:
+            msg["id"] = message_id
+
+    all_messages.extend(worker_messages)
+
+    # Push to frontend (but NO agent_speak_start — instant, no "thinking")
+    # only after every worker message in this batch is durable.
+    for worker, msg in zip(worker_agents, worker_messages):
+        metadata_failure_code = message_metadata_failure_code(msg)
+        event_data = {
+            "agent": worker["name"],
+            "agent_id": worker["id"],
+            "message": msg["content"],
+            "emotion": msg["emotion"],
+            "branch": branch_id,
+            "round": round_num,
+            "synthesized": True,
+        }
+        if metadata_failure_code:
+            event_data.update(public_emotion_metadata(msg))
         await push_event({
             "type": "agent_speak",
-            "data": {
-                "agent": worker["name"],
-                "agent_id": worker["id"],
-                "message": synth_content,
-                "emotion": emotion,
-                "branch": branch_id,
-                "round": round_num,
-                "synthesized": True,
-            },
+            "data": event_data,
         })
         _check_cancelled(scenario_id)
         if progress_total > 0:
@@ -4971,30 +5047,13 @@ async def _gather_hierarchical_messages(
             viz_bubble = viz_mapper.map_agent_speak(
                 agent_id=worker["id"],
                 agent_name=worker["name"],
-                message=synth_content,
-                emotion=emotion,
+                message=msg["content"],
+                emotion=msg["emotion"] or None,
                 stance=worker_stance,
             )
+            if metadata_failure_code:
+                viz_bubble.update(public_emotion_metadata(msg))
             await push_event(viz_bubble)
-
-        all_messages.append(msg)
-
-    saved_message_ids = _save_messages(
-        engine,
-        [
-            {
-                "round_id": round_id,
-                "agent_id": msg["agent_id"],
-                "content": msg["content"],
-                "emotion": msg["emotion"],
-                "diverge": msg.get("diverge"),
-            }
-            for msg in worker_messages
-        ],
-    ) or []
-    for msg, message_id in zip(worker_messages, saved_message_ids):
-        if message_id:
-            msg["id"] = message_id
     for msg in worker_messages:
         store_memory(
             scenario_id=scenario_id,
@@ -6035,7 +6094,7 @@ def _get_recent_messages(engine, branch_id, max_rounds=2) -> list[dict]:
             results.append({
                 "agent_name": agent_name or "Unknown",
                 "content": msg.content,
-                "emotion": msg.emotion,
+                **public_emotion_metadata(msg),
                 "round": round_num_map.get(msg.round_id, 0),
             })
         results.sort(key=lambda x: x["round"])
@@ -6066,7 +6125,7 @@ def _get_messages_in_range(engine, branch_id, start, end) -> list[dict]:
             {
                 "agent_name": agent_name or "Unknown",
                 "content": msg.content,
-                "emotion": msg.emotion,
+                **public_emotion_metadata(msg),
                 "diverge": msg.diverge,
                 "round": round_num_map.get(msg.round_id),
                 "tier": getattr(agent_tier, "value", "") if agent_tier is not None else "",

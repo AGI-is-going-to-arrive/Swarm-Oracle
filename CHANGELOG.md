@@ -9,6 +9,9 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 - Three bundled official samples that open as complete local runs without an API key, file picker, or model call; local `*.swarm` import remains available.
 - A durable Director play loop spanning Gameplay Cards, prediction bets, worldline commitments, and the post-run Causal Archive.
 - In-run Agent profiles that distinguish configured stance from observed emotion and show the matching worldline and round.
+- Agent growth history with scenario, branch, round, and event-type coordinates; “Current” means the event matches the routed scenario and explicitly selected branch segment, while other classifiable events are “Past.”
+- Truthful report lifecycle and saved-section tiers, fallback reasons, evidence coordinates, bounded per-section tool traces that survive refresh/reopen for generated, rewritten, and static-fallback output, transient live current-position progress, and model-synthesized historical excerpts labeled with simulation coordinates.
+- A Setup completion gate that requires a successful test of the current connection or explicit acceptance of saving it unverified.
 - Sanitized Snapshot demo path for browsing saved runs without a live LLM.
 - Standalone result reports, model profiles, Local Packs, multi-run results, and public sharing artifacts.
 - Bilingual screenshots, static showcase, and contributor/security guidance.
@@ -25,14 +28,31 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 - Production startup requires `ENV=production`, `SESSION_SECRET`, and `ADMIN_TOKEN`.
 - Backend `init_db()` remains the database migration owner.
 - Result probabilities use completed terminal leaf worldlines; fork parents are excluded.
+- Report likelihood and analytic confidence use completed terminal leaves and evidence counts only; fork parents and signed affect-convergence proxies do not raise analytic confidence.
+- Exact-local OpenAI-compatible endpoints can run without a key or `Authorization` header; all other custom and remote endpoints remain key-required.
+- Local Pack selection now atomically imports bounded question, language, settings, world context, stakes, and cast preview. Casts do not create persistent Agent identities, but their bounded fields enter the run as untrusted world context; author prompts remain explicitly untrusted reference evidence.
+- Agent observations are projected from the selected branch lineage and, in replay, its round cutoff. Legacy causal/faction `stance`, `trust`, and `opposition` fields are now disclosed as affect proxies derived from model-generated `emotion` / `diverge`; current causal/faction responses cover the selected branch segment only and do not merge pre-fork ancestors.
+- Pack demo entries now reference only shipped Snapshots that actually exist and display as read-only label/filename metadata rather than a clickable import action.
+- Release publication now verifies the exact CI-passed SHA, builds an immutable backend/frontend pair, promotes both tags only after both images succeed, triggers and verifies pair rollback if either promotion fails, requires an executed signoff for version tags, skips stale edge publication, labels dry-run work as planned, and propagates browser teardown failures.
 
 ### Fixed
 
+- Preserved successful Agent speech when second-pass emotion/stance parsing fails, propagated an explicit unavailable status through live, Replay, Snapshot, import/export, reports, and Pixel Theater, and stopped missing observations from being presented as neutral.
 - Prevented stale scenarios, WebSocket events, replay payloads, and automation state from crossing route or replay boundaries.
 - Corrected Agent memory and emotion continuity across forks, nested replay, counterfactual replacement, resume, duplicate names, and branch round cutoffs.
 - Expanded Snapshot and replay credential redaction, reference remapping, and import recovery without blocking localhost LLM URLs or ordinary natural-language uses of “bearer.”
 - Made result-page analysis links follow actual scenario data and capability checks, with retryable availability errors and explicit empty states.
 - Hardened BYOK URL validation, provider-error redaction, report retries, runtime-lock loss, and interrupted-run recovery.
 - Kept replay, Snapshot, report, and share paths from exposing known credential fields.
+- Prevented an old profile secret, model, rate limit, or capability policy from following a changed endpoint or Debate role profile; detached the old profile on complete provider overrides; rejected partial session overrides before they can mix with a recovered scenario profile; kept unchanged profile mirrors out of result-page session overrides; required complete remote tuples for model edits; and prevented the server default key from being injected into an explicit keyless local request.
+- Prevented Local Pack context and cast previews from leaking into a later Quick Start or other non-pack launch.
+- Reloaded selected Local Pack detail after same-ID refresh, cleared stale detail/template/actions before switching, and prevented late detail responses from overwriting the new selection.
+- Kept failed, cancelled, skipped, stalled, truncated, and partial report states visible without discarding saved sections or presenting historical excerpts as live interviews.
+- Made counterfactual Agent and round selectors fit narrow phone viewports without horizontal overflow.
+
+### Known limitations
+
+- W2.0 causal and faction views do not yet stitch pre-fork ancestor rounds into the selected branch segment; lineage-aware ancestor stitching remains W2.1.
+- Local Pack `demo_snapshots` are metadata only in W2.0; clickable, directly importable demos remain W2.1.
 
 [Unreleased]: https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/commits/main

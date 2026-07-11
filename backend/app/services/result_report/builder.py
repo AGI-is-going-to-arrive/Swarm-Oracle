@@ -107,6 +107,7 @@ class ReportGenerationOverrides:
     supports_native_search_override: bool | None = None
     native_search_upstream_override: str | None = None
     temperature: float | None = None
+    inherit_context_policy: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,7 +292,7 @@ async def _run_report_runtime_lock_heartbeat(
 def _report_sse_stall_timeout_seconds() -> float:
     """Maximum visible silence before a manual SSE retry fails closed."""
 
-    timed_calls_per_tier = min(max(settings.REPORT_MAX_TOOL_CALLS_PER_SECTION, 1), 2)
+    timed_calls_per_tier = max(settings.REPORT_MAX_TOOL_CALLS_PER_SECTION, 1)
     section_silence_budget = (
         timed_calls_per_tier
         * max(settings.REPORT_SECTION_TIMEOUT_SECONDS, 0.01)
@@ -311,9 +312,10 @@ def _report_llm_scope_kwargs(
 ) -> dict[str, object]:
     scope_kwargs: dict[str, object] = {"purpose": "result_report"}
     parsed_context = context.parsed_context if isinstance(context.parsed_context, dict) else {}
+    inherit_context_policy = overrides is None or overrides.inherit_context_policy
     effective_base_url = (
         (overrides.base_url if overrides else None)
-        or parsed_context.get("llm_base_url")
+        or (parsed_context.get("llm_base_url") if inherit_context_policy else None)
     )
     user_id = (overrides.quota_user_id if overrides else None) or parsed_context.get(
         "user_id"
@@ -326,32 +328,52 @@ def _report_llm_scope_kwargs(
     scope_kwargs["requests_per_minute"] = (
         overrides.requests_per_minute
         if overrides and overrides.requests_per_minute is not None
-        else parsed_context.get("llm_requests_per_minute")
+        else (
+            parsed_context.get("llm_requests_per_minute")
+            if inherit_context_policy
+            else None
+        )
     )
     scope_kwargs["tokens_per_minute"] = (
         overrides.tokens_per_minute
         if overrides and overrides.tokens_per_minute is not None
-        else parsed_context.get("llm_tokens_per_minute")
+        else (
+            parsed_context.get("llm_tokens_per_minute")
+            if inherit_context_policy
+            else None
+        )
     )
     scope_kwargs["concurrency"] = (
         overrides.concurrency
         if overrides and overrides.concurrency is not None
-        else parsed_context.get("llm_concurrency")
+        else (parsed_context.get("llm_concurrency") if inherit_context_policy else None)
     )
     scope_kwargs["supports_structured_outputs_override"] = (
         overrides.supports_structured_outputs_override
         if overrides and overrides.supports_structured_outputs_override is not None
-        else _normalize_optional_bool(parsed_context.get("supports_structured_outputs"))
+        else (
+            _normalize_optional_bool(parsed_context.get("supports_structured_outputs"))
+            if inherit_context_policy
+            else None
+        )
     )
     scope_kwargs["supports_native_search_override"] = (
         overrides.supports_native_search_override
         if overrides and overrides.supports_native_search_override is not None
-        else _normalize_optional_bool(parsed_context.get("supports_native_search"))
+        else (
+            _normalize_optional_bool(parsed_context.get("supports_native_search"))
+            if inherit_context_policy
+            else None
+        )
     )
     scope_kwargs["native_search_upstream_override"] = (
         overrides.native_search_upstream_override
         if overrides and overrides.native_search_upstream_override is not None
-        else _normalize_native_search_upstream(parsed_context.get("native_search_upstream"))
+        else (
+            _normalize_native_search_upstream(parsed_context.get("native_search_upstream"))
+            if inherit_context_policy
+            else None
+        )
     )
     return scope_kwargs
 
@@ -498,6 +520,13 @@ async def _build_report_unlocked(
     )
     completed_sections: list[ReportSection] = list(reusable_sections)
     section_tiers: list[SectionTier] = list(reusable_tiers)
+    reused_section_ids = {section.id for section in reusable_sections}
+    existing_report = _load_existing_full_report(scenario_id)
+    tool_trace: list[ToolTraceSummary] = [
+        item
+        for item in (existing_report.tool_trace if existing_report is not None else [])
+        if item.section_id in reused_section_ids
+    ]
     failed_sections = 0
     report = _assemble_report(
         context,
@@ -506,12 +535,11 @@ async def _build_report_unlocked(
         sections=completed_sections,
         status="generating",
         tier=_worst_tier(section_tiers) if completed_sections else "generation",
+        tool_trace=tool_trace,
     )
     report = _fit_report_to_byte_cap(report)
     _ensure_report_runtime_lock_alive(report_lock_holder)
     _persist_report_payload(scenario_id, report.model_dump(mode="json"))
-
-    reused_section_ids = {section.id for section in reusable_sections}
 
     for section_plan in outline.sections:
         _ensure_report_runtime_lock_alive(report_lock_holder)
@@ -566,6 +594,7 @@ async def _build_report_unlocked(
                 sections=completed_sections,
                 status="generating",
                 tier=_worst_tier(section_tiers),
+                tool_trace=tool_trace,
             )
             report = _fit_report_to_byte_cap(report)
             _ensure_report_runtime_lock_alive(report_lock_holder)
@@ -574,6 +603,12 @@ async def _build_report_unlocked(
 
         completed_sections.append(section_result.section)
         section_tiers.append(section_result.tier)
+        section_trace = [
+            item.model_copy(update={"section_id": section_plan.section_id})
+            for item in section_result.tool_trace
+        ]
+        tool_trace.extend(section_trace)
+        tool_trace = tool_trace[:64]
         report = _assemble_report(
             context,
             reducer_result,
@@ -581,6 +616,7 @@ async def _build_report_unlocked(
             sections=completed_sections,
             status="generating",
             tier=_worst_tier(section_tiers),
+            tool_trace=tool_trace,
         )
         report = _fit_report_to_byte_cap(report)
         _ensure_report_runtime_lock_alive(report_lock_holder)
@@ -595,7 +631,7 @@ async def _build_report_unlocked(
                     "status": "complete",
                     "tier": section_result.tier,
                     "failure_reason": section_result.section.failure_reason,
-                    "tool_trace": section_result.tool_trace,
+                    "tool_trace": section_trace,
                 },
             ),
         )
@@ -676,6 +712,7 @@ async def _build_report_unlocked(
         interview_evidence=interview_evidence,
         interview_status=interview_status,
         indicators_to_watch=llm_indicators,
+        tool_trace=tool_trace,
     )
     report = _fit_report_to_byte_cap(report)
     _ensure_report_runtime_lock_alive(report_lock_holder)
@@ -998,6 +1035,7 @@ async def generate_section_react(
     # Track the most recent LLM-tier failure so the static fallback can report
     # *why* it had to drop offline (S9 observability).
     failure_reason: SectionFailureReason = "other"
+    tool_trace: list[ToolTraceSummary] = []
     try:
         return await _generate_section_tier(
             context,
@@ -1005,6 +1043,7 @@ async def generate_section_react(
             reducer_result,
             overrides=overrides,
             tier="generation",
+            trace=tool_trace,
         )
     except Exception as exc:  # noqa: BLE001 - classify then fall through to rewrite
         failure_reason = _classify_section_failure(exc)
@@ -1020,6 +1059,7 @@ async def generate_section_react(
             reducer_result,
             overrides=overrides,
             tier="rewrite",
+            trace=tool_trace,
         )
     except Exception as exc:  # noqa: BLE001 - classify then fall through to static
         failure_reason = _classify_section_failure(exc)
@@ -1038,6 +1078,7 @@ async def generate_section_react(
         section,
         reducer_result,
         failure_reason=failure_reason,
+        tool_trace=tool_trace,
     )
 
 
@@ -1048,15 +1089,13 @@ async def _generate_section_tier(
     *,
     overrides: ReportGenerationOverrides | None,
     tier: SectionTier,
+    trace: list[ToolTraceSummary] | None = None,
 ) -> SectionBuildResult:
     history: list[str] = []
-    trace: list[ToolTraceSummary] = []
-    # The section tool re-serves the same reducer evidence on every call, so we
-    # track which evidence ids have already been surfaced. The first tool call
-    # adds them all (progress); any later call adds nothing (no progress) and the
-    # loop pivots to a forced final answer instead of spending another timed
-    # iteration on an empty spin that would otherwise time out into a static tier.
-    served_evidence_ids: set[str] = set()
+    trace = trace if trace is not None else []
+    # The section tool deterministically re-serves the same reducer evidence on
+    # every call. One call therefore exhausts all possible progress, including
+    # the honest zero-evidence case; the next step must write the final section.
     force_final = False
     max_steps = max(1, settings.REPORT_MAX_TOOL_CALLS_PER_SECTION)
     for iteration in range(1, max_steps + 1):
@@ -1128,23 +1167,7 @@ async def _generate_section_tier(
                     elapsed_ms=elapsed_ms,
                 )
             )
-            served_ids = {
-                evidence.id
-                for evidence in reducer_result.evidence[
-                    : settings.REPORT_MAX_EVIDENCE_PER_SECTION
-                ]
-            }
-            served_evidence_ids |= served_ids
-            # _tool_query_branch_messages is a deterministic re-serve of the same
-            # reducer evidence, so the first call already surfaces everything there
-            # is to gain. Any subsequent call would add nothing new — demand a final
-            # answer on the very next pass rather than funding another timed empty
-            # spin that risks a timeout into the static tier. (The subset guard is a
-            # defensive double-check in case the tool ever returns a narrower set.)
-            if served_evidence_ids and (
-                not served_ids or served_ids <= served_evidence_ids
-            ):
-                force_final = True
+            force_final = True
             history.append(
                 "\n\n".join(
                     [
@@ -1510,6 +1533,7 @@ def _static_section_from_context(
     reducer_result: ReducerResult,
     *,
     failure_reason: SectionFailureReason = "other",
+    tool_trace: list[ToolTraceSummary] | None = None,
 ) -> SectionBuildResult:
     probability = reducer_result.likelihood.probability
     branch_count = len(reducer_result.branch_distribution)
@@ -1580,7 +1604,11 @@ def _static_section_from_context(
         tier="static",
         failure_reason=resolved_reason,
     )
-    return SectionBuildResult(section=report_section, tier="static", tool_trace=[])
+    return SectionBuildResult(
+        section=report_section,
+        tier="static",
+        tool_trace=list(tool_trace or [])[:64],
+    )
 
 
 def _outline_failure_placeholder_sections(outline: ReportOutline) -> list[ReportSection]:
@@ -1614,6 +1642,7 @@ def _assemble_report(
     interview_evidence: list[dict[str, Any]] | None = None,
     interview_status: InterviewStatus | None = None,
     indicators_to_watch: list[IndicatorToWatch] | None = None,
+    tool_trace: list[ToolTraceSummary] | None = None,
 ) -> FullReport:
     result_quality = (
         context.parsed_context.get("result_quality")
@@ -1663,13 +1692,24 @@ def _assemble_report(
         follow_ups=_follow_ups(context),
         limitations=(
             "Report content is generated from a bounded simulation transcript, "
-            "deterministic reducer stats, and available evidence coordinates."
+            "deterministic reducer stats, and available evidence coordinates. "
+            "Branch-scoped evidence covers the selected terminal leaf segment only; "
+            "pre-fork ancestor rounds are not merged in W2.0."
         ),
         interview_evidence=interview_evidence or [],
         interview_status=interview_status,
         premortem=[],
         language_status=LanguageStatus(zh="available", en="available"),
+        tool_trace=list(tool_trace or [])[:64],
     )
+    if status in {"generating", "failed", "cancelled"} and report.sections:
+        payload = report.model_dump(mode="json")
+        payload = _transition_report_status_payload(
+            report,
+            payload,
+            status=status,
+        )
+        return FullReport.model_validate(payload)
     return report
 
 
@@ -2077,8 +2117,25 @@ def _build_indicators_prompt(
             "likelihood_probability": round(reducer_result.likelihood.probability, 4),
             "likelihood_wep": reducer_result.likelihood.wep,
             "confidence_level": reducer_result.analytic_confidence.level,
-            "polarization": reducer_result.polarization.value,
-            "agent_consensus": reducer_result.agent_consensus.value,
+            "simulated_affect_dispersion_proxy": reducer_result.polarization.value,
+            "simulated_affect_dispersion_proxy_status": (
+                reducer_result.polarization.status
+            ),
+            "simulated_affect_dispersion_proxy_reason": (
+                reducer_result.polarization.reason
+            ),
+            "affect_proxy_caveat": (
+                "Derived from model-generated emotion/diverge fields; not verified "
+                "stance, trust, or real-world polarization. Partial or unavailable "
+                "metadata must not be extrapolated to missing agents or rounds."
+            ),
+            "simulated_affect_convergence_proxy": reducer_result.agent_consensus.value,
+            "simulated_affect_convergence_proxy_status": (
+                reducer_result.agent_consensus.status
+            ),
+            "simulated_affect_convergence_proxy_reason": (
+                reducer_result.agent_consensus.reason
+            ),
             "result_quality_confidence": result_quality.get("confidence"),
         },
         ensure_ascii=False,
@@ -2472,79 +2529,9 @@ def _stat_signal_indicator(
     allowed_evidence_ids: set[str],
     language: str,
 ) -> IndicatorToWatch | None:
-    if (
-        reducer_result.polarization.status in {"available", "partial"}
-        and reducer_result.polarization.value is not None
-    ):
-        value = _coerce_probability(reducer_result.polarization.value)
-        status = _stat_status_label(reducer_result.polarization.status, language)
-        if language == "zh":
-            signal = f"分歧度接近 {value:.0%}"
-            note = "高分歧会削弱主导路线；低分歧支持稳定。"
-            threshold = f"分歧度 {'>=' if value >= 0.55 else '<'} 55%。"
-            observation = f"统计归约分歧度={value:.0%}，状态={status}。"
-            time_horizon = "后续 1-2 轮模拟或下一次报告刷新"
-            rationale = "统计归约分歧信号没有消息级证据坐标。"
-        else:
-            signal = f"Polarization remains near {value:.0%}"
-            note = (
-                "High polarization weakens the dominant branch; low polarization "
-                "supports stability."
-            )
-            threshold = f"Polarization is {'>=' if value >= 0.55 else '<'} 55%."
-            observation = (
-                f"Reducer polarization={value:.0%} "
-                f"status={reducer_result.polarization.status}."
-            )
-            time_horizon = "next 1-2 simulated rounds or report refresh"
-            rationale = "Reducer polarization signal has no message-level evidence coordinate."
-        return _indicator(
-            signal=signal,
-            direction="down" if value >= 0.55 else "up",
-            note=note,
-            threshold=threshold,
-            observation=observation,
-            time_horizon=time_horizon,
-            rationale=rationale,
-            evidence_refs=[],
-            allowed_evidence_ids=allowed_evidence_ids,
-            language=language,
-        )
-    if (
-        reducer_result.agent_consensus.status in {"available", "partial"}
-        and reducer_result.agent_consensus.value is not None
-    ):
-        value = _coerce_probability(reducer_result.agent_consensus.value)
-        status = _stat_status_label(reducer_result.agent_consensus.status, language)
-        if language == "zh":
-            signal = f"角色共识接近 {value:.0%}"
-            note = "共识变化会影响主导路线是否稳固。"
-            threshold = f"角色共识保持 {'>=' if value >= 0.55 else '<'} 55%。"
-            observation = f"统计归约角色共识={value:.0%}，状态={status}。"
-            time_horizon = "后续 1-2 轮模拟或下一次报告刷新"
-            rationale = "统计归约共识信号没有消息级证据坐标。"
-        else:
-            signal = f"Agent consensus remains near {value:.0%}"
-            note = "Consensus changes whether the dominant branch remains robust."
-            threshold = f"Agent consensus stays {'>=' if value >= 0.55 else '<'} 55%."
-            observation = (
-                f"Reducer agent_consensus={value:.0%} "
-                f"status={reducer_result.agent_consensus.status}."
-            )
-            time_horizon = "next 1-2 simulated rounds or report refresh"
-            rationale = "Reducer consensus signal has no message-level evidence coordinate."
-        return _indicator(
-            signal=signal,
-            direction="up" if value >= 0.55 else "down",
-            note=note,
-            threshold=threshold,
-            observation=observation,
-            time_horizon=time_horizon,
-            rationale=rationale,
-            evidence_refs=[],
-            allowed_evidence_ids=allowed_evidence_ids,
-            language=language,
-        )
+    # Affect convergence/dispersion proxies are descriptive UI diagnostics,
+    # not evidence-linked causal tripwires for the scenario outcome.
+    del reducer_result, allowed_evidence_ids, language
     return None
 
 
@@ -2646,6 +2633,9 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
                     section.get("body_md_i18n"),
                     body_limit,
                 )
+
+    while payload.get("tool_trace") and utf8_json_size_bytes(payload) > max_bytes:
+        payload["tool_trace"].pop()
 
     while payload.get("sections") and utf8_json_size_bytes(payload) > max_bytes:
         payload["sections"].pop()
@@ -2838,6 +2828,7 @@ def _persist_failed_report_after_auto_retry_exhausted(
             dominant_branch_id,
             status="failed",
             replace_unenhanced=True,
+            refresh_failed_copy=True,
         )
     finally:
         release_runtime_lock(lease)
@@ -2851,6 +2842,7 @@ def _persist_placeholder_report_if_absent(
     replace_failed: bool = False,
     replace_unenhanced: bool = False,
     replace_cancelled: bool = False,
+    refresh_failed_copy: bool = False,
 ) -> FullReport:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -2866,6 +2858,7 @@ def _persist_placeholder_report_if_absent(
             scenario_id,
             dominant_branch_id,
         )
+        branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
         if existing is not None and existing.target_branch_id == target_branch_id:
             if status == "failed":
@@ -2877,6 +2870,7 @@ def _persist_placeholder_report_if_absent(
                         and replace_unenhanced
                         and not _report_has_llm_enhanced_sections(existing)
                     )
+                    or (existing.status == "failed" and refresh_failed_copy)
                 )
             elif status == "generating":
                 should_transition = existing.status == "failed" and (
@@ -2890,14 +2884,19 @@ def _persist_placeholder_report_if_absent(
                 should_transition = existing.status == "generating"
             if not should_transition:
                 return existing
-            payload = existing.model_copy(
-                update={
-                    "status": status,
-                    "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                },
-            ).model_dump(mode="json")
+            canonical_payload = _placeholder_report_payload(
+                scenario,
+                parsed_context,
+                branch,
+                target_branch_id,
+                status=status,
+            )
+            payload = _transition_report_status_payload(
+                existing,
+                canonical_payload,
+                status=status,
+            )
         else:
-            branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
             payload = _placeholder_report_payload(
                 scenario,
                 parsed_context,
@@ -2910,6 +2909,143 @@ def _persist_placeholder_report_if_absent(
         payload,
         max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
     )
+
+
+def _transition_report_status_payload(
+    existing: FullReport,
+    canonical_payload: dict[str, Any],
+    *,
+    status: Literal["failed", "generating", "cancelled"],
+) -> dict[str, Any]:
+    """Synchronize status copy while preserving genuinely generated sections."""
+    if not existing.sections:
+        return canonical_payload
+
+    payload = existing.model_dump(mode="json")
+    payload.update({
+        "status": status,
+        "generated_at": canonical_payload["generated_at"],
+        "title": canonical_payload["title"],
+        "title_i18n": canonical_payload["title_i18n"],
+    })
+
+    partial_copy = {
+        "generating": {
+            "summary_i18n": {
+                "zh": "报告正在重试生成；此前保存的章节仍可查看。",
+                "en": "Report generation is retrying; previously saved sections remain visible.",
+            },
+            "headline": {
+                "zh": "报告正在重试生成；下方章节来自此前已保存的部分结果。",
+                "en": (
+                    "Report generation is retrying; the sections below are "
+                    "previously saved partial results."
+                ),
+            },
+            "basis": "The report is retrying after partial sections were saved.",
+            "basis_i18n": {
+                "zh": "报告在保存部分章节后正在重试生成。",
+                "en": "The report is retrying after partial sections were saved.",
+            },
+            "limitations": (
+                "Report generation is retrying after some sections were saved. "
+                "Visible sections may be incomplete until generation finishes."
+            ),
+            "interview_message": (
+                "Report generation is retrying; saved sections may not include "
+                "interview extraction yet."
+            ),
+        },
+        "cancelled": {
+            "summary_i18n": {
+                "zh": "报告生成已取消；此前保存的部分章节仍可查看。",
+                "en": (
+                    "Report generation was cancelled; previously saved partial "
+                    "sections remain visible."
+                ),
+            },
+            "headline": {
+                "zh": "报告生成已取消；下方仅展示取消前保存的部分章节。",
+                "en": (
+                    "Report generation was cancelled; only sections saved before "
+                    "cancellation are shown below."
+                ),
+            },
+            "basis": "The report builder was cancelled after producing partial sections.",
+            "basis_i18n": {
+                "zh": "报告生成器在产出部分章节后被取消。",
+                "en": "The report builder was cancelled after producing partial sections.",
+            },
+            "limitations": (
+                "Report generation was cancelled after some sections were produced. "
+                "Saved sections may be incomplete; simulation results remain available."
+            ),
+            "interview_message": (
+                "Report generation was cancelled; saved sections may not include "
+                "interview extraction."
+            ),
+        },
+        "failed": {
+            "summary_i18n": {
+                "zh": "报告生成失败；失败前保存的部分章节仍可查看。",
+                "en": (
+                    "Report generation failed; partial sections saved before failure "
+                    "remain visible."
+                ),
+            },
+            "headline": {
+                "zh": "报告生成失败；下方仅展示失败前保存的部分章节。",
+                "en": (
+                    "Report generation failed; only sections saved before failure "
+                    "are shown below."
+                ),
+            },
+            "basis": "The report builder failed after producing partial sections.",
+            "basis_i18n": {
+                "zh": "报告生成器在产出部分章节后失败。",
+                "en": "The report builder failed after producing partial sections.",
+            },
+            "limitations": (
+                "Report generation failed after some sections were produced. "
+                "Saved sections may be incomplete; simulation results remain available."
+            ),
+            "interview_message": (
+                "Report generation failed; saved sections may not include "
+                "interview extraction."
+            ),
+        },
+    }[status]
+
+    summary_i18n = partial_copy["summary_i18n"]
+    language = "zh" if existing.language == "zh" else "en"
+    payload["summary_i18n"] = summary_i18n
+    payload["summary"] = summary_i18n[language]
+    payload["limitations"] = partial_copy["limitations"]
+
+    verdict = dict(payload["verdict"])
+    verdict["headline_answer"] = partial_copy["headline"][language]
+    analytic_confidence = dict(verdict["analytic_confidence"])
+    analytic_confidence["basis"] = partial_copy["basis"]
+    analytic_confidence["basis_i18n"] = partial_copy["basis_i18n"]
+    verdict["analytic_confidence"] = analytic_confidence
+    payload["verdict"] = verdict
+
+    if existing.interview_evidence and existing.interview_status is not None:
+        interview_status = existing.interview_status.model_copy(
+            update={
+                "message": (
+                    "Saved interview evidence remains available after the report "
+                    f"transitioned to {status}."
+                )
+            }
+        )
+        payload["interview_status"] = interview_status.model_dump(mode="json")
+    else:
+        canonical_interview_status = canonical_payload.get("interview_status")
+        if isinstance(canonical_interview_status, dict):
+            payload["interview_status"] = dict(canonical_interview_status)
+            payload["interview_status"]["message"] = partial_copy["interview_message"]
+    return payload
 
 
 def _persist_failed_report_if_lock_available(
@@ -3288,6 +3424,7 @@ def _normalize_overrides(
             overrides.get("native_search_upstream_override")
         ),
         temperature=normalized_temperature,
+        inherit_context_policy=overrides.get("inherit_context_policy") is not False,
     )
 
 

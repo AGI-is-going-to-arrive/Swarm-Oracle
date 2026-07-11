@@ -21,6 +21,15 @@ function placeholders(value: string): string[] {
 }
 
 describe('i18n locale resources', () => {
+  it('labels report history excerpts as model-synthesized rather than verbatim transcripts', () => {
+    expect(en.translation.result.report.interviewsTitle).toBe(
+      'Model-synthesized simulation history excerpts',
+    );
+    expect(en.translation.result.report.personas_intro).toContain('Not verbatim source evidence');
+    expect(zh.translation.result.report.interviewsTitle).toBe('模型合成的历史推演摘录');
+    expect(zh.translation.result.report.personas_intro).toContain('不是逐字原始证据');
+  });
+
   it('provides shared common action labels used by live modals', () => {
     expect(en.translation.common.cancel).toBe('Cancel');
     expect(zh.translation.common.cancel).toBe('取消');
@@ -169,6 +178,20 @@ describe('i18n locale resources', () => {
     }
     expect(en.translation.resume.checkpoint_load_error).toBeTruthy();
     expect(zh.translation.resume.checkpoint_load_error).toBeTruthy();
+  });
+
+  it('states the setup verification and unverified-save boundary in both locales', () => {
+    const setupTruthKeys = [
+      'allow_unverified_label',
+      'connection_verified_hint',
+      'verification_required_hint',
+    ] as const;
+    for (const key of setupTruthKeys) {
+      expect(en.translation.setup[key]).toBeTruthy();
+      expect(zh.translation.setup[key]).toBeTruthy();
+    }
+    expect(en.translation.setup.allow_unverified_label).toContain('may not work');
+    expect(zh.translation.setup.allow_unverified_label).toContain('可能无法运行');
   });
 
   it('provides Sprint 3 snapshot, roundtable, and drift labels in both locales', () => {
@@ -456,6 +479,11 @@ describe('i18n locale resources', () => {
     expect(zh.translation.debate.import_local_run).toBe('导入为本地运行');
     expect(en.translation.debate.importing_local_run).toBe('Importing...');
     expect(zh.translation.debate.importing_local_run).toBe('导入中...');
+  });
+
+  it('labels social faction membership share without presenting it as confidence', () => {
+    expect(en.translation.social_feed.confidence_label).toBe('Group share');
+    expect(zh.translation.social_feed.confidence_label).toBe('群体占比');
   });
 
   it('provides localized replay, source tooltip, and knowledge-graph error labels', () => {

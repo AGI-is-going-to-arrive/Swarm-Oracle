@@ -1,7 +1,12 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { FullReport, FullReportTruncatedMarker, StoryData } from '../../types';
+import type {
+  FullReport,
+  FullReportTruncatedMarker,
+  StoryData,
+  ToolTraceSummary,
+} from '../../types';
 
 // ── Mocks ─────────────────────────────────────────────────────
 vi.mock('./ResultContext', () => ({
@@ -375,6 +380,29 @@ describe('ResultReportPanel — manual retry stream handling', () => {
 
     // The tool trace chip should now be absent because the trace was reset to []
     expect(screen.queryByRole('button', { name: /Tool activity/i })).not.toBeInTheDocument();
+  });
+
+  it('restores persisted tool activity when a completed report is reopened', async () => {
+    const report = makeReport();
+    (report as FullReport & { tool_trace: ToolTraceSummary[] }).tool_trace = [
+      {
+        section_id: 'timeline',
+        tool: 'query_branch_messages',
+        query: 'timeline',
+        item_count: 2,
+        elapsed_ms: 17,
+      } as ToolTraceSummary,
+    ];
+    setCtx({ full_report: report });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    const trigger = await screen.findByRole('button', { name: /Show tool activity/i });
+    expect(trigger).toHaveTextContent(/Tool activity \(1\)/);
+    fireEvent.click(trigger);
+    expect(screen.getByText('query_branch_messages')).toBeInTheDocument();
+    expect(screen.getByText('timeline')).toBeInTheDocument();
   });
 });
 
@@ -1199,7 +1227,8 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
 
-    expect(screen.getByText('Historical simulation transcript excerpts')).toBeInTheDocument();
+    expect(screen.getByText('Model-synthesized simulation history excerpts')).toBeInTheDocument();
+    expect(screen.getByText(/Not verbatim source evidence or real persons' words/)).toBeInTheDocument();
     expect(screen.getByText('Privacy Advocate')).toBeInTheDocument();
     expect(screen.getByText('Branch 2 · Round 4')).toBeInTheDocument();
     expect(screen.getByText('Privacy safeguards are essential.')).toBeInTheDocument();
@@ -1213,7 +1242,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCtx({ full_report: report });
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
-    expect(screen.queryByText('Historical simulation transcript excerpts')).toBeNull();
+    expect(screen.queryByText('Model-synthesized simulation history excerpts')).toBeNull();
   });
 
   it('renders nothing for interviews block when interview_evidence is missing entirely', () => {
@@ -1222,7 +1251,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCtx({ full_report: report });
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
-    expect(screen.queryByText('Historical simulation transcript excerpts')).toBeNull();
+    expect(screen.queryByText('Model-synthesized simulation history excerpts')).toBeNull();
   });
 
   it('renders failed interview status message', () => {
@@ -1242,7 +1271,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
 
-    expect(screen.getByText('Historical simulation transcript excerpts')).toBeInTheDocument();
+    expect(screen.getByText('Model-synthesized simulation history excerpts')).toBeInTheDocument();
     expect(screen.getByText(/Interview generation failed: LLM failed to respond. \(error code: INTERVIEW_LLM_FAILED\)/i)).toBeInTheDocument();
   });
 

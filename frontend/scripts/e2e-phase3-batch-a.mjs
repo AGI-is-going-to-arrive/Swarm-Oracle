@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
 import {
@@ -876,55 +877,54 @@ async function runSurface(mode, viewport, args, outputDir) {
   const baseUrl = args.baseUrl;
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), acceptDownloads: true, locale: E2E_LOCALE });
-  await context.addInitScript(({ storageKey, language }) => {
-    window.localStorage.setItem(storageKey, language);
-  }, { storageKey: "swarmoracle:language:v1", language: E2E_APP_LANGUAGE });
-  const page = await context.newPage();
-  const browserIssues = attachBrowserIssueMonitor(page);
-
-  await installFixtures(page);
-
   const allResults = { mode, browser: args.browser, viewport, tests: {} };
-
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
-    allResults.tests.agentWorkshop = await runNamedTest(
-      "agent-workshop",
-      page,
-      outputDir,
-      () => testAgentWorkshop(page, baseUrl, outputDir),
-    );
-    allResults.tests.agentLibraryProfile = await runNamedTest(
-      "agent-library-profile",
-      page,
-      outputDir,
-      () => testAgentLibraryAndProfile(page, baseUrl, outputDir),
-    );
-    allResults.tests.causalMap = await runNamedTest(
-      "causal-map",
-      page,
-      outputDir,
-      () => testCausalMap(page, baseUrl, outputDir, viewport),
-    );
-  } catch (err) {
-    allResults.error = toErrorMessage(err);
-    await saveScreenshot(page, path.join(outputDir, "crash.png"));
-  } finally {
-    const browserRuntime = buildBrowserRuntimeResult(browserIssues);
-    allResults.tests.browserRuntime = {
-      steps: browserRuntime.steps,
-      passed: browserRuntime.passed,
-      error: browserRuntime.error,
-    };
-    allResults.browserIssues = browserRuntime.issues;
-    writeJson(path.join(outputDir, "browser-issues.json"), browserRuntime.issues);
-    if (!browserRuntime.passed) {
-      await saveScreenshot(page, path.join(outputDir, "browser-runtime-errors.png"));
+    const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), acceptDownloads: true, locale: E2E_LOCALE });
+    await context.addInitScript(({ storageKey, language }) => {
+      window.localStorage.setItem(storageKey, language);
+    }, { storageKey: "swarmoracle:language:v1", language: E2E_APP_LANGUAGE });
+    const page = await context.newPage();
+    const browserIssues = attachBrowserIssueMonitor(page);
+    await installFixtures(page);
+
+    try {
+      allResults.tests.agentWorkshop = await runNamedTest(
+        "agent-workshop",
+        page,
+        outputDir,
+        () => testAgentWorkshop(page, baseUrl, outputDir),
+      );
+      allResults.tests.agentLibraryProfile = await runNamedTest(
+        "agent-library-profile",
+        page,
+        outputDir,
+        () => testAgentLibraryAndProfile(page, baseUrl, outputDir),
+      );
+      allResults.tests.causalMap = await runNamedTest(
+        "causal-map",
+        page,
+        outputDir,
+        () => testCausalMap(page, baseUrl, outputDir, viewport),
+      );
+    } catch (err) {
+      allResults.error = toErrorMessage(err);
+      await saveScreenshot(page, path.join(outputDir, "crash.png"));
+    } finally {
+      const browserRuntime = buildBrowserRuntimeResult(browserIssues);
+      allResults.tests.browserRuntime = {
+        steps: browserRuntime.steps,
+        passed: browserRuntime.passed,
+        error: browserRuntime.error,
+      };
+      allResults.browserIssues = browserRuntime.issues;
+      writeJson(path.join(outputDir, "browser-issues.json"), browserRuntime.issues);
+      if (!browserRuntime.passed) {
+        await saveScreenshot(page, path.join(outputDir, "browser-runtime-errors.png"));
+      }
     }
-    await page.close().catch(() => {});
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+  } finally {
+    await closePlaywrightBrowser(browser, `e2e-phase3-batch-a:${mode}:${args.browser}`);
   }
 
   allResults.summary = summarizeRun(allResults);

@@ -83,16 +83,6 @@
       }
     }
   ],
-  "demo_snapshots": [
-    {
-      "id": "harvest-shortfall",
-      "label": {
-        "zh": "歉收缺口",
-        "en": "Harvest Shortfall"
-      },
-      "filename": "civic-food-harvest-shortfall.json"
-    }
-  ],
   "suggested_settings": {
     "num_agents": 9,
     "rounds": 5,

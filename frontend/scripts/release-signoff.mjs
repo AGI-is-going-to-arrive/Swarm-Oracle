@@ -34,6 +34,22 @@ const GRAPH_FOCUSED_VITEST_TESTS = [
   "src/pages/CausalReviewView.test.tsx",
   "src/pages/ReplayEmptyState.test.tsx",
   "src/pages/ResultView.test.tsx",
+  "src/pages/result/ResultReportPanel.test.tsx",
+  "src/pages/result/ReportSection.test.tsx",
+  "src/pages/result/ReportConfidenceBadge.test.tsx",
+  "src/lib/agentProfileObservation.test.ts",
+  "src/components/result/AgentProfileSheet.test.tsx",
+  "src/lib/resultReportSse.test.ts",
+  "src/lib/llmProviderPolicy.test.ts",
+  "src/lib/localPackImport.test.ts",
+  "src/pages/SetupWizardView.test.tsx",
+  "src/components/Setup/ConnectionTester.test.tsx",
+  "src/components/ModelProfileManager.test.tsx",
+  "src/components/DocumentSeedPanel.test.tsx",
+  "src/components/LocalPackPicker.test.tsx",
+  "src/components/CounterfactualPanel.test.tsx",
+  "src/components/FactionForceGraph.test.tsx",
+  "src/pages/result/SocialFeedPanel.test.tsx",
   "src/scripts/releaseSignoff.test.ts",
   "src/i18n/locales.test.ts",
 ];
@@ -76,6 +92,7 @@ const SCRIPT_CONTRACT_TESTS = [
   "scripts/e2eFixtureNet.test.mjs",
   "scripts/e2e-prediction-modal.test.mjs",
   "scripts/e2e-result-report-suite.test.mjs",
+  "scripts/playwrightTeardown.test.mjs",
 ];
 const BACKEND_SIGNOFF_TESTS = [
   "tests/test_campaign_api.py",
@@ -87,6 +104,25 @@ const BACKEND_SIGNOFF_TESTS = [
   "tests/test_card_events.py",
   "tests/test_gameplay_contract_sync.py",
   "tests/test_metrics.py",
+  "tests/test_llm_provider_protocol.py",
+  "tests/test_llm_client.py",
+  "tests/test_llm_resolution.py",
+  "tests/test_model_profiles.py",
+  "tests/test_agent_identity.py",
+  "tests/test_vector_store.py",
+  "tests/test_wave1_agent_state.py",
+  "tests/test_scoring.py",
+  "tests/test_conversation.py",
+  "tests/test_ending_room_api.py",
+  "tests/test_social.py",
+  "tests/test_infra_config.py",
+  "tests/test_causal_graph.py",
+  "tests/test_factions.py",
+  "tests/test_result_report_reducer.py",
+  "tests/test_result_report_builder.py",
+  "tests/test_result_report_contract.py",
+  "tests/test_simulator.py",
+  "tests/test_local_packs.py",
 ];
 const PYTHON_HTTP_CHECK_SCRIPT = [
   "import sys, urllib.request",
@@ -419,7 +455,7 @@ function runStep(summary, runArgs, stepId, command, commandArgs, options = {}) {
   const startTime = Date.now();
   try {
     runCommand(command, commandArgs, { ...runArgs, ...options });
-    step.status = "passed";
+    step.status = runArgs.dryRun ? "planned" : "passed";
   } catch (error) {
     step.status = "failed";
     step.error = serializeError(error);
@@ -600,7 +636,7 @@ async function runAsyncStep(summary, runArgs, stepId, runner, options = {}) {
     if (!runArgs.dryRun) {
       await runner();
     }
-    step.status = "passed";
+    step.status = runArgs.dryRun ? "planned" : "passed";
   } catch (error) {
     step.status = "failed";
     step.error = serializeError(error);
@@ -610,6 +646,10 @@ async function runAsyncStep(summary, runArgs, stepId, runner, options = {}) {
     step.duration_ms = Date.now() - startTime;
     writeSummary(runArgs.outputRoot, summary);
   }
+}
+
+function successfulSummaryStatus(dryRun) {
+  return dryRun ? "planned" : "passed";
 }
 
 function buildSuiteArgs(scriptName, mode, baseUrl, outputDir, headless, scenarioId) {
@@ -681,8 +721,12 @@ export const __test__ = {
   buildPredictionFocusedStepSpecs,
   registerRound7GraphLiveSteps,
   registerPredictionFocusedSteps,
+  runAsyncStep,
+  runStep,
+  successfulSummaryStatus,
   graphE2EStepIds: GRAPH_E2E_STEP_IDS,
   graphFocusedVitestTests: GRAPH_FOCUSED_VITEST_TESTS,
+  backendSignoffTests: BACKEND_SIGNOFF_TESTS,
   predictionFocusedStepIds: PREDICTION_FOCUSED_STEP_IDS,
   fixtureBlackholeBackendUrl: FIXTURE_BLACKHOLE_BACKEND_URL,
   commandTimeoutMs: COMMAND_TIMEOUT_MS,
@@ -1527,7 +1571,7 @@ async function main() {
       );
     }
 
-    summary.status = "passed";
+    summary.status = successfulSummaryStatus(args.dryRun);
     summary.finished_at = new Date().toISOString();
     writeSummary(args.outputRoot, summary);
     console.log("\nRelease signoff completed.");

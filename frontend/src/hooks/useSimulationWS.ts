@@ -233,7 +233,11 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
         }
 
         if (raw.type.startsWith('viz:')) {
-          dispatchVizEvent(raw.type, raw.data ?? {});
+          const flatPayload = { ...raw } as Record<string, unknown>;
+          delete flatPayload.type;
+          delete flatPayload.data;
+          delete flatPayload.meta;
+          dispatchVizEvent(raw.type, raw.data ?? flatPayload);
           return;
         }
         if (raw.type !== 'heartbeat') {

@@ -31,7 +31,7 @@ from app.models import Agent, Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.models.prediction_journal import PredictionJournalEntry
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
-from app.services.llm_client import validate_llm_base_url
+from app.services.llm_client import is_local_provider_url, validate_llm_base_url
 from app.services.model_profiles import resolve_model_profile_policy
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ async def trigger_scoring(
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
-        if not req.llm_api_key:
+        if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 

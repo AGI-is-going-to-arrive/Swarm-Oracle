@@ -93,6 +93,39 @@ describe('DocumentSeedPanel', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps existing local-pack context removable when document upload is disabled', () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: false,
+      capabilities: null,
+      error: null,
+      reload: vi.fn(),
+    });
+    const setWorldContext = vi.fn();
+    const setAgentsPreview = vi.fn();
+
+    const { container } = render(
+      <DocumentSeedPanel
+        worldContext={mockWorldContext}
+        setWorldContext={setWorldContext}
+        agentsPreview={mockSeedResponse.agents_preview}
+        setAgentsPreview={setAgentsPreview}
+      />
+    );
+
+    expect(screen.getByText('Zheng He sailed to the Americas in 1421.')).toBeInTheDocument();
+    expect(screen.getByText('Emperor Zhu Di')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Replace Document' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Choose a document to seed world context')).not.toBeInTheDocument();
+    expect(container.querySelector('input[type="file"]')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(setWorldContext).toHaveBeenCalledWith(null);
+    expect(setAgentsPreview).toHaveBeenCalledWith(null);
+    expect(uploadDocumentSeedMock).not.toHaveBeenCalled();
+  });
+
   it('renders dropzone when capability is enabled and no worldContext is seeded', () => {
     useCapabilityCheckMock.mockReturnValue({
       loading: false,

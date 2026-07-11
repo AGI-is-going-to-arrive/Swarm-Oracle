@@ -61,6 +61,9 @@ interface GraphEdgeData {
   type: string;
   weight: number | null;
   label: string | null;
+  display_type?: string;
+  metric_kind?: 'affect_proxy';
+  caveat?: string;
   evidence?: EdgeEvidence | null;
 }
 
@@ -123,8 +126,19 @@ type CausalTranslate = TFunction<'translation', undefined>;
 // ── Helpers ─────────────────────────────────────────────────
 
 function getCausalTypeLabel(type: string, t: CausalTranslate): string {
+  if (type === 'affect_shift_proxy') {
+    return t('causal.type_affect_shift_proxy', 'Affect shift (proxy)');
+  }
   const pair = GRAPH_TYPE_LABEL_I18N[type];
   return pair ? t(pair[0], pair[1]) : type;
+}
+
+function getCausalNodeDisplayType(node: GraphNodeData): string {
+  if (node.payload && typeof node.payload === 'object' && !Array.isArray(node.payload)) {
+    const displayType = (node.payload as Record<string, unknown>).display_type;
+    if (typeof displayType === 'string' && displayType.trim()) return displayType.trim();
+  }
+  return node.type;
 }
 
 function getEvidenceTierLabel(tier: 'low' | 'medium' | 'high', t: CausalTranslate): string {
@@ -137,6 +151,15 @@ const BACKEND_LABEL_I18N: Record<string, [string, string]> = {
 };
 
 function getCausalEdgeBaseRelationLabel(edge: GraphEdgeData, t: CausalTranslate): string {
+  if (edge.display_type === 'affect_alignment_proxy') {
+    return t('causal.edge_affect_alignment_proxy', 'affect aligned (proxy)');
+  }
+  if (edge.display_type === 'affect_distance_proxy') {
+    return t('causal.edge_affect_distance_proxy', 'affect distant (proxy)');
+  }
+  if (edge.display_type === 'affect_proxy_observation') {
+    return t('causal.edge_affect_proxy_observation', 'affect proxy observation');
+  }
   if (edge.type === 'temporal') return t('causal.edge_temporal', 'precedes');
   if (edge.type === 'responds_to') return t('causal.edge_responds_to', 'responds to');
   if (edge.type === 'supports_stance') return t('causal.edge_supports_stance', 'aligns with');
@@ -209,7 +232,7 @@ function layoutDagre(
     const pos = g.node(n.id);
     const fullLabel = n.label || n.key;
     const label = truncateCodepoints(fullLabel, 50);
-    const typeLabel = getCausalTypeLabel(n.type, t);
+    const typeLabel = getCausalTypeLabel(getCausalNodeDisplayType(n), t);
     const roundLabel = t('causal.round_label', 'Round');
     const ariaLabel = `${t('causal.open_details', 'Open details')}: ${typeLabel} - ${fullLabel}`;
     return {
@@ -564,6 +587,14 @@ export default function CausalGraphBoard({
 
   return (
     <div data-testid="causal-graph-board" className={className} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 320, position: 'relative' }}>
+      {graphData?.scope_kind === 'branch_segment_only' && (
+        <p role="note" style={{ margin: '0.5rem 0.5rem 0', color: COLORS.textMuted, fontSize: '0.78rem' }}>
+          {t(
+            'causal.scope_branch_segment_only',
+            'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+          )}
+        </p>
+      )}
       {/* Search bar */}
       <div style={{ display: 'flex', gap: '0.5rem', padding: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <input
@@ -599,7 +630,7 @@ export default function CausalGraphBoard({
             {filteredData?.nodes.map(n => (
               <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: COLORS.textBody, padding: '2px 0' }}>
                 <button type="button" onClick={e => openNodeDetail(n.id, e.currentTarget)} style={{ width: '100%', textAlign: 'left', border: `1px solid ${COLORS.borderSubtle}`, borderRadius: 6, background: COLORS.surfacePanel, color: COLORS.textStrong, padding: '0.5rem 0.6rem', cursor: 'pointer' }}>
-                  {`${t('causal.round_label', 'Round')} ${n.round ?? '?'} · ${getCausalTypeLabel(n.type, t)}: ${n.label}`}
+                  {`${t('causal.round_label', 'Round')} ${n.round ?? '?'} · ${getCausalTypeLabel(getCausalNodeDisplayType(n), t)}: ${n.label}`}
                 </button>
               </div>
             ))}

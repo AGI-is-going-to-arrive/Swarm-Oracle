@@ -49,6 +49,10 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.agent_message_metadata import (
+    persisted_emotion_from_public_message,
+    public_emotion_metadata,
+)
 from app.services.result_report.schema import validate_full_report_payload
 
 logger = logging.getLogger(__name__)
@@ -370,6 +374,10 @@ def _serialize_message(
     round_number: int,
     branch_id: str,
 ) -> dict[str, Any]:
+    emotion_projection = public_emotion_metadata(message)
+    emotion_projection["emotion"] = _scrub_export_text(
+        emotion_projection.get("emotion")
+    )
     return {
         "id": message.id,
         "round_id": message.round_id,
@@ -377,7 +385,7 @@ def _serialize_message(
         "round_number": round_number,
         "agent_id": message.agent_id,
         "content": _scrub_export_text(message.content),
-        "emotion": _scrub_export_text(message.emotion),
+        **emotion_projection,
         "diverge": _scrub_export_text(message.diverge),
         "tokens_used": message.tokens_used,
     }
@@ -1358,7 +1366,7 @@ def import_snapshot_zip(
             round_id=round_id,
             agent_id=new_agent_id,
             content=str(raw.get("content") or ""),
-            emotion=str(raw.get("emotion") or "neutral"),
+            emotion=persisted_emotion_from_public_message(raw),
             diverge=raw.get("diverge"),
             tokens_used=_coerce_int_field(
                 raw.get("tokens_used"),

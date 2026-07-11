@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -576,12 +577,6 @@ async function runSurface(mode, contextOptions, args) {
     : path.join(DEFAULT_OUTPUT_ROOT, `kg-explorer-live-${timestampLabel()}-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext(contextOptions);
-  const page = await context.newPage();
-  const browserIssues = attachPageIssueGuards(page);
-  await installFixtures(page, args.scenarioId);
-
   const allResults = {
     mode,
     browser: args.browser,
@@ -590,7 +585,13 @@ async function runSurface(mode, contextOptions, args) {
     scenarioId: args.scenarioId,
     tests: {},
   };
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    const browserIssues = attachPageIssueGuards(page);
+    await installFixtures(page, args.scenarioId);
+
     allResults.tests.routeMount = await testRouteMount(page, args.baseUrl, args.scenarioId);
     allResults.tests.fixtureInteractions = await testFixtureInteractions(page, args.baseUrl, args.scenarioId);
     allResults.tests.budgetContract = await testBudgetContract();
@@ -603,8 +604,7 @@ async function runSurface(mode, contextOptions, args) {
       }],
     });
   } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await closePlaywrightBrowser(browser, `e2e-kg-explorer-live:${mode}:${args.browser}`);
   }
 
   let total = 0, passed = 0;

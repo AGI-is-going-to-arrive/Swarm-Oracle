@@ -29,6 +29,7 @@ from app.services.lang_detect import detect_language, get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
+    is_local_provider_url,
     llm_call,
     llm_request_scope,
     validate_llm_base_url,
@@ -411,6 +412,14 @@ def _safe_payload_summary(raw: str | None) -> str:
     return "; ".join(part for part in visible_parts if part)[:240]
 
 
+def _social_event_display_type(event_type: str) -> str:
+    """Map legacy persistence codes to truthful user-facing descriptions."""
+    normalized = event_type.strip().lower()
+    if normalized == "betrayal":
+        return "affect shift (proxy)"
+    return normalized.replace("_", " ")
+
+
 def _snapshot_lookup(
     snapshots: list[FactionSnapshot],
 ) -> dict[tuple[str, int, str], FactionSnapshot]:
@@ -442,7 +451,10 @@ def _build_display_safe_social_events(
             else _display_safe_text(event.faction_key, max_chars=80)
         )
         payload_summary = _safe_payload_summary(event.payload_json)
-        event_type = _display_safe_text(event.event_type.replace("_", " "), max_chars=60)
+        event_type = _display_safe_text(
+            _social_event_display_type(event.event_type),
+            max_chars=60,
+        )
         branch_title = branch_titles.get(event.branch_id, "worldline")
         summary_parts = [
             f"{faction_label} triggered {event_type}",
@@ -566,6 +578,8 @@ async def _generate_headline_cards(
     )
     prompt = (
         "Generate display-safe headline cards for a SwarmOracle social feed.\n"
+        "Compatibility note: the legacy confidence field is faction member share, "
+        "not model certainty or statistical confidence.\n"
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         f"{question_block}\n"
         f"{events_block}\n"
@@ -576,6 +590,8 @@ async def _generate_headline_cards(
     )
     try:
         context_api_key = provider_policy.get("llm_api_key")
+        context_base_url = provider_policy.get("llm_base_url")
+        context_model = provider_policy.get("llm_model")
         recovered_profile_overrides = None
         with Session(get_engine()) as session:
             recovered_profile_overrides = recover_profile_provider_overrides(
@@ -585,6 +601,8 @@ async def _generate_headline_cards(
         request_overrides = merge_profile_provider_overrides(
             {
                 "api_key": context_api_key if isinstance(context_api_key, str) else None,
+                "base_url": context_base_url if isinstance(context_base_url, str) else None,
+                "model": context_model if isinstance(context_model, str) else None,
             },
             recovered_profile_overrides,
             include_quota_user_id=True,
@@ -593,6 +611,8 @@ async def _generate_headline_cards(
             scenario,
             recovered_profile_overrides,
             explicit_api_key=context_api_key,
+            explicit_base_url=context_base_url,
+            explicit_model=context_model,
         ):
             return "deterministic", _deterministic_headline_cards(events)
         effective_llm = resolve_post_completion_llm_call_config(
@@ -703,7 +723,7 @@ async def _generate_social_copy(
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
-        if not req.llm_api_key:
+        if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 

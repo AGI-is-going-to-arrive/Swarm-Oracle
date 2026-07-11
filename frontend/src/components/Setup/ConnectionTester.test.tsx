@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ConnectionTester } from './ConnectionTester';
+import { ConnectionTester, type TesterStatus } from './ConnectionTester';
 import { testLlmConnection, probeNativeSearch } from '../../api/client';
 
 vi.mock('react-i18next', () => ({
@@ -24,6 +24,141 @@ afterEach(() => {
 });
 
 describe('ConnectionTester', () => {
+  it('restores a verified display for the same inputs after remount', async () => {
+    const onStatusChange = vi.fn<(status: TesterStatus) => void>();
+
+    render(
+      <ConnectionTester
+        baseUrl="http://localhost:11434/v1"
+        apiKey=""
+        model="llama3.2"
+        initiallyVerified
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('setup.test_success');
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('success'));
+  });
+
+  it('reports idle, testing, and success for the current tested inputs', async () => {
+    let resolveTest: (value: unknown) => void = () => {};
+    vi.mocked(testLlmConnection).mockReturnValue(new Promise((resolve) => {
+      resolveTest = resolve;
+    }) as unknown as ReturnType<typeof testLlmConnection>);
+    const onStatusChange = vi.fn<(status: TesterStatus) => void>();
+    const user = userEvent.setup();
+
+    render(
+      <ConnectionTester
+        baseUrl="http://127.0.0.1:11434/v1"
+        apiKey=""
+        model="llama3.2"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    expect(onStatusChange).toHaveBeenLastCalledWith('idle');
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('testing'));
+
+    await act(async () => {
+      resolveTest({ server: 'ok', llm: { status: 'ok', response: 'local model ready' } });
+    });
+
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('success'));
+  });
+
+  it('reports error when the current connection test fails', async () => {
+    let resolveTest: (value: unknown) => void = () => {};
+    vi.mocked(testLlmConnection).mockReturnValue(new Promise((resolve) => {
+      resolveTest = resolve;
+    }) as unknown as ReturnType<typeof testLlmConnection>);
+    const onStatusChange = vi.fn<(status: TesterStatus) => void>();
+    const user = userEvent.setup();
+
+    render(
+      <ConnectionTester
+        baseUrl="https://api.example.com/v1"
+        apiKey="bad-key"
+        model="bad-model"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('testing'));
+    await act(async () => {
+      resolveTest({ server: 'ok', llm: { status: 'error', error: 'invalid credentials' } });
+    });
+
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('error'));
+  });
+
+  it('resets to idle and never reports stale success after tested inputs change', async () => {
+    let resolveTest: (value: unknown) => void = () => {};
+    vi.mocked(testLlmConnection).mockReturnValue(new Promise((resolve) => {
+      resolveTest = resolve;
+    }) as unknown as ReturnType<typeof testLlmConnection>);
+    const onStatusChange = vi.fn<(status: TesterStatus) => void>();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ConnectionTester
+        baseUrl="https://api.example.com/v1"
+        apiKey="first-key"
+        model="first-model"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('testing'));
+    rerender(
+      <ConnectionTester
+        baseUrl="https://api.example.com/v1"
+        apiKey="second-key"
+        model="second-model"
+        onStatusChange={onStatusChange}
+      />,
+    );
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('idle'));
+    onStatusChange.mockClear();
+
+    await act(async () => {
+      resolveTest({ server: 'ok', llm: { status: 'ok', response: 'stale success' } });
+    });
+
+    expect(onStatusChange).not.toHaveBeenCalledWith('success');
+  });
+
+  it('does not report a late success after unmount', async () => {
+    let resolveTest: (value: unknown) => void = () => {};
+    vi.mocked(testLlmConnection).mockReturnValue(new Promise((resolve) => {
+      resolveTest = resolve;
+    }) as unknown as ReturnType<typeof testLlmConnection>);
+    const onStatusChange = vi.fn<(status: TesterStatus) => void>();
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <ConnectionTester
+        baseUrl="https://api.example.com/v1"
+        apiKey="key"
+        model="model"
+        onStatusChange={onStatusChange}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'setup.test_button' }));
+    await waitFor(() => expect(onStatusChange).toHaveBeenLastCalledWith('testing'));
+    unmount();
+    onStatusChange.mockClear();
+
+    await act(async () => {
+      resolveTest({ server: 'ok', llm: { status: 'ok', response: 'late success' } });
+    });
+
+    expect(onStatusChange).not.toHaveBeenCalled();
+  });
+
   it('treats the backend nested llm ok response as success', async () => {
     vi.mocked(testLlmConnection).mockResolvedValue({
       server: 'ok',

@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -519,42 +520,40 @@ async function runSurface(mode, viewport, args, outputDir) {
   const baseUrl = args.baseUrl;
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), locale: "en-US" });
-  await context.addInitScript(() => {
-    window.localStorage.setItem("swarm-ui-preferences", JSON.stringify({
-      state: { resultViewMode: "reader" },
-      version: 0,
-    }));
-  });
-  const page = await context.newPage();
-
-  await installFixtures(page);
-
   const allResults = { mode, browser: args.browser, viewport, tests: {}, error: null };
-
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
-    allResults.tests.resumeVisible = await testResumePanelVisible(page, baseUrl, outputDir);
-    allResults.tests.resultGraphs = await testResultGraphIntegrations(page, baseUrl, outputDir);
-    allResults.tests.resumeSubmit = await testResumeSubmitSuccess(page, baseUrl, outputDir);
-    allResults.tests.resume429 = await testResume429Error(page, baseUrl, outputDir);
-  } catch (err) {
-    allResults.error = err instanceof Error ? err.message : String(err);
-    allResults.tests.fatal = finalizeTestResult({
-      steps: [
-        {
-          name: "fatal-error",
-          passed: false,
-          details: allResults.error,
-        },
-      ],
-      passed: false,
+    const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), locale: "en-US" });
+    await context.addInitScript(() => {
+      window.localStorage.setItem("swarm-ui-preferences", JSON.stringify({
+        state: { resultViewMode: "reader" },
+        version: 0,
+      }));
     });
-    await saveScreenshot(page, path.join(outputDir, "crash.png"));
+    const page = await context.newPage();
+    await installFixtures(page);
+
+    try {
+      allResults.tests.resumeVisible = await testResumePanelVisible(page, baseUrl, outputDir);
+      allResults.tests.resultGraphs = await testResultGraphIntegrations(page, baseUrl, outputDir);
+      allResults.tests.resumeSubmit = await testResumeSubmitSuccess(page, baseUrl, outputDir);
+      allResults.tests.resume429 = await testResume429Error(page, baseUrl, outputDir);
+    } catch (err) {
+      allResults.error = err instanceof Error ? err.message : String(err);
+      allResults.tests.fatal = finalizeTestResult({
+        steps: [
+          {
+            name: "fatal-error",
+            passed: false,
+            details: allResults.error,
+          },
+        ],
+        passed: false,
+      });
+      await saveScreenshot(page, path.join(outputDir, "crash.png"));
+    }
   } finally {
-    await page.close().catch(() => {});
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await closePlaywrightBrowser(browser, `e2e-phase3-batch-c:${mode}:${args.browser}`);
   }
 
   allResults.summary = summarizeResults(allResults.tests, allResults.error);

@@ -223,6 +223,29 @@ async def test_uniform_neutral_yields_low_drift_score():
 
 
 @pytest.mark.asyncio
+async def test_metadata_unavailable_is_not_counted_as_emotion_or_volatility():
+    scenario_id = _seed_scenario()
+    agent_id = _seed_agent(scenario_id, persona="balanced observer")
+    _branch_id, round_id = _seed_branch_with_round(scenario_id)
+    _seed_messages(
+        round_id,
+        agent_id,
+        [
+            "calm",
+            "__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+            "calm",
+        ],
+    )
+
+    with Session(get_engine()) as session:
+        result = await detect_personality_drift(scenario_id, session)
+
+    report = result[0]
+    assert report["drift_score"] < 0.2
+    assert "__swarmoracle_metadata_unavailable__" not in " ".join(report["evidence"])
+
+
+@pytest.mark.asyncio
 async def test_extreme_emotion_shift_yields_high_drift_score():
     user_id = "user-2"
     scenario_id = _seed_scenario(user_id=user_id)

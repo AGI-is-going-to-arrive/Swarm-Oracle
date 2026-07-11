@@ -477,6 +477,48 @@ def test_export_includes_branches_agents_messages():
     assert messages[0]["round_number"] <= messages[1]["round_number"]
 
 
+def test_metadata_unavailable_message_round_trips_without_public_sentinel():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    agent_id, _ = _seed_agents(scenario_id)
+    with Session(get_engine()) as session:
+        round_row = Round(branch_id=root_id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        session.add(
+            AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent_id,
+                content="Speech survives metadata failure.",
+                emotion="__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+            )
+        )
+        session.commit()
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        message_payload = json.loads(zf.read("messages.jsonl").decode("utf-8"))
+    assert message_payload["emotion"] == ""
+    assert message_payload["emotion_metadata_status"] == "unavailable"
+    assert message_payload["emotion_metadata_failure_code"] == "LLM_TIMEOUT"
+    assert "__swarmoracle_metadata_unavailable__" not in str(message_payload)
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "importer-metadata", session)
+        imported_message = session.exec(
+            select(AgentMessage)
+            .join(Round, AgentMessage.round_id == Round.id)
+            .join(Branch, Round.branch_id == Branch.id)
+            .where(Branch.scenario_id == imported_id)
+        ).one()
+    assert imported_message.content == "Speech survives metadata failure."
+    assert imported_message.emotion == (
+        "__swarmoracle_metadata_unavailable__:LLM_TIMEOUT"
+    )
+
+
 def test_export_includes_causal_graph_nodes_and_edges():
     scenario_id = _seed_scenario(api_key_in_context=False)
     root_id, _ = _seed_branch_tree(scenario_id)
@@ -643,7 +685,7 @@ def test_export_scrubs_credentials_from_free_text_without_changing_normal_conten
                 round_id=round_row.id,
                 agent_id=agent.id,
                 content="Ordinary message; Bearer message-token-123456",
-                emotion="calm",
+                emotion="calm api_key=sk-emotion-secret-123456",
                 diverge="Ordinary divergence api-key=sk-diverge-secret-123456",
             )
         )
@@ -694,6 +736,7 @@ def test_export_scrubs_credentials_from_free_text_without_changing_normal_conten
     assert agent_payload["role"] == "Ordinary role"
     assert agent_payload["persona"] == "Ordinary persona with [redacted-key]"
     assert message_payload["content"] == "Ordinary message; [redacted-bearer]"
+    assert message_payload["emotion"] == "calm api key [redacted]"
     assert message_payload["diverge"] == "Ordinary divergence api key [redacted]"
     assert intervention_payload["user_input"] == (
         "Ordinary intervention api key [redacted]"

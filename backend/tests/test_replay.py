@@ -424,6 +424,32 @@ class TestTokenize:
 
 
 class TestCompareBranches:
+    def test_metadata_unavailable_is_publicly_projected_without_sentinel(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid_a = _seed_branch(engine, sid, title="Branch A")
+        bid_b = _seed_branch(engine, sid, title="Branch B")
+        aid = _seed_agent(engine, sid)
+        round_a = _seed_round(engine, bid_a, 1)
+        round_b = _seed_round(engine, bid_b, 1)
+        _seed_message(
+            engine,
+            round_a,
+            aid,
+            content="Speech without metadata",
+            emotion="__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+        )
+        _seed_message(engine, round_b, aid, content="Known emotion", emotion="calm")
+
+        result = compare_branches(sid, bid_a, bid_b)
+
+        message = result["rounds"][0]["branch_a_messages"][0]
+        assert message["content"] == "Speech without metadata"
+        assert message["emotion"] == ""
+        assert message["emotion_metadata_status"] == "unavailable"
+        assert message["emotion_metadata_failure_code"] == "LLM_TIMEOUT"
+        assert "__swarmoracle_metadata_unavailable__" not in str(message)
+
     def test_returns_per_round_diff(self):
         """compare_branches should return per-round comparison with divergence scores."""
         engine = get_engine()

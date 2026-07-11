@@ -43,7 +43,27 @@ jobs:
             tests/test_parser.py \
             tests/test_contract_freeze_v2.py \
             tests/test_metrics.py \
+            tests/test_infra_config.py \
             tests/test_config.py \
+            tests/test_simulator.py \
+            tests/test_llm_provider_protocol.py \
+            tests/test_llm_client.py \
+            tests/test_llm_resolution.py \
+            tests/test_model_profiles.py \
+            tests/test_agent_identity.py \
+            tests/test_vector_store.py \
+            tests/test_wave1_agent_state.py \
+            tests/test_scoring.py \
+            tests/test_conversation.py \
+            tests/test_ending_room_api.py \
+            tests/test_social.py \
+            tests/test_p0_wiring.py \
+            tests/test_causal_graph.py \
+            tests/test_factions.py \
+            tests/test_result_report_reducer.py \
+            tests/test_result_report_builder.py \
+            tests/test_result_report_contract.py \
+            tests/test_local_packs.py \
             tests/test_predictions.py \
             tests/test_card_events.py \
             tests/test_gameplay_contract_sync.py \
@@ -71,6 +91,9 @@ jobs:
       - name: Check asset provenance
         run: npm run assets:provenance:check
 
+      - name: Type-check frontend project references
+        run: npx tsc -b
+
       - name: Build frontend
         run: npm run build
 
@@ -93,6 +116,24 @@ jobs:
             src/pages/InputView.test.tsx \
             src/pages/SimulationView.test.tsx \
             src/pages/ResultView.test.tsx \
+            src/pages/result/ResultReportPanel.test.tsx \
+            src/pages/result/ReportSection.test.tsx \
+            src/pages/result/SocialFeedPanel.test.tsx \
+            src/pages/result/ReportConfidenceBadge.test.tsx \
+            src/lib/agentProfileObservation.test.ts \
+            src/components/result/AgentProfileSheet.test.tsx \
+            src/lib/resultReportSse.test.ts \
+            src/lib/llmProviderPolicy.test.ts \
+            src/lib/localPackImport.test.ts \
+            src/pages/SetupWizardView.test.tsx \
+            src/components/Setup/ConnectionTester.test.tsx \
+            src/components/ModelProfileManager.test.tsx \
+            src/components/DocumentSeedPanel.test.tsx \
+            src/components/LocalPackPicker.test.tsx \
+            src/components/CounterfactualPanel.test.tsx \
+            src/components/FactionTimeline.test.tsx \
+            src/components/FactionForceGraph.test.tsx \
+            src/scripts/releaseSignoff.test.ts \
             src/components/GameplayCardsModal.test.tsx \
             src/pages/DebateArenaView.test.tsx \
             src/pages/DebateResultView.test.tsx \
@@ -130,9 +171,8 @@ jobs:
       - name: Exercise cross-platform release signoff dry run
         run: |
           node scripts/release-signoff.mjs --dry-run --skip-backend-checks --skip-assets-check --headless --output-root output/e2e/cross-platform-release-smoke
-          node --input-type=module -e "import { closePlaywrightBrowser } from './scripts/playwrightTeardown.mjs'; const browser = { contexts: () => [], close: async () => { throw new Error('ci teardown smoke'); } }; const closed = await closePlaywrightBrowser(browser, 'ci teardown smoke', 1); if (closed) process.exit(1);"
+          node --input-type=module -e "import { closePlaywrightBrowser } from './scripts/playwrightTeardown.mjs'; const browser = { contexts: () => [], close: async () => { throw new Error('ci teardown smoke'); } }; let rejected = false; try { await closePlaywrightBrowser(browser, 'ci teardown smoke', 1); } catch (error) { rejected = error instanceof AggregateError; } if (!rejected) throw new Error('teardown failure was swallowed');"
 
       - name: Run frontend script unit smoke
         run: |
-          node --test scripts/e2e-frontend-preflight.test.mjs
-          node --test scripts/e2eFixtureNet.test.mjs
+          node --test scripts/playwrightTeardown.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2eFixtureNet.test.mjs

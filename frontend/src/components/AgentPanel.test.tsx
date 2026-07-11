@@ -65,6 +65,7 @@ vi.mock('react-i18next', () => ({
         'sim.panel.worldline_group': `世界线：${vars?.title ?? ''}`,
         'sim.panel.worldline_round_range': `R${vars?.start ?? ''}-R${vars?.end ?? ''}`,
         'sim.panel.view_agent_profile': `查看 ${vars?.name ?? ''} 的档案`,
+        'sim.panel.emotion_metadata_unavailable': '情绪元数据不可用',
       };
       return labels[key] ?? key;
     },
@@ -91,6 +92,25 @@ beforeEach(() => {
 });
 
 describe('AgentPanel', () => {
+  it('labels unavailable message emotion instead of rendering it as neutral', () => {
+    mockState.messages = [{
+      agent: '周鸿祎',
+      agent_id: 'zhou',
+      branch: 'alpha',
+      round: 6,
+      emotion: '',
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: 'LLM_TIMEOUT',
+      message: '真实发言仍然保留。',
+    } as AgentMessage];
+
+    render(<AgentPanel />);
+
+    const unavailable = screen.getByText('情绪元数据不可用');
+    expect(unavailable).toBeInTheDocument();
+    expect(unavailable.closest('.bubble-header')?.querySelector('.emotion-dot')).toBeNull();
+  });
+
   it('opens an explicit profile action without changing the message filter', async () => {
     const onViewProfile = vi.fn();
     render(<AgentPanel onViewProfile={onViewProfile} />);

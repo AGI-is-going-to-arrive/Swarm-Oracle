@@ -148,6 +148,16 @@
   --bubble-aa-accent: #5f584e;
 }
 
+.bubble-overlay__bubble--emotion-unavailable {
+  --bubble-aa-accent: #9f2442;
+  border-style: double;
+}
+
+.bubble-overlay__bubble--emotion-unknown {
+  --bubble-aa-accent: #667085;
+  border-style: dotted;
+}
+
 .bubble-overlay__sr-only {
   position: absolute;
   inline-size: 1px;

@@ -230,6 +230,44 @@ describe('ReplayView — data path', () => {
     expect(Array.from(select.options).map((option) => option.value)).toContain('b1');
   });
 
+  it('labels unavailable emotion metadata without inventing a neutral emotion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) return jsonResponse({ nodes: [], next_cursor: null });
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [
+            {
+              id: 'n-unavailable',
+              key: 'k-unavailable',
+              type: 'stance',
+              label: 'Agent A speaks',
+              round: 2,
+              payload: {
+                agent_id: 'a1',
+                agent_name: 'Agent A',
+                branch_id: 'b1',
+                content: 'The real first-pass response remains visible.',
+                emotion: null,
+                emotion_metadata_status: 'unavailable',
+                emotion_metadata_failure_code: 'LLM_RATE_LIMIT',
+              },
+            },
+          ],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/metadata-unavailable?branch=b1');
+
+    expect(await screen.findByText('Emotion metadata unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('neutral')).not.toBeInTheDocument();
+    expect(screen.getByText('The real first-pass response remains visible.')).toBeInTheDocument();
+  });
+
   it('renders empty state when fetch errors (network failure)', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
 

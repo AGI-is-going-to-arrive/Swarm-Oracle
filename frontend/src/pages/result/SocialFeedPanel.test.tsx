@@ -30,7 +30,7 @@ i18n.init({
           retry: 'Retry',
           mode_deterministic: 'Deterministic',
           event_round: 'Round {{round}}',
-          confidence_label: 'Confidence',
+          confidence_label: 'Group share',
           share_headline: 'Social Feed Headline',
           share_download: 'Download Headline Card',
           share_copy: 'Copy Headline Card',
@@ -178,7 +178,8 @@ describe('SocialFeedPanel', () => {
     expect(screen.getByText('PORTS BLOCKED!')).toBeInTheDocument();
     expect(screen.getByText('Trade comes to a grinding halt.')).toBeInTheDocument();
     expect(screen.getByText('Military forces have established a blockade around the main harbor.')).toBeInTheDocument();
-    expect(screen.getByText('Confidence: 90%')).toBeInTheDocument();
+    expect(screen.getByText('Group share: 90%')).toBeInTheDocument();
+    expect(screen.queryByText('Confidence: 90%')).not.toBeInTheDocument();
   });
 
   it('renders deterministic badge when generation_mode is deterministic', async () => {

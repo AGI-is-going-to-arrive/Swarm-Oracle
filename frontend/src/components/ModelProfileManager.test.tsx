@@ -173,6 +173,39 @@ describe('ModelProfileManager', () => {
     });
   });
 
+  it('allows an exact-local model profile to be created without an api key', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    createModelProfileMock.mockResolvedValue({ ...mockProfiles[1], id: 'local-new' });
+
+    render(<ModelProfileManager />);
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.add_profile' }));
+    fireEvent.change(screen.getByLabelText('model_profiles.provider'), {
+      target: { value: 'ollama' },
+    });
+    fireEvent.change(screen.getByLabelText('model_profiles.profile_name'), {
+      target: { value: 'Local Ollama' },
+    });
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), {
+      target: { value: 'llama3.2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(createModelProfileMock).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'ollama',
+        base_url: 'http://localhost:11434/v1',
+        model: 'llama3.2',
+        api_key: undefined,
+      }));
+    });
+  });
+
   it('supports three-state select roundtrip for supports fields', async () => {
     useCapabilityCheckMock.mockReturnValue({
       enabled: true,
@@ -409,6 +442,10 @@ describe('ModelProfileManager', () => {
 
     // Clear base_url to satisfy validation
     fireEvent.change(screen.getByLabelText('model_profiles.base_url'), { target: { value: '' } });
+    // Endpoint changes invalidate the old provider-bound model as well. Re-entering
+    // it makes the new keyless/server-default binding explicit before saving.
+    expect(screen.getByLabelText('model_profiles.model')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), { target: { value: 'gpt-4o' } });
 
     // Submit
     const saveBtn = screen.getByRole('button', { name: 'model_profiles.save' });
@@ -416,8 +453,65 @@ describe('ModelProfileManager', () => {
 
     await waitFor(() => {
       expect(patchModelProfileMock).toHaveBeenCalledWith('profile-1', expect.objectContaining({
-        api_key: '',
         base_url: '',
+        model: 'gpt-4o',
+      }));
+    });
+    const patchPayload = patchModelProfileMock.mock.calls[0]?.[1];
+    // Changing the endpoint invalidates the old server-side credential atomically;
+    // the write-only secret must never be echoed back into this request.
+    expect(patchPayload).not.toHaveProperty('api_key');
+  });
+
+  it('clears provider-bound fields when an edited profile switches provider', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      enabled: true,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    listModelProfilesMock.mockResolvedValue({ profiles: [mockProfiles[0]], count: 1 });
+    patchModelProfileMock.mockResolvedValue({ ...mockProfiles[0], provider: 'deepseek' });
+
+    render(<ModelProfileManager />);
+    await screen.findByText('OpenAI GPT-4o');
+    fireEvent.click(screen.getByRole('button', { name: /Edit/ }));
+
+    fireEvent.change(screen.getByLabelText('model_profiles.provider'), {
+      target: { value: 'deepseek' },
+    });
+
+    expect(screen.getByLabelText('model_profiles.base_url')).toHaveValue(
+      'https://api.deepseek.com/v1',
+    );
+    expect(screen.getByLabelText('model_profiles.model')).toHaveValue('');
+    expect(screen.getByLabelText('model_profiles.api_key')).toHaveValue('');
+    expect(screen.getByLabelText('model_profiles.rpm')).toHaveValue(null);
+    expect(screen.getByLabelText('model_profiles.tpm')).toHaveValue(null);
+    expect(screen.getByLabelText('model_profiles.concurrency')).toHaveValue('');
+    expect(screen.getByLabelText('model_profiles.supports_structured_outputs')).toHaveValue('auto');
+    expect(screen.getByLabelText('model_profiles.supports_native_search')).toHaveValue('auto');
+
+    fireEvent.change(screen.getByLabelText('model_profiles.model'), {
+      target: { value: 'deepseek-chat' },
+    });
+    fireEvent.change(screen.getByLabelText('model_profiles.api_key'), {
+      target: { value: 'deepseek-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'model_profiles.save' }));
+
+    await waitFor(() => {
+      expect(patchModelProfileMock).toHaveBeenCalledWith('profile-1', expect.objectContaining({
+        provider: 'deepseek',
+        base_url: 'https://api.deepseek.com/v1',
+        model: 'deepseek-chat',
+        api_key: 'deepseek-key',
+        rpm: null,
+        tpm: null,
+        concurrency: null,
+        supports_structured_outputs: null,
+        supports_native_search: null,
+        native_search_upstream: 'auto',
       }));
     });
   });

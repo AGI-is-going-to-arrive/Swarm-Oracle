@@ -98,6 +98,32 @@ def test_create_debate_returns_immediately_and_schedules_background(
     assert scheduled["count"] == 1
 
 
+def test_create_debate_allows_local_base_url_without_key(
+    client: TestClient,
+    monkeypatch,
+):
+    scheduled = {"count": 0}
+
+    def _capture_schedule(coro):
+        scheduled["count"] += 1
+        coro.close()
+        return None
+
+    monkeypatch.setattr(debate_api, "schedule_background_task", _capture_schedule)
+
+    response = client.post(
+        "/api/debate",
+        json={
+            "question": "Can a local model debate without a key?",
+            "llm_base_url": "http://localhost:1234/v1",
+            "llm_model": "local-model",
+        },
+    )
+
+    assert response.status_code == 200
+    assert scheduled["count"] == 1
+
+
 def test_create_debate_explicit_language_overrides_question_detection(
     client: TestClient,
     monkeypatch,

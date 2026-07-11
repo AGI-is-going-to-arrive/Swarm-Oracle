@@ -20,7 +20,7 @@
 | Docker 本机部署 | 视用途 | 默认只发布到 `127.0.0.1:18927` / `127.0.0.1:18928` |
 | 生产或公网部署 | 是 | 还必须配置生产安全门禁 |
 
-占位 endpoint 和占位 key 能启动 Snapshot 演示，但会让 `llm_static_configured=false`。只有同时没有带 key 的 model profile、且本轮未提供 BYOK 时，才不能开始实时生成。
+占位 endpoint 和占位 key 能启动 Snapshot 演示，但会让 `llm_static_configured=false`。实时生成还可以由可用 model profile 或本轮 BYOK 解锁；可用 profile 包括“带 key”或“精确本地 Base URL + 模型 ID”两种，不能再按旧的 key-only 条件判断。
 
 ## 3. LLM 配置
 
@@ -29,7 +29,7 @@
 | 变量 | `.env.example` 默认 | 含义 |
 |---|---|---|
 | `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | OpenAI-compatible Base URL |
-| `LLM_API_KEY` | `your-api-key-here` | 占位 key；非本地 endpoint 必须换成真实 key |
+| `LLM_API_KEY` | `your-api-key-here` | 占位 key；精确本地 endpoint 可清空，非本地 endpoint 必须换成真实 key |
 | `LLM_MODEL_NAME` | `gpt-5.4-mini` | provider 的实际模型 ID |
 | `LLM_REASONING_EFFORT` | `none` | `none/low/medium/high` |
 | `LLM_REQUESTS_PER_MINUTE` | `0` | `0` 表示不设置 RPM 限制 |
@@ -40,17 +40,19 @@
 
 服务端默认模型由以上变量决定。不要把某台机器的临时模型名、地址或 key 写成项目默认。模型 ID 必须由你的 provider 实际支持。
 
+免 key 只匹配 host 恰好为 `localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal` 或 `::1` 的 `http/https` URL（IPv6 URL 写成 `[::1]`）。使用这些地址并将 key 留空时，请求不会发送 `Authorization`；相似子域名、带 userinfo 的 URL、数字/十六进制/八进制 loopback 写法和其它远端 host 都不会被视为本地，仍必须提供真实 key。为避免把模板误报成可用模型，随附的 `127.0.0.1:8317` / `localhost:8317` / `host.docker.internal:8317` 与空值或占位 key 组合仍判为未配置；请改成实际服务地址，或通过 Setup/profile 明确保存该连接。
+
 ## 4. Model Profile 与 BYOK
 
-`/admin/setup` 可测试连接并保存 model profile；`/model-profiles` 可管理 provider、Base URL、模型、key、限速、并发和能力覆盖。带 key 的 profile 会参与 `llm_configured` 判断。
+`/admin/setup` 可测试连接并保存 model profile；`/model-profiles` 可管理 provider、Base URL、模型、key、限速、并发和能力覆盖。带 key 的 profile 与“精确本地 Base URL + 模型 ID”的免 key profile 都会参与 `llm_configured` 判断。Setup 只有在当前端点/key/模型组合验证成功，或用户明确接受未验证风险后才能完成；修改连接字段会清除旧验证。
 
-首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。BYOK 只覆盖当前请求；高级设置负责推演、显示、主题包和搜索选项。请求级 Base URL 必须与 API key 一起提交，不能把凭据放进 URL。
+首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。BYOK 只覆盖当前请求；高级设置负责推演、显示、主题包和搜索选项。请求级远端 Base URL 必须与 API key 一起提交；上述精确本地 Base URL 是唯一免 key 例外。凭据、端点和模型属于同一个 provider 绑定：profile-backed 场景的报告、对话、评分、社交文案和续跑要么不提交 provider 字段并恢复原 profile，要么提交完整的远端 `key + Base URL + model`；partial override 会 fail-closed。精确本地覆盖仍只需 `Base URL + model`。任何新端点或新模型都会解绑旧 profile，并清除旧 RPM/TPM、并发、结构化输出和原生搜索策略，必须为新绑定显式重新设置。切换 Debate 角色 profile 同样会清除旧 provider 的显式模型、凭据和速率覆盖。不能把凭据放进 URL。
 
 请求级 BYOK 的 host 控制：
 
 - `LLM_EXTRA_ALLOWED_HOSTS`：额外 host 白名单，只接受 host，不接受完整 URL。
 - `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`：默认拒绝通过额外白名单加入的 private/LAN host；它不控制内置本地别名。
-- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true`：控制 `localhost`、loopback 等内置本地别名；多用户、LAN 或公网部署应改为 `false`。
+- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true`：控制上述精确本地 host；多用户、LAN 或公网部署应改为 `false`。
 
 完整 SSRF 与凭据边界见 [SECURITY.md](../SECURITY.md)。
 

@@ -16,6 +16,10 @@ from app.models import (
     FactionSnapshot,
     Round,
 )
+from app.services.agent_message_metadata import (
+    METADATA_UNAVAILABLE_EMOTION_PREFIX,
+    public_emotion_metadata,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,19 @@ class LatestRelationStats:
     count: int
     avg_opposition: float | None
     max_opposition: float | None
+
+
+@dataclass(frozen=True)
+class LatestMessageMetadataCoverage:
+    round_number: int | None
+    total_count: int
+    unavailable_count: int
+
+
+@dataclass(frozen=True)
+class LatestFactionProxyRounds:
+    snapshot_round: int | None
+    relation_round: int | None
 
 
 def load_evidence_message_coords(
@@ -210,6 +227,9 @@ def _message_coord_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         emotion,
         diverge,
     ) = row
+    message_projection = public_emotion_metadata({"emotion": emotion})
+    if message_projection.get("emotion_metadata_status") == "unavailable":
+        message_projection["emotion"] = None
     return {
         "branch_id": row_branch_id,
         "round_id": round_id,
@@ -218,7 +238,7 @@ def _message_coord_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "agent_name": agent_name or "Unknown",
         "message_id": message_id,
         "content": content,
-        "emotion": emotion,
+        **message_projection,
         "diverge": diverge,
         "tier": getattr(agent_tier, "value", "") if agent_tier is not None else "",
         "role": agent_role or "",
@@ -261,7 +281,100 @@ def _key_moment_condition(key_moments: list[str]):
 
 def _has_non_neutral_emotion():
     emotion = func.lower(func.trim(func.coalesce(AgentMessage.emotion, "")))
-    return and_(emotion != "", emotion != "neutral")
+    return and_(
+        emotion != "",
+        emotion != "neutral",
+        func.substr(
+            emotion,
+            1,
+            len(METADATA_UNAVAILABLE_EMOTION_PREFIX),
+        ) != METADATA_UNAVAILABLE_EMOTION_PREFIX,
+    )
+
+
+def count_metadata_unavailable_messages(
+    engine,
+    branch_id: str,
+    round_number: int,
+) -> int:
+    emotion = func.lower(func.trim(func.coalesce(AgentMessage.emotion, "")))
+    with Session(engine) as session:
+        count = session.exec(
+            select(func.count(AgentMessage.id))
+            .join(Round, AgentMessage.round_id == Round.id)
+            .where(
+                Round.branch_id == branch_id,
+                Round.round_number == round_number,
+                func.substr(
+                    emotion,
+                    1,
+                    len(METADATA_UNAVAILABLE_EMOTION_PREFIX),
+                ) == METADATA_UNAVAILABLE_EMOTION_PREFIX,
+            )
+        ).one()
+    return int(count or 0)
+
+
+def load_latest_message_metadata_coverage(
+    engine,
+    branch_id: str,
+) -> LatestMessageMetadataCoverage:
+    emotion = func.lower(func.trim(func.coalesce(AgentMessage.emotion, "")))
+    unavailable = (
+        func.substr(
+            emotion,
+            1,
+            len(METADATA_UNAVAILABLE_EMOTION_PREFIX),
+        ) == METADATA_UNAVAILABLE_EMOTION_PREFIX
+    )
+    with Session(engine) as session:
+        latest_round = session.exec(
+            select(func.max(Round.round_number))
+            .join(AgentMessage, AgentMessage.round_id == Round.id)
+            .where(Round.branch_id == branch_id)
+        ).one()
+        if latest_round is None:
+            return LatestMessageMetadataCoverage(None, 0, 0)
+        total_count, unavailable_count = session.exec(
+            select(
+                func.count(AgentMessage.id),
+                func.sum(case((unavailable, 1), else_=0)),
+            )
+            .join(Round, AgentMessage.round_id == Round.id)
+            .where(
+                Round.branch_id == branch_id,
+                Round.round_number == int(latest_round),
+            )
+        ).one()
+    return LatestMessageMetadataCoverage(
+        int(latest_round),
+        int(total_count or 0),
+        int(unavailable_count or 0),
+    )
+
+
+def load_latest_faction_proxy_rounds(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+) -> LatestFactionProxyRounds:
+    with Session(engine) as session:
+        snapshot_round = session.exec(
+            select(func.max(FactionSnapshot.round_number)).where(
+                FactionSnapshot.scenario_id == scenario_id,
+                FactionSnapshot.branch_id == branch_id,
+            )
+        ).one()
+        relation_round = session.exec(
+            select(func.max(AgentRelationEdge.round_number)).where(
+                AgentRelationEdge.scenario_id == scenario_id,
+                AgentRelationEdge.branch_id == branch_id,
+            )
+        ).one()
+    return LatestFactionProxyRounds(
+        snapshot_round=int(snapshot_round) if snapshot_round is not None else None,
+        relation_round=int(relation_round) if relation_round is not None else None,
+    )
 
 
 def _clamped_probability_expr(value):

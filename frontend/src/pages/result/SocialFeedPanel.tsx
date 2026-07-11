@@ -172,7 +172,7 @@ export default function SocialFeedPanel({ scenarioId }: SocialFeedPanelProps) {
                 >
                   <div className="social-headline-card__badge-row">
                     <span className="social-headline-card__faction">
-                      {card.faction_label || t('social_feed.confidence_label', 'Faction')}
+                      {card.faction_label || t('social_feed.faction_label', 'Faction')}
                     </span>
                     <span className="social-headline-card__branch">{card.branch_title}</span>
                   </div>

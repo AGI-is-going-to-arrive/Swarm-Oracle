@@ -53,6 +53,30 @@ function message(
 }
 
 describe('buildAgentProfileObservation', () => {
+  it('keeps coordinates but marks unavailable emotion metadata explicitly', () => {
+    const observation = buildAgentProfileObservation({
+      agent,
+      branches: [root],
+      messages: [message({
+        emotion: '',
+        emotion_metadata_status: 'unavailable',
+        emotion_metadata_failure_code: 'LLM_TIMEOUT',
+        branch: 'root',
+        round: 4,
+      } as Partial<AgentMessage> & Pick<AgentMessage, 'emotion' | 'branch' | 'round'>)],
+      selection: { kind: 'live' },
+    });
+
+    expect(observation).toMatchObject({
+      source: 'live',
+      emotion: null,
+      emotionMetadataStatus: 'unavailable',
+      emotionMetadataFailureCode: 'LLM_TIMEOUT',
+      branchId: 'root',
+      round: 4,
+    });
+  });
+
   it('selects the greatest live round even when payload order is not chronological', () => {
     const observation = buildAgentProfileObservation({
       agent,

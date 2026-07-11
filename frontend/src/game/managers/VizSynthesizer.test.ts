@@ -283,6 +283,33 @@ describe('VizSynthesizer — synthesizeBubbles', () => {
     cleanup();
   });
 
+  it('preserves unavailable metadata during replay without inventing neutral emotion', () => {
+    const dispatchSpy = vi.spyOn(EventBridge, 'dispatchVizEvent').mockImplementation(() => {});
+    const cleanup = synthesizeBubbles([
+      {
+        agent: 'King',
+        agent_id: 'a1',
+        message: 'Metadata failed but speech survived.',
+        emotion: '',
+        emotion_metadata_status: 'unavailable',
+        emotion_metadata_failure_code: 'LLM_TIMEOUT',
+        branch: 'b1',
+        round: 1,
+      },
+    ], mockAgents, 1, 100);
+
+    vi.advanceTimersByTime(100);
+
+    const bubbleCall = dispatchSpy.mock.calls.find(([type]) => type === 'viz:bubble_show');
+    expect(bubbleCall?.[1]).toMatchObject({
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: 'LLM_TIMEOUT',
+    });
+    expect(bubbleCall?.[1]).not.toHaveProperty('emotion');
+    expect(dispatchSpy).not.toHaveBeenCalledWith('viz:emotion_change', expect.anything());
+    cleanup();
+  });
+
   it('can render the latest visible bubbles immediately', () => {
     const dispatchSpy = vi.spyOn(EventBridge, 'dispatchVizEvent').mockImplementation(() => {});
 
@@ -298,6 +325,48 @@ describe('VizSynthesizer — synthesizeBubbles', () => {
     expect(dispatchSpy).toHaveBeenCalledWith(
       'viz:emotion_change',
       expect.objectContaining({ sprite_id: 'a1' }),
+    );
+  });
+
+  it('preserves unavailable metadata when replay is skipped', () => {
+    const dispatchSpy = vi.spyOn(EventBridge, 'dispatchVizEvent').mockImplementation(() => {});
+
+    synthesizeLatestBubbles([{
+      agent: 'King',
+      agent_id: 'a1',
+      message: 'Latest speech remains visible.',
+      emotion: '',
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: 'LLM_RATE_LIMITED',
+      branch: 'b1',
+      round: 2,
+    }], mockAgents);
+
+    const bubbleCall = dispatchSpy.mock.calls.find(([type]) => type === 'viz:bubble_show');
+    expect(bubbleCall?.[1]).toMatchObject({
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: 'LLM_RATE_LIMITED',
+    });
+    expect(bubbleCall?.[1]).not.toHaveProperty('emotion');
+    expect(dispatchSpy).not.toHaveBeenCalledWith('viz:emotion_change', expect.anything());
+  });
+
+  it('keeps a genuine neutral emotion neutral', () => {
+    const dispatchSpy = vi.spyOn(EventBridge, 'dispatchVizEvent').mockImplementation(() => {});
+
+    synthesizeLatestBubbles([{
+      agent: 'King',
+      agent_id: 'a1',
+      message: 'A genuinely neutral observation.',
+      emotion: 'neutral',
+      emotion_metadata_status: 'available',
+      branch: 'b1',
+      round: 2,
+    }], mockAgents);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      'viz:bubble_show',
+      expect.objectContaining({ emotion: 'neutral' }),
     );
   });
 });

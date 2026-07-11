@@ -70,6 +70,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine, get_session
+from app.services.agent_message_metadata import persisted_emotion_from_public_message
 from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import (
     _is_chat_completions_api,
@@ -78,6 +79,7 @@ from app.services.llm_client import (
     detect_provider,
     get_last_native_citations,
     health_check,
+    is_local_provider_url,
     llm_call,
     llm_request_scope,
     measure_provider_parallelism,
@@ -90,10 +92,11 @@ from app.services.llm_resolution import (
     model_profile_provider_unresolved,
     raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
+    resolve_post_completion_llm_call_config,
 )
 from app.services.model_profiles import (
     ResolvedProviderPolicy,
-    has_profile_with_api_key,
+    has_usable_model_profile,
     resolve_model_profile_policy,
 )
 from app.services.result_report import builder as result_report_builder
@@ -898,11 +901,11 @@ async def api_capabilities(
     profile_llm_configured = False
     if settings.FEATURE_MODEL_PROFILES:
         if isinstance(session, Session):
-            profile_llm_configured = has_profile_with_api_key(session, profile_user_id)
+            profile_llm_configured = has_usable_model_profile(session, profile_user_id)
         else:
             # Direct unit tests call this endpoint function without FastAPI DI.
             with Session(get_engine()) as fallback_session:
-                profile_llm_configured = has_profile_with_api_key(
+                profile_llm_configured = has_usable_model_profile(
                     fallback_session,
                     profile_user_id,
                 )
@@ -1243,7 +1246,7 @@ async def create_multi_run_scenarios(
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
-        if not req.llm_api_key:
+        if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 
@@ -1280,6 +1283,7 @@ async def create_multi_run_scenarios(
     resolved_supports_structured_outputs = None
     resolved_supports_native_search = None
     resolved_native_search_upstream = None
+    effective_model_profile_id: str | None = None
     if req.model_profile_id:
         with Session(engine) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -1303,6 +1307,7 @@ async def create_multi_run_scenarios(
         )
         resolved_supports_native_search = model_profile_policy.supports_native_search
         resolved_native_search_upstream = model_profile_policy.native_search_upstream
+        effective_model_profile_id = model_profile_policy.model_profile_id
 
     requested_run_count, accepted_run_count = _clamp_multi_run_count(req.run_count)
     run_group_id = str(uuid.uuid4())
@@ -1347,8 +1352,8 @@ async def create_multi_run_scenarios(
             }
             if effective_user_id:
                 scenario_parsed_context["user_id"] = effective_user_id
-            if req.model_profile_id:
-                scenario_parsed_context["model_profile_id"] = req.model_profile_id
+            if effective_model_profile_id:
+                scenario_parsed_context["model_profile_id"] = effective_model_profile_id
             if req.world_context is not None:
                 scenario_parsed_context["world_context"] = req.world_context.model_dump()
             scenario = Scenario(
@@ -1400,7 +1405,7 @@ async def create_multi_run_scenarios(
                     llm_api_key=resolved_llm_api_key,
                     llm_base_url=resolved_llm_base_url,
                     llm_model=resolved_llm_model,
-                    model_profile_id=req.model_profile_id,
+                    model_profile_id=effective_model_profile_id,
                     llm_requests_per_minute=resolved_llm_requests_per_minute,
                     llm_tokens_per_minute=resolved_llm_tokens_per_minute,
                     concurrency=resolved_concurrency,
@@ -1594,7 +1599,7 @@ async def create_scenario(
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
-        if not req.llm_api_key:
+        if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
 
@@ -1631,6 +1636,7 @@ async def create_scenario(
     resolved_supports_structured_outputs = None
     resolved_supports_native_search = None
     resolved_native_search_upstream = None
+    effective_model_profile_id: str | None = None
     if req.model_profile_id:
         with Session(engine) as session:
             model_profile_policy = resolve_model_profile_policy(
@@ -1654,6 +1660,7 @@ async def create_scenario(
         )
         resolved_supports_native_search = model_profile_policy.supports_native_search
         resolved_native_search_upstream = model_profile_policy.native_search_upstream
+        effective_model_profile_id = model_profile_policy.model_profile_id
 
     if req.continuity_overrides and not effective_user_id:
         raise api_error(
@@ -1716,8 +1723,8 @@ async def create_scenario(
             "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
         } if web_search_intensity_config else {}),
     }
-    if req.model_profile_id:
-        scenario_parsed_context["model_profile_id"] = req.model_profile_id
+    if effective_model_profile_id:
+        scenario_parsed_context["model_profile_id"] = effective_model_profile_id
     if req.world_context is not None:
         scenario_parsed_context["world_context"] = req.world_context.model_dump()
     # Campaign Phase 1: persist authoritative challenge/track context so that
@@ -1895,7 +1902,7 @@ async def create_scenario(
         llm_api_key=resolved_llm_api_key,
         llm_base_url=resolved_llm_base_url,
         llm_model=resolved_llm_model,
-        model_profile_id=req.model_profile_id,
+        model_profile_id=effective_model_profile_id,
         llm_requests_per_minute=resolved_llm_requests_per_minute,
         llm_tokens_per_minute=resolved_llm_tokens_per_minute,
         concurrency=resolved_concurrency,
@@ -2134,8 +2141,7 @@ async def import_replay_scenario(
                     round_id=round_id,
                     agent_id=mapped_agent_id,
                     content=_sanitize_replay_text(raw_message.get("message", "")).strip(),
-                    emotion=_sanitize_replay_text(raw_message.get("emotion", "")).strip()
-                    or "neutral",
+                    emotion=persisted_emotion_from_public_message(raw_message),
                 )
             )
 
@@ -2616,7 +2622,11 @@ async def generate_result_report(
             "LLM_BASE_URL_NOT_ALLOWED",
             "Provided llm_base_url is not in the allowed provider list",
         )
-    if request_body.llm_base_url and not request_body.llm_api_key:
+    if (
+        request_body.llm_base_url
+        and not request_body.llm_api_key
+        and not is_local_provider_url(validated_base_url)
+    ):
         raise api_error(
             400,
             "BYOK_API_KEY_REQUIRED",
@@ -2650,6 +2660,49 @@ async def generate_result_report(
         explicit_model=request_body.llm_model,
     ):
         raise_unresolved_model_profile_provider()
+    resolved_llm = resolve_post_completion_llm_call_config(
+        parsed_context=parsed_context,
+        request_api_key=overrides.get("api_key"),
+        request_base_url=overrides.get("base_url"),
+        request_model=overrides.get("model"),
+        request_requests_per_minute=overrides.get("requests_per_minute"),
+        request_tokens_per_minute=overrides.get("tokens_per_minute"),
+        request_concurrency=overrides.get("concurrency"),
+        request_supports_structured_outputs_override=overrides.get(
+            "supports_structured_outputs_override"
+        ),
+        request_supports_native_search_override=overrides.get(
+            "supports_native_search_override"
+        ),
+        request_native_search_upstream_override=overrides.get(
+            "native_search_upstream_override"
+        ),
+    )
+    overrides = {
+        "api_key": resolved_llm.api_key,
+        "base_url": resolved_llm.base_url,
+        "model": resolved_llm.model,
+        "requests_per_minute": resolved_llm.requests_per_minute,
+        "tokens_per_minute": resolved_llm.tokens_per_minute,
+        "temperature": request_body.temperature,
+        "concurrency": resolved_llm.concurrency,
+        "supports_structured_outputs_override": (
+            resolved_llm.supports_structured_outputs_override
+        ),
+        "supports_native_search_override": resolved_llm.supports_native_search_override,
+        "native_search_upstream_override": resolved_llm.native_search_upstream_override,
+        "inherit_context_policy": resolved_llm.inherit_context_policy,
+        **(
+            {"model_profile_id": overrides["model_profile_id"]}
+            if overrides.get("model_profile_id")
+            else {}
+        ),
+        **(
+            {"quota_user_id": overrides["quota_user_id"]}
+            if overrides.get("quota_user_id")
+            else {}
+        ),
+    }
 
     return StreamingResponse(
         result_report_builder.build_report_sse_stream(

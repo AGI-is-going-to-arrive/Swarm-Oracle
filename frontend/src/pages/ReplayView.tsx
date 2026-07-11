@@ -587,6 +587,7 @@ export function ReplayView() {
                   : (agentId ? agentId.slice(0, 8) : null);
                 const content = typeof p.content === 'string' ? p.content : (node.label || '');
                 const emotion = typeof p.emotion === 'string' ? p.emotion : null;
+                const emotionMetadataUnavailable = p.emotion_metadata_status === 'unavailable';
                 const isFork = node.type === 'fork';
                 const hue = agentId ? hashToHue(agentId) : 260;
                 const accentColor = `oklch(65% 0.18 ${hue})`;
@@ -630,7 +631,14 @@ export function ReplayView() {
                       </span>
                       <div className="replay-card__meta">
                         <strong className="replay-card__name">{agentName ?? t('replay.trace.unknown_agent', 'System')}</strong>
-                        {emotion && (
+                        {emotionMetadataUnavailable ? (
+                          <span className="replay-card__emotion replay-card__emotion--unavailable">
+                            {t(
+                              'sim.panel.emotion_metadata_unavailable',
+                              'Emotion metadata unavailable',
+                            )}
+                          </span>
+                        ) : emotion && (
                           <span className="replay-card__emotion">
                             {EMOTION_ICONS[emotion] ?? ''} {emotion}
                           </span>

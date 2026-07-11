@@ -30,7 +30,12 @@ import {
   importOfficialSample,
   listModelProfiles,
 } from '../api/client';
-import type { WebSearchFamily, CampaignContext, SuggestedSettings, ModelProfile } from '../types';
+import type {
+  WebSearchFamily,
+  CampaignContext,
+  ModelProfile,
+  WorldContext,
+} from '../types';
 import { useAgentStore } from '../stores/agentStore';
 import AgentSelectionStrip from '../components/AgentSelectionStrip';
 import { AgentDrawer } from '../components/AgentDrawer';
@@ -88,7 +93,12 @@ import {
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
-import { validateByok } from '../lib/llmProviderPolicy';
+import {
+  isLocalLlmBaseUrl,
+  saveLlmProviderPolicy,
+  validateByok,
+} from '../lib/llmProviderPolicy';
+import type { MaterializedLocalPackImport } from '../lib/localPackImport';
 import { friendlyProviderName } from './inputProviderName';
 import { StreakIndicator, DifficultyBadge, RefreshCountdown, WeeklyTrackChip, WeeklyTrackDialog, CampaignProgressSheet } from '../components/campaign';
 import './InputView.css';
@@ -326,6 +336,8 @@ type PendingSimulationLaunch = {
   nextVisualization: boolean;
   challengeId?: string;
   campaignContext?: CampaignContext;
+  /** Undefined uses the current seed; null explicitly launches without seed context. */
+  worldContext?: WorldContext | null;
 };
 
 function normalizeCampaignDifficultyTier(
@@ -408,6 +420,7 @@ export function InputView() {
   const [propositionProfileId, setPropositionProfileId] = useState<string>('');
   const [oppositionProfileId, setOppositionProfileId] = useState<string>('');
   const [judgeProfileId, setJudgeProfileId] = useState<string>('');
+  const autoSelectProfileRef = useRef(false);
 
   useEffect(() => {
     if (modelProfilesEnabled) {
@@ -434,6 +447,16 @@ export function InputView() {
       setLlmTokensPerMinute('');
       setLlmApiKey('');
     }
+  };
+
+  const handleDebateProfileChange = (
+    profileId: string,
+    setRoleProfileId: (value: string) => void,
+  ) => {
+    clearLaunchError();
+    setRoleProfileId(profileId);
+    if (!profileId) return;
+    autoSelectProfileRef.current = true;
   };
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
   const onboarding = useOnboardingState();
@@ -575,17 +598,21 @@ export function InputView() {
     questionRef.current?.value ?? fallback
   ), [question]);
 
+  const hasUsableLocalLlmOverride = Boolean(llmModel.trim())
+    && isLocalLlmBaseUrl(llmBaseUrl);
+
   // 建档后 / 已有档案时，自动选中首个 model profile（list 按 updated_at desc，故为最近的），
   // 让首页直接用 DB 凭据推演。否则"未选档案 + sessionStorage 残留 base_url 无 key"会让
   // launchSimulation 的 validateByok 命中 `baseUrl && !apiKey` → BYOK_INVALID → 推演死锁。
   // 仅在「无本地明文 BYOK」「未手动选过档案」时抢选一次（ref 守卫防重复 + 不覆盖用户选择）。
-  const autoSelectProfileRef = useRef(false);
   useEffect(() => {
     if (autoSelectProfileRef.current) return;
-    if (selectedProfileId || llmApiKey.trim()) return;
-    // 只自动选「带 api_key」的档案——与后端 llm_configured 口径一致（no-key 档案后端不算已
-    // 配置，自动选中会隐藏 banner 却在推演时回退服务端默认/失败）。无带 key 档案则不抢选。
-    const first = profiles.find((p) => p.has_api_key);
+    if (selectedProfileId || llmApiKey.trim() || hasUsableLocalLlmOverride) return;
+    // 远程档案必须带 key；精确匹配后端本地 host 集合的档案可以无 key。
+    const first = profiles.find((profile) => (
+      profile.has_api_key
+      || (Boolean(profile.model?.trim()) && isLocalLlmBaseUrl(profile.base_url ?? ''))
+    ));
     if (!first) return;
     autoSelectProfileRef.current = true;
     setSelectedProfileId(first.id);
@@ -598,6 +625,7 @@ export function InputView() {
     profiles,
     selectedProfileId,
     llmApiKey,
+    hasUsableLocalLlmOverride,
     setSelectedProfileId,
     setLlmModel,
     setLlmBaseUrl,
@@ -632,6 +660,14 @@ export function InputView() {
   const isRpmOverridden = !!activeProfile && llmRequestsPerMinute !== (activeProfile.rpm != null ? String(activeProfile.rpm) : '');
   const isTpmOverridden = !!activeProfile && llmTokensPerMinute !== (activeProfile.tpm != null ? String(activeProfile.tpm) : '');
   const isApiKeyOverridden = !!activeProfile && llmApiKey !== '';
+  const profileProviderOverrideRequested = Boolean(activeProfile) && (
+    isApiKeyOverridden || isBaseUrlOverridden || isModelOverridden
+  );
+  const profileProviderOverrideInvalid = profileProviderOverrideRequested && !(
+    Boolean(llmBaseUrl.trim())
+    && Boolean(llmModel.trim())
+    && (Boolean(llmApiKey.trim()) || isLocalLlmBaseUrl(llmBaseUrl))
+  );
 
   const staticLlmConfigured = caps?.llm_static_configured === true;
   const profileOnlyLlmConfigured =
@@ -640,11 +676,35 @@ export function InputView() {
     caps?.llm_profile_configured === true;
   const hasUsableLlmCredential =
     staticLlmConfigured ||
-    Boolean(activeProfile?.has_api_key) ||
+    Boolean(activeProfile?.has_api_key && !isBaseUrlOverridden) ||
+    hasUsableLocalLlmOverride ||
     Boolean(llmApiKey.trim());
   const llmNotConfigured =
-    !hasUsableLlmCredential &&
-    (caps?.llm_configured === false || profileOnlyLlmConfigured);
+    profileProviderOverrideInvalid || (
+      !hasUsableLlmCredential &&
+      (caps?.llm_configured === false || profileOnlyLlmConfigured)
+    );
+  const debateProfileFallbackId = profileOnlyLlmConfigured ? selectedProfileId : '';
+  const effectivePropositionProfileId = propositionProfileId || debateProfileFallbackId;
+  const effectiveOppositionProfileId = oppositionProfileId || debateProfileFallbackId;
+  const effectiveJudgeProfileId = judgeProfileId || debateProfileFallbackId;
+  const effectiveDebateProfileIds = [
+    effectivePropositionProfileId,
+    effectiveOppositionProfileId,
+    effectiveJudgeProfileId,
+  ];
+  const allDebateSidesUseProfiles = effectiveDebateProfileIds.every(Boolean);
+  const hasUsableDebateProfileBundle = effectiveDebateProfileIds.every((profileId) => {
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    return Boolean(profile && (
+      profile.has_api_key
+      || (Boolean(profile.model?.trim()) && isLocalLlmBaseUrl(profile.base_url ?? ''))
+    ));
+  });
+  const suppressSharedDebateProvider = allDebateSidesUseProfiles || Boolean(
+    activeProfile && !profileProviderOverrideRequested,
+  );
+  const debateLlmNotConfigured = hasUsableDebateProfileBundle ? false : llmNotConfigured;
   const snapshotImportCapabilityState = customAgentsCapabilityLoading
     ? 'loading'
     : capabilitiesError
@@ -720,6 +780,10 @@ export function InputView() {
     agentsPreview,
     setAgentsPreview,
   } = useInputWorldContext();
+  const clearScenarioSourceContext = useCallback(() => {
+    setWorldContext(null);
+    setAgentsPreview(null);
+  }, [setAgentsPreview, setWorldContext]);
   const todayChallengeQuestion = todayChallenge
     ? (isZh ? todayChallenge.question : todayChallenge.questionEn)
     : '';
@@ -743,6 +807,32 @@ export function InputView() {
     : null;
   const byokRequestsPerMinute = parseOptionalRuntimeLimit(llmRequestsPerMinute);
   const byokTokensPerMinute = parseOptionalRuntimeLimit(llmTokensPerMinute);
+
+  useEffect(() => {
+    if (!activeProfile || profileProviderOverrideRequested) return;
+
+    // A selected profile is server-owned. Its public endpoint/model mirrors
+    // must not become a keyless session override on report or conversation
+    // retries; those paths recover the scenario's persisted profile pointer.
+    saveLlmProviderPolicy({
+      apiKey: '',
+      baseUrl: '',
+      model: '',
+      reasoningEffort,
+      disableUserQuota,
+      requestsPerMinute: isRpmOverridden ? byokRequestsPerMinute : null,
+      tokensPerMinute: isTpmOverridden ? byokTokensPerMinute : null,
+    });
+  }, [
+    activeProfile,
+    byokRequestsPerMinute,
+    byokTokensPerMinute,
+    disableUserQuota,
+    isRpmOverridden,
+    isTpmOverridden,
+    profileProviderOverrideRequested,
+    reasoningEffort,
+  ]);
   const hasDirectorGrowth =
     (campaignProfile?.total_runs ?? 0) > 0
     || campaignBadges.length > 0
@@ -964,6 +1054,7 @@ export function InputView() {
     if (prefillQuestion === null) return;
 
     clearLaunchError();
+    clearScenarioSourceContext();
     setQuestion(clampScenarioQuestion(prefillQuestion));
     navigate(
       {
@@ -975,6 +1066,7 @@ export function InputView() {
     );
   }, [
     clearLaunchError,
+    clearScenarioSourceContext,
     location.hash,
     location.pathname,
     location.search,
@@ -985,6 +1077,7 @@ export function InputView() {
   useEffect(() => {
     if (!sharedChallenge) return;
     clearLaunchError();
+    clearScenarioSourceContext();
     setQuestion(clampScenarioQuestion(sharedChallenge.question));
     setRounds(sharedChallenge.rounds);
     setNumAgents(sharedChallenge.numAgents);
@@ -993,7 +1086,7 @@ export function InputView() {
     if (sharedChallenge.runtimePreset) {
       setRuntimePreset(sharedChallenge.runtimePreset);
     }
-  }, [clearLaunchError, sharedChallenge]);
+  }, [clearLaunchError, clearScenarioSourceContext, sharedChallenge]);
 
   useEffect(() => {
     saveScenarioRuntimePreset(runtimePreset);
@@ -1176,7 +1269,7 @@ export function InputView() {
     let resolvedRpm: number | undefined = Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined;
     let resolvedTpm: number | undefined = Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined;
 
-    if (profile) {
+    if (profile && !profileProviderOverrideRequested) {
       if (llmApiKey.trim() === '') {
         resolvedApiKey = undefined;
       }
@@ -1193,6 +1286,10 @@ export function InputView() {
         resolvedTpm = undefined;
       }
     }
+
+    const effectiveWorldContext = launch.worldContext === undefined
+      ? worldContext
+      : launch.worldContext;
 
     return {
       question: trimmed,
@@ -1218,8 +1315,10 @@ export function InputView() {
       ...buildScenarioRuntimePresetOptions(runtimePreset),
       ...(clampedCustomAgentIds.length > 0 && { customAgentIdentityIds: clampedCustomAgentIds }),
       ...(campaignContext && { campaignContext }),
-      ...(worldContext && { worldContext }),
-      modelProfileId: selectedProfileId || undefined,
+      ...(effectiveWorldContext && { worldContext: effectiveWorldContext }),
+      modelProfileId: profileProviderOverrideRequested
+        ? undefined
+        : selectedProfileId || undefined,
       language: normalizeLanguage(i18n.language),
     };
   }, [
@@ -1247,6 +1346,7 @@ export function InputView() {
     getClampedCustomAgentIds,
     worldContext,
     profiles,
+    profileProviderOverrideRequested,
     selectedProfileId,
     i18n.language,
   ]);
@@ -1492,8 +1592,8 @@ export function InputView() {
       setQuestion(trimmed);
     }
     setWebSearchUrlError('');
-    const isProfileSelected = Boolean(selectedProfileId);
-    const byokValidation = isProfileSelected
+    const usesUnmodifiedProfileProvider = Boolean(activeProfile) && !isBaseUrlOverridden;
+    const byokValidation = usesUnmodifiedProfileProvider
       ? { valid: true }
       : validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
     if (!byokValidation.valid) {
@@ -1565,21 +1665,12 @@ export function InputView() {
   }) => {
     const trimmed = normalizeScenarioQuestionForLaunch(nextQuestion);
     if (!trimmed || isSubmitting) return;
-    if (llmNotConfigured) return;
+    if (debateLlmNotConfigured) return;
     clearLaunchError();
     if (nextQuestion.trim() !== trimmed) {
       setQuestion(trimmed);
     }
-    const debateProfileFallbackId = profileOnlyLlmConfigured ? selectedProfileId : '';
-    const effectivePropositionProfileId = propositionProfileId || debateProfileFallbackId;
-    const effectiveOppositionProfileId = oppositionProfileId || debateProfileFallbackId;
-    const effectiveJudgeProfileId = judgeProfileId || debateProfileFallbackId;
-    const isProfileSelected = Boolean(
-      effectivePropositionProfileId ||
-      effectiveOppositionProfileId ||
-      effectiveJudgeProfileId,
-    );
-    const byokValidation = isProfileSelected
+    const byokValidation = suppressSharedDebateProvider
       ? { valid: true }
       : validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
     if (!byokValidation.valid) {
@@ -1599,19 +1690,31 @@ export function InputView() {
           : 2,
       );
       const [propositionAgentId, oppositionAgentId] = getClampedCustomAgentIds(debateCustomAgentLimit);
-      const resolvedLlmApiKey = llmApiKey.trim() || undefined;
-      const resolvedLlmBaseUrl = !isProfileSelected || resolvedLlmApiKey
-        ? llmBaseUrl || undefined
-        : undefined;
-      const resolvedLlmModel = activeProfile && llmModel === activeProfile.model
+      // Debate role profiles own their provider bindings. Keep the shared home
+      // configuration intact for Simulation, but do not apply it as an explicit
+      // override to a role profile. An unchanged main-profile mirror is likewise
+      // server-owned and must not become a keyless global Debate override.
+      const resolvedLlmApiKey = suppressSharedDebateProvider
+        ? undefined
+        : llmApiKey.trim() || undefined;
+      const resolvedLlmBaseUrl = suppressSharedDebateProvider
+        ? undefined
+        : llmBaseUrl || undefined;
+      const resolvedLlmModel = suppressSharedDebateProvider
         ? undefined
         : llmModel || undefined;
+      const resolvedLlmRequestsPerMinute = suppressSharedDebateProvider
+        ? undefined
+        : Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined;
+      const resolvedLlmTokensPerMinute = suppressSharedDebateProvider
+        ? undefined
+        : Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined;
       const debate = await createDebate(trimmed, undefined, {
         llmApiKey: resolvedLlmApiKey,
         llmBaseUrl: resolvedLlmBaseUrl,
         llmModel: resolvedLlmModel,
-        llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
-        llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
+        llmRequestsPerMinute: resolvedLlmRequestsPerMinute,
+        llmTokensPerMinute: resolvedLlmTokensPerMinute,
         reasoningEffort: reasoningEffort || undefined,
         userId: apiUserId,
         propositionModelProfileId: effectivePropositionProfileId || undefined,
@@ -1646,6 +1749,7 @@ export function InputView() {
       ? (template.title_zh || template.title_en)
       : (template.title_en || template.title_zh);
     clearLaunchError();
+    clearScenarioSourceContext();
     setQuestion(clampScenarioQuestion(localizedTitle || ''));
     if (Number.isFinite(template.suggested_rounds) && template.suggested_rounds > 0) {
       setRounds(template.suggested_rounds);
@@ -1657,30 +1761,25 @@ export function InputView() {
     requestAnimationFrame(() => {
       questionRef.current?.focus();
     });
-  }, [clearLaunchError, isZh]);
+  }, [clearLaunchError, clearScenarioSourceContext, isZh]);
 
-  const handleImportPack = useCallback((payload: { question: string; suggested_settings: SuggestedSettings }) => {
+  const handleImportPack = useCallback((payload: MaterializedLocalPackImport) => {
     clearLaunchError();
     setQuestion(clampScenarioQuestion(payload.question));
-    if (Number.isFinite(payload.suggested_settings.rounds) && payload.suggested_settings.rounds > 0) {
-      setRounds(payload.suggested_settings.rounds);
-    }
-    if (Number.isFinite(payload.suggested_settings.num_agents) && payload.suggested_settings.num_agents > 0) {
-      setNumAgents(payload.suggested_settings.num_agents);
-    }
-    if (payload.suggested_settings.simulation_mode) {
-      setRuntimePreset(payload.suggested_settings.simulation_mode);
-    }
-    if (payload.suggested_settings.language === 'zh' || payload.suggested_settings.language === 'en') {
-      i18n.changeLanguage(payload.suggested_settings.language).catch(() => {});
-    }
+    setRounds(payload.suggestedSettings.rounds);
+    setNumAgents(payload.suggestedSettings.numAgents);
+    setRuntimePreset(payload.suggestedSettings.simulationMode);
+    setWorldContext(payload.worldContext);
+    setAgentsPreview(payload.agentsPreview);
+    i18n.changeLanguage(payload.suggestedSettings.language).catch(() => {});
     requestAnimationFrame(() => {
       questionRef.current?.focus();
     });
-  }, [clearLaunchError, i18n]);
+  }, [clearLaunchError, i18n, setAgentsPreview, setWorldContext]);
 
   const handleQuickStartSelect = async (preset: QuickStartPreset) => {
     clearLaunchError();
+    clearScenarioSourceContext();
     const nextQuestion = clampScenarioQuestion(preset.question);
     setQuestion(nextQuestion);
     try {
@@ -1690,6 +1789,7 @@ export function InputView() {
         nextAgents: preset.numAgents ?? numAgents,
         nextMode: preset.mode ?? mode,
         nextVisualization: preset.visualizationEnabled ?? vizEnabled,
+        worldContext: null,
       });
     } catch (err) {
       console.error('[handleQuickStartSelect] failed:', err);
@@ -1704,6 +1804,7 @@ export function InputView() {
     }
 
     clearLaunchError();
+    clearScenarioSourceContext();
     const nextQuestion = clampScenarioQuestion(todayChallengeQuestion);
     setQuestion(nextQuestion);
     setRounds(todayChallenge.rounds);
@@ -1718,6 +1819,7 @@ export function InputView() {
         nextMode: todayChallenge.mode,
         nextVisualization: todayChallenge.visualizationEnabled,
         challengeId: todayChallenge.id,
+        worldContext: null,
       });
     } catch (err) {
       console.error('[handleStartChallenge] failed:', err);
@@ -1731,6 +1833,7 @@ export function InputView() {
     }
     if (todayChallengeQuestion) {
       clearLaunchError();
+      clearScenarioSourceContext();
       setQuestion(todayChallengeQuestion);
       if (todayChallenge) {
         setRounds(todayChallenge.rounds);
@@ -1760,6 +1863,7 @@ export function InputView() {
     const trackQuestion = clampScenarioQuestion(isZh ? firstWeekly.question : firstWeekly.questionEn);
 
     clearLaunchError();
+    clearScenarioSourceContext();
     setQuestion(trackQuestion);
     setRounds(recommendedRounds);
     setNumAgents(recommendedAgents);
@@ -1781,6 +1885,7 @@ export function InputView() {
           profile_id: profileId,
           is_weekly_track: true,
         },
+        worldContext: null,
       });
     } catch (err) {
       console.error('[handleWeeklyTrackConfirm] failed:', err);
@@ -1998,7 +2103,7 @@ export function InputView() {
         },
         controls: {
           can_start_simulation: Boolean(question.trim()) && !isImeComposing && !isSubmitting && !isSimulationBudgetBlocked && !llmNotConfigured,
-          can_start_debate: Boolean(question.trim()) && !isImeComposing && !isSubmitting && !llmNotConfigured,
+          can_start_debate: Boolean(question.trim()) && !isImeComposing && !isSubmitting && !debateLlmNotConfigured,
         },
       },
     );
@@ -2069,6 +2174,7 @@ export function InputView() {
     webSearchServerProvider,
     webSearchStatus,
     webSearchUsesCustomOverride,
+    debateLlmNotConfigured,
     llmNotConfigured,
   ]);
 
@@ -2098,7 +2204,7 @@ export function InputView() {
       ? mainLaunchDisabledReasonKey
       : null;
   const mainLaunchDisabled = Boolean(mainLaunchDisabledReasonKey) || isSubmitting;
-  const debateLaunchDisabled = !hasQuestionText || isImeComposing || isSubmitting || llmNotConfigured;
+  const debateLaunchDisabled = !hasQuestionText || isImeComposing || isSubmitting || debateLlmNotConfigured;
 
   return (
     <div className="input-view">
@@ -3351,10 +3457,10 @@ export function InputView() {
                                   id="debate-prop-profile"
                                   className="form-control"
                                   value={propositionProfileId}
-                                  onChange={(e) => {
-                                    clearLaunchError();
-                                    setPropositionProfileId(e.target.value);
-                                  }}
+                                  onChange={(e) => handleDebateProfileChange(
+                                    e.target.value,
+                                    setPropositionProfileId,
+                                  )}
                                   disabled={isSubmitting}
                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                               >
@@ -3370,10 +3476,10 @@ export function InputView() {
                                   id="debate-opp-profile"
                                   className="form-control"
                                   value={oppositionProfileId}
-                                  onChange={(e) => {
-                                    clearLaunchError();
-                                    setOppositionProfileId(e.target.value);
-                                  }}
+                                  onChange={(e) => handleDebateProfileChange(
+                                    e.target.value,
+                                    setOppositionProfileId,
+                                  )}
                                   disabled={isSubmitting}
                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                               >
@@ -3390,10 +3496,10 @@ export function InputView() {
                                 id="debate-judge-profile"
                                 className="form-control"
                                 value={judgeProfileId}
-                                onChange={(e) => {
-                                  clearLaunchError();
-                                  setJudgeProfileId(e.target.value);
-                                }}
+                                onChange={(e) => handleDebateProfileChange(
+                                  e.target.value,
+                                  setJudgeProfileId,
+                                )}
                                 disabled={isSubmitting}
                               style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
                             >
@@ -3438,8 +3544,18 @@ export function InputView() {
                             className="input byok-input"
                             value={llmBaseUrl}
                             onChange={(e) => {
+                              const nextBaseUrl = e.target.value;
                               clearLaunchError();
-                              setLlmBaseUrl(e.target.value);
+                              if (nextBaseUrl !== llmBaseUrl) {
+                                // Endpoint, model, credential, and runtime policy form one
+                                // provider binding. Require the new target's model/policy to
+                                // be entered explicitly instead of carrying Profile A state.
+                                setLlmApiKey('');
+                                setLlmModel('');
+                                setLlmRequestsPerMinute('');
+                                setLlmTokensPerMinute('');
+                              }
+                              setLlmBaseUrl(nextBaseUrl);
                             }}
                             placeholder="https://api.openai.com/v1/chat/completions"
                           disabled={isSubmitting}
@@ -3459,6 +3575,10 @@ export function InputView() {
                             value={llmModel}
                             onChange={(nextModel) => {
                               clearLaunchError();
+                              if (nextModel !== llmModel) {
+                                setLlmRequestsPerMinute('');
+                                setLlmTokensPerMinute('');
+                              }
                               setLlmModel(nextModel);
                             }}
                             disabled={isSubmitting}

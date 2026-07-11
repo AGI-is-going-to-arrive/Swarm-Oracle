@@ -334,6 +334,7 @@ class TestHealthEndpoint:
                     user_id="owner-a",
                     name="Homepage BYOK profile",
                     provider="openai",
+                    base_url="https://api.openai.com/v1",
                     model="gpt-4o-mini",
                     api_key="sk-homepage-byok-real-key",
                 )
@@ -347,6 +348,39 @@ class TestHealthEndpoint:
         assert data["llm_configured"] is True
         assert data["llm_static_configured"] is False
         assert data["llm_profile_configured"] is True
+
+    def test_capabilities_treat_local_keyless_model_profile_as_configured(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(
+            scenarios_api.settings,
+            "LLM_RESPONSES_URL",
+            "http://127.0.0.1:8317/v1",
+        )
+        monkeypatch.setattr(scenarios_api.settings, "LLM_API_KEY", "")
+        with Session(get_engine()) as session:
+            session.add(
+                ModelProfile(
+                    user_id="local-owner",
+                    name="Local keyless profile",
+                    provider="ollama",
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="llama3.2",
+                    api_key=None,
+                )
+            )
+            session.commit()
+
+        response = client.get("/api/capabilities")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["llm_static_configured"] is False
+        assert data["llm_profile_configured"] is True
+        assert data["llm_configured"] is True
 
     def test_capabilities_ignore_model_profile_key_when_feature_disabled(
         self,
@@ -582,6 +616,53 @@ class TestGraphEndpoints:
 
 
 class TestIdentityPreflightEndpoint:
+    def test_preflight_rejects_remote_base_url_without_key(self, client, monkeypatch):
+        monkeypatch.setattr(agents_api.settings, "FEATURE_AGENT_IDENTITY", True)
+
+        response = client.post(
+            "/api/agents/identities/preflight",
+            json={
+                "question": "Remote keyless preflight must fail closed",
+                "user_id": "remote-preflight-owner",
+                "num_agents": 3,
+                "llm_base_url": "https://api.openai.com/v1",
+                "llm_model": "gpt-test",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+    def test_preflight_allows_local_base_url_without_key(self, client, monkeypatch):
+        monkeypatch.setattr(agents_api.settings, "FEATURE_AGENT_IDENTITY", True)
+        captured: dict[str, object] = {}
+
+        async def _fake_parse_question(*_args, **kwargs):
+            captured.update(kwargs)
+            return {
+                "agents": [],
+                "groups": [],
+                "simulation_rounds": 1,
+            }
+
+        monkeypatch.setattr(agents_api, "parse_question", _fake_parse_question)
+
+        response = client.post(
+            "/api/agents/identities/preflight",
+            json={
+                "question": "Can a local model preflight without a key?",
+                "user_id": "local-preflight-owner",
+                "num_agents": 3,
+                "llm_base_url": "http://0.0.0.0:11434/v1",
+                "llm_model": "llama3.2",
+            },
+        )
+
+        assert response.status_code == 200
+        assert captured["api_key"] is None
+        assert captured["base_url"] == "http://0.0.0.0:11434/v1"
+        assert captured["model"] == "llama3.2"
+
     def test_preflight_returns_l2_matches(self, client, monkeypatch):
         from app.config import settings
 
@@ -1070,6 +1151,41 @@ class TestByokValidation:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
 
+    def test_scenario_local_base_url_without_key_launches_with_keyless_override(
+        self,
+        client,
+        monkeypatch,
+    ):
+        captured: dict[str, object] = {}
+
+        async def _noop():
+            return None
+
+        def _fake_background(*_args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            _close_scheduled_coro(coro)
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        response = client.post(
+            "/api/scenario",
+            json={
+                "question": "Can a local keyless model run?",
+                "llm_base_url": "http://127.0.0.1:11434/v1",
+                "llm_model": "llama3.2",
+            },
+        )
+
+        assert response.status_code == 200
+        assert captured["llm_api_key"] is None
+        assert captured["llm_base_url"] == "http://127.0.0.1:11434/v1"
+        assert captured["llm_model"] == "llama3.2"
+
     def test_report_generate_accepts_zero_rate_limits_as_disabled(self):
         req = scenarios_api.ResultReportGenerateRequest(
             llm_requests_per_minute=0,
@@ -1144,6 +1260,78 @@ class TestByokValidation:
 
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+    def test_report_generate_allows_local_base_url_without_key(self, client, monkeypatch):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine,
+            scenario_id,
+            title="Dominant branch",
+            probability=0.9,
+            status=BranchStatus.COMPLETED,
+        )
+        captured: dict[str, object] = {}
+
+        async def _fake_report_stream(*_args, **kwargs):
+            captured["overrides"] = dict(kwargs.get("overrides") or {})
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _fake_report_stream,
+        )
+
+        with client.stream(
+            "POST",
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={
+                "llm_base_url": "http://localhost:1234/v1",
+                "llm_model": "local-model",
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+        assert response.status_code == 200
+        assert "event: report_started" in body
+        assert captured["overrides"] == {
+            "api_key": None,
+            "base_url": "http://localhost:1234/v1",
+            "model": "local-model",
+            "requests_per_minute": None,
+            "tokens_per_minute": None,
+            "temperature": None,
+            "concurrency": None,
+            "supports_structured_outputs_override": None,
+            "supports_native_search_override": None,
+            "native_search_upstream_override": None,
+            "inherit_context_policy": False,
+        }
+
+    def test_report_generate_rejects_remote_base_url_without_key(self, client, monkeypatch):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine,
+            scenario_id,
+            title="Dominant branch",
+            probability=0.9,
+            status=BranchStatus.COMPLETED,
+        )
+
+        response = client.post(
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={
+                "llm_base_url": "https://api.openai.com/v1",
+                "llm_model": "gpt-test",
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
 
     def test_report_generate_rehydrates_profile_from_parsed_context(
         self,
@@ -1228,9 +1416,248 @@ class TestByokValidation:
             "concurrency": 6,
             "supports_structured_outputs_override": False,
             "supports_native_search_override": True,
+            "native_search_upstream_override": None,
+            "inherit_context_policy": False,
             "model_profile_id": profile_id,
             "quota_user_id": "report-owner",
         }
+
+    def test_report_generate_rejects_key_only_mix_with_recovered_remote_profile(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="report-mix-owner",
+                name="Provider B report profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="provider-b-model",
+                api_key="sk-provider-b",
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            scenario = Scenario(
+                question="Can a key-only override cross providers?",
+                status=ScenarioStatus.DONE,
+                user_id="report-mix-owner",
+                parsed_context={
+                    "_language": "English",
+                    "model_profile_id": profile.id,
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Provider B branch",
+                    probability=1.0,
+                    status=BranchStatus.COMPLETED,
+                    story="The report must keep provider credentials bound.",
+                )
+            )
+            session.commit()
+
+        stream_called = False
+
+        async def _must_not_stream(*_args, **_kwargs):
+            nonlocal stream_called
+            stream_called = True
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _must_not_stream,
+        )
+
+        response = client.post(
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={"llm_api_key": "sk-provider-a"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+        assert stream_called is False
+
+    def test_report_generate_rejects_key_only_mix_with_legacy_remote_context(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        with Session(get_engine()) as session:
+            scenario = Scenario(
+                question="Can a legacy endpoint receive another provider key?",
+                status=ScenarioStatus.DONE,
+                parsed_context={
+                    "_language": "English",
+                    "llm_base_url": "https://api.openai.com/v1",
+                    "llm_model": "provider-b-model",
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Legacy provider branch",
+                    probability=1.0,
+                    status=BranchStatus.COMPLETED,
+                    story="The report must reject a key-only provider mix.",
+                )
+            )
+            session.commit()
+
+        stream_called = False
+
+        async def _must_not_stream(*_args, **_kwargs):
+            nonlocal stream_called
+            stream_called = True
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _must_not_stream,
+        )
+
+        response = client.post(
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={"llm_api_key": "sk-provider-a"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+        assert stream_called is False
+
+    def test_report_complete_provider_override_suppresses_old_profile_scope(
+        self,
+        client,
+        monkeypatch,
+    ):
+        from app.services.result_report import builder
+
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="report-detach-owner",
+                name="Provider A",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="provider-a-model",
+                api_key="sk-provider-a",
+                rpm=19,
+                tpm=1900,
+                concurrency=3,
+                supports_structured_outputs=True,
+                supports_native_search=True,
+                native_search_upstream="openai_responses",
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            scenario = Scenario(
+                question="Can a report detach from Provider A?",
+                status=ScenarioStatus.DONE,
+                user_id="report-detach-owner",
+                parsed_context={
+                    "_language": "English",
+                    "model_profile_id": profile.id,
+                    "llm_requests_per_minute": 19,
+                    "llm_tokens_per_minute": 1900,
+                    "llm_concurrency": 3,
+                    "supports_structured_outputs": True,
+                    "supports_native_search": True,
+                    "native_search_upstream": "openai_responses",
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            branch = Branch(
+                scenario_id=scenario.id,
+                title="Detached report branch",
+                probability=1.0,
+                status=BranchStatus.COMPLETED,
+                story="Provider B must not inherit Provider A policy.",
+            )
+            session.add(branch)
+            session.commit()
+            scenario_id = scenario.id
+            branch_id = branch.id
+
+        captured: dict[str, object] = {}
+
+        async def _capture_stream(*_args, **kwargs):
+            overrides = dict(kwargs.get("overrides") or {})
+            captured["overrides"] = overrides
+            normalized = builder._normalize_overrides(overrides)
+            context = builder.BuilderContext(
+                scenario_id=scenario_id,
+                question="Can a report detach from Provider A?",
+                language="en",
+                parsed_context={
+                    "llm_requests_per_minute": 19,
+                    "llm_tokens_per_minute": 1900,
+                    "llm_concurrency": 3,
+                    "supports_structured_outputs": True,
+                    "supports_native_search": True,
+                    "native_search_upstream": "openai_responses",
+                },
+                branch_id=branch_id,
+                branch_title="Detached report branch",
+                branch_story="Provider B must not inherit Provider A policy.",
+                branch_insight="",
+                web_context_blocks=[],
+            )
+            captured["scope"] = builder._report_llm_scope_kwargs(context, normalized)
+            yield "event: report_started\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            scenarios_api.result_report_builder,
+            "build_report_sse_stream",
+            _capture_stream,
+        )
+
+        with client.stream(
+            "POST",
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={
+                "llm_api_key": "sk-provider-b",
+                "llm_base_url": "https://api.x.ai/v1",
+                "llm_model": "provider-b-model",
+                "llm_requests_per_minute": 7,
+            },
+        ) as response:
+            _ = "".join(response.iter_text())
+
+        assert response.status_code == 200
+        overrides = captured["overrides"]
+        assert isinstance(overrides, dict)
+        assert overrides["api_key"] == "sk-provider-b"
+        assert overrides["base_url"] == "https://api.x.ai/v1"
+        assert overrides["model"] == "provider-b-model"
+        assert overrides["inherit_context_policy"] is False
+        assert "model_profile_id" not in overrides
+        scope = captured["scope"]
+        assert isinstance(scope, dict)
+        assert scope["requests_per_minute"] == 7
+        assert scope["tokens_per_minute"] is None
+        assert scope["concurrency"] is None
+        assert scope["supports_structured_outputs_override"] is None
+        assert scope["supports_native_search_override"] is None
+        assert scope["native_search_upstream_override"] is None
 
     def test_report_generate_rehydrates_profile_by_id_for_local_single_user_run_group(
         self,
@@ -1329,6 +1756,8 @@ class TestByokValidation:
             "concurrency": 7,
             "supports_structured_outputs_override": True,
             "supports_native_search_override": False,
+            "native_search_upstream_override": None,
+            "inherit_context_policy": False,
             "model_profile_id": profile_id,
             "quota_user_id": "local-report-owner",
         }
@@ -1474,6 +1903,77 @@ class TestByokValidation:
             "supports_native_search_override": True,
             "native_search_upstream_override": "xai_responses",
         }
+
+    @pytest.mark.asyncio
+    async def test_run_sim_background_recovered_remote_profile_rejects_key_only_override(
+        self,
+        monkeypatch,
+    ):
+        import app.api.helpers as helpers_module
+
+        monkeypatch.setattr(
+            helpers_module.settings,
+            "FEATURE_MODEL_PROFILES",
+            True,
+        )
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="runtime-mix-owner",
+                name="Provider B runtime profile",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="provider-b-runtime-model",
+                api_key="sk-provider-b-runtime",
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            scenario = Scenario(
+                question="Can a key-only runtime override cross providers?",
+                status=ScenarioStatus.SIMULATING,
+                user_id="runtime-mix-owner",
+                parsed_context={
+                    "_language": "English",
+                    "user_id": "runtime-mix-owner",
+                    "model_profile_id": profile.id,
+                },
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            scenario_id = scenario.id
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Provider B active branch",
+                    probability=1.0,
+                    status=BranchStatus.ACTIVE,
+                )
+            )
+            session.commit()
+
+        simulator_called = False
+
+        async def unexpected_run_simulation(**_kwargs):
+            nonlocal simulator_called
+            simulator_called = True
+
+        monkeypatch.setattr(
+            helpers_module,
+            "run_simulation",
+            unexpected_run_simulation,
+        )
+
+        await helpers_module.run_sim_background(
+            scenario_id,
+            llm_overrides={"api_key": "sk-provider-a-session"},
+        )
+
+        assert simulator_called is False
+        with Session(get_engine()) as session:
+            stored = session.get(Scenario, scenario_id)
+            assert stored is not None
+            assert stored.status == ScenarioStatus.ERROR
 
     def test_scenario_docker_host_accepted(self, client):
         """host.docker.internal must remain in allowlist."""
@@ -2243,6 +2743,53 @@ class TestReplayArtifactEndpoints:
         assert len(data["messages"]) == 1
         assert data["messages"][0]["message"] == "Imported message"
 
+    def test_import_replay_restores_metadata_unavailable_durable_marker(self, client):
+        response = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "question": "Imported metadata gap",
+                "status": "done",
+                "groups": [],
+                "agents": [{
+                    "id": "agent-1",
+                    "name": "Archivist",
+                    "role": "Recorder",
+                    "tier": "CORE",
+                    "emotion": "calm",
+                }],
+                "branches": [{
+                    "id": "branch-1",
+                    "title": "Main",
+                    "probability": 1.0,
+                    "status": "COMPLETED",
+                }],
+                "messages": [{
+                    "agent": "Archivist",
+                    "agent_id": "agent-1",
+                    "message": "Speech survives replay import.",
+                    "emotion": "",
+                    "emotion_metadata_status": "unavailable",
+                    "emotion_metadata_failure_code": "LLM_TIMEOUT",
+                    "branch": "branch-1",
+                    "round": 1,
+                }],
+            },
+        })
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["messages"][0]["emotion"] == ""
+        assert payload["messages"][0]["emotion_metadata_status"] == "unavailable"
+        with Session(get_engine()) as session:
+            stored = session.exec(
+                select(AgentMessage)
+                .join(Round, AgentMessage.round_id == Round.id)
+                .join(Branch, Round.branch_id == Branch.id)
+                .where(Branch.scenario_id == payload["id"])
+            ).one()
+        assert stored.emotion == (
+            "__swarmoracle_metadata_unavailable__:LLM_TIMEOUT"
+        )
+
     @pytest.mark.parametrize("token", ["abc123", "bonds"])
     def test_import_replay_scenario_redacts_short_bearer_assignment(
         self,
@@ -2607,6 +3154,90 @@ class TestReplayArtifactEndpoints:
                 assert "llm_base_url" not in parsed_context
                 assert "llm_model" not in parsed_context
                 assert profile_api_key not in json.dumps(parsed_context)
+
+    def test_multi_run_complete_provider_override_detaches_old_profile(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        with Session(get_engine()) as session:
+            profile = ModelProfile(
+                user_id="multi-run-detach-owner",
+                name="Provider A",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="provider-a-model",
+                api_key="sk-provider-a",
+                rpm=23,
+                tpm=23000,
+                concurrency=4,
+                supports_structured_outputs=True,
+                supports_native_search=True,
+                native_search_upstream="openai_responses",
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+
+        scheduled: list[object] = []
+        captured: list[dict[str, object]] = []
+
+        async def _noop():
+            return None
+
+        def _fake_background(*_args, **kwargs):
+            captured.append(kwargs)
+            return _noop()
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        try:
+            response = client.post(
+                "/api/scenario/multi-run",
+                json={
+                    "question": "Can every run detach from Provider A?",
+                    "user_id": "multi-run-detach-owner",
+                    "model_profile_id": profile_id,
+                    "llm_api_key": "sk-provider-b",
+                    "llm_base_url": "https://api.x.ai/v1",
+                    "llm_model": "provider-b-model",
+                    "llm_requests_per_minute": 7,
+                    "run_count": 2,
+                    "num_agents": 3,
+                    "rounds": 1,
+                },
+            )
+            assert response.status_code == 200
+            response_body = response.json()
+            for coro in scheduled:
+                asyncio.run(coro)
+        finally:
+            for coro in scheduled:
+                if getattr(coro, "cr_frame", None) is not None:
+                    _close_scheduled_coro(coro)
+
+        assert len(captured) == 2
+        for kwargs in captured:
+            assert kwargs["llm_api_key"] == "sk-provider-b"
+            assert kwargs["llm_base_url"] == "https://api.x.ai/v1"
+            assert kwargs["llm_model"] == "provider-b-model"
+            assert kwargs["model_profile_id"] is None
+            assert kwargs["llm_requests_per_minute"] == 7
+            assert kwargs["llm_tokens_per_minute"] is None
+            assert kwargs["concurrency"] is None
+            assert kwargs["supports_structured_outputs"] is None
+            assert kwargs["supports_native_search"] is None
+            assert kwargs["native_search_upstream"] is None
+        with Session(get_engine()) as session:
+            for run in response_body["runs"]:
+                scenario = session.get(Scenario, run["scenario_id"])
+                assert scenario is not None
+                assert "model_profile_id" not in (scenario.parsed_context or {})
 
     def test_multi_run_explicit_byok_forwards_llm_policy_to_each_run(
         self,

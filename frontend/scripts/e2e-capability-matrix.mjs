@@ -17,6 +17,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
+import {
+  closePlaywrightBrowser,
+  closePlaywrightContext,
+} from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -84,8 +88,7 @@ const PAGES = [
     gateKey: "kg_explorer",
     enabledSurfaceSelector: '[data-testid="kg-explorer-root"]',
     enabledGatedUrlPatterns: [],
-    disabledCopy: "KG Explorer is not enabled on this server.",
-    disabledSurfaceSelector: '[data-testid="kg-explorer-root"][role="alert"]',
+    disabledCopy: "Knowledge graph view is turned off on this server. Ask the admin to enable it.",
     allowRouteFallbackSkip: true,
   },
   {
@@ -509,14 +512,20 @@ async function runPreset({ browser, preset, baseUrl }) {
         // ignore language persistence issues in diagnostics
       }
     }, sessionToken);
-    const page = await context.newPage();
+    try {
+      const page = await context.newPage();
 
-    await routeCapabilities(page, buildCapabilityPayload(preset.on));
-    await stubGatedEndpoints(page);
+      await routeCapabilities(page, buildCapabilityPayload(preset.on));
+      await stubGatedEndpoints(page);
 
-    const checkpoint = await runCheckpoint({ page, preset, pageSpec, baseUrl });
-    results.push(checkpoint);
-    await context.close();
+      const checkpoint = await runCheckpoint({ page, preset, pageSpec, baseUrl });
+      results.push(checkpoint);
+    } finally {
+      await closePlaywrightContext(
+        context,
+        `e2e-capability-matrix:${preset.name}:${pageSpec.name}`,
+      );
+    }
   }
   return results;
 }
@@ -572,7 +581,7 @@ async function main() {
       allResults.push(...results);
     }
   } finally {
-    await browser.close();
+    await closePlaywrightBrowser(browser, "e2e-capability-matrix");
   }
 
   writeJson(path.join(outputRoot, "results.json"), {

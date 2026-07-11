@@ -427,3 +427,18 @@ def test_shipped_packs_parse_have_parity_and_avoid_red_line_themes():
         original = copy.deepcopy(pack.model_dump(mode="json"))
         assert original["title"]["zh"]
         assert original["title"]["en"]
+
+
+def test_shipped_pack_demo_snapshots_exist():
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = load_local_packs(repo_root / "packs")
+    snapshot_dir = repo_root / "samples" / "snapshots"
+
+    missing = [
+        f"{pack.id}:{demo.filename}"
+        for pack in registry.packs
+        for demo in pack.demo_snapshots
+        if not (snapshot_dir / demo.filename).is_file()
+    ]
+
+    assert missing == []

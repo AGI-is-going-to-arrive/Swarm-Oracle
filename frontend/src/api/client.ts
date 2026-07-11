@@ -1708,11 +1708,18 @@ export async function getFactionTimeline(
     key: string;
     label: string | null;
     members: string[];
+    metric_kind?: 'affect_proxy';
+    caveat?: string;
+    affect_center?: number;
+    member_share?: number;
     stance_center?: number;
     confidence?: number;
   }>;
   events: Array<{
     type: string;
+    display_type?: string;
+    metric_kind?: 'affect_proxy';
+    caveat?: string;
     actor_agent_id: string;
     faction_key: string;
   }>;
@@ -1775,13 +1782,20 @@ export interface FactionRelationEdge {
   source_agent_id: string;
   target_agent_id: string;
   relation_type: 'trust' | 'opposition';
+  display_relation_type?: 'affect_alignment' | 'affect_distance';
+  metric_kind?: 'affect_proxy';
+  caveat?: string;
   weight: number;
+  affect_alignment?: number;
+  affect_distance?: number;
   trust_score: number;
   opposition_score: number;
   evidence_summary: string | null;
 }
 
 export interface FactionRelationsResponse {
+  metric_kind?: 'affect_proxy';
+  caveat?: string;
   edges: FactionRelationEdge[];
   truncated: boolean;
   threshold: number;

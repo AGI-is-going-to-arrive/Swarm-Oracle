@@ -21,9 +21,17 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 - Counterfactual reruns, branch comparison, and Replay Trace
 - Causal graph, knowledge graph, and timeline views
 - In-run Agent profiles, branch-scoped memory, Custom Agents, persona backups, prediction journal, and snapshots
-- Result verdicts, full reports, share cards, and optional search augmentation
+- Bounded, atomic Local Pack imports plus result verdicts, transparent full reports, share cards, and optional search augmentation
 
-In-run Agent profiles separate configured stance from observed emotion and identify the worldline and round behind that observation; replay explicitly says when no matching observation exists.
+## W2.0 Visibility and Truth Boundaries
+
+- Agent profiles separate configured stance from observed emotion. Every growth event shows scenario, branch, round, and `event_type` coordinates; it is labeled “Current · selected branch segment” only when it matches both the routed scenario and an explicitly selected branch. Other classifiable events are labeled “Past.”
+- If an Agent's speech succeeds but the second-pass structured-metadata parse fails, the real speech is preserved while emotion, stance, and relationship observations are explicitly unavailable with a bounded error code. Live views, Replay, Snapshots, and Pixel Theater never invent `neutral` metadata.
+- Legacy `stance` / `trust` / `opposition` fields in causal and faction views are affect proxies derived from model-generated `emotion` / `diverge`, not verified stance, trust, relationships, or causal evidence. The current view covers the selected branch segment only and does not merge pre-fork ancestor rounds.
+- Report likelihood and analytic confidence count only completed terminal leaves as branch samples and use persisted evidence-item counts; fork parents do not count, and signed affect-convergence proxies do not raise analytic confidence. Bounded per-section tool traces remain available after generated, rewritten, or static-fallback sections and survive refresh/reopen; the live “current section” cursor remains transient.
+- Local Pack refresh reloads details even when the selected pack keeps the same ID, clears old details and actions before switching, and isolates late responses. Pack `demo_snapshots` currently show read-only label and filename metadata; they are not clickable or directly importable.
+
+Two items remain for W2.1: ancestor-lineage stitching in causal/faction views and interactive, directly importable Local Pack `demo_snapshots`.
 
 See the [feature index](docs/FEATURES.en.md) for capability groups and routes, and the [usage guide](docs/USAGE.en.md) for operation.
 
@@ -38,8 +46,10 @@ The backend and frontend can start without a real LLM. The home page offers thre
 New simulations, debates, chambers, and reports need a working OpenAI-compatible LLM. You can:
 
 - configure the server default in `backend/.env` or `.env.docker`; or
-- open `/admin/setup` after startup, test a connection, and save a model profile with a key; or
+- open `/admin/setup` after startup, test a connection, and save a model profile; or
 - provide connection details for one run in the separate **BYOK** disclosure on the home page.
+
+Local Base URLs whose host is exactly `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, or `[::1]` may omit the API key; those keyless requests send no `Authorization` header. Every other custom or remote Base URL still requires a key. Credentials, endpoint, and model are bound to one provider: an unchanged profile is recovered by scenario on the backend and leaves no keyless session mirror; changing its remote endpoint or model requires a complete key/Base URL/model tuple, while partial overrides are rejected and the old profile, rate limits, and capability policy are detached. Setup can finish only after the current combination passes its test or you explicitly accept saving it unverified. The shipped `127.0.0.1:8317 + empty/placeholder key` combination remains an “unconfigured” sentinel; replace it with your actual local service or explicitly save that connection in Setup.
 
 **Advanced Settings** and **BYOK** are separate disclosures. Public defaults come from [`.env.example`](.env.example), not from any developer's local `backend/.env`.
 
@@ -52,7 +62,7 @@ cp .env.docker.example .env.docker
 docker compose up -d
 ```
 
-Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. The backend image bundles `packs/` and `samples/`, so Local Packs and official samples are available inside the container. To rebuild the images from source, run `docker compose up --build -d`.
+Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. The backend image bundles `packs/` and `samples/`, so Local Packs and official samples are available inside the container; bundled pack `demo_snapshots` show label/filename metadata only for Snapshots that actually exist. To rebuild the images from source, run `docker compose up --build -d`.
 
 ### Local Development
 
@@ -80,6 +90,8 @@ Open http://127.0.0.1:18928 . The frontend proxies `/api` and `/ws` to http://12
 ## Public Deployment
 
 Docker Compose is loopback-only by default. Before binding it to a LAN or public interface, set `ENV=production`, a unique `SESSION_SECRET`, and a unique `ADMIN_TOKEN`; production startup fails if either secret is empty. [SECURITY.md](SECURITY.md) is authoritative for BYOK, SSRF, and admin boundaries. See [Configuration](docs/CONFIGURATION.en.md) for deployment variables.
+
+Published backend/frontend images are built only from the exact commit that passed CI, first under immutable SHA tags and then promoted as a pair. If either promotion fails, rollback of both tags is triggered and verified; an incomplete rollback fails the job explicitly. Version tags additionally require an executed release signoff for that exact SHA. `--dry-run` records planned steps and is never reported as passed.
 
 ## Documentation
 

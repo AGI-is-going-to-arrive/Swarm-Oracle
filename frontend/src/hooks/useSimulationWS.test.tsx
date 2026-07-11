@@ -10,7 +10,8 @@ const storeState = {
   setCancelled: vi.fn(),
 };
 
-const { getScenarioMock } = vi.hoisted(() => ({
+const { dispatchVizEventMock, getScenarioMock } = vi.hoisted(() => ({
+  dispatchVizEventMock: vi.fn(),
   getScenarioMock: vi.fn(),
 }));
 
@@ -25,7 +26,7 @@ vi.mock('../api/client', () => ({
 }));
 
 vi.mock('../game/managers/EventBridge', () => ({
-  dispatchVizEvent: vi.fn(),
+  dispatchVizEvent: dispatchVizEventMock,
 }));
 
 class MockWebSocket {
@@ -93,6 +94,7 @@ describe('useSimulationWS', () => {
     vi.useFakeTimers();
     MockWebSocket.reset();
     getScenarioMock.mockReset();
+    dispatchVizEventMock.mockReset();
     storeState.setScenario.mockReset();
     storeState.handleWSEvent.mockReset();
     storeState.setCancelled.mockReset();
@@ -122,6 +124,52 @@ describe('useSimulationWS', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('forwards flat and legacy nested visualization payloads without dropping metadata', () => {
+    render(<Harness scenarioId="scenario-viz" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'viz:bubble_show',
+          sprite_id: 'agent-flat',
+          bubble_text: 'Flat payload',
+          emotion: '',
+          emotion_metadata_status: 'unavailable',
+          emotion_metadata_failure_code: 'LLM_TIMEOUT',
+          meta: { stream_id: 'scenario-viz', sequence: 1, event_id: 'viz-flat' },
+        }),
+      } as MessageEvent<string>);
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'viz:bubble_show',
+          data: {
+            sprite_id: 'agent-nested',
+            bubble_text: 'Nested payload',
+            emotion: 'neutral',
+          },
+          meta: { stream_id: 'scenario-viz', sequence: 2, event_id: 'viz-nested' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(dispatchVizEventMock).toHaveBeenNthCalledWith(1, 'viz:bubble_show', {
+      sprite_id: 'agent-flat',
+      bubble_text: 'Flat payload',
+      emotion: '',
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: 'LLM_TIMEOUT',
+    });
+    expect(dispatchVizEventMock).toHaveBeenNthCalledWith(2, 'viz:bubble_show', {
+      sprite_id: 'agent-nested',
+      bubble_text: 'Nested payload',
+      emotion: 'neutral',
+    });
   });
 
   it('polls the latest scenario snapshot after reconnect when no state event arrives first', async () => {

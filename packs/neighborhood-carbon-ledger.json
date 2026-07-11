@@ -83,16 +83,6 @@
       }
     }
   ],
-  "demo_snapshots": [
-    {
-      "id": "retrofit-vote",
-      "label": {
-        "zh": "改造投票",
-        "en": "Retrofit Vote"
-      },
-      "filename": "neighborhood-carbon-retrofit-vote.json"
-    }
-  ],
   "suggested_settings": {
     "num_agents": 10,
     "rounds": 6,

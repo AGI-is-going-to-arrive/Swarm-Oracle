@@ -148,6 +148,75 @@ class TestProcessRound:
         result = process_round("s1", "b1", 1, [])
         assert result is None
 
+    def test_metadata_unavailable_agents_are_excluded_and_skip_below_four(self):
+        messages = [
+            MockMessage(agent_id="a1", emotion="confident", id="m1"),
+            MockMessage(agent_id="a2", emotion="cooperative", id="m2"),
+            MockMessage(agent_id="a3", emotion="aggressive", id="m3"),
+            MockMessage(
+                agent_id="a4",
+                emotion="__swarmoracle_metadata_unavailable__:LLM_AUTH_FAILED",
+                id="m4",
+            ),
+            MockMessage(
+                agent_id="a5",
+                emotion="__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+                id="m5",
+            ),
+        ]
+
+        result = process_round("metadata-gap", "b1", 1, messages)
+
+        assert result is not None
+        assert result["degraded"] == "insufficient_metadata"
+        assert result["eligible_agent_count"] == 3
+        assert result["excluded_agent_count"] == 2
+        assert result["required_agent_count"] == 4
+        assert result["factions"] == []
+        assert result["events"] == []
+        with Session(get_engine()) as session:
+            relations = session.exec(
+                select(AgentRelationEdge).where(
+                    AgentRelationEdge.scenario_id == "metadata-gap"
+                )
+            ).all()
+            snapshots = session.exec(
+                select(FactionSnapshot).where(
+                    FactionSnapshot.scenario_id == "metadata-gap"
+                )
+            ).all()
+        assert relations == []
+        assert snapshots == []
+
+    def test_metadata_coverage_is_disclosed_when_four_agents_remain(self):
+        messages = [
+            MockMessage(agent_id=f"a{index}", emotion=emotion, id=f"m{index}")
+            for index, emotion in enumerate(
+                (
+                    "confident",
+                    "cooperative",
+                    "aggressive",
+                    "anxious",
+                    "__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+                ),
+                start=1,
+            )
+        ]
+
+        result = process_round("metadata-partial", "b1", 1, messages)
+
+        assert result is not None
+        assert result["eligible_agent_count"] == 4
+        assert result["excluded_agent_count"] == 1
+        assert result["required_agent_count"] == 4
+        assert result["partial"] is True
+        member_ids = {
+            agent_id
+            for faction in result["factions"]
+            for agent_id in faction["members"]
+        }
+        assert member_ids == {"a1", "a2", "a3", "a4"}
+
     def test_accepts_simulator_message_dicts_and_preserves_agent_ids(self):
         scenario_id, branch_id = _seed_scenario_with_branch()
         messages = [
@@ -381,7 +450,9 @@ class TestProcessRound:
             assert edge.trust_score + edge.opposition_score == pytest.approx(1.0)
 
         extreme_edges = [
-            edge for edge in edges if edge.evidence_summary == "stance diff=1.40"
+            edge
+            for edge in edges
+            if edge.evidence_summary == "affect-proxy diff=1.40"
         ]
         assert len(extreme_edges) == 4
         assert all(edge.trust_score == 0.0 for edge in extreme_edges)
@@ -515,20 +586,32 @@ class TestProcessRound:
         result = process_round(scenario_id, branch_id, 2, round_two)
 
         assert result is not None
-        assert result["events"] == [
+        assert [
+            {
+                "type": event["type"],
+                "display_type": event["display_type"],
+                "agent_id": event["agent_id"],
+                "faction_key": event["faction_key"],
+                "shift": event["shift"],
+            }
+            for event in result["events"]
+        ] == [
             {
                 "type": "betrayal",
+                "display_type": "affect_shift_proxy",
                 "agent_id": "a1",
                 "faction_key": "indexed-first-faction",
                 "shift": 1.2,
             },
             {
                 "type": "betrayal",
+                "display_type": "affect_shift_proxy",
                 "agent_id": "a2",
                 "faction_key": "unknown",
                 "shift": 1.2,
             },
         ]
+        assert all(event["metric_kind"] == "affect_proxy" for event in result["events"])
         assert index_calls == [result["factions"]]
 
         with Session(get_engine()) as session:
@@ -561,6 +644,26 @@ class TestGetFactionTimeline:
     def test_returns_empty_for_no_data(self):
         result = get_faction_timeline("nonexistent", "b1")
         assert result == []
+
+    def test_timeline_exposes_machine_readable_affect_proxy_semantics(self):
+        messages = [
+            MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
+            MockMessage(agent_id="a2", emotion="angry", id="m2"),
+            MockMessage(agent_id="a3", emotion="hopeful", id="m3"),
+            MockMessage(agent_id="a4", emotion="cooperative", id="m4"),
+        ]
+        process_round("truthful-timeline", "b1", 1, messages)
+
+        timeline = get_faction_timeline("truthful-timeline", "b1")
+
+        assert timeline[0]["metric_kind"] == "affect_proxy"
+        assert timeline[0]["scope_kind"] == "branch_segment_only"
+        assert "pre-fork" in timeline[0]["scope_caveat"].lower()
+        assert "not verified" in timeline[0]["caveat"].lower()
+        faction = timeline[0]["factions"][0]
+        assert faction["metric_kind"] == "affect_proxy"
+        assert faction["affect_center"] == faction["stance_center"]
+        assert faction["member_share"] == faction["confidence"]
 
     def test_returns_populated_timeline(self):
         """Multiple rounds produce a multi-entry timeline."""
@@ -630,6 +733,8 @@ class TestGetFactionTimeline:
         assert len(r2_entry) == 1
         assert len(r2_entry[0]["events"]) >= 1
         assert r2_entry[0]["events"][0]["type"] == "betrayal"
+        assert r2_entry[0]["events"][0]["display_type"] == "affect_shift_proxy"
+        assert r2_entry[0]["events"][0]["metric_kind"] == "affect_proxy"
 
     def test_timeline_scoped_to_branch(self):
         """Timeline only returns data for the requested branch."""
@@ -1155,12 +1260,23 @@ class TestGetFactionRelations:
             "source_agent_id",
             "target_agent_id",
             "relation_type",
+            "display_relation_type",
+            "metric_kind",
+            "caveat",
             "weight",
+            "affect_alignment",
+            "affect_distance",
             "trust_score",
             "opposition_score",
             "evidence_summary",
         }
         assert edge["relation_type"] == "trust"
+        assert edge["display_relation_type"] == "affect_alignment"
+        assert edge["metric_kind"] == "affect_proxy"
+        assert edge["affect_alignment"] == edge["trust_score"]
+        assert edge["affect_distance"] == edge["opposition_score"]
+        assert "not verified" in edge["caveat"].lower()
+        assert result["scope_kind"] == "branch_segment_only"
         assert edge["weight"] == 1.0
         assert edge["trust_score"] == 1.0
         assert edge["evidence_summary"] == "stance diff=0.30"
@@ -1250,6 +1366,10 @@ class TestFactionRelationsEndpoint:
 
         assert response.status_code == 200
         assert response.json() == {
+            "metric_kind": "affect_proxy",
+            "caveat": response.json()["caveat"],
+            "scope_kind": "branch_segment_only",
+            "scope_caveat": response.json()["scope_caveat"],
             "edges": [],
             "truncated": False,
             "threshold": 0.65,

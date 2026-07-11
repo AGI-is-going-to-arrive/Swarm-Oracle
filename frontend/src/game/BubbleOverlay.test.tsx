@@ -70,6 +70,47 @@ describe('BubbleOverlay', () => {
     expect(await screen.findByRole('button', { name: 'Rome holds the line.' })).toBeInTheDocument();
   });
 
+  it('uses distinct unavailable and unknown visuals instead of the neutral class', async () => {
+    render(<BubbleOverlayHarness />);
+
+    act(() => {
+      dispatchVizEvent('viz:bubble_show', {
+        sprite_id: 'agent-unavailable',
+        bubble_text: 'Speech with unavailable metadata.',
+        bubble_mode: 'live',
+        emotion_metadata_status: 'unavailable',
+      });
+      dispatchVizEvent('viz:bubble_show', {
+        sprite_id: 'agent-unknown',
+        bubble_text: 'Legacy speech without metadata.',
+        bubble_mode: 'live',
+      });
+    });
+
+    const unavailable = await screen.findByRole('button', { name: 'Speech with unavailable metadata.' });
+    const unknown = await screen.findByRole('button', { name: 'Legacy speech without metadata.' });
+    expect(unavailable).toHaveClass('bubble-overlay__bubble--emotion-unavailable');
+    expect(unavailable).not.toHaveClass('bubble-overlay__bubble--emotion-neutral');
+    expect(unknown).toHaveClass('bubble-overlay__bubble--emotion-unknown');
+    expect(unknown).not.toHaveClass('bubble-overlay__bubble--emotion-neutral');
+  });
+
+  it('keeps explicit neutral metadata on the neutral visual', async () => {
+    render(<BubbleOverlayHarness />);
+
+    act(() => {
+      dispatchVizEvent('viz:bubble_show', {
+        sprite_id: 'agent-neutral',
+        bubble_text: 'A neutral observation.',
+        emotion: 'neutral',
+        emotion_metadata_status: 'available',
+      });
+    });
+
+    expect(await screen.findByRole('button', { name: 'A neutral observation.' }))
+      .toHaveClass('bubble-overlay__bubble--emotion-neutral');
+  });
+
   it('clears bubbles and dispatches agent detail requests from visual bubbles', async () => {
     const detailHandler = vi.fn();
     window.addEventListener('swarm:agent_detail_request', detailHandler);

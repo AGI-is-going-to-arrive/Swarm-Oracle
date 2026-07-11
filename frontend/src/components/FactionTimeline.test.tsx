@@ -95,15 +95,16 @@ const localeExpectations = {
     branchScope: 'Branch scope: Archive Branch',
     roundSpan: 'Round span: Round 1',
     membersSummary: '2 members',
-    stanceSummary: 'Stance 0.12',
-    confidenceSummary: 'Confidence 0.50',
-    betrayal: 'betrayal',
+    stanceSummary: 'Affect proxy 0.12',
+    confidenceSummary: 'Group share 0.50',
+    betrayal: 'Affect shift (proxy)',
     allianceFormed: 'alliance formed',
     actor: 'Actor a1',
     faction: 'Faction Moderates',
     unknownEvent: 'Unknown event',
     unknownType: 'Type shadow merger',
-    fallbackMetric: 'Stance —',
+    fallbackMetric: 'Affect proxy —',
+    disclosure: 'Derived from model-generated emotion/diverge fields; not verified trust, relationships, or stances.',
   },
   zh: {
     title: '阵营时间线',
@@ -113,15 +114,16 @@ const localeExpectations = {
     branchScope: '分支范围: Archive Branch',
     roundSpan: '轮次跨度: 第 1 轮',
     membersSummary: '2 名成员',
-    stanceSummary: '立场 0.12',
-    confidenceSummary: '置信度 0.50',
-    betrayal: '背叛',
+    stanceSummary: '情绪代理值 0.12',
+    confidenceSummary: '群体占比 0.50',
+    betrayal: '情绪变化（代理）',
     allianceFormed: '结盟',
     actor: '行动者 a1',
     faction: '阵营 Moderates',
     unknownEvent: '未知事件',
     unknownType: '类型 shadow merger',
-    fallbackMetric: '立场 —',
+    fallbackMetric: '情绪代理值 —',
+    disclosure: '由模型生成的 emotion/diverge 字段推导；不是已验证的信任、关系或立场。',
   },
 } satisfies Record<TestLanguage, {
   title: string;
@@ -140,6 +142,7 @@ const localeExpectations = {
   unknownEvent: string;
   unknownType: string;
   fallbackMetric: string;
+  disclosure: string;
 }>;
 
 async function createTestI18n(language: TestLanguage): Promise<I18nInstance> {
@@ -183,8 +186,8 @@ describe('FactionTimeline', () => {
     expect(zh.translation.factions.a11y_label).toBe(localeExpectations.zh.a11yLabel);
     expect(en.translation.factions.round_label).toBe('Round {{round}}');
     expect(zh.translation.factions.round_label).toBe('第 {{round}} 轮');
-    expect(en.translation.factions.badge_title).toBe('{{label}}: {{count}} members, stance {{stance}}');
-    expect(zh.translation.factions.badge_title).toBe('{{label}}：{{count}} 名成员，立场 {{stance}}');
+    expect(en.translation.factions.badge_title).toBe('{{label}}: {{count}} members, affect proxy {{stance}}');
+    expect(zh.translation.factions.badge_title).toBe('{{label}}：{{count}} 名成员，情绪代理值 {{stance}}');
     expect(en.translation.factions.event_labels.betrayal).toBe(localeExpectations.en.betrayal);
     expect(zh.translation.factions.event_labels.betrayal).toBe(localeExpectations.zh.betrayal);
     expect(en.translation.factions.event_labels.alliance_formed).toBe(localeExpectations.en.allianceFormed);
@@ -253,8 +256,9 @@ describe('FactionTimeline', () => {
     expect(screen.getByText(expected.membersSummary)).toBeInTheDocument();
     expect(screen.getByText(expected.stanceSummary)).toBeInTheDocument();
     expect(screen.getByText(expected.confidenceSummary)).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(expected.betrayal))).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(expected.allianceFormed))).toBeInTheDocument();
+    expect(screen.getByText(expected.disclosure)).toBeInTheDocument();
+    expect(screen.getByText(expected.betrayal)).toBeInTheDocument();
+    expect(screen.getByText(expected.allianceFormed)).toBeInTheDocument();
     expect(screen.getByText(expected.actor)).toBeInTheDocument();
     expect(screen.getAllByText(expected.faction)).toHaveLength(2);
   });
@@ -327,8 +331,8 @@ describe('FactionTimeline', () => {
   });
 
   it.each([
-    ['en', localeExpectations.en.fallbackMetric, 'Confidence —'],
-    ['zh', localeExpectations.zh.fallbackMetric, '置信度 —'],
+    ['en', localeExpectations.en.fallbackMetric, 'Group share —'],
+    ['zh', localeExpectations.zh.fallbackMetric, '群体占比 —'],
   ] as const)('renders missing stance and confidence safely in %s', async (language, expectedStance, expectedConfidence) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
       {
@@ -622,9 +626,9 @@ describe('FactionTimeline', () => {
     expect(zh.translation.factions.force_graph_title).toBe('阵营力导向图');
     expect(en.translation.factions.force_graph_slider_label).toBe('Round');
     expect(zh.translation.factions.force_graph_slider_label).toBe('轮次');
-    expect(en.translation.factions.force_graph_relation_trust).toBe('Trust');
-    expect(zh.translation.factions.force_graph_relation_trust).toBe('信任');
-    expect(en.translation.factions.force_graph_relation_opposition).toBe('Opposition');
-    expect(zh.translation.factions.force_graph_relation_opposition).toBe('对抗');
+    expect(en.translation.factions.force_graph_relation_trust).toBe('Affect alignment');
+    expect(zh.translation.factions.force_graph_relation_trust).toBe('情绪互动相似度');
+    expect(en.translation.factions.force_graph_relation_opposition).toBe('Affect distance');
+    expect(zh.translation.factions.force_graph_relation_opposition).toBe('情绪互动差异度');
   });
 });

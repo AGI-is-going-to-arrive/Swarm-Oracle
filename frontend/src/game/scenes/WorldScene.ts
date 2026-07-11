@@ -15,7 +15,13 @@
 import Phaser from 'phaser';
 import i18next from 'i18next';
 import { predictBubbleTextSize } from '../../lib/textLayout/canvasTextPredict';
-import { EventBridge, dispatchVizEvent, type SpritePositionUpdate } from '../managers/EventBridge';
+import {
+  EventBridge,
+  dispatchVizEvent,
+  resolveBubbleEmotionState,
+  shouldClearEmotionHalo,
+  type SpritePositionUpdate,
+} from '../managers/EventBridge';
 import {
   CHARACTER_SPRITE_KEYS,
   getSceneTextureKey,
@@ -163,8 +169,11 @@ const BUBBLE_STYLES: Record<string, { bg: number; bgAlpha: number; borderColor: 
   cooperative: { bg: 0xe3f2fd, bgAlpha: 0.95, borderColor: 0x2196F3 },
   confident:   { bg: 0xe8f5e9, bgAlpha: 0.95, borderColor: 0x4CAF50 },
   neutral:     { bg: 0xffffff, bgAlpha: 0.95, borderColor: 0x999999 },
+  unavailable: { bg: 0xfff1f3, bgAlpha: 0.95, borderColor: 0x9f2442, indicator: '∅' },
+  unknown:     { bg: 0xf2f4f7, bgAlpha: 0.95, borderColor: 0x667085, indicator: '?' },
 };
-const DEFAULT_BUBBLE_STYLE = BUBBLE_STYLES.neutral;
+const DEFAULT_BUBBLE_STYLE = BUBBLE_STYLES.unknown;
+const BUBBLE_EMOTION_STATES = new Set(Object.keys(BUBBLE_STYLES));
 const BUBBLE_TEXT_FONT_STACK = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
 const BUBBLE_BASE_OFFSET_Y = -74;
 const BUBBLE_MAX_STACK = 4;
@@ -296,7 +305,7 @@ export class WorldScene extends Phaser.Scene {
       : [...this.bubbles.entries()].map(([agentId, bubble]) => ({
         agent_id: agentId,
         text: this.extractBubbleText(bubble),
-        emotion: (bubble.getData('emotion') as string | undefined) || 'neutral',
+        emotion: (bubble.getData('emotion') as string | undefined) ?? 'unknown',
         visible: bubble.visible,
       }));
 
@@ -867,19 +876,30 @@ export class WorldScene extends Phaser.Scene {
       EventBridge.on('viz:bubble_show', (data) => {
         const spriteId = data.sprite_id as string;
         const text = data.bubble_text as string;
-        const emotion = data.emotion as string | undefined;
-        const haloColor = data.halo_color as string | undefined;
+        const rawEmotion = typeof data.emotion === 'string' ? data.emotion.trim() : '';
+        const emotionMetadataStatus = data.emotion_metadata_status;
+        const emotionState = resolveBubbleEmotionState(
+          rawEmotion,
+          emotionMetadataStatus,
+          BUBBLE_EMOTION_STATES,
+        );
+        const haloColor = emotionState === 'unavailable' || emotionState === 'unknown'
+          ? undefined
+          : data.halo_color as string | undefined;
         const bubbleMode = data.bubble_mode === 'replay' ? 'replay' : 'live';
         const agent = this.agentSprites.get(spriteId);
         if (!spriteId || typeof text !== 'string') return;
-        if (agent && emotion) {
-          agent.emotion = emotion;
+        if (shouldClearEmotionHalo(emotionState)) {
+          this.clearHalo(spriteId);
+        }
+        if (agent && emotionMetadataStatus !== 'unavailable' && rawEmotion) {
+          agent.emotion = rawEmotion;
         }
         if (this.useDomBubbles) {
-          this.trackDomBubble(spriteId, text, emotion, bubbleMode);
+          this.trackDomBubble(spriteId, text, emotionState, bubbleMode);
           return;
         }
-        this.showBubble(spriteId, text, emotion, haloColor, bubbleMode);
+        this.showBubble(spriteId, text, emotionState, haloColor, bubbleMode);
       })
     );
 
@@ -1026,7 +1046,7 @@ export class WorldScene extends Phaser.Scene {
       })
     );
 
-    // Phase 3 F5: Faction events (alliance/betrayal) — pooled visual flash
+    // Phase 3 F5: Faction events — legacy `betrayal` means affect-proxy shift.
     this.unsubscribers.push(
       EventBridge.on('viz:faction_event', (data) => {
         const events = data.events as Array<{
@@ -1548,7 +1568,7 @@ export class WorldScene extends Phaser.Scene {
     bubbleContainer.add(textObj);
     bubbleContainer.setAlpha(0);
     bubbleContainer.setData('fullText', visibleText);
-    bubbleContainer.setData('emotion', emotion || 'neutral');
+    bubbleContainer.setData('emotion', emotion ?? 'unknown');
     bubbleContainer.setData('bubbleWidth', bubbleWidth);
     bubbleContainer.setData('bubbleHeight', bubbleHeight);
     bubbleContainer.setData('bubbleMode', bubbleMode);
@@ -1637,7 +1657,7 @@ export class WorldScene extends Phaser.Scene {
     const lifetimeMs = typedChars * timing.charDelayMs + timing.lingerMs;
     this.domBubbleMetadata.set(spriteId, {
       text: normalizedText,
-      emotion: emotion || 'neutral',
+      emotion: emotion ?? 'unknown',
       mode,
       expiresAt: (this.time?.now ?? performance.now()) + lifetimeMs,
     });
@@ -1704,6 +1724,22 @@ export class WorldScene extends Phaser.Scene {
   }
 
   // ── Emotion Halos ─────────────────────────────────────
+
+  private clearHalo(spriteId: string): void {
+    const agent = this.agentSprites.get(spriteId);
+    if (!agent) return;
+
+    if (agent.haloTween) {
+      agent.haloTween.stop();
+      agent.haloTween = undefined;
+    }
+
+    if (agent.haloGraphics) {
+      agent.haloGraphics.clear();
+      agent.haloGraphics.setAlpha(0);
+      agent.haloGraphics.setScale(1);
+    }
+  }
 
   private updateHalo(spriteId: string, haloColor: string): void {
     const agent = this.agentSprites.get(spriteId);

@@ -539,7 +539,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
               (t) => !(t.agent_id === d.agent_id && t.branch === d.branch && t.round === d.round),
             ),
             agents: state.agents.map((a) =>
-              a.id === d.agent_id ? { ...a, emotion: d.emotion } : a,
+              a.id === d.agent_id && d.emotion_metadata_status !== 'unavailable'
+                ? { ...a, emotion: d.emotion }
+                : a,
             ),
           };
         });

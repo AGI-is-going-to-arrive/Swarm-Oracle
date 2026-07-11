@@ -42,7 +42,11 @@ from app.services.debate import (
 )
 from app.services.debate_argument_map import extract_argument_units
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
-from app.services.llm_client import safe_llm_error_payload, validate_llm_base_url
+from app.services.llm_client import (
+    is_local_provider_url,
+    safe_llm_error_payload,
+    validate_llm_base_url,
+)
 from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
 
 router = APIRouter(tags=["debate"], dependencies=[Depends(verify_session)])
@@ -746,7 +750,7 @@ async def create_debate(
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
             raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
-        if not req.llm_api_key:
+        if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
@@ -755,6 +759,9 @@ async def create_debate(
         DebateSide.OPPOSITION.value: req.opposition_model_profile_id,
         DebateSide.JUDGE.value: req.judge_model_profile_id,
     }
+    has_global_provider_binding = any(
+        (req.llm_api_key, req.llm_base_url, req.llm_model)
+    )
     llm_overrides_by_side: dict[str, dict[str, Any]] | None = None
     if any(profile_ids.values()):
         llm_overrides_by_side = {}
@@ -766,11 +773,29 @@ async def create_debate(
                     profile_session,
                     user_id=effective_user_id,
                     model_profile_id=profile_id,
-                    explicit_api_key=req.llm_api_key,
-                    explicit_base_url=req.llm_base_url,
-                    explicit_model=req.llm_model,
-                    explicit_requests_per_minute=req.llm_requests_per_minute,
-                    explicit_tokens_per_minute=req.llm_tokens_per_minute,
+                    # A global BYOK binding is fallback for roles without a
+                    # profile; it must never replace a selected role profile.
+                    # Rate-only request policy remains a deliberate all-role
+                    # override when no competing global provider is present.
+                    explicit_api_key=(
+                        None if has_global_provider_binding else req.llm_api_key
+                    ),
+                    explicit_base_url=(
+                        None if has_global_provider_binding else req.llm_base_url
+                    ),
+                    explicit_model=(
+                        None if has_global_provider_binding else req.llm_model
+                    ),
+                    explicit_requests_per_minute=(
+                        None
+                        if has_global_provider_binding
+                        else req.llm_requests_per_minute
+                    ),
+                    explicit_tokens_per_minute=(
+                        None
+                        if has_global_provider_binding
+                        else req.llm_tokens_per_minute
+                    ),
                 )
                 if policy is not None:
                     llm_overrides_by_side[side] = _debate_policy_to_overrides(

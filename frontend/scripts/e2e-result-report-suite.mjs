@@ -716,10 +716,10 @@ async function assertChartsRender(page, steps, isZh) {
     const expectedMembers = isZh ? "4 名成员" : "4 members";
     steps.push(createStep(`${locale}-faction-members`, facText.includes(expectedMembers), facText));
 
-    const expectedRelations = isZh ? "关系连接：7" : "Relationship links: 7";
+    const expectedRelations = isZh ? "情绪代理连接：7" : "Affect-proxy links: 7";
     steps.push(createStep(`${locale}-faction-relations`, facText.includes(expectedRelations), facText));
 
-    const expectedOpposition = isZh ? "平均对立度：0.42" : "Avg. opposition: 0.42";
+    const expectedOpposition = isZh ? "平均情绪差异度：0.42" : "Avg. affect distance: 0.42";
     steps.push(createStep(`${locale}-faction-opposition`, facText.includes(expectedOpposition), facText));
   } else {
     steps.push(createStep(`${locale}-faction-title`, false));
@@ -731,7 +731,7 @@ async function assertChartsRender(page, steps, isZh) {
 
   // 3. factionOppositionNone copy
   const pageText = await page.locator(".report-panel-container").first().textContent().catch(() => "") || "";
-  const expectedOppNone = isZh ? "平均对立度：暂无" : "Avg. opposition: n/a";
+  const expectedOppNone = isZh ? "平均情绪差异度：暂无" : "Avg. affect distance: n/a";
   steps.push(createStep(`${locale}-faction-opposition-none`, pageText.includes(expectedOppNone), pageText));
 
   // 4. empty-data with reason
@@ -842,11 +842,13 @@ async function runToolTraceSseLifecycleTest(page, steps, isZh, state, locale) {
   const sectionTitle = isZh ? /关键驱动力/ : /Key Drivers/;
   const sectionHeading = page.getByRole("heading", { name: sectionTitle }).first();
   await sectionHeading.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+  const partialBanner = page.locator(".report-partial-banner").first();
+  await partialBanner.waitFor({ state: "hidden", timeout: 12000 }).catch(() => {});
   steps.push(createStep(
     `tooltrace-report-recovers-${locale}`,
     refreshed
       && await sectionHeading.isVisible().catch(() => false)
-      && !(await page.locator(".report-partial-banner").first().isVisible().catch(() => false)),
+      && !(await partialBanner.isVisible().catch(() => false)),
   ));
 
   // The finite SSE truthfully reaches EOF, so standalone onRefresh remounts the
@@ -898,7 +900,9 @@ async function runEvidenceDeepLink(page, steps) {
 
 async function runForcedColorsReducedMotionSmoke(page, steps) {
   await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" }).catch(() => {});
-  await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
   const panel = page.locator(".report-panel-container").first();
   await panel.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
   steps.push(createStep(
@@ -1133,8 +1137,6 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
     }));
     if (page) await saveScreenshot(page, path.join(outputDir, "crash.png"));
   } finally {
-    if (page) await closePlaywrightPage(page, `result-report-${mode}-${browserName}-final-page`);
-    if (context) await closePlaywrightContext(context, `result-report-${mode}-${browserName}-final-context`);
     await closePlaywrightBrowser(browser, `result-report-${mode}-${browserName}-browser`);
   }
 

@@ -11,7 +11,11 @@ from sqlmodel import Session, select
 from app.api.errors import api_error
 from app.config import settings
 from app.models.model_profile import ModelProfile
-from app.services.llm_client import normalize_native_search_upstream, validate_llm_base_url
+from app.services.llm_client import (
+    is_local_provider_url,
+    normalize_native_search_upstream,
+    validate_llm_base_url,
+)
 
 MODEL_PROFILE_STORAGE_NOTICE = (
     "API keys are stored in local plaintext SQLite for local single-user deployments."
@@ -88,7 +92,13 @@ def _normalize_api_key(value: object) -> str | None:
 
 
 def _ensure_base_url_has_key(*, base_url: str | None, api_key: str | None) -> None:
-    if base_url and not api_key:
+    if api_key and not base_url:
+        raise api_error(
+            400,
+            "BYOK_API_KEY_REQUIRED",
+            "api_key requires base_url for BYOK model profiles",
+        )
+    if base_url and not api_key and not is_local_provider_url(base_url):
         raise api_error(
             400,
             "BYOK_API_KEY_REQUIRED",
@@ -135,25 +145,26 @@ def list_model_profiles(session: Session, user_id: str) -> list[ModelProfile]:
     )
 
 
-def has_profile_with_api_key(session: Session, user_id: str | None = None) -> bool:
-    """Return whether model-profile SSOT has persisted LLM credentials.
+def has_usable_model_profile(session: Session, user_id: str | None = None) -> bool:
+    """Return whether model-profile SSOT has a usable provider configuration.
 
     When a signed session principal is available, callers pass ``user_id`` to
     keep the check aligned with profile CRUD scoping.  Local self-hosted
-    capability probes may not have a stable user identity, so ``user_id=None``
-    intentionally checks for any local profile with a non-empty key.
+    providers are usable without a key when both base URL and model are set.
+    ``user_id=None`` intentionally checks any local profile.
     """
-    stmt = (
-        select(ModelProfile.id)
-        .where(
-            ModelProfile.api_key.is_not(None),
-            ModelProfile.api_key != "",
-        )
-        .limit(1)
-    )
+    stmt = select(ModelProfile)
     if user_id:
         stmt = stmt.where(ModelProfile.user_id == user_id)
-    return session.exec(stmt).first() is not None
+    return any(
+        bool((profile.base_url or "").strip())
+        and bool((profile.model or "").strip())
+        and (
+            bool((profile.api_key or "").strip())
+            or is_local_provider_url(profile.base_url)
+        )
+        for profile in session.exec(stmt).all()
+    )
 
 
 def create_model_profile(session: Session, payload: dict[str, Any], user_id: str) -> ModelProfile:
@@ -209,6 +220,9 @@ def update_model_profile(
     updates: dict[str, Any],
 ) -> ModelProfile:
     profile = _profile_or_404(session, profile_id, user_id)
+    original_provider = profile.provider
+    original_base_url = profile.base_url
+    original_model = profile.model
 
     if "name" in updates:
         name = _clean_text(updates.get("name"), max_length=100, field_name="name")
@@ -221,22 +235,59 @@ def update_model_profile(
             max_length=500,
             field_name="description",
         )
+    next_provider = profile.provider
     if "provider" in updates:
-        profile.provider = (
+        next_provider = (
             _clean_text(updates.get("provider"), max_length=64, field_name="provider")
             or "openai"
         ).lower()
+    next_model = profile.model
     if "model" in updates:
         model = _clean_text(updates.get("model"), max_length=120, field_name="model")
         if not model:
             raise api_error(400, "MODEL_PROFILE_MODEL_REQUIRED", "model is required")
-        profile.model = model
-    if "api_key" in updates:
-        profile.api_key = _normalize_api_key(updates.get("api_key"))
+        next_model = model
+    next_api_key = (
+        _normalize_api_key(updates.get("api_key"))
+        if "api_key" in updates
+        else profile.api_key
+    )
+    next_base_url = profile.base_url
     if "base_url" in updates:
-        profile.base_url = _normalize_base_url(updates.get("base_url"))
+        next_base_url = _normalize_base_url(updates.get("base_url"))
+        base_url_changed = next_base_url != profile.base_url
+        if base_url_changed:
+            if (
+                next_base_url
+                and not is_local_provider_url(next_base_url)
+                and "api_key" not in updates
+            ):
+                raise api_error(
+                    400,
+                    "BYOK_API_KEY_REQUIRED",
+                    "base_url requires api_key for BYOK model profiles",
+                )
+            if next_base_url and "model" not in updates:
+                raise api_error(
+                    400,
+                    "MODEL_PROFILE_MODEL_REQUIRED",
+                    "model is required when base_url changes",
+                )
+            if "api_key" not in updates:
+                # A credential belongs to its previous endpoint. Local/no-endpoint
+                # transitions must not silently carry that secret to a new target.
+                next_api_key = None
 
-    _ensure_base_url_has_key(base_url=profile.base_url, api_key=profile.api_key)
+    _ensure_base_url_has_key(base_url=next_base_url, api_key=next_api_key)
+    provider_policy_changed = (
+        next_provider != original_provider
+        or next_base_url != original_base_url
+        or next_model != original_model
+    )
+    profile.provider = next_provider
+    profile.base_url = next_base_url
+    profile.model = next_model
+    profile.api_key = next_api_key
 
     for field_name in ("rpm", "tpm", "concurrency"):
         if field_name in updates:
@@ -245,15 +296,23 @@ def update_model_profile(
                 field_name,
                 _clean_limit(updates.get(field_name), field_name=field_name),
             )
+        elif provider_policy_changed:
+            setattr(profile, field_name, None)
 
     if "supports_structured_outputs" in updates:
         profile.supports_structured_outputs = updates["supports_structured_outputs"]
+    elif provider_policy_changed:
+        profile.supports_structured_outputs = None
     if "supports_native_search" in updates:
         profile.supports_native_search = updates["supports_native_search"]
+    elif provider_policy_changed:
+        profile.supports_native_search = None
     if "native_search_upstream" in updates:
         profile.native_search_upstream = normalize_native_search_upstream(
             updates["native_search_upstream"]
         )
+    elif provider_policy_changed:
+        profile.native_search_upstream = None
 
     profile.updated_at = _now()
     session.add(profile)
@@ -291,34 +350,77 @@ def resolve_model_profile_policy(
         )
 
     profile = _profile_or_404(session, model_profile_id, user_id)
+    explicit_api_key_normalized = (
+        _normalize_api_key(explicit_api_key)
+        if explicit_api_key is not None
+        else None
+    )
     explicit_base_url_normalized = (
         _normalize_base_url(explicit_base_url)
         if explicit_base_url is not None
         else None
     )
-    base_url_changed = (
-        explicit_base_url_normalized is not None
-        and explicit_base_url_normalized != profile.base_url
+    explicit_model_normalized = (
+        _clean_text(explicit_model, max_length=120, field_name="model")
+        if explicit_model is not None
+        else None
     )
-    if base_url_changed and explicit_api_key is None:
+    has_any_explicit_provider = any(
+        value is not None
+        for value in (
+            explicit_api_key_normalized,
+            explicit_base_url_normalized,
+            explicit_model_normalized,
+        )
+    )
+    has_complete_explicit_provider = (
+        explicit_base_url_normalized is not None
+        and explicit_model_normalized is not None
+        and (
+            explicit_api_key_normalized is not None
+            or is_local_provider_url(explicit_base_url_normalized)
+        )
+    )
+    if has_any_explicit_provider and not has_complete_explicit_provider:
         raise api_error(
             400,
             "BYOK_API_KEY_REQUIRED",
-            "base_url requires api_key for BYOK model profiles",
+            "A profile provider override requires API key, base URL, and model, "
+            "or a complete keyless local base URL and model",
         )
 
-    base_url = explicit_base_url_normalized or profile.base_url
-    api_key = explicit_api_key if explicit_api_key is not None else profile.api_key
-    model = explicit_model if explicit_model and explicit_model.strip() else profile.model
+    profile_api_key = _normalize_api_key(profile.api_key)
+    profile_base_url = _normalize_base_url(profile.base_url)
+    profile_model = _clean_text(profile.model, max_length=120, field_name="model")
+    provider_binding_changed = has_complete_explicit_provider and (
+        explicit_api_key_normalized != profile_api_key
+        or explicit_base_url_normalized != profile_base_url
+        or explicit_model_normalized != profile_model
+    )
+
+    if has_complete_explicit_provider:
+        base_url = explicit_base_url_normalized
+        api_key = explicit_api_key_normalized
+        model = explicit_model_normalized
+    else:
+        base_url = profile_base_url
+        api_key = profile_api_key
+        model = profile_model
+        if not base_url or not model:
+            raise api_error(
+                400,
+                "BYOK_API_KEY_REQUIRED",
+                "Model profile requires a bound base URL and model",
+            )
     requests_per_minute = (
         explicit_requests_per_minute
         if explicit_requests_per_minute is not None
-        else profile.rpm
+        else (None if provider_binding_changed else profile.rpm)
     )
     tokens_per_minute = (
         explicit_tokens_per_minute
         if explicit_tokens_per_minute is not None
-        else profile.tpm
+        else (None if provider_binding_changed else profile.tpm)
     )
     _ensure_base_url_has_key(base_url=base_url, api_key=api_key)
 
@@ -328,9 +430,15 @@ def resolve_model_profile_policy(
         model=model,
         requests_per_minute=requests_per_minute,
         tokens_per_minute=tokens_per_minute,
-        concurrency=profile.concurrency,
-        supports_structured_outputs=profile.supports_structured_outputs,
-        supports_native_search=profile.supports_native_search,
-        native_search_upstream=profile.native_search_upstream,
-        model_profile_id=profile.id,
+        concurrency=None if provider_binding_changed else profile.concurrency,
+        supports_structured_outputs=(
+            None if provider_binding_changed else profile.supports_structured_outputs
+        ),
+        supports_native_search=(
+            None if provider_binding_changed else profile.supports_native_search
+        ),
+        native_search_upstream=(
+            None if provider_binding_changed else profile.native_search_upstream
+        ),
+        model_profile_id=None if provider_binding_changed else profile.id,
     )

@@ -413,6 +413,75 @@ class TestAppendRoundNodes:
             assert len(nodes) == 2
             assert all(n.node_type == "event" for n in nodes)
 
+    def test_metadata_unavailable_keeps_event_but_excludes_affect_state(self):
+        initial_messages = [
+            {
+                "agent_id": "a1",
+                "agent_name": "Unavailable Agent",
+                "content": "The real speech remains visible.",
+                "emotion": "confident",
+                "id": "m1",
+            },
+            MockMessage(emotion="confident", agent_id="a2", id="m2"),
+            MockMessage(emotion="cooperative", agent_id="a3", id="m3"),
+        ]
+        append_round_nodes("sc_metadata_gap", "br1", 1, initial_messages)
+
+        replayed_messages = [
+            {
+                "agent_id": "a1",
+                "agent_name": "Unavailable Agent",
+                "content": "The real speech remains visible.",
+                "emotion": (
+                    "__swarmoracle_metadata_unavailable__:LLM_AUTH_FAILED"
+                ),
+                "id": "m1",
+            },
+            MockMessage(emotion="confident", agent_id="a2", id="m2"),
+            MockMessage(emotion="cooperative", agent_id="a3", id="m3"),
+        ]
+
+        append_round_nodes("sc_metadata_gap", "br1", 1, replayed_messages)
+        result = build_snapshot("sc_metadata_gap", branch_id="br1")
+
+        unavailable_node = next(
+            node
+            for node in result["nodes"]
+            if node["payload"].get("agent_id") == "a1"
+        )
+        assert unavailable_node["type"] == "event"
+        assert unavailable_node["payload"]["content"] == (
+            "The real speech remains visible."
+        )
+        assert unavailable_node["payload"]["emotion"] is None
+        assert unavailable_node["payload"]["stance_score"] is None
+        assert unavailable_node["payload"]["emotion_metadata_status"] == "unavailable"
+        assert (
+            unavailable_node["payload"]["emotion_metadata_failure_code"]
+            == "LLM_AUTH_FAILED"
+        )
+
+        with Session(get_engine()) as session:
+            frames = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc_metadata_gap",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 1,
+                )
+            ).all()
+        assert {frame.agent_id for frame in frames} == {"a2", "a3"}
+
+        affect_edges = [
+            edge
+            for edge in result["edges"]
+            if edge["type"] in {"supports_stance", "opposes_stance"}
+        ]
+        assert len(affect_edges) == 1
+        assert all(
+            unavailable_node["id"] not in {edge["source"], edge["target"]}
+            for edge in affect_edges
+        )
+
     def test_creates_fork_node_and_edges(self):
         messages = [
             MockMessage(emotion="neutral", agent_id="a1", id="m10", content="trigger"),
@@ -911,13 +980,16 @@ class TestInterAgentEdges:
         supports = _edges_of_type(result, "supports_stance")
 
         assert len(supports) == 1
+        assert supports[0]["display_type"] == "affect_alignment_proxy"
+        assert supports[0]["metric_kind"] == "affect_proxy"
+        assert "not verified" in supports[0]["caveat"].lower()
         assert supports[0]["evidence"] == {
-            "confidence_tier": "medium",
+            "confidence_tier": "low",
             "source_ref": None,
             "source_round_number": 1,
             "detail": supports[0]["evidence"]["detail"],
         }
-        assert '"rule": "supports_stance"' in supports[0]["evidence"]["detail"]
+        assert '"display_type": "affect_alignment_proxy"' in supports[0]["evidence"]["detail"]
 
     def test_opposes_stance_edge_for_opposing_agents(self):
         append_round_nodes(
@@ -934,9 +1006,11 @@ class TestInterAgentEdges:
         opposes = _edges_of_type(result, "opposes_stance")
 
         assert len(opposes) == 1
-        assert opposes[0]["evidence"]["confidence_tier"] == "medium"
+        assert opposes[0]["display_type"] == "affect_distance_proxy"
+        assert opposes[0]["metric_kind"] == "affect_proxy"
+        assert opposes[0]["evidence"]["confidence_tier"] == "low"
         assert opposes[0]["evidence"]["source_round_number"] == 1
-        assert '"rule": "opposes_stance"' in opposes[0]["evidence"]["detail"]
+        assert '"display_type": "affect_distance_proxy"' in opposes[0]["evidence"]["detail"]
 
     def test_no_self_edges_created(self):
         append_round_nodes(
@@ -1815,6 +1889,8 @@ class TestBuildSnapshot:
         result = build_snapshot("nonexistent_scenario")
         assert result == {
             "id": None,
+            "scope_kind": "branch_segment_only",
+            "scope_caveat": result["scope_caveat"],
             "available_branches": [],
             "nodes": [],
             "edges": [],
@@ -2776,11 +2852,16 @@ class TestStanceShift:
         append_round_nodes("sc_ss_i18n", "br1", 2, m2)
 
         result = build_snapshot("sc_ss_i18n")
+        assert result["scope_kind"] == "branch_segment_only"
+        assert "pre-fork" in result["scope_caveat"].lower()
         shift = next(node for node in result["nodes"] if node["type"] == "stance_shift")
 
-        assert shift["label"] == "a1 stance shifted"
+        assert shift["label"] == "a1 affect proxy shifted"
+        assert shift["payload"]["display_type"] == "affect_shift_proxy"
+        assert shift["payload"]["metric_kind"] == "affect_proxy"
+        assert "not verified" in shift["payload"]["caveat"].lower()
         assert shift["payload"]["label_i18n"] == {
-            "key": "causal.node.stance_shift",
+            "key": "causal.node.affect_shift_proxy",
             "params": {"agent_name": "a1"},
         }
 

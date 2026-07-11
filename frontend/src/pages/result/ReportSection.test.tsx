@@ -23,9 +23,9 @@ const I18N: Record<string, string> = {
   'result.report.factionChartTitle': '[L10N factionChartTitle]',
   'result.report.dominantBranch': '[L10N dominant simulated path]',
   'result.report.factionMembers': '{{count}} members',
-  'result.report.factionRelations': 'Relationship links: {{count}}',
-  'result.report.factionOpposition': 'Avg. opposition: {{value}}',
-  'result.report.factionOppositionNone': 'Avg. opposition: n/a',
+  'result.report.factionRelations': 'Affect-proxy links: {{count}}',
+  'result.report.factionOpposition': 'Avg. affect distance: {{value}}',
+  'result.report.factionOppositionNone': 'Avg. affect distance: n/a',
   'result.report.chartUnavailable': '[L10N chartUnavailable]',
   'result.report.chartEmptyReason.no_branches': 'No completed branches to chart yet.',
   'result.report.chartEmptyReason.feature_disabled': "This chart's data source is turned off.",
@@ -290,8 +290,10 @@ describe('ReportSection', () => {
 
     expect(screen.getByText('Faction One Label')).toBeInTheDocument();
     expect(screen.getByText('5 members (75%)')).toBeInTheDocument();
-    expect(screen.getByText('Relationship links: 12')).toBeInTheDocument();
-    expect(screen.getByText('Avg. opposition: 0.45')).toBeInTheDocument();
+    expect(screen.getByText('Affect-proxy links: 12')).toBeInTheDocument();
+    expect(screen.getByText('Avg. affect distance: 0.45')).toBeInTheDocument();
+    expect(screen.queryByText('Relationship links: 12')).not.toBeInTheDocument();
+    expect(screen.queryByText('Avg. opposition: 0.45')).not.toBeInTheDocument();
   });
 
   it('renders known-type chart with missing/empty data using empty-state line', () => {

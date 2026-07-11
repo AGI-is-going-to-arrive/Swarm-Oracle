@@ -169,6 +169,40 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().thinkingAgents).toHaveLength(0);
   });
 
+  it("keeps the last known roster emotion when speech metadata is unavailable", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-metadata", {
+      agents: [{
+        id: "a1",
+        name: "曹操",
+        role: "主公",
+        tier: "CORE",
+        emotion: "alert",
+      }],
+    }));
+
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "曹操",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "真实发言仍然保留。",
+        emotion: "",
+        emotion_metadata_status: "unavailable",
+        emotion_metadata_failure_code: "LLM_TIMEOUT",
+      },
+    } as unknown as WSEvent);
+
+    expect(store.getState().agents[0].emotion).toBe("alert");
+    expect(store.getState().messages[0]).toMatchObject({
+      emotion: "",
+      emotion_metadata_status: "unavailable",
+      emotion_metadata_failure_code: "LLM_TIMEOUT",
+    });
+  });
+
   it("clears stale thinkingAgents when a scenario snapshot resync is applied", () => {
     const store = useSimulationStore;
 

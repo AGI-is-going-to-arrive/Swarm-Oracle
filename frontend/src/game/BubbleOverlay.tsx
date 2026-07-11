@@ -3,7 +3,10 @@ import type * as React from 'react';
 import useReducedMotion from '../hooks/useReducedMotion';
 import { EMOTION_HALO_COLORS } from './constants/emotionColors';
 import { getAgentPaletteToken } from './constants/agentPalette';
-import type { SpritePositionUpdate } from './managers/EventBridge';
+import {
+  resolveBubbleEmotionState,
+  type SpritePositionUpdate,
+} from './managers/EventBridge';
 import './BubbleOverlay.css';
 
 interface BubbleOverlayProps {
@@ -64,8 +67,8 @@ function getVisibleLimit(agentCount: number, fallbackCount: number): number {
   return Math.max(0, Math.min(effectiveCount, MAX_VISIBLE_BUBBLES));
 }
 
-function normalizeEmotion(value: string | null): string {
-  return value && EMOTION_CLASS_NAMES.has(value) ? value : 'neutral';
+function normalizeEmotion(value: string | null, metadataStatus: unknown): string {
+  return resolveBubbleEmotionState(value, metadataStatus, EMOTION_CLASS_NAMES);
 }
 
 function parseBubbleMode(value: unknown): BubbleMode {
@@ -355,7 +358,10 @@ export function BubbleOverlay({ containerRef }: BubbleOverlayProps) {
       const metrics = getStageMetrics(containerRef.current, canvasRectRef.current);
       setIsCompact((current) => current === metrics.compact ? current : metrics.compact);
 
-      const emotion = normalizeEmotion(readString(data.emotion));
+      const emotion = normalizeEmotion(
+        readString(data.emotion),
+        data.emotion_metadata_status,
+      );
       const mode = parseBubbleMode(data.bubble_mode);
       const palette = getAgentPaletteToken(spriteId);
       const now = performance.now();

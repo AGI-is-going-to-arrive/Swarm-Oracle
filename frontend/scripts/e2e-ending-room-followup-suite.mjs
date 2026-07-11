@@ -13,7 +13,11 @@ import {
   isReadonlyReplayUiReady,
 } from "../src/lib/endingRoomReplayAutomation.js";
 import { assertReplayCoverage } from "../src/lib/e2eReplayGuards.js";
-import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
+import {
+  closePlaywrightBrowsers,
+  closePlaywrightContext,
+  closePlaywrightPage,
+} from "./playwrightTeardown.mjs";
 
 const DESKTOP_CONTEXT_OPTIONS = {
   viewport: { width: 1600, height: 900 },
@@ -29,6 +33,7 @@ const BROWSER_LAUNCH_OPTIONS = {
   headless: true,
   args: ["--use-gl=angle", "--use-angle=swiftshader"],
 };
+const OWNED_FALLBACK_BROWSERS = new Set();
 const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
 const VALID_LOCALES = new Set(["zh", "en"]);
 const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
@@ -804,6 +809,7 @@ async function reopenLiveEndingRoomPage(
     }
     if (!freshContext) {
       const fallbackBrowser = await chromium.launch(BROWSER_LAUNCH_OPTIONS);
+      OWNED_FALLBACK_BROWSERS.add(fallbackBrowser);
       freshContext = await fallbackBrowser.newContext(contextOptions);
       await configureLocaleContext(freshContext, getContextLocale(context));
       console.warn(`[ending-room] ${label}: relaunched browser after context/browser closure`);
@@ -3119,17 +3125,13 @@ async function main() {
     fs.writeFileSync(path.join(args.outputDir, "summary.json"), JSON.stringify(summary, null, 2));
     console.log(JSON.stringify(summary, null, 2));
   } finally {
-    await closePlaywrightBrowser(browser, "ending-room-browser");
+    const ownedBrowsers = [browser, ...OWNED_FALLBACK_BROWSERS];
+    OWNED_FALLBACK_BROWSERS.clear();
+    await closePlaywrightBrowsers(ownedBrowsers, "ending-room", 20000);
   }
 }
 
-main()
-  .then(() => {
-    // Playwright can leave lingering handles even after best-effort teardown.
-    // This script is CLI-only, so exit explicitly once all artifacts are written.
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

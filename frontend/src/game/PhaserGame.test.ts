@@ -114,14 +114,18 @@ vi.mock('./scenes/TitleScene', () => ({ TitleScene: class TitleScene {} }));
 vi.mock('./scenes/WorldScene', () => ({ WorldScene: class WorldScene {} }));
 vi.mock('./scenes/EndingScene', () => ({ EndingScene: class EndingScene {} }));
 
-vi.mock('./managers/EventBridge', () => ({
-  EventBridge: {
-    start: mockEventBridgeStart,
-    stop: mockEventBridgeStop,
-    on: mockEventBridgeOn,
-  },
-  dispatchVizEvent: mockDispatchVizEvent,
-}));
+vi.mock('./managers/EventBridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./managers/EventBridge')>();
+  return {
+    ...actual,
+    EventBridge: {
+      start: mockEventBridgeStart,
+      stop: mockEventBridgeStop,
+      on: mockEventBridgeOn,
+    },
+    dispatchVizEvent: mockDispatchVizEvent,
+  };
+});
 
 vi.mock('./managers/VizSynthesizer', () => ({
   clipBubbleEventText: (value: string) => value,
@@ -255,6 +259,63 @@ describe('PhaserGame replay speed behavior', () => {
     const view = render(createElement(PhaserGame, { useDomBubbles: true }));
 
     expect(mockGameInstances[0]?.registry.set).toHaveBeenCalledWith('useDomBubbles', true);
+
+    view.unmount();
+  });
+
+  it('keeps unavailable live emotion metadata out of neutral bubble state', () => {
+    let sceneReadyHandler: (() => void) | null = null;
+    let storeSubscriber: ((state: typeof replayState, prevState: typeof replayState) => void) | null = null;
+    mockEventBridgeOn.mockImplementation((eventType: string, handler: () => void) => {
+      if (eventType === 'viz:scene_ready') {
+        sceneReadyHandler = handler;
+      }
+      return () => {};
+    });
+    mockUseSimulationStoreSubscribe.mockImplementation((subscriber) => {
+      storeSubscriber = subscriber;
+      return () => {};
+    });
+
+    const view = render(createElement(PhaserGame));
+    act(() => {
+      sceneReadyHandler?.();
+      vi.advanceTimersByTime(300);
+    });
+    mockDispatchVizEvent.mockClear();
+
+    const unavailableMessage = {
+      id: 'msg-2',
+      agent_id: 'agent-1',
+      message: 'Speech survives metadata failure.',
+      emotion: '',
+      emotion_metadata_status: 'unavailable' as const,
+      emotion_metadata_failure_code: 'LLM_TIMEOUT',
+      branch: 'branch-1',
+      round: 2,
+    };
+    const previousState = { ...replayState, isSimulationComplete: false };
+    const nextState = {
+      ...previousState,
+      messages: [...previousState.messages, unavailableMessage],
+    };
+
+    act(() => {
+      storeSubscriber?.(nextState, previousState);
+      vi.advanceTimersByTime(1);
+    });
+
+    const bubbleCall = mockDispatchVizEvent.mock.calls.find(([type]) => type === 'viz:bubble_show');
+    expect(bubbleCall?.[1]).toMatchObject({
+      sprite_id: 'agent-1',
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: 'LLM_TIMEOUT',
+    });
+    expect(bubbleCall?.[1]).not.toHaveProperty('emotion');
+    expect(mockDispatchVizEvent).not.toHaveBeenCalledWith(
+      'viz:emotion_change',
+      expect.anything(),
+    );
 
     view.unmount();
   });

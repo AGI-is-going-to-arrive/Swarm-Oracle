@@ -21,6 +21,9 @@ vi.mock('react-i18next', () => ({
         'causal.edge_responds_to': 'responds to',
         'causal.edge_supports_stance': 'aligns with',
         'causal.edge_opposes_stance': 'opposes',
+        'causal.edge_affect_alignment_proxy': 'affect aligned (proxy)',
+        'causal.edge_affect_distance_proxy': 'affect distant (proxy)',
+        'causal.scope_branch_segment_only': 'Selected branch segment only; pre-fork ancestor rounds are not merged.',
         'causal.edge_triggered_fork': '触发分支',
         'causal.edge_stance_shift': '立场转变',
       };
@@ -131,6 +134,40 @@ describe('CausalGraphBoard', () => {
       'Alpha 触发分支 Beta',
       'Beta 立场转变 Gamma',
     ]);
+  });
+
+  it('renders affect-proxy display types and discloses branch-segment scope', async () => {
+    hoisted.mockScenarioGraphReturn.data = {
+      id: 'g-workbench-affect-proxy',
+      scope_kind: 'branch_segment_only',
+      scope_caveat: 'Backend caveat',
+      nodes: [
+        { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+        { id: 'n2', key: 'e2', type: 'event', label: 'Beta', round: 1, payload: null },
+      ],
+      edges: [
+        {
+          id: 'edge-1',
+          source: 'n1',
+          target: 'n2',
+          type: 'supports_stance',
+          display_type: 'affect_alignment_proxy',
+          weight: 1,
+          label: null,
+        },
+      ],
+    };
+
+    render(<CausalGraphBoard scenarioId="s1" hideExport />);
+
+    expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Causal relations list' }))
+        .getByRole('listitem'),
+    ).toHaveTextContent('Alpha affect aligned (proxy) Beta');
   });
 
   it('always fetches the full causal graph without branch filtering', async () => {

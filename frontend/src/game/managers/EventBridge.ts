@@ -40,12 +40,64 @@ export interface SpritePositionUpdate {
   };
 }
 
+export type EmotionMetadataStatus = 'available' | 'unavailable';
+
+export interface BubbleEmotionSource {
+  emotion?: string | null;
+  emotion_metadata_status?: EmotionMetadataStatus;
+  emotion_metadata_failure_code?: string;
+}
+
 export interface BubbleShowPayload extends Record<string, unknown> {
   sprite_id?: string;
   bubble_text?: string;
   bubble_mode?: 'live' | 'replay';
   emotion?: string;
+  emotion_metadata_status?: 'available' | 'unavailable';
+  emotion_metadata_failure_code?: string;
   halo_color?: string;
+}
+
+export function bubbleEmotionPayload(
+  source: BubbleEmotionSource,
+): Pick<
+  BubbleShowPayload,
+  'emotion' | 'emotion_metadata_status' | 'emotion_metadata_failure_code'
+> {
+  if (source.emotion_metadata_status === 'unavailable') {
+    return {
+      emotion_metadata_status: 'unavailable',
+      ...(source.emotion_metadata_failure_code
+        ? { emotion_metadata_failure_code: source.emotion_metadata_failure_code }
+        : {}),
+    };
+  }
+
+  const emotion = typeof source.emotion === 'string' ? source.emotion.trim() : '';
+  return {
+    ...(emotion ? { emotion } : {}),
+    ...(source.emotion_metadata_status === 'available'
+      ? { emotion_metadata_status: 'available' as const }
+      : {}),
+  };
+}
+
+export function resolveBubbleEmotionState(
+  emotion: unknown,
+  emotionMetadataStatus: unknown,
+  supportedEmotions: ReadonlySet<string>,
+): string {
+  if (emotionMetadataStatus === 'unavailable') return 'unavailable';
+  const normalizedEmotion = typeof emotion === 'string' ? emotion.trim() : '';
+  return normalizedEmotion && supportedEmotions.has(normalizedEmotion)
+    ? normalizedEmotion
+    : 'unknown';
+}
+
+export function shouldClearEmotionHalo(emotionState: string): boolean {
+  return emotionState === 'neutral'
+    || emotionState === 'unknown'
+    || emotionState === 'unavailable';
 }
 
 export interface VizEventPayloadMap {

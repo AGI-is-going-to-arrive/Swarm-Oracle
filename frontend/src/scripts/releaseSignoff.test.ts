@@ -1,9 +1,56 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 // @ts-expect-error Plain .mjs test helper has no generated declaration file.
 import { __test__ } from '../../scripts/release-signoff.mjs';
 
 describe('release-signoff round7 checks', () => {
+  it('runs every W2 truthfulness and provider regression in the release gate', () => {
+    expect(__test__.graphFocusedVitestTests).toEqual(expect.arrayContaining([
+      'src/components/Setup/ConnectionTester.test.tsx',
+      'src/components/ModelProfileManager.test.tsx',
+      'src/lib/resultReportSse.test.ts',
+      'src/lib/llmProviderPolicy.test.ts',
+      'src/components/DocumentSeedPanel.test.tsx',
+      'src/components/result/AgentProfileSheet.test.tsx',
+      'src/components/FactionForceGraph.test.tsx',
+      'src/pages/result/SocialFeedPanel.test.tsx',
+    ]));
+    expect(__test__.backendSignoffTests).toEqual(expect.arrayContaining([
+      'tests/test_agent_identity.py',
+      'tests/test_vector_store.py',
+      'tests/test_wave1_agent_state.py',
+      'tests/test_scoring.py',
+      'tests/test_causal_graph.py',
+      'tests/test_factions.py',
+      'tests/test_result_report_reducer.py',
+      'tests/test_result_report_builder.py',
+      'tests/test_result_report_contract.py',
+      'tests/test_simulator.py',
+      'tests/test_local_packs.py',
+    ]));
+  });
+
+  it('records unexecuted dry-run work as planned', async () => {
+    const outputRoot = mkdtempSync(path.join(tmpdir(), 'swarm-signoff-'));
+    const summary = { steps: [] as Array<{ status: string }> };
+    const args = { dryRun: true, outputRoot };
+    let asyncRunnerCalled = false;
+
+    __test__.runStep(summary, args, 'sync', process.execPath, ['-e', 'process.exit(9)']);
+    await __test__.runAsyncStep(summary, args, 'async', async () => {
+      asyncRunnerCalled = true;
+    });
+
+    expect(asyncRunnerCalled).toBe(false);
+    expect(summary.steps.map((step) => step.status)).toEqual(['planned', 'planned']);
+    expect(__test__.successfulSummaryStatus(true)).toBe('planned');
+    expect(__test__.successfulSummaryStatus(false)).toBe('passed');
+  });
+
   it('builds a literal-safe Cmd+R pattern and list command', () => {
     const spec = __test__.buildFocusedVitestSpec(
       'src/components/kg/NodeConversationSheet.test.tsx',

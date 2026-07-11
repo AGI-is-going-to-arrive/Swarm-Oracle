@@ -9,7 +9,7 @@
 
 import type { AgentInfo, AgentMessage } from '../../types';
 import { inferSceneThemeFromQuestion } from '../../lib/themeRegistry';
-import { dispatchVizEvent } from './EventBridge';
+import { bubbleEmotionPayload, dispatchVizEvent } from './EventBridge';
 import { emotionToHaloColor } from '../constants/emotionColors';
 
 export const MAX_BUBBLE_EVENT_TEXT_CHARS = 180;
@@ -443,18 +443,19 @@ export function synthesizeBubbles(
         if (!agentIds.has(agentId)) continue; // skip unknown agents
 
         // Dispatch bubble
+        const emotionPayload = bubbleEmotionPayload(msg);
         dispatchVizEvent('viz:bubble_show', {
           sprite_id: agentId,
           bubble_text: clipBubbleEventText(msg.message),
           bubble_mode: 'replay',
-          emotion: msg.emotion || 'neutral',
+          ...emotionPayload,
         });
 
         // Dispatch emotion change
-        if (msg.emotion && msg.emotion !== 'neutral') {
+        if (emotionPayload.emotion && emotionPayload.emotion !== 'neutral') {
           dispatchVizEvent('viz:emotion_change', {
             sprite_id: agentId,
-            halo_color: emotionToHaloColor(msg.emotion),
+            halo_color: emotionToHaloColor(emotionPayload.emotion),
           });
         }
       }
@@ -487,17 +488,18 @@ export function synthesizeLatestBubbles(
   }
 
   for (const message of latestByAgent.values()) {
+    const emotionPayload = bubbleEmotionPayload(message);
     dispatchVizEvent('viz:bubble_show', {
       sprite_id: message.agent_id,
       bubble_text: clipBubbleEventText(message.message),
       bubble_mode: 'replay',
-      emotion: message.emotion || 'neutral',
+      ...emotionPayload,
     });
 
-    if (message.emotion && message.emotion !== 'neutral') {
+    if (emotionPayload.emotion && emotionPayload.emotion !== 'neutral') {
       dispatchVizEvent('viz:emotion_change', {
         sprite_id: message.agent_id,
-        halo_color: emotionToHaloColor(message.emotion),
+        halo_color: emotionToHaloColor(emotionPayload.emotion),
       });
     }
   }

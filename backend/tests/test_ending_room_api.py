@@ -9,9 +9,11 @@ import time
 from contextlib import contextmanager
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+import app.api.ending_rooms as ending_rooms_api
 from app.main import app
 from app.models import (
     Agent,
@@ -36,6 +38,27 @@ from app.services.ending_room_service import run_ending_room_background
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+def test_roundtable_llm_overrides_allow_local_base_url_without_key():
+    api_key, base_url = ending_rooms_api._validate_roundtable_llm_overrides(
+        None,
+        "http://host.docker.internal:1234/v1",
+    )
+
+    assert api_key is None
+    assert base_url == "http://host.docker.internal:1234/v1"
+
+
+def test_roundtable_llm_overrides_reject_remote_base_url_without_key():
+    with pytest.raises(HTTPException) as exc_info:
+        ending_rooms_api._validate_roundtable_llm_overrides(
+            None,
+            "https://api.openai.com/v1",
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert exc_info.value.detail["code"] == "BYOK_API_KEY_REQUIRED"
 
 
 def _make_signed_session_token(secret: str, subject: str) -> str:

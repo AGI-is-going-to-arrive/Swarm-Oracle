@@ -24,6 +24,9 @@ interface GraphEdgeData {
   type: string;
   weight: number | null;
   label: string | null;
+  display_type?: string;
+  metric_kind?: 'affect_proxy';
+  caveat?: string;
   evidence?: EdgeEvidence | null;
 }
 
@@ -32,6 +35,8 @@ export interface GraphPayload {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
   available_branches?: string[];
+  scope_kind?: 'branch_segment_only';
+  scope_caveat?: string;
 }
 
 export interface GraphErrorState {

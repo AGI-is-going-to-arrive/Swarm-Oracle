@@ -12,12 +12,11 @@ import {
   deleteModelProfile,
 } from '../api/client';
 import type { ModelProfile } from '../types';
-import { LLM_PROVIDER_PRESETS } from '../lib/llmProviderPolicy';
+import { isLocalLlmBaseUrl, LLM_PROVIDER_PRESETS } from '../lib/llmProviderPolicy';
 import { ConnectionTester } from './Setup/ConnectionTester';
 import './ModelProfileManager.css';
 
 const DEFAULT_PROVIDER_ID = 'openai';
-const PROVIDER_PRESET_BASE_URLS = LLM_PROVIDER_PRESETS.map((preset) => preset.baseUrl);
 type NativeSearchUpstream = 'off' | 'auto' | 'xai_responses' | 'openai_responses';
 // Concurrency must stay a positive, safe integer: the backend coerces <=0 to "no cap"
 // (a silent no-op), and values past Number.MAX_SAFE_INTEGER lose precision via parseInt
@@ -85,6 +84,14 @@ export function ModelProfileManager() {
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const endpointBindingChanged = Boolean(
+    isEditing
+    && selectedProfile
+    && (
+      provider !== selectedProfile.provider
+      || baseUrl.trim() !== (selectedProfile.base_url || '')
+    )
+  );
 
   // Fetch profiles
   const fetchProfiles = useCallback(async () => {
@@ -106,13 +113,22 @@ export function ModelProfileManager() {
     }
   }, [enabled, fetchProfiles]);
 
+  const resetProviderPolicyFields = () => {
+    setRpm('');
+    setTpm('');
+    setConcurrency('');
+    setSupportsStructuredOutputs('auto');
+    setNativeSearchUpstream('auto');
+  };
+
   // Handle provider change to suggest base_url
   const handleProviderChange = (newProvider: string) => {
     setProvider(newProvider);
-    // If base URL matches previous preset or is empty, suggest the new preset URL
-    if (!baseUrl || PROVIDER_PRESET_BASE_URLS.includes(baseUrl)) {
-      setBaseUrl(getProviderBaseUrl(newProvider));
-    }
+    setBaseUrl(getProviderBaseUrl(newProvider));
+    setModel('');
+    setApiKey('');
+    setKeyCleared(false);
+    resetProviderPolicyFields();
   };
 
   // Open create form
@@ -206,8 +222,13 @@ export function ModelProfileManager() {
       }
 
       // Profile with base_url must have an api_key (or already have one set and not cleared)
-      const hasKey = apiKey.trim().length > 0 || (isEditing && selectedProfile?.has_api_key && !keyCleared);
-      if (!hasKey) {
+      const hasKey = apiKey.trim().length > 0 || (
+        isEditing
+        && selectedProfile?.has_api_key
+        && !keyCleared
+        && !endpointBindingChanged
+      );
+      if (!hasKey && !isLocalLlmBaseUrl(trimmedBaseUrl)) {
         errors.push(t('model_profiles.validation_base_url_api_key'));
       }
     }
@@ -500,7 +521,16 @@ export function ModelProfileManager() {
                   type="url"
                   className="form-control"
                   value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
+                  onChange={(e) => {
+                    const nextBaseUrl = e.target.value;
+                    if (nextBaseUrl !== baseUrl) {
+                      setModel('');
+                      setApiKey('');
+                      setKeyCleared(false);
+                      resetProviderPolicyFields();
+                    }
+                    setBaseUrl(nextBaseUrl);
+                  }}
                   disabled={isSaving}
                 />
               </div>
@@ -512,7 +542,10 @@ export function ModelProfileManager() {
                   type="text"
                   className="form-control"
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={(e) => {
+                    if (e.target.value !== model) resetProviderPolicyFields();
+                    setModel(e.target.value);
+                  }}
                   disabled={isSaving}
                   required
                 />
@@ -533,7 +566,7 @@ export function ModelProfileManager() {
                   placeholder={isEditing ? t('model_profiles.api_key_placeholder') : ''}
                 />
 
-                {isEditing && selectedProfile?.has_api_key && (
+                {isEditing && selectedProfile?.has_api_key && !endpointBindingChanged && (
                   <div className="model-profile-manager__key-status">
                     {!keyCleared ? (
                       <>

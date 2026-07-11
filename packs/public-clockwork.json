@@ -83,16 +83,6 @@
       }
     }
   ],
-  "demo_snapshots": [
-    {
-      "id": "bell-dispute",
-      "label": {
-        "zh": "钟声争议",
-        "en": "Bell Dispute"
-      },
-      "filename": "public-clockwork-bell-dispute.json"
-    }
-  ],
   "suggested_settings": {
     "num_agents": 8,
     "rounds": 5,

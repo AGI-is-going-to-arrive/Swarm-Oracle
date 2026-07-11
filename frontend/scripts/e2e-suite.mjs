@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium, firefox, webkit } from "playwright";
-import { closePlaywrightBrowser, closePlaywrightContext, closePlaywrightPage } from "./playwrightTeardown.mjs";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 import {
   FIXTURE_MODE,
   FIXTURE_SCENARIO_IDS,
@@ -14,6 +14,9 @@ import {
 } from "./e2eFixtureNet.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
@@ -1270,10 +1273,10 @@ async function runCrossBrowserDirectorStateSuite(args) {
 
   for (const browserName of supportedBrowsers) {
     const { browser, launchProfile } = await launchBrowser(args.headless, browserName);
-    writeJson(path.join(args.outputDir, `${browserName}-browser-launch.json`), launchProfile);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
-    const page = await context.newPage();
     try {
+      writeJson(path.join(args.outputDir, `${browserName}-browser-launch.json`), launchProfile);
+      const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
+      const page = await context.newPage();
       runs[browserName] = await runDirectorStateBrowserReadback(page, {
         baseUrl: args.baseUrl,
         scenarioId: sample.scenarioId,
@@ -1281,7 +1284,6 @@ async function runCrossBrowserDirectorStateSuite(args) {
         browserName,
       });
     } finally {
-      await closePlaywrightContext(context, `cross-browser-${browserName}-context`);
       await closePlaywrightBrowser(browser, `cross-browser-${browserName}-browser`);
     }
   }
@@ -1331,11 +1333,23 @@ async function createSafariSession(webdriverUrl) {
   };
 }
 
-async function deleteSafariSession(webdriverUrl, sessionId) {
+async function deleteSafariSession(webdriverUrl, sessionId, { fetchImpl = fetch } = {}) {
+  const endpoint = `${webdriverUrl}/session/${encodeURIComponent(sessionId)}`;
+  let response;
   try {
-    await fetch(`${webdriverUrl}/session/${sessionId}`, { method: "DELETE" });
-  } catch {
-    // Ignore cleanup failures.
+    response = await fetchImpl(endpoint, { method: "DELETE" });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Safari WebDriver DELETE session ${sessionId} failed: ${detail}`,
+      { cause: error },
+    );
+  }
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Safari WebDriver DELETE session ${sessionId} failed: HTTP ${response.status}${body ? ` ${body}` : ""}`,
+    );
   }
 }
 
@@ -2684,8 +2698,8 @@ async function runMatrixSuite(args) {
     args.themes.length === 0 || args.themes.includes(sample.theme)
   ));
   const { browser, launchProfile } = await launchBrowser(args.headless);
-  writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
   try {
+    writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
     const summaries = [];
     for (const sample of samples) {
       const sampleDir = path.join(args.outputDir, sample.theme);
@@ -2865,16 +2879,17 @@ async function assertNoFixtureEscapes(page, fixture, outputDir, label) {
 }
 
 async function runCornersSuite(args) {
+  let fixture = null;
   const { browser, launchProfile } = await launchBrowser(args.headless);
-  writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
-
-  // M-fixture: in fixture mode, stub ALL network offline (Node fetch + browser
-  // page routes + WS) so no request escapes to a real backend. Active fail-closed
-  // guard: any uncovered /api request is recorded and the suite fails at the end.
-  const fixture = FIXTURE_MODE ? await installCornersFixture(page) : null;
-
   try {
+    writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
+    const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, locale: 'en-US' });
+
+    // M-fixture: in fixture mode, stub ALL network offline (Node fetch + browser
+    // page routes + WS) so no request escapes to a real backend. Active fail-closed
+    // guard: any uncovered /api request is recorded and the suite fails at the end.
+    fixture = FIXTURE_MODE ? await installCornersFixture(page) : null;
+
     const outputDir = args.outputDir;
     const cases = {};
     const governanceReplaySample = await resolveMatrixScenario(args.baseUrl, {
@@ -2997,26 +3012,29 @@ async function runCornersSuite(args) {
       cases,
     };
   } finally {
-    if (fixture) fixture.nodeFixture.restore();
-    await closePlaywrightPage(page, "corners-browser:page", 10000);
-    await closePlaywrightBrowser(browser, "corners-browser", 20000);
+    try {
+      if (fixture) fixture.nodeFixture.restore();
+    } finally {
+      await closePlaywrightBrowser(browser, "corners-browser", 20000);
+    }
   }
 }
 
 async function runMobileSuite(args) {
+  let fixture = null;
   const { browser, launchProfile } = await launchBrowser(args.headless);
-  writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
-  const page = await browser.newPage({
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
-    locale: 'en-US',
-  });
-
-  // M-fixture: same offline harness as corners (mobile now carries the flag too).
-  const fixture = FIXTURE_MODE ? await installCornersFixture(page) : null;
-
   try {
+    writeJson(path.join(args.outputDir, "browser-launch.json"), launchProfile);
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      locale: 'en-US',
+    });
+
+    // M-fixture: same offline harness as corners (mobile now carries the flag too).
+    fixture = FIXTURE_MODE ? await installCornersFixture(page) : null;
+
     const governanceSample = await resolveMatrixScenario(args.baseUrl, {
       theme: "governance",
       scenario_id: FIXTURE_MODE ? FIXTURE_SCENARIO_IDS.governance : "72ae364d-3ea1-4959-939c-8fe1dbeca1c9",
@@ -3165,8 +3183,11 @@ async function runMobileSuite(args) {
       result: result.page ?? null,
     };
   } finally {
-    if (fixture) fixture.nodeFixture.restore();
-    await closePlaywrightBrowser(browser, "mobile-browser");
+    try {
+      if (fixture) fixture.nodeFixture.restore();
+    } finally {
+      await closePlaywrightBrowser(browser, "mobile-browser");
+    }
   }
 }
 
@@ -3207,13 +3228,11 @@ async function main() {
   console.log(`artifacts: ${outputDir}`);
 }
 
-main()
-  .then(() => {
-    // Playwright can leave lingering handles even after best-effort teardown.
-    // This script is CLI-only, so exit explicitly once all artifacts are written.
-    process.exit(0);
-  })
-  .catch((error) => {
+export const __test__ = { deleteSafariSession };
+
+if (IS_MAIN_MODULE) {
+  main().catch((error) => {
     console.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   });
+}

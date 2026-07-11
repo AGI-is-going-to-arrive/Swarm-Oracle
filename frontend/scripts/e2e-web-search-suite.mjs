@@ -4,6 +4,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -219,13 +220,13 @@ async function runWebSearchFlow(args) {
   const outputDir = args.outputDir || path.join(DEFAULT_OUTPUT_ROOT, `web-search-${timestampLabel()}`);
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless);
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1180 } });
-  const page = await context.newPage();
-  const browserIssues = attachPageIssueMonitor(page);
   let capturedScenarioRequest = null;
-
+  const browser = await launchBrowser(args.headless);
   try {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1180 } });
+    const page = await context.newPage();
+    const browserIssues = attachPageIssueMonitor(page);
+
     const resolvedBaseUrl = args.baseUrlOverride || defaultProviderBaseUrl(args.provider);
     await page.route("**/api/agents/identities/preflight", async (route) => {
       await route.fulfill({
@@ -364,9 +365,7 @@ async function runWebSearchFlow(args) {
     writeJson(path.join(outputDir, "summary.json"), summary);
     console.log(JSON.stringify(summary, null, 2));
   } finally {
-    await page.close().catch(() => {});
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await closePlaywrightBrowser(browser, "e2e-web-search-suite");
   }
 }
 

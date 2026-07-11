@@ -28,6 +28,7 @@ class ResolvedLlmCallConfig:
     supports_structured_outputs_override: bool | None
     supports_native_search_override: bool | None
     native_search_upstream_override: str | None
+    inherit_context_policy: bool
 
 
 def _clean_optional_text(value: object) -> str | None:
@@ -95,15 +96,39 @@ def model_profile_provider_unresolved(
 
     if not scenario_has_model_profile_pointer(scenario):
         return False
+    explicit_key = _clean_optional_text(explicit_api_key)
+    explicit_base = _clean_optional_text(explicit_base_url)
+    explicit_model_name = _clean_optional_text(explicit_model)
     has_complete_explicit_provider = (
-        _clean_optional_text(explicit_api_key) is not None
-        and _clean_optional_text(explicit_base_url) is not None
-        and _clean_optional_text(explicit_model) is not None
+        explicit_base is not None
+        and explicit_model_name is not None
+        and (
+            explicit_key is not None
+            or is_local_provider_url(explicit_base)
+        )
     )
-    if has_complete_explicit_provider:
-        return False
-    if recovered and _clean_optional_text(recovered.get("api_key")) is not None:
-        return False
+    has_any_explicit_provider = any(
+        value is not None
+        for value in (explicit_key, explicit_base, explicit_model_name)
+    )
+    if has_any_explicit_provider:
+        # Provider credentials, endpoint, and model form one binding. Never
+        # complete a partial request override from a recovered profile because
+        # that can send one provider's key or model to another provider.
+        return not has_complete_explicit_provider
+    if recovered:
+        recovered_key = _clean_optional_text(recovered.get("api_key"))
+        recovered_base = _clean_optional_text(recovered.get("base_url"))
+        recovered_model = _clean_optional_text(recovered.get("model"))
+        if (
+            recovered_base is not None
+            and recovered_model is not None
+            and (
+                recovered_key is not None
+                or is_local_provider_url(recovered_base)
+            )
+        ):
+            return False
     return True
 
 
@@ -209,10 +234,38 @@ def merge_profile_provider_overrides(
     merged = dict(overrides or {})
     if not recovered:
         return merged
+    explicit_provider = tuple(
+        _clean_optional_text(merged.get(key))
+        for key in ("api_key", "base_url", "model")
+    )
+    recovered_provider = tuple(
+        _clean_optional_text(recovered.get(key))
+        for key in ("api_key", "base_url", "model")
+    )
+    has_any_explicit_provider = any(value is not None for value in explicit_provider)
+    provider_binding_changed = (
+        has_any_explicit_provider and explicit_provider != recovered_provider
+    )
+    if provider_binding_changed:
+        if include_quota_user_id and _clean_optional_text(merged.get("quota_user_id")) is None:
+            recovered_quota_user_id = _clean_optional_text(recovered.get("quota_user_id"))
+            if recovered_quota_user_id is not None:
+                merged["quota_user_id"] = recovered_quota_user_id
+        return merged
+    explicit_base_url = _clean_optional_text(merged.get("base_url"))
+    recovered_base_url = _clean_optional_text(recovered.get("base_url"))
+    endpoint_overridden = (
+        explicit_base_url is not None
+        and explicit_base_url != recovered_base_url
+    )
     text_keys = ["api_key", "base_url", "model", "model_profile_id"]
     if include_quota_user_id:
         text_keys.append("quota_user_id")
     for key in text_keys:
+        if key == "api_key" and endpoint_overridden:
+            # Credentials are endpoint-bound. An explicit URL override must
+            # never inherit the selected profile's secret for another target.
+            continue
         if _clean_optional_text(merged.get(key)) is None:
             recovered_value = _clean_optional_text(recovered.get(key))
             if recovered_value is not None:
@@ -247,29 +300,92 @@ def resolve_post_completion_llm_call_config(
     explicit_api_key = _clean_optional_text(request_api_key)
     explicit_base_url = _clean_optional_text(request_base_url)
     explicit_model = _clean_optional_text(request_model)
+    inherited_api_key = _clean_optional_text(context.get("llm_api_key"))
     inherited_base_url = _clean_optional_text(context.get("llm_base_url"))
+    inherited_model = _clean_optional_text(context.get("llm_model"))
+
+    has_any_explicit_provider = any(
+        value is not None
+        for value in (explicit_api_key, explicit_base_url, explicit_model)
+    )
+    has_complete_explicit_provider = (
+        explicit_base_url is not None
+        and explicit_model is not None
+        and (
+            explicit_api_key is not None
+            or is_local_provider_url(explicit_base_url)
+        )
+    )
+    explicit_provider_binding = (
+        explicit_api_key,
+        explicit_base_url,
+        explicit_model,
+    )
+    inherited_provider_binding = (
+        inherited_api_key,
+        inherited_base_url,
+        inherited_model,
+    )
+    # Some internal post-completion callers thread the scenario's own provider
+    # tuple through the request arguments. That is still the same binding and
+    # may retain its rate/capability policy. A genuinely different tuple must
+    # start with a clean policy so Provider A settings never follow Provider B.
+    inherit_provider_policy = (
+        not has_any_explicit_provider
+        or (
+            has_complete_explicit_provider
+            and explicit_provider_binding == inherited_provider_binding
+        )
+    )
     effective_concurrency = (
         request_concurrency
         if request_concurrency is not None
-        else context.get("llm_concurrency")
+        else (context.get("llm_concurrency") if inherit_provider_policy else None)
     )
     effective_supports_structured_outputs = (
         request_supports_structured_outputs_override
         if request_supports_structured_outputs_override is not None
-        else _optional_bool(context.get("supports_structured_outputs"))
+        else (
+            _optional_bool(context.get("supports_structured_outputs"))
+            if inherit_provider_policy
+            else None
+        )
     )
     effective_supports_native_search = (
         request_supports_native_search_override
         if request_supports_native_search_override is not None
-        else _optional_bool(context.get("supports_native_search"))
+        else (
+            _optional_bool(context.get("supports_native_search"))
+            if inherit_provider_policy
+            else None
+        )
     )
     effective_native_search_upstream = (
         _optional_native_search_upstream(request_native_search_upstream_override)
         if request_native_search_upstream_override is not None
-        else _optional_native_search_upstream(context.get("native_search_upstream"))
+        else (
+            _optional_native_search_upstream(context.get("native_search_upstream"))
+            if inherit_provider_policy
+            else None
+        )
     )
+    if (
+        inherited_base_url is not None
+        and has_any_explicit_provider
+        and not has_complete_explicit_provider
+    ):
+        raise api_error(
+            400,
+            "BYOK_API_KEY_REQUIRED",
+            "A partial provider override cannot be combined with a saved endpoint; "
+            "provide API key, base URL, and model, or use a complete keyless local provider",
+        )
 
-    if explicit_base_url and not explicit_api_key:
+    if (
+        explicit_base_url
+        and not explicit_api_key
+        and not is_local_provider_url(explicit_base_url)
+    ):
         raise api_error(
             400,
             "BYOK_API_KEY_REQUIRED",
@@ -295,28 +411,42 @@ def resolve_post_completion_llm_call_config(
             model=explicit_model,
             requests_per_minute=request_requests_per_minute,
             tokens_per_minute=request_tokens_per_minute,
-            concurrency=effective_concurrency,
-            supports_structured_outputs_override=effective_supports_structured_outputs,
-            supports_native_search_override=effective_supports_native_search,
-            native_search_upstream_override=effective_native_search_upstream,
+            concurrency=request_concurrency,
+            supports_structured_outputs_override=(
+                request_supports_structured_outputs_override
+            ),
+            supports_native_search_override=request_supports_native_search_override,
+            native_search_upstream_override=_optional_native_search_upstream(
+                request_native_search_upstream_override
+            ),
+            inherit_context_policy=False,
         )
 
     return ResolvedLlmCallConfig(
         api_key=explicit_api_key,
         base_url=explicit_base_url or inherited_base_url,
-        model=explicit_model or _clean_optional_text(context.get("llm_model")),
+        model=explicit_model or inherited_model,
         requests_per_minute=(
             request_requests_per_minute
             if request_requests_per_minute is not None
-            else context.get("llm_requests_per_minute")
+            else (
+                context.get("llm_requests_per_minute")
+                if inherit_provider_policy
+                else None
+            )
         ),
         tokens_per_minute=(
             request_tokens_per_minute
             if request_tokens_per_minute is not None
-            else context.get("llm_tokens_per_minute")
+            else (
+                context.get("llm_tokens_per_minute")
+                if inherit_provider_policy
+                else None
+            )
         ),
         concurrency=effective_concurrency,
         supports_structured_outputs_override=effective_supports_structured_outputs,
         supports_native_search_override=effective_supports_native_search,
         native_search_upstream_override=effective_native_search_upstream,
+        inherit_context_policy=inherit_provider_policy,
     )

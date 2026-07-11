@@ -1,3 +1,6 @@
+import os
+import subprocess
+import textwrap
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -240,3 +243,247 @@ def test_deploy_readme_documents_native_linux_host_gateway_fallbacks():
     assert "llm_responses_url" in deploy_readme
     assert "host's actual ip" in deploy_readme
     assert "network_mode: host" in deploy_readme
+
+
+def test_ghcr_publish_requires_exact_verified_sha():
+    workflow = read_repo_file(".github/workflows/ghcr.yml")
+    promotion_script = read_repo_file("scripts/promote-ghcr-pair.sh")
+    trigger_block = workflow.split("\npermissions:", maxsplit=1)[0]
+    publish_block = workflow.split("\n  publish:", maxsplit=1)[1].split(
+        "\n  promote:", maxsplit=1
+    )[0]
+    promote_block = workflow.split("\n  promote:", maxsplit=1)[1]
+
+    assert "workflow_run:" in trigger_block
+    assert 'workflows: ["CI"]' in trigger_block
+    assert "workflow_dispatch:" in trigger_block
+    assert "\n  push:" not in trigger_block
+    for marker in (
+        "github.event.workflow_run.head_sha",
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.head_branch == 'main'",
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+        'select(.name == "release-signoff" and .conclusion == "success")',
+        "ref: ${{ needs.verify.outputs.target_sha }}",
+        "sha-${{ needs.verify.outputs.target_sha }}",
+    ):
+        assert marker in workflow
+
+    assert "type=raw,value=sha-${{ needs.verify.outputs.target_sha }}" in publish_block
+    assert "type=semver" not in publish_block
+    assert "imagetools create" not in publish_block
+    assert "concurrency:" not in publish_block
+
+    assert "needs: [verify, publish]" in promote_block
+    assert "matrix.component" not in promote_block
+    assert "ghcr-promotion-${{ needs.verify.outputs.channel }}-" in promote_block
+    assert "Revalidate freshness and promote verified image pair" in promote_block
+    assert "regctl-linux-amd64" in promote_block
+    assert "c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467" in promote_block
+    assert "bash scripts/promote-ghcr-pair.sh" in promote_block
+    assert "docker buildx imagetools create" not in promote_block
+
+    for marker in (
+        'current_main_sha="$($GH_BIN api "repos/${GITHUB_REPOSITORY}/commits/main"',
+        'target_tag="edge"',
+        "rollback_pair()",
+        'trap on_exit EXIT',
+        'tag delete --ignore-missing "${image}:${target_tag}"',
+        'image copy "${image}@${old_digest}" "${image}:${target_tag}"',
+        'promotion_committed="true"',
+    ):
+        assert marker in promotion_script
+
+    build_index = workflow.index("Build and push immutable ${{ matrix.component }} image")
+    promotion_index = workflow.index(
+        "Revalidate freshness and promote verified image pair"
+    )
+    assert build_index < promotion_index
+    assert "pattern={{major}}.{{minor}}" not in workflow
+
+
+def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
+    tmp_path: Path,
+):
+    promotion_script = REPO_ROOT / "scripts/promote-ghcr-pair.sh"
+    fake_client = tmp_path / "fake-regctl"
+    fake_client.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import os
+            from pathlib import Path
+            import sys
+
+            args = sys.argv[1:]
+            state = Path(os.environ["FAKE_REGISTRY_STATE"])
+            target_tag = os.environ["FAKE_TARGET_TAG"]
+            with (state / "commands.log").open("a", encoding="utf-8") as log:
+                log.write(" ".join(args) + "\\n")
+
+            if args and args[0] == "api":
+                print(os.environ["TARGET_SHA"])
+                raise SystemExit(0)
+
+            def image_kind(ref: str) -> str:
+                return "backend" if "/backend" in ref else "frontend"
+
+            def target_path(ref: str) -> Path:
+                return state / f"{image_kind(ref)}-{target_tag}.digest"
+
+            if args[:2] == ["tag", "ls"]:
+                ref = args[2]
+                if target_path(ref).exists():
+                    print(target_tag)
+                raise SystemExit(0)
+
+            if args[:2] == ["image", "digest"]:
+                ref = args[2]
+                if ":sha-" in ref:
+                    print(f"sha256:{image_kind(ref)}-new")
+                    raise SystemExit(0)
+                path = target_path(ref)
+                if not path.exists():
+                    raise SystemExit(1)
+                print(path.read_text(encoding="utf-8"))
+                raise SystemExit(0)
+
+            if args[:2] == ["image", "copy"]:
+                source, target = args[2], args[3]
+                digest = source.rsplit("@", 1)[1]
+                if image_kind(target) == "frontend" and digest.endswith("frontend-new"):
+                    raise SystemExit(42)
+                target_path(target).write_text(digest, encoding="utf-8")
+                raise SystemExit(0)
+
+            if args[:2] == ["tag", "delete"]:
+                target_path(args[-1]).unlink(missing_ok=True)
+                raise SystemExit(0)
+
+            raise SystemExit(f"unexpected command: {args}")
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_client.chmod(0o755)
+
+    for case_name, old_digests in (
+        ("first-promotion", None),
+        ("existing-promotion", ("sha256:backend-old", "sha256:frontend-old")),
+    ):
+        state = tmp_path / case_name
+        state.mkdir()
+        if old_digests:
+            (state / "backend-edge.digest").write_text(old_digests[0], encoding="utf-8")
+            (state / "frontend-edge.digest").write_text(old_digests[1], encoding="utf-8")
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "BACKEND_IMAGE": "ghcr.io/acme/backend",
+                "FRONTEND_IMAGE": "ghcr.io/acme/frontend",
+                "TARGET_SHA": "a" * 40,
+                "CHANNEL": "edge",
+                "VERSION_TAG": "",
+                "GITHUB_REPOSITORY": "acme/swarmoracle",
+                "REGCTL_BIN": str(fake_client),
+                "GH_BIN": str(fake_client),
+                "PROMOTE_MAX_ATTEMPTS": "1",
+                "PROMOTE_RETRY_SLEEP_SECONDS": "0",
+                "FAKE_REGISTRY_STATE": str(state),
+                "FAKE_TARGET_TAG": "edge",
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(promotion_script)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        assert result.returncode != 0
+        backend_state = state / "backend-edge.digest"
+        frontend_state = state / "frontend-edge.digest"
+        if old_digests is None:
+            assert not backend_state.exists()
+            assert not frontend_state.exists()
+        else:
+            assert backend_state.read_text(encoding="utf-8") == old_digests[0]
+            assert frontend_state.read_text(encoding="utf-8") == old_digests[1]
+
+        commands = (state / "commands.log").read_text(encoding="utf-8")
+        assert "image copy ghcr.io/acme/backend@sha256:backend-new" in commands
+        assert "image copy ghcr.io/acme/frontend@sha256:frontend-new" in commands
+        if old_digests is None:
+            assert "tag delete --ignore-missing ghcr.io/acme/backend:edge" in commands
+            assert "tag delete --ignore-missing ghcr.io/acme/frontend:edge" in commands
+        else:
+            assert "image copy ghcr.io/acme/backend@sha256:backend-old" in commands
+            assert "image copy ghcr.io/acme/frontend@sha256:frontend-old" in commands
+
+
+def test_ci_executes_wave20_release_regressions_in_one_process_per_stack():
+    workflow = read_repo_file(".github/workflows/ci.yml")
+    release_signoff = read_repo_file("frontend/scripts/release-signoff.mjs")
+
+    for test_path in (
+        "tests/test_llm_client.py",
+        "tests/test_llm_resolution.py",
+        "tests/test_model_profiles.py",
+        "tests/test_conversation.py",
+        "tests/test_ending_room_api.py",
+        "tests/test_social.py",
+    ):
+        assert test_path in workflow
+        assert test_path in release_signoff
+
+    for test_path in (
+        "tests/test_infra_config.py",
+        "tests/test_llm_provider_protocol.py",
+        "tests/test_p0_wiring.py",
+        "tests/test_causal_graph.py",
+        "tests/test_factions.py",
+        "tests/test_result_report_reducer.py",
+        "tests/test_result_report_builder.py",
+        "tests/test_result_report_contract.py",
+        "tests/test_local_packs.py",
+    ):
+        assert test_path in workflow
+    for test_path in (
+        "src/pages/result/ResultReportPanel.test.tsx",
+        "src/pages/result/ReportSection.test.tsx",
+        "src/pages/result/ReportConfidenceBadge.test.tsx",
+        "src/lib/agentProfileObservation.test.ts",
+        "src/lib/localPackImport.test.ts",
+        "src/pages/SetupWizardView.test.tsx",
+        "src/components/LocalPackPicker.test.tsx",
+        "src/components/CounterfactualPanel.test.tsx",
+        "src/scripts/releaseSignoff.test.ts",
+    ):
+        assert test_path in workflow
+    assert "npx tsc -b" in workflow
+    assert "scripts/playwrightTeardown.test.mjs" in workflow
+
+
+def test_release_scripts_do_not_force_success_exit():
+    for script_path in (
+        "frontend/scripts/e2e-suite.mjs",
+        "frontend/scripts/e2e-debate-suite.mjs",
+        "frontend/scripts/e2e-ending-room-followup-suite.mjs",
+        "frontend/scripts/e2e-worldline-roundtable-suite.mjs",
+    ):
+        assert "process.exit(0)" not in read_repo_file(script_path), script_path
+
+
+def test_docker_context_excludes_verified_local_only_directories():
+    dockerignore = read_repo_file(".dockerignore")
+
+    for relative_path in (
+        ".ccg/cache",
+        ".claude/session",
+        ".release-audit/result.json",
+        "frontend/.stitch/cache",
+        "frontend/dist-spikes/index.html",
+    ):
+        assert dockerignore_ignores(dockerignore, relative_path), relative_path

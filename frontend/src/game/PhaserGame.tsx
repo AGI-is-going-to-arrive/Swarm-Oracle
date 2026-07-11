@@ -13,7 +13,7 @@ import { BootScene } from './scenes/BootScene';
 import { TitleScene } from './scenes/TitleScene';
 import { WorldScene } from './scenes/WorldScene';
 import { EndingScene } from './scenes/EndingScene';
-import { EventBridge, dispatchVizEvent } from './managers/EventBridge';
+import { bubbleEmotionPayload, EventBridge, dispatchVizEvent } from './managers/EventBridge';
 import {
   clipBubbleEventText,
   synthesizeSceneInit,
@@ -464,17 +464,18 @@ export function PhaserGame({
           if (!agentIds.has(msg.agent_id)) return;
           const timerId = window.setTimeout(() => {
             liveBubbleTimersRef.current.delete(timerId);
+            const emotionPayload = bubbleEmotionPayload(msg);
             dispatchVizEvent('viz:bubble_show', {
               sprite_id: msg.agent_id,
               bubble_text: clipBubbleEventText(msg.message),
               bubble_mode: 'live',
-              emotion: msg.emotion || 'neutral',
+              ...emotionPayload,
             });
 
-            if (msg.emotion && msg.emotion !== 'neutral') {
+            if (emotionPayload.emotion && emotionPayload.emotion !== 'neutral') {
               dispatchVizEvent('viz:emotion_change', {
                 sprite_id: msg.agent_id,
-                halo_color: emotionToHaloColor(msg.emotion),
+                halo_color: emotionToHaloColor(emotionPayload.emotion),
               });
             }
           }, idx * LIVE_BUBBLE_STAGGER_MS);

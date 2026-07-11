@@ -13,7 +13,15 @@ from sqlmodel import Session
 import app.api.social as social_api
 from app.config import settings
 from app.main import app
-from app.models import Agent, Branch, BranchStatus, Scenario, ScenarioStatus
+from app.models import (
+    Agent,
+    Branch,
+    BranchStatus,
+    FactionEvent,
+    FactionSnapshot,
+    Scenario,
+    ScenarioStatus,
+)
 from app.models.database import get_engine
 from app.services.llm_client import LLMError
 
@@ -120,6 +128,46 @@ def _request_social_copy(
     return client.post(url, json=body or {}, headers=headers)
 
 
+def test_social_projection_maps_legacy_betrayal_code_to_truthful_affect_proxy_copy():
+    scenario = Scenario(
+        id="social-affect-proxy",
+        question="How will the coalition react?",
+        status=ScenarioStatus.DONE,
+    )
+    branch = Branch(
+        id="social-affect-branch",
+        scenario_id=scenario.id,
+        title="Coalition holds",
+    )
+    snapshot = FactionSnapshot(
+        scenario_id=scenario.id,
+        branch_id=branch.id,
+        round_number=2,
+        faction_key="harbor",
+        label="Harbor coalition",
+        confidence=0.5,
+    )
+    event = FactionEvent(
+        scenario_id=scenario.id,
+        branch_id=branch.id,
+        round_number=2,
+        event_type="betrayal",
+        actor_agent_id="agent-1",
+        faction_key="harbor",
+    )
+
+    projected = social_api._build_display_safe_social_events(
+        scenario,
+        [branch],
+        [snapshot],
+        [event],
+    )
+
+    assert projected[0]["event_type"] == "affect shift (proxy)"
+    assert "affect shift (proxy)" in projected[0]["summary"]
+    assert "betrayal" not in projected[0]["summary"].lower()
+
+
 def test_social_copy_request_accepts_model_profile_id():
     req = social_api.SocialCopyRequest(model_profile_id=" profile-social ")
 
@@ -204,6 +252,37 @@ def test_social_copy_explicit_base_url_without_key_still_requires_key(
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+
+def test_social_copy_explicit_local_base_url_without_key_is_forwarded(
+    client: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "FEATURE_SOCIAL_HEADLINES", True, raising=False)
+    scenario_id = _seed_social_scenario()
+    captured: dict[str, object] = {}
+
+    async def fake_llm(_prompt: str, **kwargs):
+        captured.update(kwargs)
+        return "local social copy"
+
+    monkeypatch.setattr("app.services.llm_client.llm_call", fake_llm)
+
+    response = _request_social_copy(
+        client,
+        "POST",
+        scenario_id,
+        body={
+            "llm_base_url": "http://127.0.0.1:11434/v1",
+            "llm_model": "llama3.2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["copy"] == "local social copy"
+    assert captured["api_key"] is None
+    assert captured["base_url"] == "http://127.0.0.1:11434/v1"
+    assert captured["model"] == "llama3.2"
 
 
 def test_social_copy_inherited_remote_byok_url_without_server_key_is_400(
@@ -379,6 +458,45 @@ def test_social_copy_rehydrates_profile_from_parsed_context(
     }
 
 
+def test_social_copy_recovered_remote_profile_rejects_key_only_override(
+    client: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "FEATURE_SOCIAL_HEADLINES", True, raising=False)
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    profile_id = _seed_model_profile(
+        user_id="social-mix-owner",
+        model="provider-b-social-model",
+        api_key="sk-provider-b-social",
+    )
+    scenario_id = _seed_social_scenario(
+        user_id="social-mix-owner",
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": profile_id,
+        },
+    )
+    llm_called = False
+
+    async def unexpected_llm(_prompt: str, **_kwargs):
+        nonlocal llm_called
+        llm_called = True
+        raise AssertionError("key-only override must not use the recovered endpoint")
+
+    monkeypatch.setattr("app.services.llm_client.llm_call", unexpected_llm)
+
+    response = _request_social_copy(
+        client,
+        "POST",
+        scenario_id,
+        body={"llm_api_key": "sk-provider-a-session"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+    assert llm_called is False
+
+
 @pytest.mark.parametrize("method", ["GET", "POST"])
 def test_social_copy_stored_profile_missing_fails_closed(
     client: TestClient,
@@ -468,6 +586,7 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
         "title": "Harbor correction",
         "summary": "The harbor coalition publishes every correction.",
         "faction_label": "Harbor coalition",
+        "confidence": 0.5,
     }]
     captured: dict[str, object] = {}
     original_scope = social_api.llm_request_scope
@@ -476,7 +595,8 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
         captured["scope"] = dict(kwargs)
         return original_scope(**kwargs)
 
-    async def fake_llm(_prompt: str, **kwargs):
+    async def fake_llm(prompt: str, **kwargs):
+        captured["prompt"] = prompt
         captured["llm"] = dict(kwargs)
         return json.dumps({
             "headline_cards": [
@@ -495,6 +615,8 @@ def test_social_headline_cards_thread_profile_provider_and_runtime(monkeypatch):
 
     assert mode == "llm"
     assert cards[0]["headline"] == "Harbor councils publish the receipts"
+    assert "legacy confidence field is faction member share" in str(captured["prompt"])
+    assert "not model certainty" in str(captured["prompt"])
     assert captured["llm"]["api_key"] == "sk-social-headline-profile"
     assert captured["llm"]["base_url"] == "https://api.openai.com/v1"
     assert captured["llm"]["model"] == "headline-profile-model"

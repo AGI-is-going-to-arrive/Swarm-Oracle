@@ -14,12 +14,15 @@ interface FactionInfo {
   key: string;
   label: string | null;
   members: string[];
+  affect_center?: number;
+  member_share?: number;
   stance_center?: number;
   confidence?: number;
 }
 
 interface FactionEventInfo {
   type?: string | null;
+  display_type?: string | null;
   actor_agent_id?: string | null;
   agent_id?: string | null;
   faction_key: string;
@@ -33,7 +36,8 @@ interface RoundFactionData {
 
 const FACTION_COLORS = ['#4a90d9', '#e74c3c', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#f1c40f', '#e91e63'];
 const FACTION_EVENT_ICONS: Record<string, string> = {
-  betrayal: '⚔️',
+  affect_shift_proxy: '↕️',
+  betrayal: '↕️',
   alliance_formed: '🤝',
   faction_split: '💔',
 };
@@ -80,8 +84,8 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
   const scopeLabel = t('factions.branch_scope', 'Branch scope');
   const roundSpanLabel = t('factions.round_span', 'Round span');
   const factionCountLabel = t('factions.faction_count', 'Factions');
-  const stanceLabel = t('factions.stance', 'Stance');
-  const confidenceLabel = t('factions.confidence', 'Confidence');
+  const stanceLabel = t('factions.stance', 'Affect proxy');
+  const confidenceLabel = t('factions.confidence', 'Group share');
   const actorLabel = t('factions.actor', 'Actor');
   const factionLabel = t('factions.faction', 'Faction');
   const eventTypeLabel = t('factions.event_type', 'Type');
@@ -211,6 +215,12 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
           <h3 style={{ margin: 0, fontSize: '1rem' }}>{t('factions.title', 'Faction Timeline')}</h3>
           <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#9aa4b2' }}>
             {scopeLabel}: {branchDisplayName}
+          </p>
+          <p style={{ margin: '0.35rem 0 0', fontSize: '0.72rem', color: '#8b98ab', maxWidth: '54rem' }}>
+            {t(
+              'factions.proxy_disclosure',
+              'Derived from model-generated emotion/diverge fields; not verified trust, relationships, or stances.',
+            )}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
@@ -391,8 +401,8 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
                       </span>
                     </div>
                     <div style={{ display: 'grid', gap: '0.2rem', fontSize: '0.73rem', color: '#9aa4b2' }}>
-                      <span>{stanceLabel} {formatMetric(faction.stance_center)}</span>
-                      <span>{confidenceLabel} {formatMetric(faction.confidence)}</span>
+                      <span>{stanceLabel} {formatMetric(faction.affect_center ?? faction.stance_center)}</span>
+                      <span>{confidenceLabel} {formatMetric(faction.member_share ?? faction.confidence)}</span>
                     </div>
                   </div>
                 );
@@ -406,7 +416,9 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
                 </div>
                 <div style={{ display: 'grid', gap: '0.45rem' }}>
                   {round.events.map((event, eventIndex) => {
-                    const { label, normalizedEventType, isKnown } = describeEventType(event.type);
+                    const { label, normalizedEventType, isKnown } = describeEventType(
+                      event.display_type ?? event.type,
+                    );
                     const actorId = normalizeText(event.actor_agent_id ?? event.agent_id);
                     const eventFactionKey = normalizeText(event.faction_key);
                     const eventFactionName = eventFactionKey

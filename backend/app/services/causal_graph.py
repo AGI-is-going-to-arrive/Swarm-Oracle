@@ -21,6 +21,10 @@ from sqlmodel import Session, col, select
 
 from app.models.database import Agent, AgentMessage, Branch, BranchStatus, Round, get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
+from app.services.agent_message_metadata import (
+    message_emotion_if_available,
+    message_metadata_failure_code,
+)
 
 logger = logging.getLogger(__name__)
 _schema_lock = threading.Lock()
@@ -299,6 +303,23 @@ def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
         if display_summary:
             payload["display_summary"] = display_summary
         label = display_reason
+    elif node.node_type == "stance_shift":
+        agent_name = str(payload.get("agent_name") or payload.get("agent_id") or "Agent")
+        label = f"{agent_name} affect proxy shifted"
+        payload = {
+            **payload,
+            "display_type": "affect_shift_proxy",
+            "legacy_type": "stance_shift",
+            "metric_kind": "affect_proxy",
+            "caveat": (
+                "Derived only from model-generated emotion/diverge fields; "
+                "not verified stance or causal evidence."
+            ),
+            "label_i18n": {
+                "key": "causal.node.affect_shift_proxy",
+                "params": {"agent_name": agent_name},
+            },
+        }
     return {
         "id": node.id,
         "key": node.node_key,
@@ -316,19 +337,51 @@ def _serialize_graph_node_delta(node: GraphNode) -> dict[str, Any]:
     return record
 
 
+def _affect_proxy_edge_metadata(edge: GraphEdge) -> dict[str, Any] | None:
+    display_type = {
+        "supports_stance": "affect_alignment_proxy",
+        "opposes_stance": "affect_distance_proxy",
+    }.get(edge.edge_type)
+    if display_type is None and edge.label == "stance shift":
+        display_type = "affect_proxy_observation"
+    if display_type is None:
+        return None
+    return {
+        "display_type": display_type,
+        "legacy_type": edge.edge_type,
+        "metric_kind": "affect_proxy",
+        "caveat": (
+            "Derived only from model-generated emotion/diverge fields; not "
+            "verified stance, relationship, or causal evidence."
+        ),
+    }
+
+
 def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
+    affect_metadata = _affect_proxy_edge_metadata(edge)
+    confidence_tier = "low" if affect_metadata is not None else edge.confidence_tier
+    detail = edge.evidence_json
+    if affect_metadata is not None:
+        detail = json.dumps(
+            {
+                "metric_kind": "affect_proxy",
+                "display_type": affect_metadata["display_type"],
+                "legacy_type": edge.edge_type,
+                "caveat": affect_metadata["caveat"],
+            }
+        )
     evidence = {
-        "confidence_tier": edge.confidence_tier,
+        "confidence_tier": confidence_tier,
         "source_ref": edge.source_ref,
         "source_round_number": edge.source_round_number,
-        "detail": edge.evidence_json,
+        "detail": detail,
     } if (
-        edge.confidence_tier is not None
+        confidence_tier is not None
         or edge.source_ref is not None
         or edge.source_round_number is not None
-        or edge.evidence_json is not None
+        or detail is not None
     ) else None
-    return {
+    record = {
         "kind": "edge",
         "id": edge.id,
         "snapshot_id": edge.snapshot_id,
@@ -342,6 +395,18 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
         "weight": edge.weight,
         "label": edge.label,
         "evidence": evidence,
+    }
+    if affect_metadata is not None:
+        record.update(affect_metadata)
+    return record
+
+
+def _serialize_snapshot_edge(edge: GraphEdge) -> dict[str, Any]:
+    record = _serialize_graph_edge(edge)
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"kind", "snapshot_id", "key"}
     }
 
 
@@ -452,7 +517,17 @@ def _load_orphan_fork_provenance(
                         "payload": {
                             "agent_id": message.agent_id,
                             "agent_name": agent_name,
-                            "emotion": message.emotion,
+                            "emotion": message_emotion_if_available(message),
+                            **(
+                                {
+                                    "emotion_metadata_status": "unavailable",
+                                    "emotion_metadata_failure_code": (
+                                        message_metadata_failure_code(message)
+                                    ),
+                                }
+                                if message_metadata_failure_code(message)
+                                else {}
+                            ),
                             "branch_id": source_branch_id,
                             "content": message.content,
                             "message_id": message.id,
@@ -911,14 +986,19 @@ def _extract_inter_agent_edges(
                 updated_records=updated_records,
             )
 
-    sorted_agent_ids = sorted(latest_record_by_agent)
+    affect_record_by_agent = {
+        agent_id: record
+        for agent_id, record in latest_record_by_agent.items()
+        if record.get("emotion_metadata_available", True)
+    }
+    sorted_agent_ids = sorted(affect_record_by_agent)
     for left_index, left_agent_id in enumerate(sorted_agent_ids):
-        left_record = latest_record_by_agent[left_agent_id]
+        left_record = affect_record_by_agent[left_agent_id]
         left_stance = float(left_record.get("stance", 0.0) or 0.0)
         if abs(left_stance) <= 0.15:
             continue
         for right_agent_id in sorted_agent_ids[left_index + 1:]:
-            right_record = latest_record_by_agent[right_agent_id]
+            right_record = affect_record_by_agent[right_agent_id]
             right_stance = float(right_record.get("stance", 0.0) or 0.0)
             if abs(right_stance) <= 0.15:
                 continue
@@ -1229,9 +1309,14 @@ def append_round_nodes(
 
             message_records: list[dict[str, Any]] = []
             for idx, msg in enumerate(messages):
-                stance = derive_stance_score(msg)
                 agent_id = _getfield(msg, "agent_id", "unknown")
-                emotion = _getfield(msg, "emotion", None)
+                metadata_failure_code = message_metadata_failure_code(msg)
+                stance = (
+                    None
+                    if metadata_failure_code is not None
+                    else derive_stance_score(msg)
+                )
+                emotion = message_emotion_if_available(msg)
                 content = _getfield(msg, "content", "") or ""
                 msg_id = _getfield(msg, "id", None)
                 agent_name = _getfield(msg, "agent_name", None)
@@ -1239,6 +1324,14 @@ def append_round_nodes(
                     "agent_id": agent_id,
                     "agent_name": agent_name,
                     "emotion": emotion,
+                    **(
+                        {
+                            "emotion_metadata_status": "unavailable",
+                            "emotion_metadata_failure_code": metadata_failure_code,
+                        }
+                        if metadata_failure_code
+                        else {}
+                    ),
                     "stance_score": stance,
                     "branch_id": branch_id,
                     "content": content,
@@ -1287,13 +1380,18 @@ def append_round_nodes(
                     "agent_name": _getfield(msg, "agent_name", None),
                     "stance": stance,
                     "emotion": emotion,
+                    "emotion_metadata_available": metadata_failure_code is None,
                     "content": content,
                     "node_id": node.id,
                 })
 
             latest_record_by_agent: dict[str, dict[str, Any]] = {}
             for record in message_records:
-                latest_record_by_agent[record["agent_id"]] = record
+                if record["emotion_metadata_available"]:
+                    latest_record_by_agent[record["agent_id"]] = record
+            latest_event_record_by_agent: dict[str, dict[str, Any]] = {}
+            for record in message_records:
+                latest_event_record_by_agent[record["agent_id"]] = record
 
             stale_frame_agent_ids = (
                 []
@@ -1519,7 +1617,7 @@ def append_round_nodes(
                     updated_records=updated_records,
                 )
 
-            if latest_record_by_agent:
+            if latest_event_record_by_agent:
                 next_stmt = select(GraphNode).where(
                     GraphNode.snapshot_id == snapshot.id,
                     GraphNode.node_type == "event",
@@ -1532,7 +1630,7 @@ def append_round_nodes(
                     if payload.get("branch_id") == branch_id:
                         next_by_agent[payload.get("agent_id", "")] = next_node.id
 
-                for aid, record in latest_record_by_agent.items():
+                for aid, record in latest_event_record_by_agent.items():
                     next_node_id = next_by_agent.get(aid)
                     if next_node_id is None:
                         continue
@@ -1724,7 +1822,20 @@ def append_round_nodes(
 
 def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
     """Build and return a serialized causal graph snapshot."""
-    empty = {"id": None, "available_branches": [], "nodes": [], "edges": []}
+    scope_metadata = {
+        "scope_kind": "branch_segment_only",
+        "scope_caveat": (
+            "Branch-filtered snapshots cover the selected segment only; pre-fork "
+            "ancestor rounds are not merged."
+        ),
+    }
+    empty = {
+        "id": None,
+        "available_branches": [],
+        "nodes": [],
+        "edges": [],
+        **scope_metadata,
+    }
 
     with Session(get_engine()) as session:
         snapshot = _load_latest_snapshot(session, scenario_id)
@@ -1829,6 +1940,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
 
         return {
             "id": snapshot.id,
+            **scope_metadata,
             "available_branches": available_branches,
             "nodes": (
                 [_serialize_graph_node(n) for n in nodes]
@@ -1836,25 +1948,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                 + outcome_nodes
             ),
             "edges": [
-                {
-                    "id": e.id,
-                    "source": e.source_node_id,
-                    "target": e.target_node_id,
-                    "type": e.edge_type,
-                    "weight": e.weight,
-                    "label": e.label,
-                    "evidence": {
-                        "confidence_tier": e.confidence_tier,
-                        "source_ref": e.source_ref,
-                        "source_round_number": e.source_round_number,
-                        "detail": e.evidence_json,
-                    } if (
-                        e.confidence_tier is not None
-                        or e.source_ref is not None
-                        or e.source_round_number is not None
-                        or e.evidence_json is not None
-                    ) else None,
-                }
-                for e in edges
+                _serialize_snapshot_edge(edge)
+                for edge in edges
             ] + provenance_edges + outcome_edges,
         }

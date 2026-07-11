@@ -178,6 +178,9 @@ interface GraphEdgeData {
   type: string;
   weight: number | null;
   label: string | null;
+  display_type?: string;
+  metric_kind?: 'affect_proxy';
+  caveat?: string;
   evidence?: EdgeEvidence | null;
 }
 
@@ -186,6 +189,8 @@ interface CausalGraphData {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
   available_branches?: string[];
+  scope_kind?: 'branch_segment_only';
+  scope_caveat?: string;
 }
 
 interface GuideNodeSummary {
@@ -407,8 +412,19 @@ function useCompactGraphViewport() {
 }
 
 function getCausalTypeLabel(type: string, t: (key: string, fallback: string) => string): string {
+  if (type === 'affect_shift_proxy') {
+    return t('causal.type_affect_shift_proxy', 'Affect shift (proxy)');
+  }
   const pair = GRAPH_TYPE_LABEL_I18N[type];
   return pair ? t(pair[0], pair[1]) : type;
+}
+
+function getCausalNodeDisplayType(node: GraphNodeData): string {
+  if (node.payload && typeof node.payload === 'object' && !Array.isArray(node.payload)) {
+    const displayType = (node.payload as Record<string, unknown>).display_type;
+    if (typeof displayType === 'string' && displayType.trim()) return displayType.trim();
+  }
+  return node.type;
 }
 
 function getCausalNodeActionLabel(
@@ -427,6 +443,15 @@ function getCausalEdgeBaseRelationLabel(
   edge: GraphEdgeData,
   t: (key: string, fallback: string) => string,
 ): string {
+  if (edge.display_type === 'affect_alignment_proxy') {
+    return t('causal.edge_affect_alignment_proxy', 'affect aligned (proxy)');
+  }
+  if (edge.display_type === 'affect_distance_proxy') {
+    return t('causal.edge_affect_distance_proxy', 'affect distant (proxy)');
+  }
+  if (edge.display_type === 'affect_proxy_observation') {
+    return t('causal.edge_affect_proxy_observation', 'affect proxy observation');
+  }
   const rawLabel = edge.label?.trim();
   if (rawLabel) {
     const labelMapping = BACKEND_CAUSAL_EDGE_LABEL_I18N[rawLabel.toLowerCase()];
@@ -527,7 +552,7 @@ function getCompactNodeName(node: GraphNodeData): string {
 }
 
 function formatRelatedNodeLabel(node: GraphNodeData, t: CausalTranslate): string {
-  const typeLabel = getCausalTypeLabel(node.type, t);
+  const typeLabel = getCausalTypeLabel(getCausalNodeDisplayType(node), t);
   const nodeLabel = getCompactNodeName(node);
   const roundLabel = node.round != null
     ? t('node_context_banner.round', { round: node.round, defaultValue: 'R{{round}}' })
@@ -637,6 +662,20 @@ function buildNodeCausalMeaning(
     const relation = getCausalEdgeBaseRelationLabel(edge, t);
     const node = formatRelatedNodeLabel(relatedNode, t);
 
+    if (edge.display_type === 'affect_alignment_proxy') {
+      relationContext.push(t('node_context_banner.relation_affect_alignment_proxy', {
+        defaultValue: 'Its model-generated affect proxy is similar to {{node}} in the same round; this is not verified agreement.',
+        node,
+      }));
+      continue;
+    }
+    if (edge.display_type === 'affect_distance_proxy') {
+      relationContext.push(t('node_context_banner.relation_affect_distance_proxy', {
+        defaultValue: 'Its model-generated affect proxy differs from {{node}} in the same round; this is not verified opposition.',
+        node,
+      }));
+      continue;
+    }
     if (edge.type === 'supports_stance') {
       relationContext.push(t('node_context_banner.relation_supports', {
         defaultValue: 'It aligns with {{node}} in the same round.',
@@ -787,7 +826,7 @@ function layoutDagre(
     const pos = g.node(n.id);
     const fullLabel = resolveCausalNodeLabel(n, t);
     const label = fullLabel.length > 50 ? fullLabel.slice(0, 50) + '\u2026' : fullLabel;
-    const typeLabel = getCausalTypeLabel(n.type, t);
+    const typeLabel = getCausalTypeLabel(getCausalNodeDisplayType(n), t);
     const roundLabel = t('causal.round_label', 'Round');
     const ariaLabel = getCausalNodeActionLabel(typeLabel, fullLabel, t);
     const causalMeaning = buildNodeCausalMeaning(n, edges, nodeMap, t);
@@ -1088,7 +1127,7 @@ export function CausalReviewView() {
           label,
           fullText: buildGuideNodeFullText(graphNode, label),
           degree: gn.total_degree,
-          type: graphNode?.type ?? gn.type,
+          type: graphNode ? getCausalNodeDisplayType(graphNode) : gn.type,
           inDegree: degreeById.get(gn.node_id)?.inDegree ?? gn.in_degree,
           outDegree: degreeById.get(gn.node_id)?.outDegree ?? gn.out_degree,
         };
@@ -1557,6 +1596,14 @@ export function CausalReviewView() {
                   {nodeCount} {t('causal.nodes', 'nodes')} &middot; {edgeCount} {t('causal.edges', 'edges')}
                 </span>
               </div>
+              {graphData?.scope_kind === 'branch_segment_only' && (
+                <p role="note" style={{ margin: 0, color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem' }}>
+                  {t(
+                    'causal.scope_branch_segment_only',
+                    'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+                  )}
+                </p>
+              )}
             </div>
             {agentSearch.trim() ? (
               <div style={{ fontSize: '0.78rem', color: CAUSAL_COLORS.textMuted, maxWidth: 360 }}>
@@ -2050,7 +2097,7 @@ export function CausalReviewView() {
                       cursor: 'pointer',
                     }}
                   >
-                    {`${t('causal.round_label', 'Round')} ${n.round ?? '?'} · ${getCausalTypeLabel(n.type, t)}: ${n.label}`}
+                    {`${t('causal.round_label', 'Round')} ${n.round ?? '?'} · ${getCausalTypeLabel(getCausalNodeDisplayType(n), t)}: ${n.label}`}
                   </button>
                 </div>
               ))}
@@ -2130,7 +2177,7 @@ export function CausalReviewView() {
             <div data-testid="causal-events-list" className="sr-only" role="list" aria-label={causalListAriaLabel}>
               {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
                 <div key={n.id} role="listitem">
-                  {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
+                  {`${getCausalTypeLabel(getCausalNodeDisplayType(n), t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
                 </div>
               ))}
             </div>

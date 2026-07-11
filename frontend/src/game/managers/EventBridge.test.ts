@@ -7,11 +7,30 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { EventBridge, dispatchVizEvent, type SpritePositionUpdate, type VizEventType } from './EventBridge';
+import {
+  EventBridge,
+  dispatchVizEvent,
+  shouldClearEmotionHalo,
+  type SpritePositionUpdate,
+  type VizEventType,
+} from './EventBridge';
 
 // Reset after each test
 afterEach(() => {
   EventBridge.stop();
+});
+
+describe('EventBridge — emotion halo truth', () => {
+  it('clears a prior halo when the next observation has no usable emotion', () => {
+    expect(shouldClearEmotionHalo('neutral')).toBe(true);
+    expect(shouldClearEmotionHalo('unknown')).toBe(true);
+    expect(shouldClearEmotionHalo('unavailable')).toBe(true);
+  });
+
+  it('keeps a halo eligible for a supported non-neutral emotion', () => {
+    expect(shouldClearEmotionHalo('calm')).toBe(false);
+    expect(shouldClearEmotionHalo('angry')).toBe(false);
+  });
 });
 
 describe('EventBridge — lifecycle', () => {

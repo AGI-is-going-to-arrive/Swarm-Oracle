@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
 import {
@@ -1317,71 +1318,70 @@ async function runSurface(mode, viewport, args, outputDir) {
   const baseUrl = args.baseUrl;
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), acceptDownloads: true, locale: E2E_LOCALE });
-  await context.addInitScript(({ languageKey, language, argumentMapTourKey, preferencesKey }) => {
-    window.localStorage.setItem(languageKey, language);
-    window.localStorage.setItem(argumentMapTourKey, "1");
-    window.localStorage.setItem(preferencesKey, JSON.stringify({
-      state: { resultViewMode: "reader" },
-      version: 0,
-    }));
-  }, {
-    languageKey: "swarmoracle:language:v1",
-    language: E2E_APP_LANGUAGE,
-    argumentMapTourKey: "swarm.argmap.tour_seen",
-    preferencesKey: "swarm-ui-preferences",
-  });
-  const page = await context.newPage();
-  const browserIssues = attachBrowserIssueMonitor(page);
-
-  await installFixtures(page);
-
   const allResults = { mode, browser: args.browser, viewport, tests: {} };
-
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
-    allResults.tests.argumentMap = await runNamedTest(
-      "argument-map",
-      page,
-      outputDir,
-      () => testArgumentMap(page, baseUrl, outputDir),
-    );
-    allResults.tests.argumentMapLoadFailed = await runNamedTest(
-      "argument-map-load-failed",
-      page,
-      outputDir,
-      () => testArgumentMapLoadFailed(page, baseUrl, outputDir, browserIssues),
-    );
-    allResults.tests.factionTimeline = await runNamedTest(
-      "faction-timeline",
-      page,
-      outputDir,
-      () => testFactionTimeline(page, baseUrl, outputDir),
-    );
-    allResults.tests.compareDigest = await runNamedTest(
-      "compare-digest",
-      page,
-      outputDir,
-      () => testCompareDigest(page, baseUrl, outputDir),
-    );
-  } catch (err) {
-    allResults.error = toErrorMessage(err);
-    await saveScreenshot(page, path.join(outputDir, "crash.png"));
-  } finally {
-    const browserRuntime = buildBrowserRuntimeResult(browserIssues);
-    allResults.tests.browserRuntime = {
-      steps: browserRuntime.steps,
-      passed: browserRuntime.passed,
-      error: browserRuntime.error,
-    };
-    allResults.browserIssues = browserRuntime.issues;
-    writeJson(path.join(outputDir, "browser-issues.json"), browserRuntime.issues);
-    if (!browserRuntime.passed) {
-      await saveScreenshot(page, path.join(outputDir, "browser-runtime-errors.png"));
+    const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), acceptDownloads: true, locale: E2E_LOCALE });
+    await context.addInitScript(({ languageKey, language, argumentMapTourKey, preferencesKey }) => {
+      window.localStorage.setItem(languageKey, language);
+      window.localStorage.setItem(argumentMapTourKey, "1");
+      window.localStorage.setItem(preferencesKey, JSON.stringify({
+        state: { resultViewMode: "reader" },
+        version: 0,
+      }));
+    }, {
+      languageKey: "swarmoracle:language:v1",
+      language: E2E_APP_LANGUAGE,
+      argumentMapTourKey: "swarm.argmap.tour_seen",
+      preferencesKey: "swarm-ui-preferences",
+    });
+    const page = await context.newPage();
+    const browserIssues = attachBrowserIssueMonitor(page);
+    await installFixtures(page);
+
+    try {
+      allResults.tests.argumentMap = await runNamedTest(
+        "argument-map",
+        page,
+        outputDir,
+        () => testArgumentMap(page, baseUrl, outputDir),
+      );
+      allResults.tests.argumentMapLoadFailed = await runNamedTest(
+        "argument-map-load-failed",
+        page,
+        outputDir,
+        () => testArgumentMapLoadFailed(page, baseUrl, outputDir, browserIssues),
+      );
+      allResults.tests.factionTimeline = await runNamedTest(
+        "faction-timeline",
+        page,
+        outputDir,
+        () => testFactionTimeline(page, baseUrl, outputDir),
+      );
+      allResults.tests.compareDigest = await runNamedTest(
+        "compare-digest",
+        page,
+        outputDir,
+        () => testCompareDigest(page, baseUrl, outputDir),
+      );
+    } catch (err) {
+      allResults.error = toErrorMessage(err);
+      await saveScreenshot(page, path.join(outputDir, "crash.png"));
+    } finally {
+      const browserRuntime = buildBrowserRuntimeResult(browserIssues);
+      allResults.tests.browserRuntime = {
+        steps: browserRuntime.steps,
+        passed: browserRuntime.passed,
+        error: browserRuntime.error,
+      };
+      allResults.browserIssues = browserRuntime.issues;
+      writeJson(path.join(outputDir, "browser-issues.json"), browserRuntime.issues);
+      if (!browserRuntime.passed) {
+        await saveScreenshot(page, path.join(outputDir, "browser-runtime-errors.png"));
+      }
     }
-    await page.close().catch(() => {});
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+  } finally {
+    await closePlaywrightBrowser(browser, `e2e-phase3-batch-b:${mode}:${args.browser}`);
   }
 
   allResults.summary = summarizeRun(allResults);

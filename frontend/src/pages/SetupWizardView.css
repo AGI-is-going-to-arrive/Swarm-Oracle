@@ -340,6 +340,47 @@
   min-width: 0;
 }
 
+.wizard__verification-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--wz-border);
+  border-radius: 10px;
+  background: var(--wz-accent-soft);
+}
+
+.wizard__unverified-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--wz-text);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.wizard__unverified-confirm .wizard__checkbox {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.wizard__unverified-confirm:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.wizard__verification-hint {
+  margin: 0 0 0 24px;
+  color: var(--wz-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.wizard__verification-hint--verified {
+  margin-left: 0;
+}
+
 /* ── ConnectionTester ── */
 .tester {
   display: flex;

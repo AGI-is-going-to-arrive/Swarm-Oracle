@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog';
 import type {
@@ -71,6 +71,19 @@ function visibleDecisionBias(
   });
 }
 
+type GrowthEventScope = 'current' | 'past' | null;
+
+function growthEventScope(
+  event: AgentGrowthEvent,
+  currentScenarioId: string | null,
+  currentBranchId: string | null,
+): GrowthEventScope {
+  if (!currentScenarioId || !event.scenario_id) return null;
+  if (event.scenario_id !== currentScenarioId) return 'past';
+  if (!currentBranchId || !event.branch_id) return null;
+  return event.branch_id === currentBranchId ? 'current' : 'past';
+}
+
 export function AgentProfileSheet({
   agent,
   observation,
@@ -79,6 +92,7 @@ export function AgentProfileSheet({
   onStartConversation,
 }: AgentProfileSheetProps) {
   const { t, i18n } = useTranslation();
+  const { id: routeScenarioId } = useParams<{ id: string }>();
   const locale = i18n?.language || 'en';
   const requestSeqRef = useRef(0);
   const [profile, setProfile] = useState<AgentIdentityProfile | null>(null);
@@ -90,6 +104,10 @@ export function AgentProfileSheet({
   const open = agent !== null;
   const identityId = agent?.agent_identity_id ?? null;
   const sourceType = normalizeScenarioAgentSource(agent?.source_type);
+  const currentScenarioId = routeScenarioId?.trim() || null;
+  // Observation coordinates are evidence provenance. Only a selected branch
+  // is an explicit statement about which worldline the user is viewing.
+  const currentBranchId = observation?.selectedBranchId?.trim() || null;
 
   const fetchData = useCallback(
     async (id: string, uid: string, source: string | null) => {
@@ -161,7 +179,11 @@ export function AgentProfileSheet({
     ? t('result.agent_profile_sheet.no_observation_value', {
         defaultValue: 'No matching observation',
       })
-    : observation?.emotion ?? agent.emotion;
+    : observation?.emotionMetadataStatus === 'unavailable'
+      ? t('result.agent_profile_sheet.emotion_metadata_unavailable', {
+          defaultValue: 'Emotion metadata unavailable',
+        })
+      : observation?.emotion ?? agent.emotion;
   const branchLabel = observation?.branchTitle
     ?? observation?.branchId
     ?? t('common.unknown', { defaultValue: 'Unknown' });
@@ -373,14 +395,57 @@ export function AgentProfileSheet({
                 <section className="agent-profile-sheet__section">
                   <h3>{t('result.agent_profile_sheet.events_title', { defaultValue: 'Growth Events' })}</h3>
                   <ul className="agent-profile-sheet__list" data-testid="agent-profile-sheet-events">
-                    {events.map((event) => (
-                      <li key={event.id}>
-                        <span className="agent-profile-sheet__date">
-                          {formatDate(event.created_at, locale)}
-                        </span>
-                        <span>{event.summary}</span>
-                      </li>
-                    ))}
+                    {events.map((event) => {
+                      const scope = growthEventScope(
+                        event,
+                        currentScenarioId,
+                        currentBranchId,
+                      );
+                      const unknown = t('common.unknown', { defaultValue: 'Unknown' });
+                      return (
+                        <li
+                          key={event.id}
+                          data-testid={`agent-profile-sheet-event-${event.id}`}
+                          data-history-scope={scope ?? undefined}
+                        >
+                          <span className="agent-profile-sheet__date">
+                            {formatDate(event.created_at, locale)}
+                          </span>
+                          <span>
+                            {scope === 'current' ? (
+                              <strong>
+                                {t('result.agent_profile_sheet.history_current', {
+                                  defaultValue: 'Current',
+                                })}
+                                {' · '}
+                                {t('result.agent_profile_sheet.history_current_worldline', {
+                                  defaultValue: 'selected branch segment',
+                                })}
+                                {' · '}
+                              </strong>
+                            ) : scope === 'past' ? (
+                              <strong>
+                                {t('result.agent_profile_sheet.history_past', {
+                                  defaultValue: 'Past',
+                                })}
+                                {' · '}
+                              </strong>
+                            ) : null}
+                            {event.summary}
+                            <br />
+                            <span className="agent-profile-sheet__profile-meta">
+                              {t('result.agent_profile_sheet.history_coordinates', {
+                                defaultValue: 'Scenario {{scenario}} · Branch {{branch}} · R{{round}} · {{eventType}}',
+                                scenario: event.scenario_id ?? unknown,
+                                branch: event.branch_id ?? unknown,
+                                round: event.round_number ?? unknown,
+                                eventType: event.event_type || unknown,
+                              })}
+                            </span>
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </section>
               ) : null}

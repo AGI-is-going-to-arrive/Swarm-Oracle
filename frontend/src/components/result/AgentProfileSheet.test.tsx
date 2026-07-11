@@ -5,6 +5,7 @@ import { I18nextProvider } from 'react-i18next';
 vi.mock('react-router-dom', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Link: ({ children, to, ...props }: any) => <a href={to} {...props}>{children}</a>,
+  useParams: () => ({ id: 'scenario-current' }),
 }));
 import i18next from 'i18next';
 import type { AgentInfo, ScenarioAgentProfileResponse } from '../../types';
@@ -64,6 +65,10 @@ void i18n.init({
             snapshot_emotion_source: 'No branch and round observation context is available for this snapshot.',
             knowledge_domains_title: 'Knowledge domains',
             decision_bias_title: 'Decision style',
+            history_current: 'Current',
+            history_past: 'Past',
+            history_current_worldline: 'selected branch segment',
+            history_coordinates: 'Scenario {{scenario}} · Branch {{branch}} · R{{round}} · {{eventType}}',
           },
         },
       },
@@ -105,6 +110,8 @@ interface TestProfileObservation {
   selectedBranchId?: string | null;
   selectedBranchTitle?: string | null;
   selectedRound?: number | null;
+  emotionMetadataStatus?: 'available' | 'unavailable';
+  emotionMetadataFailureCode?: string | null;
 }
 
 function renderSheet(
@@ -290,6 +297,127 @@ describe('AgentProfileSheet', () => {
     expect(screen.queryByTestId('agent-profile-sheet-empty')).not.toBeInTheDocument();
   });
 
+  it('keeps growth events attached to their scenario and worldline coordinates', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(
+      makeResponse({
+        growth_events: [
+          {
+            id: 'event-current',
+            scenario_id: 'scenario-current',
+            branch_id: 'branch-current',
+            round_number: 4,
+            event_type: 'stance_shift',
+            summary: 'Current-worldline decision',
+            metrics_json: null,
+            created_at: '2026-01-05T00:00:00Z',
+          },
+          {
+            id: 'event-other-branch',
+            scenario_id: 'scenario-current',
+            branch_id: 'branch-other',
+            round_number: 2,
+            event_type: 'alliance_formed',
+            summary: 'Alternate-worldline alliance',
+            metrics_json: null,
+            created_at: '2026-01-04T00:00:00Z',
+          },
+          {
+            id: 'event-past-scenario',
+            scenario_id: 'scenario-past',
+            branch_id: 'branch-past',
+            round_number: 7,
+            event_type: 'betrayal',
+            summary: 'Past-scenario rupture',
+            metrics_json: null,
+            created_at: '2025-12-01T00:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    renderSheet(
+      makeAgent(),
+      vi.fn(),
+      undefined,
+      {
+        emotion: 'focused',
+        source: 'result',
+        branchId: 'branch-current',
+        branchTitle: 'Current branch',
+        round: 4,
+        selectedBranchId: 'branch-current',
+        selectedBranchTitle: 'Current branch',
+      },
+    );
+
+    const current = await screen.findByTestId('agent-profile-sheet-event-event-current');
+    expect(current).toHaveAttribute('data-history-scope', 'current');
+    expect(current).toHaveTextContent('Current');
+    expect(current).toHaveTextContent('selected branch segment');
+    expect(current).toHaveTextContent(
+      'Scenario scenario-current · Branch branch-current · R4 · stance_shift',
+    );
+
+    const otherBranch = screen.getByTestId('agent-profile-sheet-event-event-other-branch');
+    expect(otherBranch).toHaveAttribute('data-history-scope', 'past');
+    expect(otherBranch).toHaveTextContent('Past');
+    expect(otherBranch).toHaveTextContent(
+      'Scenario scenario-current · Branch branch-other · R2 · alliance_formed',
+    );
+    expect(otherBranch).not.toHaveTextContent('selected branch segment');
+
+    const pastScenario = screen.getByTestId('agent-profile-sheet-event-event-past-scenario');
+    expect(pastScenario).toHaveAttribute('data-history-scope', 'past');
+    expect(pastScenario).toHaveTextContent('Past');
+    expect(pastScenario).toHaveTextContent(
+      'Scenario scenario-past · Branch branch-past · R7 · betrayal',
+    );
+    expect(pastScenario).not.toHaveTextContent('selected branch segment');
+  });
+
+  it('does not guess a current branch when the caller provides no selected branch', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(
+      makeResponse({
+        growth_events: [
+          {
+            id: 'event-unscoped-branch',
+            scenario_id: 'scenario-current',
+            branch_id: 'branch-observed',
+            round_number: 3,
+            event_type: 'stance_shift',
+            summary: 'Observed without a selected worldline',
+            metrics_json: null,
+            created_at: '2026-01-05T00:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    renderSheet(
+      makeAgent(),
+      vi.fn(),
+      undefined,
+      {
+        emotion: 'focused',
+        source: 'live',
+        branchId: 'branch-observed',
+        branchTitle: 'Observed branch',
+        round: 3,
+      },
+    );
+
+    const event = await screen.findByTestId(
+      'agent-profile-sheet-event-event-unscoped-branch',
+    );
+    expect(event).not.toHaveAttribute('data-history-scope');
+    expect(event).toHaveTextContent(
+      'Scenario scenario-current · Branch branch-observed · R3 · stance_shift',
+    );
+    expect(event).not.toHaveTextContent('Current');
+    expect(event).not.toHaveTextContent('selected branch segment');
+    expect(event).not.toHaveTextContent('Past');
+  });
+
   it('shows configured stance and a sourced observation instead of the mutable agent emotion', async () => {
     mockedGetAgentProfileData.mockResolvedValueOnce(
       makeResponse({
@@ -438,6 +566,29 @@ describe('AgentProfileSheet', () => {
     expect(state).toHaveTextContent(
       'No message observation yet; showing the configured starting emotion.',
     );
+  });
+
+  it('shows unavailable metadata instead of falling back to the agent emotion', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(
+      makeAgent({ emotion: 'stale-neutral' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: null,
+        source: 'live',
+        branchId: 'root',
+        branchTitle: 'Shared history',
+        round: 4,
+        emotionMetadataStatus: 'unavailable',
+        emotionMetadataFailureCode: 'LLM_TIMEOUT',
+      },
+    );
+
+    const state = await screen.findByTestId('agent-profile-sheet-current-state');
+    expect(state).toHaveTextContent('Emotion metadata unavailable');
+    expect(state).not.toHaveTextContent('stale-neutral');
   });
 
   it('does not fall back to a cross-branch agent emotion when replay has no matching observation', async () => {

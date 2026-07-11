@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -27,6 +28,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.result_report.queries import load_evidence_message_coords
 from app.services.result_report.reducer import (
     TARGET_BRANCH_SORT,
     _derive_likelihood,
@@ -224,7 +226,7 @@ def test_reduce_sorts_branches_and_populates_structured_ir_models():
     assert result.dissenting is not None
     assert result.dissenting.runner_up_branch_id == "branch-b"
     assert result.dissenting.what_almost_won == "Delay for committee review"
-    assert result.analytic_confidence.level == "high"
+    assert result.analytic_confidence.level == "medium"
     assert "branch_count=3" in result.analytic_confidence.basis
 
 
@@ -346,6 +348,72 @@ def test_branch_distribution_dominant_can_follow_target_branch_id():
     assert legacy[0]["branch_id"] == "branch-root"
     assert legacy[0]["dominant"] is True
     assert legacy[1]["dominant"] is False
+
+
+def test_reduce_counts_only_completed_terminal_leaves_for_likelihood_and_confidence():
+    engine = get_engine()
+    scenario_id = "scenario-single-terminal-leaf"
+    with Session(engine) as session:
+        scenario = Scenario(
+            id=scenario_id,
+            question="Does one resolved worldline count as multiple samples?",
+            status=ScenarioStatus.DONE,
+        )
+        session.add(scenario)
+        session.add_all(
+            [
+                Branch(
+                    id="branch-completed-parent",
+                    scenario_id=scenario.id,
+                    title="Completed fork parent",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-only-terminal-leaf",
+                    scenario_id=scenario.id,
+                    parent_branch_id="branch-completed-parent",
+                    title="Only resolved outcome",
+                    story="The sole resolved worldline reaches one answer.",
+                    insight="There is no second terminal outcome to compare.",
+                    probability=0.64,
+                    fork_round=2,
+                    status=BranchStatus.COMPLETED,
+                ),
+            ],
+        )
+        session.commit()
+
+    result = reduce(
+        engine,
+        scenario_id,
+        dominant_branch_id="branch-only-terminal-leaf",
+    )
+
+    assert result.target_branch_id == "branch-only-terminal-leaf"
+    assert result.likelihood.probability == pytest.approx(0.64)
+    assert result.likelihood.interval == pytest.approx((0.64, 0.64))
+    assert result.likelihood.wep == "single_path"
+    assert "branch_count=1" in result.analytic_confidence.basis
+    assert result.analytic_confidence.basis_i18n is not None
+    assert "Based on 1 terminal branch" in result.analytic_confidence.basis_i18n.en
+
+    # The chart remains a full-tree visualization even though statistical
+    # branch samples are restricted to completed terminal leaves.
+    assert [item["branch_id"] for item in result.branch_distribution] == [
+        "branch-completed-parent",
+        "branch-only-terminal-leaf",
+    ]
+    assert [item["is_terminal_leaf"] for item in result.branch_distribution] == [
+        False,
+        True,
+    ]
+    probability_chart = next(chart for chart in result.charts if chart.kind == "probability_bar")
+    assert [item["branch_id"] for item in probability_chart.data["branches"]] == [
+        "branch-completed-parent",
+        "branch-only-terminal-leaf",
+    ]
 
 
 def test_dissenting_runner_up_uses_strongest_other_terminal_leaf():
@@ -570,6 +638,403 @@ def test_clamp_stance_score_preserves_signed_range_and_rejects_non_finite(
     expected,
 ):
     assert reducer_module._clamp_stance_score(value) == pytest.approx(expected)
+
+
+def test_agent_affect_convergence_uses_the_full_signed_proxy_range(monkeypatch):
+    frames = [
+        AgentStateFrame(
+            scenario_id="scenario-extremes",
+            branch_id="branch-extremes",
+            round_number=1,
+            agent_id="agent-negative",
+            stance_score=-1.0,
+        ),
+        AgentStateFrame(
+            scenario_id="scenario-extremes",
+            branch_id="branch-extremes",
+            round_number=1,
+            agent_id="agent-positive",
+            stance_score=1.0,
+        ),
+    ]
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_agent_state_frames",
+        lambda *_args, **_kwargs: frames,
+    )
+
+    assert reducer_module.reduce_agent_consensus(
+        get_engine(),
+        "scenario-extremes",
+        "branch-extremes",
+    ) == reducer_module.StatResult(status="available", value=0.0)
+
+
+def test_agent_affect_convergence_discloses_metadata_unavailable(monkeypatch):
+    frames = [
+        AgentStateFrame(
+            scenario_id="scenario-partial",
+            branch_id="branch-partial",
+            round_number=2,
+            agent_id=f"agent-{index}",
+            stance_score=score,
+        )
+        for index, score in enumerate((-0.5, 0.5), start=1)
+    ]
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_agent_state_frames",
+        lambda *_args, **_kwargs: frames,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            round_number=None,
+            total_count=0,
+            unavailable_count=0,
+        ),
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "count_metadata_unavailable_messages",
+        lambda *_args, **_kwargs: 1,
+    )
+
+    assert reducer_module.reduce_agent_consensus(
+        get_engine(),
+        "scenario-partial",
+        "branch-partial",
+    ) == reducer_module.StatResult(
+        status="partial",
+        value=pytest.approx(0.5),
+        reason="metadata_unavailable",
+    )
+
+
+def test_latest_all_unavailable_round_does_not_reuse_old_agent_consensus(monkeypatch):
+    frames = [
+        AgentStateFrame(
+            scenario_id="scenario-stale",
+            branch_id="branch-stale",
+            round_number=1,
+            agent_id=f"agent-{index}",
+            stance_score=score,
+        )
+        for index, score in enumerate((-0.2, 0.2), start=1)
+    ]
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_agent_state_frames",
+        lambda *_args, **_kwargs: frames,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            round_number=2,
+            total_count=2,
+            unavailable_count=2,
+        ),
+        raising=False,
+    )
+
+    assert reducer_module.reduce_agent_consensus(
+        get_engine(),
+        "scenario-stale",
+        "branch-stale",
+    ) == reducer_module.StatResult(
+        status="missing",
+        value=None,
+        reason="metadata_unavailable",
+    )
+
+
+def test_latest_metadata_gap_marks_old_faction_proxies_partial(monkeypatch):
+    snapshots = [
+        FactionSnapshot(
+            scenario_id="scenario-faction-stale",
+            branch_id="branch-faction-stale",
+            round_number=1,
+            faction_key="faction-1",
+            stance_center=0.2,
+            member_agent_ids_json=json.dumps(["a1", "a2"]),
+            confidence=1.0,
+        )
+    ]
+    relation_stats = reducer_module.LatestRelationStats(
+        count=1,
+        avg_opposition=0.2,
+        max_opposition=0.2,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "_latest_faction_snapshots",
+        lambda *_args, **_kwargs: snapshots,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "_latest_relation_stats",
+        lambda *_args, **_kwargs: relation_stats,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_faction_proxy_rounds",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            snapshot_round=1,
+            relation_round=1,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            round_number=2,
+            total_count=3,
+            unavailable_count=3,
+        ),
+        raising=False,
+    )
+
+    faction = reducer_module.reduce_faction_consensus(
+        get_engine(),
+        "scenario-faction-stale",
+        "branch-faction-stale",
+    )
+    polarization = reducer_module.reduce_polarization(
+        get_engine(),
+        "scenario-faction-stale",
+        "branch-faction-stale",
+    )
+
+    assert faction.status == "partial"
+    assert faction.reason == "metadata_unavailable"
+    assert polarization.status == "partial"
+    assert polarization.reason == "metadata_unavailable"
+
+
+def test_same_round_metadata_gap_marks_faction_proxies_partial(monkeypatch):
+    snapshots = [
+        FactionSnapshot(
+            scenario_id="scenario-faction-partial",
+            branch_id="branch-faction-partial",
+            round_number=2,
+            faction_key="faction-1",
+            stance_center=0.2,
+            member_agent_ids_json=json.dumps(["a1", "a2", "a3", "a4"]),
+            confidence=1.0,
+        )
+    ]
+    monkeypatch.setattr(
+        reducer_module,
+        "_latest_faction_snapshots",
+        lambda *_args, **_kwargs: snapshots,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "_latest_relation_stats",
+        lambda *_args, **_kwargs: reducer_module.LatestRelationStats(
+            count=1,
+            avg_opposition=0.2,
+            max_opposition=0.2,
+        ),
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_faction_proxy_rounds",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            snapshot_round=2,
+            relation_round=2,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            round_number=2,
+            total_count=5,
+            unavailable_count=1,
+        ),
+    )
+
+    faction = reducer_module.reduce_faction_consensus(
+        get_engine(),
+        "scenario-faction-partial",
+        "branch-faction-partial",
+    )
+    polarization = reducer_module.reduce_polarization(
+        get_engine(),
+        "scenario-faction-partial",
+        "branch-faction-partial",
+    )
+
+    assert faction.status == "partial"
+    assert faction.reason == "metadata_unavailable"
+    assert polarization.status == "partial"
+    assert polarization.reason == "metadata_unavailable"
+
+
+def test_mixed_faction_proxy_rounds_are_not_reported_available(monkeypatch):
+    snapshots = [
+        FactionSnapshot(
+            scenario_id="scenario-faction-mixed",
+            branch_id="branch-faction-mixed",
+            round_number=1,
+            faction_key="faction-old",
+            stance_center=-0.2,
+            member_agent_ids_json=json.dumps(["a1", "a2"]),
+            confidence=1.0,
+        )
+    ]
+    monkeypatch.setattr(
+        reducer_module,
+        "_latest_faction_snapshots",
+        lambda *_args, **_kwargs: snapshots,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "_latest_relation_stats",
+        lambda *_args, **_kwargs: reducer_module.LatestRelationStats(
+            count=1,
+            avg_opposition=0.4,
+            max_opposition=0.4,
+        ),
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_faction_proxy_rounds",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            snapshot_round=1,
+            relation_round=2,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            round_number=2,
+            total_count=5,
+            unavailable_count=0,
+        ),
+    )
+
+    faction = reducer_module.reduce_faction_consensus(
+        get_engine(),
+        "scenario-faction-mixed",
+        "branch-faction-mixed",
+    )
+    polarization = reducer_module.reduce_polarization(
+        get_engine(),
+        "scenario-faction-mixed",
+        "branch-faction-mixed",
+    )
+
+    assert faction.status == "partial"
+    assert faction.reason == "stale_proxy_round"
+    assert polarization.status == "partial"
+    assert polarization.reason == "stale_proxy_round"
+
+
+def test_disabled_factions_keep_feature_disabled_reason_with_current_messages(monkeypatch):
+    monkeypatch.setattr(settings, "FEATURE_FACTIONS", False)
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            round_number=2,
+            total_count=4,
+            unavailable_count=0,
+        ),
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_faction_proxy_rounds",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            snapshot_round=None,
+            relation_round=None,
+        ),
+        raising=False,
+    )
+
+    assert reducer_module.reduce_faction_consensus(
+        get_engine(),
+        "scenario-disabled",
+        "branch-disabled",
+    ) == reducer_module.StatResult(
+        status="missing",
+        value=None,
+        reason="feature_disabled",
+    )
+    assert reducer_module.reduce_polarization(
+        get_engine(),
+        "scenario-disabled",
+        "branch-disabled",
+    ) == reducer_module.StatResult(
+        status="missing",
+        value=None,
+        reason="feature_disabled",
+    )
+
+
+def test_evidence_query_does_not_rank_or_expose_metadata_sentinel():
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(
+            id="scenario-metadata-evidence",
+            question="Metadata evidence?",
+            status=ScenarioStatus.DONE,
+        )
+        branch = Branch(
+            id="branch-metadata-evidence",
+            scenario_id=scenario.id,
+            title="Main",
+            status=BranchStatus.COMPLETED,
+        )
+        agent = Agent(
+            id="agent-metadata-evidence",
+            scenario_id=scenario.id,
+            name="Archivist",
+            role="Recorder",
+        )
+        round_row = Round(
+            id="round-metadata-evidence",
+            branch_id=branch.id,
+            round_number=1,
+        )
+        session.add_all([scenario, branch, agent, round_row])
+        session.add_all([
+            AgentMessage(
+                id="a-neutral",
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content="Neutral observation",
+                emotion="neutral",
+            ),
+            AgentMessage(
+                id="z-unavailable",
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content="Speech without metadata",
+                emotion="__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+            ),
+        ])
+        session.commit()
+
+    rows = load_evidence_message_coords(
+        engine,
+        "branch-metadata-evidence",
+        key_moments=[],
+        limit=2,
+    )
+
+    assert [row["message_id"] for row in rows] == ["a-neutral", "z-unavailable"]
+    unavailable = rows[1]
+    assert unavailable["emotion"] is None
+    assert unavailable["emotion_metadata_status"] == "unavailable"
+    assert unavailable["emotion_metadata_failure_code"] == "LLM_TIMEOUT"
 
 
 def test_stance_centers_preserve_weights_clamp_extremes_and_skip_empty_membership():
@@ -1009,13 +1474,34 @@ def test_confidence_mapping_is_deterministic():
         agent_consensus=None,
     )
 
-    assert high.level == "high"
-    assert high.basis == "branch_count=3; evidence_count=4; agent_consensus=0.7500 (available)"
+    assert high.level == "medium"
+    assert high.basis == "branch_count=3; evidence_count=4"
     assert low.level == "low"
-    assert low.basis == "branch_count=1; evidence_count=0; agent_consensus=missing"
+    assert low.basis == "branch_count=1; evidence_count=0"
 
 
-def test_confidence_basis_i18n_with_available_consensus():
+def test_affect_convergence_proxy_does_not_raise_analytic_confidence():
+    with_proxy = derive_confidence(
+        evidence_count=3,
+        branch_count=2,
+        agent_consensus_status="available",
+        agent_consensus=1.0,
+    )
+    without_proxy = derive_confidence(
+        evidence_count=3,
+        branch_count=2,
+        agent_consensus_status="missing",
+        agent_consensus=None,
+    )
+
+    assert with_proxy.level == without_proxy.level == "medium"
+    assert with_proxy.basis == without_proxy.basis == (
+        "branch_count=2; evidence_count=3"
+    )
+    assert with_proxy.basis_i18n == without_proxy.basis_i18n
+
+
+def test_confidence_basis_i18n_excludes_affect_proxy_even_when_available():
     confidence = derive_confidence(
         evidence_count=5,
         branch_count=12,
@@ -1024,14 +1510,11 @@ def test_confidence_basis_i18n_with_available_consensus():
     )
 
     assert confidence.basis_i18n is not None
-    assert confidence.basis_i18n.zh == "依据 12 条分支、5 条证据；Agent 共识 100%"
+    assert confidence.basis_i18n.zh == "依据 12 条终端分支、5 条证据"
     assert confidence.basis_i18n.en == (
-        "Based on 12 branches and 5 evidence items; agent consensus 100%"
+        "Based on 12 terminal branches and 5 evidence items"
     )
-    # Legacy machine-style basis stays untouched for API compatibility.
-    assert confidence.basis == (
-        "branch_count=12; evidence_count=5; agent_consensus=1.0000 (available)"
-    )
+    assert confidence.basis == "branch_count=12; evidence_count=5"
 
 
 def test_confidence_basis_i18n_drops_unavailable_consensus_clause():
@@ -1050,8 +1533,10 @@ def test_confidence_basis_i18n_drops_unavailable_consensus_clause():
 
     for confidence in (missing, partial_value):
         assert confidence.basis_i18n is not None
-        assert confidence.basis_i18n.zh == "依据 3 条分支、2 条证据"
-        assert confidence.basis_i18n.en == "Based on 3 branches and 2 evidence items"
+        assert confidence.basis_i18n.zh == "依据 3 条终端分支、2 条证据"
+        assert confidence.basis_i18n.en == (
+            "Based on 3 terminal branches and 2 evidence items"
+        )
         assert "共识" not in confidence.basis_i18n.zh
         assert "consensus" not in confidence.basis_i18n.en
 
@@ -1357,8 +1842,8 @@ def test_reduce_clamps_confidence_to_result_quality_ceiling():
     # would have pushed high); the ceiling caps it at the model's medium.
 
 
-def test_derive_confidence_ceiling_caps_high_to_medium():
-    """S5 unit: a high countable score is clamped down to the medium ceiling."""
+def test_derive_confidence_ceiling_preserves_count_based_medium():
+    """Affect proxy does not create a synthetic high score before clamping."""
 
     capped = derive_confidence(
         evidence_count=4,
@@ -1377,7 +1862,7 @@ def test_derive_confidence_ceiling_caps_high_to_medium():
         agent_consensus=0.75,
         confidence_ceiling=None,
     )
-    assert uncapped.level == "high"
+    assert uncapped.level == "medium"
 
     # A ceiling at/above the derived level does not raise it.
     not_raised = derive_confidence(

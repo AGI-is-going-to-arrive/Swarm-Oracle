@@ -318,7 +318,10 @@ class TestSafeLlmErrorTaxonomy:
         assert "private-request" not in rendered
 
     def test_does_not_overclassify_other_provider_errors(self):
-        assert classify_llm_error_code(self._http_status_error(500, "server error")) is None
+        assert (
+            classify_llm_error_code(self._http_status_error(500, "server error"))
+            == "LLM_UNREACHABLE"
+        )
         assert classify_llm_error_code(LLMError("Unexpected response structure")) is None
 
     @pytest.mark.asyncio
@@ -391,6 +394,22 @@ class TestLLMCall:
         llm_client._runtime_rate_limit_table_ensured_keys.clear()
         llm_client._rate_limit_requests.clear()
         llm_client._rate_limit_tokens.clear()
+
+    @pytest.mark.asyncio
+    async def test_remote_base_url_with_whitespace_key_fails_before_network(self, monkeypatch):
+        class NoNetworkClient:
+            async def post(self, *_args, **_kwargs):
+                raise AssertionError("whitespace key must fail before network")
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: NoNetworkClient())
+
+        with pytest.raises(LLMError, match="requires an api_key"):
+            await llm_call(
+                "Reply with OK.",
+                api_key="   ",
+                base_url="https://api.openai.com/v1",
+                model="gpt-test",
+            )
 
     @pytest.mark.asyncio
     async def test_global_backpressure_rejects_when_queue_is_full(self, monkeypatch):
@@ -2424,6 +2443,42 @@ class TestStreamingSupportProbe:
 
         assert result["supported"] is False
         assert "unsupported" in (result["reason"] or "")
+        assert result["error_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_probe_streaming_support_does_not_cache_credential_failure(
+        self,
+        monkeypatch,
+    ):
+        calls = 0
+
+        async def _key_sensitive_stream(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if kwargs.get("api_key") == "bad-key":
+                raise llm_client.LLMError("bad key", code="LLM_AUTH_FAILED")
+            yield "OK"
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _key_sensitive_stream)
+        llm_client._stream_support_cache.clear()
+
+        first = await llm_client.probe_streaming_support(
+            api_key="bad-key",
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+            force_refresh=True,
+        )
+        second = await llm_client.probe_streaming_support(
+            api_key="good-key",
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+        )
+
+        assert first["error_code"] == "LLM_AUTH_FAILED"
+        assert second["supported"] is True
+        assert second["error_code"] is None
+        assert second["cached"] is False
+        assert calls == 2
 
 
 class TestJSONStreamFallbackHelper:
@@ -2466,6 +2521,30 @@ class TestJSONStreamFallbackHelper:
         assert result == {"answer": "from-non-stream"}
 
     @pytest.mark.asyncio
+    async def test_does_not_replay_stable_provider_failure_from_stream_probe(
+        self,
+        monkeypatch,
+    ):
+        async def _fake_probe(**kwargs):
+            return {
+                "supported": False,
+                "reason": "invalid credentials",
+                "error_code": "LLM_AUTH_FAILED",
+            }
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("probe provider failure must not be replayed")
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _should_not_run)
+        monkeypatch.setattr(llm_client, "llm_call_json", _should_not_run)
+
+        with pytest.raises(llm_client.LLMError) as raised:
+            await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
+
+        assert raised.value.code == "LLM_AUTH_FAILED"
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_non_stream_when_stream_call_errors(self, monkeypatch):
         async def _fake_probe(**kwargs):
             return {"supported": True, "reason": None}
@@ -2483,6 +2562,99 @@ class TestJSONStreamFallbackHelper:
         result = await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
 
         assert result == {"answer": "fallback"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "LLM_AUTH_FAILED",
+            "LLM_RATE_LIMITED",
+            "LLM_MODEL_NOT_FOUND",
+            "LLM_TIMEOUT",
+            "LLM_UNREACHABLE",
+        ],
+    )
+    async def test_does_not_replay_known_provider_failures_on_non_stream_path(
+        self,
+        monkeypatch,
+        code,
+    ):
+        async def _fake_probe(**kwargs):
+            return {"supported": True, "reason": None}
+
+        failure = llm_client.LLMError("provider failed", code=code)
+
+        async def _broken_stream(*args, **kwargs):
+            raise failure
+
+        non_stream_calls = 0
+
+        async def _non_stream(*args, **kwargs):
+            nonlocal non_stream_calls
+            non_stream_calls += 1
+            return {"answer": "must-not-replay"}
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _broken_stream)
+        monkeypatch.setattr(llm_client, "llm_call_json", _non_stream)
+
+        with pytest.raises(llm_client.LLMError) as raised:
+            await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
+
+        assert raised.value is failure
+        assert non_stream_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_allowed_fallback_shares_one_total_timeout_budget(self, monkeypatch):
+        async def _fake_probe(**kwargs):
+            assert kwargs["timeout"] == 8.0
+            return {"supported": True, "reason": None}
+
+        async def _broken_stream(*args, **kwargs):
+            assert kwargs["timeout"] == 10.0
+            raise llm_client.LLMError("stream failed")
+
+        async def _fake_non_stream(*args, **kwargs):
+            assert kwargs["timeout"] == 4.0
+            return {"answer": "within-shared-budget"}
+
+        clock = iter([100.0, 100.0, 100.0, 106.0])
+        monkeypatch.setattr(llm_client, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _broken_stream)
+        monkeypatch.setattr(llm_client, "llm_call_json", _fake_non_stream)
+
+        result = await llm_call_json_with_stream_fallback(
+            "ignored",
+            probe_timeout=8.0,
+            timeout=10.0,
+        )
+
+        assert result == {"answer": "within-shared-budget"}
+
+    @pytest.mark.asyncio
+    async def test_total_timeout_cancels_a_hanging_stream_call(self, monkeypatch):
+        async def _fake_probe(**kwargs):
+            return {"supported": True, "reason": None}
+
+        async def _hanging_stream(*args, **kwargs):
+            await asyncio.Event().wait()
+            return {"answer": "too-late"}
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("timeout must not replay the request as non-stream")
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _hanging_stream)
+        monkeypatch.setattr(llm_client, "llm_call_json", _should_not_run)
+
+        with pytest.raises(llm_client.LLMError) as raised:
+            await asyncio.wait_for(
+                llm_call_json_with_stream_fallback("ignored", timeout=0.02),
+                timeout=0.2,
+            )
+
+        assert raised.value.code == "LLM_TIMEOUT"
 
 
 class TestStripReasoningBlocks:
@@ -3170,18 +3342,17 @@ class TestLlmCallStructuredOutputs:
         monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
         caplog.set_level("WARNING")
 
-        result = await llm_call_json_with_stream_fallback(
-            "Return JSON.",
-            base_url="https://api.openai.com/v1/chat/completions",
-            api_key="openai-key",
-            probe_timeout=1.0,
-        )
+        with pytest.raises(LLMError, match="LLM returned 400"):
+            await llm_call_json_with_stream_fallback(
+                "Return JSON.",
+                base_url="https://api.openai.com/v1/chat/completions",
+                api_key="openai-key",
+                probe_timeout=1.0,
+            )
 
-        assert result == {"answer": "fallback"}
         assert len(stream_payloads) == 1
         assert "response_format" in stream_payloads[0]
-        assert len(post_payloads) == 1
-        assert "response_format" in post_payloads[0]
+        assert post_payloads == []
         assert "Structured output rejected by provider" not in caplog.text
 
 
@@ -3294,6 +3465,72 @@ class TestDetectProvider:
 
 
 class TestMeasureProviderParallelism:
+    def test_provider_headers_never_send_the_server_key_to_explicit_keyless_local_urls(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(llm_client.settings, "LLM_API_KEY", "sk-server-secret")
+
+        local_headers = llm_client._build_provider_request_headers(
+            api_key="   ",
+            base_url="http://127.0.0.1:11434/v1",
+        )
+        explicit_headers = llm_client._build_provider_request_headers(
+            api_key="sk-local-explicit",
+            base_url="http://127.0.0.1:11434/v1",
+        )
+        server_default_headers = llm_client._build_provider_request_headers(
+            api_key=None,
+            base_url=None,
+        )
+
+        assert "Authorization" not in local_headers
+        assert explicit_headers["Authorization"] == "Bearer sk-local-explicit"
+        assert server_default_headers["Authorization"] == "Bearer sk-server-secret"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", [None, "   "])
+    async def test_raw_probe_allows_local_base_url_without_key(self, api_key):
+        calls: list[tuple[str, dict[str, str]]] = []
+
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                calls.append((url, kwargs["headers"]))
+                return httpx.Response(200, request=httpx.Request("POST", url))
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key=api_key,
+            base_url="http://127.0.0.1:11434/v1",
+            model="llama3.2",
+            timeout=1.0,
+        )
+
+        assert ok is True
+        assert error is None
+        assert calls == [(
+            "http://127.0.0.1:11434/v1/chat/completions",
+            {"Content-Type": "application/json"},
+        )]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", [None, "   "])
+    async def test_raw_probe_rejects_remote_base_url_without_key_before_network(self, api_key):
+        class FailingClient:
+            async def post(self, *_args, **_kwargs):
+                raise AssertionError("remote keyless BYOK must fail before network")
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FailingClient(),
+            api_key=api_key,
+            base_url="https://api.openai.com/v1",
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is False
+        assert error == "BYOK mode requires an api_key when a custom base_url is provided"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("base_url", "expected_local_provider"),
@@ -4174,13 +4411,14 @@ class TestLlmCallNativeSearch:
         llm_client._last_native_citations.set(["stale"])
 
         with llm_client.llm_request_scope(supports_native_search_override=True):
-            with pytest.raises(LLMError, match="LLM returned 500"):
+            with pytest.raises(LLMError) as raised:
                 await llm_call(
                     "test prompt",
                     base_url="https://api.x.ai/v1/responses",
                     api_key="xai-key",
                     native_search_domains=["example.com"],
                 )
+        assert raised.value.code == "LLM_UNREACHABLE"
 
         assert len(payloads) == 2
         assert "tools" in payloads[0]

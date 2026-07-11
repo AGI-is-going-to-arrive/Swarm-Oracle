@@ -26,6 +26,13 @@ from app.models import (
 from app.models.database import get_engine
 
 SECRET_KEY = "sk-f9-model-profile-secret-1234567890"
+LOCAL_NO_KEY_URLS = (
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:11434/v1",
+    "http://0.0.0.0:11434/v1",
+    "http://host.docker.internal:11434/v1",
+    "http://[::1]:11434/v1",
+)
 
 
 def _assert_secret_absent(payload: object, *extra_secrets: str) -> None:
@@ -351,6 +358,236 @@ def test_model_profile_feature_gate_and_byok_base_url_rules(monkeypatch):
     assert invalid_url.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
     _assert_secret_absent(invalid_url.json())
 
+    unbound_key = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(base_url=None),
+    )
+    assert unbound_key.status_code == 400
+    assert unbound_key.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+    _assert_secret_absent(unbound_key.json())
+
+
+@pytest.mark.parametrize("base_url", LOCAL_NO_KEY_URLS)
+def test_model_profile_local_base_url_without_key_can_create_and_resolve(base_url):
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(
+            user_id="local-no-key-owner",
+            provider="ollama",
+            base_url=base_url,
+            model="llama3.2",
+            api_key=None,
+        ),
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["base_url"] == base_url
+    assert body["has_api_key"] is False
+
+    with Session(get_engine()) as session:
+        policy = resolve_model_profile_policy(
+            session,
+            user_id="local-no-key-owner",
+            model_profile_id=body["id"],
+        )
+
+    assert policy is not None
+    assert policy.api_key is None
+    assert policy.base_url == base_url
+    assert policy.model == "llama3.2"
+
+
+def test_model_profile_patch_to_local_without_key_clears_the_stored_remote_secret():
+    from app.models.model_profile import ModelProfile
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(
+            user_id="patch-local-owner",
+            base_url="https://api.openai.com/v1",
+            api_key=SECRET_KEY,
+        ),
+    )
+    assert created.status_code == 201
+
+    incomplete = client.patch(
+        f"/api/model-profiles/{created.json()['id']}",
+        params={"user_id": "patch-local-owner"},
+        json={"base_url": "http://localhost:11434/v1"},
+    )
+    assert incomplete.status_code == 400
+    assert incomplete.json()["detail"]["code"] == "MODEL_PROFILE_MODEL_REQUIRED"
+
+    patched = client.patch(
+        f"/api/model-profiles/{created.json()['id']}",
+        params={"user_id": "patch-local-owner"},
+        json={
+            "base_url": "http://localhost:11434/v1",
+            "model": "llama3.2",
+        },
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["base_url"] == "http://localhost:11434/v1"
+    assert patched.json()["has_api_key"] is False
+    with Session(get_engine()) as session:
+        stored = session.get(ModelProfile, created.json()["id"])
+        assert stored is not None
+        assert stored.api_key is None
+        assert stored.model == "llama3.2"
+        assert stored.rpm is None
+        assert stored.tpm is None
+        assert stored.concurrency is None
+        assert stored.supports_structured_outputs is None
+        assert stored.supports_native_search is None
+        assert stored.native_search_upstream is None
+
+
+def test_model_profile_patch_to_remote_requires_a_matching_explicit_key():
+    from app.models.model_profile import ModelProfile
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(
+            user_id="patch-remote-owner",
+            base_url="https://api.openai.com/v1",
+            api_key=SECRET_KEY,
+        ),
+    )
+    assert created.status_code == 201
+
+    missing_key = client.patch(
+        f"/api/model-profiles/{created.json()['id']}",
+        params={"user_id": "patch-remote-owner"},
+        json={"base_url": "https://api.x.ai/v1"},
+    )
+    assert missing_key.status_code == 400
+    assert missing_key.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+    replacement_key = "sk-replacement-key-123456"
+    missing_model = client.patch(
+        f"/api/model-profiles/{created.json()['id']}",
+        params={"user_id": "patch-remote-owner"},
+        json={
+            "base_url": "https://api.x.ai/v1",
+            "api_key": replacement_key,
+        },
+    )
+    assert missing_model.status_code == 400
+    assert missing_model.json()["detail"]["code"] == "MODEL_PROFILE_MODEL_REQUIRED"
+
+    patched = client.patch(
+        f"/api/model-profiles/{created.json()['id']}",
+        params={"user_id": "patch-remote-owner"},
+        json={
+            "base_url": "https://api.x.ai/v1",
+            "api_key": replacement_key,
+            "model": "grok-4-fast",
+        },
+    )
+    assert patched.status_code == 200
+    assert patched.json()["base_url"] == "https://api.x.ai/v1"
+    assert patched.json()["model"] == "grok-4-fast"
+    assert patched.json()["has_api_key"] is True
+    with Session(get_engine()) as session:
+        stored = session.get(ModelProfile, created.json()["id"])
+        assert stored is not None
+        assert stored.api_key == replacement_key
+        assert stored.rpm is None
+        assert stored.tpm is None
+        assert stored.concurrency is None
+        assert stored.supports_structured_outputs is None
+        assert stored.supports_native_search is None
+        assert stored.native_search_upstream is None
+
+
+def test_model_profile_model_change_resets_unsubmitted_provider_policy_but_keeps_endpoint_key():
+    from app.models.model_profile import ModelProfile
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(user_id="patch-model-owner"),
+    )
+    assert created.status_code == 201
+
+    patched = client.patch(
+        f"/api/model-profiles/{created.json()['id']}",
+        params={"user_id": "patch-model-owner"},
+        json={"model": "gpt-5-mini"},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["model"] == "gpt-5-mini"
+    assert patched.json()["has_api_key"] is True
+    with Session(get_engine()) as session:
+        stored = session.get(ModelProfile, created.json()["id"])
+        assert stored is not None
+        assert stored.api_key == SECRET_KEY
+        assert stored.base_url == "https://api.openai.com/v1"
+        assert stored.rpm is None
+        assert stored.tpm is None
+        assert stored.concurrency is None
+        assert stored.supports_structured_outputs is None
+        assert stored.supports_native_search is None
+        assert stored.native_search_upstream is None
+
+
+def test_model_profile_usable_profile_detection_is_local_keyless_and_user_scoped():
+    from app.models.model_profile import ModelProfile
+    from app.services.model_profiles import has_usable_model_profile
+
+    with Session(get_engine()) as session:
+        session.add_all(
+            [
+                ModelProfile(
+                    user_id="local-owner",
+                    name="Local keyless",
+                    provider="ollama",
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="llama3.2",
+                    api_key=None,
+                ),
+                ModelProfile(
+                    user_id="remote-owner",
+                    name="Remote keyless invalid legacy row",
+                    provider="openai",
+                    base_url="https://api.openai.com/v1",
+                    model="gpt-test",
+                    api_key=None,
+                ),
+                ModelProfile(
+                    user_id="local-missing-model-owner",
+                    name="Local keyless missing model",
+                    provider="ollama",
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="",
+                    api_key=None,
+                ),
+                ModelProfile(
+                    user_id="missing-base-owner",
+                    name="Missing base must not inherit server locality",
+                    provider="ollama",
+                    base_url=None,
+                    model="llama3.2",
+                    api_key=SECRET_KEY,
+                ),
+            ]
+        )
+        session.commit()
+
+        assert has_usable_model_profile(session, "local-owner") is True
+        assert has_usable_model_profile(session, "remote-owner") is False
+        assert has_usable_model_profile(session, "local-missing-model-owner") is False
+        assert has_usable_model_profile(session, "missing-base-owner") is False
+        assert has_usable_model_profile(session, "other-owner") is False
+
 
 def test_model_profile_capabilities_and_diagnostics_do_not_leak_keys():
     client = TestClient(app)
@@ -385,6 +622,12 @@ def test_resolve_model_profile_policy_override_matrix():
             base_url=profile_base_url,
             model="profile-model",
             api_key=SECRET_KEY,
+            rpm=19,
+            tpm=1900,
+            concurrency=3,
+            supports_structured_outputs=True,
+            supports_native_search=True,
+            native_search_upstream="openai_responses",
         )
         session.add(profile)
         session.commit()
@@ -399,15 +642,25 @@ def test_resolve_model_profile_policy_override_matrix():
         assert base_policy.base_url == profile_base_url
         assert base_policy.api_key == SECRET_KEY
 
-        same_url_policy = resolve_model_profile_policy(
-            session,
-            user_id="resolver-owner",
-            model_profile_id=profile.id,
-            explicit_base_url=profile_base_url,
-        )
-        assert same_url_policy is not None
-        assert same_url_policy.base_url == profile_base_url
-        assert same_url_policy.api_key == SECRET_KEY
+        for partial_override in (
+            {"explicit_api_key": override_key},
+            {"explicit_base_url": profile_base_url},
+            {"explicit_model": "override-model"},
+            {
+                "explicit_api_key": override_key,
+                "explicit_base_url": override_base_url,
+            },
+        ):
+            with pytest.raises(HTTPException) as partial_exc:
+                resolve_model_profile_policy(
+                    session,
+                    user_id="resolver-owner",
+                    model_profile_id=profile.id,
+                    **partial_override,
+                )
+            assert partial_exc.value.status_code == 400
+            assert partial_exc.value.detail["code"] == "BYOK_API_KEY_REQUIRED"
+            assert SECRET_KEY not in json.dumps(partial_exc.value.detail, ensure_ascii=False)
 
         with pytest.raises(HTTPException) as exc_info:
             resolve_model_profile_policy(
@@ -426,10 +679,32 @@ def test_resolve_model_profile_policy_override_matrix():
             model_profile_id=profile.id,
             explicit_base_url=override_base_url,
             explicit_api_key=override_key,
+            explicit_model="override-model",
+            explicit_requests_per_minute=7,
         )
         assert changed_url_policy is not None
         assert changed_url_policy.base_url == override_base_url
         assert changed_url_policy.api_key == override_key
+        assert changed_url_policy.model == "override-model"
+        assert changed_url_policy.requests_per_minute == 7
+        assert changed_url_policy.tokens_per_minute is None
+        assert changed_url_policy.concurrency is None
+        assert changed_url_policy.supports_structured_outputs is None
+        assert changed_url_policy.supports_native_search is None
+        assert changed_url_policy.native_search_upstream is None
+        assert changed_url_policy.model_profile_id is None
+
+        local_keyless_override = resolve_model_profile_policy(
+            session,
+            user_id="resolver-owner",
+            model_profile_id=profile.id,
+            explicit_base_url="http://127.0.0.1:11434/v1",
+            explicit_model="llama3.2",
+        )
+        assert local_keyless_override is not None
+        assert local_keyless_override.base_url == "http://127.0.0.1:11434/v1"
+        assert local_keyless_override.api_key is None
+        assert local_keyless_override.model == "llama3.2"
 
         empty_url_policy = resolve_model_profile_policy(
             session,
@@ -449,12 +724,12 @@ def test_resolve_model_profile_policy_override_matrix():
         )
         assert empty_model_policy is not None
         assert empty_model_policy.model == "profile-model"
-        assert empty_model_policy.supports_structured_outputs is None
-        assert empty_model_policy.supports_native_search is None
+        assert empty_model_policy.supports_structured_outputs is True
+        assert empty_model_policy.supports_native_search is True
 
 
 @pytest.mark.asyncio
-async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
+async def test_scenario_model_profile_policy_and_no_leak_surfaces(
     monkeypatch,
     caplog,
 ):
@@ -497,7 +772,6 @@ async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
             "question": "Can a profile drive the main scenario?",
             "user_id": "scenario-owner",
             "model_profile_id": profile_id,
-            "llm_model": "explicit-model",
             "llm_tokens_per_minute": 0,
         },
     )
@@ -507,7 +781,7 @@ async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
     assert scheduled["count"] == 1
     assert captured["llm_api_key"] == SECRET_KEY
     assert captured["llm_base_url"] == "https://api.openai.com/v1"
-    assert captured["llm_model"] == "explicit-model"
+    assert captured["llm_model"] == "profile-model"
     assert captured["llm_requests_per_minute"] == 19
     assert captured["llm_tokens_per_minute"] == 0
     assert captured["concurrency"] == 3
@@ -551,6 +825,74 @@ async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
     assert capabilities.status_code == 200
     _assert_secret_absent(capabilities.json())
     assert SECRET_KEY not in "\n".join(record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_scenario_complete_provider_override_detaches_old_profile_policy(monkeypatch):
+    client = TestClient(app)
+    created_profile = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(
+            user_id="scenario-override-owner",
+            name="Provider A",
+            base_url="https://api.openai.com/v1",
+            model="provider-a-model",
+            rpm=19,
+            tpm=19000,
+            concurrency=3,
+            supports_structured_outputs=True,
+            supports_native_search=True,
+            native_search_upstream="openai_responses",
+        ),
+    )
+    assert created_profile.status_code == 201
+    profile_id = created_profile.json()["id"]
+    captured: dict[str, object] = {}
+
+    async def _noop():
+        return None
+
+    def _fake_background(*_args, **kwargs):
+        captured.update(kwargs)
+        return _noop()
+
+    def _capture_schedule(coro):
+        _close_scheduled_coro(coro)
+        return None
+
+    monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+    monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+    response = client.post(
+        "/api/scenario",
+        json={
+            "question": "Can Provider B detach from Provider A?",
+            "user_id": "scenario-override-owner",
+            "model_profile_id": profile_id,
+            "llm_api_key": "sk-provider-b",
+            "llm_base_url": "https://api.x.ai/v1",
+            "llm_model": "provider-b-model",
+            "llm_requests_per_minute": 7,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["llm_api_key"] == "sk-provider-b"
+    assert captured["llm_base_url"] == "https://api.x.ai/v1"
+    assert captured["llm_model"] == "provider-b-model"
+    assert captured["llm_requests_per_minute"] == 7
+    assert captured["llm_tokens_per_minute"] is None
+    assert captured["concurrency"] is None
+    assert captured["supports_structured_outputs"] is None
+    assert captured["supports_native_search"] is None
+    assert captured["native_search_upstream"] is None
+    assert captured["model_profile_id"] is None
+
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, response.json()["id"])
+        assert scenario is not None
+        assert "model_profile_id" not in (scenario.parsed_context or {})
+        _assert_secret_absent(scenario.parsed_context, "sk-provider-b")
 
 
 def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, caplog):
@@ -601,7 +943,6 @@ def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, cap
             "proposition_model_profile_id": profile_ids["proposition"],
             "opposition_model_profile_id": profile_ids["opposition"],
             "judge_model_profile_id": profile_ids["judge"],
-            "llm_model": "explicit-debate-model",
             "llm_requests_per_minute": 0,
         },
     )
@@ -612,7 +953,7 @@ def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, cap
     assert by_side["proposition"]["api_key"] == secrets["proposition"]
     assert by_side["opposition"]["api_key"] == secrets["opposition"]
     assert by_side["judge"]["api_key"] == secrets["judge"]
-    assert by_side["proposition"]["model"] == "explicit-debate-model"
+    assert by_side["proposition"]["model"] == "proposition-model"
     assert by_side["opposition"]["requests_per_minute"] == 0
     assert by_side["judge"]["tokens_per_minute"] == 7000
     assert by_side["proposition"]["concurrency"] == 3
@@ -625,6 +966,73 @@ def test_debate_model_profiles_resolve_per_side_and_do_not_leak(monkeypatch, cap
     log_text = "\n".join(record.getMessage() for record in caplog.records)
     for secret in secrets.values():
         assert secret not in log_text
+
+
+def test_debate_partial_role_profile_keeps_global_byok_only_as_other_side_fallback(
+    monkeypatch,
+):
+    client = TestClient(app)
+    profile_response = client.post(
+        "/api/model-profiles",
+        json=_profile_payload(
+            user_id="debate-mixed-owner",
+            name="Provider B proposition",
+            provider="xai",
+            base_url="https://api.x.ai/v1",
+            api_key="sk-provider-b-role",
+            model="provider-b-model",
+            rpm=37,
+            tpm=37000,
+        ),
+    )
+    assert profile_response.status_code == 201
+    proposition_profile_id = profile_response.json()["id"]
+    captured: dict[str, object] = {}
+
+    def _capture_scheduled(coro):
+        frame = getattr(coro, "cr_frame", None)
+        if frame is not None:
+            captured["llm_overrides_by_side"] = frame.f_locals.get(
+                "llm_overrides_by_side"
+            )
+            captured["llm_overrides"] = frame.f_locals.get("llm_overrides")
+        coro.close()
+        return None
+
+    monkeypatch.setattr(debate_api, "DEBATE_START_DELAY_SECONDS", 0)
+    monkeypatch.setattr(debate_api, "schedule_background_task", _capture_scheduled)
+
+    response = client.post(
+        "/api/debate",
+        json={
+            "question": "Should one role use Provider B while the others use Provider A?",
+            "user_id": "debate-mixed-owner",
+            "proposition_model_profile_id": proposition_profile_id,
+            "llm_api_key": "sk-provider-a-global",
+            "llm_base_url": "https://api.openai.com/v1",
+            "llm_model": "provider-a-model",
+            "llm_requests_per_minute": 91,
+            "llm_tokens_per_minute": 91000,
+        },
+    )
+
+    assert response.status_code == 200
+    by_side = captured["llm_overrides_by_side"]
+    assert by_side["proposition"]["api_key"] == "sk-provider-b-role"
+    assert by_side["proposition"]["base_url"] == "https://api.x.ai/v1"
+    assert by_side["proposition"]["model"] == "provider-b-model"
+    assert by_side["proposition"]["requests_per_minute"] == 37
+    assert by_side["proposition"]["tokens_per_minute"] == 37000
+    assert "opposition" not in by_side
+    assert "judge" not in by_side
+    assert captured["llm_overrides"] == {
+        "api_key": "sk-provider-a-global",
+        "base_url": "https://api.openai.com/v1",
+        "model": "provider-a-model",
+        "reasoning_effort": None,
+        "requests_per_minute": 91,
+        "tokens_per_minute": 91000,
+    }
 
 
 @pytest.mark.asyncio

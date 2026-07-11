@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { __test__ as batchATest } from "./e2e-phase3-batch-a.mjs";
 import { __test__ as batchBTest } from "./e2e-phase3-batch-b.mjs";
 import { __test__ as batchCTest } from "./e2e-phase3-batch-c.mjs";
+import { __test__ as e2eSuiteTest } from "./e2e-suite.mjs";
 import { __test__ as releaseSignoffTest } from "./release-signoff.mjs";
 import {
   assertFrontendRoutesReady,
@@ -55,6 +57,68 @@ function createResponse(status, body, contentType = "text/html; charset=utf-8") 
     },
   };
 }
+
+test("e2e suite exposes Safari teardown behind a main-module guard", () => {
+  const source = readFileSync(new URL("./e2e-suite.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /const IS_MAIN_MODULE =/u);
+  assert.match(source, /export const __test__ = \{[^}]*deleteSafariSession[^}]*\};/su);
+  assert.match(source, /if \(IS_MAIN_MODULE\) \{\s*main\(\)\.catch/su);
+});
+
+test("Safari session deletion propagates WebDriver transport failures", async () => {
+  await assert.rejects(
+    e2eSuiteTest.deleteSafariSession(
+      "http://127.0.0.1:9",
+      "session-network",
+      {
+        fetchImpl: async () => {
+          throw new Error("connection reset by peer");
+        },
+      },
+    ),
+    /Safari WebDriver DELETE.*session-network.*connection reset by peer/u,
+  );
+});
+
+test("Safari session deletion rejects non-2xx WebDriver responses", async () => {
+  await assert.rejects(
+    e2eSuiteTest.deleteSafariSession(
+      "http://webdriver.example",
+      "session-http",
+      {
+        fetchImpl: async () => ({
+          ok: false,
+          status: 503,
+          async text() {
+            return "driver is shutting down";
+          },
+        }),
+      },
+    ),
+    /Safari WebDriver DELETE.*session-http.*HTTP 503.*driver is shutting down/u,
+  );
+});
+
+test("Safari session deletion accepts successful 2xx WebDriver responses", async () => {
+  const calls = [];
+
+  await e2eSuiteTest.deleteSafariSession(
+    "http://webdriver.example",
+    "session-ok",
+    {
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return { ok: true, status: 204 };
+      },
+    },
+  );
+
+  assert.deepEqual(calls, [{
+    url: "http://webdriver.example/session/session-ok",
+    init: { method: "DELETE" },
+  }]);
+});
 
 test("buildPhase3BatchAPreflightPaths includes each deep-link route used by batch-a", () => {
   assert.deepEqual(
@@ -600,6 +664,22 @@ test("release signoff includes the graph-focused vitest gate", () => {
       "src/pages/CausalReviewView.test.tsx",
       "src/pages/ReplayEmptyState.test.tsx",
       "src/pages/ResultView.test.tsx",
+      "src/pages/result/ResultReportPanel.test.tsx",
+      "src/pages/result/ReportSection.test.tsx",
+      "src/pages/result/ReportConfidenceBadge.test.tsx",
+      "src/lib/agentProfileObservation.test.ts",
+      "src/components/result/AgentProfileSheet.test.tsx",
+      "src/lib/resultReportSse.test.ts",
+      "src/lib/llmProviderPolicy.test.ts",
+      "src/lib/localPackImport.test.ts",
+      "src/pages/SetupWizardView.test.tsx",
+      "src/components/Setup/ConnectionTester.test.tsx",
+      "src/components/ModelProfileManager.test.tsx",
+      "src/components/DocumentSeedPanel.test.tsx",
+      "src/components/LocalPackPicker.test.tsx",
+      "src/components/CounterfactualPanel.test.tsx",
+      "src/components/FactionForceGraph.test.tsx",
+      "src/pages/result/SocialFeedPanel.test.tsx",
       "src/scripts/releaseSignoff.test.ts",
       "src/i18n/locales.test.ts",
     ],

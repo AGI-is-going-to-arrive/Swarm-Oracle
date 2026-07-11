@@ -39,6 +39,10 @@ export interface ConnectionTesterProps {
   nativeSearchUpstream?: string;
   /** Explicit native-search capability override for the tested profile. */
   supportsNativeSearchOverride?: boolean | null;
+  /** Reports the state of the current input signature to a parent gate. */
+  onStatusChange?: (status: TesterStatus) => void;
+  /** Restores a successful test for these exact inputs after a parent step remount. */
+  initiallyVerified?: boolean;
 }
 
 export type TesterStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -144,6 +148,8 @@ export function ConnectionTester({
   includeNativeProbe,
   nativeSearchUpstream,
   supportsNativeSearchOverride,
+  onStatusChange,
+  initiallyVerified = false,
 }: ConnectionTesterProps) {
   const { t } = useTranslation();
   const requestSignature = JSON.stringify([
@@ -156,10 +162,15 @@ export function ConnectionTester({
     signatureValueForSupportOverride(supportsNativeSearchOverride),
   ]);
   const runIdRef = useRef(0);
+  const mountedRef = useRef(false);
   const requestSignatureRef = useRef(requestSignature);
-  const [status, setStatus] = useState<TesterStatus>('idle');
-  const [activeRunSignature, setActiveRunSignature] = useState<string | null>(null);
-  const [message, setMessage] = useState<string>('');
+  const [status, setStatus] = useState<TesterStatus>(initiallyVerified ? 'success' : 'idle');
+  const [activeRunSignature, setActiveRunSignature] = useState<string | null>(
+    initiallyVerified ? requestSignature : null,
+  );
+  const [message, setMessage] = useState<string>(
+    initiallyVerified ? (testSuccessText || t('setup.test_success')) : '',
+  );
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [rawPayload, setRawPayload] = useState<TestResultPayload | null>(null);
   const [showLog, setShowLog] = useState<boolean>(false);
@@ -167,6 +178,14 @@ export function ConnectionTester({
   const [nativeResult, setNativeResult] = useState<NativeSearchProbe | null>(null);
   const nativeResultRef = useRef<NativeSearchProbe | null>(null);
   const [nativeErrorMessage, setNativeErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      runIdRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     requestSignatureRef.current = requestSignature;
@@ -178,7 +197,8 @@ export function ConnectionTester({
     const runSignature = requestSignatureRef.current;
     setActiveRunSignature(runSignature);
     const isCurrentRun = () => (
-      runIdRef.current === runId
+      mountedRef.current
+      && runIdRef.current === runId
       && requestSignatureRef.current === runSignature
     );
 
@@ -324,7 +344,7 @@ export function ConnectionTester({
           supportsNativeSearchOverride,
           true, // liveTest
         ).then((liveData) => {
-          if (runIdRef.current !== runId) return;
+          if (!isCurrentRun()) return;
           if (liveData) {
             setNativeResult(liveData);
             nativeResultRef.current = liveData;
@@ -333,7 +353,7 @@ export function ConnectionTester({
           }
         }).catch(() => {
           // Live test failure is non-fatal; keep static result
-          if (runIdRef.current !== runId) return;
+          if (!isCurrentRun()) return;
           setNativeStatus('success');
         });
       }
@@ -347,6 +367,10 @@ export function ConnectionTester({
   const displayNativeStatus: NativeProbeStatus = displayCurrentRun ? nativeStatus : 'idle';
   const displayNativeResult = displayCurrentRun ? nativeResult : null;
   const displayNativeErrorMessage = displayCurrentRun ? nativeErrorMessage : null;
+
+  useEffect(() => {
+    onStatusChange?.(displayStatus);
+  }, [displayStatus, onStatusChange]);
 
   const dotClass = `status-dot status-dot--${displayStatus}`;
   const canTest = baseUrl.trim().length > 0

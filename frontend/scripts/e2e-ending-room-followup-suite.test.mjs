@@ -587,3 +587,12 @@ test("isFollowupCommitCandidate accepts anchored followups after the new thread 
     true,
   );
 });
+
+test("fallback browser recovery remains owned by final teardown", () => {
+  const reopenSource = extractAsyncFunction("reopenLiveEndingRoomPage");
+  const mainSource = extractAsyncFunction("main");
+
+  assert.match(reopenSource, /OWNED_FALLBACK_BROWSERS\.add\(fallbackBrowser\)/u);
+  assert.match(mainSource, /closePlaywrightBrowsers/u);
+  assert.match(mainSource, /OWNED_FALLBACK_BROWSERS/u);
+});

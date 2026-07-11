@@ -11,6 +11,8 @@ export type AgentProfileObservationSource =
 
 export interface AgentProfileObservation {
   emotion: string | null;
+  emotionMetadataStatus?: 'available' | 'unavailable';
+  emotionMetadataFailureCode?: string | null;
   source: AgentProfileObservationSource;
   branchId: string | null;
   branchTitle: string | null;
@@ -121,7 +123,15 @@ function messageObservation(
     || null;
 
   return {
-    emotion: message.emotion,
+    emotion: message.emotion_metadata_status === 'unavailable'
+      ? null
+      : message.emotion,
+    ...(message.emotion_metadata_status === 'unavailable'
+      ? {
+          emotionMetadataStatus: 'unavailable' as const,
+          emotionMetadataFailureCode: message.emotion_metadata_failure_code ?? null,
+        }
+      : {}),
     source,
     branchId: message.branch,
     branchTitle,

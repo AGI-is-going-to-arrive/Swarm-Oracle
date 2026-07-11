@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -193,20 +194,19 @@ async function runSurface(mode, viewport, args) {
     : path.join(DEFAULT_OUTPUT_ROOT, `replay-view-live-${timestampLabel()}-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext({ viewport });
-  const page = await context.newPage();
-  await installFixtures(page);
-
   const allResults = { mode, browser: args.browser, viewport, live: LIVE_MODE, tests: {} };
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await installFixtures(page);
+
     allResults.tests.routeMount = await testRouteMount(page, args.baseUrl);
     allResults.tests.hashScrubber = await testHashScrubberContract(page, args.baseUrl);
     allResults.tests.keyboardContract = await testKeyboardContract();
     allResults.tests.fixtureShape = await testFixtureShape();
   } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await closePlaywrightBrowser(browser, `e2e-replay-view-live:${mode}:${args.browser}`);
   }
 
   let total = 0, passed = 0;

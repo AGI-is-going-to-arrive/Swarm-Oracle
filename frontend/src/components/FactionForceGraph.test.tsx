@@ -84,8 +84,11 @@ function createTestI18n() {
             force_graph_empty_few_agents: 'The force graph requires at least 4 agents.',
             force_graph_empty_no_data: 'No faction data available.',
             force_graph_truncated_warning: 'Some weaker relations are hidden.',
-            force_graph_relation_trust: 'Trust',
-            force_graph_relation_opposition: 'Opposition',
+            force_graph_relation_trust: 'Affect alignment',
+            force_graph_relation_opposition: 'Affect distance',
+            force_graph_disclosure: 'Derived from model-generated emotion/diverge fields; not verified trust, relationships, or stances.',
+            force_graph_a11y_edge_trust: 'Affect alignment: {{source}} → {{target}}',
+            force_graph_a11y_edge_opposition: 'Affect distance: {{source}} → {{target}}',
           },
           common: { retry: 'Retry' },
         },
@@ -230,13 +233,41 @@ describe('FactionForceGraph', () => {
     expect(screen.getByText(/weaker relations are hidden/i)).toBeInTheDocument();
   });
 
-  it('displays trust and opposition legend colors', async () => {
+  it('labels legacy relation scores as affect proxies and discloses their limits', async () => {
     renderGraph();
     await waitFor(() => {
-      expect(screen.getByText('Trust')).toBeInTheDocument();
+      expect(screen.getByText('Affect alignment')).toBeInTheDocument();
     });
-    expect(screen.getByText('Opposition')).toBeInTheDocument();
+    expect(screen.getByText('Affect distance')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Derived from model-generated emotion/diverge fields; not verified trust, relationships, or stances.',
+    )).toBeInTheDocument();
+    expect(screen.queryByText('Trust')).not.toBeInTheDocument();
+    expect(screen.queryByText('Opposition')).not.toBeInTheDocument();
   });
+
+  it.each([
+    ['affect_alignment', 'Affect alignment: Alice → Bob'],
+    ['affect_distance', 'Affect distance: Alice → Bob'],
+  ] as const)(
+    'announces %s edges with the matching affect-proxy label',
+    async (displayRelationType, expectedLabel) => {
+      mockGetFactionRelations.mockResolvedValue({
+        ...MOCK_RESPONSE,
+        edges: [{
+          ...MOCK_RESPONSE.edges[0],
+          display_relation_type: displayRelationType,
+        }],
+        total_before_filter: 1,
+      });
+
+      renderGraph({ agentNames: { a1: 'Alice', a2: 'Bob' } });
+
+      await waitFor(() => {
+        expect(screen.getByText(expectedLabel)).toBeInTheDocument();
+      });
+    },
+  );
 
   it('shows error state with retry button', async () => {
     mockGetFactionRelations.mockRejectedValueOnce(new Error('network fail'));

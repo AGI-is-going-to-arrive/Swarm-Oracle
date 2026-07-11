@@ -392,6 +392,14 @@ class InterviewStatus(_StrictModel):
     message: str | None = None
 
 
+class ToolTraceSummary(_StrictModel):
+    section_id: str | None = Field(default=None, max_length=80)
+    tool: str = Field(min_length=1, max_length=64)
+    query: str = Field(default="", max_length=200)
+    item_count: int = Field(default=0, ge=0)
+    elapsed_ms: int = Field(default=0, ge=0)
+
+
 class FullReport(_StrictModel):
     version: str = Field(min_length=1)
     generated_at: str = Field(min_length=1)
@@ -418,6 +426,7 @@ class FullReport(_StrictModel):
     interview_status: InterviewStatus | None = None
     premortem: list[dict[str, Any]] = Field(default_factory=list)
     language_status: LanguageStatus | None = None
+    tool_trace: list[ToolTraceSummary] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
     def validate_report_contract(self) -> "FullReport":
@@ -446,13 +455,6 @@ class FullReport(_StrictModel):
                 raise ValueError("indicator evidence_refs must reference report evidence ids")
         _assert_no_sensitive_material(self.model_dump(mode="json"))
         return self
-
-
-class ToolTraceSummary(_StrictModel):
-    tool: str = Field(min_length=1)
-    query: str = ""
-    item_count: int = Field(default=0, ge=0)
-    elapsed_ms: int = Field(default=0, ge=0)
 
 
 class ResultReportSSEData(_StrictModel):

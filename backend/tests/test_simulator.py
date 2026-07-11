@@ -15,6 +15,7 @@ from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
 import app.services.simulator as simulator_module
+from app.api.helpers import load_scenario_response
 from app.models import (
     Agent,
     AgentMessage,
@@ -310,20 +311,21 @@ async def test_agent_turn_timeout_expiry_skips_generation_coroutine_construction
     monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
     monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
 
-    messages = await simulator_module._gather_agent_messages(
-        engine,
-        scenario_id,
-        branch_id,
-        round_id,
-        1,
-        [agent],
-        "",
-        "Is any turn budget left?",
-        language="English",
-    )
+    with pytest.raises(simulator_module.AgentTurnBatchFailure) as raised:
+        await simulator_module._gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            [agent],
+            "",
+            "Is any turn budget left?",
+            language="English",
+        )
 
     assert generation_constructions == 0
-    assert messages[0]["content"] == "(ExpiredAgent stays silent)"
+    assert raised.value.code == "LLM_TIMEOUT"
 
 
 @pytest.mark.asyncio
@@ -408,29 +410,63 @@ async def test_gather_agent_messages_times_out_hung_turn_llm(monkeypatch):
     )
     monkeypatch.setattr(simulator_module, "llm_call", hung_llm_call)
 
-    messages = await simulator_module._gather_agent_messages(
-        engine,
-        scenario_id,
-        branch_id,
-        round_id,
-        1,
-        [agent],
-        "",
-        "Will a stalled provider block the run?",
-        push=push,
-        language="Chinese",
-    )
+    with pytest.raises(simulator_module.AgentTurnBatchFailure) as exc_info:
+        await simulator_module._gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            [agent],
+            "",
+            "Will a stalled provider block the run?",
+            push=push,
+            language="Chinese",
+        )
 
-    assert messages[0]["content"] == "（SlowAgent 沉默了）"
+    assert exc_info.value.code == "LLM_TIMEOUT"
     assert [event["type"] for event in events] == [
         "agent_speak_start",
-        "agent_speak",
-        "turn_progress",
+        "simulation_degraded",
     ]
+    assert events[-1]["data"]["stage"] == "generation"
     with Session(engine) as session:
         saved = session.exec(select(AgentMessage)).all()
-        assert len(saved) == 1
-        assert saved[0].content == "（SlowAgent 沉默了）"
+        assert saved == []
+
+
+@pytest.mark.asyncio
+async def test_gather_agent_messages_aborts_unknown_pass_one_generation_failures(
+    monkeypatch,
+):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Unknown failure branch")
+    round_id = _create_round(engine, branch_id, 1)
+    agent_id = _make_agent(engine, scenario_id, name="UnknownAgent", tier=AgentTier.CROWD)
+    agent = _load_agent_dict(engine, agent_id)
+
+    async def fail_generation(*_args, **_kwargs):
+        raise RuntimeError("malformed provider response")
+
+    monkeypatch.setattr(simulator_module, "llm_call", fail_generation)
+
+    with pytest.raises(simulator_module.AgentTurnBatchFailure) as exc_info:
+        await simulator_module._gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            [agent],
+            "",
+            "Will an unknown provider failure be visible?",
+            language="English",
+        )
+
+    assert exc_info.value.code == "LLM_FAILED"
+    with Session(engine) as session:
+        assert session.exec(select(AgentMessage)).all() == []
 
 
 @pytest.mark.asyncio
@@ -3090,6 +3126,154 @@ class TestWorkerSynthesisHelpers:
 
 class TestGatherHierarchicalMessages:
     @pytest.mark.asyncio
+    async def test_worker_batch_is_durable_before_first_broadcast_cancellation(
+        self,
+        monkeypatch,
+    ):
+        saved_batches: list[list[dict]] = []
+        pushed_events: list[dict] = []
+        timeline: list[str] = []
+        cancel_after_first_speech = False
+
+        async def _fake_gather_agent_messages(*_args, **_kwargs):
+            return [
+                {
+                    "agent_id": "leader-1",
+                    "agent_name": "Leader Alpha",
+                    "content": "Adopt the compromise route immediately.",
+                    "emotion": "focused",
+                    "diverge": None,
+                }
+            ]
+
+        def _capture_messages(_engine, rows):
+            saved_batches.append(list(rows))
+            timeline.append("save_batch")
+            return ["worker-message-1", "worker-message-2"]
+
+        async def _push(event: dict):
+            nonlocal cancel_after_first_speech
+            pushed_events.append(event)
+            if event["type"] == "agent_speak":
+                timeline.append("agent_speak")
+                cancel_after_first_speech = True
+
+        def _cancel_after_speech(scenario_id: str):
+            if cancel_after_first_speech:
+                raise simulator_module.SimulationCancelled(scenario_id)
+
+        monkeypatch.setattr(
+            "app.services.simulator._gather_agent_messages",
+            _fake_gather_agent_messages,
+        )
+        monkeypatch.setattr("app.services.simulator._save_messages", _capture_messages)
+        monkeypatch.setattr(
+            "app.services.simulator._check_cancelled",
+            _cancel_after_speech,
+        )
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda **_kwargs: None)
+
+        with pytest.raises(simulator_module.SimulationCancelled):
+            await _gather_hierarchical_messages(
+                engine=object(),
+                scenario_id="scenario-1",
+                branch_id="branch-1",
+                round_id="round-1",
+                round_num=3,
+                leader_agents=[{"id": "leader-1", "name": "Leader Alpha"}],
+                worker_agents=[
+                    {"id": "worker-1", "name": "Worker One"},
+                    {"id": "worker-2", "name": "Worker Two"},
+                ],
+                agent_to_group={"Worker One": "alpha", "Worker Two": "alpha"},
+                group_leaders={"alpha": "Leader Alpha"},
+                setting_bg="bg",
+                topic="topic",
+                push=_push,
+            )
+
+        assert [event["type"] for event in pushed_events] == ["agent_speak"]
+        assert timeline == ["save_batch", "agent_speak"]
+        assert len(saved_batches) == 1
+        assert [row["agent_id"] for row in saved_batches[0]] == [
+            "worker-1",
+            "worker-2",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_synthesized_worker_preserves_unavailable_leader_metadata(self, monkeypatch):
+        saved_rows: list[dict] = []
+        pushed_events: list[dict] = []
+        worker = {
+            "id": "worker-1",
+            "name": "Worker Beta",
+            "role": "Analyst",
+            "emotion": "calm",
+        }
+        emotion_state = {"worker-1": "calm"}
+
+        async def _fake_gather_agent_messages(*_args, **_kwargs):
+            return [
+                {
+                    "agent_id": "leader-1",
+                    "agent_name": "Leader Alpha",
+                    "content": "Adopt the compromise route immediately.",
+                    "emotion": "",
+                    "emotion_metadata_status": "unavailable",
+                    "emotion_metadata_failure_code": "LLM_RATE_LIMIT",
+                    "diverge": None,
+                }
+            ]
+
+        async def _push(event: dict):
+            pushed_events.append(event)
+
+        def _capture_messages(_engine, rows):
+            saved_rows.extend(rows)
+            return ["worker-message-id"]
+
+        monkeypatch.setattr(
+            "app.services.simulator._gather_agent_messages",
+            _fake_gather_agent_messages,
+        )
+        monkeypatch.setattr("app.services.simulator._save_messages", _capture_messages)
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda **_kwargs: None)
+
+        result = await _gather_hierarchical_messages(
+            engine=object(),
+            scenario_id="scenario-1",
+            branch_id="branch-1",
+            round_id="round-1",
+            round_num=3,
+            leader_agents=[{"id": "leader-1", "name": "Leader Alpha"}],
+            worker_agents=[worker],
+            agent_to_group={"Worker Beta": "alpha"},
+            group_leaders={"alpha": "Leader Alpha"},
+            setting_bg="bg",
+            topic="topic",
+            push=_push,
+            agent_prev_emotions=emotion_state,
+            viz_mapper=VisualizationMapper(),
+        )
+
+        worker_message = result[-1]
+        assert worker_message["emotion"] == ""
+        assert worker_message["emotion_metadata_status"] == "unavailable"
+        assert worker_message["emotion_metadata_failure_code"] == "LLM_RATE_LIMIT"
+        assert worker["emotion"] == "calm"
+        assert emotion_state["worker-1"] == "calm"
+        assert saved_rows[0]["emotion"].startswith(
+            "__swarmoracle_metadata_unavailable__:LLM_RATE_LIMIT"
+        )
+        spoken = [event for event in pushed_events if event["type"] == "agent_speak"]
+        assert spoken[0]["data"]["emotion"] == ""
+        assert spoken[0]["data"]["emotion_metadata_status"] == "unavailable"
+        bubbles = [event for event in pushed_events if event["type"] == "viz:bubble_show"]
+        assert bubbles[0]["emotion"] == ""
+        assert bubbles[0]["emotion_metadata_status"] == "unavailable"
+        assert bubbles[0]["emotion_metadata_failure_code"] == "LLM_RATE_LIMIT"
+
+    @pytest.mark.asyncio
     async def test_synthesized_worker_messages_are_stored_in_vector_memory(self, monkeypatch):
         captured: list[dict] = []
         worker = {
@@ -3639,29 +3823,29 @@ class TestGatherAgentMessages:
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
-        results = await _gather_agent_messages(
-            engine,
-            sid,
-            bid,
-            rid,
-            1,
-            [agent_dict],
-            "时代: 测试\n地点: 本地\n背景: 输出过滤",
-            "原始问题是什么？",
-            push=_push,
-            language="Chinese",
-        )
+        with pytest.raises(simulator_module.AgentTurnBatchFailure) as exc_info:
+            await _gather_agent_messages(
+                engine,
+                sid,
+                bid,
+                rid,
+                1,
+                [agent_dict],
+                "时代: 测试\n地点: 本地\n背景: 输出过滤",
+                "原始问题是什么？",
+                push=_push,
+                language="Chinese",
+            )
 
-        assert results[0]["content"] == "（林默 沉默了）"
-        speak_events = [event for event in pushed_events if event["type"] == "agent_speak"]
-        assert speak_events[0]["data"]["message"] == "（林默 沉默了）"
+        assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+        assert all(event["type"] != "agent_speak" for event in pushed_events)
+        degraded = [event for event in pushed_events if event["type"] == "simulation_degraded"]
+        assert degraded[0]["data"]["stage"] == "generation"
         with Session(engine) as session:
-            stored = session.exec(select(AgentMessage)).one()
-        assert stored.content == "（林默 沉默了）"
-        assert "CharacterPromptContext" not in stored.content
+            assert session.exec(select(AgentMessage)).all() == []
 
     @pytest.mark.asyncio
-    async def test_strips_diverge_marker_from_extracted_content(self, monkeypatch):
+    async def test_metadata_pass_never_rewrites_validated_agent_speech(self, monkeypatch):
         engine = get_engine()
         sid = _make_scenario(engine)
         bid = _create_branch(engine, sid, title="主线", probability=1.0)
@@ -3671,12 +3855,20 @@ class TestGatherAgentMessages:
         with Session(engine) as session:
             agent_dict = _agent_to_dict(session.get(Agent, agent_id))
 
+        async def _fake_raw_llm_call(*_args, **_kwargs):
+            return "稳住阵线 [DIVERGE：use [A] branch] 等候信号"
+
         async def _fake_llm_call_json(*args, **kwargs):
             return {
-                "content": "稳住阵线 [DIVERGE：use [A] branch] 等候信号",
-                "emotion": "calm",
-                "diverge": None,
+                "content": "这是元数据模型擅自改写后的不同发言。",
+                "emotion": "resolute",
+                "diverge": "hold the line",
             }
+
+        pushed_events: list[dict] = []
+
+        async def _push(event: dict) -> None:
+            pushed_events.append(event)
 
         monkeypatch.setattr(
             "app.services.simulator.llm_call_json_with_stream_fallback",
@@ -3686,7 +3878,7 @@ class TestGatherAgentMessages:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
-        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_raw_llm_call)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
@@ -3699,10 +3891,18 @@ class TestGatherAgentMessages:
             [agent_dict],
             "时代: 测试\n地点: 本地\n背景: marker 清理",
             "是否推进",
+            push=_push,
             language="Chinese",
         )
 
         assert results[0]["content"] == "稳住阵线  等候信号"
+        assert results[0]["emotion"] == "resolute"
+        assert results[0]["diverge"] == "hold the line"
+        spoken = [event for event in pushed_events if event["type"] == "agent_speak"]
+        assert spoken[0]["data"]["message"] == "稳住阵线  等候信号"
+        with Session(engine) as session:
+            stored = session.exec(select(AgentMessage)).one()
+        assert stored.content == "稳住阵线  等候信号"
 
     @pytest.mark.asyncio
     async def test_strips_diverge_marker_from_raw_fallback_content(self, monkeypatch):
@@ -3713,13 +3913,24 @@ class TestGatherAgentMessages:
 
         agent_id = _make_agent(engine, sid, name="斥候", tier=AgentTier.IMPORTANT)
         with Session(engine) as session:
-            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+            agent_row = session.get(Agent, agent_id)
+            assert agent_row is not None
+            agent_row.emotion = "alert"
+            session.add(agent_row)
+            session.commit()
+            session.refresh(agent_row)
+            agent_dict = _agent_to_dict(agent_row)
 
         async def _fake_raw_llm_call(*args, **kwargs):
             return "发现伏兵 [DIVERGE : 立即撤退]"
 
         async def _raise_llm_call_json(*args, **kwargs):
-            raise RuntimeError("metadata extraction failed")
+            raise LLMError(code="LLM_AUTH_FAILED")
+
+        pushed_events: list[dict] = []
+
+        async def _push(event: dict) -> None:
+            pushed_events.append(event)
 
         monkeypatch.setattr(
             "app.services.simulator.llm_call_json_with_stream_fallback",
@@ -3742,11 +3953,62 @@ class TestGatherAgentMessages:
             [agent_dict],
             "时代: 测试\n地点: 本地\n背景: fallback 清理",
             "是否推进",
+            push=_push,
             language="Chinese",
+            viz_mapper=VisualizationMapper(),
         )
 
         assert results[0]["content"] == "发现伏兵"
-        assert results[0]["emotion"] == "neutral"
+        assert results[0]["emotion"] == ""
+        assert results[0]["emotion_metadata_status"] == "unavailable"
+        assert results[0]["emotion_metadata_failure_code"] == "LLM_AUTH_FAILED"
+        assert results[0].get("_turn_failure_code") is None
+        assert results[0]["_metadata_failure_code"] == "LLM_AUTH_FAILED"
+        assert agent_dict["emotion"] == "alert"
+        spoken = [event for event in pushed_events if event["type"] == "agent_speak"]
+        assert spoken[0]["data"]["emotion"] == ""
+        assert spoken[0]["data"]["emotion_metadata_status"] == "unavailable"
+        assert spoken[0]["data"]["emotion_metadata_failure_code"] == "LLM_AUTH_FAILED"
+        bubbles = [event for event in pushed_events if event["type"] == "viz:bubble_show"]
+        assert bubbles[0]["emotion"] == ""
+        assert bubbles[0]["emotion_metadata_status"] == "unavailable"
+        assert (
+            bubbles[0]["emotion_metadata_failure_code"]
+            == "LLM_AUTH_FAILED"
+        )
+        degraded = [event for event in pushed_events if event["type"] == "simulation_degraded"]
+        assert degraded[0]["data"] == {
+            "branch_id": bid,
+            "round": 1,
+            "stage": "metadata",
+            "partial": True,
+            "code": "LLM_AUTH_FAILED",
+            "failed_agents": ["斥候"],
+            "failed_count": 1,
+            "total": 1,
+        }
+        with Session(engine) as session:
+            stored = session.exec(select(AgentMessage)).one()
+        assert stored.content == "发现伏兵"
+        assert stored.emotion == (
+            "__swarmoracle_metadata_unavailable__:LLM_AUTH_FAILED"
+        )
+
+        refreshed = load_scenario_response(engine, sid, fail_forward_stale=False)
+        assert refreshed is not None
+        assert refreshed.messages[0]["emotion"] == ""
+        assert refreshed.messages[0]["emotion_metadata_status"] == "unavailable"
+        assert (
+            refreshed.messages[0]["emotion_metadata_failure_code"]
+            == "LLM_AUTH_FAILED"
+        )
+        recent = _get_recent_messages(engine, bid, max_rounds=1)
+        assert recent[0]["emotion"] == ""
+        ranged = _get_messages_in_range(engine, bid, 1, 1)
+        assert ranged[0]["emotion"] == ""
+        assert "__swarmoracle_metadata_unavailable__" not in (
+            _format_message_for_compression(ranged[0])
+        )
 
     @pytest.mark.asyncio
     async def test_blackboard_skips_recent_db_query_but_keeps_own_memory_lookup(
@@ -3777,6 +4039,9 @@ class TestGatherAgentMessages:
         async def _fake_llm_call_json(*args, **kwargs):
             return {"content": "保持阵线。", "emotion": "calm", "diverge": None}
 
+        async def _fake_raw_llm_call(*args, **kwargs):
+            return "保持阵线。"
+
         def _raise_on_recent_messages(*args, **kwargs):
             raise AssertionError("blackboard path should not query recent DB messages")
 
@@ -3788,7 +4053,7 @@ class TestGatherAgentMessages:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
-        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_raw_llm_call)
         monkeypatch.setattr(
             "app.services.simulator._get_recent_messages",
             _raise_on_recent_messages,

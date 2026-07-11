@@ -48,6 +48,14 @@ test("browser coverage checks the bounded SSE lifecycle instead of a transient t
   assert.match(source, /tooltrace-sse-report-complete/);
   assert.match(source, /tooltrace-refresh-count-bounded/);
   assert.match(source, /tooltrace-report-recovers/);
+  assert.match(
+    source,
+    /partialBanner\.waitFor\(\{\s*state:\s*"hidden",\s*timeout:\s*12000\s*\}\)/su,
+  );
+  assert.doesNotMatch(
+    source,
+    /page\.reload\(\{\s*waitUntil:\s*"domcontentloaded"/su,
+  );
 });
 
 test("result-report browser assertions use the current report hero contract", () => {
@@ -61,4 +69,8 @@ test("result-report suite bounds Playwright cleanup and is import-safe", () => {
   assert.match(source, /closePlaywrightBrowser/);
   assert.match(source, /const IS_MAIN_MODULE/);
   assert.match(source, /if \(IS_MAIN_MODULE\)/);
+  assert.doesNotMatch(
+    source,
+    /if \(page\) await closePlaywrightPage\([^;]+;\s*if \(context\) await closePlaywrightContext\([^;]+;\s*await closePlaywrightBrowser/u,
+  );
 });

@@ -104,12 +104,12 @@
   ],
   "demo_snapshots": [
     {
-      "id": "first-anchorage",
+      "id": "zheng-he-americas",
       "label": {
-        "zh": "初次锚泊",
-        "en": "First Anchorage"
+        "zh": "郑和抵达美洲",
+        "en": "Zheng He Reaches the Americas"
       },
-      "filename": "zheng-he-first-anchorage.json"
+      "filename": "zheng-he-americas.swarm"
     }
   ],
   "suggested_settings": {

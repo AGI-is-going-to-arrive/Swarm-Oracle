@@ -11,18 +11,22 @@
    so downstream BYOK paths (InputView etc.) can pick it up.
 */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import {
   LLM_PROVIDER_PRESETS,
+  isLocalLlmBaseUrl,
   loadLlmProviderPolicy,
   saveLlmProviderPolicy,
   type LlmProviderPreset,
 } from '../lib/llmProviderPolicy';
 import { ProviderPresetCard } from '../components/Setup/ProviderPresetCard';
-import { ConnectionTester } from '../components/Setup/ConnectionTester';
+import {
+  ConnectionTester,
+  type TesterStatus,
+} from '../components/Setup/ConnectionTester';
 import { ModelSelect } from '../components/ModelSelect';
 import { createModelProfile } from '../api/client';
 import './SetupWizardView.css';
@@ -51,31 +55,51 @@ export default function SetupWizardView() {
   const [saveToProfiles, setSaveToProfiles] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<TesterStatus>('idle');
+  const [allowUnverified, setAllowUnverified] = useState<boolean>(false);
 
   const stepIndex = STEP_ORDER.indexOf(step);
   const stepNumber = stepIndex + 1;
   const totalSteps = STEP_ORDER.length;
 
+  const resetConnectionVerification = useCallback(() => {
+    setConnectionStatus('idle');
+    setAllowUnverified(false);
+  }, []);
+
   const handleSelectPreset = (preset: LlmProviderPreset) => {
+    resetConnectionVerification();
     setSelectedPreset(preset);
+    // Provider credentials never follow a provider selection, including one
+    // remote provider to another remote provider. Model identifiers are also
+    // provider-scoped and must be re-selected for the new endpoint.
+    setApiKey('');
+    setModel('');
     if (preset.baseUrl) {
       setBaseUrl(preset.baseUrl);
     } else if (preset.id === 'custom') {
       setBaseUrl('');
     }
-    if (!preset.requiresApiKey) {
-      // Local stacks (Ollama / LM Studio) don't need a key — clear stale one.
-      setApiKey('');
-    }
   };
 
-  const requiresApiKey = selectedPreset?.requiresApiKey ?? true;
+  const requiresApiKey = !isLocalLlmBaseUrl(baseUrl);
   const apiConfigValid = useMemo(() => {
     if (!baseUrl.trim()) return false;
     if (requiresApiKey && !apiKey.trim()) return false;
     if (!model.trim()) return false;
     return true;
   }, [baseUrl, apiKey, requiresApiKey, model]);
+
+  const canFinish = apiConfigValid
+    && connectionStatus !== 'testing'
+    && (connectionStatus === 'success' || allowUnverified);
+
+  const handleConnectionStatusChange = useCallback((status: TesterStatus) => {
+    setConnectionStatus(status);
+    if (status === 'testing' || status === 'success') {
+      setAllowUnverified(false);
+    }
+  }, []);
 
   const goNext = () => {
     if (step === 'provider_select' && selectedPreset) {
@@ -91,6 +115,8 @@ export default function SetupWizardView() {
   };
 
   const handleFinish = async () => {
+    if (step !== 'connection_test' || !canFinish || isSaving) return;
+
     setIsSaving(true);
     setSaveError(null);
 
@@ -213,7 +239,14 @@ export default function SetupWizardView() {
               <input
                 type="url"
                 value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
+                onChange={(e) => {
+                  resetConnectionVerification();
+                  const nextBaseUrl = e.target.value;
+                  if (nextBaseUrl !== baseUrl && apiKey) {
+                    setApiKey('');
+                  }
+                  setBaseUrl(nextBaseUrl);
+                }}
                 placeholder="https://api.example.com/v1"
                 className="wizard__input"
                 spellCheck={false}
@@ -235,7 +268,10 @@ export default function SetupWizardView() {
               <input
                 type="password"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => {
+                  resetConnectionVerification();
+                  setApiKey(e.target.value);
+                }}
                 placeholder={t('setup.api_key_placeholder')}
                 className="wizard__input"
                 spellCheck={false}
@@ -256,7 +292,10 @@ export default function SetupWizardView() {
                 baseUrl={baseUrl}
                 apiKey={apiKey}
                 value={model}
-                onChange={setModel}
+                onChange={(nextModel) => {
+                  resetConnectionVerification();
+                  setModel(nextModel);
+                }}
                 disabled={isSaving}
               />
             </div>
@@ -311,7 +350,39 @@ export default function SetupWizardView() {
                 <span className="wizard__summary-val">{model || '—'}</span>
               </div>
             </div>
-            <ConnectionTester baseUrl={baseUrl} apiKey={apiKey} model={model} />
+            <ConnectionTester
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              model={model}
+              initiallyVerified={connectionStatus === 'success'}
+              onStatusChange={handleConnectionStatusChange}
+            />
+
+            <div className="wizard__verification-gate">
+              {connectionStatus !== 'success' ? (
+                <label className="wizard__unverified-confirm">
+                  <input
+                    type="checkbox"
+                    checked={allowUnverified}
+                    onChange={(event) => setAllowUnverified(event.target.checked)}
+                    className="wizard__checkbox"
+                    disabled={isSaving || connectionStatus === 'testing'}
+                    aria-describedby="wizard-verification-hint"
+                  />
+                  <span>{t('setup.allow_unverified_label')}</span>
+                </label>
+              ) : null}
+              <p
+                id="wizard-verification-hint"
+                className={connectionStatus === 'success'
+                  ? 'wizard__verification-hint wizard__verification-hint--verified'
+                  : 'wizard__verification-hint'}
+              >
+                {connectionStatus === 'success'
+                  ? t('setup.connection_verified_hint')
+                  : t('setup.verification_required_hint')}
+              </p>
+            </div>
 
             <div className="wizard__go-to-profiles-wrap" style={{ marginTop: '16px' }}>
               <Link to="/model-profiles" className="wizard__link">
@@ -380,7 +451,7 @@ export default function SetupWizardView() {
               type="button"
               className="wizard__btn wizard__btn--primary"
               onClick={handleFinish}
-              disabled={isSaving}
+              disabled={isSaving || !canFinish}
             >
               {isSaving ? '...' : t('setup.finish')}
             </button>

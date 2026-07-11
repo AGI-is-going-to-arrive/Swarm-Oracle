@@ -681,7 +681,7 @@ async def preflight_identity_continuity(
                 "LLM_BASE_URL_NOT_ALLOWED",
                 "Provided llm_base_url is not in the allowed provider list",
             )
-        if not req.llm_api_key:
+        if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(
                 400,
                 "BYOK_API_KEY_REQUIRED",

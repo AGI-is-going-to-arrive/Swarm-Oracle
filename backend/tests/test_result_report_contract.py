@@ -191,6 +191,7 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "interview_status",
         "premortem",
         "language_status",
+        "tool_trace",
     }
     assert set(report.sections[0].model_fields) == {
         "id",
@@ -458,6 +459,7 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
         "interview_status",
         "premortem",
         "language_status",
+        "tool_trace",
     }
     assert {
         name
@@ -582,7 +584,7 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
         FullReport.model_validate(payload).model_dump(mode="json"),
     )
     assert raw_size == 1395
-    assert response_size == 1543
+    assert response_size == 1559
 
     with pytest.raises(ValueError, match="byte budget"):
         validate_full_report_payload(payload, max_bytes=raw_size)
@@ -596,6 +598,7 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
     )
 
     assert set(ToolTraceSummary.model_fields) == {
+        "section_id",
         "tool",
         "query",
         "item_count",
@@ -623,6 +626,7 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
                 "failure_reason": "timeout",
                 "tool_trace": [
                     {
+                        "section_id": "timeline",
                         "tool": "reducer",
                         "query": "dominant branch",
                         "item_count": 3,
@@ -635,6 +639,7 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
     assert event.event == "report_section_complete"
     assert event.data.tier == "static"
     assert event.data.failure_reason == "timeout"
+    assert event.data.tool_trace[0].section_id == "timeline"
     assert event.data.tool_trace[0].tool == "reducer"
     assert isinstance(event.data.tool_trace[0].tool, str)
     assert isinstance(event.data.tool_trace[0].query, str)

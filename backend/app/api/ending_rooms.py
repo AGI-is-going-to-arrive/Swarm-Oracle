@@ -40,7 +40,11 @@ from app.services.ending_room_service import (
     load_existing_ending_room_snapshot_for_scenario,
     run_ending_room_background,
 )
-from app.services.llm_client import safe_llm_error_payload, validate_llm_base_url
+from app.services.llm_client import (
+    is_local_provider_url,
+    safe_llm_error_payload,
+    validate_llm_base_url,
+)
 from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
 
 router = APIRouter(prefix="/api", tags=["ending-room"], dependencies=[Depends(verify_session)])
@@ -805,7 +809,7 @@ def _validate_roundtable_llm_overrides(
                 400, "LLM_BASE_URL_NOT_ALLOWED",
                 "Provided llm_base_url is not in the allowed provider list",
             )
-        if not api_key:
+        if not api_key and not is_local_provider_url(validated):
             raise api_error(
                 400, "BYOK_API_KEY_REQUIRED",
                 "An API key is required when using a custom LLM base URL",

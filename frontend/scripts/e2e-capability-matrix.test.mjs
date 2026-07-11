@@ -58,3 +58,13 @@ test("parseArgs accepts output directory for release artifacts", () => {
   assert.equal(args.outputDir, "output/e2e/capability-matrix");
   assert.equal(args.headless, true);
 });
+
+test("KG Explorer disabled checkpoint verifies current user-visible copy", () => {
+  const page = __test__.PAGES.find((entry) => entry.name === "KGExplorerView");
+
+  assert.equal(page?.disabledSurfaceSelector, undefined);
+  assert.equal(
+    page?.disabledCopy,
+    "Knowledge graph view is turned off on this server. Ask the admin to enable it.",
+  );
+});

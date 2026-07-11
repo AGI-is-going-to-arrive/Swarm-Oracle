@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_QUESTION = "如果互联网从未被发明？";
@@ -721,7 +722,7 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
     console.log(`artifacts: ${outputDir}`);
   } finally {
-    await browser.close();
+    await closePlaywrightBrowser(browser, "e2e-automation");
   }
 }
 

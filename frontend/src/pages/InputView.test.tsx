@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OfficialSampleSummary } from '../api/client';
+import type { MaterializedLocalPackImport } from '../lib/localPackImport';
 import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
 import { useAgentStore } from '../stores/agentStore';
 import { InputView } from './InputView';
@@ -34,6 +35,8 @@ const {
   setMockLanguage,
   getMockLanguage,
   stableTranslator,
+  getLocalPackImportHandler,
+  setLocalPackImportHandler,
 } = vi.hoisted(() => {
   const translations: Record<string, Record<string, string>> = {
     en: {
@@ -66,6 +69,7 @@ const {
     },
   };
   let currentLanguage = 'en';
+  let localPackImportHandler: ((payload: unknown) => void) | null = null;
   const setMockLanguage = (language: string) => {
     currentLanguage = language;
   };
@@ -163,7 +167,7 @@ const {
     getCampaignDailyChallengeStatusMock: vi.fn(),
     getCampaignWeeklySummaryMock: vi.fn(),
     getChallengeProgressMock: vi.fn(),
-    changeLanguageMock: vi.fn((language: string) => {
+    changeLanguageMock: vi.fn(async (language: string) => {
       setMockLanguage(language);
     }),
     listAgentIdentitiesMock: vi.fn(),
@@ -173,6 +177,10 @@ const {
     setMockLanguage,
     getMockLanguage,
     stableTranslator,
+    getLocalPackImportHandler: () => localPackImportHandler,
+    setLocalPackImportHandler: (handler: ((payload: unknown) => void) | null) => {
+      localPackImportHandler = handler;
+    },
   };
 });
 
@@ -320,6 +328,17 @@ vi.mock('../components/QuickStartCards', () => ({
   ),
 }));
 
+vi.mock('../components/LocalPackPicker', () => ({
+  LocalPackPicker: ({
+    onImport,
+  }: {
+    onImport: (payload: MaterializedLocalPackImport) => void;
+  }) => {
+    setLocalPackImportHandler(onImport as (payload: unknown) => void);
+    return <div data-testid="local-pack-picker-stub" />;
+  },
+}));
+
 async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
   // Open the iv-advanced accordion (mode selectors, source families)
   const advancedTrigger = screen.queryByRole('button', {
@@ -422,6 +441,7 @@ describe('InputView campaign progress', () => {
       requestSeq: 0,
     });
     setMockLanguage('en');
+    setLocalPackImportHandler(null);
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();
     startSimulationMock.mockClear();
@@ -550,6 +570,163 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText('4 runs completed')).toBeInTheDocument();
     expect(screen.getByText(/2 achievements earned/)).toBeInTheDocument();
     expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
+  });
+
+  it('atomically imports complete local-pack context and clears prior pack residue', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: true,
+      document_seed: { enabled: true },
+    });
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(getLocalPackImportHandler()).not.toBeNull());
+    const firstImport: MaterializedLocalPackImport = {
+      packId: 'first-pack',
+      templateId: 'first-template',
+      question: 'First imported question',
+      suggestedSettings: {
+        numAgents: 12,
+        rounds: 9,
+        simulationMode: 'conservative',
+        language: 'zh',
+      },
+      worldContext: {
+        title: 'First imported question',
+        summary: 'First context must be replaced',
+        key_entities: [{
+          name: 'First Agent',
+          role: 'Observer',
+          traits: [],
+          perspective: 'First perspective',
+        }],
+        constraints: ['First stake'],
+        evidence_snippets: ['Untrusted local pack author note: first note'],
+        source_metadata: {
+          filename: 'first-pack-first-template.json',
+          content_type: 'application/json',
+          suffix: '.json',
+          byte_count: 123,
+          char_count: 120,
+          extraction_method: 'text',
+        },
+        warnings: ['First warning'],
+      },
+      agentsPreview: [{ name: 'First Agent', role: 'Observer', persona: 'First perspective' }],
+    };
+    const secondImport: MaterializedLocalPackImport = {
+      packId: 'second-pack',
+      templateId: 'second-template',
+      question: 'Second imported question',
+      suggestedSettings: {
+        numAgents: 7,
+        rounds: 6,
+        simulationMode: 'aggressive',
+        language: 'en',
+      },
+      worldContext: {
+        title: 'Second imported question',
+        summary: 'Second context wins atomically',
+        key_entities: [],
+        constraints: [],
+        evidence_snippets: [],
+        source_metadata: {
+          filename: 'second-pack-second-template.json',
+          content_type: 'application/json',
+          suffix: '.json',
+          byte_count: 99,
+          char_count: 99,
+          extraction_method: 'text',
+        },
+        warnings: [],
+      },
+      agentsPreview: [],
+    };
+
+    act(() => getLocalPackImportHandler()?.(firstImport));
+    expect(await screen.findByText('First context must be replaced')).toBeInTheDocument();
+    expect(screen.getAllByText('First Agent').length).toBeGreaterThan(0);
+
+    act(() => getLocalPackImportHandler()?.(secondImport));
+    expect(await screen.findByText('Second context wins atomically')).toBeInTheDocument();
+    expect(screen.queryByText('First context must be replaced')).not.toBeInTheDocument();
+    expect(screen.queryByText('First Agent')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'home.question_input_label' })).toHaveValue(
+      'Second imported question',
+    );
+    expect(changeLanguageMock).toHaveBeenLastCalledWith('en');
+
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+    await waitFor(() => expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+      question: 'Second imported question',
+      rounds: 6,
+      numAgents: 7,
+      forkDetectorActiveBranchLimit: 0,
+      worldContext: secondImport.worldContext,
+    })));
+  });
+
+  it('does not carry imported pack context into an immediate Quick Start launch', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: true,
+      document_seed: { enabled: true },
+    });
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(getLocalPackImportHandler()).not.toBeNull());
+    act(() => getLocalPackImportHandler()?.({
+      packId: 'stale-pack',
+      templateId: 'stale-template',
+      question: 'Stale imported question',
+      suggestedSettings: {
+        numAgents: 5,
+        rounds: 5,
+        simulationMode: 'balanced',
+        language: 'en',
+      },
+      worldContext: {
+        title: 'Stale pack context',
+        summary: 'This context must not reach Quick Start.',
+        key_entities: [],
+        constraints: ['Stale stake'],
+        evidence_snippets: ['Untrusted local pack author note: stale note'],
+        source_metadata: {
+          filename: 'stale-pack-stale-template.json',
+          content_type: 'application/json',
+          suffix: '.json',
+          byte_count: 100,
+          char_count: 100,
+          extraction_method: 'text',
+        },
+        warnings: ['Stale warning'],
+      },
+      agentsPreview: [{ name: 'Stale Agent', role: 'Observer', persona: 'Stale persona' }],
+    }));
+    expect(await screen.findByText('This context must not reach Quick Start.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'quick-start-cards' }));
+
+    await waitFor(() => expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+      question: 'Mock quick start question',
+    })));
+    const launchOptions = (
+      startSimulationMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+    ).at(-1)?.[0];
+    expect(launchOptions).not.toHaveProperty('worldContext');
+    expect(screen.queryByText('This context must not reach Quick Start.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale Agent')).not.toBeInTheDocument();
   });
 
   it('keeps the current UI language when entering Debate Arena from the homepage', async () => {
@@ -3976,6 +4153,7 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
 });
 
 describe('InputView Model Profile Integration', () => {
+  const POLICY_STORAGE_KEY = 'swarmoracle.llm-provider-policy.v1';
   const mockProfiles = [
     {
       id: 'profile-1',
@@ -4017,6 +4195,7 @@ describe('InputView Model Profile Integration', () => {
     listModelsMock.mockResolvedValue({ models: [], supported: false });
     startSimulationMock.mockClear();
     startSimulationMock.mockResolvedValue('scenario-1');
+    testLlmConnectionMock.mockReset();
     createDebateMock.mockReset();
     createDebateMock.mockResolvedValue({ id: 'debate-1' });
     identityPreflightMock.mockReset();
@@ -4032,8 +4211,13 @@ describe('InputView Model Profile Integration', () => {
     });
   });
 
-  it('renders profile selector, shows overrides, and flows model_profile_id into submit', async () => {
+  it('keeps profile mirrors out of session policy and requires a complete remote model override', async () => {
     const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValue({
+      server: 'ok',
+      llm: { status: 'ok', model: 'gpt-4o-modified', response: 'ready' },
+      probe: null,
+    });
     getCapabilitiesMock.mockResolvedValue({
       llm_configured: true,
       model_profiles: { enabled: true },
@@ -4064,20 +4248,49 @@ describe('InputView Model Profile Integration', () => {
     expect(modelInput.value).toBe('gpt-4o');
     expect(urlInput.value).toBe('https://api.openai.com/v1');
 
+    await waitFor(() => {
+      const policy = JSON.parse(
+        window.sessionStorage.getItem(POLICY_STORAGE_KEY) || '{}',
+      ) as Record<string, unknown>;
+      expect(policy.apiKey ?? '').toBe('');
+      expect(policy.baseUrl ?? '').toBe('');
+      expect(policy.model ?? '').toBe('');
+    });
+
     // No override badge should be visible initially
     expect(screen.queryByText('(model_profiles.overridden)')).toBeNull();
 
     // Override the model field
     fireEvent.change(modelInput, { target: { value: 'gpt-4o-modified' } });
+    expect(screen.getByLabelText(/home\.byok_rpm_label/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/home\.byok_tpm_label/i)).toHaveValue(null);
 
-    // Override badge should now be visible
-    expect(screen.getByText('(model_profiles.overridden)')).toBeInTheDocument();
+    // The model plus both cleared profile policies are visibly marked as
+    // detached from the saved binding.
+    expect(screen.getAllByText('(model_profiles.overridden)')).toHaveLength(3);
 
-    // Enter question and submit
+    // A model is provider-bound. The saved profile key must not silently follow
+    // a partial model override, so remote overrides require an explicit key.
     const textarea = screen.getByRole('textbox', { name: 'home.question_input_label' });
     fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
 
     const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    expect(submitBtn).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/home\.byok_api_key_label/i), {
+      target: { value: 'explicit-model-override-key' },
+    });
+    expect(submitBtn).toBeEnabled();
+    await waitFor(() => {
+      const policy = JSON.parse(
+        window.sessionStorage.getItem(POLICY_STORAGE_KEY) || '{}',
+      ) as Record<string, unknown>;
+      expect(policy).toEqual(expect.objectContaining({
+        apiKey: 'explicit-model-override-key',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-modified',
+      }));
+    });
     fireEvent.click(submitBtn);
 
     await confirmLaunchDialog(user);
@@ -4085,10 +4298,124 @@ describe('InputView Model Profile Integration', () => {
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
         question: 'What if Mars has water?',
-        modelProfileId: 'profile-1',
+        modelProfileId: undefined,
+        llmApiKey: 'explicit-model-override-key',
         llmModel: 'gpt-4o-modified',
-        // base_url was not overridden, so it should be undefined (using profile default on server)
-        llmBaseUrl: undefined,
+        llmBaseUrl: 'https://api.openai.com/v1',
+        llmRequestsPerMinute: undefined,
+        llmTokensPerMinute: undefined,
+      }));
+    });
+  });
+
+  it('requires an explicit key when a selected profile is pointed at another remote endpoint', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValueOnce({
+      server: 'ok',
+      llm: { status: 'ok', model: 'gpt-4o', response: 'ready' },
+      probe: null,
+    });
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+
+    const urlInput = screen.getByLabelText(/home\.byok_base_url_label/i);
+    const keyInput = screen.getByLabelText(/home\.byok_api_key_label/i) as HTMLInputElement;
+    const modelInput = screen.getByLabelText(/home\.byok_model_label/i) as HTMLInputElement;
+    fireEvent.change(urlInput, { target: { value: 'https://relay.example.com/v1' } });
+    expect(modelInput).toHaveValue('');
+    expect(screen.getByLabelText(/home\.byok_rpm_label/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/home\.byok_tpm_label/i)).toHaveValue(null);
+    fireEvent.change(textarea, { target: { value: 'What if the relay changes?' } });
+
+    const submit = screen.getByRole('button', { name: 'home.submit' });
+    expect(submit).toBeDisabled();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+
+    fireEvent.change(modelInput, { target: { value: 'relay-model' } });
+    fireEvent.change(keyInput, { target: { value: 'relay-key' } });
+    expect(submit).toBeEnabled();
+
+    fireEvent.change(urlInput, { target: { value: 'https://second-relay.example.com/v1' } });
+    expect(keyInput.value).toBe('');
+    expect(modelInput.value).toBe('');
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(modelInput, { target: { value: 'second-relay-model' } });
+    fireEvent.change(keyInput, { target: { value: 'second-relay-key' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        modelProfileId: undefined,
+        llmApiKey: 'second-relay-key',
+        llmBaseUrl: 'https://second-relay.example.com/v1',
+        llmModel: 'second-relay-model',
+        llmRequestsPerMinute: undefined,
+        llmTokensPerMinute: undefined,
+      }));
+    });
+  });
+
+  it('allows a selected profile to use an exact-local keyless endpoint override', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+    fireEvent.change(screen.getByLabelText(/home\.byok_base_url_label/i), {
+      target: { value: 'http://localhost:11434/v1' },
+    });
+    const modelInput = screen.getByLabelText(/home\.byok_model_label/i) as HTMLInputElement;
+    expect(modelInput).toHaveValue('');
+    expect(screen.getByLabelText(/home\.byok_rpm_label/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/home\.byok_tpm_label/i)).toHaveValue(null);
+    fireEvent.change(textarea, { target: { value: 'What if the profile moves local?' } });
+
+    const submit = screen.getByRole('button', { name: 'home.submit' });
+    expect(submit).toBeDisabled();
+    fireEvent.change(modelInput, { target: { value: 'llama3.2' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        modelProfileId: undefined,
+        llmApiKey: undefined,
+        llmBaseUrl: 'http://localhost:11434/v1',
+        llmModel: 'llama3.2',
+        llmRequestsPerMinute: undefined,
+        llmTokensPerMinute: undefined,
       }));
     });
   });
@@ -4128,6 +4455,131 @@ describe('InputView Model Profile Integration', () => {
         modelProfileId: 'profile-1',
       }));
     });
+  });
+
+  it('launches from a keyless local session without letting an existing profile replace it', async () => {
+    const user = userEvent.setup();
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: '',
+      baseUrl: 'http://localhost:11434/v1',
+      model: 'llama3.2',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      llm_static_configured: false,
+      llm_profile_configured: false,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    await waitFor(() => expect((selector as HTMLSelectElement).value).toBe(''));
+    expect(screen.getByLabelText(/home\.byok_base_url_label/i)).toHaveValue(
+      'http://localhost:11434/v1',
+    );
+    expect(screen.getByLabelText(/home\.byok_model_label/i)).toHaveValue('llama3.2');
+
+    fireEvent.change(textarea, { target: { value: 'What if the local model governs Mars?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'What if the local model governs Mars?',
+        modelProfileId: undefined,
+        llmApiKey: undefined,
+        llmBaseUrl: 'http://localhost:11434/v1',
+        llmModel: 'llama3.2',
+      }));
+    });
+    expect(testLlmConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('auto-selects and launches with a keyless local model profile', async () => {
+    const user = userEvent.setup();
+    const localProfile = {
+      ...mockProfiles[0],
+      id: 'local-profile',
+      name: 'Local Ollama',
+      provider: 'ollama',
+      base_url: 'http://localhost:11434/v1',
+      model: 'llama3.2',
+      has_api_key: false,
+    };
+    listModelProfilesMock.mockResolvedValue({ profiles: [localProfile], count: 1 });
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: false,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    await waitFor(() => expect((selector as HTMLSelectElement).value).toBe('local-profile'));
+
+    fireEvent.change(textarea, { target: { value: 'What if Ollama runs the council?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'What if Ollama runs the council?',
+        modelProfileId: 'local-profile',
+        llmApiKey: undefined,
+        llmBaseUrl: undefined,
+      }));
+    });
+  });
+
+  it('does not auto-select or launch with a keyless remote model profile', async () => {
+    const remoteProfile = {
+      ...mockProfiles[0],
+      id: 'remote-keyless',
+      name: 'Broken remote profile',
+      base_url: 'https://api.openai.com/v1',
+      has_api_key: false,
+    };
+    listModelProfilesMock.mockResolvedValue({ profiles: [remoteProfile], count: 1 });
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      llm_static_configured: false,
+      llm_profile_configured: false,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = await screen.findByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    await waitFor(() => expect((selector as HTMLSelectElement).value).toBe(''));
+
+    fireEvent.change(textarea, { target: { value: 'This remote profile must stay blocked' } });
+    expect(screen.getByRole('button', { name: 'home.submit' })).toBeDisabled();
+    expect(startSimulationMock).not.toHaveBeenCalled();
   });
 
   it('blocks launch when server LLM config comes only from an unselected saved profile', async () => {
@@ -4472,6 +4924,261 @@ describe('InputView Model Profile Integration', () => {
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('uses the static server LLM for Debate when an unchanged main profile is only a UI mirror', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: true,
+      llm_profile_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/debate/:id" element={<div>debate-route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const questionInput = await screen.findByRole('textbox', {
+      name: 'home.question_input_label',
+    });
+    fireEvent.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const mainProfileSelector = await screen.findByRole('combobox', {
+      name: /model_profiles\.title/i,
+    });
+    await waitFor(() => expect(mainProfileSelector).toHaveValue('profile-1'));
+    expect(screen.getByLabelText(/home\.byok_base_url_label/i)).toHaveValue(
+      'https://api.openai.com/v1',
+    );
+    expect(screen.getByLabelText(/home\.byok_api_key_label/i)).toHaveValue('');
+
+    await user.type(questionInput, 'Should the server default run this debate?');
+    const debateButton = screen.getByRole('button', { name: 'debate.entry_cta' });
+    expect(debateButton).toBeEnabled();
+    await user.click(debateButton);
+
+    await waitFor(() => expect(createDebateMock).toHaveBeenCalledTimes(1));
+    expect(createDebateMock).toHaveBeenCalledWith(
+      'Should the server default run this debate?',
+      undefined,
+      expect.objectContaining({
+        propositionModelProfileId: undefined,
+        oppositionModelProfileId: undefined,
+        judgeModelProfileId: undefined,
+        llmApiKey: undefined,
+        llmBaseUrl: undefined,
+        llmModel: undefined,
+        llmRequestsPerMinute: undefined,
+        llmTokensPerMinute: undefined,
+      }),
+      undefined,
+    );
+  });
+
+  it.each([
+    ['proposition', 'debate-prop-profile', 'propositionModelProfileId'],
+    ['opposition', 'debate-opp-profile', 'oppositionModelProfileId'],
+    ['judge', 'debate-judge-profile', 'judgeModelProfileId'],
+  ] as const)(
+    'keeps profile-only Debate available when the %s role switches providers',
+    async (_role, selectorId, profileOptionName) => {
+      const user = userEvent.setup();
+      const scenarioProfile = {
+        ...mockProfiles[0],
+        id: 'scenario-profile-a',
+        name: 'Scenario Provider A',
+        provider: 'provider-a',
+        base_url: 'https://provider-a.example/v1',
+        model: 'provider-a-model',
+        rpm: 91,
+        tpm: 91000,
+      };
+      const roleProfile = {
+        ...mockProfiles[0],
+        id: 'role-profile-b',
+        name: 'Debate Provider B',
+        provider: 'provider-b',
+        base_url: 'https://provider-b.example/v1',
+        model: 'provider-b-model',
+        rpm: 37,
+        tpm: 37000,
+      };
+      listModelProfilesMock.mockResolvedValue({
+        profiles: [scenarioProfile, roleProfile],
+        count: 2,
+      });
+      getCapabilitiesMock.mockResolvedValue({
+        llm_configured: true,
+        llm_static_configured: false,
+        llm_profile_configured: true,
+        model_profiles: { enabled: true },
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<InputView />} />
+            <Route path="/debate/:id" element={<div>debate-route</div>} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const questionInput = await screen.findByRole('textbox', {
+        name: 'home.question_input_label',
+      });
+      const byokToggle = screen.getByRole('button', { name: /home\.byok_toggle/i });
+      if (byokToggle.getAttribute('aria-expanded') !== 'true') {
+        fireEvent.click(byokToggle);
+      }
+      const scenarioSelector = await screen.findByRole('combobox', {
+        name: /model_profiles\.title/i,
+      });
+      await waitFor(() => expect(scenarioSelector).toHaveValue('scenario-profile-a'));
+
+      const roleProfileSelector = await waitFor(() => {
+        const selector = document.getElementById(selectorId);
+        expect(selector).toBeInstanceOf(HTMLSelectElement);
+        return selector as HTMLSelectElement;
+      });
+      fireEvent.change(roleProfileSelector, { target: { value: 'role-profile-b' } });
+
+      expect(screen.getByLabelText(/home\.byok_api_key_label/i)).toHaveValue('');
+      expect(screen.getByLabelText(/home\.byok_base_url_label/i)).toHaveValue(
+        'https://provider-a.example/v1',
+      );
+      expect(screen.getByLabelText(/home\.byok_model_label/i)).toHaveValue('provider-a-model');
+      expect(screen.getByLabelText(/home\.byok_rpm_label/i)).toHaveValue(91);
+      expect(screen.getByLabelText(/home\.byok_tpm_label/i)).toHaveValue(91000);
+
+      await user.type(questionInput, 'Should Provider B own this debate role?');
+      const simulationButton = screen.getByRole('button', { name: 'home.submit' });
+      const debateButton = screen.getByRole('button', { name: 'debate.entry_cta' });
+      expect(simulationButton).toBeEnabled();
+      expect(debateButton).toBeEnabled();
+      await user.click(debateButton);
+
+      await waitFor(() => expect(createDebateMock).toHaveBeenCalledTimes(1));
+      const expectedProfileIds = {
+        propositionModelProfileId: 'scenario-profile-a',
+        oppositionModelProfileId: 'scenario-profile-a',
+        judgeModelProfileId: 'scenario-profile-a',
+        [profileOptionName]: 'role-profile-b',
+      };
+      expect(createDebateMock).toHaveBeenCalledWith(
+        'Should Provider B own this debate role?',
+        undefined,
+        expect.objectContaining({
+          ...expectedProfileIds,
+          llmApiKey: undefined,
+          llmBaseUrl: undefined,
+          llmModel: undefined,
+          llmRequestsPerMinute: undefined,
+          llmTokensPerMinute: undefined,
+        }),
+        undefined,
+      );
+      expect(startSimulationMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['proposition', 'debate-prop-profile', 'propositionModelProfileId'],
+    ['opposition', 'debate-opp-profile', 'oppositionModelProfileId'],
+    ['judge', 'debate-judge-profile', 'judgeModelProfileId'],
+  ] as const)(
+    'keeps provider A as global fallback while provider B owns the %s role',
+    async (_role, selectorId, profileOptionName) => {
+      const user = userEvent.setup();
+      window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+        apiKey: 'provider-a-secret',
+        baseUrl: 'https://provider-a.example/v1',
+        model: 'provider-a-model',
+        reasoningEffort: '',
+        requestsPerMinute: 91,
+        tokensPerMinute: 91000,
+        disableUserQuota: false,
+      }));
+      getCapabilitiesMock.mockResolvedValue({
+        llm_configured: true,
+        llm_static_configured: true,
+        llm_profile_configured: true,
+        model_profiles: { enabled: true },
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<InputView />} />
+            <Route path="/debate/:id" element={<div>debate-route</div>} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const questionInput = await screen.findByRole('textbox', {
+        name: 'home.question_input_label',
+      });
+      const byokToggle = screen.getByRole('button', { name: /home\.byok_toggle/i });
+      if (byokToggle.getAttribute('aria-expanded') !== 'true') {
+        fireEvent.click(byokToggle);
+      }
+      const keyInput = screen.getByLabelText(/home\.byok_api_key_label/i);
+      const baseUrlInput = screen.getByLabelText(/home\.byok_base_url_label/i);
+      const modelInput = screen.getByLabelText(/home\.byok_model_label/i);
+      const rpmInput = screen.getByLabelText(/home\.byok_rpm_label/i);
+      const tpmInput = screen.getByLabelText(/home\.byok_tpm_label/i);
+      expect(keyInput).toHaveValue('provider-a-secret');
+      expect(baseUrlInput).toHaveValue('https://provider-a.example/v1');
+      expect(modelInput).toHaveValue('provider-a-model');
+      expect(rpmInput).toHaveValue(91);
+      expect(tpmInput).toHaveValue(91000);
+      await waitFor(() => expect(listModelProfilesMock).toHaveBeenCalledTimes(1));
+
+      const roleProfileSelector = await waitFor(() => {
+        const selector = document.getElementById(selectorId);
+        expect(selector).toBeInstanceOf(HTMLSelectElement);
+        return selector as HTMLSelectElement;
+      });
+      fireEvent.change(roleProfileSelector, { target: { value: 'profile-1' } });
+
+      expect(keyInput).toHaveValue('provider-a-secret');
+      expect(baseUrlInput).toHaveValue('https://provider-a.example/v1');
+      expect(modelInput).toHaveValue('provider-a-model');
+      expect(rpmInput).toHaveValue(91);
+      expect(tpmInput).toHaveValue(91000);
+      expect(screen.getByRole('combobox', { name: /model_profiles\.title/i })).toHaveValue('');
+      await waitFor(() => {
+        expect(JSON.parse(window.sessionStorage.getItem(POLICY_STORAGE_KEY) || '{}')).toEqual(
+          expect.objectContaining({
+            apiKey: 'provider-a-secret',
+            baseUrl: 'https://provider-a.example/v1',
+            model: 'provider-a-model',
+            requestsPerMinute: 91,
+            tokensPerMinute: 91000,
+          }),
+        );
+      });
+
+      await user.type(questionInput, 'Should provider B own this debate role?');
+      await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+
+      await waitFor(() => expect(createDebateMock).toHaveBeenCalledTimes(1));
+      const debateOptions = createDebateMock.mock.calls[0]?.[2] as
+        | Record<string, unknown>
+        | undefined;
+      expect(debateOptions).toEqual(expect.objectContaining({
+        [profileOptionName]: 'profile-1',
+        llmApiKey: 'provider-a-secret',
+        llmBaseUrl: 'https://provider-a.example/v1',
+        llmModel: 'provider-a-model',
+        llmRequestsPerMinute: 91,
+        llmTokensPerMinute: 91000,
+      }));
+    },
+  );
 
   it('renders debate API failures instead of swallowing them', async () => {
     const user = userEvent.setup();

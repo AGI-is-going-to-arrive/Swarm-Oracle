@@ -1357,6 +1357,50 @@ def test_score_predictions_rehydrates_profile_from_parsed_context(monkeypatch):
     }
 
 
+def test_score_predictions_recovered_remote_profile_rejects_key_only_override(
+    monkeypatch,
+):
+    from app.config import settings
+    from app.services import scoring as scoring_module
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    monkeypatch.setattr(settings, "FEATURE_MODEL_PROFILES", True, raising=False)
+    profile_id = _seed_model_profile(
+        user_id="score-mix-owner",
+        model="provider-b-score-model",
+        api_key="sk-provider-b-score",
+    )
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={
+            "_language": "English",
+            "model_profile_id": profile_id,
+            "result_quality": {"actual_outcome": True},
+        },
+        user_id="score-mix-owner",
+    )
+    llm_called = False
+
+    async def unexpected_llm(*_args, **_kwargs):
+        nonlocal llm_called
+        llm_called = True
+        raise AssertionError("key-only override must not use the recovered endpoint")
+
+    monkeypatch.setattr(
+        scoring_module,
+        "llm_call_json_with_stream_fallback",
+        unexpected_llm,
+    )
+
+    response = TestClient(app).post(
+        f"/api/scenario/{scenario_id}/score-predictions",
+        json={"llm_api_key": "sk-provider-a-session"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+    assert llm_called is False
+
+
 def test_score_predictions_stored_profile_missing_fails_closed(monkeypatch):
     from app.config import settings
     from app.services import scoring as scoring_module
@@ -1469,6 +1513,35 @@ def test_score_predictions_explicit_base_url_without_key_still_requires_key(monk
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+
+def test_score_predictions_explicit_local_base_url_without_key_is_forwarded(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    scenario_id = _seed_done_scenario_with_prediction(
+        parsed_context={"_language": "English", "result_quality": {"actual_outcome": True}}
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_llm(_prompt: str, **kwargs):
+        captured.update(kwargs)
+        return {"score": 88, "reason": "local model scored it"}
+
+    monkeypatch.setattr("app.services.scoring.llm_call_json_with_stream_fallback", fake_llm)
+
+    response = TestClient(app).post(
+        f"/api/scenario/{scenario_id}/score-predictions",
+        json={
+            "llm_base_url": "http://127.0.0.1:11434/v1",
+            "llm_model": "llama3.2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["api_key"] is None
+    assert captured["base_url"] == "http://127.0.0.1:11434/v1"
+    assert captured["model"] == "llama3.2"
 
 
 @pytest.mark.asyncio

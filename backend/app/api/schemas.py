@@ -704,7 +704,7 @@ class StartConversationRequest(BaseModel):
     origin_node_type: str | None = None
     origin_excerpt: str | None = None
     first_user_content: str
-    # BYOK (HC-24) — optional; when ``base_url`` is present ``api_key`` is required.
+    # BYOK (HC-24) — remote base URLs require api_key; local providers may be keyless.
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None

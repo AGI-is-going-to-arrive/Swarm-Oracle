@@ -519,6 +519,8 @@ export interface AgentMessage {
   agent_id: string;
   message: string;
   emotion: string;
+  emotion_metadata_status?: 'available' | 'unavailable';
+  emotion_metadata_failure_code?: string;
   diverge?: string | null;
   branch: string;
   branch_title?: string;
@@ -815,6 +817,7 @@ export interface FullReport {
   interview_status?: InterviewStatus | null;
   premortem: Record<string, unknown>[];
   language_status: { zh: 'available' | 'missing'; en: 'available' | 'missing' } | null;
+  tool_trace?: ToolTraceSummary[];
 }
 
 export interface FullReportTruncatedMarker {
@@ -823,6 +826,7 @@ export interface FullReportTruncatedMarker {
 }
 
 export interface ToolTraceSummary {
+  section_id?: string | null;
   tool: string;
   query: string;
   item_count: number;

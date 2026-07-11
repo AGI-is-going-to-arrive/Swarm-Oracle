@@ -76,6 +76,8 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_responds_to': 'responds to',
     'causal.edge_supports_stance': 'aligns with',
     'causal.edge_opposes_stance': 'opposes',
+    'causal.edge_affect_alignment_proxy': 'affect aligned (proxy)',
+    'causal.edge_affect_distance_proxy': 'affect distant (proxy)',
     'causal.edge_led_to': 'leads to',
     'causal.edge_triggered_fork': 'triggered fork',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
@@ -85,6 +87,8 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.node_card_summary_fork': 'Fork point · {{effectCount}} follow-ups',
     'causal.node_card_summary_outcome': 'Endpoint · {{causeCount}} sources',
     'causal.node.stance_shift': '{{agent_name}} stance shifted',
+    'causal.type_affect_shift_proxy': 'Affect shift (proxy)',
+    'causal.scope_branch_segment_only': 'Selected branch segment only; pre-fork ancestor rounds are not merged.',
     'causal.node.outcome': 'Outcome',
     'causal.type_outcome': 'Outcome',
     'node_context_banner.meaning_event_title': 'Event card',
@@ -145,6 +149,8 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_responds_to': '回应',
     'causal.edge_supports_stance': '立场一致',
     'causal.edge_opposes_stance': '立场对立',
+    'causal.edge_affect_alignment_proxy': '情绪代理相近',
+    'causal.edge_affect_distance_proxy': '情绪代理差异',
     'causal.edge_led_to': '导向',
     'causal.edge_triggered_fork': '触发分支',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
@@ -154,6 +160,8 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.node_card_summary_fork': '分岔点 · {{effectCount}} 条去向',
     'causal.node_card_summary_outcome': '结局 · {{causeCount}} 个来源',
     'causal.node.stance_shift': '{{agent_name}} 立场转变',
+    'causal.type_affect_shift_proxy': '情绪变化（代理）',
+    'causal.scope_branch_segment_only': '仅展示所选分支片段；不会合并分叉前祖先轮次。',
     'causal.node.outcome': '结局',
     'causal.type_outcome': '结局',
     'node_context_banner.meaning_event_title': '事件卡',
@@ -514,6 +522,57 @@ const changeUiLanguage = async (locale: TestLocale) => {
 };
 
 describe('CausalReviewView', () => {
+  it('uses affect-proxy display types and exposes the branch-segment boundary', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-affect-proxy',
+          scope_kind: 'branch_segment_only',
+          scope_caveat: 'Backend caveat',
+          nodes: [
+            {
+              id: 'n1',
+              key: 'shift-1',
+              type: 'stance_shift',
+              label: 'Ada affect proxy shifted',
+              round: 2,
+              payload: { display_type: 'affect_shift_proxy', agent_name: 'Ada' },
+            },
+            { id: 'n2', key: 'event-2', type: 'event', label: 'Beta', round: 2, payload: null },
+          ],
+          edges: [
+            {
+              id: 'edge-1',
+              source: 'n1',
+              target: 'n2',
+              type: 'supports_stance',
+              display_type: 'affect_alignment_proxy',
+              weight: 1,
+              label: null,
+            },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1');
+
+    const graph = await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(graph).toHaveAttribute('data-edge-label', 'affect aligned (proxy)');
+      expect(graph.getAttribute('data-node-aria-label')).toContain(
+        'Affect shift (proxy)',
+      );
+    });
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+    );
+  });
+
   it('shows loading state initially', () => {
     // Mock fetch to never resolve
     vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(() => {}));

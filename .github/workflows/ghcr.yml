@@ -1,23 +1,93 @@
 name: Publish GHCR Images
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*.*.*"
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
-
-concurrency:
-  group: ghcr-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
-  publish:
+  verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      target_sha: ${{ steps.target.outputs.target_sha }}
+      channel: ${{ steps.target.outputs.channel }}
+      version_tag: ${{ steps.target.outputs.version_tag }}
+    steps:
+      - name: Resolve immutable publication target
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          MANUAL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            target_sha="$CI_SHA"
+            channel="edge"
+            version_tag=""
+          else
+            if [ "$REF_TYPE" != "tag" ] || ! [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Semver publication must be dispatched from a vX.Y.Z tag." >&2
+              exit 1
+            fi
+            target_sha="$MANUAL_SHA"
+            channel="semver"
+            version_tag="$REF_NAME"
+          fi
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "version_tag=$version_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact SHA gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.target_sha }}
+          CHANNEL: ${{ steps.target.outputs.channel }}
+          VERSION_TAG: ${{ steps.target.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          ci_runs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" -f status=completed -f per_page=100)"
+          ci_id="$(jq -r --arg sha "$TARGET_SHA" '.workflow_runs | map(select(.head_sha == $sha and .event == "push" and .conclusion == "success")) | first | .id // empty' <<<"$ci_runs")"
+          [ -n "$ci_id" ] || { echo "No successful CI push run for $TARGET_SHA" >&2; exit 1; }
+
+          if [ "$CHANNEL" = "semver" ]; then
+            resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${VERSION_TAG}" --jq .sha)"
+            [ "$resolved_sha" = "$TARGET_SHA" ] || { echo "Tag does not resolve to target SHA" >&2; exit 1; }
+            signoff_runs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/release-signoff.yml/runs" -f status=completed -f per_page=100)"
+            mapfile -t run_ids < <(jq -r --arg sha "$TARGET_SHA" '.workflow_runs[] | select(.head_sha == $sha and .event == "workflow_dispatch" and .conclusion == "success") | .id' <<<"$signoff_runs")
+            verified="false"
+            for run_id in "${run_ids[@]}"; do
+              jobs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs")"
+              if jq -e '.jobs[] | select(.name == "release-signoff" and .conclusion == "success")' <<<"$jobs" >/dev/null; then
+                verified="true"
+                break
+              fi
+            done
+            [ "$verified" = "true" ] || { echo "No executed successful release-signoff job for $TARGET_SHA" >&2; exit 1; }
+          fi
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -29,8 +99,18 @@ jobs:
             dockerfile: frontend/Dockerfile
             image: swarmoracle-frontend
     steps:
-      - name: Checkout
+      - name: Checkout verified commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.target_sha }}
+
+      - name: Confirm checked-out commit
+        env:
+          TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          [ "$actual_sha" = "$TARGET_SHA" ] || { echo "Checked-out SHA $actual_sha does not match verified SHA $TARGET_SHA" >&2; exit 1; }
 
       - name: Normalize GHCR image name
         id: image
@@ -57,11 +137,9 @@ jobs:
         with:
           images: ${{ steps.image.outputs.name }}
           tags: |
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
-            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=sha-${{ needs.verify.outputs.target_sha }}
 
-      - name: Build and push ${{ matrix.component }} image
+      - name: Build and push immutable ${{ matrix.component }} image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -70,3 +148,68 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  promote:
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ghcr-promotion-${{ needs.verify.outputs.channel }}-${{ needs.verify.outputs.channel == 'edge' && 'edge' || needs.verify.outputs.version_tag }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.target_sha }}
+
+      - name: Confirm checked-out commit
+        env:
+          TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          [ "$actual_sha" = "$TARGET_SHA" ] || { echo "Checked-out SHA $actual_sha does not match verified SHA $TARGET_SHA" >&2; exit 1; }
+
+      - name: Normalize GHCR image names
+        id: images
+        run: |
+          set -euo pipefail
+          owner_lc="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "backend=ghcr.io/${owner_lc}/swarmoracle-backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=ghcr.io/${owner_lc}/swarmoracle-frontend" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install pinned regctl
+        env:
+          REGCTL_VERSION: v0.11.5
+          REGCTL_SHA256: c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467
+        run: |
+          set -euo pipefail
+          destination="${RUNNER_TEMP}/regctl"
+          curl --fail --location --silent --show-error \
+            "https://github.com/regclient/regclient/releases/download/${REGCTL_VERSION}/regctl-linux-amd64" \
+            --output "$destination"
+          echo "${REGCTL_SHA256}  ${destination}" | sha256sum --check --strict
+          chmod +x "$destination"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Revalidate freshness and promote verified image pair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          FRONTEND_IMAGE: ${{ steps.images.outputs.frontend }}
+          TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+          CHANNEL: ${{ needs.verify.outputs.channel }}
+          VERSION_TAG: ${{ needs.verify.outputs.version_tag }}
+          REGCTL_BIN: regctl
+        run: |
+          set -euo pipefail
+          bash scripts/promote-ghcr-pair.sh

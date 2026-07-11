@@ -28,6 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -973,12 +974,6 @@ async function runSurface(mode, contextOptions, args) {
     );
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext(contextOptions);
-  const page = await context.newPage();
-  await installFixtures(page);
-  await installLivePreflightBypass(page);
-
   const allResults = {
     mode,
     browser: args.browser,
@@ -987,7 +982,13 @@ async function runSurface(mode, contextOptions, args) {
     baseUrl: args.baseUrl,
     tests: {},
   };
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    await installFixtures(page);
+    await installLivePreflightBypass(page);
+
     allResults.tests.inputAndResultContracts = await testInputAndResultContracts(page, args.baseUrl, mode);
     allResults.tests.geoGatedContract = await testGeoGatedContract(
       context,
@@ -997,8 +998,10 @@ async function runSurface(mode, contextOptions, args) {
     );
     allResults.tests.offlineBannerContract = await testOfflineBannerContract(page, args.baseUrl);
   } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await closePlaywrightBrowser(
+      browser,
+      `e2e-new-source-ingestion-live:${mode}:${args.browser}`,
+    );
   }
 
   let total = 0;

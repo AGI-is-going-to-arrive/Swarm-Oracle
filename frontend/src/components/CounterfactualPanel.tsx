@@ -150,7 +150,7 @@ export function CounterfactualPanel({
       </p>
 
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        <div>
+        <div style={{ flex: '1 1 14rem', minWidth: 0, maxWidth: '100%' }}>
           <label htmlFor="cf-agent" style={{ display: 'block', fontSize: '0.8rem', marginBottom: 3 }}>
             {t('counterfactual.agent', 'Agent')}
           </label>
@@ -159,7 +159,17 @@ export function CounterfactualPanel({
             value={selectedAgent}
             onChange={e => setSelectedAgent(e.target.value)}
             disabled={!hasSourceRounds || availableAgents.length === 0}
-            style={{ padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
+            style={{
+              boxSizing: 'border-box',
+              width: '100%',
+              minWidth: 0,
+              maxWidth: '100%',
+              padding: '0.4rem',
+              borderRadius: 4,
+              border: '1px solid #555',
+              background: '#1a1a2e',
+              color: '#fff',
+            }}
           >
             <option value="">{t('counterfactual.select_agent', '-- Select --')}</option>
             {availableAgents.map(a => (
@@ -168,7 +178,7 @@ export function CounterfactualPanel({
           </select>
         </div>
 
-        <div>
+        <div style={{ flex: '0 1 8rem', minWidth: 0, maxWidth: '100%' }}>
           <label htmlFor="cf-round" style={{ display: 'block', fontSize: '0.8rem', marginBottom: 3 }}>
             {t('counterfactual.round', 'Round')}
           </label>

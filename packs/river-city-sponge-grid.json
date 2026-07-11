@@ -85,12 +85,12 @@
   ],
   "demo_snapshots": [
     {
-      "id": "monsoon-test",
+      "id": "river-city-pact",
       "label": {
-        "zh": "季风测试",
-        "en": "Monsoon Test"
+        "zh": "河城协定",
+        "en": "The River City Pact"
       },
-      "filename": "river-city-monsoon-test.json"
+      "filename": "river-city-pact.swarm"
     }
   ],
   "suggested_settings": {

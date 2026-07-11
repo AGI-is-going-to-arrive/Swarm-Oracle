@@ -19,6 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, devices, firefox, webkit } from "playwright";
+import { closePlaywrightBrowser } from "./playwrightTeardown.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -194,20 +195,21 @@ async function runSurface(mode, viewport, args) {
     : path.join(DEFAULT_OUTPUT_ROOT, `node-conversation-live-${timestampLabel()}-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
-  const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext({ viewport });
-  const page = await context.newPage();
-
-  await installFixtures(page);
-
   const allResults = { mode, browser: args.browser, viewport, live: LIVE_MODE, tests: {} };
+  const browser = await launchBrowser(args.headless, args.browser);
   try {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await installFixtures(page);
+
     allResults.tests.triggerVisibility = await testTriggerVisibility(page, args.baseUrl);
     allResults.tests.turnErrorMatrix = await testTurnErrorMatrix();
     allResults.tests.draftDegrade = await testDraftDegrade();
   } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    await closePlaywrightBrowser(
+      browser,
+      `e2e-node-conversation-live:${mode}:${args.browser}`,
+    );
   }
 
   let total = 0, passed = 0;

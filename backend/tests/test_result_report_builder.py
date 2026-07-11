@@ -29,6 +29,7 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.result_report import builder
+from app.services.result_report.reducer import StatResult
 from app.services.result_report.schema import (
     FullReport,
     I18nText,
@@ -129,6 +130,55 @@ def _seed_report_scenario() -> str:
     return "scenario-report"
 
 
+def test_affect_proxy_is_not_promoted_to_any_causal_indicator():
+    scenario_id = _seed_report_scenario()
+    reducer_result = replace(
+        builder.reduce_report(get_engine(), scenario_id),
+        polarization=StatResult(status="available", value=0.82),
+        agent_consensus=StatResult(status="available", value=0.64),
+    )
+
+    indicator = builder._stat_signal_indicator(
+        reducer_result,
+        allowed_evidence_ids=set(),
+        language="en",
+    )
+
+    assert indicator is None
+
+
+def test_indicators_prompt_discloses_the_noncausal_affect_proxy_semantics():
+    scenario_id = _seed_report_scenario()
+    reducer_result = replace(
+        builder.reduce_report(get_engine(), scenario_id),
+        polarization=StatResult(status="available", value=0.82),
+        agent_consensus=StatResult(
+            status="partial",
+            value=0.64,
+            reason="metadata_unavailable",
+        ),
+    )
+    context = builder.BuilderContext(
+        scenario_id=scenario_id,
+        question="Should the city approve the AI transit plan?",
+        language="en",
+        parsed_context={},
+        branch_id="branch-a",
+        branch_title="Approval with safeguards",
+        branch_story="The proposal passes with safeguards.",
+        branch_insight="Safeguards unlock support.",
+        web_context_blocks=[],
+    )
+
+    prompt = builder._build_indicators_prompt(context, reducer_result)
+
+    assert '"simulated_affect_dispersion_proxy":0.82' in prompt
+    assert '"simulated_affect_convergence_proxy_status":"partial"' in prompt
+    assert '"simulated_affect_convergence_proxy_reason":"metadata_unavailable"' in prompt
+    assert '"polarization"' not in prompt
+    assert "not verified stance, trust, or real-world polarization" in prompt
+
+
 def test_report_scope_kwargs_inherits_profile_runtime_fields():
     from app.services.result_report import builder
 
@@ -196,6 +246,21 @@ def test_report_scope_kwargs_inherits_profile_runtime_fields():
     )
     assert profile_scope["quota_key"] == "user:report-owner"
     assert profile_scope["concurrency"] == 3
+
+    detached_overrides = builder._normalize_overrides(
+        {
+            "base_url": "https://provider-b.example/v1",
+            "model": "provider-b-model",
+            "inherit_context_policy": False,
+        }
+    )
+    detached_scope = builder._report_llm_scope_kwargs(context, detached_overrides)
+    assert detached_scope["requests_per_minute"] is None
+    assert detached_scope["tokens_per_minute"] is None
+    assert detached_scope["concurrency"] is None
+    assert detached_scope["supports_structured_outputs_override"] is None
+    assert detached_scope["supports_native_search_override"] is None
+    assert detached_scope["native_search_upstream_override"] is None
 
 
 def _seed_report_faction_data(scenario_id: str) -> None:
@@ -570,10 +635,75 @@ async def test_build_report_persists_complete_report_with_evidence_coords(monkey
     # Boilerplate disclaimer is no longer persisted; the frontend renders its
     # own localized fallback when the field is absent.
     assert report.verdict.disclaimer is None
+    assert "terminal leaf segment only" in report.limitations
 
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.status == "complete"
     assert persisted.evidence[0].agent_name == "Privacy Advocate"
+
+
+@pytest.mark.asyncio
+async def test_build_report_persists_bounded_section_tool_trace(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            {"action": "query_branch_messages", "params": {"query": "timeline"}},
+            _section_payload("timeline"),
+            _section_payload("sources"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert len(report.tool_trace) == 1
+    assert report.tool_trace[0].section_id == "timeline"
+    assert report.tool_trace[0].tool == "query_branch_messages"
+    assert report.tool_trace[0].query == "timeline"
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.tool_trace == report.tool_trace
+
+
+@pytest.mark.asyncio
+async def test_build_report_persists_tools_run_before_both_llm_tiers_fail(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            {"action": "query_branch_messages", "params": {"query": "timeline"}},
+            builder.ResultReportBuilderError(
+                "generation failed after the tool call",
+                reason="json_parse_error",
+            ),
+            {"action": "query_branch_messages", "params": {"query": "timeline"}},
+            builder.ResultReportBuilderError(
+                "rewrite failed after the tool call",
+                reason="json_parse_error",
+            ),
+        ],
+    )
+    monkeypatch.setattr(builder.settings, "REPORT_MIN_SECTIONS", 1)
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    timeline = next(section for section in report.sections if section.id == "timeline")
+    assert timeline.tier == "static"
+    assert timeline.failure_reason == "json_parse_error"
+    assert [
+        (item.section_id, item.tool, item.query)
+        for item in report.tool_trace
+    ] == [
+        ("timeline", "query_branch_messages", "timeline"),
+        ("timeline", "query_branch_messages", "timeline"),
+    ]
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.tool_trace == report.tool_trace
 
 
 @pytest.mark.asyncio
@@ -1537,19 +1667,212 @@ async def test_build_report_releases_durable_lock_after_early_failure(monkeypatc
     )
 
 
-def test_persist_failed_report_replaces_stale_generating_report():
+@pytest.mark.parametrize(
+    ("source_status", "target_status", "transition_kwargs", "expected_copy"),
+    [
+        (
+            "generating",
+            "failed",
+            {},
+            {
+                "title": "Full report unavailable",
+                "summary": (
+                    "Report generation failed; the simulation result remains available."
+                ),
+                "headline": (
+                    "Report generation failed before renderable sections were produced."
+                ),
+                "limitations": (
+                    "Report generation failed before any renderable section could be "
+                    "produced. Existing simulation results remain available."
+                ),
+                "interview": "Report generation failed before interviews could run.",
+            },
+        ),
+        (
+            "generating",
+            "cancelled",
+            {},
+            {
+                "title": "Full report cancelled",
+                "summary": (
+                    "Report generation was cancelled; the simulation result remains "
+                    "available."
+                ),
+                "headline": (
+                    "Report generation was cancelled before renderable sections "
+                    "were produced."
+                ),
+                "limitations": (
+                    "Report generation was cancelled before any renderable section "
+                    "was produced. Existing simulation results remain available."
+                ),
+                "interview": "Report generation was cancelled before interviews could run.",
+            },
+        ),
+        (
+            "failed",
+            "generating",
+            {"replace_failed": True},
+            {
+                "title": "Full report generating",
+                "summary": (
+                    "The full report is being generated; the simulation result is "
+                    "available."
+                ),
+                "headline": (
+                    "The full report is being generated and enhanced analysis will "
+                    "appear shortly."
+                ),
+                "limitations": (
+                    "Report generation is in progress. This placeholder preserves "
+                    "the report contract until generated sections are persisted."
+                ),
+                "interview": "Report generation has not reached interview extraction yet.",
+            },
+        ),
+        (
+            "cancelled",
+            "failed",
+            {"replace_cancelled": True},
+            {
+                "title": "Full report unavailable",
+                "summary": (
+                    "Report generation failed; the simulation result remains available."
+                ),
+                "headline": (
+                    "Report generation failed before renderable sections were produced."
+                ),
+                "limitations": (
+                    "Report generation failed before any renderable section could be "
+                    "produced. Existing simulation results remain available."
+                ),
+                "interview": "Report generation failed before interviews could run.",
+            },
+        ),
+    ],
+)
+def test_placeholder_status_transitions_rebuild_all_canonical_status_copy(
+    source_status,
+    target_status,
+    transition_kwargs,
+    expected_copy,
+):
     from app.services.result_report import builder
 
     scenario_id = _seed_report_scenario()
-    failed = builder._persist_failed_report_if_absent(scenario_id, "branch-a")
-    generating_payload = failed.model_dump(mode="json")
-    generating_payload["status"] = "generating"
-    builder._persist_report_payload(scenario_id, generating_payload)
+    builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status=source_status,
+    )
 
-    replaced = builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+    transitioned = builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status=target_status,
+        **transition_kwargs,
+    )
 
-    assert replaced.status == "failed"
-    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+    assert transitioned.status == target_status
+    assert transitioned.title_i18n.en == expected_copy["title"]
+    assert transitioned.summary_i18n.en == expected_copy["summary"]
+    assert transitioned.verdict.headline_answer == expected_copy["headline"]
+    assert transitioned.limitations == expected_copy["limitations"]
+    assert transitioned.interview_status is not None
+    assert transitioned.interview_status.message == expected_copy["interview"]
+    assert validate_full_report_payload(_persisted_report(scenario_id)) == transitioned
+
+
+def test_terminal_transition_preserves_real_sections_but_replaces_placeholder_copy():
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    generating = builder.persist_generating_report_placeholder_if_absent(
+        scenario_id,
+        "branch-a",
+    )
+    payload = generating.model_dump(mode="json")
+    payload["sections"] = [
+        ReportSection(
+            id="timeline",
+            title="Timeline",
+            title_i18n=I18nText(zh="时间线", en="Timeline"),
+            intent="Trace the simulation.",
+            body_md_i18n=I18nText(zh="已保存章节。", en="Saved section."),
+        ).model_dump(mode="json")
+    ]
+    builder._persist_report_payload(scenario_id, payload)
+
+    transitioned = builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status="cancelled",
+    )
+
+    assert transitioned.status == "cancelled"
+    assert [section.id for section in transitioned.sections] == ["timeline"]
+    assert transitioned.sections[0].body_md_i18n.en == "Saved section."
+    assert transitioned.title_i18n.en == "Full report cancelled"
+    assert transitioned.summary_i18n.en.startswith("Report generation was cancelled")
+    assert "being generated" not in transitioned.verdict.headline_answer
+    assert "in progress" not in transitioned.limitations
+    assert transitioned.interview_status is not None
+    assert "cancelled" in (transitioned.interview_status.message or "").lower()
+
+
+@pytest.mark.parametrize(
+    ("source_status", "status", "transition_kwargs", "expected_en", "expected_zh"),
+    [
+        ("failed", "generating", {"replace_failed": True}, "retrying", "重试"),
+        ("generating", "cancelled", {}, "cancelled", "取消"),
+        ("generating", "failed", {}, "failed", "失败"),
+    ],
+)
+def test_partial_section_transition_replaces_confidence_basis_in_both_languages(
+    source_status,
+    status,
+    transition_kwargs,
+    expected_en,
+    expected_zh,
+):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    existing = builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status=source_status,
+    )
+    payload = existing.model_dump(mode="json")
+    payload["sections"] = [
+        ReportSection(
+            id="timeline",
+            title="Timeline",
+            title_i18n=I18nText(zh="时间线", en="Timeline"),
+            intent="Trace the simulation.",
+            body_md_i18n=I18nText(zh="已保存章节。", en="Saved section."),
+        ).model_dump(mode="json")
+    ]
+    payload["verdict"]["analytic_confidence"]["basis_i18n"] = {
+        "zh": "旧置信依据",
+        "en": "stale confidence basis",
+    }
+    builder._persist_report_payload(scenario_id, payload)
+
+    transitioned = builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status=status,
+        **transition_kwargs,
+    )
+
+    basis_i18n = transitioned.verdict.analytic_confidence.basis_i18n
+    assert basis_i18n is not None
+    assert expected_en in basis_i18n.en.lower()
+    assert expected_zh in basis_i18n.zh
+    assert "stale" not in basis_i18n.en.lower()
+    assert "旧置信" not in basis_i18n.zh
 
 
 def test_persist_generating_report_placeholder_if_absent():
@@ -1732,12 +2055,8 @@ async def test_auto_retry_preserves_and_reuses_complementary_sections(monkeypatc
     assert [item.id for item in retry_snapshots[0].evidence] == [
         item.id for item in failed_snapshots[0].evidence
     ]
-    failed_payload = failed_snapshots[0].model_dump(mode="json")
-    retry_payload = retry_snapshots[0].model_dump(mode="json")
-    for field in ("status", "generated_at"):
-        failed_payload.pop(field)
-        retry_payload.pop(field)
-    assert retry_payload == failed_payload
+    assert "retrying" in retry_snapshots[0].summary_i18n.en.lower()
+    assert "failed" in failed_snapshots[0].summary_i18n.en.lower()
     assert generated.count((1, "timeline")) == 1
     assert (2, "timeline") not in generated
     assert report.status == "complete"
@@ -1792,12 +2111,8 @@ async def test_auto_retry_terminal_markers_preserve_surviving_sections(
     assert report.tier == before.tier
     assert report.sections == before.sections
     assert report.evidence == before.evidence
-    before_payload = before.model_dump(mode="json")
-    report_payload = report.model_dump(mode="json")
-    for field in ("status", "generated_at"):
-        before_payload.pop(field)
-        report_payload.pop(field)
-    assert report_payload == before_payload
+    assert "failed" in report.summary_i18n.en.lower()
+    assert "failed" in report.verdict.analytic_confidence.basis.lower()
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.sections == before.sections
     assert persisted.evidence == before.evidence
@@ -2052,6 +2367,18 @@ def test_report_sse_stall_timeout_covers_full_report_budget():
     )
 
 
+def test_report_sse_stall_timeout_covers_every_legal_section_call(monkeypatch):
+    from app.services.result_report import builder
+
+    monkeypatch.setattr(builder.settings, "REPORT_MAX_TOOL_CALLS_PER_SECTION", 3)
+    monkeypatch.setattr(builder.settings, "REPORT_SECTION_TIMEOUT_SECONDS", 10.0)
+    monkeypatch.setattr(builder.settings, "REPORT_PLAN_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(builder.settings, "REPORT_RUNTIME_LOCK_LEASE_SECONDS", 1.0)
+
+    expected_minimum = 2.0 + (3 * 10.0 * 2) + 5.0
+    assert builder._report_sse_stall_timeout_seconds() >= expected_minimum
+
+
 def test_report_runtime_lock_short_ttl_expires_and_becomes_preemptible(monkeypatch):
     from app.services.result_report import builder
     from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
@@ -2116,12 +2443,8 @@ async def test_build_report_cancel_preserves_persisted_sections_and_reraises(mon
     assert persisted.sections == before.sections
     assert persisted.evidence == before.evidence
     assert persisted.tier == before.tier == "generation"
-    before_payload = before.model_dump(mode="json")
-    cancelled_payload = persisted.model_dump(mode="json")
-    for field in ("status", "generated_at"):
-        before_payload.pop(field)
-        cancelled_payload.pop(field)
-    assert cancelled_payload == before_payload
+    assert "cancelled" in persisted.summary_i18n.en.lower()
+    assert "cancelled" in persisted.verdict.analytic_confidence.basis.lower()
 
 
 @pytest.mark.asyncio
@@ -2929,6 +3252,7 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
         fake_llm_json,
     )
     monkeypatch.setattr("app.services.simulator.llm_call", fake_llm_text)
+    monkeypatch.setattr("app.services.simulator.llm_call", fake_llm_text)
     monkeypatch.setattr("app.services.simulator.llm_call_json", fake_llm_json)
     monkeypatch.setattr("app.services.simulator.narrate_branch", fake_narrate_branch)
     monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
@@ -3094,6 +3418,9 @@ async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypa
     async def fake_llm_json(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"content": "Life support stays stable.", "emotion": "focused"}
 
+    async def fake_llm_text(*_args: Any, **_kwargs: Any) -> str:
+        return "Life support stays stable."
+
     async def fake_narrate_branch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
             "title": "Stabilize first",
@@ -3114,6 +3441,7 @@ async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypa
         "app.services.simulator.llm_call_json_with_stream_fallback",
         fake_llm_json,
     )
+    monkeypatch.setattr("app.services.simulator.llm_call", fake_llm_text)
     monkeypatch.setattr("app.services.simulator.llm_call_json", fake_llm_json)
     monkeypatch.setattr("app.services.simulator.narrate_branch", fake_narrate_branch)
     monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
@@ -3769,6 +4097,44 @@ async def test_section_no_progress_tool_call_forces_final_not_static(monkeypatch
     # The no-progress guard bounds section calls to the per-tier ceiling (3) — it
     # never spins past the tool budget into static.
     assert len(section_prompts) <= builder.settings.REPORT_MAX_TOOL_CALLS_PER_SECTION
+
+
+@pytest.mark.asyncio
+async def test_first_empty_evidence_tool_call_forces_final_on_next_step(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    context = builder._load_builder_context(scenario_id, "branch-a")
+    reducer_result = replace(
+        builder.reduce_report(get_engine(), scenario_id),
+        evidence=[],
+    )
+    section = builder.SectionPlan(
+        section_id="timeline",
+        title_i18n={"zh": "时间线", "en": "Timeline"},
+        intent="Trace what happened.",
+    )
+    prompts: list[str] = []
+
+    async def route(prompt: str, **_kwargs: Any) -> dict[str, Any]:
+        prompts.append(prompt)
+        if _FORCE_FINAL_MARKER in prompt:
+            return _section_payload("timeline", body="Finalized with no evidence rows.")
+        return _tool_action_payload()
+
+    monkeypatch.setattr(builder, "llm_call_json", route)
+
+    result = await builder._generate_section_tier(
+        context,
+        section,
+        reducer_result,
+        overrides=None,
+        tier="generation",
+    )
+
+    assert result.section.body_md_i18n.en == "Finalized with no evidence rows."
+    assert len(prompts) == 2
+    assert _FORCE_FINAL_MARKER in prompts[1]
 
 
 @pytest.mark.asyncio

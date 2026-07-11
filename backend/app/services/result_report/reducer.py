@@ -15,10 +15,13 @@ from app.models import Branch, BranchStatus, FactionSnapshot, Scenario
 from app.services.result_report.queries import (
     LatestRelationStats,
     count_branch_rounds,
+    count_metadata_unavailable_messages,
     load_evidence_message_coords,
     load_key_participant_stats,
     load_latest_agent_state_frames,
+    load_latest_faction_proxy_rounds,
     load_latest_faction_snapshots,
+    load_latest_message_metadata_coverage,
     load_latest_relation_stats,
 )
 from app.services.result_report.schema import (
@@ -140,10 +143,17 @@ def reduce(
         target_branch_id=target_branch_id,
         parent_branch_ids=parent_branch_ids,
     )
+    terminal_leaf_count = sum(
+        1 for item in branch_distribution if item["is_terminal_leaf"]
+    )
+    # Legacy scenarios may retain only a pruned answer-bearing branch. Keep
+    # that partial answer's probability visible as one path, while analytic
+    # confidence still records that there are zero completed terminal samples.
+    likelihood_branch_count = max(1, terminal_leaf_count)
     likelihood = (
         _suppressed_root_likelihood()
         if verdict_disclaimer is not None
-        else _derive_likelihood(target.probability, len(distribution_branches))
+        else _derive_likelihood(target.probability, likelihood_branch_count)
     )
     evidence = collect_evidence_pool(
         engine,
@@ -158,7 +168,7 @@ def reduce(
     polarization = _reduce_polarization_from_stats(faction_snapshots, relation_stats)
     analytic_confidence = derive_confidence(
         evidence_count=len(evidence),
-        branch_count=len(distribution_branches),
+        branch_count=terminal_leaf_count,
         agent_consensus_status=agent_consensus.status,
         agent_consensus=agent_consensus.value,
         confidence_ceiling=result_quality_confidence,
@@ -276,7 +286,7 @@ def derive_confidence(
     agent_consensus: float | None,
     confidence_ceiling: str | None = None,
 ) -> AnalyticConfidence:
-    """Derive analytic confidence from countable support signals only.
+    """Derive analytic confidence from real branch/evidence counts only.
 
     ``confidence_ceiling`` (S5) clamps the result so the countable analytic
     confidence never claims more certainty than the LLM's own
@@ -285,17 +295,16 @@ def derive_confidence(
     while the model reported ``medium``.
     """
 
+    # Kept in the signature for wire/caller compatibility. This value is an
+    # emotion/diverge-derived affect convergence proxy, not independent support
+    # for the verdict, so it must not raise or explain analytic confidence.
+    del agent_consensus_status, agent_consensus
+
     score = 0
     if branch_count >= 2:
         score += 1
     if evidence_count >= 3:
         score += 1
-    if agent_consensus_status == "available" and agent_consensus is not None:
-        if agent_consensus >= 0.70:
-            score += 1
-        elif agent_consensus >= 0.55:
-            score += 0.5
-
     if score >= 3:
         level = "high"
     elif score >= 2:
@@ -305,39 +314,30 @@ def derive_confidence(
 
     level = _clamp_confidence_level(level, confidence_ceiling)
 
-    if agent_consensus is None:
-        consensus_part = agent_consensus_status
-    else:
-        consensus_part = f"{agent_consensus:.4f} ({agent_consensus_status})"
-    # Human-readable bilingual basis for the UI; the legacy machine-style
-    # `basis` string stays unchanged for API compatibility.
-    if agent_consensus is not None and agent_consensus_status == "available":
-        consensus_pct = round(agent_consensus * 100)
-        basis_i18n = I18nText(
-            zh=f"依据 {branch_count} 条分支、{evidence_count} 条证据；Agent 共识 {consensus_pct}%",
-            en=(
-                f"Based on {branch_count} branches and {evidence_count} evidence items; "
-                f"agent consensus {consensus_pct}%"
-            ),
-        )
-    else:
-        basis_i18n = I18nText(
-            zh=f"依据 {branch_count} 条分支、{evidence_count} 条证据",
-            en=f"Based on {branch_count} branches and {evidence_count} evidence items",
-        )
+    basis_i18n = I18nText(
+        zh=f"依据 {branch_count} 条终端分支、{evidence_count} 条证据",
+        en=(
+            f"Based on {branch_count} terminal branches and "
+            f"{evidence_count} evidence items"
+        ),
+    )
     return AnalyticConfidence(
         level=level,
-        basis=(
-            f"branch_count={branch_count}; evidence_count={evidence_count}; "
-            f"agent_consensus={consensus_part}"
-        ),
+        basis=f"branch_count={branch_count}; evidence_count={evidence_count}",
         basis_i18n=basis_i18n,
     )
 
 
 def reduce_faction_consensus(engine, scenario_id: str, branch_id: str) -> StatResult[float]:
     snapshots = _latest_faction_snapshots(engine, scenario_id, branch_id)
-    return _reduce_faction_consensus_from_snapshots(snapshots)
+    result = _reduce_faction_consensus_from_snapshots(snapshots)
+    return _mark_stale_faction_proxy_partial(
+        engine,
+        scenario_id,
+        branch_id,
+        result,
+        require_relation_round=False,
+    )
 
 
 def _reduce_faction_consensus_from_snapshots(
@@ -356,7 +356,47 @@ def _reduce_faction_consensus_from_snapshots(
 def reduce_polarization(engine, scenario_id: str, branch_id: str) -> StatResult[float]:
     snapshots = _latest_faction_snapshots(engine, scenario_id, branch_id)
     relation_stats = _latest_relation_stats(engine, scenario_id, branch_id)
-    return _reduce_polarization_from_stats(snapshots, relation_stats)
+    result = _reduce_polarization_from_stats(snapshots, relation_stats)
+    return _mark_stale_faction_proxy_partial(
+        engine,
+        scenario_id,
+        branch_id,
+        result,
+        require_relation_round=True,
+    )
+
+
+def _mark_stale_faction_proxy_partial(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    result: StatResult[float],
+    *,
+    require_relation_round: bool,
+) -> StatResult[float]:
+    if result.reason == "feature_disabled":
+        return result
+    coverage = load_latest_message_metadata_coverage(engine, branch_id)
+    proxy_rounds = load_latest_faction_proxy_rounds(engine, scenario_id, branch_id)
+    if coverage.round_number is None:
+        return result
+    required_rounds = [proxy_rounds.snapshot_round]
+    if require_relation_round:
+        required_rounds.append(proxy_rounds.relation_round)
+    has_stale_input = any(
+        proxy_round != coverage.round_number for proxy_round in required_rounds
+    )
+    if coverage.unavailable_count <= 0 and result.value is None:
+        return result
+    if coverage.unavailable_count <= 0 and not has_stale_input:
+        return result
+    reason = (
+        "metadata_unavailable"
+        if coverage.unavailable_count > 0
+        else "stale_proxy_round"
+    )
+    status: StatStatus = "partial" if result.value is not None else "missing"
+    return StatResult(status=status, value=result.value, reason=reason)
 
 
 def _reduce_polarization_from_stats(
@@ -396,13 +436,48 @@ def _reduce_polarization_from_stats(
 
 def reduce_agent_consensus(engine, scenario_id: str, branch_id: str) -> StatResult[float]:
     frames = load_latest_agent_state_frames(engine, scenario_id, branch_id)
+    coverage = load_latest_message_metadata_coverage(engine, branch_id)
     if not frames:
-        return StatResult(status="missing", value=None, reason="no_agent_state_frames")
+        reason = (
+            "metadata_unavailable"
+            if coverage.unavailable_count > 0
+            else "no_agent_state_frames"
+        )
+        return StatResult(status="missing", value=None, reason=reason)
 
-    values = [_clamp_probability(frame.stance_score) for frame in frames]
+    values = [_clamp_stance_score(frame.stance_score) for frame in frames]
+    frame_round = frames[0].round_number
+    if coverage.round_number is None:
+        unavailable_count = count_metadata_unavailable_messages(
+            engine,
+            branch_id,
+            frame_round,
+        )
+    else:
+        unavailable_count = coverage.unavailable_count
+        if coverage.round_number > frame_round:
+            if coverage.unavailable_count >= coverage.total_count > 0:
+                return StatResult(
+                    status="missing",
+                    value=None,
+                    reason="metadata_unavailable",
+                )
+            return StatResult(
+                status="partial",
+                value=round(1.0 - _std(values), 4),
+                reason=(
+                    "metadata_unavailable"
+                    if coverage.unavailable_count > 0
+                    else "stale_agent_state_round"
+                ),
+            )
     if len(values) < 2:
-        return StatResult(status="partial", value=1.0, reason="single_agent_state_frame")
-    return StatResult(status="available", value=round(1.0 - _std(values), 4))
+        reason = "metadata_unavailable" if unavailable_count else "single_agent_state_frame"
+        return StatResult(status="partial", value=1.0, reason=reason)
+    value = round(1.0 - _std(values), 4)
+    if unavailable_count:
+        return StatResult(status="partial", value=value, reason="metadata_unavailable")
+    return StatResult(status="available", value=value)
 
 
 def collect_evidence_pool(

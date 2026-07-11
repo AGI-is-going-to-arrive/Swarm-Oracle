@@ -34,6 +34,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.agent_message_metadata import public_emotion_metadata
 from app.services.campaign import (
     normalize_scenario_director_state,
     normalize_scenario_gameplay_state,
@@ -2247,7 +2248,7 @@ def load_scenario_response(
                         "agent": agent_map.get(msg.agent_id, "Unknown"),
                         "agent_id": msg.agent_id,
                         "message": msg.content,
-                        "emotion": msg.emotion,
+                        **public_emotion_metadata(msg),
                         "diverge": msg.diverge,
                         "branch": branch.id,
                         "branch_title": branch.title,

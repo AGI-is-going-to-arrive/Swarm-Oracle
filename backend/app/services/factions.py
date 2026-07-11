@@ -1,7 +1,10 @@
-"""Factions service — F5 dynamic faction detection & timeline.
+"""Factions service — F5 dynamic affect-proxy clustering and timeline.
 
-Detects emergent agent factions from message content using stance
-clustering. Requires >= 4 agents to produce meaningful groupings.
+The persisted field names predate the current truthfulness contract. Values
+called ``stance``, ``trust``, ``opposition``, or ``confidence`` in storage and
+wire responses are compatibility fields derived only from model-generated
+``emotion`` / ``diverge`` output. They are not verified beliefs or relations.
+Requires >= 4 agents to produce meaningful groupings.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from sqlmodel import Session, select
 from app.models.checkpoint import AgentRelationEdge, FactionEvent, FactionSnapshot
 from app.models.database import get_engine
 from app.models.graph import AgentStateFrame
+from app.services.agent_message_metadata import message_metadata_failure_code
 from app.services.causal_graph import derive_stance_score
 
 logger = logging.getLogger(__name__)
@@ -24,7 +28,27 @@ logger = logging.getLogger(__name__)
 _STANCE_GROUP_THRESHOLD = 0.3  # max stance diff within a faction
 _NEUTRAL_BAND = 0.1  # stance_score in [-0.1, 0.1] is neutral
 _MAJORITY_RATIO = 0.80  # >= 80% of agents = majority
-_BETRAYAL_SHIFT = 0.5  # stance shift > 0.5 = betrayal event
+_BETRAYAL_SHIFT = 0.5  # legacy threshold/code: affect-proxy shift > 0.5
+_AFFECT_PROXY_KIND = "affect_proxy"
+_AFFECT_PROXY_CAVEAT = (
+    "Derived only from model-generated emotion/diverge fields; not verified "
+    "stance, trust, opposition, confidence, or real-world relationships."
+)
+_BRANCH_SCOPE_KIND = "branch_segment_only"
+_BRANCH_SCOPE_CAVEAT = (
+    "This response covers the selected branch segment only; pre-fork ancestor "
+    "rounds are not merged."
+)
+
+
+def _with_affect_proxy_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "metric_kind": _AFFECT_PROXY_KIND,
+        "caveat": _AFFECT_PROXY_CAVEAT,
+        "scope_kind": _BRANCH_SCOPE_KIND,
+        "scope_caveat": _BRANCH_SCOPE_CAVEAT,
+        **payload,
+    }
 
 
 def _first_faction_by_agent(
@@ -55,9 +79,40 @@ def process_round(
         )
         return None
 
-    # Derive stance scores for each agent
+    eligible_messages = [
+        message
+        for message in messages
+        if message_metadata_failure_code(message) is None
+    ]
+    excluded_count = len(messages) - len(eligible_messages)
+    coverage = {
+        "eligible_agent_count": len(eligible_messages),
+        "excluded_agent_count": excluded_count,
+        "required_agent_count": 4,
+        "partial": excluded_count > 0,
+    }
+    if len(eligible_messages) < 4:
+        if excluded_count == 0:
+            return None
+        logger.info(
+            "factions: skipping round %d — only %d/%d messages have metadata",
+            round_number,
+            len(eligible_messages),
+            len(messages),
+        )
+        return _with_affect_proxy_metadata({
+            "degraded": "insufficient_metadata",
+            "eligible_agent_count": len(eligible_messages),
+            "excluded_agent_count": excluded_count,
+            "required_agent_count": 4,
+            "partial": True,
+            "factions": [],
+            "events": [],
+        })
+
+    # Derive the compatibility score from model-generated emotion/diverge data.
     agent_stances: list[tuple[str, float]] = []
-    for msg in messages:
+    for msg in eligible_messages:
         agent_id = (
             msg.get("agent_id", "unknown")
             if isinstance(msg, dict)
@@ -84,7 +139,7 @@ def process_round(
                     target_agent_id=aid_b,
                     trust_score=trust,
                     opposition_score=opposition,
-                    evidence_summary=f"stance diff={diff:.2f}",
+                    evidence_summary=f"affect-proxy diff={diff:.2f}",
                 )
                 session.add(edge)
 
@@ -115,7 +170,14 @@ def process_round(
                 round_number,
                 scenario_id,
             )
-            return {"degraded": "all_neutral", "factions": [], "events": []}
+            return _with_affect_proxy_metadata(
+                {
+                    **coverage,
+                    "degraded": "all_neutral",
+                    "factions": [],
+                    "events": [],
+                }
+            )
 
         # ── 4. Build faction list ──────────────────────────
         total_agents = len(agent_stances)
@@ -133,6 +195,10 @@ def process_round(
                 "key": faction_key,
                 "label": label,
                 "members": member_ids,
+                "metric_kind": _AFFECT_PROXY_KIND,
+                "caveat": _AFFECT_PROXY_CAVEAT,
+                "affect_center": round(stance_center, 4),
+                "member_share": round(confidence, 4),
                 "stance_center": round(stance_center, 4),
                 "confidence": round(confidence, 4),
             })
@@ -166,15 +232,17 @@ def process_round(
                 majority_info["confidence"] * 100,
                 round_number,
             )
-            return {
+            return _with_affect_proxy_metadata({
+                **coverage,
                 "degraded": "single_sided",
                 "majority": majority_info,
                 "minority": minority_factions,
                 "factions": factions,
                 "events": [],
-            }
+            })
 
-        # ── 6. Detect betrayal events ──────────────────────
+        # ── 6. Detect affect-proxy shifts ──────────────────
+        # ``betrayal`` remains the persisted event code for compatibility only.
         events: list[dict] = []
         prev_frames = _get_previous_frames(session, scenario_id, branch_id, round_number)
         faction_by_agent = _first_faction_by_agent(factions)
@@ -202,6 +270,9 @@ def process_round(
                     session.add(event)
                     events.append({
                         "type": "betrayal",
+                        "display_type": "affect_shift_proxy",
+                        "metric_kind": _AFFECT_PROXY_KIND,
+                        "caveat": _AFFECT_PROXY_CAVEAT,
                         "agent_id": agent_id,
                         "faction_key": faction_key,
                         "shift": round(shift, 4),
@@ -216,7 +287,11 @@ def process_round(
             round_number,
             scenario_id,
         )
-        return {"factions": factions, "events": events}
+        return _with_affect_proxy_metadata({
+            **coverage,
+            "factions": factions,
+            "events": events,
+        })
 
 
 def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
@@ -250,11 +325,17 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
         for snap in snapshots:
             rn = snap.round_number
             if rn not in rounds:
-                rounds[rn] = {"round": rn, "factions": [], "events": []}
+                rounds[rn] = _with_affect_proxy_metadata(
+                    {"round": rn, "factions": [], "events": []}
+                )
             rounds[rn]["factions"].append({
                 "key": snap.faction_key,
                 "label": snap.label,
                 "members": json.loads(snap.member_agent_ids_json),
+                "metric_kind": _AFFECT_PROXY_KIND,
+                "caveat": _AFFECT_PROXY_CAVEAT,
+                "affect_center": snap.stance_center,
+                "member_share": snap.confidence,
                 "stance_center": snap.stance_center,
                 "confidence": snap.confidence,
             })
@@ -262,7 +343,9 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
         for evt in events:
             rn = evt.round_number
             if rn not in rounds:
-                rounds[rn] = {"round": rn, "factions": [], "events": []}
+                rounds[rn] = _with_affect_proxy_metadata(
+                    {"round": rn, "factions": [], "events": []}
+                )
             payload = None
             if evt.payload_json:
                 try:
@@ -271,6 +354,13 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
                     pass
             rounds[rn]["events"].append({
                 "type": evt.event_type,
+                "display_type": (
+                    "affect_shift_proxy"
+                    if evt.event_type == "betrayal"
+                    else evt.event_type
+                ),
+                "metric_kind": _AFFECT_PROXY_KIND,
+                "caveat": _AFFECT_PROXY_CAVEAT,
                 "agent_id": evt.actor_agent_id,
                 "faction_key": evt.faction_key,
                 "payload": payload,
@@ -379,13 +469,26 @@ def get_faction_relations(
             "relation_type": (
                 "trust" if trust_value > opposition_value else "opposition"
             ),
+            "display_relation_type": (
+                "affect_alignment"
+                if trust_value > opposition_value
+                else "affect_distance"
+            ),
+            "metric_kind": _AFFECT_PROXY_KIND,
+            "caveat": _AFFECT_PROXY_CAVEAT,
             "weight": float(relation["weight"]),
+            "affect_alignment": trust_value,
+            "affect_distance": opposition_value,
             "trust_score": trust_value,
             "opposition_score": opposition_value,
             "evidence_summary": relation["evidence_summary"],
         })
 
     return {
+        "metric_kind": _AFFECT_PROXY_KIND,
+        "caveat": _AFFECT_PROXY_CAVEAT,
+        "scope_kind": _BRANCH_SCOPE_KIND,
+        "scope_caveat": _BRANCH_SCOPE_CAVEAT,
         "edges": response_edges,
         "truncated": truncated,
         "threshold": threshold,
@@ -405,7 +508,11 @@ def build_previous_round_relationship_contexts(
     max_edges_per_agent: int = 4,
     max_chars_per_agent: int = 700,
 ) -> dict[str, str]:
-    """Build bounded, agent-perspective relation observations from the prior round."""
+    """Build bounded affect-proxy observations from the prior round.
+
+    Database columns keep their legacy relation names, but prompt copy must not
+    present the derived scores as verified trust, opposition, or stance.
+    """
     previous_round = int(round_number) - 1
     if previous_round < 1 or not agents:
         return {}
@@ -550,17 +657,23 @@ def build_previous_round_relationship_contexts(
         relation = row._mapping
         agent_id = str(relation["owner_agent_id"])
         other_name = str(relation["other_name"])
-        trust = float(relation["trust_score"])
-        opposition = float(relation["opposition_score"])
+        alignment = float(relation["trust_score"])
+        distance = float(relation["opposition_score"])
         evidence = " ".join(str(relation["evidence_summary"] or "").split())
         if len(evidence) > 160:
             evidence = evidence[:159].rstrip() + "…"
         if is_chinese:
-            line = f"- 与 {other_name}: 信任={trust:.2f}, 对立={opposition:.2f}"
+            line = (
+                f"- 与 {other_name}: 情绪互动相似度={alignment:.2f}, "
+                f"情绪互动差异度={distance:.2f}"
+            )
             if evidence:
                 line += f"；依据={evidence}"
         else:
-            line = f"- With {other_name}: trust={trust:.2f}, opposition={opposition:.2f}"
+            line = (
+                f"- With {other_name}: affect alignment={alignment:.2f}, "
+                f"affect distance={distance:.2f}"
+            )
             if evidence:
                 line += f"; evidence={evidence}"
         lines_by_agent.setdefault(agent_id, []).append(line)
@@ -584,7 +697,7 @@ def _get_previous_frames(
     branch_id: str,
     round_number: int,
 ) -> dict[str, float]:
-    """Get stance scores from the previous round for betrayal detection."""
+    """Get compatibility affect-proxy scores for legacy shift detection."""
     prev_round = round_number - 1
     if prev_round < 1:
         return {}

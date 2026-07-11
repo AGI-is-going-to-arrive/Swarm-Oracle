@@ -305,7 +305,13 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
         <span className="bubble-round">
           {t('sim.panel.round')}{msg.round}
         </span>
-        <EmotionDot emotion={msg.emotion} />
+        {msg.emotion_metadata_status === 'unavailable' ? (
+          <span className="bubble-emotion-unavailable" role="status">
+            {t('sim.panel.emotion_metadata_unavailable')}
+          </span>
+        ) : (
+          <EmotionDot emotion={msg.emotion} />
+        )}
       </div>
       <div className="speech-bubble">
         <MessageText text={msg.message} agents={agents} onAgentClick={scrollToAgent} />

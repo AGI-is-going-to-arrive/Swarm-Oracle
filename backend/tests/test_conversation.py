@@ -42,7 +42,16 @@ from app.api import conversation as conversation_module
 from app.api.conversation import router as conversation_router
 from app.main import app
 from app.models.agent_conversation import AgentConversationThread, AgentConversationTurn
-from app.models.database import Scenario, ScenarioStatus, get_engine
+from app.models.database import (
+    Agent,
+    AgentMessage,
+    Branch,
+    Round,
+    Scenario,
+    ScenarioStatus,
+    get_engine,
+)
+from app.models.model_profile import ModelProfile
 from app.services import conversation_service
 from app.services.conversation_service import (
     claim_bootstrap_start_stream_state,
@@ -86,8 +95,18 @@ def _make_signed_token(secret: str, subject: str) -> str:
     return f"v1.{payload_segment}.{signature_segment}"
 
 
-def _seed_scenario(engine, *, user_id: str | None = None) -> str:
-    s = Scenario(question="qq", status=ScenarioStatus.DONE, user_id=user_id)
+def _seed_scenario(
+    engine,
+    *,
+    user_id: str | None = None,
+    parsed_context: dict | None = None,
+) -> str:
+    s = Scenario(
+        question="qq",
+        status=ScenarioStatus.DONE,
+        user_id=user_id,
+        parsed_context=parsed_context or {},
+    )
     with Session(engine) as session:
         session.add(s)
         session.commit()
@@ -161,6 +180,200 @@ def _complete_active_turn(
             model=model,
         )
         assert transitioned is True
+
+
+class TestConversationProfileRecovery:
+    @pytest.mark.asyncio
+    async def test_missing_profile_fails_closed_without_calling_server_default(
+        self,
+        client,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(
+            engine,
+            parsed_context={"model_profile_id": "deleted-profile"},
+        )
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="profile-backed question"),
+        ).json()
+        called = False
+
+        async def _must_not_call(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            yield "unexpected"
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=start["thread_id"],
+            assistant_turn_id=start["assistant_turn_id"],
+            new_user_content="profile-backed question",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model=None,
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_must_not_call,
+        )
+
+        terminal = await anext(iterator)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "BYOK_DENIED"
+        assert called is False
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+        with Session(engine) as session:
+            turn = session.get(AgentConversationTurn, start["assistant_turn_id"])
+            assert turn is not None
+            assert turn.status == "error"
+            assert turn.error_code == "BYOK_DENIED"
+
+    @pytest.mark.asyncio
+    async def test_missing_profile_allows_complete_explicit_keyless_local_provider(
+        self,
+        client,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(
+            engine,
+            parsed_context={"model_profile_id": "deleted-profile"},
+        )
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="local question"),
+        ).json()
+        captured: dict[str, object] = {}
+
+        async def _local_stream(_prompt, **kwargs):
+            captured.update(kwargs)
+            yield "local answer"
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=start["thread_id"],
+            assistant_turn_id=start["assistant_turn_id"],
+            new_user_content="local question",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url="http://localhost:11434/v1",
+                model="local-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_local_stream,
+        )
+
+        events = [event async for event in iterator]
+        assert [event["event"] for event in events] == [
+            "turn_started",
+            "turn_token_delta",
+            "turn_completed",
+        ]
+        assert captured["api_key"] is None
+        assert captured["base_url"] == "http://localhost:11434/v1"
+        assert captured["model"] == "local-model"
+
+    @pytest.mark.asyncio
+    async def test_recovered_remote_profile_rejects_key_only_provider_mix(
+        self,
+        client,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(conversation_service.settings, "FEATURE_MODEL_PROFILES", True)
+        engine = get_engine()
+        with Session(engine) as session:
+            profile = ModelProfile(
+                user_id="profile-b-owner",
+                name="Provider B",
+                provider="openai",
+                base_url="https://api.openai.com/v1",
+                model="provider-b-model",
+                api_key="sk-provider-b",
+            )
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            profile_id = profile.id
+        sid = _seed_scenario(
+            engine,
+            user_id="profile-b-owner",
+            parsed_context={"model_profile_id": profile_id},
+        )
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="key-only mix"),
+        ).json()
+        called = False
+
+        async def _must_not_call(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            yield "unexpected"
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=start["thread_id"],
+            assistant_turn_id=start["assistant_turn_id"],
+            new_user_content="key-only mix",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key="sk-provider-a",
+                base_url=None,
+                model=None,
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_must_not_call,
+        )
+
+        terminal = await anext(iterator)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "BYOK_DENIED"
+        assert called is False
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    @pytest.mark.asyncio
+    async def test_legacy_remote_context_rejects_key_only_provider_mix(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(
+            engine,
+            parsed_context={
+                "llm_base_url": "https://api.openai.com/v1",
+                "llm_model": "provider-b-model",
+            },
+        )
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="legacy key-only mix"),
+        ).json()
+        called = False
+
+        async def _must_not_call(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            yield "unexpected"
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=start["thread_id"],
+            assistant_turn_id=start["assistant_turn_id"],
+            new_user_content="legacy key-only mix",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key="sk-provider-a",
+                base_url=None,
+                model=None,
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_must_not_call,
+        )
+
+        terminal = await anext(iterator)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "BYOK_DENIED"
+        assert called is False
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
 
 
 # ── T1 FEATURE gate ─────────────────────────────────────────
@@ -1426,6 +1639,38 @@ class TestBootstrapClaim:
 
 
 class TestPromptInjection:
+    def test_round_transcript_omits_internal_metadata_sentinel(self):
+        scenario_id = _seed_scenario(get_engine())
+        with Session(get_engine()) as session:
+            branch = Branch(scenario_id=scenario_id, title="Main")
+            agent = Agent(scenario_id=scenario_id, name="Archivist", role="Recorder")
+            session.add_all([branch, agent])
+            session.flush()
+            round_row = Round(branch_id=branch.id, round_number=1)
+            session.add(round_row)
+            session.flush()
+            session.add(
+                AgentMessage(
+                    round_id=round_row.id,
+                    agent_id=agent.id,
+                    content="The real speech remains available.",
+                    emotion=(
+                        "__swarmoracle_metadata_unavailable__:LLM_TIMEOUT"
+                    ),
+                )
+            )
+            session.commit()
+
+            summaries = conversation_service._summarize_round_transcripts(
+                session,
+                branch_id=branch.id,
+                origin_round_number=1,
+            )
+
+        transcript = "\n".join(summaries)
+        assert "The real speech remains available." in transcript
+        assert "__swarmoracle_metadata_unavailable__" not in transcript
+
     def test_user_turn_wrapped_in_untrusted_block(self, monkeypatch):
         from app.services.conversation_service import _build_prompt
 
@@ -1494,6 +1739,21 @@ class TestBYOKBoundary:
         )
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "BYOK_KEY_REQUIRED"
+
+    def test_local_base_url_without_api_key_can_start_thread(self, client):
+        scenario_id = _seed_scenario(get_engine())
+
+        response = client.post(
+            "/api/conversation/start",
+            json={
+                **_default_start_body(scenario_id),
+                "llm_base_url": "http://localhost:1234/v1",
+                "llm_model": "local-model",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["thread_id"]
 
     def test_start_rejects_base_url_when_validator_denies_it(self, client, monkeypatch):
         engine = get_engine()

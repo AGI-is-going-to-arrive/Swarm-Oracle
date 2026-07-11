@@ -59,6 +59,7 @@ from app.models.agent_conversation import (
 from app.models.agent_identity import AgentIdentity
 from app.models.database import Agent, AgentMessage, Branch, Round, Scenario, get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.agent_message_metadata import message_emotion_if_available
 from app.services.llm_client import (
     LLMError,
     format_untrusted_text_block,
@@ -70,7 +71,10 @@ from app.services.llm_client import (
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
+    model_profile_provider_unresolved,
+    raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
+    resolve_post_completion_llm_call_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -297,12 +301,12 @@ def resolve_byok_overrides(
     llm_model: str | None,
     disable_user_quota: bool | None,
 ) -> LLMOverrides:
-    """Normalize BYOK + enforce HC-24 boundary (``base_url requires api_key``)."""
+    """Normalize BYOK and require a key for non-local custom provider URLs."""
     api_key = (llm_api_key or "").strip() or None
     base_url_raw = (llm_base_url or "").strip() or None
     model = (llm_model or "").strip() or None
 
-    if base_url_raw and not api_key:
+    if base_url_raw and not api_key and not is_local_provider_url(base_url_raw):
         raise api_error(
             400,
             "BYOK_KEY_REQUIRED",
@@ -335,6 +339,7 @@ def _recover_thread_profile_overrides(
     if scenario is None:
         return overrides
     carrier = SimpleNamespace(
+        id=scenario.id,
         parsed_context=(
             scenario.parsed_context
             if isinstance(scenario.parsed_context, dict)
@@ -343,8 +348,14 @@ def _recover_thread_profile_overrides(
         user_id=thread.owner_user_id or scenario.user_id,
     )
     recovered = recover_profile_provider_overrides(session, carrier)
-    if not recovered:
-        return overrides
+    if model_profile_provider_unresolved(
+        carrier,
+        recovered,
+        explicit_api_key=overrides.api_key,
+        explicit_base_url=overrides.base_url,
+        explicit_model=overrides.model,
+    ):
+        raise_unresolved_model_profile_provider()
     merged = merge_profile_provider_overrides(
         {
             "api_key": overrides.api_key,
@@ -365,23 +376,37 @@ def _recover_thread_profile_overrides(
         },
         recovered,
     )
-    return LLMOverrides(
-        api_key=merged.get("api_key"),
-        base_url=merged.get("base_url"),
-        model=merged.get("model"),
-        disable_user_quota=overrides.disable_user_quota,
-        requests_per_minute=merged.get("requests_per_minute"),
-        tokens_per_minute=merged.get("tokens_per_minute"),
-        concurrency=merged.get("concurrency"),
-        supports_structured_outputs_override=merged.get(
+    resolved = resolve_post_completion_llm_call_config(
+        parsed_context=carrier.parsed_context,
+        request_api_key=merged.get("api_key"),
+        request_base_url=merged.get("base_url"),
+        request_model=merged.get("model"),
+        request_requests_per_minute=merged.get("requests_per_minute"),
+        request_tokens_per_minute=merged.get("tokens_per_minute"),
+        request_concurrency=merged.get("concurrency"),
+        request_supports_structured_outputs_override=merged.get(
             "supports_structured_outputs_override"
         ),
-        supports_native_search_override=merged.get(
+        request_supports_native_search_override=merged.get(
             "supports_native_search_override"
         ),
-        native_search_upstream_override=merged.get(
+        request_native_search_upstream_override=merged.get(
             "native_search_upstream_override"
         ),
+    )
+    return LLMOverrides(
+        api_key=resolved.api_key,
+        base_url=resolved.base_url,
+        model=resolved.model,
+        disable_user_quota=overrides.disable_user_quota,
+        requests_per_minute=resolved.requests_per_minute,
+        tokens_per_minute=resolved.tokens_per_minute,
+        concurrency=resolved.concurrency,
+        supports_structured_outputs_override=(
+            resolved.supports_structured_outputs_override
+        ),
+        supports_native_search_override=resolved.supports_native_search_override,
+        native_search_upstream_override=resolved.native_search_upstream_override,
     )
 
 
@@ -1449,10 +1474,11 @@ def _summarize_round_transcripts(
             content = _truncate_prompt_text(message.content, _PROMPT_ROUND_MESSAGE_LIMIT)
             if not content:
                 continue
-            if message.emotion:
+            emotion = message_emotion_if_available(message)
+            if emotion:
                 lines.append(
                     f"- [R{round_row.round_number} {speaker} "
-                    f"{message.emotion}]: {content}"
+                    f"{emotion}]: {content}"
                 )
             else:
                 lines.append(f"- [R{round_row.round_number} {speaker}]: {content}")
@@ -1899,6 +1925,31 @@ async def stream_assistant_turn(
                             "model": active_overrides.model or settings.LLM_MODEL_NAME,
                             "code": "SCENARIO_DELETED",
                             "message": _map_error_message("SCENARIO_DELETED"),
+                        },
+                    }
+                    return
+                if code == "BYOK_API_KEY_REQUIRED":
+                    with Session(engine) as session:
+                        finalize_turn_cas(
+                            session,
+                            turn_id=assistant_turn_id,
+                            new_status="error",
+                            expected_from=_CAS_EXPECTED_FROM_DEFAULT,
+                            content="",
+                            error_code="BYOK_DENIED",
+                            model=active_overrides.model,
+                        )
+                    yield {
+                        "event": "turn_error",
+                        "data": {
+                            "turn_id": assistant_turn_id,
+                            "thread_id": thread_id,
+                            "sequence": assistant_turn.sequence,
+                            "status": "error",
+                            "model": active_overrides.model
+                            or settings.LLM_MODEL_NAME,
+                            "code": "BYOK_DENIED",
+                            "message": _map_error_message("BYOK_DENIED"),
                         },
                     }
                     return

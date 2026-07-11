@@ -2,6 +2,9 @@
 .env*
 .git
 .github
+.ccg/**
+.claude/**
+.release-audit/**
 .tmp
 .tmp-playwright
 .trae
@@ -23,6 +26,8 @@ backend/*.db*
 chroma_data
 e2e-screenshots
 frontend/output
+frontend/.stitch/**
+frontend/dist-spikes/**
 node-compile-cache
 original
 output

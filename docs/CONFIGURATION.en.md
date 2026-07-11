@@ -20,7 +20,7 @@ Restart the backend after environment changes. The frontend reads effective capa
 | Local Docker deployment | Depends | Publishes only to `127.0.0.1:18927` / `127.0.0.1:18928` by default |
 | Production or public deployment | Yes | Also requires production security gates |
 
-The placeholder endpoint and key can boot the Snapshot demo, but they leave `llm_static_configured=false`. Live generation is unavailable only when there is also no model profile with a key and the current run provides no BYOK connection.
+The placeholder endpoint and key can boot the Snapshot demo, but they leave `llm_static_configured=false`. A usable model profile or per-run BYOK can still enable live generation. A usable profile now means either “has a key” or “exact local Base URL plus model ID,” rather than the old key-only condition.
 
 ## 3. LLM Configuration
 
@@ -29,7 +29,7 @@ Current public template values:
 | Variable | `.env.example` default | Meaning |
 |---|---|---|
 | `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | OpenAI-compatible Base URL |
-| `LLM_API_KEY` | `your-api-key-here` | Placeholder; non-local endpoints require a real key |
+| `LLM_API_KEY` | `your-api-key-here` | Placeholder; clear it for an exact local endpoint, while non-local endpoints require a real key |
 | `LLM_MODEL_NAME` | `gpt-5.4-mini` | Actual model ID supported by the provider |
 | `LLM_REASONING_EFFORT` | `none` | `none/low/medium/high` |
 | `LLM_REQUESTS_PER_MINUTE` | `0` | `0` means no RPM cap |
@@ -40,17 +40,19 @@ Current public template values:
 
 These variables define the server-default model. Do not publish a temporary model, endpoint, or key from one machine as the project default. The model ID must exist at your provider.
 
+Keyless access matches only `http/https` URLs whose host is exactly `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, or `::1` (write the IPv6 URL as `[::1]`). When the key is empty for one of these endpoints, requests send no `Authorization` header. Lookalike subdomains, URLs with userinfo, numeric/hex/octal loopback forms, and every other remote host are not local and still require a real key. To avoid reporting a template as a usable model, the shipped `127.0.0.1:8317` / `localhost:8317` / `host.docker.internal:8317` endpoint plus an empty or placeholder key still counts as unconfigured; replace it with the actual service endpoint or explicitly save that connection through Setup/profile.
+
 ## 4. Model Profiles and BYOK
 
-Use `/admin/setup` to test a connection and save a model profile. Use `/model-profiles` to manage provider, Base URL, model, key, rate limits, concurrency, and capability overrides. A profile with a key contributes to the `llm_configured` check.
+Use `/admin/setup` to test a connection and save a model profile. Use `/model-profiles` to manage provider, Base URL, model, key, rate limits, concurrency, and capability overrides. Profiles with a key and keyless profiles with an exact local Base URL plus model ID both contribute to `llm_configured`. Setup can finish only after the current endpoint/key/model combination passes verification or the user explicitly accepts the unverified risk; editing a connection field clears prior verification.
 
-**Advanced Settings** and **BYOK** are separate home-page disclosures. BYOK overrides the current request; Advanced Settings controls simulation, display, Local Packs, and search. A request-level Base URL must be submitted with an API key, and credentials must not appear in the URL.
+**Advanced Settings** and **BYOK** are separate home-page disclosures. BYOK overrides the current request; Advanced Settings controls simulation, display, Local Packs, and search. A request-level remote Base URL must be submitted with an API key; the exact local URLs above are the only keyless exception. Credentials, endpoint, and model form one provider binding: reports, conversations, scoring, social copy, and resumes on a profile-backed scenario must either omit provider fields and recover that profile, or submit a complete remote `key + Base URL + model` tuple; partial overrides fail closed. An exact-local override still needs only `Base URL + model`. A new endpoint or model detaches the old profile and clears its RPM/TPM, concurrency, structured-output, and native-search policy; configure those explicitly for the new binding. Switching a Debate role profile likewise clears explicit model, credential, and rate overrides from the previous provider. Credentials must not appear in the URL.
 
 Request-level BYOK host controls:
 
 - `LLM_EXTRA_ALLOWED_HOSTS`: extra host allowlist; accepts hosts, not full URLs.
 - `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`: rejects private/LAN hosts added through the extra allowlist by default; it does not control built-in local aliases.
-- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true`: controls built-in local aliases such as `localhost` and loopback addresses; set it to `false` for multi-user, LAN, or public deployments.
+- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true`: controls the exact local hosts listed above; set it to `false` for multi-user, LAN, or public deployments.
 
 See [SECURITY.md](../SECURITY.md) for the full SSRF and credential boundary.
 

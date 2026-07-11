@@ -15,6 +15,10 @@ function readWorldSceneSource(): string {
   return readFileSync(`${process.cwd()}/src/game/scenes/WorldScene.ts`, 'utf8');
 }
 
+function readEventBridgeSource(): string {
+  return readFileSync(`${process.cwd()}/src/game/managers/EventBridge.ts`, 'utf8');
+}
+
 // ── Re-export testable constants via inline copy ────────
 // (WorldScene doesn't export them, so we validate structure/completeness here)
 
@@ -153,10 +157,31 @@ describe('WorldScene — bubble readability tuning', () => {
 
     expect(source).toContain('private get useDomBubbles(): boolean {');
     expect(source).toContain('if (this.useDomBubbles) {');
-    expect(source).toContain('this.trackDomBubble(spriteId, text, emotion, bubbleMode);');
+    expect(source).toContain('this.trackDomBubble(spriteId, text, emotionState, bubbleMode);');
     expect(source).toContain('this.domBubbleMetadata.clear();');
-    expect(source).toContain('this.showBubble(spriteId, text, emotion, haloColor, bubbleMode);');
+    expect(source).toContain('this.showBubble(spriteId, text, emotionState, haloColor, bubbleMode);');
     expect(source).toContain('this.clearActiveBubbles();');
+  });
+
+  it('keeps unavailable Canvas bubble metadata distinct from neutral without roster writeback', () => {
+    const source = readWorldSceneSource();
+    const eventContract = readEventBridgeSource();
+
+    expect(eventContract).toContain("emotion_metadata_status?: 'available' | 'unavailable'");
+    expect(source).toContain("const emotionMetadataStatus = data.emotion_metadata_status");
+    expect(source).toContain("emotionMetadataStatus !== 'unavailable'");
+    expect(source).toContain("emotionState === 'unavailable'");
+    expect(source).toContain('unavailable:');
+    expect(source).toContain('unknown:');
+    expect(source).not.toContain("emotion || 'neutral'");
+  });
+
+  it('clears a stale emotion halo before rendering neutral, unknown, or unavailable bubbles', () => {
+    const source = readWorldSceneSource();
+
+    expect(source).toContain('if (shouldClearEmotionHalo(emotionState)) {');
+    expect(source).toContain('this.clearHalo(spriteId);');
+    expect(source).toContain('private clearHalo(spriteId: string): void {');
   });
 });
 

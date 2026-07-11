@@ -169,6 +169,32 @@ describe('llmProviderPolicy', () => {
     expect(validateByok({ apiKey: 'sk-test', baseUrl: 'https://example.com/v1' })).toEqual({ valid: true });
   });
 
+  it.each([
+    'http://localhost:11434/v1',
+    'http://127.0.0.1:1234/v1',
+    'http://0.0.0.0:8317/v1',
+    'http://host.docker.internal:11434/v1',
+    'http://[::1]:1234/v1',
+  ])('validateByok accepts a local baseUrl without an apiKey: %s', (baseUrl) => {
+    expect(validateByok({ apiKey: '', baseUrl })).toEqual({ valid: true });
+  });
+
+  it.each([
+    'http://localhost.example.com/v1',
+    'http://127.0.0.2:11434/v1',
+    'http://2130706433:11434/v1',
+    'http://0x7f000001:11434/v1',
+    'http://127.1:11434/v1',
+    'http://0177.0.0.1:11434/v1',
+    'https://example.com/v1',
+    'not-a-url',
+  ])('validateByok still rejects a non-local baseUrl without an apiKey: %s', (baseUrl) => {
+    expect(validateByok({ apiKey: '', baseUrl })).toEqual({
+      valid: false,
+      errorCode: 'BYOK_INVALID',
+    });
+  });
+
   describe('resolveProviderPolicy', () => {
     const dummyProfile: ModelProfile = {
       id: 'profile-1',

@@ -173,7 +173,7 @@ export function DocumentSeedPanel({
     return null;
   }
 
-  if (!enabled) {
+  if (!enabled && !worldContext) {
     return (
       <div className="document-seed-panel document-seed-panel--disabled">
         <p className="document-seed-panel__disabled-message">
@@ -210,14 +210,16 @@ export function DocumentSeedPanel({
             {t('document_seed.panel_title', 'Document Seed Context')}
           </h3>
           <div className="document-seed-panel__controls">
-            <button
-              type="button"
-              className="document-seed-panel__btn document-seed-panel__btn--secondary"
-              onClick={triggerFileInput}
-              aria-label={t('document_seed.replace', 'Replace Document')}
-            >
-              {t('document_seed.replace', 'Replace Document')}
-            </button>
+            {enabled && (
+              <button
+                type="button"
+                className="document-seed-panel__btn document-seed-panel__btn--secondary"
+                onClick={triggerFileInput}
+                aria-label={t('document_seed.replace', 'Replace Document')}
+              >
+                {t('document_seed.replace', 'Replace Document')}
+              </button>
+            )}
             <button
               type="button"
               className="document-seed-panel__btn document-seed-panel__btn--danger"
@@ -344,15 +346,17 @@ export function DocumentSeedPanel({
           )}
         </div>
 
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".pdf,.txt,.md,.markdown"
-          className="document-seed-panel__hidden-input"
-          onChange={handleInputChange}
-          aria-hidden="true"
-          tabIndex={-1}
-        />
+        {enabled && (
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".pdf,.txt,.md,.markdown"
+            className="document-seed-panel__hidden-input"
+            onChange={handleInputChange}
+            aria-hidden="true"
+            tabIndex={-1}
+          />
+        )}
       </div>
     );
   }

@@ -92,6 +92,8 @@ _LLM_SAFE_ERROR_MESSAGES: dict[str, str] = {
     "LLM_RATE_LIMITED": "LLM provider rate limit was reached. Retry later.",
     "LLM_TIMEOUT": "LLM provider timed out. Retry later or raise the configured timeout.",
     "LLM_EMPTY": "LLM returned no visible content.",
+    "LLM_FAILED": "LLM generation failed before producing usable content.",
+    "LLM_INVALID_OUTPUT": "LLM returned content that could not be used safely.",
 }
 _MODEL_MISSING_BODY_RE = re.compile(
     r"\b(?:model[_ -]?not[_ -]?found|model\s+not\s+found|no\s+such\s+model)\b"
@@ -658,6 +660,8 @@ def _http_status_to_llm_error_code(status_code: int) -> str | None:
         return "LLM_MODEL_NOT_FOUND"
     if status_code == 429:
         return "LLM_RATE_LIMITED"
+    if status_code >= 500:
+        return "LLM_UNREACHABLE"
     return None
 
 
@@ -849,7 +853,7 @@ _shared_async_client: httpx.AsyncClient | None = None
 _shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
 _STREAM_SUPPORT_CACHE_TTL_SECONDS = 300.0
-_stream_support_cache: dict[str, tuple[float, bool, str | None]] = {}
+_stream_support_cache: dict[str, tuple[float, bool, str | None, str | None]] = {}
 _stream_support_cache_lock = threading.Lock()
 _rate_limit_requests: dict[str, dict[int, int]] = defaultdict(dict)
 _rate_limit_tokens: dict[str, dict[int, int]] = defaultdict(dict)
@@ -969,6 +973,26 @@ def is_local_provider_url(base_url: str | None = None) -> bool:
     effective_url = _resolve_llm_api_url(base_url)
     hostname = (urlparse(effective_url).hostname or "").strip().lower()
     return hostname in _LOCAL_LLM_HOSTS
+
+
+def _normalize_provider_api_key(api_key: str | None) -> str | None:
+    normalized = (api_key or "").strip()
+    return normalized or None
+
+
+def _build_provider_request_headers(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+) -> dict[str, str]:
+    """Build provider headers without leaking the server key to local BYOK URLs."""
+    headers = {"Content-Type": "application/json"}
+    target_key = _normalize_provider_api_key(api_key)
+    if not target_key and not (base_url and is_local_provider_url(base_url)):
+        target_key = settings.LLM_API_KEY
+    if target_key:
+        headers["Authorization"] = f"Bearer {target_key}"
+    return headers
 
 
 def _get_global_concurrency_limit() -> int | None:
@@ -1419,11 +1443,13 @@ async def _probe_provider_request(
     timeout: float,
 ) -> tuple[bool, str | None]:
     """Issue one raw provider request without runtime-guard quotas for probe purposes."""
+    api_key = _normalize_provider_api_key(api_key)
     target_url = _resolve_llm_api_url(base_url)
-    # SSRF + key-exfil guard: never send server key to a user-specified URL.
-    if base_url and not api_key:
+    # SSRF + key-exfil guard: remote BYOK URLs require their own key; local
+    # OpenAI-compatible probes may intentionally run without authentication.
+    if base_url and not api_key and not is_local_provider_url(base_url):
         return False, "BYOK mode requires an api_key when a custom base_url is provided"
-    target_key = api_key or settings.LLM_API_KEY
+    request_headers = _build_provider_request_headers(api_key=api_key, base_url=base_url)
     payload, _ = _build_llm_payload(
         input_text="Respond with exactly: OK",
         model=model,
@@ -1435,10 +1461,7 @@ async def _probe_provider_request(
         response = await client.post(
             target_url,
             json=payload,
-            headers={
-                "Authorization": f"Bearer {target_key}",
-                "Content-Type": "application/json",
-            },
+            headers=request_headers,
             timeout=timeout,
         )
         response.raise_for_status()
@@ -1554,7 +1577,8 @@ async def probe_streaming_support(
     """Probe whether the effective provider/model pair supports SSE streaming.
 
     The result is cached briefly because Oracle follow-up may call this often.
-    Probe failures are treated as "unsupported" so callers can safely fall back.
+    Stream incompatibility is treated as unsupported. Stable provider failures
+    are returned separately so callers do not replay the same failed request.
     """
     effective_model = model or settings.LLM_MODEL_NAME
     cache_key = _stream_support_cache_key(base_url=base_url, model=effective_model)
@@ -1563,18 +1587,20 @@ async def probe_streaming_support(
         with _stream_support_cache_lock:
             cached = _stream_support_cache.get(cache_key)
         if cached is not None and now - cached[0] < _STREAM_SUPPORT_CACHE_TTL_SECONDS:
-            checked_at, supported, reason = cached
+            checked_at, supported, reason, error_code = cached
             return {
                 "status": "ok",
                 "model": effective_model,
                 "supported": supported,
                 "reason": reason,
+                "error_code": error_code,
                 "cached": True,
                 "checked_at": checked_at,
             }
 
     supported = False
     reason: str | None = None
+    error_code: str | None = None
     try:
         async for chunk in llm_call_stream(
             "Reply with exactly OK.",
@@ -1591,17 +1617,29 @@ async def probe_streaming_support(
             reason = "No stream chunks received"
     except LLMError as exc:
         reason = _sanitize_error(str(exc))
+        error_code = classify_llm_error_code(exc)
     except Exception as exc:  # pragma: no cover - defensive probe fallback
         reason = _sanitize_error(str(exc))
+        error_code = classify_llm_error_code(exc)
 
     checked_at = monotonic()
-    with _stream_support_cache_lock:
-        _stream_support_cache[cache_key] = (checked_at, supported, reason)
+    # Credentials are intentionally absent from the capability cache key.
+    # Therefore cache only capability outcomes, never auth/rate/provider
+    # failures that could poison another profile using the same endpoint/model.
+    if error_code is None:
+        with _stream_support_cache_lock:
+            _stream_support_cache[cache_key] = (
+                checked_at,
+                supported,
+                reason,
+                error_code,
+            )
     return {
         "status": "ok",
         "model": effective_model,
         "supported": supported,
         "reason": reason,
+        "error_code": error_code,
         "cached": False,
         "checked_at": checked_at,
     }
@@ -2410,6 +2448,7 @@ async def llm_call(
         Native search citations (if any) are stored in the _last_native_citations
         ContextVar and retrievable via get_last_native_citations().
     """
+    api_key = _normalize_provider_api_key(api_key)
     # Reset before any URL parsing or validation so early failures cannot expose
     # stale citations from a previous call in the same task context.
     _last_native_citations.set([])
@@ -2420,14 +2459,13 @@ async def llm_call(
     target_url = _resolve_llm_api_url(base_url)
     original_target_url = target_url
     original_is_chat = _is_chat_completions_api(original_target_url)
-    # SSRF + key-exfil guard: when the caller provides a custom base_url
-    # (BYOK mode), they MUST also supply their own api_key. Never send the
-    # server's default LLM_API_KEY to an arbitrary third-party URL.
+    # SSRF + key-exfil guard: remote BYOK URLs require their own key. Local
+    # OpenAI-compatible providers may intentionally run without authentication.
     if base_url and not api_key and not is_local_provider_url(base_url):
         raise LLMError(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )
-    target_key = api_key or settings.LLM_API_KEY
+    request_headers = _build_provider_request_headers(api_key=api_key, base_url=base_url)
     is_chat = original_is_chat
     estimated_tokens = _estimate_tokens(input_text)
 
@@ -2548,10 +2586,7 @@ async def llm_call(
                 fallback_resp = await client.post(
                     request_url,
                     json=request_payload,
-                    headers={
-                        "Authorization": f"Bearer {target_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=request_headers,
                     timeout=timeout,
                 )
                 fallback_resp.raise_for_status()
@@ -2581,10 +2616,7 @@ async def llm_call(
                 resp = await client.post(
                     target_url,
                     json=attempt_payload,
-                    headers={
-                        "Authorization": f"Bearer {target_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=request_headers,
                     timeout=timeout,
                 )
                 resp.raise_for_status()
@@ -3064,12 +3096,13 @@ async def llm_call_json_for_family_query_reformulation(
     optional parameter incompatibilities while preserving auth/quota/rate-limit
     failures as non-retryable.
     """
+    api_key = _normalize_provider_api_key(api_key)
     target_url = _resolve_llm_api_url(base_url)
     if base_url and not api_key and not is_local_provider_url(base_url):
         raise LLMError(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )
-    target_key = api_key or settings.LLM_API_KEY
+    request_headers = _build_provider_request_headers(api_key=api_key, base_url=base_url)
     selected_model = model or settings.LLM_MODEL_NAME
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
@@ -3110,10 +3143,7 @@ async def llm_call_json_for_family_query_reformulation(
                 resp = await client.post(
                     target_url,
                     json=attempt_payload,
-                    headers={
-                        "Authorization": f"Bearer {target_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=request_headers,
                     timeout=timeout,
                 )
                 resp.raise_for_status()
@@ -3472,16 +3502,17 @@ async def llm_call_stream(
     yielded when include_reasoning_content is explicitly enabled.
     Only supports Chat Completions API with stream=true.
     """
+    api_key = _normalize_provider_api_key(api_key)
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
     purpose = request_context.purpose
     target_url = _resolve_llm_api_url(base_url)
-    # SSRF + key-exfil guard: BYOK base_url requires a matching api_key.
+    # SSRF + key-exfil guard: remote BYOK URLs require a matching api_key.
     if base_url and not api_key and not is_local_provider_url(base_url):
         raise LLMError(
             "BYOK mode requires an api_key when a custom base_url is provided"
         )
-    target_key = api_key or settings.LLM_API_KEY
+    request_headers = _build_provider_request_headers(api_key=api_key, base_url=base_url)
     is_chat = _is_chat_completions_api(target_url)
     provider_key = _provider_key(target_url)
     estimated_tokens = max(1, _estimate_tokens(input_text))
@@ -3548,10 +3579,7 @@ async def llm_call_stream(
                     "POST",
                     target_url,
                     json=attempt_payload,
-                    headers={
-                        "Authorization": f"Bearer {target_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=request_headers,
                     timeout=timeout,
                 ) as resp:
                     resp.raise_for_status()
@@ -3776,6 +3804,49 @@ async def llm_call_json_stream(
     return _parse_json_response(cleaned, fallback_mode=fallback_mode)
 
 
+def _stream_json_error_allows_non_stream_fallback(exc: BaseException) -> bool:
+    """Allow one transport fallback only for stream-specific incompatibilities.
+
+    Provider failures such as auth, rate limits, timeouts, and server errors
+    would be repeated by a non-stream request.  Replaying those failures can
+    double latency, quota use, or billing without changing the outcome.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    chain: list[BaseException] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+
+    # A terminal-frame truncation is specific to SSE transport.  The outer
+    # LLMError is classified as unreachable, but a single non-stream attempt
+    # can still recover it.
+    if any(isinstance(item, _TruncatedSSEStreamError) for item in chain):
+        return True
+
+    for item in chain:
+        if isinstance(item, httpx.HTTPStatusError):
+            return _is_structured_output_rejection(
+                item.response.status_code,
+                item.response.text,
+            )
+
+    if classify_llm_error_code(exc) is not None:
+        return False
+
+    if not isinstance(exc, LLMError):
+        return False
+
+    # These uncoded errors mean the stream transport or streamed payload was
+    # unusable; preserve the legacy one-shot compatibility fallback.
+    return (
+        str(exc) == "Structured output rejected by provider"
+        or str(exc) == "Invalid JSON from LLM after recovery attempts"
+        or exc.__cause__ is None
+    )
+
+
 async def llm_call_json_with_stream_fallback(
     input_text: str,
     *,
@@ -3795,15 +3866,87 @@ async def llm_call_json_with_stream_fallback(
     This helper is opt-in. Existing callers keep their current behavior unless
     they explicitly choose the streaming-first path.
     """
-    probe = await probe_streaming_support(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        timeout=probe_timeout,
-    )
+    deadline = monotonic() + timeout
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise LLMError(
+            _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+            code="LLM_TIMEOUT",
+        )
+    try:
+        probe = await asyncio.wait_for(
+            probe_streaming_support(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                timeout=min(probe_timeout, remaining),
+            ),
+            timeout=remaining,
+        )
+    except TimeoutError as exc:
+        raise LLMError(
+            _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+            code="LLM_TIMEOUT",
+        ) from exc
+    probe_error_code = probe.get("error_code")
+    if (
+        isinstance(probe_error_code, str)
+        and probe_error_code in _LLM_SAFE_ERROR_MESSAGES
+    ):
+        raise LLMError(
+            _LLM_SAFE_ERROR_MESSAGES[probe_error_code],
+            code=probe_error_code,
+        )
+    stream_error: BaseException | None = None
     if probe.get("supported"):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise LLMError(
+                _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+                code="LLM_TIMEOUT",
+            )
         try:
-            return await llm_call_json_stream(
+            return await asyncio.wait_for(
+                llm_call_json_stream(
+                    input_text,
+                    reasoning_effort=reasoning_effort,
+                    temperature=temperature,
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url,
+                    fallback_mode=fallback_mode,
+                    use_structured_outputs=use_structured_outputs,
+                    structured_output_schema=structured_output_schema,
+                    timeout=remaining,
+                ),
+                timeout=remaining,
+            )
+        except TimeoutError as exc:
+            raise LLMError(
+                _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+                code="LLM_TIMEOUT",
+            ) from exc
+        except Exception as exc:
+            if not _stream_json_error_allows_non_stream_fallback(exc):
+                raise
+            stream_error = exc
+            logger.warning(
+                "Streaming JSON transport was incompatible; falling back once "
+                "to non-stream JSON",
+                exc_info=True,
+            )
+
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        if stream_error is not None:
+            raise stream_error
+        raise LLMError(
+            _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+            code="LLM_TIMEOUT",
+        )
+    try:
+        return await asyncio.wait_for(
+            llm_call_json(
                 input_text,
                 reasoning_effort=reasoning_effort,
                 temperature=temperature,
@@ -3813,26 +3956,15 @@ async def llm_call_json_with_stream_fallback(
                 fallback_mode=fallback_mode,
                 use_structured_outputs=use_structured_outputs,
                 structured_output_schema=structured_output_schema,
-                timeout=timeout,
-            )
-        except Exception:
-            logger.warning(
-                "Streaming JSON call failed, falling back to non-stream JSON",
-                exc_info=True,
-            )
-
-    return await llm_call_json(
-        input_text,
-        reasoning_effort=reasoning_effort,
-        temperature=temperature,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        fallback_mode=fallback_mode,
-        use_structured_outputs=use_structured_outputs,
-        structured_output_schema=structured_output_schema,
-        timeout=timeout,
-    )
+                timeout=remaining,
+            ),
+            timeout=remaining,
+        )
+    except TimeoutError as exc:
+        raise LLMError(
+            _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+            code="LLM_TIMEOUT",
+        ) from exc
 
 
 async def health_check(

@@ -18,9 +18,12 @@ import type {
   LocalPack,
   PackDiagnostic,
   LocalizedText,
-  SuggestedSettings,
 } from '../types';
 import { copyText } from '../lib/copyText';
+import {
+  materializeLocalPackImport,
+  type MaterializedLocalPackImport,
+} from '../lib/localPackImport';
 import './LocalPackPicker.css';
 
 interface GenreMeta {
@@ -53,10 +56,7 @@ const genreColorOf = (genre: string | undefined | null): string =>
   genreMetaOf(genre)?.color ?? GENRE_FALLBACK_COLOR;
 
 export interface LocalPackPickerProps {
-  onImport: (payload: {
-    question: string;
-    suggested_settings: SuggestedSettings;
-  }) => void;
+  onImport: (payload: MaterializedLocalPackImport) => void;
 }
 
 export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
@@ -68,6 +68,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [selectedPackDetail, setSelectedPackDetail] = useState<LocalPack | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [detailReloadKey, setDetailReloadKey] = useState(0);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
@@ -132,6 +133,9 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
     }
 
     let isMounted = true;
+    setSelectedPackDetail(null);
+    setSelectedTemplateId(null);
+    setApiError(null);
     const fetchDetail = async () => {
       setIsLoadingDetail(true);
       try {
@@ -160,7 +164,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
     return () => {
       isMounted = false;
     };
-  }, [selectedPackId, enabled, getLocalized, t]);
+  }, [selectedPackId, enabled, detailReloadKey, getLocalized, t]);
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
@@ -170,6 +174,9 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
       const res = await refreshLocalPacks();
       setPacks(res.packs || []);
       setDiagnostics(res.diagnostics || []);
+      setSelectedPackDetail(null);
+      setSelectedTemplateId(null);
+      setDetailReloadKey((current) => current + 1);
     } catch {
       setApiError(t('local_packs.error_refresh_failed', 'Failed to refresh packs from disk.'));
     } finally {
@@ -470,7 +477,13 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
                   <li key={pack.id} className="local-pack-picker__pack-item">
                     <button
                       type="button"
-                      onClick={() => setSelectedPackId(pack.id)}
+                      onClick={() => {
+                        if (pack.id !== selectedPackId) {
+                          setSelectedPackDetail(null);
+                          setSelectedTemplateId(null);
+                        }
+                        setSelectedPackId(pack.id);
+                      }}
                       aria-pressed={isSelected}
                       style={{ '--pack-genre-color': genreColor } as CSSProperties}
                       className={`local-pack-picker__pack-card ${
@@ -597,10 +610,11 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  onImport({
-                                    question: getLocalized(temp.question, i18n.language),
-                                    suggested_settings: selectedPackDetail.suggested_settings,
-                                  })
+                                  onImport(materializeLocalPackImport(
+                                    selectedPackDetail,
+                                    temp,
+                                    i18n.language,
+                                  ))
                                 }
                                 className="local-pack-picker__import-btn"
                               >

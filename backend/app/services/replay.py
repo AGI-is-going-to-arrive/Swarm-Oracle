@@ -25,6 +25,10 @@ from app.models.database import (
     Scenario,
     get_engine,
 )
+from app.services.agent_message_metadata import (
+    message_emotion_if_available,
+    public_emotion_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +413,7 @@ def seed_counterfactual(
                     "agent_name": agent.name,
                     "content": replacement_content,
                     "round_num": last_round.round_number,
-                    "emotion": message.emotion,
+                    "emotion": message_emotion_if_available(message) or "",
                     "branch_id": branch.id,
                 }
 
@@ -467,7 +471,7 @@ def _round_messages(session: Session, round_: Round) -> list[dict]:
             "agent_id": msg.agent_id,
             "agent_name": agent.name,
             "content": msg.content,
-            "emotion": msg.emotion,
+            **public_emotion_metadata(msg),
         }
         for msg, agent in rows
     ]

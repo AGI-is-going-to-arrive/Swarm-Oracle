@@ -6,8 +6,8 @@ import useReducedMotion from '../hooks/useReducedMotion';
 import { forceTimelineLayout } from '../lib/g6Layouts';
 import { Slider } from './ui/slider';
 
-const TRUST_COLOR = '#2ecc71';
-const OPPOSITION_COLOR = '#e74c3c';
+const ALIGNMENT_COLOR = '#2ecc71';
+const DISTANCE_COLOR = '#e74c3c';
 const FACTION_COLORS = ['#4a90d9', '#e74c3c', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#f1c40f', '#e91e63'];
 const MIN_AGENTS_FOR_GRAPH = 4;
 
@@ -29,7 +29,11 @@ interface G6EdgeData {
   id: string;
   source: string;
   target: string;
-  data: { relationType: 'trust' | 'opposition'; weight: number; [key: string]: unknown };
+  data: {
+    relationType: 'trust' | 'opposition' | 'affect_alignment' | 'affect_distance';
+    weight: number;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -99,7 +103,7 @@ export function transformToG6Data(
     source: e.source_agent_id,
     target: e.target_agent_id,
     data: {
-      relationType: e.relation_type,
+      relationType: e.display_relation_type ?? e.relation_type,
       weight: e.weight,
     },
   }));
@@ -200,7 +204,11 @@ export function FactionForceGraph({
     },
     edge: {
       style: {
-        stroke: (d: D) => d.data?.relationType === 'trust' ? TRUST_COLOR : OPPOSITION_COLOR,
+        stroke: (d: D) => (
+          d.data?.relationType === 'trust' || d.data?.relationType === 'affect_alignment'
+            ? ALIGNMENT_COLOR
+            : DISTANCE_COLOR
+        ),
         lineWidth: (d: D) => Math.max(1, (Number(d.data?.weight) || 0.5) * 3),
         opacity: 0.7,
       },
@@ -240,6 +248,12 @@ export function FactionForceGraph({
       <h4 style={{ margin: 0, fontSize: '0.95rem' }}>
         {t('factions.force_graph_title', 'Faction Force Graph')}
       </h4>
+      <p style={{ margin: 0, fontSize: '0.72rem', color: '#8b98ab' }}>
+        {t(
+          'factions.force_graph_disclosure',
+          'Derived from model-generated emotion/diverge fields; not verified trust, relationships, or stances.',
+        )}
+      </p>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
         <label
@@ -276,12 +290,12 @@ export function FactionForceGraph({
 
       <div style={{ display: 'flex', gap: '0.6rem', fontSize: '0.72rem', color: '#9aa4b2' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-          <span style={{ width: 10, height: 3, background: TRUST_COLOR, borderRadius: 2, display: 'inline-block' }} />
-          {t('factions.force_graph_relation_trust', 'Trust')}
+          <span style={{ width: 10, height: 3, background: ALIGNMENT_COLOR, borderRadius: 2, display: 'inline-block' }} />
+          {t('factions.force_graph_relation_trust', 'Affect alignment')}
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-          <span style={{ width: 10, height: 3, background: OPPOSITION_COLOR, borderRadius: 2, display: 'inline-block' }} />
-          {t('factions.force_graph_relation_opposition', 'Opposition')}
+          <span style={{ width: 10, height: 3, background: DISTANCE_COLOR, borderRadius: 2, display: 'inline-block' }} />
+          {t('factions.force_graph_relation_opposition', 'Affect distance')}
         </span>
       </div>
 
@@ -332,9 +346,9 @@ export function FactionForceGraph({
           const targetName = agentNames?.[edge.target] ?? edge.target.slice(0, 8);
           return (
             <div key={edge.id} role="listitem">
-              {edge.data.relationType === 'trust'
-                ? t('factions.force_graph_a11y_edge_trust', 'Trust: {{source}} → {{target}}', { source: sourceName, target: targetName })
-                : t('factions.force_graph_a11y_edge_opposition', 'Opposition: {{source}} → {{target}}', { source: sourceName, target: targetName })}
+              {edge.data.relationType === 'trust' || edge.data.relationType === 'affect_alignment'
+                ? t('factions.force_graph_a11y_edge_trust', 'Affect alignment: {{source}} → {{target}}', { source: sourceName, target: targetName })
+                : t('factions.force_graph_a11y_edge_opposition', 'Affect distance: {{source}} → {{target}}', { source: sourceName, target: targetName })}
             </div>
           );
         })}

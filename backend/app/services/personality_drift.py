@@ -26,6 +26,10 @@ from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import Agent, AgentMessage, Branch, Round
+from app.services.agent_message_metadata import (
+    message_emotion_if_available,
+    message_metadata_failure_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +218,11 @@ def _emotion_volatility(messages: list[AgentMessage]) -> float:
     Uses transitions between non-empty emotion strings.  Higher value
     means the agent shifted emotion more often.  Clamped to [0, 1].
     """
-    emotions = [m.emotion.strip().lower() for m in messages if m.emotion]
+    emotions = [
+        emotion.lower()
+        for message in messages
+        if (emotion := message_emotion_if_available(message)) is not None
+    ]
     if len(emotions) < 2:
         return 0.0
     transitions = sum(1 for i in range(1, len(emotions)) if emotions[i] != emotions[i - 1])
@@ -287,13 +295,20 @@ def _detect_for_agent(
 ) -> dict[str, Any]:
     initial = _resolve_initial_baseline(agent, identity)
 
+    available_messages = [
+        message
+        for message in messages
+        if message_metadata_failure_code(message) is None
+    ]
     emotion_counts: Counter[str] = Counter(
-        msg.emotion.strip().lower() for msg in messages if msg.emotion
+        emotion.lower()
+        for message in available_messages
+        if (emotion := message_emotion_if_available(message)) is not None
     )
     current = _compute_current_traits(emotion_counts)
 
     trait_drift = _euclidean_drift(initial, current)
-    volatility = _emotion_volatility(messages)
+    volatility = _emotion_volatility(available_messages)
     drift_score = round(_clamp(0.7 * trait_drift + 0.3 * volatility), 4)
 
     evidence: list[str] = []

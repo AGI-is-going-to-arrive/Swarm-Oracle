@@ -79,6 +79,13 @@ export interface LlmProviderPolicy {
 }
 
 const STORAGE_KEY = 'swarmoracle.llm-provider-policy.v1';
+const LOCAL_LLM_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  'host.docker.internal',
+  '::1',
+]);
 
 const EMPTY_POLICY: LlmProviderPolicy = {
   apiKey: '',
@@ -96,10 +103,30 @@ export function validateByok(input: {
 }): { valid: true } | { valid: false; errorCode: 'BYOK_INVALID' } {
   const apiKey = normalizeText(input.apiKey);
   const baseUrl = normalizeText(input.baseUrl);
-  if (baseUrl && !apiKey) {
+  if (baseUrl && !apiKey && !isLocalLlmBaseUrl(baseUrl)) {
     return { valid: false, errorCode: 'BYOK_INVALID' };
   }
   return { valid: true };
+}
+
+export function isLocalLlmBaseUrl(baseUrl: string): boolean {
+  try {
+    const normalizedInput = baseUrl.trim();
+    const parsed = new URL(normalizedInput);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const authority = /^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i.exec(normalizedInput)?.[1];
+    if (!authority || parsed.username || parsed.password) return false;
+
+    const rawHostname = authority.startsWith('[')
+      ? /^\[([^\]]+)\](?::\d+)?$/.exec(authority)?.[1]
+      : /^([^:]+)(?::\d+)?$/.exec(authority)?.[1];
+    if (!rawHostname || !LOCAL_LLM_HOSTS.has(rawHostname.toLowerCase())) return false;
+
+    const parsedHostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return LOCAL_LLM_HOSTS.has(parsedHostname);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeText(value: unknown): string {
