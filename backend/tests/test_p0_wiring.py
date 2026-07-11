@@ -3,6 +3,8 @@
 These tests exercise the REAL production code paths, not re-implementations.
 """
 
+import asyncio
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -102,12 +104,21 @@ def _identity_parse_pipeline(monkeypatch, agents: list[dict], profile_writer):
     async def fake_run_sim_background(scenario_id: str, **_kwargs):
         handoffs.append(scenario_id)
 
+    scheduled_tasks: list[asyncio.Task] = []
+    real_schedule = helpers_api.schedule_background_task
+
+    def track_schedule(coro):
+        task = real_schedule(coro)
+        scheduled_tasks.append(task)
+        return task
+
     monkeypatch.setattr(helpers_api, "parse_question", fake_parse_question)
     monkeypatch.setattr(helpers_api, "run_sim_background", fake_run_sim_background)
+    monkeypatch.setattr(helpers_api, "schedule_background_task", track_schedule)
     monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", True)
     monkeypatch.setattr(agent_identity, "store_identity_profile", profile_writer)
     monkeypatch.setattr(vector_store, "store_identity_profile", profile_writer)
-    return helpers_api, handoffs
+    return helpers_api, handoffs, scheduled_tasks
 
 
 def _parsed_identity_agent(
@@ -143,6 +154,11 @@ async def _run_identity_parse(
         disable_user_quota=None,
         **kwargs,
     )
+
+
+async def _drain_profile_tasks(tasks: list[asyncio.Task]) -> None:
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -892,7 +908,7 @@ class TestIdentityLifecycleHooks:
                 identity = independent_session.get(AgentIdentity, identity_id)
             observations.append(identity.id if identity else None)
 
-        helpers_api, handoffs = _identity_parse_pipeline(
+        helpers_api, handoffs, profile_tasks = _identity_parse_pipeline(
             monkeypatch,
             [_parsed_identity_agent("Trace Keeper")],
             observe_profile,
@@ -903,6 +919,7 @@ class TestIdentityLifecycleHooks:
         await _run_identity_parse(
             helpers_api, scenario_id, "profile-after-commit", num_agents=1,
         )
+        await _drain_profile_tasks(profile_tasks)
 
         with Session(get_engine()) as session:
             agent = session.exec(
@@ -918,11 +935,16 @@ class TestIdentityLifecycleHooks:
     ):
         from app.services.agent_identity import build_continuity_key
 
-        profile_calls: list[str] = []
-        helpers_api, _handoffs = _identity_parse_pipeline(
+        canonical_persona = "A" * 30 + " first canonical tail"
+        later_persona = "A" * 30 + " later generated tail"
+        profile_calls: list[tuple[str, str, str, str | None]] = []
+        helpers_api, _handoffs, profile_tasks = _identity_parse_pipeline(
             monkeypatch,
-            [_parsed_identity_agent("Trace One"), _parsed_identity_agent("Trace Two")],
-            lambda _u, identity_id, _r, _p: profile_calls.append(identity_id),
+            [
+                _parsed_identity_agent("Trace One", persona=canonical_persona),
+                _parsed_identity_agent("Trace Two", persona=later_persona),
+            ],
+            lambda *profile: profile_calls.append(profile),
         )
         with Session(get_engine()) as session:
             scenario_id = _create_scenario(session, user_id="profile-dedup")
@@ -930,6 +952,7 @@ class TestIdentityLifecycleHooks:
         await _run_identity_parse(
             helpers_api, scenario_id, "profile-dedup", num_agents=2,
         )
+        await _drain_profile_tasks(profile_tasks)
 
         with Session(get_engine()) as session:
             agents = session.exec(
@@ -938,7 +961,9 @@ class TestIdentityLifecycleHooks:
         identity_ids = {agent.agent_identity_id for agent in agents}
         assert len(identity_ids) == 1 and None not in identity_ids
         identity_id = agents[0].agent_identity_id
-        assert profile_calls == [identity_id]
+        assert profile_calls == [(
+            "profile-dedup", identity_id, "Auditor", canonical_persona,
+        )]
 
         with Session(get_engine()) as session:
             reuse_scenario_id = _create_scenario(session, user_id="profile-dedup")
@@ -948,12 +973,15 @@ class TestIdentityLifecycleHooks:
             "profile-dedup",
             num_agents=2,
             continuity_overrides=[{
-                "continuity_key": build_continuity_key("Auditor", "Tracks evidence"),
+                "continuity_key": build_continuity_key("Auditor", canonical_persona),
                 "action": "reuse_existing",
                 "identity_id": identity_id,
             }],
         )
-        assert profile_calls == [identity_id]
+        await _drain_profile_tasks(profile_tasks)
+        assert profile_calls == [(
+            "profile-dedup", identity_id, "Auditor", canonical_persona,
+        )]
 
     @pytest.mark.asyncio
     async def test_profile_failure_isolated_and_handoff_continues(
@@ -971,7 +999,7 @@ class TestIdentityLifecycleHooks:
             _parsed_identity_agent("Trace Keeper"),
             _parsed_identity_agent("Signal Keeper", "Analyst", "Tracks signals"),
         ]
-        helpers_api, handoffs = _identity_parse_pipeline(
+        helpers_api, handoffs, profile_tasks = _identity_parse_pipeline(
             monkeypatch, agents, fail_first_profile,
         )
         with Session(get_engine()) as session:
@@ -980,6 +1008,7 @@ class TestIdentityLifecycleHooks:
         await _run_identity_parse(
             helpers_api, scenario_id, "profile-failure", num_agents=2,
         )
+        await _drain_profile_tasks(profile_tasks)
 
         with Session(get_engine()) as session:
             persisted_agents = session.exec(
@@ -992,6 +1021,127 @@ class TestIdentityLifecycleHooks:
         assert {agent.agent_identity_id for agent in persisted_agents} == identity_ids
         assert set(profile_calls) == identity_ids
         assert handoffs == [scenario_id]
+
+    @pytest.mark.asyncio
+    async def test_slow_profile_writer_does_not_block_simulation_handoff(
+        self,
+        monkeypatch,
+    ):
+        writer_started = threading.Event()
+        release_writer = threading.Event()
+
+        def slow_profile_writer(*_profile):
+            writer_started.set()
+            release_writer.wait()
+
+        helpers_api, handoffs, profile_tasks = _identity_parse_pipeline(
+            monkeypatch,
+            [_parsed_identity_agent("Slow Profile")],
+            slow_profile_writer,
+        )
+        with Session(get_engine()) as session:
+            scenario_id = _create_scenario(session, user_id="profile-nonblocking")
+
+        failsafe_release = threading.Timer(2.0, release_writer.set)
+        failsafe_release.start()
+        try:
+            await _run_identity_parse(
+                helpers_api, scenario_id, "profile-nonblocking", num_agents=1,
+            )
+            assert handoffs == [scenario_id]
+            assert not release_writer.is_set()
+        finally:
+            failsafe_release.cancel()
+            release_writer.set()
+            await _drain_profile_tasks(profile_tasks)
+        assert writer_started.is_set()
+
+    def test_profile_batch_stops_remaining_items_at_overall_deadline(self):
+        from app.api import helpers as helpers_api
+
+        now = [0.0]
+        profile_calls: list[str] = []
+
+        def controlled_writer(_user_id, identity_id, _role, _persona):
+            profile_calls.append(identity_id)
+            now[0] = 11.0
+
+        helpers_api._store_identity_profile_batch(
+            [
+                ("user", "identity-1", "Role", "Persona 1"),
+                ("user", "identity-2", "Role", "Persona 2"),
+                ("user", "identity-3", "Role", "Persona 3"),
+            ],
+            controlled_writer,
+            budget_seconds=10.0,
+            monotonic=lambda: now[0],
+        )
+
+        assert profile_calls == ["identity-1"]
+
+    @pytest.mark.asyncio
+    async def test_profile_batch_uses_one_thread_submission(self, monkeypatch):
+        thread_submissions: list[object] = []
+
+        async def capture_to_thread(function, *args, **kwargs):
+            thread_submissions.append(function)
+            return function(*args, **kwargs)
+
+        helpers_api, _handoffs, profile_tasks = _identity_parse_pipeline(
+            monkeypatch,
+            [
+                _parsed_identity_agent("One", "Role 1", "Persona 1"),
+                _parsed_identity_agent("Two", "Role 2", "Persona 2"),
+                _parsed_identity_agent("Three", "Role 3", "Persona 3"),
+            ],
+            lambda *_profile: None,
+        )
+        monkeypatch.setattr(helpers_api.asyncio, "to_thread", capture_to_thread)
+        with Session(get_engine()) as session:
+            scenario_id = _create_scenario(session, user_id="profile-one-thread")
+
+        await _run_identity_parse(
+            helpers_api, scenario_id, "profile-one-thread", num_agents=3,
+        )
+        await _drain_profile_tasks(profile_tasks)
+
+        assert len(thread_submissions) == 1
+        assert profile_tasks and all(task.done() for task in profile_tasks)
+
+    @pytest.mark.asyncio
+    async def test_cancel_after_profile_schedule_skips_simulation(self, monkeypatch):
+        from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
+        from app.services.simulation_cancel import request_cancel
+
+        helpers_api, handoffs, profile_tasks = _identity_parse_pipeline(
+            monkeypatch,
+            [_parsed_identity_agent("Cancelled Profile")],
+            lambda *_profile: None,
+        )
+        with Session(get_engine()) as session:
+            scenario_id = _create_scenario(session, user_id="profile-cancelled")
+
+        tracked_schedule = helpers_api.schedule_background_task
+
+        def schedule_then_cancel(coro):
+            task = tracked_schedule(coro)
+            assert request_cancel(scenario_id)
+            return task
+
+        monkeypatch.setattr(helpers_api, "schedule_background_task", schedule_then_cancel)
+
+        await _run_identity_parse(
+            helpers_api, scenario_id, "profile-cancelled", num_agents=1,
+        )
+        await _drain_profile_tasks(profile_tasks)
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario.status == ScenarioStatus.CANCELLED
+        assert handoffs == []
+        assert helpers_api.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_api._running_simulations
+        assert not runtime_lock_is_active(simulation_lock_key(scenario_id))
 
     def test_record_growth_event_per_agent(self):
         """Each agent with identity should get a growth event."""

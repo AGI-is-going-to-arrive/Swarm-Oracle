@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -561,6 +562,7 @@ _SIMULATION_LOCK_TRANSIENT_FAILURE_LIMIT = 3
 _SIMULATION_LOCK_TRANSIENT_WARNING_INTERVAL_SECONDS = 30.0
 _SIMULATION_STALL_POLL_SECONDS = 1.0
 _SIMULATION_CREATE_GRACE_SECONDS = 90.0
+_IDENTITY_PROFILE_BATCH_BUDGET_SECONDS = 10.0
 
 
 def register_running_task(scenario_id: str, task: asyncio.Task) -> None:
@@ -1251,6 +1253,53 @@ def schedule_background_task(coro):
     return task
 
 
+def _store_identity_profile_batch(
+    profiles: list[tuple[str, str, str, str | None]],
+    writer: Callable[[str, str, str, str | None], None],
+    *,
+    budget_seconds: float = _IDENTITY_PROFILE_BATCH_BUDGET_SECONDS,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> None:
+    """Write profiles sequentially, stopping before starting work past the budget."""
+    deadline = monotonic() + max(0.0, budget_seconds)
+    for index, (user_id, identity_id, role, persona) in enumerate(profiles):
+        if monotonic() >= deadline:
+            logger.warning(
+                "Post-commit identity profile batch deadline reached; "
+                "skipping %d remaining profile(s)",
+                len(profiles) - index,
+            )
+            return
+        try:
+            writer(user_id, identity_id, role, persona)
+        except Exception:
+            logger.warning(
+                "Post-commit identity profile write failed for identity=%s",
+                identity_id,
+                exc_info=True,
+            )
+
+
+async def _store_identity_profiles_background(
+    profiles: list[tuple[str, str, str, str | None]],
+) -> None:
+    """Run one bounded sequential profile batch outside the event loop."""
+    try:
+        from app.services.vector_store import store_identity_profile
+    except ImportError:
+        logger.warning(
+            "Post-commit identity profile writer import failed",
+            exc_info=True,
+        )
+        return
+
+    await asyncio.to_thread(
+        _store_identity_profile_batch,
+        profiles,
+        store_identity_profile,
+    )
+
+
 async def parse_and_run_background(
     scenario_id: str,
     *,
@@ -1348,8 +1397,7 @@ async def parse_and_run_background(
 
     from app.api.ws import ws_manager
 
-    # H2 fix: if cancel landed before parse started, finalize as cancelled.
-    if is_cancelled(scenario_id):
+    async def _finalize_cancelled_parse(log_message: str) -> None:
         try:
             from app.services.simulator import handle_simulation_cancelled
 
@@ -1357,12 +1405,16 @@ async def parse_and_run_background(
                 scenario_id, ws_callback=ws_manager.broadcast,
             )
         except Exception:
-            logger.exception(
-                "Failed to finalize early-cancelled scenario %s", scenario_id,
-            )
+            logger.exception(log_message, scenario_id)
         finally:
             _stop_parse_runtime_lock(release=True)
             _cleanup_parse_bookkeeping()
+
+    # H2 fix: if cancel landed before parse started, finalize as cancelled.
+    if is_cancelled(scenario_id):
+        await _finalize_cancelled_parse(
+            "Failed to finalize early-cancelled scenario %s",
+        )
         return
 
     try:
@@ -1404,20 +1456,9 @@ async def parse_and_run_background(
     except asyncio.CancelledError:
         # H2 fix: parse-stage cancellation funnels into the cancelled terminal state.
         if is_cancelled(scenario_id):
-            try:
-                from app.services.simulator import handle_simulation_cancelled
-
-                await handle_simulation_cancelled(
-                    scenario_id, ws_callback=ws_manager.broadcast,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to finalize cancelled-during-parse scenario %s",
-                    scenario_id,
-                )
-            finally:
-                _stop_parse_runtime_lock(release=True)
-                _cleanup_parse_bookkeeping()
+            await _finalize_cancelled_parse(
+                "Failed to finalize cancelled-during-parse scenario %s",
+            )
             return
         # Not user-cancel: clean bookkeeping then propagate.
         _stop_parse_runtime_lock(release=True)
@@ -1446,21 +1487,9 @@ async def parse_and_run_background(
         return
 
     if is_cancelled(scenario_id):
-        try:
-            from app.services.simulator import handle_simulation_cancelled
-
-            await handle_simulation_cancelled(
-                scenario_id,
-                ws_callback=ws_manager.broadcast,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to finalize cancelled-after-parse scenario %s",
-                scenario_id,
-            )
-        finally:
-            _stop_parse_runtime_lock(release=True)
-            _cleanup_parse_bookkeeping()
+        await _finalize_cancelled_parse(
+            "Failed to finalize cancelled-after-parse scenario %s",
+        )
         return
 
     parsed["mode"] = mode
@@ -1671,6 +1700,8 @@ async def parse_and_run_background(
                 agent.source_type = "custom"
             elif _resolve_id and user_id:
                 try:
+                    from app.models.agent_identity import AgentIdentity
+
                     role = agent_data.get("role", "")
                     persona = agent_data.get("persona")
                     resolved_profile_identity_id: str | None = None
@@ -1693,7 +1724,6 @@ async def parse_and_run_background(
                         )
                     if continuity_override and continuity_override["action"] == "reuse_existing":
                         override_identity_id = continuity_override.get("identity_id")
-                        from app.models.agent_identity import AgentIdentity
                         existing_identity = (
                             session.get(AgentIdentity, override_identity_id)
                             if override_identity_id
@@ -1733,11 +1763,18 @@ async def parse_and_run_background(
                         agent.source_type = "generated"
                         resolved_profile_identity_id = identity_id
                     if resolved_profile_identity_id:
-                        pending_identity_profiles[resolved_profile_identity_id] = (
-                            user_id,
-                            role,
-                            persona,
+                        canonical_identity = session.get(
+                            AgentIdentity, resolved_profile_identity_id,
                         )
+                        if canonical_identity is not None:
+                            pending_identity_profiles.setdefault(
+                                canonical_identity.id,
+                                (
+                                    canonical_identity.user_id,
+                                    canonical_identity.role,
+                                    canonical_identity.persona,
+                                ),
+                            )
                 except Exception:
                     logger.debug(
                         "resolve_identity failed for %s",
@@ -1804,29 +1841,18 @@ async def parse_and_run_background(
         session.commit()
 
     if pending_identity_profiles:
-        try:
-            from app.services.vector_store import store_identity_profile
-        except ImportError:
-            logger.warning(
-                "Post-commit identity profile writer import failed",
-                exc_info=True,
-            )
-        else:
-            for identity_id, profile in pending_identity_profiles.items():
-                profile_user_id, role, persona = profile
-                try:
-                    store_identity_profile(
-                        profile_user_id,
-                        identity_id,
-                        role,
-                        persona,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Post-commit identity profile write failed for identity=%s",
-                        identity_id,
-                        exc_info=True,
-                    )
+        profile_batch = [
+            (profile_user_id, identity_id, role, persona)
+            for identity_id, (profile_user_id, role, persona)
+            in pending_identity_profiles.items()
+        ]
+        schedule_background_task(_store_identity_profiles_background(profile_batch))
+
+    if is_cancelled(scenario_id):
+        await _finalize_cancelled_parse(
+            "Failed to finalize cancelled-after-profile-schedule scenario %s",
+        )
+        return
 
     llm_overrides: dict | None = None
     if llm_api_key or llm_base_url or llm_model or temperature is not None:
