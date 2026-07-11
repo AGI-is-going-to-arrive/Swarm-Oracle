@@ -276,12 +276,21 @@ Expected: both processes exit `0`. Add terminal frames only to old fixtures that
 
 **Files:** Modify `backend/tests/test_llm_provider_protocol.py`; modify `backend/app/services/llm_client.py:5-24,2640-2650,3476-3490`.
 
+**Evidence refinement (2026-07-11):** RFC 9110 permits both `delay-seconds`
+and `HTTP-date`.  Keep fractional seconds as an explicitly documented
+OpenAI-compatible extension, but reject scientific notation, non-finite values,
+negative values, overlong headers, and waits above 30 seconds.  Tests must pin a
+private UTC clock helper rather than depend on wall-clock timing.  Values above
+the cap fall back to the existing bounded exponential delay instead of sleeping
+for an attacker-controlled duration.
+
 - [ ] **Step 1: Add RED Retry-After tests and compatibility cases**
 
 ```python
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("header", "wait"), [("0.25", .25), ("31", 1.0),
-                                                ("bad", 1.0), ("nan", 1.0)])
+@pytest.mark.parametrize(("header", "wait"), [("0.25", .25), ("10", 10.0),
+                                                ("31", 1.0), ("bad", 1.0),
+                                                ("nan", 1.0), ("-1", 1.0)])
 async def test_bounded_retry_after(provider, monkeypatch, header, wait):
     provider.enqueue(ScriptedResponse(status=429, headers={"Retry-After": header},
                                       json_body={"error": "limited"}))
@@ -293,6 +302,9 @@ async def test_bounded_retry_after(provider, monkeypatch, header, wait):
     assert await llm_call("probe", base_url=provider.url("/v1/chat/completions"),
                           api_key="local-test-key", model="fake-model") == "retried"
     assert waits == [wait]
+
+# Add fixed-clock cases for HTTP-date at now-10s, now, now+10s, now+30s,
+# and now+31s.  Expected waits are 0, 0, 10, 30, and the exponential fallback.
 @pytest.mark.asyncio
 async def test_pre_output_reset_slow_chunks_cancel_and_long_body(provider):
     provider.enqueue(ScriptedResponse(disconnect=True))
@@ -313,16 +325,32 @@ Expected before implementation: the `0.25` case fails with observed wait `1.0`.
 
 - [ ] **Step 2: Implement one shared bounded policy**
 
-Add `import math`, `_LLM_MAX_RETRY_AFTER_SECONDS = 30.0`, and:
+Add `import math`, `from datetime import datetime, timezone`,
+`from email.utils import parsedate_to_datetime`,
+`_LLM_MAX_RETRY_AFTER_SECONDS = 30.0`, a private `_retry_after_now()` helper,
+and one parser that:
 
 ```python
 def _bounded_retry_wait(response: httpx.Response, *, fallback: float) -> float:
     fallback = min(max(float(fallback), 0.0), _LLM_MAX_RETRY_AFTER_SECONDS)
-    try:
-        value = float(response.headers.get("Retry-After", ""))
-    except ValueError:
+    raw = response.headers.get("Retry-After", "").strip()
+    if not raw or len(raw) > 128:
         return fallback
-    return value if math.isfinite(value) and 0 <= value <= _LLM_MAX_RETRY_AFTER_SECONDS else fallback
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw):
+        value = float(raw)
+    else:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        if retry_at.tzinfo is None:
+            return fallback
+        value = max(0.0, (retry_at - _retry_after_now()).total_seconds())
+    return (
+        value
+        if math.isfinite(value) and value <= _LLM_MAX_RETRY_AFTER_SECONDS
+        else fallback
+    )
 ```
 
 In both 429/5xx HTTP retry branches replace exponential assignment with:
@@ -356,6 +384,34 @@ git commit -m "fix: honor bounded provider retry delays"
 ```
 
 Expected: all tests pass; cancellation finishes within `.5` seconds.
+
+### Task 3b: Preserve timeout taxonomy across httpx failures
+
+**Files:** Modify `backend/tests/test_llm_client.py`,
+`backend/tests/test_llm_provider_protocol.py`, and
+`backend/app/services/llm_client.py`.
+
+- [ ] **Step 1: Add RED taxonomy and real-socket timeout tests**
+
+Cover `httpx.ReadTimeout`, `ConnectTimeout`, `WriteTimeout`, and `PoolTimeout`
+in `classify_llm_error_code()`.  Through the local provider, exhaust retries for
+both non-stream and stream reads whose delay exceeds the request timeout.  The
+final safe code must be `LLM_TIMEOUT`, not `LLM_UNREACHABLE`; request counts,
+failure accounting, and API-key redaction must remain exact.
+
+- [ ] **Step 2: Classify timeout before the broad RequestError branch**
+
+Check `httpx.TimeoutException` before `httpx.RequestError` in
+`classify_llm_error_code()`, and make `_llm_error_from_request()` return the
+existing `LLM_TIMEOUT` safe payload for timeout subclasses.  Do not change the
+retry count, localhost policy, public response shape, or non-timeout
+`RequestError → LLM_UNREACHABLE` behavior.
+
+- [ ] **Step 3: GREEN, static checks, and isolated commit**
+
+Run the taxonomy unit tests and both real-provider timeout paths in one pytest
+process, then Ruff and `git diff --check`.  Commit separately from Retry-After
+so the two root causes remain independently reviewable.
 
 ### Task 4: Configure Agent-turn request and total timeouts
 
