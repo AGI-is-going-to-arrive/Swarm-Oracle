@@ -15,6 +15,8 @@ from time import monotonic
 from typing import Any
 
 _MISSING_JSON = object()
+_REQUEST_READ_TIMEOUT_SECONDS = 0.1
+_REQUEST_READ_CHUNK_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +64,7 @@ class ScriptedResponse:
     status: int = HTTPStatus.OK
     headers: Mapping[str, str] = field(default_factory=dict)
     json_body: Any = field(default=_MISSING_JSON, repr=False)
-    sse_events: tuple[SSEEvent, ...] = ()
+    sse_events: tuple[SSEEvent, ...] | None = None
     delay_seconds: float = 0.0
     disconnect: bool = False
     disconnect_after_bytes: int | None = None
@@ -76,7 +78,7 @@ class ScriptedResponse:
             raise ValueError("disconnect_after_bytes must be non-negative")
         if self.disconnect and self.disconnect_after_bytes is not None:
             raise ValueError("Choose either an immediate or mid-body disconnect")
-        if self.json_body is not _MISSING_JSON and self.sse_events:
+        if self.json_body is not _MISSING_JSON and self.sse_events is not None:
             raise ValueError("A scripted response cannot contain both JSON and SSE events")
 
         normalized_headers: dict[str, str] = {}
@@ -85,7 +87,8 @@ class ScriptedResponse:
                 raise ValueError("HTTP response headers cannot contain newlines")
             normalized_headers[str(name)] = str(value)
         object.__setattr__(self, "headers", normalized_headers)
-        object.__setattr__(self, "sse_events", tuple(self.sse_events))
+        if self.sse_events is not None:
+            object.__setattr__(self, "sse_events", tuple(self.sse_events))
 
     @classmethod
     def json(
@@ -259,19 +262,18 @@ class FakeLLMProvider:
     def __exit__(self, _exc_type, _exc, _traceback) -> None:
         self.close()
 
-    def _next_response(self) -> ScriptedResponse:
-        try:
-            return self._responses.get_nowait()
-        except queue.Empty:
-            return ScriptedResponse.json(
-                {"error": {"message": "No scripted response queued"}},
-                status=HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
-
-    def _record_request(self, request: RecordedRequest) -> None:
+    def _record_and_take_response(self, request: RecordedRequest) -> ScriptedResponse:
         with self._request_condition:
             self._requests.append(request)
+            try:
+                response = self._responses.get_nowait()
+            except queue.Empty:
+                response = ScriptedResponse.json(
+                    {"error": {"message": "No scripted response queued"}},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
             self._request_condition.notify_all()
+            return response
 
     def _record_server_error(self, error: BaseException) -> None:
         with self._request_condition:
@@ -306,6 +308,10 @@ class _ScriptedRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server: _ScriptedHTTPServer
 
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(_REQUEST_READ_TIMEOUT_SECONDS)
+
     def do_GET(self) -> None:
         self._handle_request()
 
@@ -321,7 +327,7 @@ class _ScriptedRequestHandler(BaseHTTPRequestHandler):
             json_body = json.loads(body.decode()) if body else None
         except (UnicodeDecodeError, json.JSONDecodeError):
             json_body = None
-        self.server.provider._record_request(
+        response = self.server.provider._record_and_take_response(
             RecordedRequest(
                 method=self.command,
                 path=self.path,
@@ -330,8 +336,6 @@ class _ScriptedRequestHandler(BaseHTTPRequestHandler):
                 json_body=json_body,
             )
         )
-
-        response = self.server.provider._next_response()
         if self.server.provider._wait_or_stopping(response.delay_seconds):
             self._disconnect()
             return
@@ -388,13 +392,25 @@ class _ScriptedRequestHandler(BaseHTTPRequestHandler):
             content_length = max(0, int(raw_length))
         except ValueError:
             content_length = 0
-        return self.rfile.read(content_length)
+        body = bytearray()
+        while len(body) < content_length and not self.server.provider._stop_event.is_set():
+            remaining = min(content_length - len(body), _REQUEST_READ_CHUNK_BYTES)
+            try:
+                chunk = self.rfile.read1(remaining)
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            if not chunk:
+                break
+            body.extend(chunk)
+        return bytes(body)
 
     @staticmethod
     def _encode_response(
         response: ScriptedResponse,
     ) -> tuple[list[tuple[float, bytes]], str | None]:
-        if response.sse_events:
+        if response.sse_events is not None:
             return (
                 [(event.delay_seconds, event.encode()) for event in response.sse_events],
                 "text/event-stream; charset=utf-8",
