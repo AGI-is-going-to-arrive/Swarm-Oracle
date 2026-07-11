@@ -10,6 +10,7 @@ import hashlib
 import logging
 from typing import Any
 
+from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
@@ -257,26 +258,33 @@ def resolve_identity(
                         )
                         return candidate["identity_id"]
 
-        # ── No match: create new identity + store L2 profile ──
-        identity = AgentIdentity(
-            user_id=user_id,
-            kind="generated",
-            display_name=name,
-            role=role,
-            persona=persona,
-            continuity_key=key,
+        # ── No match: atomically converge on the canonical identity ──
+        session_obj.execute(
+            insert(AgentIdentity)
+            .values(
+                user_id=user_id,
+                kind="generated",
+                display_name=name,
+                role=role,
+                persona=persona,
+                continuity_key=key,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["user_id", "continuity_key"],
+            )
         )
-        session_obj.add(identity)
+        identity = session_obj.exec(
+            select(AgentIdentity).where(
+                AgentIdentity.user_id == user_id,
+                AgentIdentity.continuity_key == key,
+            )
+        ).one()
+        profile = (identity.user_id, identity.id, identity.role, identity.persona)
         if own_session:
             session_obj.commit()
-            session_obj.refresh(identity)
-        else:
-            session_obj.flush()
-
-        if own_session:
-            store_identity_profile(user_id, identity.id, role, persona)
+            store_identity_profile(*profile)
         logger.info(
-            "Created new identity %s for user=%s key=%s",
+            "Resolved canonical identity %s for user=%s key=%s",
             identity.id, user_id, key,
         )
         return identity.id

@@ -1,12 +1,15 @@
 """Tests for app.services.agent_identity — cross-scenario identity & memory."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
-from app.models.database import get_engine
+from app.models.database import Scenario, get_engine
 from app.services.agent_identity import (
     _continuity_key,
     build_continuity_key,
@@ -250,6 +253,183 @@ class TestResolveIdentity:
             caller_session.rollback()
 
         assert profile_calls == []
+
+    def test_concurrent_self_owned_create_returns_one_canonical_identity(
+        self,
+        monkeypatch,
+    ):
+        from app.services import agent_identity as identity_service
+
+        barrier = threading.Barrier(2)
+        profile_calls: list[tuple[str, str, str, str | None]] = []
+        profile_lock = threading.Lock()
+        persona_prefix = "C" * 30
+
+        def synchronize_after_l1_miss(_session, _user_id):
+            barrier.wait(timeout=5)
+            return frozenset()
+
+        def record_profile(user_id, identity_id, role, persona):
+            with profile_lock:
+                profile_calls.append((user_id, identity_id, role, persona))
+
+        monkeypatch.setattr(
+            identity_service, "_owned_identity_ids", synchronize_after_l1_miss,
+        )
+        monkeypatch.setattr(identity_service, "store_identity_profile", record_profile)
+
+        def resolve(index: int) -> str:
+            return resolve_identity(
+                "concurrent-self-owned",
+                f"Candidate {index}",
+                "Auditor",
+                f"{persona_prefix} tail-{index}",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            identity_ids = list(executor.map(resolve, range(2)))
+
+        with Session(get_engine()) as session:
+            identities = session.exec(
+                select(AgentIdentity).where(
+                    AgentIdentity.user_id == "concurrent-self-owned"
+                )
+            ).all()
+        assert len(identities) == 1
+        canonical = identities[0]
+        assert identity_ids == [canonical.id, canonical.id]
+        canonical_profile = (
+            canonical.user_id,
+            canonical.id,
+            canonical.role,
+            canonical.persona,
+        )
+        assert profile_calls == [canonical_profile, canonical_profile]
+
+    def test_concurrent_caller_owned_create_preserves_outer_transactions(
+        self,
+        monkeypatch,
+    ):
+        from app.services import agent_identity as identity_service
+
+        barrier = threading.Barrier(2)
+        profile_writer = MagicMock()
+        marker_questions = [f"identity-race-marker-{index}" for index in range(2)]
+
+        def synchronize_after_l1_miss(_session, _user_id):
+            barrier.wait(timeout=5)
+            return frozenset()
+
+        monkeypatch.setattr(
+            identity_service, "_owned_identity_ids", synchronize_after_l1_miss,
+        )
+        monkeypatch.setattr(identity_service, "store_identity_profile", profile_writer)
+
+        def resolve_and_commit(index: int) -> tuple[str, str]:
+            with Session(get_engine()) as caller_session:
+                identity_id = resolve_identity(
+                    "concurrent-caller-owned",
+                    f"Candidate {index}",
+                    "Auditor",
+                    "Shared caller-owned persona",
+                    session=caller_session,
+                )
+                marker = Scenario(question=marker_questions[index])
+                caller_session.add(marker)
+                caller_session.commit()
+                assert caller_session.get(AgentIdentity, identity_id) is not None
+                assert caller_session.get(Scenario, marker.id) is not None
+                return identity_id, marker.id
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(resolve_and_commit, range(2)))
+
+        with Session(get_engine()) as session:
+            identities = session.exec(
+                select(AgentIdentity).where(
+                    AgentIdentity.user_id == "concurrent-caller-owned"
+                )
+            ).all()
+            markers = session.exec(
+                select(Scenario).where(Scenario.question.in_(marker_questions))
+            ).all()
+        assert len(identities) == 1
+        assert {identity_id for identity_id, _marker_id in results} == {identities[0].id}
+        assert {marker.id for marker in markers} == {
+            marker_id for _identity_id, marker_id in results
+        }
+        profile_writer.assert_not_called()
+
+    def test_fresh_caller_owned_create_disappears_on_outer_rollback(self):
+        with Session(get_engine()) as caller_session:
+            identity_id = resolve_identity(
+                "caller-rollback-fresh",
+                "Rollback Candidate",
+                "Auditor",
+                "Must remain inside the outer transaction",
+                allow_l2=False,
+                session=caller_session,
+            )
+            assert caller_session.get(AgentIdentity, identity_id) is not None
+            caller_session.rollback()
+
+        with Session(get_engine()) as independent_session:
+            assert independent_session.get(AgentIdentity, identity_id) is None
+
+    def test_writer_lock_operational_error_is_not_treated_as_duplicate(
+        self,
+        monkeypatch,
+    ):
+        from app.services import agent_identity as identity_service
+
+        engine = get_engine()
+        blocker = engine.raw_connection()
+        blocker.execute("BEGIN IMMEDIATE")
+        profile_writer = MagicMock()
+        monkeypatch.setattr(identity_service, "store_identity_profile", profile_writer)
+
+        with Session(engine) as caller_session:
+            caller_session.connection().exec_driver_sql("PRAGMA busy_timeout=1")
+            original_rollback = caller_session.rollback
+            rollback_calls = 0
+
+            def tracked_rollback():
+                nonlocal rollback_calls
+                rollback_calls += 1
+                return original_rollback()
+
+            monkeypatch.setattr(caller_session, "rollback", tracked_rollback)
+            try:
+                with pytest.raises(OperationalError, match="database is locked"):
+                    resolve_identity(
+                        "writer-lock-owner",
+                        "Locked Candidate",
+                        "Auditor",
+                        "Writer lock must remain a real failure",
+                        allow_l2=False,
+                        session=caller_session,
+                    )
+                assert rollback_calls == 0
+            finally:
+                blocker.rollback()
+                blocker.close()
+                caller_session.rollback()
+
+        recovered_id = resolve_identity(
+            "writer-lock-owner",
+            "Recovered Candidate",
+            "Auditor",
+            "Writer lock must remain a real failure",
+            allow_l2=False,
+        )
+        with Session(engine) as independent_session:
+            identities = independent_session.exec(
+                select(AgentIdentity).where(
+                    AgentIdentity.user_id == "writer-lock-owner"
+                )
+            ).all()
+        assert [identity.id for identity in identities] == [recovered_id]
+        profile_writer.assert_called_once()
 
 
 class TestContinuityKey:
