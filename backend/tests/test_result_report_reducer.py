@@ -831,7 +831,7 @@ def test_reduce_handles_empty_single_and_missing_snapshot_cases(monkeypatch):
                     id="single-branch",
                     scenario_id=single.id,
                     title="Only branch",
-                    probability=1.0,
+                    probability=0.44,
                     status=BranchStatus.COMPLETED,
                 ),
                 Branch(
@@ -869,7 +869,9 @@ def test_reduce_handles_empty_single_and_missing_snapshot_cases(monkeypatch):
     assert single_result.status == "available"
     assert single_result.target_branch_id == "single-branch"
     assert single_result.dissenting is None
-    assert single_result.likelihood.interval == (0.95, 1.0)
+    assert single_result.likelihood.probability == 0.44
+    assert single_result.likelihood.interval == (0.44, 0.44)
+    assert single_result.likelihood.wep == "single_path"
     single_charts = {chart.type: chart.data for chart in single_result.charts}
     assert single_charts["faction_share"] == {
         "status": "missing",
@@ -963,24 +965,34 @@ def test_wep_mapping_is_seven_tier_and_deterministic(probability: float, label: 
 
 
 @pytest.mark.parametrize(
-    ("probability", "branch_count", "expected_probability", "expected_interval"),
+    (
+        "probability",
+        "branch_count",
+        "expected_probability",
+        "expected_interval",
+        "expected_wep",
+    ),
     [
-        (-0.1, 1, 0.0, (0.0, 0.05)),
-        (0.0, 1, 0.0, (0.0, 0.05)),
-        (1.0, 1, 1.0, (0.95, 1.0)),
-        (1.2, 3, 1.0, (0.9, 1.0)),
+        (0.9, 0, 0.0, (0.0, 0.0), "missing"),
+        (-0.1, 1, 0.0, (0.0, 0.0), "single_path"),
+        (0.37, 1, 0.37, (0.37, 0.37), "single_path"),
+        (1.2, 1, 1.0, (1.0, 1.0), "single_path"),
+        (0.62, 3, 0.62, (0.52, 0.72), "likely"),
+        (1.2, 3, 1.0, (0.9, 1.0), "almost_certain"),
     ],
 )
-def test_likelihood_clamps_probability_and_clips_interval(
+def test_likelihood_distinguishes_missing_single_path_and_branch_spread(
     probability: float,
     branch_count: int,
     expected_probability: float,
     expected_interval: tuple[float, float],
+    expected_wep: str,
 ):
     likelihood = _derive_likelihood(probability, branch_count)
 
     assert likelihood.probability == expected_probability
     assert likelihood.interval == expected_interval
+    assert likelihood.wep == expected_wep
 
 
 def test_confidence_mapping_is_deterministic():

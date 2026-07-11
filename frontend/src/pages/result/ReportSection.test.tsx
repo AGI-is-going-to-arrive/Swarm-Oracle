@@ -5,9 +5,10 @@ import type { ReportSection as ReportSectionType, ReportChart } from '../../type
 
 const I18N: Record<string, string> = {
   'result.report.chartEmpty': '[L10N chartEmpty]',
-  'result.report.probabilityChartTitle': '[L10N probabilityChartTitle]',
+  'result.report.probabilityChartTitle': '[L10N simulated branch distribution]',
+  'result.report.probabilityChartNoComparison': '[L10N no branch comparison]',
   'result.report.factionChartTitle': '[L10N factionChartTitle]',
-  'result.report.dominantBranch': '[L10N dominantBranch]',
+  'result.report.dominantBranch': '[L10N dominant simulated path]',
   'result.report.factionMembers': '{{count}} members',
   'result.report.factionRelations': 'Relationship links: {{count}}',
   'result.report.factionOpposition': 'Avg. opposition: {{value}}',
@@ -100,9 +101,78 @@ describe('ReportSection', () => {
     expect(screen.getByText('62%')).toBeInTheDocument();
     expect(screen.getByText('Branch B Label')).toBeInTheDocument();
     expect(screen.getByText('38%')).toBeInTheDocument();
+    expect(screen.getByText('[L10N simulated branch distribution]')).toBeInTheDocument();
 
     // Assert a11y label for dominant branch is rendered in screen-reader text
-    expect(screen.getByText('[L10N dominantBranch]')).toBeInTheDocument();
+    expect(screen.getByText('[L10N dominant simulated path]')).toBeInTheDocument();
+  });
+
+  it('renders only a localized no-comparison message for a single-path chart', () => {
+    const singlePathChart: ReportChart = {
+      kind: 'probability_bar',
+      type: 'probability_bar',
+      data: {
+        status: 'available',
+        reason: null,
+        sort: ['branch-only'],
+        branches: [
+          {
+            branch_id: 'branch-only',
+            label: 'Only Branch',
+            probability: 1,
+            dominant: true,
+            status: 'COMPLETED',
+          },
+        ],
+      },
+    };
+
+    const section = { ...baseSection, charts: [singlePathChart] };
+    const { container } = render(
+      <ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />,
+    );
+
+    expect(screen.getByText('[L10N no branch comparison]')).toBeInTheDocument();
+    expect(screen.queryByText('Only Branch')).toBeNull();
+    expect(screen.queryByText('100%')).toBeNull();
+    expect(container.querySelector('.report-chart__row')).toBeNull();
+    expect(container.querySelector('.bar-track')).toBeNull();
+  });
+
+  it('does not infer a single path from probability=1 when multiple branches exist', () => {
+    const multiPathChart: ReportChart = {
+      kind: 'probability_bar',
+      type: 'probability_bar',
+      data: {
+        status: 'available',
+        reason: null,
+        sort: ['branch-a', 'branch-b'],
+        branches: [
+          {
+            branch_id: 'branch-a',
+            label: 'Dominant Branch',
+            probability: 1,
+            dominant: true,
+            status: 'COMPLETED',
+          },
+          {
+            branch_id: 'branch-b',
+            label: 'Other Branch',
+            probability: 0,
+            dominant: false,
+            status: 'COMPLETED',
+          },
+        ],
+      },
+    };
+
+    const section = { ...baseSection, charts: [multiPathChart] };
+    render(<ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+
+    expect(screen.getByText('[L10N simulated branch distribution]')).toBeInTheDocument();
+    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('0%')).toBeInTheDocument();
+    expect(screen.queryByText('[L10N no branch comparison]')).toBeNull();
   });
 
   it('renders populated faction_share chart correctly', () => {

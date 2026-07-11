@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import time
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -31,6 +32,7 @@ from app.services.result_report import builder
 from app.services.result_report.schema import (
     FullReport,
     I18nText,
+    Likelihood,
     ReportSection,
     ResultReportSSEEvent,
     utf8_json_size_bytes,
@@ -2646,6 +2648,95 @@ def test_static_section_records_failure_reason():
         failure_reason="timeout",
     )
     assert empty_result.section.failure_reason == "empty_body"
+
+
+def test_static_section_describes_single_missing_and_multi_branch_uncertainty_truthfully():
+    reducer_result = builder.reduce_report(get_engine(), _seed_report_scenario())
+    section_plan = builder.SectionPlan(
+        section_id="timeline",
+        title_i18n={"zh": "时间线", "en": "Timeline"},
+        intent="Lay out the timeline.",
+    )
+    context = builder.BuilderContext(
+        scenario_id="scenario-report",
+        question="Question?",
+        language="en",
+        parsed_context={},
+        branch_id="branch-a",
+        branch_title="Branch A",
+        branch_story="A populated story.",
+        branch_insight="A populated insight.",
+        web_context_blocks=[],
+    )
+
+    single_path = replace(
+        reducer_result,
+        branch_distribution=reducer_result.branch_distribution[:1],
+        likelihood=Likelihood(
+            probability=1.0,
+            interval=(1.0, 1.0),
+            wep="single_path",
+        ),
+    )
+    single_section = builder._static_section_from_context(
+        context,
+        section_plan,
+        single_path,
+    ).section.body_md_i18n
+    assert "只有一条模拟路径" in single_section.zh
+    assert "无法比较" in single_section.zh
+    assert "不代表现实发生率" in single_section.zh
+    assert "Only one simulated path" in single_section.en
+    assert "cannot compare" in single_section.en
+    assert "does not represent a real-world occurrence rate" in single_section.en
+    assert all(token not in single_section.zh for token in ("100%", "概率为", "路线概率"))
+    assert all(
+        token not in single_section.en.lower()
+        for token in ("100%", "probability is", "route probability")
+    )
+
+    missing = replace(
+        reducer_result,
+        likelihood=Likelihood(
+            probability=0.0,
+            interval=(0.0, 0.0),
+            wep="missing",
+        ),
+    )
+    missing_section = builder._static_section_from_context(
+        context,
+        section_plan,
+        missing,
+    ).section.body_md_i18n
+    assert "没有可比较的模拟分支占比" in missing_section.zh
+    assert "不代表现实发生率" in missing_section.zh
+    assert "No comparable simulated branch share" in missing_section.en
+    assert "does not represent a real-world occurrence rate" in missing_section.en
+    assert all(token not in missing_section.zh for token in ("0%", "概率为", "路线概率"))
+    assert all(
+        token not in missing_section.en.lower()
+        for token in ("0%", "probability is", "route probability")
+    )
+
+    multi_branch = replace(
+        reducer_result,
+        likelihood=Likelihood(
+            probability=1.0,
+            interval=(0.9, 1.0),
+            wep="almost_certain",
+        ),
+    )
+    multi_section = builder._static_section_from_context(
+        context,
+        section_plan,
+        multi_branch,
+    ).section.body_md_i18n
+    assert "主导模拟分支占比为 100%" in multi_section.zh
+    assert "不代表现实发生概率" in multi_section.zh
+    assert "dominant simulated branch share is 100%" in multi_section.en.lower()
+    assert "not a real-world probability" in multi_section.en.lower()
+    assert "路线概率" not in multi_section.zh
+    assert "route probability" not in multi_section.en.lower()
 
 
 def _seed_split_brain_scenario() -> str:

@@ -19,9 +19,9 @@ const CONFIDENCE_LEVEL_FALLBACK: Record<ReportVerdict['analytic_confidence']['le
   low: 'Low',
 };
 
-// The backend `wep` is a snake_case word-estimate enum (e.g. `likely`, `roughly_even`,
-// `missing`) from `derive_likelihood_label`. These are the only values it emits; anything
-// else falls back to the neutral `missing` label so a raw backend string never leaks.
+// Displayable word-estimate values from `derive_likelihood_label`. The non-display
+// `single_path` sentinel is handled separately below; any other value falls back to the
+// neutral `missing` label so a raw backend string never leaks.
 const KNOWN_WEP_KEYS = new Set([
   'almost_no_chance',
   'very_unlikely',
@@ -93,10 +93,23 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
     : t('result.report.wep.missing', 'Not Available');
   const reachedSegments = isKnownLevel ? CONFIDENCE_LEVEL_SEGMENTS[level] : 0;
 
-  // Localize the word-estimate (WEP) through `result.report.wep.*`. Normalize defensively
+  // Localize displayable WEP values through `result.report.wep.*`. Normalize defensively
   // (the field is a free string in the type) and fall back to the neutral localized label
-  // for any value outside the known seven-tier set — never render the raw backend string.
+  // for any value outside the known set — never render the raw backend string.
   const normalizedWep = (likelihood.wep ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  let branchCountNum: number | null = null;
+  if (analytic_confidence.basis) {
+    const branchMatch = analytic_confidence.basis.match(/branch_count=(\d+)/);
+    if (branchMatch) {
+      const parsedBranches = Number.parseInt(branchMatch[1], 10);
+      if (Number.isFinite(parsedBranches)) {
+        branchCountNum = parsedBranches;
+      }
+    }
+  }
+  const statisticsSuppressed = normalizedWep === 'missing';
+  const singlePath = !statisticsSuppressed
+    && (normalizedWep === 'single_path' || branchCountNum === 1);
   const wepLabel = KNOWN_WEP_KEYS.has(normalizedWep)
     ? t(`result.report.wep.${normalizedWep}`, CONFIDENCE_WEP_FALLBACK[normalizedWep] ?? 'Not Available')
     : likelihood.wep
@@ -107,13 +120,13 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
   // qualitative band or em-dash — it is never silently clamped into a fake range.
   // wep="missing" is the backend suppressed-statistics sentinel (no answer branch was
   // resolvable): its probability/interval are placeholders, not estimates — hide both.
-  const statisticsSuppressed = normalizedWep === 'missing';
   const probabilityRenderable =
-    !statisticsSuppressed && isRenderableProbability(likelihood.probability);
+    !singlePath && !statisticsSuppressed && isRenderableProbability(likelihood.probability);
   const probabilityText = probabilityRenderable
     ? (likelihood.probability * 100).toFixed(1)
     : '—';
-  const intervalRenderable = !statisticsSuppressed && isRenderableInterval(likelihood.interval);
+  const intervalRenderable =
+    !singlePath && !statisticsSuppressed && isRenderableInterval(likelihood.interval);
 
   // Prefer scenario-specific disclaimers, but localize legacy persisted boilerplate.
   // Kept as a tail footnote so the existing scenario-custom disclaimer path is preserved.
@@ -162,18 +175,8 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
 
   // §F honest hedge: derive the simulation framing from REAL basis data instead of
   // hard-coding "single-branch / agents aligned" (which would contradict a multi-branch
-  // or low/missing-consensus report). branch_count is parsed on its own so the descriptor
-  // still shows when the full debug pattern (with consensus) is absent.
-  let branchCountNum: number | null = null;
-  if (analytic_confidence.basis) {
-    const branchMatch = analytic_confidence.basis.match(/branch_count=(\d+)/);
-    if (branchMatch) {
-      const parsedBranches = Number.parseInt(branchMatch[1], 10);
-      if (Number.isFinite(parsedBranches)) {
-        branchCountNum = parsedBranches;
-      }
-    }
-  }
+  // or low/missing-consensus report). branch_count was parsed independently above so the
+  // descriptor still works when the full debug pattern (with consensus) is absent.
   const hedgeParts: string[] = [];
   if (branchCountNum === 1) {
     hedgeParts.push(t('result.report.hedge_branch_single', 'Single-branch simulation'));
@@ -195,39 +198,56 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
   const intervalAriaText = intervalRenderable
     ? `${(likelihood.interval[0] * 100).toFixed(1)}% – ${(likelihood.interval[1] * 100).toFixed(1)}%`
     : t('result.report.interval_unavailable', 'Interval unavailable');
+  const weightLabel = branchCountNum !== null && branchCountNum > 1
+    ? t('result.report.dominant_branch_share_label', 'Dominant simulated branch share')
+    : t('result.report.simulation_weight_label', 'Simulation result weight');
+  const intervalLabel = branchCountNum !== null && branchCountNum > 1
+    ? t('result.report.simulated_distribution_range_label', 'Simulated distribution range')
+    : t('result.report.intervalLabel', 'Interval');
 
   return (
     <section className="report-hero report-reveal report-d1" aria-label={t('result.report.summary_label', 'Verdict')}>
       <div className="report-hero__grid">
         {/* Probability stat */}
         <div className="report-hero__stat">
-          <div className="report-hero__eyebrow">{t('result.report.likelihood_label', 'Estimated Likelihood')}</div>
-          <p className="report-hero__pct">
-            {probabilityText}
-            {probabilityRenderable && <span className="report-hero__unit">%</span>}
-          </p>
-          {intervalRenderable ? (
-            <div className="report-hero__interval" aria-label={intervalAriaText}>
-              <span className="report-hero__interval-lbl">{t('result.report.intervalLabel', 'Interval')}</span>
-              ({(likelihood.interval[0] * 100).toFixed(1)}%, {(likelihood.interval[1] * 100).toFixed(1)}%)
-            </div>
+          {singlePath ? (
+            <p className="report-hero__single-path">
+              {t(
+                'result.report.single_path_no_distribution',
+                'Only one simulated path is available, so there is no branch distribution to compare.',
+              )}
+            </p>
           ) : (
-            // §E: invalid/reversed/out-of-range interval — qualitative band, no fake numbers.
-            <div className="report-hero__interval">
-              <span className="report-hero__interval-lbl">{t('result.report.intervalLabel', 'Interval')}</span>
-              {t('result.report.interval_unavailable', 'Interval unavailable')}
-            </div>
+            <>
+              <div className="report-hero__eyebrow">{weightLabel}</div>
+              <p className="report-hero__pct">
+                {probabilityText}
+                {probabilityRenderable && <span className="report-hero__unit">%</span>}
+              </p>
+              {intervalRenderable ? (
+                <div className="report-hero__interval" aria-label={intervalAriaText}>
+                  <span className="report-hero__interval-lbl">{intervalLabel}</span>
+                  ({(likelihood.interval[0] * 100).toFixed(1)}%, {(likelihood.interval[1] * 100).toFixed(1)}%)
+                </div>
+              ) : (
+                // §E: invalid/reversed/out-of-range interval — qualitative band, no fake numbers.
+                <div className="report-hero__interval">
+                  <span className="report-hero__interval-lbl">{intervalLabel}</span>
+                  {t('result.report.interval_unavailable', 'Interval unavailable')}
+                </div>
+              )}
+              <div className="report-hero__wep-row">
+                {wepLabel && (
+                  <span className="report-hero__wep">
+                    <span className="report-hero__wep-dot" aria-hidden="true" />
+                    {wepLabel}
+                  </span>
+                )}
+                {/* §F: honest hedge — derived from real branch count / consensus, omitted when unverifiable. */}
+                {hedgeText && <span className="report-hero__hedge">{hedgeText}</span>}
+              </div>
+            </>
           )}
-          <div className="report-hero__wep-row">
-            {wepLabel && (
-              <span className="report-hero__wep">
-                <span className="report-hero__wep-dot" aria-hidden="true" />
-                {wepLabel}
-              </span>
-            )}
-            {/* §F: honest hedge — derived from real branch count / consensus, omitted when unverifiable. */}
-            {hedgeText && <span className="report-hero__hedge">{hedgeText}</span>}
-          </div>
         </div>
 
         {/* Confidence + consensus meta */}

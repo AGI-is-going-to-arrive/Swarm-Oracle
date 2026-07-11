@@ -1506,6 +1506,7 @@ def _static_section_from_context(
     failure_reason: SectionFailureReason = "other",
 ) -> SectionBuildResult:
     probability = reducer_result.likelihood.probability
+    branch_count = len(reducer_result.branch_distribution)
     evidence_refs = [item.id for item in reducer_result.evidence[:2]]
     has_source_body = bool(context.branch_insight or context.branch_story)
     # When neither insight nor story exists, the static body is just the
@@ -1524,16 +1525,43 @@ def _static_section_from_context(
         or context.branch_story
         or "This section is based on the existing ending summary."
     )
+    if reducer_result.likelihood.wep == "missing" or branch_count == 0:
+        uncertainty_zh = (
+            "当前没有可比较的模拟分支占比；这不代表现实发生率。"
+        )
+        uncertainty_en = (
+            "No comparable simulated branch share is available; "
+            "this does not represent a real-world occurrence rate."
+        )
+    elif reducer_result.likelihood.wep == "single_path" or branch_count == 1:
+        uncertainty_zh = (
+            "只有一条模拟路径，无法比较不同路径的相对占比；"
+            "这不代表现实发生率。"
+        )
+        uncertainty_en = (
+            "Only one simulated path is available, so we cannot compare it "
+            "with alternative paths; this does not represent a real-world "
+            "occurrence rate."
+        )
+    else:
+        uncertainty_zh = (
+            f"主导模拟分支占比为 {probability:.0%}。"
+            "该数值只描述本次模拟中的分支分布，不代表现实发生概率。"
+        )
+        uncertainty_en = (
+            f"The dominant simulated branch share is {probability:.0%}. "
+            "This value describes only the branch distribution in this simulation, "
+            "not a real-world probability."
+        )
     zh = (
         f"### {section.title_i18n.get('zh', section.section_id)}\n\n"
         f"{fallback_body}\n\n"
-        f"主导路线概率为 {probability:.0%}。这只是叙事推演概率，不是真实预测。"
+        f"{uncertainty_zh}"
     )
     en = (
         f"### {section.title_i18n.get('en', section.section_id)}\n\n"
         f"{fallback_body_en}\n\n"
-        f"The dominant route probability is {probability:.0%}. "
-        "This is a narrative simulation probability, not a real-world forecast."
+        f"{uncertainty_en}"
     )
     report_section = ReportSection(
         id=section.section_id,

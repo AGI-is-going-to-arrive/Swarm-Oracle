@@ -24,6 +24,17 @@ export const ProbabilityBarChart = React.memo(function ProbabilityBarChart({ dat
     );
   }
 
+  if (data.branches.length === 1) {
+    return (
+      <div className="report-chart-empty text-sm text-[color:var(--text-muted)] italic">
+        {t(
+          'result.report.probabilityChartNoComparison',
+          'Only one simulated path is available, so there is no branch comparison.',
+        )}
+      </div>
+    );
+  }
+
   // Sort branches according to data.sort if available
   const sortedBranches = [...data.branches].sort((a, b) => {
     if (data.sort) {

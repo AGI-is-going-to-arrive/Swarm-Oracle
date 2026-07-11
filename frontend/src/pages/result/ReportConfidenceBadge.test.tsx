@@ -7,7 +7,11 @@ import type { ReportVerdict } from '../../types';
 // Map every i18n key to a recognizable localized string so the test can prove the
 // component reads keys (never the raw enum / backend string).
 const I18N: Record<string, string> = {
-  'result.report.likelihood_label': '[L10N likelihood]',
+  'result.report.likelihood_label': 'Estimated Likelihood',
+  'result.report.single_path_no_distribution': '[L10N single-path-no-distribution]',
+  'result.report.dominant_branch_share_label': '[L10N dominant simulated branch share]',
+  'result.report.simulation_weight_label': '[L10N simulation result weight]',
+  'result.report.simulated_distribution_range_label': '[L10N simulated distribution range]',
   'result.report.analytic_confidence_label': '[L10N analytic confidence]',
   'result.report.confidence_level.high': '[L10N high]',
   'result.report.confidence_level.medium': '[L10N medium]',
@@ -64,7 +68,8 @@ describe('ReportConfidenceBadge', () => {
   it('localizes labels and the confidence level word (never the raw enum)', () => {
     render(<ReportConfidenceBadge verdict={makeVerdict({ analytic_confidence: { level: 'high', basis: 'b' } })} />);
 
-    expect(screen.getByText(/\[L10N likelihood\]/)).toBeInTheDocument();
+    expect(screen.getByText('[L10N simulation result weight]')).toBeInTheDocument();
+    expect(screen.queryByText('Estimated Likelihood')).toBeNull();
     expect(screen.getByText(/\[L10N analytic confidence\]/)).toBeInTheDocument();
     // Localized level word is shown (meter value + tick scale); the raw enum "high" must NOT leak.
     expect(screen.getAllByText('[L10N high]').length).toBeGreaterThan(0);
@@ -111,6 +116,26 @@ describe('ReportConfidenceBadge', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
     expect(screen.queryByText('0.0')).toBeNull();
     expect(screen.getByText('[L10N wep missing]')).toBeInTheDocument();
+  });
+
+  it('keeps the neutral missing state when a legacy basis reports one branch', () => {
+    const { container } = render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          likelihood: { probability: 0, interval: [0, 1], wep: 'missing' },
+          analytic_confidence: {
+            level: 'low',
+            basis: 'branch_count=1; evidence_count=0; agent_consensus=missing',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText('[L10N single-path-no-distribution]')).toBeNull();
+    expect(screen.getByText('[L10N simulation result weight]')).toBeInTheDocument();
+    expect(container.querySelector('.report-hero__pct')?.textContent).toContain('—');
+    expect(screen.getByText('[L10N wep missing]')).toBeInTheDocument();
+    expect(screen.getByText('[L10N interval unavailable]')).toBeInTheDocument();
   });
 
   it('shows a localized safe fallback for an unknown confidence level (never the raw value)', () => {
@@ -261,10 +286,11 @@ describe('ReportConfidenceBadge', () => {
     expect(screen.queryByText(/\[L10N single-branch\]/)).toBeNull();
   });
 
-  it('shows the single-branch hedge only when basis reports exactly one branch', () => {
-    render(
+  it('hides probability, interval, and WEP for legacy single-path data inferred from basis', () => {
+    const { container } = render(
       <ReportConfidenceBadge
         verdict={makeVerdict({
+          likelihood: { probability: 1, interval: [0.95, 1], wep: 'almost_certain' },
           analytic_confidence: {
             level: 'high',
             basis: 'branch_count=1; evidence_count=2; agent_consensus=1.0000',
@@ -272,7 +298,65 @@ describe('ReportConfidenceBadge', () => {
         })}
       />,
     );
-    expect(screen.getByText(/\[L10N single-branch\]/)).toBeInTheDocument();
+    expect(container.querySelector('.report-hero__pct')).toBeNull();
+    expect(container.querySelector('.report-hero__interval')).toBeNull();
+    expect(container.querySelector('.report-hero__wep')).toBeNull();
+    expect(screen.queryByText(/100\.0/)).toBeNull();
+    expect(screen.queryByText('[L10N wep almost_certain]')).toBeNull();
+    expect(screen.getByText('[L10N single-path-no-distribution]')).toBeInTheDocument();
+    expect(screen.getByText('[L10N analytic confidence]')).toBeInTheDocument();
+  });
+
+  it('honors explicit wep=single_path even when basis is not parseable', () => {
+    const { container } = render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          likelihood: { probability: 0.73, interval: [0.6, 0.8], wep: 'single_path' },
+          analytic_confidence: { level: 'medium', basis: 'Freeform basis without a branch count.' },
+        })}
+      />,
+    );
+
+    expect(container.querySelector('.report-hero__pct')).toBeNull();
+    expect(container.querySelector('.report-hero__interval')).toBeNull();
+    expect(container.querySelector('.report-hero__wep')).toBeNull();
+    expect(screen.queryByText(/73\.0/)).toBeNull();
+    expect(screen.getByText('[L10N single-path-no-distribution]')).toBeInTheDocument();
+    expect(screen.getByText('[L10N analytic confidence]')).toBeInTheDocument();
+  });
+
+  it('keeps a 100% multi-branch weight and labels it as the dominant simulated branch share', () => {
+    const { container } = render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          likelihood: { probability: 1, interval: [0.9, 1], wep: 'almost_certain' },
+          analytic_confidence: {
+            level: 'medium',
+            basis: 'branch_count=3; evidence_count=5; agent_consensus=0.5000',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('[L10N dominant simulated branch share]')).toBeInTheDocument();
+    expect(container.querySelector('.report-hero__pct')?.textContent).toContain('100.0');
+    expect(screen.getByText('[L10N simulated distribution range]')).toBeInTheDocument();
+    expect(screen.queryByText('Estimated Likelihood')).toBeNull();
+  });
+
+  it('uses a neutral simulation-weight label when branch count is unknown', () => {
+    const { container } = render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          likelihood: { probability: 0.64, interval: [0.5, 0.78], wep: 'likely' },
+          analytic_confidence: { level: 'medium', basis: 'Freeform evidence note.' },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('[L10N simulation result weight]')).toBeInTheDocument();
+    expect(container.querySelector('.report-hero__pct')?.textContent).toContain('64.0');
+    expect(screen.queryByText('Estimated Likelihood')).toBeNull();
   });
 
   it('omits the "agents aligned" claim when consensus is low', () => {

@@ -799,8 +799,22 @@ def _missing_result(reason: str) -> ReducerResult:
 
 
 def _derive_likelihood(probability: float, branch_count: int) -> Likelihood:
+    if branch_count <= 0:
+        return Likelihood(
+            probability=0.0,
+            interval=(0.0, 0.0),
+            wep="missing",
+        )
+
     probability = _clamp_probability(probability)
-    spread = 0.05 if branch_count <= 1 else 0.10
+    if branch_count == 1:
+        return Likelihood(
+            probability=probability,
+            interval=(probability, probability),
+            wep="single_path",
+        )
+
+    spread = 0.10
     return Likelihood(
         probability=probability,
         interval=(
