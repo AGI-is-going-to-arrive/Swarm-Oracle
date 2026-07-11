@@ -418,60 +418,155 @@ def build_previous_round_relationship_contexts(
     if not agent_names:
         return {}
 
-    with Session(engine) as session:
-        edges = list(
-            session.exec(
-                select(AgentRelationEdge).where(
-                    AgentRelationEdge.scenario_id == scenario_id,
-                    AgentRelationEdge.branch_id == branch_id,
-                    AgentRelationEdge.round_number == previous_round,
-                )
-            ).all()
-        )
-
-    adjacent: dict[str, list[tuple[float, str, AgentRelationEdge]]] = {
-        agent_id: [] for agent_id in agent_names
-    }
-    for edge in edges:
-        source_id = str(edge.source_agent_id or "")
-        target_id = str(edge.target_agent_id or "")
-        trust = min(max(float(edge.trust_score), 0.0), 1.0)
-        opposition = min(max(float(edge.opposition_score), 0.0), 1.0)
-        weight = max(trust, opposition)
-        if source_id in adjacent:
-            adjacent[source_id].append((weight, target_id, edge))
-        if target_id in adjacent:
-            adjacent[target_id].append((weight, source_id, edge))
-
     edge_limit = max(1, int(max_edges_per_agent))
     char_limit = max(80, int(max_chars_per_agent))
-    is_chinese = language == "Chinese"
-    contexts: dict[str, str] = {}
-    for agent_id, candidates in adjacent.items():
-        ranked = sorted(
-            candidates,
-            key=lambda item: (-item[0], agent_names.get(item[1], item[1]), item[2].id),
-        )[:edge_limit]
-        lines: list[str] = []
-        for _weight, other_id, edge in ranked:
-            trust = min(max(float(edge.trust_score), 0.0), 1.0)
-            opposition = min(max(float(edge.opposition_score), 0.0), 1.0)
-            other_name = agent_names.get(other_id, other_id or "unknown")
-            evidence = " ".join(str(edge.evidence_summary or "").split())
-            if len(evidence) > 160:
-                evidence = evidence[:159].rstrip() + "…"
-            if is_chinese:
-                line = f"- 与 {other_name}: 信任={trust:.2f}, 对立={opposition:.2f}"
-                if evidence:
-                    line += f"；依据={evidence}"
-            else:
-                line = f"- With {other_name}: trust={trust:.2f}, opposition={opposition:.2f}"
-                if evidence:
-                    line += f"; evidence={evidence}"
-            lines.append(line)
 
-        if not lines:
-            continue
+    from sqlalchemy import text as sa_text
+
+    agent_names_json = json.dumps(
+        list(agent_names.items()),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    stmt = sa_text("""
+        WITH runtime_agents AS (
+            SELECT
+                CAST(json_extract(entry.value, '$[0]') AS TEXT) AS agent_id,
+                CAST(json_extract(entry.value, '$[1]') AS TEXT) AS agent_name,
+                CAST(entry.key AS INTEGER) AS input_order
+            FROM json_each(:agent_names_json) AS entry
+        ),
+        filtered_edges AS (
+            SELECT
+                id AS edge_id,
+                source_agent_id,
+                target_agent_id,
+                trust_score,
+                opposition_score,
+                evidence_summary
+            FROM agent_relation_edge
+            WHERE scenario_id = :scenario_id
+              AND branch_id = :branch_id
+              AND round_number = :previous_round
+        ),
+        adjacent AS (
+            SELECT
+                owner.agent_id AS owner_agent_id,
+                owner.input_order AS owner_input_order,
+                edge.target_agent_id AS other_agent_id,
+                edge.edge_id,
+                edge.trust_score,
+                edge.opposition_score,
+                edge.evidence_summary
+            FROM filtered_edges AS edge
+            JOIN runtime_agents AS owner
+              ON owner.agent_id = edge.source_agent_id
+
+            UNION ALL
+
+            SELECT
+                owner.agent_id AS owner_agent_id,
+                owner.input_order AS owner_input_order,
+                edge.source_agent_id AS other_agent_id,
+                edge.edge_id,
+                edge.trust_score,
+                edge.opposition_score,
+                edge.evidence_summary
+            FROM filtered_edges AS edge
+            JOIN runtime_agents AS owner
+              ON owner.agent_id = edge.target_agent_id
+        ),
+        clamped AS (
+            SELECT
+                adjacent.owner_agent_id,
+                adjacent.owner_input_order,
+                adjacent.edge_id,
+                adjacent.evidence_summary,
+                COALESCE(
+                    peer.agent_name,
+                    NULLIF(adjacent.other_agent_id, ''),
+                    'unknown'
+                ) AS other_name,
+                CASE
+                    WHEN adjacent.trust_score < 0.0 THEN 0.0
+                    WHEN adjacent.trust_score > 1.0 THEN 1.0
+                    ELSE adjacent.trust_score
+                END AS trust_score,
+                CASE
+                    WHEN adjacent.opposition_score < 0.0 THEN 0.0
+                    WHEN adjacent.opposition_score > 1.0 THEN 1.0
+                    ELSE adjacent.opposition_score
+                END AS opposition_score
+            FROM adjacent
+            LEFT JOIN runtime_agents AS peer
+              ON peer.agent_id = adjacent.other_agent_id
+        ),
+        weighted AS (
+            SELECT
+                clamped.*,
+                CASE
+                    WHEN trust_score >= opposition_score THEN trust_score
+                    ELSE opposition_score
+                END AS weight
+            FROM clamped
+        ),
+        ranked AS (
+            SELECT
+                weighted.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY owner_agent_id
+                    ORDER BY
+                        weight DESC,
+                        other_name COLLATE BINARY ASC,
+                        edge_id ASC
+                ) AS row_rank
+            FROM weighted
+        )
+        SELECT
+            owner_agent_id,
+            other_name,
+            trust_score,
+            opposition_score,
+            evidence_summary
+        FROM ranked
+        WHERE row_rank <= :edge_limit
+        ORDER BY owner_input_order ASC, row_rank ASC
+    """)
+    with Session(engine) as session:
+        relation_rows = session.exec(
+            stmt,
+            params={
+                "agent_names_json": agent_names_json,
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "previous_round": previous_round,
+                "edge_limit": edge_limit,
+            },
+        ).all()
+
+    is_chinese = language == "Chinese"
+    lines_by_agent: dict[str, list[str]] = {}
+    for row in relation_rows:
+        relation = row._mapping
+        agent_id = str(relation["owner_agent_id"])
+        other_name = str(relation["other_name"])
+        trust = float(relation["trust_score"])
+        opposition = float(relation["opposition_score"])
+        evidence = " ".join(str(relation["evidence_summary"] or "").split())
+        if len(evidence) > 160:
+            evidence = evidence[:159].rstrip() + "…"
+        if is_chinese:
+            line = f"- 与 {other_name}: 信任={trust:.2f}, 对立={opposition:.2f}"
+            if evidence:
+                line += f"；依据={evidence}"
+        else:
+            line = f"- With {other_name}: trust={trust:.2f}, opposition={opposition:.2f}"
+            if evidence:
+                line += f"; evidence={evidence}"
+        lines_by_agent.setdefault(agent_id, []).append(line)
+
+    contexts: dict[str, str] = {}
+    for agent_id, lines in lines_by_agent.items():
         rendered = "\n".join(lines)
         if len(rendered) > char_limit:
             rendered = rendered[: char_limit - 1].rstrip() + "…"

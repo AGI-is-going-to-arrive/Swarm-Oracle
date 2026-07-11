@@ -7,6 +7,7 @@ import copy
 import pytest
 from sqlmodel import Session, select
 
+import app.services.factions as factions_module
 import app.services.simulator as simulator_module
 from app.models import (
     Agent,
@@ -923,6 +924,364 @@ def test_relationship_context_is_agent_perspective_and_bounded():
     assert len(alice_context) <= 420
     assert "Peer 0" in alice_context
     assert "Peer 5" not in alice_context
+
+
+def test_relationship_context_exactly_filters_and_preserves_bidirectional_self_views():
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Relationship truth")
+    other_branch_id = _create_branch(engine, scenario_id, title="Other branch")
+    other_scenario_id = _make_scenario(engine)
+    alice = _add_agent(engine, scenario_id, name="Alice Database")
+    bob = _add_agent(engine, scenario_id, name="Bob Database")
+    alice_runtime = {**alice, "name": "Alice Runtime"}
+    bob_runtime = {**bob, "name": "Bob Runtime"}
+
+    with Session(engine) as session:
+        session.add_all([
+            AgentRelationEdge(
+                id="valid-pair",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=2,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.82,
+                opposition_score=0.18,
+                evidence_summary="valid pair",
+            ),
+            AgentRelationEdge(
+                id="valid-self",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=2,
+                source_agent_id=alice["id"],
+                target_agent_id=alice["id"],
+                trust_score=0.70,
+                opposition_score=0.30,
+                evidence_summary="self view",
+            ),
+            AgentRelationEdge(
+                id="noise-old",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.99,
+                opposition_score=0.01,
+                evidence_summary="OLD_MUST_NOT_APPEAR",
+            ),
+            AgentRelationEdge(
+                id="noise-future",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=3,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.99,
+                opposition_score=0.01,
+                evidence_summary="FUTURE_MUST_NOT_APPEAR",
+            ),
+            AgentRelationEdge(
+                id="noise-branch",
+                scenario_id=scenario_id,
+                branch_id=other_branch_id,
+                round_number=2,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.99,
+                opposition_score=0.01,
+                evidence_summary="OTHER_BRANCH_MUST_NOT_APPEAR",
+            ),
+            AgentRelationEdge(
+                id="noise-scenario",
+                scenario_id=other_scenario_id,
+                branch_id=branch_id,
+                round_number=2,
+                source_agent_id=bob["id"],
+                target_agent_id=alice["id"],
+                trust_score=0.99,
+                opposition_score=0.01,
+                evidence_summary="OTHER_SCENARIO_MUST_NOT_APPEAR",
+            ),
+        ])
+        session.commit()
+
+    english = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        3,
+        [alice_runtime, bob_runtime],
+        language="English",
+        max_edges_per_agent=4,
+    )
+    chinese = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        3,
+        [alice_runtime, bob_runtime],
+        language="Chinese",
+        max_edges_per_agent=4,
+    )
+
+    assert english == {
+        alice["id"]: (
+            "- With Bob Runtime: trust=0.82, opposition=0.18; evidence=valid pair\n"
+            "- With Alice Runtime: trust=0.70, opposition=0.30; evidence=self view\n"
+            "- With Alice Runtime: trust=0.70, opposition=0.30; evidence=self view"
+        ),
+        bob["id"]: (
+            "- With Alice Runtime: trust=0.82, opposition=0.18; evidence=valid pair"
+        ),
+    }
+    assert chinese == {
+        alice["id"]: (
+            "- 与 Bob Runtime: 信任=0.82, 对立=0.18；依据=valid pair\n"
+            "- 与 Alice Runtime: 信任=0.70, 对立=0.30；依据=self view\n"
+            "- 与 Alice Runtime: 信任=0.70, 对立=0.30；依据=self view"
+        ),
+        bob["id"]: "- 与 Alice Runtime: 信任=0.82, 对立=0.18；依据=valid pair",
+    }
+    assert "Database" not in "\n".join(english.values())
+    assert "MUST_NOT_APPEAR" not in "\n".join(english.values())
+
+
+def test_relationship_context_ranks_by_clamped_weight_runtime_binary_alias_and_edge_id():
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Relationship ranking")
+    owner = _add_agent(engine, scenario_id, name="Owner Database")
+    zeta = _add_agent(engine, scenario_id, name="Zeta Database")
+    lower_alpha = _add_agent(engine, scenario_id, name="Alpha Database")
+    twin_a = _add_agent(engine, scenario_id, name="Twin A Database")
+    twin_b = _add_agent(engine, scenario_id, name="Twin B Database")
+
+    with Session(engine) as session:
+        session.add_all([
+            AgentRelationEdge(
+                id="rank-zeta",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=owner["id"],
+                target_agent_id=zeta["id"],
+                trust_score=1.4,
+                opposition_score=0.2,
+            ),
+            AgentRelationEdge(
+                id="rank-alpha",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=owner["id"],
+                target_agent_id=lower_alpha["id"],
+                trust_score=0.2,
+                opposition_score=1.4,
+            ),
+            AgentRelationEdge(
+                id="rank-unknown",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=owner["id"],
+                target_agent_id="unknown-peer",
+                trust_score=0.9,
+                opposition_score=0.1,
+            ),
+            AgentRelationEdge(
+                id="rank-tie-b",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=owner["id"],
+                target_agent_id=twin_b["id"],
+                trust_score=0.8,
+                opposition_score=0.2,
+                evidence_summary="edge-b",
+            ),
+            AgentRelationEdge(
+                id="rank-tie-a",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=owner["id"],
+                target_agent_id=twin_a["id"],
+                trust_score=0.8,
+                opposition_score=0.2,
+                evidence_summary="edge-a",
+            ),
+        ])
+        session.commit()
+
+    runtime_agents = [
+        {**zeta, "name": "Zeta Runtime"},
+        {**owner, "name": "Owner First"},
+        {**lower_alpha, "name": "alpha Runtime"},
+        {**owner, "name": "Owner Final"},
+        {**twin_a, "name": "Twin Runtime"},
+        {**twin_b, "name": "Twin Runtime"},
+    ]
+    contexts = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        2,
+        runtime_agents,
+        language="English",
+        max_edges_per_agent=5,
+    )
+
+    assert list(contexts) == [
+        zeta["id"],
+        owner["id"],
+        lower_alpha["id"],
+        twin_a["id"],
+        twin_b["id"],
+    ]
+    assert contexts[owner["id"]].splitlines() == [
+        "- With Zeta Runtime: trust=1.00, opposition=0.20",
+        "- With alpha Runtime: trust=0.20, opposition=1.00",
+        "- With unknown-peer: trust=0.90, opposition=0.10",
+        "- With Twin Runtime: trust=0.80, opposition=0.20; evidence=edge-a",
+        "- With Twin Runtime: trust=0.80, opposition=0.20; evidence=edge-b",
+    ]
+    assert contexts[zeta["id"]] == (
+        "- With Owner Final: trust=1.00, opposition=0.20"
+    )
+
+
+def test_relationship_context_preserves_bilingual_evidence_and_total_character_limits():
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Relationship truncation")
+    owner = {"id": "owner", "name": "Owner Runtime"}
+    peer = {"id": "peer", "name": "Peer Runtime"}
+    with Session(engine) as session:
+        session.add(
+            AgentRelationEdge(
+                id="long-evidence",
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=1,
+                source_agent_id=owner["id"],
+                target_agent_id=peer["id"],
+                trust_score=0.82,
+                opposition_score=0.18,
+                evidence_summary="  LONG   " + ("x" * 200) + " \n",
+            )
+        )
+        session.commit()
+
+    expected_evidence = "LONG " + ("x" * 154) + "…"
+    english = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        2,
+        [owner, peer],
+        language="English",
+    )[owner["id"]]
+    chinese = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        2,
+        [owner, peer],
+        language="Chinese",
+    )[owner["id"]]
+    limited = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        2,
+        [owner, peer],
+        language="English",
+        max_chars_per_agent=80,
+    )[owner["id"]]
+
+    expected_english = (
+        "- With Peer Runtime: trust=0.82, opposition=0.18; evidence="
+        + expected_evidence
+    )
+    assert english == expected_english
+    assert chinese == (
+        "- 与 Peer Runtime: 信任=0.82, 对立=0.18；依据=" + expected_evidence
+    )
+    assert limited == expected_english[:79].rstrip() + "…"
+    assert len(limited) == 80
+
+
+def test_relationship_context_single_query_materializes_only_ranked_agent_edges(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Dense relationships")
+    agent_count = 200
+    edge_limit = 4
+    agents = [
+        {"id": f"agent-{index:03d}", "name": f"Agent {index:03d}"}
+        for index in range(agent_count)
+    ]
+    edge_rows = [
+        {
+            "id": f"dense-{source_index:03d}-{target_index:03d}",
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_number": 1,
+            "source_agent_id": agents[source_index]["id"],
+            "target_agent_id": agents[target_index]["id"],
+            "trust_score": 0.8,
+            "opposition_score": 0.2,
+            "evidence_summary": None,
+        }
+        for source_index in range(agent_count)
+        for target_index in range(source_index + 1, agent_count)
+    ]
+    with engine.begin() as connection:
+        connection.execute(AgentRelationEdge.__table__.insert(), edge_rows)
+
+    original_exec = factions_module.Session.exec
+    executed_statements = []
+    materialized_row_counts = []
+
+    class ObservedResult:
+        def __init__(self, result):
+            self._result = result
+
+        def all(self):
+            rows = self._result.all()
+            materialized_row_counts.append(len(rows))
+            return rows
+
+        def __getattr__(self, name):
+            return getattr(self._result, name)
+
+    def observed_exec(session, statement, *args, **kwargs):
+        executed_statements.append(statement)
+        return ObservedResult(original_exec(session, statement, *args, **kwargs))
+
+    monkeypatch.setattr(factions_module.Session, "exec", observed_exec)
+
+    contexts = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        branch_id,
+        2,
+        agents,
+        language="English",
+        max_edges_per_agent=edge_limit,
+    )
+
+    assert len(edge_rows) == 19_900
+    assert len(executed_statements) == 1
+    assert materialized_row_counts == [agent_count * edge_limit]
+    assert len(contexts) == agent_count
+    assert all(context.count("- With ") <= edge_limit for context in contexts.values())
+    assert sum(context.count("- With ") for context in contexts.values()) == (
+        agent_count * edge_limit
+    )
 
 
 @pytest.mark.asyncio
