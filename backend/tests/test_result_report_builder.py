@@ -906,34 +906,73 @@ async def test_build_report_interview_failure_is_fail_soft(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_build_report_initial_persist_marks_report_generating(monkeypatch):
+async def test_build_report_persists_generating_until_all_sections_finish(monkeypatch):
     from app.services.result_report import builder
 
     scenario_id = _seed_report_scenario()
     fake_llm = QueuedLlm(
         [
-            _outline_payload(["timeline"]),
+            _outline_payload(["timeline", "sources"]),
             _section_payload("timeline"),
+            _section_payload("sources"),
         ],
     )
     monkeypatch.setattr(builder, "llm_call_json", fake_llm)
     original_generate = builder.generate_section_react
-    observed_initial_status: list[str] = []
+    observed_statuses: list[str] = []
 
-    async def assert_generating_before_first_section(*args: Any, **kwargs: Any):
-        observed_initial_status.append(_persisted_report(scenario_id)["status"])
+    async def capture_status_before_each_section(*args: Any, **kwargs: Any):
+        observed_statuses.append(_persisted_report(scenario_id)["status"])
         return await original_generate(*args, **kwargs)
 
     monkeypatch.setattr(
         builder,
         "generate_section_react",
-        assert_generating_before_first_section,
+        capture_status_before_each_section,
     )
 
     report = await builder.build_report(scenario_id, "branch-a", overrides=None)
 
     assert report.status == "complete"
-    assert observed_initial_status[0] == "generating"
+    assert observed_statuses == ["generating", "generating"]
+
+
+@pytest.mark.asyncio
+async def test_missing_section_keeps_loop_generating_then_finishes_failed(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("sources"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    original_generate = builder.generate_section_react
+    status_before_second: list[str] = []
+
+    async def fail_first_and_capture_second(*args: Any, **kwargs: Any):
+        section_plan = args[1]
+        if section_plan.section_id == "timeline":
+            raise RuntimeError("timeline section missing")
+        status_before_second.append(_persisted_report(scenario_id)["status"])
+        return await original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        builder,
+        "generate_section_react",
+        fail_first_and_capture_second,
+    )
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert status_before_second == ["generating"]
+    assert report.status == "failed"
+    assert [section.id for section in report.sections] == ["sources"]
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "failed"
+    assert [section.id for section in persisted.sections] == ["sources"]
 
 
 @pytest.mark.asyncio
@@ -962,10 +1001,10 @@ async def test_plan_failure_uses_fallback_outline_and_section_failure_isolated(
         overrides=None,
     )
 
-    assert report.status == "partial"
+    assert report.status == "failed"
     assert report.summary_i18n.en
     assert [section.id for section in report.sections] == ["timeline"]
-    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "partial"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
     assert len([prompt for prompt in fake_llm.prompts if "REPORT_OUTLINE" in prompt]) == 1
 
 
@@ -1079,6 +1118,49 @@ async def test_static_tier_used_when_generation_and_rewrite_fail(monkeypatch):
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.generation_mode == "static"
     assert persisted.interview_evidence == report.interview_evidence
+
+
+@pytest.mark.asyncio
+async def test_all_static_sections_complete_and_emit_bounded_observability(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    monkeypatch.setattr(
+        builder,
+        "llm_call_json",
+        QueuedLlm([_outline_payload(["timeline", "sources"])]),
+    )
+    progress_events: list[ResultReportSSEEvent] = []
+
+    async def static_section(*args: Any, **_kwargs: Any):
+        return builder._static_section_from_context(
+            args[0],
+            args[1],
+            args[2],
+            failure_reason="timeout",
+        )
+
+    async def capture_progress(event: ResultReportSSEEvent) -> None:
+        progress_events.append(event)
+
+    monkeypatch.setattr(builder, "generate_section_react", static_section)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+        progress=capture_progress,
+    )
+
+    assert report.status == "complete"
+    assert report.tier == "static"
+    assert [section.tier for section in report.sections] == ["static", "static"]
+    section_events = [
+        event for event in progress_events
+        if event.event == "report_section_complete"
+    ]
+    assert [event.data.tier for event in section_events] == ["static", "static"]
+    assert [event.data.failure_reason for event in section_events] == ["timeout", "timeout"]
 
 
 @pytest.mark.asyncio
@@ -1463,7 +1545,216 @@ async def test_build_report_safe_retries_failed_report_until_success(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_build_report_safe_retries_static_only_report_until_success(monkeypatch):
+async def test_auto_retry_preserves_and_reuses_complementary_sections(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "重试报告", "en": "Retry report"},
+        summary_i18n={"zh": "重试摘要", "en": "Retry summary"},
+        sections=[
+            builder.SectionPlan(
+                section_id=section_id,
+                title_i18n={"zh": section_id, "en": section_id.title()},
+                intent=f"Explain {section_id}.",
+            )
+            for section_id in ("timeline", "sources")
+        ],
+    )
+    attempt_number = 0
+    generated: list[tuple[int, str]] = []
+    failed_snapshots: list[FullReport] = []
+    retry_snapshots: list[FullReport] = []
+
+    async def fixed_outline(*_args: Any, **_kwargs: Any):
+        nonlocal attempt_number
+        attempt_number += 1
+        if attempt_number == 2:
+            retry_snapshots.append(
+                validate_full_report_payload(_persisted_report(scenario_id)),
+            )
+        return outline
+
+    async def complementary_sections(*args: Any, **_kwargs: Any):
+        section_plan = args[1]
+        generated.append((attempt_number, section_plan.section_id))
+        if attempt_number == 1 and section_plan.section_id == "sources":
+            raise RuntimeError("sources missing on first attempt")
+        section = ReportSection(
+            id=section_plan.section_id,
+            title=section_plan.title_i18n["en"],
+            title_i18n=I18nText.model_validate(section_plan.title_i18n),
+            intent=section_plan.intent,
+            body_md_i18n=I18nText(
+                zh=f"{section_plan.section_id} 来自第 {attempt_number} 次尝试。",
+                en=(
+                    f"{section_plan.section_id} was generated on attempt "
+                    f"{attempt_number}."
+                ),
+            ),
+            evidence_refs=["ev_001"],
+            tier="generation",
+        )
+        return builder.SectionBuildResult(
+            section=section,
+            tier="generation",
+            tool_trace=[],
+        )
+
+    original_prepare = builder._prepare_auto_report_retry
+
+    async def capture_failed_then_prepare(*args: Any, **kwargs: Any):
+        failed_snapshots.append(
+            validate_full_report_payload(_persisted_report(scenario_id)),
+        )
+        await original_prepare(*args, **kwargs)
+
+    async def no_interviews(*_args: Any, **_kwargs: Any):
+        return [], builder.InterviewStatus(
+            status="skipped",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+        )
+
+    async def no_indicators(*_args: Any, **_kwargs: Any):
+        return None
+
+    monkeypatch.setattr(builder, "plan_outline", fixed_outline)
+    monkeypatch.setattr(builder, "generate_section_react", complementary_sections)
+    monkeypatch.setattr(builder, "_prepare_auto_report_retry", capture_failed_then_prepare)
+    monkeypatch.setattr(builder, "_build_interview_evidence", no_interviews)
+    monkeypatch.setattr(builder, "_build_indicators_llm", no_indicators)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 2)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report is not None
+    assert attempt_number == 2
+    assert failed_snapshots[0].status == "failed"
+    assert [section.id for section in failed_snapshots[0].sections] == ["timeline"]
+    assert retry_snapshots[0].status == "generating"
+    assert [section.id for section in retry_snapshots[0].sections] == ["timeline"]
+    assert retry_snapshots[0].tier == "generation"
+    assert [item.id for item in retry_snapshots[0].evidence] == [
+        item.id for item in failed_snapshots[0].evidence
+    ]
+    failed_payload = failed_snapshots[0].model_dump(mode="json")
+    retry_payload = retry_snapshots[0].model_dump(mode="json")
+    for field in ("status", "generated_at"):
+        failed_payload.pop(field)
+        retry_payload.pop(field)
+    assert retry_payload == failed_payload
+    assert generated.count((1, "timeline")) == 1
+    assert (2, "timeline") not in generated
+    assert report.status == "complete"
+    assert [section.id for section in report.sections] == ["timeline", "sources"]
+    assert "attempt 1" in report.sections[0].body_md_i18n.en
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "tier", "terminal_path"),
+    [
+        ("generating", "generation", "exception"),
+        ("generating", "static", "exception"),
+        ("failed", "generation", "retry_exhausted"),
+        ("failed", "static", "retry_exhausted"),
+    ],
+)
+async def test_auto_retry_terminal_markers_preserve_surviving_sections(
+    monkeypatch,
+    initial_status,
+    tier,
+    terminal_path,
+):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    payload = _legal_full_report()
+    payload["target_branch_id"] = "branch-a"
+    payload["status"] = initial_status
+    payload["generation_mode"] = tier
+    payload["tier"] = tier
+    payload["sections"][0]["tier"] = tier
+    payload["sections"][0]["failure_reason"] = "other" if tier == "static" else None
+    builder._persist_report_payload(scenario_id, payload)
+    before = validate_full_report_payload(payload)
+
+    if terminal_path == "exception":
+        async def terminal_build(*_args: Any, **_kwargs: Any):
+            raise RuntimeError("terminal provider failure")
+    else:
+        async def terminal_build(*_args: Any, **_kwargs: Any):
+            return validate_full_report_payload(_persisted_report(scenario_id))
+
+    monkeypatch.setattr(builder, "build_report", terminal_build)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 1)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert report is not None
+    assert report.status == "failed"
+    assert report.tier == before.tier
+    assert report.sections == before.sections
+    assert report.evidence == before.evidence
+    before_payload = before.model_dump(mode="json")
+    report_payload = report.model_dump(mode="json")
+    for field in ("status", "generated_at"):
+        before_payload.pop(field)
+        report_payload.pop(field)
+    assert report_payload == before_payload
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.sections == before.sections
+    assert persisted.evidence == before.evidence
+
+
+def test_retry_placeholder_does_not_reuse_sections_from_different_target_branch():
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    payload = _legal_full_report()
+    payload["target_branch_id"] = "branch-a"
+    payload["status"] = "failed"
+    builder._persist_report_payload(scenario_id, payload)
+
+    placeholder = builder._persist_generating_report_placeholder_for_retry(
+        scenario_id,
+        "branch-b",
+    )
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "新分支", "en": "New branch"},
+        summary_i18n={"zh": "新分支摘要", "en": "New branch summary"},
+        sections=[
+            builder.SectionPlan(
+                section_id="timeline",
+                title_i18n={"zh": "时间线", "en": "Timeline"},
+                intent="Explain why the dominant branch won.",
+            ),
+        ],
+    )
+
+    assert placeholder is not None
+    assert placeholder.status == "generating"
+    assert placeholder.target_branch_id == "branch-b"
+    assert placeholder.sections == []
+    assert placeholder.evidence == []
+    assert builder._reusable_existing_sections(
+        scenario_id,
+        "branch-b",
+        outline,
+    ) == ([], [])
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_returns_complete_static_report_without_retry(monkeypatch):
     from app.services.result_report import builder
     from tests.test_result_report_contract import _legal_full_report
 
@@ -1492,11 +1783,11 @@ async def test_build_report_safe_retries_static_only_report_until_success(monkey
 
     report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
 
-    assert attempts == 2
+    assert attempts == 1
     assert report is not None
     assert report.status == "complete"
-    assert report.sections[0].tier == "generation"
-    assert validate_full_report_payload(_persisted_report(scenario_id)).tier == "generation"
+    assert report.sections[0].tier == "static"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).tier == "static"
 
 
 @pytest.mark.asyncio
@@ -1553,7 +1844,7 @@ async def test_build_report_safe_stops_after_retry_budget_and_returns_failed(mon
 
 
 @pytest.mark.asyncio
-async def test_build_report_safe_marks_static_only_report_failed_after_retry_budget(
+async def test_build_report_safe_does_not_mark_complete_static_failed_after_retry_budget(
     monkeypatch,
 ):
     from app.services.result_report import builder
@@ -1580,10 +1871,53 @@ async def test_build_report_safe_marks_static_only_report_failed_after_retry_bud
 
     report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
 
-    assert attempts == 2
+    assert attempts == 1
     assert report is not None
-    assert report.status == "failed"
-    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+    assert report.status == "complete"
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "complete"
+
+
+@pytest.mark.parametrize(
+    ("status", "tier", "expected"),
+    [
+        ("failed", "generation", True),
+        ("complete", "static", False),
+        ("generating", "generation", False),
+        ("partial", "static", False),
+        ("cancelled", "static", False),
+        ("skipped", "static", False),
+    ],
+)
+def test_auto_report_should_retry_only_none_or_failed(status, tier, expected):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    report = validate_full_report_payload(_legal_full_report())
+    sections = [
+        section.model_copy(
+            update={
+                "tier": tier,
+                "failure_reason": "other" if tier == "static" else None,
+            },
+        )
+        for section in report.sections
+    ]
+    report = report.model_copy(
+        update={
+            "status": status,
+            "tier": tier,
+            "generation_mode": tier,
+            "sections": sections,
+        },
+    )
+
+    assert builder._auto_report_should_retry(report) is expected
+
+
+def test_auto_report_should_retry_none():
+    from app.services.result_report import builder
+
+    assert builder._auto_report_should_retry(None) is True
 
 
 @pytest.mark.asyncio

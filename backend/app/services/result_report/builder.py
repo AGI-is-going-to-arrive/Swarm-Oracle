@@ -549,11 +549,7 @@ async def _build_report_unlocked(
                 reducer_result,
                 outline,
                 sections=completed_sections,
-                status=_status_for_sections(
-                    completed=len(completed_sections),
-                    failed=failed_sections,
-                    total=len(outline.sections),
-                ),
+                status="generating",
                 tier=_worst_tier(section_tiers),
             )
             report = _fit_report_to_byte_cap(report)
@@ -568,11 +564,7 @@ async def _build_report_unlocked(
             reducer_result,
             outline,
             sections=completed_sections,
-            status=_status_for_sections(
-                completed=len(completed_sections),
-                failed=failed_sections,
-                total=len(outline.sections),
-            ),
+            status="generating",
             tier=_worst_tier(section_tiers),
         )
         report = _fit_report_to_byte_cap(report)
@@ -586,6 +578,8 @@ async def _build_report_unlocked(
                     "report_id": scenario_id,
                     "section_id": section_plan.section_id,
                     "status": "complete",
+                    "tier": section_result.tier,
+                    "failure_reason": section_result.section.failure_reason,
                     "tool_trace": section_result.tool_trace,
                 },
             ),
@@ -758,11 +752,7 @@ def _auto_report_retry_delay_seconds(attempt: int) -> float:
 
 
 def _auto_report_should_retry(report: FullReport | None) -> bool:
-    if report is None:
-        return True
-    if report.status in {"failed", "generating"}:
-        return True
-    return not _report_has_llm_enhanced_sections(report)
+    return report is None or report.status == "failed"
 
 
 def _report_has_llm_enhanced_sections(report: FullReport) -> bool:
@@ -2843,39 +2833,43 @@ def _persist_placeholder_report_if_absent(
             if isinstance(scenario.parsed_context, dict)
             else {}
         )
-        existing = _coerce_existing_full_report(parsed_context.get("full_report"))
-        if existing is not None:
-            if (
-                status == "failed"
-                and existing.status != "generating"
-                and not (
-                    replace_unenhanced
-                    and not _report_has_llm_enhanced_sections(existing)
-                )
-            ):
-                return existing
-            if (
-                status == "generating"
-                and (existing.status != "failed" or not replace_failed)
-                and not (
-                    replace_unenhanced
-                    and not _report_has_llm_enhanced_sections(existing)
-                )
-            ):
-                return existing
-
         target_branch_id = _resolve_failed_report_target_branch_id(
             scenario_id,
             dominant_branch_id,
         )
-        branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
-        payload = _placeholder_report_payload(
-            scenario,
-            parsed_context,
-            branch,
-            target_branch_id,
-            status=status,
-        )
+        existing = _coerce_existing_full_report(parsed_context.get("full_report"))
+        if existing is not None and existing.target_branch_id == target_branch_id:
+            if status == "failed":
+                should_transition = existing.status == "generating" or (
+                    existing.status == "failed"
+                    and replace_unenhanced
+                    and not _report_has_llm_enhanced_sections(existing)
+                )
+            else:
+                should_transition = existing.status == "failed" and (
+                    replace_failed
+                    or (
+                        replace_unenhanced
+                        and not _report_has_llm_enhanced_sections(existing)
+                    )
+                )
+            if not should_transition:
+                return existing
+            payload = existing.model_copy(
+                update={
+                    "status": status,
+                    "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                },
+            ).model_dump(mode="json")
+        else:
+            branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
+            payload = _placeholder_report_payload(
+                scenario,
+                parsed_context,
+                branch,
+                target_branch_id,
+                status=status,
+            )
     _persist_report_payload(scenario_id, payload)
     return validate_full_report_payload(
         payload,
@@ -3334,11 +3328,9 @@ def _worst_tier(tiers: list[SectionTier]) -> ReportTier:
 
 
 def _status_for_sections(*, completed: int, failed: int, total: int) -> ReportStatus:
-    if total <= 0 or completed == 0 and failed > 0:
-        return "failed"
-    if completed >= total and failed == 0:
+    if total > 0 and completed >= total and failed == 0:
         return "complete"
-    return "partial"
+    return "failed"
 
 
 def _follow_ups(context: BuilderContext) -> list[str]:

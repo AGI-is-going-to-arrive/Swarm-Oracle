@@ -241,6 +241,18 @@ def test_full_report_schema_accepts_generating_status():
     assert report.status == "generating"
 
 
+@pytest.mark.parametrize("status", ["cancelled", "partial"])
+def test_full_report_schema_accepts_cancelled_and_legacy_partial_status(status):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["status"] = status
+
+    report = validate_full_report_payload(payload)
+
+    assert report.status == status
+
+
 @pytest.mark.parametrize(
     ("interval", "expected"),
     [
@@ -576,13 +588,27 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
 
 
 def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
-    from app.services.result_report.schema import ResultReportSSEEvent, ToolTraceSummary
+    from app.services.result_report.schema import (
+        ResultReportSSEData,
+        ResultReportSSEEvent,
+        ToolTraceSummary,
+    )
 
     assert set(ToolTraceSummary.model_fields) == {
         "tool",
         "query",
         "item_count",
         "elapsed_ms",
+    }
+    assert set(ResultReportSSEData.model_fields) == {
+        "report_id",
+        "section_id",
+        "status",
+        "message",
+        "tool_trace",
+        "error_code",
+        "tier",
+        "failure_reason",
     }
 
     event = ResultReportSSEEvent.model_validate(
@@ -592,6 +618,8 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
                 "report_id": "report-1",
                 "section_id": "timeline",
                 "status": "complete",
+                "tier": "static",
+                "failure_reason": "timeout",
                 "tool_trace": [
                     {
                         "tool": "reducer",
@@ -604,6 +632,8 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
         }
     )
     assert event.event == "report_section_complete"
+    assert event.data.tier == "static"
+    assert event.data.failure_reason == "timeout"
     assert event.data.tool_trace[0].tool == "reducer"
     assert isinstance(event.data.tool_trace[0].tool, str)
     assert isinstance(event.data.tool_trace[0].query, str)
@@ -617,6 +647,33 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
         }
     )
     assert no_tool_calls.data.tool_trace == []
+    assert no_tool_calls.data.tier is None
+    assert no_tool_calls.data.failure_reason is None
+
+    cancelled = ResultReportSSEEvent.model_validate(
+        {
+            "event": "report_failed",
+            "data": {"report_id": "report-1", "status": "cancelled"},
+        }
+    )
+    assert cancelled.data.status == "cancelled"
+
+    for field, value in (
+        ("tier", "unsafe-tier"),
+        ("failure_reason", "provider-secret-detail"),
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            ResultReportSSEEvent.model_validate(
+                {
+                    "event": "report_section_complete",
+                    "data": {
+                        "report_id": "report-1",
+                        "section_id": "timeline",
+                        "status": "complete",
+                        field: value,
+                    },
+                }
+            )
 
     with pytest.raises((ValidationError, ValueError)):
         ResultReportSSEEvent.model_validate(

@@ -11,7 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LanguageCode = Literal["zh", "en"]
 GenerationMode = Literal["generation", "rewrite", "static"]
-ReportStatus = Literal["generating", "complete", "partial", "failed", "skipped"]
+ReportStatus = Literal[
+    "generating",
+    "complete",
+    "partial",
+    "failed",
+    "cancelled",
+    "skipped",
+]
 ReportTier = Literal["generation", "rewrite", "static"]
 SectionTier = Literal["generation", "rewrite", "static"]
 # Why a section fell back to its static/offline tier. ``None`` means the section
@@ -47,6 +54,7 @@ ResultReportSSEStatus = Literal[
     "complete",
     "partial",
     "failed",
+    "cancelled",
     "skipped",
 ]
 InterviewStatusValue = Literal["skipped", "complete", "partial", "failed"]
@@ -454,6 +462,8 @@ class ResultReportSSEData(_StrictModel):
     message: str | None = None
     tool_trace: list[ToolTraceSummary] = Field(default_factory=list)
     error_code: str | None = None
+    tier: SectionTier | None = None
+    failure_reason: SectionFailureReason | None = None
 
 
 class ResultReportSSEEvent(_StrictModel):

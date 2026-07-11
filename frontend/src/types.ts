@@ -644,6 +644,27 @@ export type StoryResponse = StoryData;
 
 // ── Result Report Upgrade (Sprint S0 Contract Freeze) ──
 
+export type ReportStatus =
+  | 'generating'
+  | 'complete'
+  | 'partial'
+  | 'failed'
+  | 'cancelled'
+  | 'skipped';
+
+export type ReportTier = 'generation' | 'rewrite' | 'static';
+
+export type ReportSectionFailureReason =
+  | 'timeout'
+  | 'tool_floor_not_met'
+  | 'empty_outline'
+  | 'json_parse_error'
+  | 'plan_outline_timeout'
+  | 'unsupported_action'
+  | 'tool_budget_exhausted'
+  | 'empty_body'
+  | 'other';
+
 export interface ReportVerdict {
   headline_answer: string;
   likelihood: {
@@ -712,6 +733,8 @@ export interface ReportSection {
   body_md_i18n: { zh: string; en: string };
   evidence_refs: string[];
   charts: ReportChart[];
+  tier?: ReportTier;
+  failure_reason?: ReportSectionFailureReason | null;
 }
 
 export interface ReportEvidence {
@@ -763,7 +786,7 @@ export interface InterviewStatus {
 export interface FullReport {
   version: string;
   generated_at: string;
-  generation_mode: 'generation' | 'rewrite' | 'static';
+  generation_mode: ReportTier;
   target_branch_id: string;
   target_branch_sort: string[];
   language: 'zh' | 'en';
@@ -772,8 +795,8 @@ export interface FullReport {
   title_i18n: { zh: string; en: string };
   summary: string;
   summary_i18n: { zh: string; en: string };
-  status: 'complete' | 'partial' | 'failed' | 'skipped' | 'generating';
-  tier: 'generation' | 'rewrite' | 'static';
+  status: ReportStatus;
+  tier: ReportTier;
   verdict: ReportVerdict;
   sections: ReportSection[];
   evidence: ReportEvidence[];
@@ -807,14 +830,16 @@ export interface ToolTraceSummary {
 }
 
 export interface ResultReportSSEEvent {
-  event: 'report_started' | 'report_section_delta' | 'report_section_complete' | 'report_failed' | 'report_complete' | string;
+  event: 'report_started' | 'report_section_delta' | 'report_section_complete' | 'report_failed' | 'report_complete';
   data: {
     report_id?: string;
     section_id?: string;
-    status: 'pending' | 'generating' | 'complete' | 'partial' | 'failed' | 'skipped' | string;
+    status: 'pending' | ReportStatus;
     message?: string;
     tool_trace: ToolTraceSummary[];
     error_code?: string;
+    tier?: ReportTier;
+    failure_reason?: ReportSectionFailureReason | null;
   };
 }
 
