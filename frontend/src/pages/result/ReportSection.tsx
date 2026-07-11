@@ -1,13 +1,84 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SafeMarkdown } from '../../components/SafeMarkdown';
-import type { ReportSection as ReportSectionType } from '../../types';
+import type {
+  ReportSection as ReportSectionType,
+  ReportSectionFailureReason,
+  ReportTier,
+} from '../../types';
 import { ReportChartRenderer } from './ReportCharts';
 
 interface Props {
   section: ReportSectionType;
   onOpenEvidence: (refs: string[]) => void;
   index: number;
+}
+
+interface LocalizedChipCopy {
+  key: string;
+  defaultValue: string;
+}
+
+const SECTION_TIER_COPY = {
+  generation: { key: 'result.report.sectionTier.generation', defaultValue: 'Generated' },
+  rewrite: { key: 'result.report.sectionTier.rewrite', defaultValue: 'Rewritten' },
+  static: { key: 'result.report.sectionTier.static', defaultValue: 'Static fallback' },
+} satisfies Record<ReportTier, LocalizedChipCopy>;
+
+const SECTION_FAILURE_REASON_COPY = {
+  timeout: {
+    key: 'result.report.sectionFailureReason.timeout',
+    defaultValue: 'Fallback: section generation timed out',
+  },
+  tool_floor_not_met: {
+    key: 'result.report.sectionFailureReason.tool_floor_not_met',
+    defaultValue: 'Fallback: tool evidence threshold was not met',
+  },
+  empty_outline: {
+    key: 'result.report.sectionFailureReason.empty_outline',
+    defaultValue: 'Fallback: generated outline was empty',
+  },
+  json_parse_error: {
+    key: 'result.report.sectionFailureReason.json_parse_error',
+    defaultValue: 'Fallback: generated section was invalid',
+  },
+  plan_outline_timeout: {
+    key: 'result.report.sectionFailureReason.plan_outline_timeout',
+    defaultValue: 'Fallback: report planning timed out',
+  },
+  unsupported_action: {
+    key: 'result.report.sectionFailureReason.unsupported_action',
+    defaultValue: 'Fallback: requested generation action was unsupported',
+  },
+  tool_budget_exhausted: {
+    key: 'result.report.sectionFailureReason.tool_budget_exhausted',
+    defaultValue: 'Fallback: tool budget was exhausted',
+  },
+  empty_body: {
+    key: 'result.report.sectionFailureReason.empty_body',
+    defaultValue: 'Fallback: generated section was empty',
+  },
+  other: {
+    key: 'result.report.sectionFailureReason.other',
+    defaultValue: 'Fallback: other degradation reason',
+  },
+} satisfies Record<ReportSectionFailureReason, LocalizedChipCopy>;
+
+function hasOwnKey<T extends object>(record: T, key: PropertyKey): key is keyof T {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function resolveTier(tier: unknown): { tier: ReportTier; copy: LocalizedChipCopy } | null {
+  if (typeof tier !== 'string' || !hasOwnKey(SECTION_TIER_COPY, tier)) return null;
+  return { tier, copy: SECTION_TIER_COPY[tier] };
+}
+
+function resolveFailureReason(reason: unknown): LocalizedChipCopy | null {
+  if (reason === null || reason === undefined) return null;
+  if (typeof reason === 'string' && hasOwnKey(SECTION_FAILURE_REASON_COPY, reason)) {
+    return SECTION_FAILURE_REASON_COPY[reason];
+  }
+  return SECTION_FAILURE_REASON_COPY.other;
 }
 
 // The page owns <h1>, the report panel owns <h2>, section titles are <h3>; demote any
@@ -50,6 +121,8 @@ export const ReportSection = React.memo(function ReportSection({ section, onOpen
   }, [isZh, section.body_md_i18n.zh, section.body_md_i18n.en, title]);
 
   const sectionNumber = String(index + 1).padStart(2, '0');
+  const tier = resolveTier(section.tier);
+  const failureReason = resolveFailureReason(section.failure_reason);
 
   return (
     <section
@@ -61,6 +134,20 @@ export const ReportSection = React.memo(function ReportSection({ section, onOpen
         <h3 className="report-section__title">
           {title}
         </h3>
+        {(tier || failureReason) && (
+          <div className="report-section__truth-chips">
+            {tier && (
+              <span className={`report-section__tier-chip report-section__tier-chip--${tier.tier}`}>
+                {t(tier.copy.key, tier.copy.defaultValue)}
+              </span>
+            )}
+            {failureReason && (
+              <span className="report-section__failure-chip">
+                {t(failureReason.key, failureReason.defaultValue)}
+              </span>
+            )}
+          </div>
+        )}
         {/* WIRE: Evidence · N → opens the evidence drawer (hidden when no refs). */}
         {section.evidence_refs && section.evidence_refs.length > 0 && (
           <button

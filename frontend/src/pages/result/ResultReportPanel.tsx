@@ -10,7 +10,20 @@ import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
-import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData, ToolTraceSummary, InterviewEvidenceEntry } from '../../types';
+import {
+  consumeResultReportStream,
+  ReportStreamInterruptedError,
+} from '../../lib/resultReportSse';
+import type {
+  FullReport,
+  FullReportTruncatedMarker,
+  InterviewEvidenceEntry,
+  ReportEvidence,
+  ReportSectionFailureReason,
+  ReportTier,
+  StoryData,
+  ToolTraceSummary,
+} from '../../types';
 // The .report-doc editorial skin lives in ResultReportView.css. Import it here (not only in
 // the standalone /report page) so the inline embed on /result/:id is fully styled too —
 // otherwise the panel renders unskinned (+ zeroed padding) on a direct /result/:id load.
@@ -153,74 +166,61 @@ function deriveTakeaways(report: FullReport, lang: 'zh' | 'en'): string[] {
 const ALLOWED_SECTION_IDS = ['timeline', 'factions', 'conflicts', 'premortem', 'indicators', 'sources'];
 const REPORT_GENERATE_TIMEOUT_MS = 35 * 60_000;
 
-async function drainReportStreamAndDetectAlreadyRunning(
-  res: Response,
-  signal: AbortSignal,
-  onToolTraceUpdate?: (trace: ToolTraceSummary[]) => void
-): Promise<boolean> {
-  const reader = res.body?.getReader();
-  if (!reader) return false;
+type TerminalAuthorityState = 'idle' | 'pending' | 'resolved';
 
-  const cancelReader = () => {
-    void reader.cancel().catch(() => undefined);
-  };
+function reportAttemptFingerprint(
+  report: FullReport | FullReportTruncatedMarker | null | undefined,
+): string | null {
+  if (!isFullReport(report)) return null;
+  return JSON.stringify({
+    generatedAt: report.generated_at,
+    status: report.status,
+    targetBranchId: report.target_branch_id,
+    targetBranchSort: report.target_branch_sort,
+  });
+}
 
-  if (signal.aborted) {
-    cancelReader();
-    throw new DOMException('Report generation aborted', 'AbortError');
-  }
+interface SectionStreamProgress {
+  sectionId: string;
+  status: 'complete' | 'failed';
+  tier?: ReportTier;
+  failureReason?: ReportSectionFailureReason | null;
+}
 
-  let isAlreadyRunning = false;
-  const decoder = new TextDecoder();
-  let buffer = '';
+const SECTION_FAILURE_REASONS = new Set<ReportSectionFailureReason>([
+  'timeout',
+  'tool_floor_not_met',
+  'empty_outline',
+  'json_parse_error',
+  'plan_outline_timeout',
+  'unsupported_action',
+  'tool_budget_exhausted',
+  'empty_body',
+  'other',
+]);
 
-  signal.addEventListener('abort', cancelReader, { once: true });
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        break;
-      }
+const SECTION_TIER_LOCALE_KEYS: Record<ReportTier, string> = {
+  generation: 'result.report.sectionTier.generation',
+  rewrite: 'result.report.sectionTier.rewrite',
+  static: 'result.report.sectionTier.static',
+};
 
-      buffer += decoder.decode(value, { stream: true });
-      const frames = buffer.split(/\r?\n\r?\n/);
-      buffer = frames.pop() ?? '';
-      for (const frame of frames) {
-        const dataLines: string[] = [];
-        for (const line of frame.split(/\r?\n/)) {
-          if (line.length === 0 || line.startsWith(':')) continue;
-          const separatorIndex = line.indexOf(':');
-          const field = separatorIndex >= 0 ? line.slice(0, separatorIndex) : line;
-          let val = separatorIndex >= 0 ? line.slice(separatorIndex + 1) : '';
-          if (val.startsWith(' ')) val = val.slice(1);
-          if (field === 'data') dataLines.push(val);
-        }
-        const dataText = dataLines.join('\n');
-        if (dataText) {
-          try {
-            const data = JSON.parse(dataText);
-            if (data && data.error_code === 'REPORT_ALREADY_RUNNING') {
-              isAlreadyRunning = true;
-            }
-            if (data && Array.isArray(data.tool_trace) && data.tool_trace.length > 0) {
-              onToolTraceUpdate?.(data.tool_trace);
-            }
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }
-    if (signal.aborted) {
-      throw new DOMException('Report generation aborted', 'AbortError');
-    }
-  } finally {
-    signal.removeEventListener('abort', cancelReader);
-    reader.releaseLock();
-  }
+const SECTION_FAILURE_LOCALE_KEYS: Record<ReportSectionFailureReason, string> = {
+  timeout: 'result.report.sectionFailureReason.timeout',
+  tool_floor_not_met: 'result.report.sectionFailureReason.tool_floor_not_met',
+  empty_outline: 'result.report.sectionFailureReason.empty_outline',
+  json_parse_error: 'result.report.sectionFailureReason.json_parse_error',
+  plan_outline_timeout: 'result.report.sectionFailureReason.plan_outline_timeout',
+  unsupported_action: 'result.report.sectionFailureReason.unsupported_action',
+  tool_budget_exhausted: 'result.report.sectionFailureReason.tool_budget_exhausted',
+  empty_body: 'result.report.sectionFailureReason.empty_body',
+  other: 'result.report.sectionFailureReason.other',
+};
 
-  return isAlreadyRunning;
+function normalizedFailureReason(reason: unknown): ReportSectionFailureReason {
+  return typeof reason === 'string' && SECTION_FAILURE_REASONS.has(reason as ReportSectionFailureReason)
+    ? reason as ReportSectionFailureReason
+    : 'other';
 }
 
 interface ToolTraceChipProps {
@@ -319,6 +319,21 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const [localStoryData, setLocalStoryData] = useState<StoryData | null>(null);
   const [localGenerating, setLocalGenerating] = useState(false);
   const [toolTrace, setToolTrace] = useState<ToolTraceSummary[]>([]);
+  const [streamInterrupted, setStreamInterrupted] = useState(false);
+  const [pollStalled, setPollStalled] = useState(false);
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const [sectionProgress, setSectionProgress] = useState<SectionStreamProgress[]>([]);
+  const [pollRevision, setPollRevision] = useState(0);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
+  const attemptEpochRef = useRef(0);
+  const terminalAuthorityRef = useRef<TerminalAuthorityState>('idle');
+  const refreshNotifiedRef = useRef(false);
+  const awaitingFreshAttemptRef = useRef<{
+    epoch: number;
+    fingerprint: string | null;
+  } | null>(null);
 
   const activeStoryData = localStoryData || storyData;
   const rawReport = activeStoryData?.full_report;
@@ -326,22 +341,51 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const report = isFullReport(rawReport) ? rawReport : null;
   const isEnabled = capabilities?.result_report?.enabled ?? false;
 
-  const isGenerating = report?.status === 'generating' || localGenerating;
+  const isGenerating = !pollStalled && (report?.status === 'generating' || localGenerating);
+
+  const beginAuthorityAttempt = useCallback(() => {
+    const epoch = attemptEpochRef.current + 1;
+    attemptEpochRef.current = epoch;
+    terminalAuthorityRef.current = 'idle';
+    refreshNotifiedRef.current = false;
+    awaitingFreshAttemptRef.current = null;
+    return epoch;
+  }, []);
+
+  const notifyRefreshOnce = useCallback(() => {
+    if (refreshNotifiedRef.current) return;
+    refreshNotifiedRef.current = true;
+    if (onRefresh) {
+      onRefresh();
+    } else if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  }, [onRefresh]);
 
   // Reset local overrides when props change
   useEffect(() => {
+    beginAuthorityAttempt();
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     setLocalStoryData(null);
     setLocalGenerating(false);
+    setRetrying(false);
     setRetryError(false);
-  }, [storyData]);
-
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const isMountedRef = useRef(true);
+    setToolTrace([]);
+    setStreamInterrupted(false);
+    setPollStalled(false);
+    setActiveSectionId(null);
+    setSectionProgress([]);
+    setPollRevision((revision) => revision + 1);
+  }, [storyData, beginAuthorityAttempt]);
 
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      attemptEpochRef.current += 1;
+      terminalAuthorityRef.current = 'resolved';
+      awaitingFreshAttemptRef.current = null;
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -352,47 +396,89 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   useEffect(() => {
     if (!isGenerating || !activeScenarioId || isReplayMode) return;
 
+    const attemptEpoch = attemptEpochRef.current;
+    let cancelled = false;
     let timerId: number | undefined;
     const startTime = Date.now();
     const maxPollTime = 35 * 60 * 1000; // 35 minutes
 
+    const isCurrentAttempt = () => (
+      !cancelled
+      && isMountedRef.current
+      && attemptEpochRef.current === attemptEpoch
+    );
+    const canPoll = () => (
+      isCurrentAttempt()
+      && terminalAuthorityRef.current === 'idle'
+    );
+    const schedulePoll = () => {
+      if (canPoll()) {
+        timerId = window.setTimeout(poll, 15000);
+      }
+    };
+
     const poll = async () => {
+      if (!canPoll()) return;
       if (Date.now() - startTime >= maxPollTime) {
-        if (isMountedRef.current) {
+        if (canPoll()) {
           setLocalGenerating(false);
+          setPollStalled(true);
         }
         return;
       }
       try {
         const updatedStory = await getStory(activeScenarioId);
-        if (!isMountedRef.current) return;
+        // A stream terminal can claim authority while this request is in flight.
+        // Such a late response belongs to the old arbitration window and must not
+        // publish data or schedule another poll.
+        if (!canPoll()) return;
         const newReport = updatedStory?.full_report;
-        if (newReport && newReport.status !== 'generating') {
+        if (newReport && newReport.status === 'generating') {
+          awaitingFreshAttemptRef.current = null;
+          setLocalStoryData(updatedStory);
+          setLocalGenerating(true);
+          setPollStalled(false);
+          schedulePoll();
+        } else if (newReport) {
+          const awaitingFreshAttempt = awaitingFreshAttemptRef.current;
+          if (
+            awaitingFreshAttempt?.epoch === attemptEpoch
+            && reportAttemptFingerprint(newReport) === awaitingFreshAttempt.fingerprint
+          ) {
+            // Persistence can still expose the exact pre-attempt terminal
+            // snapshot before an accepted build publishes fresh authority.
+            setPollStalled(false);
+            schedulePoll();
+            return;
+          }
+          awaitingFreshAttemptRef.current = null;
+          terminalAuthorityRef.current = 'resolved';
           setLocalStoryData(updatedStory);
           setLocalGenerating(false);
+          setStreamInterrupted(false);
+          setPollStalled(false);
           setRetryError(false);
-          if (onRefresh) {
-            onRefresh();
-          }
+          notifyRefreshOnce();
         } else {
-          timerId = window.setTimeout(poll, 15000);
+          schedulePoll();
         }
       } catch (err) {
-        console.error('Error polling report status', err);
-        if (isMountedRef.current) {
-          timerId = window.setTimeout(poll, 15000);
+        if (isCurrentAttempt()) {
+          console.error('Error polling report status', err);
+          schedulePoll();
         }
       }
     };
 
-    timerId = window.setTimeout(poll, 15000);
+    schedulePoll();
 
     return () => {
+      cancelled = true;
       if (timerId) {
         clearTimeout(timerId);
       }
     };
-  }, [isGenerating, activeScenarioId, isReplayMode, onRefresh]);
+  }, [isGenerating, activeScenarioId, isReplayMode, notifyRefreshOnce, pollRevision]);
 
   const takeaways = useMemo(() => {
     if (!report) return [];
@@ -449,9 +535,26 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       return;
     }
 
+    const attemptFingerprint = reportAttemptFingerprint(report);
+    const attemptEpoch = beginAuthorityAttempt();
+    awaitingFreshAttemptRef.current = {
+      epoch: attemptEpoch,
+      fingerprint: attemptFingerprint,
+    };
+    const isCurrentAttempt = () => (
+      isMountedRef.current
+      && attemptEpochRef.current === attemptEpoch
+    );
+    const isTerminalAuthorityResolved = () => terminalAuthorityRef.current === 'resolved';
+    abortControllerRef.current?.abort();
     setRetrying(true);
     setRetryError(false);
     setToolTrace([]);
+    setStreamInterrupted(false);
+    setPollStalled(false);
+    setActiveSectionId(null);
+    setSectionProgress([]);
+    setPollRevision((revision) => revision + 1);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -463,6 +566,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     // the poll is what eventually clears the stale partial banner.
     setLocalGenerating(true);
 
+    let terminalAuthorityFetchPending = false;
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const res = await generateReport(
@@ -476,34 +580,108 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         },
         controller.signal
       );
+      if (!isCurrentAttempt() || isTerminalAuthorityResolved()) return;
 
-      const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(
+      let isAlreadyRunning = false;
+      await consumeResultReportStream(
         res,
         controller.signal,
-        (newTrace) => {
-          if (isMountedRef.current) {
+        (event) => {
+          if (!isCurrentAttempt() || isTerminalAuthorityResolved()) return;
+          if (event.data.error_code === 'REPORT_ALREADY_RUNNING') {
+            isAlreadyRunning = true;
+          }
+          if (event.data.section_id) {
+            setActiveSectionId(event.data.section_id);
+          }
+          if (event.event === 'report_section_complete' && event.data.section_id) {
+            const next: SectionStreamProgress = {
+              sectionId: event.data.section_id,
+              status: 'complete',
+              tier: event.data.tier,
+              failureReason: event.data.failure_reason,
+            };
+            setSectionProgress((previous) => [
+              ...previous.filter((item) => item.sectionId !== next.sectionId),
+              next,
+            ]);
+          } else if (event.event === 'report_failed' && event.data.section_id) {
+            const next: SectionStreamProgress = {
+              sectionId: event.data.section_id,
+              status: 'failed',
+              tier: event.data.tier,
+              failureReason: event.data.failure_reason,
+            };
+            setSectionProgress((previous) => [
+              ...previous.filter((item) => item.sectionId !== next.sectionId),
+              next,
+            ]);
+          }
+          const newTrace = event.data.tool_trace;
+          if (newTrace.length > 0) {
             setToolTrace((prev) => [...prev, ...newTrace]);
           }
         }
       );
-      if (!isMountedRef.current) return;
+      if (!isCurrentAttempt()) return;
       if (isAlreadyRunning) {
         setLocalGenerating(true);
       } else {
-        // Stream completed: drop the local generating flag so the freshly fetched
-        // report renders immediately instead of waiting for the next poll tick.
-        setLocalGenerating(false);
-        setRetryError(false);
-        if (onRefresh) {
-          onRefresh();
-        } else if (typeof window !== 'undefined') {
-          window.location.reload();
+        if (isTerminalAuthorityResolved()) return;
+        terminalAuthorityRef.current = 'pending';
+        terminalAuthorityFetchPending = true;
+        const updatedStory = await getStory(activeScenarioId);
+        terminalAuthorityFetchPending = false;
+        if (!isCurrentAttempt() || terminalAuthorityRef.current !== 'pending') return;
+        const updatedReport = updatedStory?.full_report;
+        if (updatedReport?.status === 'generating') {
+          terminalAuthorityRef.current = 'idle';
+          awaitingFreshAttemptRef.current = null;
+          setLocalStoryData(updatedStory);
+          setLocalGenerating(true);
+          setRetryError(false);
+          setPollStalled(false);
+          setPollRevision((revision) => revision + 1);
+        } else if (updatedReport) {
+          const awaitingFreshAttempt = awaitingFreshAttemptRef.current;
+          if (
+            awaitingFreshAttempt?.epoch === attemptEpoch
+            && reportAttemptFingerprint(updatedReport) === awaitingFreshAttempt.fingerprint
+          ) {
+            terminalAuthorityRef.current = 'idle';
+            setLocalGenerating(true);
+            setPollRevision((revision) => revision + 1);
+            return;
+          }
+          terminalAuthorityRef.current = 'resolved';
+          awaitingFreshAttemptRef.current = null;
+          setLocalStoryData(updatedStory);
+          setLocalGenerating(false);
+          setStreamInterrupted(false);
+          setPollStalled(false);
+          setRetryError(updatedReport.status === 'complete' ? false : true);
+          notifyRefreshOnce();
+        } else {
+          terminalAuthorityRef.current = 'idle';
+          setLocalGenerating(true);
+          setPollRevision((revision) => revision + 1);
         }
       }
     } catch (err) {
       const error = err as { code?: string; message?: string; name?: string } | null;
-      if (isMountedRef.current) {
-        if (error && (error.code === 'REPORT_ALREADY_RUNNING' || error.message?.includes('REPORT_ALREADY_RUNNING'))) {
+      if (isCurrentAttempt() && !isTerminalAuthorityResolved()) {
+        if (terminalAuthorityFetchPending && terminalAuthorityRef.current === 'pending') {
+          terminalAuthorityRef.current = 'idle';
+          setLocalGenerating(true);
+          setPollRevision((revision) => revision + 1);
+        } else if (err instanceof ReportStreamInterruptedError) {
+          // EOF without a terminal event is not terminal authority. Keep the
+          // attempt pollable and let the persisted story decide its outcome.
+          terminalAuthorityRef.current = 'idle';
+          setStreamInterrupted(true);
+          setLocalGenerating(true);
+        } else if (error && (error.code === 'REPORT_ALREADY_RUNNING' || error.message?.includes('REPORT_ALREADY_RUNNING'))) {
+          terminalAuthorityRef.current = 'idle';
           setLocalGenerating(true);
         } else if (error?.name === 'AbortError') {
           // The backend ties report generation to the SSE generator; aborting the
@@ -520,11 +698,19 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
-      if (isMountedRef.current) {
+      if (isCurrentAttempt()) {
         setRetrying(false);
       }
     }
-  }, [activeScenarioId, retrying, onRefresh, isReplayMode, t]);
+  }, [
+    activeScenarioId,
+    retrying,
+    isReplayMode,
+    t,
+    report,
+    beginAuthorityAttempt,
+    notifyRefreshOnce,
+  ]);
 
   const currentIds = useMemo(() => new Set(sections.map((s) => s.id)), [sections]);
   const missingSections = useMemo(() => {
@@ -568,10 +754,71 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   const missing = !report || !report.verdict;
   const hasSections = sections.length > 0;
-  const partialButRenderable = report?.status === 'partial' && hasSections && !missing;
-  const incomplete = !partialButRenderable && (report?.status === 'failed' || report?.status === 'partial');
+  const emptyStatus = !missing && !hasSections
+    ? pollStalled
+      ? 'stalled'
+      : report?.status === 'partial'
+        || report?.status === 'failed'
+        || report?.status === 'cancelled'
+        || report?.status === 'skipped'
+        ? report.status
+        : null
+    : null;
+  const reportBannerKind = hasSections
+    ? pollStalled
+      ? 'stalled'
+      : isGenerating
+        ? 'generating'
+        : report?.status === 'partial'
+          || report?.status === 'failed'
+          || report?.status === 'cancelled'
+          || report?.status === 'skipped'
+          ? report.status
+          : null
+    : null;
 
-  if (isGenerating) {
+  let reportBannerTitle = '';
+  let reportBannerDesc = '';
+  if (reportBannerKind === 'generating') {
+    reportBannerTitle = t('result.report.generationInProgressTitle');
+    reportBannerDesc = t('result.report.generationInProgressDesc', { count: sections.length });
+  } else if (reportBannerKind === 'partial') {
+    reportBannerTitle = t('result.report.reportPartiallyGenerated');
+    reportBannerDesc = t('result.report.reportPartiallyGeneratedDesc');
+  } else if (reportBannerKind === 'failed') {
+    reportBannerTitle = t('result.report.reportFailedTitle');
+    reportBannerDesc = t('result.report.reportFailedDesc');
+  } else if (reportBannerKind === 'cancelled') {
+    reportBannerTitle = t('result.report.reportCancelledTitle');
+    reportBannerDesc = t('result.report.reportCancelledDesc');
+  } else if (reportBannerKind === 'skipped') {
+    reportBannerTitle = t('result.report.reportSkippedTitle');
+    reportBannerDesc = t('result.report.reportSkippedDesc');
+  } else if (reportBannerKind === 'stalled') {
+    reportBannerTitle = t('result.report.pollStalledTitle');
+    reportBannerDesc = t('result.report.pollStalledDesc');
+  }
+
+  let emptyStatusTitle = '';
+  let emptyStatusDesc = '';
+  if (emptyStatus === 'partial') {
+    emptyStatusTitle = t('result.report.reportIncomplete');
+    emptyStatusDesc = t('result.report.reportIncompleteDesc');
+  } else if (emptyStatus === 'failed') {
+    emptyStatusTitle = t('result.report.reportFailedTitle');
+    emptyStatusDesc = t('result.report.reportFailedDesc');
+  } else if (emptyStatus === 'cancelled') {
+    emptyStatusTitle = t('result.report.reportCancelledTitle');
+    emptyStatusDesc = t('result.report.reportCancelledDesc');
+  } else if (emptyStatus === 'skipped') {
+    emptyStatusTitle = t('result.report.reportSkippedTitle');
+    emptyStatusDesc = t('result.report.reportSkippedDesc');
+  } else if (emptyStatus === 'stalled') {
+    emptyStatusTitle = t('result.report.pollStalledTitle');
+    emptyStatusDesc = t('result.report.pollStalledDesc');
+  }
+
+  if (isGenerating && !hasSections) {
     return (
       <div className="report-panel-container report-state-card">
         <div
@@ -589,6 +836,42 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         <p className="report-state-card__desc">
           {t('result.report.generatingDesc')}
         </p>
+        {streamInterrupted && (
+          <p className="report-state-card__error" role="alert">
+            {t('result.report.streamInterrupted')}
+          </p>
+        )}
+        {(sectionProgress.length > 0 || toolTrace.length > 0) && (
+          <div className="report-doc report-state-card__live-progress">
+            <div className="report-stream-progress" aria-label={t('result.report.progressLabel')}>
+              {activeSectionId && (
+                <span className="report-stream-progress__current">
+                  {t('result.report.progressCurrentSection', { section: activeSectionId })}
+                </span>
+              )}
+              {sectionProgress.map((item) => (
+                <div key={item.sectionId} className="report-stream-progress__item">
+                  <span>
+                    {item.status === 'complete'
+                      ? t('result.report.progressSectionComplete', { section: item.sectionId })
+                      : t('result.report.progressSectionFailed', { section: item.sectionId })}
+                  </span>
+                  {item.tier && (
+                    <span className={`report-stream-progress__chip report-stream-progress__chip--${item.tier}`}>
+                      {t(SECTION_TIER_LOCALE_KEYS[item.tier])}
+                    </span>
+                  )}
+                  {item.failureReason != null && (
+                    <span className="report-stream-progress__failure">
+                      {t(SECTION_FAILURE_LOCALE_KEYS[normalizedFailureReason(item.failureReason)])}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <ToolTraceChip trace={toolTrace} />
+          </div>
+        )}
       </div>
     );
   }
@@ -632,11 +915,14 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     );
   }
 
-  if (incomplete || (missing && variant === 'standalone')) {
+  if (emptyStatus || (missing && variant === 'standalone')) {
+    const isNeutralStatus = emptyStatus === 'cancelled'
+      || emptyStatus === 'skipped'
+      || emptyStatus === 'stalled';
     return (
       <div className="report-panel-container report-state-card">
         <div
-          className="report-state-card__icon report-state-card__icon--danger"
+          className={`report-state-card__icon ${isNeutralStatus ? 'report-state-card__icon--neutral' : 'report-state-card__icon--danger'}`}
           aria-hidden="true"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -648,12 +934,12 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         <h2 className="report-state-card__title">
           {missing
             ? t('result.report.reportNotGenerated')
-            : t('result.report.reportIncomplete')}
+            : emptyStatusTitle}
         </h2>
         <p className="report-state-card__desc">
           {missing
             ? t('result.report.generateReportDesc')
-            : t('result.report.reportIncompleteDesc')}
+            : emptyStatusDesc}
         </p>
         {retryError && (
           <p className="report-state-card__error" role="alert">
@@ -707,9 +993,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   return (
     <div className="report-doc report-panel-container report-panel-container--rendered">
-      {partialButRenderable && (
+      {reportBannerKind && (
         <div
-          className="report-partial-banner"
+          className={`report-partial-banner report-partial-banner--${reportBannerKind}`}
           role="status"
         >
           <div className="report-partial-banner__content">
@@ -722,19 +1008,55 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             </span>
             <div className="report-partial-banner__copy">
               <p className="report-partial-banner__title">
-                {t('result.report.reportPartiallyGenerated')}
+                {reportBannerTitle}
               </p>
               <p className="report-partial-banner__desc">
-                {t('result.report.reportPartiallyGeneratedDesc')}
+                {reportBannerDesc}
               </p>
               {retryError && (
                 <p className="report-partial-banner__error" role="alert">
                   {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
                 </p>
               )}
+              {streamInterrupted && (
+                <p className="report-partial-banner__error" role="alert">
+                  {t('result.report.streamInterrupted')}
+                </p>
+              )}
+              {(isGenerating || pollStalled || sectionProgress.length > 0) && (
+                <div className="report-stream-progress" aria-label={t('result.report.progressLabel')}>
+                  <span className="report-stream-progress__summary">
+                    {t('result.report.progressSections', { count: sections.length })}
+                  </span>
+                  {activeSectionId && (
+                    <span className="report-stream-progress__current">
+                      {t('result.report.progressCurrentSection', { section: activeSectionId })}
+                    </span>
+                  )}
+                  {sectionProgress.map((item) => (
+                    <div key={item.sectionId} className="report-stream-progress__item">
+                      <span>
+                        {item.status === 'complete'
+                          ? t('result.report.progressSectionComplete', { section: item.sectionId })
+                          : t('result.report.progressSectionFailed', { section: item.sectionId })}
+                      </span>
+                      {item.tier && (
+                        <span className={`report-stream-progress__chip report-stream-progress__chip--${item.tier}`}>
+                          {t(SECTION_TIER_LOCALE_KEYS[item.tier])}
+                        </span>
+                      )}
+                      {item.failureReason != null && (
+                        <span className="report-stream-progress__failure">
+                          {t(SECTION_FAILURE_LOCALE_KEYS[normalizedFailureReason(item.failureReason)])}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-          {!isReplayMode && (
+          {!isReplayMode && reportBannerKind !== 'generating' && reportBannerKind !== 'skipped' && (
             <button
               type="button"
               onClick={() => void handleRetry()}

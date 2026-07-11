@@ -141,6 +141,9 @@
 .report-state-card__icon--danger {
   color: var(--color-danger);
 }
+.report-state-card__icon--neutral {
+  color: var(--text-secondary);
+}
 .report-state-card__title {
   font-size: var(--text-lg);
   font-weight: 600;
@@ -157,6 +160,17 @@
   font-size: var(--text-sm);
   color: var(--color-danger);
   margin: 0 0 var(--space-3);
+}
+.report-state-card__live-progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.report-state-card__live-progress .report-stream-progress {
+  justify-content: center;
 }
 .report-state-card__button {
   padding: 0.5rem 1.25rem;
@@ -282,6 +296,14 @@
   margin-top: 2px;
   color: var(--color-warning, var(--color-primary));
 }
+.report-doc .report-partial-banner--failed .report-partial-banner__icon {
+  color: var(--color-danger);
+}
+.report-doc .report-partial-banner--cancelled .report-partial-banner__icon,
+.report-doc .report-partial-banner--skipped .report-partial-banner__icon,
+.report-doc .report-partial-banner--stalled .report-partial-banner__icon {
+  color: var(--text-secondary);
+}
 .report-doc .report-partial-banner__copy {
   min-width: 0;
 }
@@ -299,6 +321,36 @@
 .report-doc .report-partial-banner__error {
   margin: var(--space-1) 0 0;
   font-size: var(--text-xs);
+  color: var(--color-danger);
+}
+.report-doc .report-stream-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+.report-doc .report-stream-progress__summary,
+.report-doc .report-stream-progress__current {
+  font-weight: 600;
+}
+.report-doc .report-stream-progress__item {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.report-doc .report-stream-progress__chip,
+.report-doc .report-stream-progress__failure {
+  padding: 2px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+}
+.report-doc .report-stream-progress__failure {
   color: var(--color-danger);
 }
 .report-doc .report-partial-banner__retry {
@@ -684,6 +736,47 @@
   margin: 0;
   line-height: 1.2;
   overflow-wrap: anywhere;
+}
+.report-doc .report-section__truth-chips {
+  margin-left: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.report-doc .report-section__tier-chip,
+.report-doc .report-section__failure-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+.report-doc .report-section__tier-chip--generation {
+  color: var(--color-primary);
+}
+.report-doc .report-section__tier-chip--rewrite {
+  color: var(--text-primary);
+}
+.report-doc .report-section__tier-chip--static,
+.report-doc .report-section__failure-chip {
+  color: var(--color-warning, var(--text-secondary));
+}
+.report-doc .report-section__failure-chip {
+  max-width: min(42ch, 100%);
+  white-space: normal;
+}
+.report-doc .report-section__truth-chips + .report-section__evidence-btn {
+  margin-left: 0;
 }
 /* WIRE: Evidence·N outline button (replaces fabricated meta row) */
 .report-doc .report-section__evidence-btn {

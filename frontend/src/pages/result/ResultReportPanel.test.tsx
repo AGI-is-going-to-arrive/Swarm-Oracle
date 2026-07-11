@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { FullReport, FullReportTruncatedMarker } from '../../types';
+import type { FullReport, FullReportTruncatedMarker, StoryData } from '../../types';
 
 // ── Mocks ─────────────────────────────────────────────────────
 vi.mock('./ResultContext', () => ({
@@ -53,13 +53,14 @@ vi.mock('../../lib/llmProviderPolicy', () => ({
 
 import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
-import { generateReport } from '../../api/client';
+import { generateReport, getStory } from '../../api/client';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { ResultReportPanel } from './ResultReportPanel';
 
 const mockedCtx = vi.mocked(useResultContext);
 const mockedCap = vi.mocked(useCapabilityCheck);
 const mockedGenerateReport = vi.mocked(generateReport);
+const mockedGetStory = vi.mocked(getStory);
 const mockedLoadLlmProviderPolicy = vi.mocked(loadLlmProviderPolicy);
 const mockedValidateByok = vi.mocked(validateByok);
 
@@ -120,6 +121,44 @@ function setCap(over: Partial<ReturnType<typeof useCapabilityCheck>>) {
   } as unknown as ReturnType<typeof useCapabilityCheck>);
 }
 
+function responseFromSse(payload: string): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload));
+      controller.close();
+    },
+  }));
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function controlledSseResponse() {
+  const encoder = new TextEncoder();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  }));
+
+  return {
+    response,
+    finish(payload: string) {
+      controller.enqueue(encoder.encode(payload));
+      controller.close();
+    },
+  };
+}
+
 const originalReload = window.location.reload;
 
 beforeEach(() => {
@@ -127,6 +166,7 @@ beforeEach(() => {
   mockedCtx.mockReset();
   mockedCap.mockReset();
   mockedGenerateReport.mockReset();
+  mockedGetStory.mockReset();
   mockedLoadLlmProviderPolicy.mockReset();
   mockedValidateByok.mockReset();
   mockedLoadLlmProviderPolicy.mockReturnValue({
@@ -241,8 +281,8 @@ describe('ResultReportPanel — manual retry stream handling', () => {
     setCap({});
 
     const encoder = new TextEncoder();
-    const frameContent1 = 'data: {"tool_trace": [{"tool": "web_search", "query": "Find things", "item_count": 3, "elapsed_ms": 45}]}\n\n';
-    const frameContent2 = 'data: {"tool_trace": [{"tool": "vector_lookup", "query": "lookup embedding", "item_count": 5, "elapsed_ms": 120}]}\n\n';
+    const frameContent1 = 'event: report_section_complete\ndata: {"status":"complete","section_id":"timeline","tool_trace": [{"tool": "web_search", "query": "Find things", "item_count": 3, "elapsed_ms": 45}]}\n\n';
+    const frameContent2 = 'event: report_section_complete\ndata: {"status":"complete","section_id":"factions","tool_trace": [{"tool": "vector_lookup", "query": "lookup embedding", "item_count": 5, "elapsed_ms": 120}]}\n\nevent: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n';
     const sseBytes1 = encoder.encode(frameContent1);
     const sseBytes2 = encoder.encode(frameContent2);
 
@@ -270,6 +310,12 @@ describe('ResultReportPanel — manual retry stream handling', () => {
         getReader: () => reader,
       },
     } as unknown as Response);
+    mockedGetStory.mockResolvedValueOnce({
+      full_report: makeReport({
+        generated_at: '2026-07-11T00:01:00Z',
+        status: 'partial',
+      }),
+    } as Awaited<ReturnType<typeof getStory>>);
 
     render(<ResultReportPanel variant="standalone" />);
 
@@ -332,6 +378,688 @@ describe('ResultReportPanel — manual retry stream handling', () => {
   });
 });
 
+describe('ResultReportPanel — SSE section progress', () => {
+  it('shows section and tool progress before the first completed section is persisted', async () => {
+    let resolveAuthority!: (story: Awaited<ReturnType<typeof getStory>>) => void;
+    mockedGetStory.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveAuthority = resolve;
+    }));
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_section_complete\ndata: {"status":"complete","section_id":"timeline","tier":"generation","tool_trace":[{"tool":"web_search","query":"evidence","item_count":1,"elapsed_ms":10}]}\n\n'
+        + 'event: report_complete\ndata: {"status":"failed","tool_trace":[]}\n\n',
+    ));
+    setCtx({ full_report: makeReport({ status: 'partial', sections: [] }) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(screen.getByText(/section timeline completed/i)).toBeInTheDocument();
+    expect(screen.getByText('Generated')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Show tool activity/i })).toHaveTextContent('Tool activity (1)');
+
+    await act(async () => {
+      resolveAuthority({
+        full_report: makeReport({ status: 'generating' }),
+      } as Awaited<ReturnType<typeof getStory>>);
+      await Promise.resolve();
+    });
+  });
+
+  it('keeps section failures non-terminal and exposes section, tier, fallback, and tool progress', async () => {
+    const onRefresh = vi.fn();
+    setCtx({ full_report: makeReport({ status: 'partial', sections: [] }) });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_failed\ndata: {"status":"failed","section_id":"factions","error_code":"SECTION_FAILED","failure_reason":"timeout","tool_trace":[]}\n\n'
+        + 'event: report_section_complete\ndata: {"status":"complete","section_id":"timeline","tier":"rewrite","failure_reason":null,"tool_trace":[{"tool":"web_search","query":"evidence","item_count":2,"elapsed_ms":25}]}\n\n'
+        + 'event: report_complete\ndata: {"status":"failed","tool_trace":[]}\n\n',
+    ));
+    mockedGetStory.mockResolvedValue({
+      full_report: makeReport({ status: 'generating' }),
+    } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/section factions failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/section timeline completed/i)).toBeInTheDocument();
+    expect(screen.getByText('Rewritten')).toBeInTheDocument();
+    expect(screen.getByText(/section generation timed out/i)).toBeInTheDocument();
+    expect(screen.getByText(/current section: timeline/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 sections available/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Show tool activity/i })).toHaveTextContent('Tool activity (1)');
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps polling when the stream reports REPORT_ALREADY_RUNNING', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    setCtx({ full_report: makeReport({ status: 'partial' }) });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_failed\ndata: {"status":"failed","error_code":"REPORT_ALREADY_RUNNING","tool_trace":[]}\n\n'
+        + 'event: report_complete\ndata: {"status":"failed","tool_trace":[]}\n\n',
+    ));
+    mockedGetStory.mockResolvedValue({
+      full_report: makeReport({ status: 'generating' }),
+    } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetStory).not.toHaveBeenCalled();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('ResultReportPanel — persisted report authority', () => {
+  it('keeps a terminal stream authority result when an earlier poll resolves generating late', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const pollAuthority = deferred<Awaited<ReturnType<typeof getStory>>>();
+    const streamAuthority = deferred<Awaited<ReturnType<typeof getStory>>>();
+    const stream = controlledSseResponse();
+    const terminalReport = makeReport({
+      status: 'complete',
+      sections: [{
+        id: 'terminal-authority',
+        title: 'Terminal authority',
+        title_i18n: { zh: '终态权威', en: 'Terminal authority' },
+        intent: '',
+        body_md_i18n: { zh: '', en: 'terminal' },
+        evidence_refs: [],
+        charts: [],
+      }],
+    });
+    const lateGeneratingReport = makeReport({
+      status: 'generating',
+      sections: [{
+        id: 'late-poll',
+        title: 'Late poll',
+        title_i18n: { zh: '迟到轮询', en: 'Late poll' },
+        intent: '',
+        body_md_i18n: { zh: '', en: 'late' },
+        evidence_refs: [],
+        charts: [],
+      }],
+    });
+    setCtx({ full_report: makeReport({ status: 'partial' }) });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(stream.response);
+    mockedGetStory
+      .mockImplementationOnce(() => pollAuthority.promise)
+      .mockImplementationOnce(() => streamAuthority.promise);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      stream.finish('event: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      streamAuthority.resolve({ full_report: terminalReport } as Awaited<ReturnType<typeof getStory>>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('report-section-terminal-authority')).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      pollAuthority.resolve({ full_report: lateGeneratingReport } as Awaited<ReturnType<typeof getStory>>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('report-section-terminal-authority')).toBeInTheDocument();
+    expect(screen.queryByTestId('report-section-late-poll')).not.toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not refetch or refresh when polling reaches terminal authority before the stream', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const pollAuthority = deferred<Awaited<ReturnType<typeof getStory>>>();
+    const stream = controlledSseResponse();
+    const pollTerminalReport = makeReport({
+      status: 'complete',
+      sections: [{
+        id: 'poll-terminal',
+        title: 'Poll terminal',
+        title_i18n: { zh: '轮询终态', en: 'Poll terminal' },
+        intent: '',
+        body_md_i18n: { zh: '', en: 'terminal' },
+        evidence_refs: [],
+        charts: [],
+      }],
+    });
+    setCtx({ full_report: makeReport({ status: 'partial' }) });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(stream.response);
+    mockedGetStory
+      .mockImplementationOnce(() => pollAuthority.promise)
+      .mockResolvedValue({
+        full_report: makeReport({ status: 'complete' }),
+      } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      pollAuthority.resolve({ full_report: pollTerminalReport } as Awaited<ReturnType<typeof getStory>>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('report-section-poll-terminal')).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      stream.finish('event: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('report-section-poll-terminal')).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('ignores the pre-attempt terminal snapshot after REPORT_ALREADY_RUNNING', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const initialReport = makeReport({
+      generated_at: '2026-07-11T00:00:00Z',
+      status: 'failed',
+      target_branch_id: 'b1',
+    });
+    const completedReport = makeReport({
+      generated_at: '2026-07-11T00:01:00Z',
+      status: 'complete',
+      target_branch_id: 'b1',
+    });
+    setCtx({ full_report: initialReport });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_failed\ndata: {"status":"failed","error_code":"REPORT_ALREADY_RUNNING","tool_trace":[]}\n\n'
+        + 'event: report_complete\ndata: {"status":"failed","tool_trace":[]}\n\n',
+    ));
+    mockedGetStory
+      .mockResolvedValueOnce({ full_report: initialReport } as Awaited<ReturnType<typeof getStory>>)
+      .mockResolvedValueOnce({ full_report: completedReport } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Report generation in progress/i)).toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('ignores the pre-attempt terminal snapshot while an accepted stream is still open', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const stream = controlledSseResponse();
+    const initialReport = makeReport({
+      generated_at: '2026-07-11T00:00:00Z',
+      status: 'failed',
+      target_branch_id: 'b1',
+    });
+    const completedReport = makeReport({
+      generated_at: '2026-07-11T00:01:00Z',
+      status: 'complete',
+      target_branch_id: 'b1',
+      sections: [{
+        id: 'fresh-terminal',
+        title: 'Fresh terminal',
+        title_i18n: { zh: '新终态', en: 'Fresh terminal' },
+        intent: '',
+        body_md_i18n: { zh: '', en: 'fresh' },
+        evidence_refs: [],
+        charts: [],
+      }],
+    });
+    setCtx({ full_report: initialReport });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(stream.response);
+    mockedGetStory
+      .mockResolvedValueOnce({ full_report: initialReport } as Awaited<ReturnType<typeof getStory>>)
+      .mockResolvedValueOnce({ full_report: completedReport } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Report generation in progress/i)).toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => {
+      stream.finish('event: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('report-section-fresh-terminal')).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the pre-attempt baseline after stream interruption until authority changes', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const initialReport = makeReport({
+      generated_at: '2026-07-11T00:00:00Z',
+      status: 'failed',
+      target_branch_id: 'b1',
+    });
+    const cancelledReport = makeReport({
+      generated_at: '2026-07-11T00:01:00Z',
+      status: 'cancelled',
+      target_branch_id: 'b1',
+    });
+    setCtx({ full_report: initialReport });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_started\ndata: {"status":"generating","tool_trace":[]}\n\n',
+    ));
+    mockedGetStory
+      .mockResolvedValueOnce({ full_report: initialReport } as Awaited<ReturnType<typeof getStory>>)
+      .mockResolvedValueOnce({ full_report: cancelledReport } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/stream interrupted/i)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(screen.getByText(/Report generation in progress/i)).toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/report generation cancelled/i)).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      'REPORT_ALREADY_RUNNING',
+      'event: report_failed\ndata: {"status":"failed","error_code":"REPORT_ALREADY_RUNNING","tool_trace":[]}\n\n'
+        + 'event: report_complete\ndata: {"status":"failed","tool_trace":[]}\n\n',
+    ],
+    [
+      'an interrupted stream',
+      'event: report_started\ndata: {"status":"generating","tool_trace":[]}\n\n',
+    ],
+  ])('clears terminal authority for a new retry followed by %s', async (_label, payload) => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const retryableTerminal = makeReport({
+      generated_at: '2026-07-11T00:01:00Z',
+      status: 'partial',
+    });
+    setCtx({ full_report: makeReport({ status: 'generating' }) });
+    setCap({});
+    mockedGetStory
+      .mockResolvedValueOnce({ full_report: retryableTerminal } as Awaited<ReturnType<typeof getStory>>)
+      .mockResolvedValueOnce({
+        full_report: makeReport({
+          generated_at: '2026-07-11T00:02:00Z',
+          status: 'generating',
+        }),
+      } as Awaited<ReturnType<typeof getStory>>);
+    mockedGenerateReport.mockResolvedValue(responseFromSse(payload));
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Report generation in progress/i)).toBeInTheDocument();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('clears terminal authority when story data resets and rearms polling', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const initialStory = {
+      full_report: makeReport({ status: 'generating' }),
+    } as StoryData;
+    const resetStory = {
+      full_report: makeReport({
+        generated_at: '2026-07-11T00:01:00Z',
+        status: 'generating',
+      }),
+    } as StoryData;
+    setCtx(null);
+    setCap({});
+    mockedGetStory
+      .mockResolvedValueOnce({
+        full_report: makeReport({ status: 'complete' }),
+      } as Awaited<ReturnType<typeof getStory>>)
+      .mockResolvedValueOnce({ full_report: resetStory.full_report } as Awaited<ReturnType<typeof getStory>>);
+
+    const { rerender } = render(
+      <ResultReportPanel
+        variant="standalone"
+        onRefresh={onRefresh}
+        storyData={initialStory}
+        activeScenarioId="sc-1"
+        isZh={false}
+        isReplayMode={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      rerender(
+        <ResultReportPanel
+          variant="standalone"
+          onRefresh={onRefresh}
+          storyData={resetStory}
+          activeScenarioId="sc-1"
+          isZh={false}
+          isReplayMode={false}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces an interrupted stream without refreshing and keeps polling story authority', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const polledReport = makeReport({
+      status: 'generating',
+      sections: [
+        ...makeReport().sections,
+        {
+          id: 's3',
+          title: 'Three',
+          title_i18n: { zh: '三', en: 'Three' },
+          intent: '',
+          body_md_i18n: { zh: '', en: 'b' },
+          evidence_refs: [],
+          charts: [],
+        },
+      ],
+    });
+    setCtx({ full_report: makeReport({ status: 'partial', sections: [] }) });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_started\ndata: {"status":"generating","tool_trace":[]}\n\n',
+    ));
+    mockedGetStory.mockResolvedValue({
+      full_report: polledReport,
+    } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/stream interrupted/i)).toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(mockedGetStory).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('report-section-s3')).toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('publishes each generating poll and refreshes exactly once after persisted terminal state', async () => {
+    vi.useFakeTimers();
+    const onRefresh = vi.fn();
+    const reportWithThreeSections = makeReport({
+      status: 'generating',
+      sections: [
+        ...makeReport().sections,
+        {
+          id: 's3',
+          title: 'Three',
+          title_i18n: { zh: '三', en: 'Three' },
+          intent: '',
+          body_md_i18n: { zh: '', en: 'b' },
+          evidence_refs: [],
+          charts: [],
+        },
+      ],
+    });
+    setCtx({ full_report: makeReport({ status: 'generating' }) });
+    setCap({});
+    mockedGetStory
+      .mockResolvedValueOnce({ full_report: reportWithThreeSections } as Awaited<ReturnType<typeof getStory>>)
+      .mockResolvedValueOnce({
+        full_report: makeReport({ status: 'complete', sections: reportWithThreeSections.sections }),
+      } as Awaited<ReturnType<typeof getStory>>);
+
+    render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('report-section-s3')).toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mockedGetStory).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['failed', /report generation failed/i],
+    ['cancelled', /report generation cancelled/i],
+    ['skipped', /report generation skipped/i],
+    ['partial', /partially generated/i],
+  ] as const)(
+    'waits for story authority before applying a stream terminal status of %s',
+    async (status, title) => {
+      const onRefresh = vi.fn();
+      let resolveAuthority!: (story: Awaited<ReturnType<typeof getStory>>) => void;
+      mockedGetStory.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveAuthority = resolve;
+      }));
+      mockedGenerateReport.mockResolvedValue(responseFromSse(
+        `event: report_complete\ndata: {"status":"${status}","tool_trace":[]}\n\n`,
+      ));
+      setCtx({ full_report: makeReport({ status: 'partial' }) });
+      setCap({});
+
+      render(<ResultReportPanel variant="standalone" onRefresh={onRefresh} />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockedGetStory).toHaveBeenCalledOnce();
+      expect(onRefresh).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveAuthority({
+          full_report: makeReport({
+            generated_at: '2026-07-11T00:01:00Z',
+            status,
+          }),
+        } as Awaited<ReturnType<typeof getStory>>);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText(title)).toBeInTheDocument();
+      expect(onRefresh).toHaveBeenCalledOnce();
+      expect(screen.queryByText(/Key takeaways/i)).toBeNull();
+    },
+  );
+
+  it.each(['partial', 'failed', 'cancelled', 'skipped'] as const)(
+    'does not poll a persisted legacy %s report',
+    async (status) => {
+      vi.useFakeTimers();
+      setCtx({ full_report: makeReport({ status }) });
+      setCap({});
+
+      render(<ResultReportPanel variant="standalone" />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(mockedGetStory).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not poll a truncated legacy marker', async () => {
+    vi.useFakeTimers();
+    setCtx({ full_report: { status: 'partial', truncated: true } });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(mockedGetStory).not.toHaveBeenCalled();
+  });
+
+  it('shows a retryable stalled state when generating authority polling exceeds its deadline', async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-07-11T00:00:00Z');
+    vi.setSystemTime(startedAt);
+    setCtx({ full_report: makeReport({ status: 'generating' }) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+    vi.setSystemTime(new Date(startedAt.getTime() + 35 * 60_000));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(screen.getByText(/status check stalled/i)).toBeInTheDocument();
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Retry Generation/i })).toBeInTheDocument();
+  });
+});
+
 describe('ResultReportPanel — partial report rendering', () => {
   it('renders the full report + a non-blocking retry banner when partial WITH sections', () => {
     setCtx({ full_report: makeReport({ status: 'partial' }) });
@@ -369,15 +1097,53 @@ describe('ResultReportPanel — partial report rendering', () => {
     expect(screen.getByRole('button', { name: /Retry Generation/i })).toBeInTheDocument();
   });
 
-  it('shows the failure card for a failed report even when sections exist', () => {
+  it('preserves a failed report document and shows a failure banner when sections exist', () => {
     setCtx({ full_report: makeReport({ status: 'failed' }) });
     setCap({});
-    render(<ResultReportPanel variant="inline" />);
+    render(<ResultReportPanel variant="standalone" />);
 
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.getByText(/report generation failed/i)).toBeInTheDocument();
+  });
+
+  it('preserves a generating report document and shows progress when sections exist', () => {
+    setCtx({ full_report: makeReport({ status: 'generating' }) });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.getByText(/report generation in progress/i)).toBeInTheDocument();
+  });
+
+  it('uses the full generating state only when no sections exist', () => {
+    setCtx({ full_report: makeReport({ status: 'generating', sections: [] }) });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Building your report')).toBeInTheDocument();
+    expect(screen.queryByTestId('report-confidence-badge')).toBeNull();
+  });
+
+  it('preserves a cancelled report document and shows a cancellation banner when sections exist', () => {
+    setCtx({ full_report: makeReport({ status: 'cancelled' }) });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.getByText(/report generation cancelled/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['failed', /report generation failed/i],
+    ['cancelled', /report generation cancelled/i],
+    ['skipped', /report generation skipped/i],
+  ] as const)('shows an explicit %s card when no sections exist', (status, title) => {
+    setCtx({ full_report: makeReport({ status, sections: [] }) });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText(title)).toBeInTheDocument();
     expect(screen.queryByTestId('report-section-s1')).toBeNull();
-    expect(screen.getByText('Report Generation Incomplete')).toBeInTheDocument();
-    expect(screen.queryByText(/深读/)).toBeNull();
-    expect(screen.queryByText(/Deep-read/i)).toBeNull();
   });
 
   it('does not show a live report generation CTA for replay payloads without full_report', () => {
@@ -433,7 +1199,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
 
-    expect(screen.getByText('Simulated personas')).toBeInTheDocument();
+    expect(screen.getByText('Historical simulation transcript excerpts')).toBeInTheDocument();
     expect(screen.getByText('Privacy Advocate')).toBeInTheDocument();
     expect(screen.getByText('Branch 2 · Round 4')).toBeInTheDocument();
     expect(screen.getByText('Privacy safeguards are essential.')).toBeInTheDocument();
@@ -447,7 +1213,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCtx({ full_report: report });
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
-    expect(screen.queryByText('Simulated personas')).toBeNull();
+    expect(screen.queryByText('Historical simulation transcript excerpts')).toBeNull();
   });
 
   it('renders nothing for interviews block when interview_evidence is missing entirely', () => {
@@ -456,7 +1222,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCtx({ full_report: report });
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
-    expect(screen.queryByText('Simulated personas')).toBeNull();
+    expect(screen.queryByText('Historical simulation transcript excerpts')).toBeNull();
   });
 
   it('renders failed interview status message', () => {
@@ -476,7 +1242,7 @@ describe('ResultReportPanel — interview evidence rendering', () => {
     setCap({});
     render(<ResultReportPanel variant="standalone" />);
 
-    expect(screen.getByText('Simulated personas')).toBeInTheDocument();
+    expect(screen.getByText('Historical simulation transcript excerpts')).toBeInTheDocument();
     expect(screen.getByText(/Interview generation failed: LLM failed to respond. \(error code: INTERVIEW_LLM_FAILED\)/i)).toBeInTheDocument();
   });
 

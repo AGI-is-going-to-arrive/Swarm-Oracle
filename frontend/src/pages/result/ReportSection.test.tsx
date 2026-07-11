@@ -1,9 +1,22 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ReportSection } from './ReportSection';
 import type { ReportSection as ReportSectionType, ReportChart } from '../../types';
 
 const I18N: Record<string, string> = {
+  'result.report.viewCitedEvidence': '[L10N view cited evidence]',
+  'result.report.sectionTier.generation': '[L10N generated source]',
+  'result.report.sectionTier.rewrite': '[L10N rewritten source]',
+  'result.report.sectionTier.static': '[L10N static fallback source]',
+  'result.report.sectionFailureReason.timeout': '[L10N section timeout]',
+  'result.report.sectionFailureReason.tool_floor_not_met': '[L10N tool floor not met]',
+  'result.report.sectionFailureReason.empty_outline': '[L10N empty outline]',
+  'result.report.sectionFailureReason.json_parse_error': '[L10N invalid generated section]',
+  'result.report.sectionFailureReason.plan_outline_timeout': '[L10N outline planning timeout]',
+  'result.report.sectionFailureReason.unsupported_action': '[L10N unsupported action]',
+  'result.report.sectionFailureReason.tool_budget_exhausted': '[L10N tool budget exhausted]',
+  'result.report.sectionFailureReason.empty_body': '[L10N empty generated section]',
+  'result.report.sectionFailureReason.other': '[L10N other fallback reason]',
   'result.report.chartEmpty': '[L10N chartEmpty]',
   'result.report.probabilityChartTitle': '[L10N simulated branch distribution]',
   'result.report.probabilityChartNoComparison': '[L10N no branch comparison]',
@@ -64,6 +77,81 @@ describe('ReportSection', () => {
     expect(screen.getByText('01')).toBeInTheDocument();
     expect(screen.getByText('Test Section')).toBeInTheDocument();
     expect(screen.getByText('This is content')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['generation', '[L10N generated source]'],
+    ['rewrite', '[L10N rewritten source]'],
+    ['static', '[L10N static fallback source]'],
+  ] as const)('renders the %s source tier as a localized chip', (tier, localizedLabel) => {
+    render(
+      <ReportSection
+        section={{ ...baseSection, tier }}
+        onOpenEvidence={mockOnOpenEvidence}
+        index={0}
+      />,
+    );
+
+    expect(screen.getByText(localizedLabel)).toBeInTheDocument();
+    expect(screen.queryByText(tier)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['timeout', '[L10N section timeout]'],
+    ['tool_floor_not_met', '[L10N tool floor not met]'],
+    ['empty_outline', '[L10N empty outline]'],
+    ['json_parse_error', '[L10N invalid generated section]'],
+    ['plan_outline_timeout', '[L10N outline planning timeout]'],
+    ['unsupported_action', '[L10N unsupported action]'],
+    ['tool_budget_exhausted', '[L10N tool budget exhausted]'],
+    ['empty_body', '[L10N empty generated section]'],
+    ['other', '[L10N other fallback reason]'],
+  ] as const)('maps the %s failure reason through localized whitelist copy', (failureReason, localizedLabel) => {
+    render(
+      <ReportSection
+        section={{ ...baseSection, tier: 'static', failure_reason: failureReason }}
+        onOpenEvidence={mockOnOpenEvidence}
+        index={0}
+      />,
+    );
+
+    expect(screen.getByText(localizedLabel)).toBeInTheDocument();
+    expect(screen.queryByText(failureReason)).not.toBeInTheDocument();
+  });
+
+  it('maps an unknown failure reason to other without rendering provider text', () => {
+    const rawProviderReason = 'provider stack: upstream secret detail';
+    const untrustedSection = {
+      ...baseSection,
+      tier: 'static',
+      failure_reason: rawProviderReason,
+    } as unknown as ReportSectionType;
+
+    render(<ReportSection section={untrustedSection} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+
+    expect(screen.getByText('[L10N other fallback reason]')).toBeInTheDocument();
+    expect(screen.queryByText(rawProviderReason)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('upstream secret detail');
+  });
+
+  it('keeps analytic content and the evidence drawer trigger with fallback metadata', () => {
+    const onOpenEvidence = vi.fn();
+    render(
+      <ReportSection
+        section={{
+          ...baseSection,
+          tier: 'static',
+          failure_reason: 'timeout',
+          evidence_refs: ['evidence-1', 'evidence-2'],
+        }}
+        onOpenEvidence={onOpenEvidence}
+        index={0}
+      />,
+    );
+
+    expect(screen.getByText('This is content')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '[L10N view cited evidence]' }));
+    expect(onOpenEvidence).toHaveBeenCalledWith(['evidence-1', 'evidence-2']);
   });
 
   it('renders populated probability_bar chart correctly', () => {
