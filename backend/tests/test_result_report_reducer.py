@@ -549,6 +549,158 @@ def test_faction_share_non_finite_signed_stance_remains_schema_safe(
     }
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (-2.0, -1.0),
+        (-1.0, -1.0),
+        (-0.7, -0.7),
+        (0.0, 0.0),
+        (0.6, 0.6),
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (float("nan"), 0.0),
+        (float("inf"), 0.0),
+        (float("-inf"), 0.0),
+        (None, 0.0),
+    ],
+)
+def test_clamp_stance_score_preserves_signed_range_and_rejects_non_finite(
+    value,
+    expected,
+):
+    assert reducer_module._clamp_stance_score(value) == pytest.approx(expected)
+
+
+def test_stance_centers_preserve_weights_clamp_extremes_and_skip_empty_membership():
+    snapshots = [
+        FactionSnapshot(
+            scenario_id="scenario-stat-clamp",
+            branch_id="branch-stat-clamp",
+            round_number=1,
+            faction_key="below-range",
+            stance_center=-2.0,
+            member_agent_ids_json=json.dumps(["a1", "a2"]),
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-stat-clamp",
+            branch_id="branch-stat-clamp",
+            round_number=1,
+            faction_key="non-finite",
+            stance_center=float("nan"),
+            member_agent_ids_json=json.dumps(["a3"]),
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-stat-clamp",
+            branch_id="branch-stat-clamp",
+            round_number=1,
+            faction_key="above-range",
+            stance_center=2.0,
+            member_agent_ids_json=json.dumps(["a4", "a5", "a6"]),
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-stat-clamp",
+            branch_id="branch-stat-clamp",
+            round_number=1,
+            faction_key="empty",
+            stance_center=-0.5,
+            member_agent_ids_json="[]",
+        ),
+    ]
+
+    centers, weights = reducer_module._stance_centers_and_weights(snapshots)
+
+    assert centers == [-1.0, 0.0, 1.0]
+    assert weights == [2.0, 1.0, 3.0]
+
+
+def test_signed_faction_statistics_preserve_distance_and_existing_statuses(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+    snapshots = [
+        FactionSnapshot(
+            scenario_id="scenario-signed-stats",
+            branch_id="branch-signed-stats",
+            round_number=1,
+            faction_key="negative-low",
+            stance_center=-0.7,
+            member_agent_ids_json=json.dumps(["a1"]),
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-signed-stats",
+            branch_id="branch-signed-stats",
+            round_number=1,
+            faction_key="negative-high",
+            stance_center=-0.3,
+            member_agent_ids_json=json.dumps(["a2"]),
+        ),
+    ]
+    no_relations = reducer_module.LatestRelationStats(
+        count=0,
+        avg_opposition=None,
+        max_opposition=None,
+    )
+    relations = reducer_module.LatestRelationStats(
+        count=2,
+        avg_opposition=0.4,
+        max_opposition=0.6,
+    )
+
+    assert reducer_module._reduce_faction_consensus_from_snapshots(
+        snapshots
+    ) == reducer_module.StatResult(status="available", value=0.8)
+    assert reducer_module._reduce_polarization_from_stats(
+        snapshots, no_relations
+    ) == reducer_module.StatResult(
+        status="partial",
+        value=0.2,
+        reason="relation_edges_missing",
+    )
+    assert reducer_module._reduce_polarization_from_stats(
+        snapshots, relations
+    ) == reducer_module.StatResult(status="available", value=0.6)
+    assert reducer_module._reduce_polarization_from_stats(
+        [], relations
+    ) == reducer_module.StatResult(
+        status="partial",
+        value=0.6,
+        reason="faction_snapshots_missing",
+    )
+    assert reducer_module._reduce_polarization_from_stats(
+        [], no_relations
+    ) == reducer_module.StatResult(
+        status="missing",
+        value=None,
+        reason="no_faction_or_relation_data",
+    )
+
+    empty_membership = [
+        FactionSnapshot(
+            scenario_id="scenario-signed-stats",
+            branch_id="branch-signed-stats",
+            round_number=1,
+            faction_key="empty",
+            stance_center=-0.5,
+            member_agent_ids_json="[]",
+        )
+    ]
+    assert reducer_module._reduce_faction_consensus_from_snapshots(
+        empty_membership
+    ) == reducer_module.StatResult(
+        status="missing",
+        value=None,
+        reason="empty_faction_membership",
+    )
+    assert reducer_module._reduce_polarization_from_stats(
+        empty_membership, no_relations
+    ) == reducer_module.StatResult(
+        status="missing",
+        value=None,
+        reason="empty_polarization_inputs",
+    )
+
+
 def test_reduce_computes_consensus_polarization_charts_and_participants():
     scenario_id = _seed_scenario()
 

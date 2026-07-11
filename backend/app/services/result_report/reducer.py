@@ -944,7 +944,7 @@ def _stance_centers_and_weights(
         member_count = len(_parse_json_list(snapshot.member_agent_ids_json))
         if member_count <= 0:
             continue
-        centers.append(_clamp_probability(snapshot.stance_center))
+        centers.append(_clamp_stance_score(snapshot.stance_center))
         weights.append(float(member_count))
     return centers, weights
 
@@ -1005,6 +1005,16 @@ def _clamp_probability(value: float | int | None) -> float:
     if math.isnan(number) or math.isinf(number):
         return 0.0
     return round(min(1.0, max(0.0, number)), 4)
+
+
+def _clamp_stance_score(value: float | int | None) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(number):
+        return 0.0
+    return round(min(1.0, max(-1.0, number)), 4)
 
 
 def _std(values: list[float]) -> float:
