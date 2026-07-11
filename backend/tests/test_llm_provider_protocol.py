@@ -256,6 +256,158 @@ async def test_partial_sse_eof_preserves_chunk_and_does_not_retry(
     assert llm_client._provider_failures[provider_key] == 1
 
 
+async def test_chat_stream_decodes_multiline_data_event(isolated_llm_provider):
+    provider = isolated_llm_provider
+    multiline_delta = json.dumps(
+        {"choices": [{"delta": {"content": "chat multiline"}}]},
+        indent=2,
+    )
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    multiline_delta,
+                    event="chat.completion.chunk",
+                    event_id="chat-event-1",
+                    retry=10,
+                    comment=" keepalive",
+                ),
+                SSEEvent("[DONE]"),
+            )
+        )
+    )
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "decode multiline chat event",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["chat multiline"]
+    assert len(provider.requests) == 1
+
+
+async def test_responses_stream_decodes_multiline_data_event_at_eof(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    multiline_delta = json.dumps(
+        {"type": "response.output_text.delta", "delta": "responses multiline"},
+        indent=2,
+    )
+    multiline_terminal = json.dumps(
+        {"type": "response.completed", "response": {"id": "resp_multiline"}},
+        indent=2,
+    )
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(multiline_delta, event="response.output_text.delta"),
+                SSEEvent(
+                    multiline_terminal,
+                    event="response.completed",
+                    terminate_event=False,
+                ),
+            )
+        )
+    )
+    provider.enqueue(ScriptedResponse.sse((SSEEvent("[DONE]"),)))
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "decode multiline Responses event",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["responses multiline"]
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "partial_content"),
+    [
+        ("response.failed", None),
+        ("response.incomplete", "partial"),
+        ("error", "partial"),
+    ],
+)
+async def test_responses_failure_terminal_is_safe_and_not_retried(
+    isolated_llm_provider,
+    monkeypatch,
+    failure_type,
+    partial_content,
+):
+    provider = isolated_llm_provider
+    provider_message = "provider-secret-marker sk-do-not-leak-123456"
+    failure_event = {"type": failure_type}
+    if failure_type == "error":
+        failure_event.update({"code": "server_error", "message": provider_message})
+    else:
+        failure_event["response"] = {
+            "status": failure_type.removeprefix("response."),
+            "error": {"code": "server_error", "message": provider_message},
+        }
+    events = []
+    if partial_content is not None:
+        events.append(
+            SSEEvent(
+                {"type": "response.output_text.delta", "delta": partial_content}
+            )
+        )
+    events.extend(
+        (
+            SSEEvent(failure_event),
+            SSEEvent({"type": "response.output_text.delta", "delta": " late"}),
+            SSEEvent({"type": "response.completed", "response": {"id": "late"}}),
+        )
+    )
+    provider.enqueue(ScriptedResponse.sse(events))
+    success_calls: list[str] = []
+    original_record_success = llm_client._record_provider_success
+
+    async def _record_success(provider_key: str) -> None:
+        success_calls.append(provider_key)
+        await original_record_success(provider_key)
+
+    monkeypatch.setattr(llm_client, "_record_provider_success", _record_success)
+    chunks: list[str] = []
+
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        async for chunk in llm_client.llm_call_stream(
+            "stop on explicit Responses failure",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ([partial_content] if partial_content is not None else [])
+    assert exc_info.value.code == "LLM_UNREACHABLE"
+    error_metadata = json.dumps(
+        {
+            "message": str(exc_info.value),
+            "safe_payload": exc_info.value.safe_payload(),
+            "cause": repr(exc_info.value.__cause__),
+        }
+    )
+    assert provider_message not in error_metadata
+    assert len(provider.requests) == 1
+    assert success_calls == []
+    provider_key = llm_client._provider_key(f"{provider.base_url}/responses")
+    assert llm_client._provider_failures == {provider_key: 1}
+
+
 def test_close_interrupts_incomplete_request_body():
     provider = FakeLLMProvider().start()
     host, port_text = provider.origin.removeprefix("http://").split(":", maxsplit=1)

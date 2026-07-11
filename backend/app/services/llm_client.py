@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -3323,11 +3324,41 @@ class _TruncatedSSEStreamError(Exception):
     """Raised internally when an SSE response ends without a terminal frame."""
 
 
-def _extract_sse_data(line: str) -> str | None:
-    """Return an SSE data field with or without the optional post-colon space."""
-    if not line.startswith("data:"):
-        return None
-    return line[5:].strip()
+class _ResponsesStreamFailureError(Exception):
+    """Represent a safe, explicit Responses failure terminal internally."""
+
+    def __init__(self, event_type: str) -> None:
+        self.event_type = event_type
+        super().__init__(f"Responses stream failure event: {event_type}")
+
+
+async def _iter_sse_data_events(lines: AsyncIterable[str]) -> AsyncIterator[str]:
+    """Decode SSE frames, tolerating an unseparated legacy ``[DONE]`` sentinel."""
+    data_lines: list[str] = []
+    async for line in lines:
+        if line == "":
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            continue
+        if line == "data":
+            data_lines.append("")
+            continue
+        if not line.startswith("data:"):
+            continue
+        value = line[5:]
+        if value.startswith(" "):
+            value = value[1:]
+        if value.strip() == "[DONE]":
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines = []
+            yield value
+            continue
+        data_lines.append(value)
+
+    if data_lines:
+        yield "\n".join(data_lines)
 
 
 def _is_stream_terminal(chunk: dict[str, Any], *, is_chat: bool) -> bool:
@@ -3339,6 +3370,19 @@ def _is_stream_terminal(chunk: dict[str, Any], *, is_chat: bool) -> bool:
         isinstance(choice, dict) and choice.get("finish_reason") is not None
         for choice in choices
     )
+
+
+def _responses_stream_failure_type(
+    chunk: dict[str, Any],
+    *,
+    is_chat: bool,
+) -> str | None:
+    if is_chat:
+        return None
+    event_type = chunk.get("type")
+    if event_type in {"response.failed", "response.incomplete", "error"}:
+        return str(event_type)
+    return None
 
 
 async def llm_call_stream(
@@ -3443,15 +3487,19 @@ async def llm_call_stream(
                     timeout=timeout,
                 ) as resp:
                     resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        data_str = _extract_sse_data(line)
-                        if data_str is None:
-                            continue
+                    async for event_data in _iter_sse_data_events(resp.aiter_lines()):
+                        data_str = event_data.strip()
                         if data_str == "[DONE]":
                             terminal_received = True
                             break
                         try:
                             chunk = json.loads(data_str)
+                            failure_type = _responses_stream_failure_type(
+                                chunk,
+                                is_chat=is_chat,
+                            )
+                            if failure_type is not None:
+                                raise _ResponsesStreamFailureError(failure_type)
                             if active_structured_output_keys:
                                 body_error = _detect_structured_output_body_error(chunk)
                                 if body_error:
@@ -3486,6 +3534,16 @@ async def llm_call_stream(
                     raise _TruncatedSSEStreamError
                 await _record_provider_success(provider_key)
                 break
+            except _ResponsesStreamFailureError as exc:
+                await _record_provider_failure(provider_key)
+                logger.error(
+                    "Responses stream ended with failure event type=%s",
+                    exc.event_type,
+                )
+                raise LLMError(
+                    _LLM_SAFE_ERROR_MESSAGES["LLM_UNREACHABLE"],
+                    code="LLM_UNREACHABLE",
+                ) from exc
             except _TruncatedSSEStreamError as exc:
                 last_exc = exc
                 if not emitted_content and attempt < max_retries:

@@ -29,18 +29,26 @@ class SSEEvent:
     retry: int | None = None
     delay_seconds: float = 0.0
     space_after_data_colon: bool = True
+    comment: str | None = None
+    terminate_event: bool = True
 
     def __post_init__(self) -> None:
         if self.delay_seconds < 0:
             raise ValueError("SSE event delay_seconds must be non-negative")
         if self.retry is not None and self.retry < 0:
             raise ValueError("SSE event retry must be non-negative")
-        for field_name, value in (("event", self.event), ("event_id", self.event_id)):
+        for field_name, value in (
+            ("event", self.event),
+            ("event_id", self.event_id),
+            ("comment", self.comment),
+        ):
             if value is not None and ("\r" in value or "\n" in value):
                 raise ValueError(f"SSE {field_name} cannot contain a newline")
 
     def encode(self) -> bytes:
         lines: list[str] = []
+        if self.comment is not None:
+            lines.append(f":{self.comment}")
         if self.event is not None:
             lines.append(f"event: {self.event}")
         if self.event_id is not None:
@@ -56,7 +64,8 @@ class SSEEvent:
         for data_line in data.splitlines() or [""]:
             separator = " " if self.space_after_data_colon else ""
             lines.append(f"data:{separator}{data_line}")
-        return ("\n".join(lines) + "\n\n").encode()
+        suffix = "\n\n" if self.terminate_event else "\n"
+        return ("\n".join(lines) + suffix).encode()
 
 
 @dataclass(frozen=True, slots=True)
