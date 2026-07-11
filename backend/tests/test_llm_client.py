@@ -2704,8 +2704,19 @@ class TestLlmCallStructuredOutputs:
     async def test_responses_stream_injects_text_format_json_schema(self, monkeypatch):
         captured_payload: dict = {}
         stream_lines = [
-            "data: " + json.dumps({"delta": '{"answer":"ok"}'}),
-            "data: [DONE]",
+            "data: "
+            + json.dumps(
+                {
+                    "type": "response.output_text.delta",
+                    "delta": '{"answer":"ok"}',
+                }
+            ),
+            "",
+            "data: "
+            + json.dumps(
+                {"type": "response.completed", "response": {"id": "resp_test"}}
+            ),
+            "",
         ]
 
         def mock_stream(self, method, url, *, json=None, **kwargs):

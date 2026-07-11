@@ -292,8 +292,97 @@ async def test_chat_stream_decodes_multiline_data_event(isolated_llm_provider):
     assert len(provider.requests) == 1
 
 
-async def test_responses_stream_decodes_multiline_data_event_at_eof(
+async def test_responses_done_sentinel_is_not_terminal_and_retries(
     isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(ScriptedResponse.sse((SSEEvent("[DONE]"),)))
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"type": "response.output_text.delta", "delta": "completed retry"}
+                ),
+                SSEEvent({"type": "response.completed", "response": {"id": "resp_2"}}),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "Responses DONE is not completion",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["completed retry"]
+    assert sleep_calls == [1.0]
+    assert len(provider.requests) == 2
+
+
+async def test_responses_unseparated_done_compatibility_is_chat_only(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"type": "response.output_text.delta", "delta": "discard me"},
+                    terminate_event=False,
+                ),
+                SSEEvent("[DONE]", terminate_event=False),
+            )
+        )
+    )
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"type": "response.output_text.delta", "delta": "valid retry"}
+                ),
+                SSEEvent({"type": "response.completed", "response": {"id": "resp_2"}}),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "Responses unseparated DONE is not compatible",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["valid retry"]
+    assert sleep_calls == [1.0]
+    assert len(provider.requests) == 2
+
+
+async def test_responses_stream_discards_unterminated_event_at_eof_and_retries(
+    isolated_llm_provider,
+    monkeypatch,
 ):
     provider = isolated_llm_provider
     multiline_delta = json.dumps(
@@ -307,7 +396,6 @@ async def test_responses_stream_decodes_multiline_data_event_at_eof(
     provider.enqueue(
         ScriptedResponse.sse(
             (
-                SSEEvent(multiline_delta, event="response.output_text.delta"),
                 SSEEvent(
                     multiline_terminal,
                     event="response.completed",
@@ -316,7 +404,20 @@ async def test_responses_stream_decodes_multiline_data_event_at_eof(
             )
         )
     )
-    provider.enqueue(ScriptedResponse.sse((SSEEvent("[DONE]"),)))
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(multiline_delta, event="response.output_text.delta"),
+                SSEEvent(multiline_terminal, event="response.completed"),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
 
     chunks = [
         chunk
@@ -330,15 +431,16 @@ async def test_responses_stream_decodes_multiline_data_event_at_eof(
     ]
 
     assert chunks == ["responses multiline"]
-    assert len(provider.requests) == 1
+    assert sleep_calls == [1.0]
+    assert len(provider.requests) == 2
 
 
 @pytest.mark.parametrize(
-    ("failure_type", "partial_content"),
+    ("failure_type", "partial_content", "expected_code", "expected_failure_count"),
     [
-        ("response.failed", None),
-        ("response.incomplete", "partial"),
-        ("error", "partial"),
+        ("response.failed", None, "LLM_UNREACHABLE", 1),
+        ("response.incomplete", "partial", None, 0),
+        ("error", "partial", "LLM_UNREACHABLE", 1),
     ],
 )
 async def test_responses_failure_terminal_is_safe_and_not_retried(
@@ -346,12 +448,20 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
     monkeypatch,
     failure_type,
     partial_content,
+    expected_code,
+    expected_failure_count,
 ):
     provider = isolated_llm_provider
     provider_message = "provider-secret-marker sk-do-not-leak-123456"
     failure_event = {"type": failure_type}
     if failure_type == "error":
         failure_event.update({"code": "server_error", "message": provider_message})
+    elif failure_type == "response.incomplete":
+        failure_event["response"] = {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "error": {"message": provider_message},
+        }
     else:
         failure_event["response"] = {
             "status": failure_type.removeprefix("response."),
@@ -393,7 +503,10 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
             chunks.append(chunk)
 
     assert chunks == ([partial_content] if partial_content is not None else [])
-    assert exc_info.value.code == "LLM_UNREACHABLE"
+    assert exc_info.value.code == expected_code
+    if failure_type == "response.incomplete":
+        assert str(exc_info.value) == "LLM response ended incomplete."
+        assert exc_info.value.safe_payload() is None
     error_metadata = json.dumps(
         {
             "message": str(exc_info.value),
@@ -405,7 +518,93 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
     assert len(provider.requests) == 1
     assert success_calls == []
     provider_key = llm_client._provider_key(f"{provider.base_url}/responses")
-    assert llm_client._provider_failures == {provider_key: 1}
+    expected_failures = (
+        {provider_key: expected_failure_count} if expected_failure_count else {}
+    )
+    assert llm_client._provider_failures == expected_failures
+
+
+async def test_repeated_responses_incomplete_does_not_open_circuit(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_THRESHOLD", 6)
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_RESET_SECONDS", 60)
+    incomplete_reasons = ["max_output_tokens", "content_filter"] * 3
+    provider_messages: list[str] = []
+    for index, reason in enumerate(incomplete_reasons):
+        provider_message = f"incomplete-provider-secret-{index}"
+        provider_messages.append(provider_message)
+        provider.enqueue(
+            ScriptedResponse.sse(
+                (
+                    SSEEvent(
+                        {
+                            "type": "response.incomplete",
+                            "response": {
+                                "status": "incomplete",
+                                "incomplete_details": {"reason": reason},
+                                "error": {"message": provider_message},
+                            },
+                        }
+                    ),
+                )
+            )
+        )
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"type": "response.output_text.delta", "delta": "seventh ok"}
+                ),
+                SSEEvent(
+                    {"type": "response.completed", "response": {"id": "resp_7"}}
+                ),
+            )
+        )
+    )
+
+    incomplete_errors: list[llm_client.LLMError] = []
+    for index in range(len(incomplete_reasons)):
+        with pytest.raises(llm_client.LLMError) as exc_info:
+            async for _chunk in llm_client.llm_call_stream(
+                f"incomplete request {index}",
+                api_key="test-only-provider-key",
+                base_url=f"{provider.base_url}/responses",
+                model="provider-harness-model",
+                timeout=2.0,
+            ):
+                pass
+        incomplete_errors.append(exc_info.value)
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "completed request seven",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["seventh ok"]
+    assert len(provider.requests) == 7
+    assert all(error.code is None for error in incomplete_errors)
+    assert all(
+        str(error) == "LLM response ended incomplete." for error in incomplete_errors
+    )
+    for provider_message, error in zip(
+        provider_messages,
+        incomplete_errors,
+        strict=True,
+    ):
+        assert provider_message not in str(error)
+        assert provider_message not in repr(error.__cause__)
+    provider_key = llm_client._provider_key(f"{provider.base_url}/responses")
+    assert provider_key not in llm_client._provider_failures
+    assert provider_key not in llm_client._provider_circuit_until
 
 
 def test_close_interrupts_incomplete_request_body():

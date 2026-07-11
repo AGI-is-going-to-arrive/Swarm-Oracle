@@ -3332,8 +3332,12 @@ class _ResponsesStreamFailureError(Exception):
         super().__init__(f"Responses stream failure event: {event_type}")
 
 
-async def _iter_sse_data_events(lines: AsyncIterable[str]) -> AsyncIterator[str]:
-    """Decode SSE frames, tolerating an unseparated legacy ``[DONE]`` sentinel."""
+async def _iter_sse_data_events(
+    lines: AsyncIterable[str],
+    *,
+    allow_unseparated_done: bool,
+) -> AsyncIterator[str]:
+    """Decode dispatched SSE frames with optional Chat ``[DONE]`` compatibility."""
     data_lines: list[str] = []
     async for line in lines:
         if line == "":
@@ -3349,16 +3353,13 @@ async def _iter_sse_data_events(lines: AsyncIterable[str]) -> AsyncIterator[str]
         value = line[5:]
         if value.startswith(" "):
             value = value[1:]
-        if value.strip() == "[DONE]":
+        if allow_unseparated_done and value.strip() == "[DONE]":
             if data_lines:
                 yield "\n".join(data_lines)
                 data_lines = []
             yield value
             continue
         data_lines.append(value)
-
-    if data_lines:
-        yield "\n".join(data_lines)
 
 
 def _is_stream_terminal(chunk: dict[str, Any], *, is_chat: bool) -> bool:
@@ -3487,11 +3488,16 @@ async def llm_call_stream(
                     timeout=timeout,
                 ) as resp:
                     resp.raise_for_status()
-                    async for event_data in _iter_sse_data_events(resp.aiter_lines()):
+                    async for event_data in _iter_sse_data_events(
+                        resp.aiter_lines(),
+                        allow_unseparated_done=is_chat,
+                    ):
                         data_str = event_data.strip()
                         if data_str == "[DONE]":
-                            terminal_received = True
-                            break
+                            if is_chat:
+                                terminal_received = True
+                                break
+                            continue
                         try:
                             chunk = json.loads(data_str)
                             failure_type = _responses_stream_failure_type(
@@ -3535,6 +3541,9 @@ async def llm_call_stream(
                 await _record_provider_success(provider_key)
                 break
             except _ResponsesStreamFailureError as exc:
+                if exc.event_type == "response.incomplete":
+                    logger.warning("Responses stream ended incomplete")
+                    raise LLMError("LLM response ended incomplete.") from exc
                 await _record_provider_failure(provider_key)
                 logger.error(
                     "Responses stream ended with failure event type=%s",
