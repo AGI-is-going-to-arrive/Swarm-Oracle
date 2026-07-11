@@ -436,17 +436,27 @@ async def test_responses_stream_discards_unterminated_event_at_eof_and_retries(
 
 
 @pytest.mark.parametrize(
-    ("failure_type", "partial_content", "expected_code", "expected_failure_count"),
+    (
+        "failure_type",
+        "provider_code",
+        "partial_content",
+        "expected_code",
+        "expected_failure_count",
+    ),
     [
-        ("response.failed", None, "LLM_UNREACHABLE", 1),
-        ("response.incomplete", "partial", None, 0),
-        ("error", "partial", "LLM_UNREACHABLE", 1),
+        ("response.failed", "server_error", None, "LLM_UNREACHABLE", 1),
+        ("response.incomplete", None, "partial", None, 0),
+        ("error", "server_error", "partial", "LLM_UNREACHABLE", 1),
+        ("error", "rate_limit_exceeded", None, "LLM_RATE_LIMITED", 0),
+        ("response.failed", "vector_store_timeout", None, "LLM_TIMEOUT", 1),
+        ("response.failed", "invalid_prompt", None, None, 0),
     ],
 )
 async def test_responses_failure_terminal_is_safe_and_not_retried(
     isolated_llm_provider,
     monkeypatch,
     failure_type,
+    provider_code,
     partial_content,
     expected_code,
     expected_failure_count,
@@ -455,7 +465,7 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
     provider_message = "provider-secret-marker sk-do-not-leak-123456"
     failure_event = {"type": failure_type}
     if failure_type == "error":
-        failure_event.update({"code": "server_error", "message": provider_message})
+        failure_event.update({"code": provider_code, "message": provider_message})
     elif failure_type == "response.incomplete":
         failure_event["response"] = {
             "status": "incomplete",
@@ -465,7 +475,7 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
     else:
         failure_event["response"] = {
             "status": failure_type.removeprefix("response."),
-            "error": {"code": "server_error", "message": provider_message},
+            "error": {"code": provider_code, "message": provider_message},
         }
     events = []
     if partial_content is not None:
@@ -507,6 +517,9 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
     if failure_type == "response.incomplete":
         assert str(exc_info.value) == "LLM response ended incomplete."
         assert exc_info.value.safe_payload() is None
+    elif expected_code is None:
+        assert str(exc_info.value) == "LLM request was rejected by the provider."
+        assert exc_info.value.safe_payload() is None
     error_metadata = json.dumps(
         {
             "message": str(exc_info.value),
@@ -515,6 +528,8 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
         }
     )
     assert provider_message not in error_metadata
+    if expected_code is None and provider_code is not None:
+        assert provider_code not in error_metadata
     assert len(provider.requests) == 1
     assert success_calls == []
     provider_key = llm_client._provider_key(f"{provider.base_url}/responses")
@@ -522,6 +537,102 @@ async def test_responses_failure_terminal_is_safe_and_not_retried(
         {provider_key: expected_failure_count} if expected_failure_count else {}
     )
     assert llm_client._provider_failures == expected_failures
+
+
+async def test_repeated_responses_client_errors_do_not_open_circuit(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_THRESHOLD", 6)
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_RESET_SECONDS", 60)
+    provider_codes = [
+        "invalid_prompt",
+        "bio_policy",
+        "invalid_image",
+        "image_content_policy_violation",
+        "image_file_not_found",
+        "failed_to_download_image",
+        "future_unknown_code",
+    ]
+    provider_messages: list[str] = []
+    for index, provider_code in enumerate(provider_codes):
+        provider_message = f"client-provider-secret-{index}"
+        provider_messages.append(provider_message)
+        if index % 2 == 0:
+            failure_event = {
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "error": {
+                        "code": provider_code,
+                        "message": provider_message,
+                    },
+                },
+            }
+        else:
+            failure_event = {
+                "type": "error",
+                "code": provider_code,
+                "message": provider_message,
+            }
+        provider.enqueue(ScriptedResponse.sse((SSEEvent(failure_event),)))
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"type": "response.output_text.delta", "delta": "still reachable"}
+                ),
+                SSEEvent(
+                    {"type": "response.completed", "response": {"id": "resp_ok"}}
+                ),
+            )
+        )
+    )
+
+    client_errors: list[llm_client.LLMError] = []
+    for index in range(len(provider_codes)):
+        with pytest.raises(llm_client.LLMError) as exc_info:
+            async for _chunk in llm_client.llm_call_stream(
+                f"client error request {index}",
+                api_key="test-only-provider-key",
+                base_url=f"{provider.base_url}/responses",
+                model="provider-harness-model",
+                timeout=2.0,
+            ):
+                pass
+        client_errors.append(exc_info.value)
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "completed after client errors",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["still reachable"]
+    assert len(provider.requests) == len(provider_codes) + 1
+    assert all(error.code is None for error in client_errors)
+    assert all(
+        str(error) == "LLM request was rejected by the provider."
+        for error in client_errors
+    )
+    for provider_code, provider_message, error in zip(
+        provider_codes,
+        provider_messages,
+        client_errors,
+        strict=True,
+    ):
+        error_metadata = f"{error!s} {error.__cause__!r}"
+        assert provider_code not in error_metadata
+        assert provider_message not in error_metadata
+    provider_key = llm_client._provider_key(f"{provider.base_url}/responses")
+    assert provider_key not in llm_client._provider_failures
+    assert provider_key not in llm_client._provider_circuit_until
 
 
 async def test_repeated_responses_incomplete_does_not_open_circuit(

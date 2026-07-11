@@ -3324,12 +3324,24 @@ class _TruncatedSSEStreamError(Exception):
     """Raised internally when an SSE response ends without a terminal frame."""
 
 
+_RESPONSES_STREAM_ACTIONABLE_ERROR_CODES: frozenset[str] = frozenset(
+    {"server_error", "rate_limit_exceeded", "vector_store_timeout"}
+)
+
+
 class _ResponsesStreamFailureError(Exception):
     """Represent a safe, explicit Responses failure terminal internally."""
 
-    def __init__(self, event_type: str) -> None:
+    def __init__(self, event_type: str, error_code: object = None) -> None:
         self.event_type = event_type
-        super().__init__(f"Responses stream failure event: {event_type}")
+        normalized_code = error_code.strip() if isinstance(error_code, str) else None
+        self.error_code = (
+            normalized_code
+            if normalized_code in _RESPONSES_STREAM_ACTIONABLE_ERROR_CODES
+            else None
+        )
+        code_suffix = f" code={self.error_code}" if self.error_code else ""
+        super().__init__(f"Responses stream failure event: {event_type}{code_suffix}")
 
 
 async def _iter_sse_data_events(
@@ -3384,6 +3396,22 @@ def _responses_stream_failure_type(
     if event_type in {"response.failed", "response.incomplete", "error"}:
         return str(event_type)
     return None
+
+
+def _responses_stream_failure_code(
+    chunk: dict[str, Any],
+    *,
+    event_type: str,
+) -> object:
+    if event_type == "error":
+        return chunk.get("code")
+    if event_type != "response.failed":
+        return None
+    response = chunk.get("response")
+    if not isinstance(response, dict):
+        return None
+    error = response.get("error")
+    return error.get("code") if isinstance(error, dict) else None
 
 
 async def llm_call_stream(
@@ -3505,7 +3533,13 @@ async def llm_call_stream(
                                 is_chat=is_chat,
                             )
                             if failure_type is not None:
-                                raise _ResponsesStreamFailureError(failure_type)
+                                raise _ResponsesStreamFailureError(
+                                    failure_type,
+                                    _responses_stream_failure_code(
+                                        chunk,
+                                        event_type=failure_type,
+                                    ),
+                                )
                             if active_structured_output_keys:
                                 body_error = _detect_structured_output_body_error(chunk)
                                 if body_error:
@@ -3544,6 +3578,25 @@ async def llm_call_stream(
                 if exc.event_type == "response.incomplete":
                     logger.warning("Responses stream ended incomplete")
                     raise LLMError("LLM response ended incomplete.") from exc
+                if exc.error_code == "rate_limit_exceeded":
+                    logger.warning("Responses stream ended due to provider rate limit")
+                    raise LLMError(
+                        _LLM_SAFE_ERROR_MESSAGES["LLM_RATE_LIMITED"],
+                        code="LLM_RATE_LIMITED",
+                    ) from exc
+                if exc.error_code == "vector_store_timeout":
+                    await _record_provider_failure(provider_key)
+                    logger.error("Responses stream vector store timed out")
+                    raise LLMError(
+                        _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+                        code="LLM_TIMEOUT",
+                    ) from exc
+                if exc.error_code != "server_error":
+                    logger.warning(
+                        "Responses stream ended with non-transient failure type=%s",
+                        exc.event_type,
+                    )
+                    raise LLMError("LLM request was rejected by the provider.") from exc
                 await _record_provider_failure(provider_key)
                 logger.error(
                     "Responses stream ended with failure event type=%s",
