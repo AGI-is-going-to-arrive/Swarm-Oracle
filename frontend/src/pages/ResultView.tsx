@@ -134,6 +134,7 @@ import DirectorNotebook from './result/DirectorNotebook';
 import AgentRoster from './result/AgentRoster';
 import ResultModals from './result/ResultModals';
 import { AgentProfileSheet } from '../components/result/AgentProfileSheet';
+import { buildAgentProfileObservation } from '../lib/agentProfileObservation';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -1173,6 +1174,23 @@ export default function ResultView() {
     [branches, dominantBranchFromStory, expandedBranch],
   );
   const analysisBranch = factionTimelineBranch;
+  const profileObservation = useMemo(
+    () => (
+      profileTarget
+        ? buildAgentProfileObservation({
+            agent: profileTarget,
+            messages: scenario?.messages ?? [],
+            branches: scenario?.branches ?? [],
+            selection: {
+              kind: 'result',
+              branchId: analysisBranch?.id ?? null,
+              branchTitle: analysisBranch?.title ?? null,
+            },
+          })
+        : undefined
+    ),
+    [analysisBranch?.id, analysisBranch?.title, profileTarget, scenario?.branches, scenario?.messages],
+  );
   const resultConversationContext = useMemo(() => {
     if (!analysisBranch) return null;
 
@@ -2163,6 +2181,7 @@ export default function ResultView() {
 
       <AgentProfileSheet
         agent={profileTarget}
+        observation={profileObservation}
         userId={apiUserId}
         onClose={() => setProfileTarget(null)}
         onStartConversation={handleStartConversationFromProfile}

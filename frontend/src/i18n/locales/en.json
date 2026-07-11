@@ -1126,6 +1126,7 @@
         "snapshot_emotion_label": "Scenario emotion snapshot",
         "live_observation_source": "Latest observed on {{branch}} · R{{round}}",
         "replay_observation_source": "Replay selection {{selectedBranch}} · R{{selectedRound}}; latest matching observation {{branch}} · R{{round}}",
+        "result_observation_source": "Result branch {{selectedBranch}}; latest matching observation {{branch}} · R{{round}}",
         "replay_no_observation_source": "No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.",
         "no_observation_value": "No matching observation",
         "baseline_emotion_source": "No message observation yet; showing the configured starting emotion.",

@@ -95,6 +95,7 @@ function readBlobText(blob: Blob): Promise<string> {
 }
 
 const {
+  agentProfileSheetRenderMock,
   createReplayArtifactMock,
   finalizeCampaignMock,
   findChallengeProgressByScenarioIdMock,
@@ -104,6 +105,7 @@ const {
   upsertScenarioDirectorStateMock,
   upsertScenarioGameplayStateMock,
 } = vi.hoisted(() => ({
+  agentProfileSheetRenderMock: vi.fn(),
   createReplayArtifactMock: vi.fn(async () => ({
     id: 'share-result-1',
     kind: 'scenario_result_v1',
@@ -403,6 +405,12 @@ describe('ResultView locale contracts', () => {
     expect(zh.translation.result.bridge_full_report_saved_title).toBe('查看已保存章节');
     expect(en.translation.result.bridge_full_report_status_title).toBe('View Report Status');
     expect(zh.translation.result.bridge_full_report_status_title).toBe('查看报告状态');
+    expect(en.translation.result.agent_profile_sheet.result_observation_source).toBe(
+      'Result branch {{selectedBranch}}; latest matching observation {{branch}} · R{{round}}',
+    );
+    expect(zh.translation.result.agent_profile_sheet.result_observation_source).toBe(
+      '结果分支 {{selectedBranch}}；最近匹配观察 {{branch}} · R{{round}}',
+    );
   });
 });
 
@@ -705,6 +713,28 @@ vi.mock('../components/ShareModal', () => ({
   default: (props: unknown) => shareModalMock(props),
 }));
 
+vi.mock('../components/result/AgentProfileSheet', () => ({
+  AgentProfileSheet: (props: {
+    agent: { id: string; emotion?: string | null } | null;
+    observation?: {
+      source: string;
+      emotion: string | null;
+      branchId: string | null;
+      branchTitle: string | null;
+      round: number | null;
+      selectedBranchId?: string | null;
+      selectedBranchTitle?: string | null;
+    };
+  }) => {
+    agentProfileSheetRenderMock(props);
+    return props.agent ? (
+      <div data-testid="result-agent-profile-sheet">
+        {JSON.stringify({ agent: props.agent, observation: props.observation })}
+      </div>
+    ) : null;
+  },
+}));
+
 beforeEach(() => {
   setMockLanguage('en');
   changeLanguageMock.mockClear();
@@ -729,6 +759,7 @@ beforeEach(() => {
   setMockCapabilityError(null);
   reloadCapabilityMock.mockClear();
   shareModalMock.mockClear();
+  agentProfileSheetRenderMock.mockClear();
   importReplayScenarioMock.mockReset();
   importReplayScenarioMock.mockImplementation(async (scenario: { id: string }) => ({
     ...scenario,
@@ -4721,6 +4752,158 @@ describe('ResultView explore deeper bridge', () => {
     expect(within(bridge).getByRole('link', { name: /result.bridge_full_report_retry_title/ }))
       .toHaveAttribute('href', '/result/scenario-1/report');
     expect(bridge).not.toHaveTextContent('result.bridge_full_report_read_title');
+  });
+
+  it('opens an agent profile with result-branch observation coordinates from scenario lineage', async () => {
+    const user = userEvent.setup();
+    setMockCapabilities({ agent_conversation: { enabled: true } });
+    vi.mocked(apiClient.getAgents).mockResolvedValueOnce([{
+      id: 'agent-1',
+      name: 'Ada',
+      role: 'Analyst',
+      tier: 'CORE',
+      emotion: 'stale-global-value',
+      source_type: 'generated',
+      agent_identity_id: 'identity-1',
+    }]);
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      agents: [],
+      branches: [
+        {
+          id: 'root',
+          parent_branch_id: null,
+          fork_round: 0,
+          fork_reason: '',
+          title: 'Shared history',
+          summary: '',
+          story: '',
+          insight: '',
+          key_moments: [],
+          probability: 0.2,
+          status: 'COMPLETED',
+        },
+        {
+          id: 'child',
+          parent_branch_id: 'root',
+          fork_round: 2,
+          fork_reason: 'Diplomatic split',
+          title: 'Diplomatic fork',
+          summary: '',
+          story: '',
+          insight: '',
+          key_moments: [],
+          probability: 0.7,
+          status: 'COMPLETED',
+        },
+        {
+          id: 'unrelated',
+          parent_branch_id: null,
+          fork_round: 0,
+          fork_reason: '',
+          title: 'Unrelated fork',
+          summary: '',
+          story: '',
+          insight: '',
+          key_moments: [],
+          probability: 0.1,
+          status: 'COMPLETED',
+        },
+      ],
+      messages: [
+        {
+          agent: 'Ada',
+          agent_id: 'agent-1',
+          message: 'Shared evidence before the fork.',
+          emotion: 'cautious',
+          branch: 'root',
+          round: 1,
+        },
+        {
+          agent: 'Ada',
+          agent_id: 'agent-1',
+          message: 'Ancestor future must be excluded.',
+          emotion: 'ancestor-future',
+          branch: 'root',
+          round: 3,
+        },
+        {
+          agent: 'Ada',
+          agent_id: 'agent-1',
+          message: 'Unrelated branch must be excluded.',
+          emotion: 'wrong-worldline',
+          branch: 'unrelated',
+          round: 9,
+        },
+      ],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'root',
+          title: 'Shared history',
+          probability: 0.2,
+          status: 'COMPLETED',
+          story: '',
+          insight: '',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'child',
+          title: 'Diplomatic fork',
+          probability: 0.7,
+          status: 'COMPLETED',
+          story: '',
+          insight: '',
+          key_moments: [],
+          parent_branch_id: 'root',
+          fork_reason: 'Diplomatic split',
+        },
+        {
+          id: 'unrelated',
+          title: 'Unrelated fork',
+          probability: 0.1,
+          status: 'COMPLETED',
+          story: '',
+          insight: '',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /result.next_ask_agent/ }));
+    await user.click(await screen.findByRole('button', { name: 'result.agent_picker_view_profile: Ada' }));
+
+    const sheet = await screen.findByTestId('result-agent-profile-sheet');
+    expect(sheet).toHaveTextContent('"source":"result"');
+    expect(sheet).toHaveTextContent('"emotion":"cautious"');
+    expect(sheet).toHaveTextContent('"branchId":"root"');
+    expect(sheet).toHaveTextContent('"branchTitle":"Shared history"');
+    expect(sheet).toHaveTextContent('"round":1');
+    expect(sheet).toHaveTextContent('"selectedBranchId":"child"');
+    expect(sheet).toHaveTextContent('"selectedBranchTitle":"Diplomatic fork"');
+    expect(sheet).not.toHaveTextContent('ancestor-future');
+    expect(sheet).not.toHaveTextContent('wrong-worldline');
   });
 
   it('passes only populated source families into share image artifacts', async () => {

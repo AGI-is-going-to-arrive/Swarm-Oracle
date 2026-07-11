@@ -17,6 +17,8 @@ import type {
   AgentInfo,
   AgentMemoryEntry,
 } from '../../types';
+import type { AgentProfileObservation } from '../../lib/agentProfileObservation';
+export type { AgentProfileObservation } from '../../lib/agentProfileObservation';
 import { getAgentProfileData, normalizeScenarioAgentSource } from '../../api/client';
 import {
   DECISION_BIAS_KEYS,
@@ -31,17 +33,6 @@ export interface AgentProfileSheetProps {
   userId: string;
   onClose: () => void;
   onStartConversation?: (agent: AgentInfo) => void;
-}
-
-export interface AgentProfileObservation {
-  emotion: string | null;
-  source: 'live' | 'replay' | 'replay_unavailable' | 'baseline' | 'snapshot';
-  branchId: string | null;
-  branchTitle: string | null;
-  round: number | null;
-  selectedBranchId?: string | null;
-  selectedBranchTitle?: string | null;
-  selectedRound?: number | null;
 }
 
 function nameInitial(name?: string | null): string {
@@ -194,19 +185,26 @@ export function AgentProfileSheet({
           branch: branchLabel,
           round: roundLabel,
         })
-      : observationSource === 'replay_unavailable'
-        ? t('result.agent_profile_sheet.replay_no_observation_source', {
-            defaultValue: 'No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.',
+      : observationSource === 'result'
+        ? t('result.agent_profile_sheet.result_observation_source', {
+            defaultValue: 'Result branch {{selectedBranch}}; latest matching observation {{branch}} · R{{round}}',
             selectedBranch: selectedBranchLabel,
-            selectedRound: selectedRoundLabel,
+            branch: branchLabel,
+            round: roundLabel,
           })
-        : observationSource === 'snapshot'
-          ? t('result.agent_profile_sheet.snapshot_emotion_source', {
-              defaultValue: 'No branch and round observation context is available for this snapshot.',
+        : observationSource === 'replay_unavailable'
+          ? t('result.agent_profile_sheet.replay_no_observation_source', {
+              defaultValue: 'No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.',
+              selectedBranch: selectedBranchLabel,
+              selectedRound: selectedRoundLabel,
             })
-          : t('result.agent_profile_sheet.baseline_emotion_source', {
-              defaultValue: 'No message observation yet; showing the configured starting emotion.',
-            });
+          : observationSource === 'snapshot'
+            ? t('result.agent_profile_sheet.snapshot_emotion_source', {
+                defaultValue: 'No branch and round observation context is available for this snapshot.',
+              })
+            : t('result.agent_profile_sheet.baseline_emotion_source', {
+                defaultValue: 'No message observation yet; showing the configured starting emotion.',
+              });
   const sourceLabel =
     sourceType === 'custom'
       ? t('result.agent_profile_sheet.source_custom', { defaultValue: 'Custom' })

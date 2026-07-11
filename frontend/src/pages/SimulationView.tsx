@@ -103,12 +103,12 @@ import {
   loadScenarioRuntimePreset,
   matchScenarioRuntimePreset,
 } from '../lib/runtimePreset';
+import {
+  buildAgentProfileObservation,
+} from '../lib/agentProfileObservation';
 import type {
-  AgentInfo,
-  AgentMessage,
   BranchInfo,
 } from '../types';
-import type { AgentProfileObservation } from '../components/result/AgentProfileSheet';
 import {
   THEATER_SCENE_LABELS,
   THEATER_WEATHER_LABELS,
@@ -126,128 +126,6 @@ import './SimulationView.css';
 
 function SimulationSlotFallback({ label }: { label: string }) {
   return <div className="sim-slot-fallback">{label}</div>;
-}
-
-function findLatestLiveAgentMessage(
-  messages: AgentMessage[],
-  agentId: string,
-): AgentMessage | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].agent_id === agentId) return messages[index];
-  }
-  return null;
-}
-
-function findLatestReplayAgentMessage(
-  messages: AgentMessage[],
-  branches: BranchInfo[],
-  agentId: string,
-  selectedBranchId: string,
-  selectedRound: number | null,
-): AgentMessage | null {
-  const branchById = new Map(branches.map((branch) => [branch.id, branch]));
-  const branchPriority = new Map<string, number>();
-  const seen = new Set<string>();
-  let currentBranchId: string | null | undefined = selectedBranchId;
-  let priority = branches.length;
-  while (currentBranchId && !seen.has(currentBranchId)) {
-    branchPriority.set(currentBranchId, priority);
-    seen.add(currentBranchId);
-    currentBranchId = branchById.get(currentBranchId)?.parent_branch_id;
-    priority -= 1;
-  }
-
-  let best: { message: AgentMessage; index: number } | null = null;
-  const replayMessages = filterReplayMessages(messages, branches, selectedBranchId, selectedRound);
-  for (let index = 0; index < replayMessages.length; index += 1) {
-    const message = replayMessages[index];
-    if (message.agent_id !== agentId) continue;
-    if (!best) {
-      best = { message, index };
-      continue;
-    }
-    const bestPriority = branchPriority.get(best.message.branch) ?? -1;
-    const messagePriority = branchPriority.get(message.branch) ?? -1;
-    if (
-      message.round > best.message.round
-      || (
-        message.round === best.message.round
-        && (
-          messagePriority > bestPriority
-          || (messagePriority === bestPriority && index > best.index)
-        )
-      )
-    ) {
-      best = { message, index };
-    }
-  }
-  return best?.message ?? null;
-}
-
-function buildAgentProfileObservation({
-  agent,
-  messages,
-  branches,
-  selectedBranchId,
-  selectedRound,
-}: {
-  agent: AgentInfo;
-  messages: AgentMessage[];
-  branches: BranchInfo[];
-  selectedBranchId: string | null;
-  selectedRound: number | null;
-}): AgentProfileObservation {
-  const branchById = new Map(branches.map((branch) => [branch.id, branch]));
-  if (selectedBranchId) {
-    const message = findLatestReplayAgentMessage(
-      messages,
-      branches,
-      agent.id,
-      selectedBranchId,
-      selectedRound,
-    );
-    if (message) {
-      return {
-        emotion: message.emotion,
-        source: 'replay',
-        branchId: message.branch,
-        branchTitle: message.branch_title ?? branchById.get(message.branch)?.title ?? null,
-        round: message.round,
-        selectedBranchId,
-        selectedBranchTitle: branchById.get(selectedBranchId)?.title ?? null,
-        selectedRound,
-      };
-    }
-    return {
-      emotion: null,
-      source: 'replay_unavailable',
-      branchId: null,
-      branchTitle: null,
-      round: null,
-      selectedBranchId,
-      selectedBranchTitle: branchById.get(selectedBranchId)?.title ?? null,
-      selectedRound,
-    };
-  } else {
-    const message = findLatestLiveAgentMessage(messages, agent.id);
-    if (message) {
-      return {
-        emotion: message.emotion,
-        source: 'live',
-        branchId: message.branch,
-        branchTitle: message.branch_title ?? branchById.get(message.branch)?.title ?? null,
-        round: message.round,
-      };
-    }
-  }
-
-  return {
-    emotion: agent.emotion,
-    source: 'baseline',
-    branchId: null,
-    branchTitle: null,
-    round: null,
-  };
 }
 
 interface SimulationAutomationRouteIntent {
@@ -661,8 +539,16 @@ function SimulationViewContent({
         agent: profileTargetAgent,
         messages,
         branches,
-        selectedBranchId: selectedReplayBranchId,
-        selectedRound: selectedReplayRound,
+        selection: isSimulationComplete || isReplayMode
+          ? {
+              kind: 'replay',
+              branchId: selectedReplayBranchId,
+              branchTitle: replayBranchOptions.find(
+                (branch) => branch.id === selectedReplayBranchId,
+              )?.title ?? null,
+              round: selectedReplayRound,
+            }
+          : { kind: 'live' },
       })
     : null;
   const isTerminal = status === 'error' || status === 'cancelled' || status === 'done';

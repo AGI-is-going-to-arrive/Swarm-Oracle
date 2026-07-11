@@ -1126,6 +1126,7 @@
         "snapshot_emotion_label": "场景情绪快照",
         "live_observation_source": "最近一次观察：{{branch}} · R{{round}}",
         "replay_observation_source": "回放选择 {{selectedBranch}} · R{{selectedRound}}；最近匹配观察 {{branch}} · R{{round}}",
+        "result_observation_source": "结果分支 {{selectedBranch}}；最近匹配观察 {{branch}} · R{{round}}",
         "replay_no_observation_source": "回放选择 {{selectedBranch}} · R{{selectedRound}} 中没有该 Agent 的匹配观察。",
         "no_observation_value": "无匹配观察",
         "baseline_emotion_source": "尚无发言观察，当前展示初始配置情绪。",

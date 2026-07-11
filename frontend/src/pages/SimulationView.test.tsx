@@ -321,7 +321,7 @@ vi.mock('../components/result/AgentProfileSheet', () => ({
     agent: AgentInfo | null;
     observation?: {
       emotion: string | null;
-      source: 'live' | 'replay' | 'replay_unavailable' | 'baseline' | 'snapshot';
+      source: 'live' | 'replay' | 'replay_unavailable' | 'result' | 'baseline' | 'snapshot';
       branchId: string | null;
       branchTitle: string | null;
       round: number | null;
@@ -562,8 +562,8 @@ describe('SimulationView replay automation output', () => {
       { ...mockStore.branches[0], id: 'b2', title: '冲突线' },
     ];
     mockStore.messages = [
-      { agent: '奥勒留斯', agent_id: 'a1', message: '先观察。', emotion: 'calm', branch: 'b1', round: 1 },
       { agent: '奥勒留斯', agent_id: 'a1', message: '冲突升级。', emotion: 'agitated', branch: 'b2', round: 2 },
+      { agent: '奥勒留斯', agent_id: 'a1', message: '先观察。', emotion: 'calm', branch: 'b1', round: 1 },
     ];
 
     const view = render(
@@ -709,6 +709,42 @@ describe('SimulationView replay automation output', () => {
     expect(sheet).toHaveTextContent('"emotion":null');
     expect(sheet).toHaveTextContent('"selectedBranchId":"b1"');
     expect(sheet).not.toHaveTextContent('furious');
+  });
+
+  it('fails closed while a completed replay branch selection has not settled', async () => {
+    mockStore.status = 'done';
+    mockStore.isSimulationComplete = true;
+    mockStore.agents = [{
+      id: 'a1',
+      name: '奥勒留斯',
+      role: '皇帝',
+      tier: 'CORE' as const,
+      emotion: 'configured-baseline',
+    }];
+    mockStore.branches = [];
+    mockStore.messages = [{
+      agent: '奥勒留斯',
+      agent_id: 'a1',
+      message: '未绑定回放路径的消息。',
+      emotion: 'must-not-leak-as-live',
+      branch: 'missing-branch',
+      round: 4,
+    }];
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'open-agent-profile' }));
+
+    const sheet = await screen.findByTestId('agent-profile-sheet-mock');
+    expect(sheet).toHaveTextContent('"source":"replay_unavailable"');
+    expect(sheet).toHaveTextContent('"emotion":null');
+    expect(sheet).not.toHaveTextContent('must-not-leak-as-live');
   });
 
   it('renders the question and runtime preset badge in separate header rows so long prompts wrap independently', async () => {

@@ -57,6 +57,7 @@ void i18n.init({
             snapshot_emotion_label: 'Scenario emotion snapshot',
             live_observation_source: 'Latest observed on {{branch}} · R{{round}}',
             replay_observation_source: 'Replay selection {{selectedBranch}} · R{{selectedRound}}; latest matching observation {{branch}} · R{{round}}',
+            result_observation_source: 'Result branch {{selectedBranch}}; latest matching observation {{branch}} · R{{round}}',
             replay_no_observation_source: 'No matching observation in replay selection {{selectedBranch}} · R{{selectedRound}}.',
             no_observation_value: 'No matching observation',
             baseline_emotion_source: 'No message observation yet; showing the configured starting emotion.',
@@ -97,7 +98,7 @@ function makeResponse(overrides?: Partial<ScenarioAgentProfileResponse>): Scenar
 
 interface TestProfileObservation {
   emotion: string | null;
-  source: 'live' | 'replay' | 'replay_unavailable' | 'baseline' | 'snapshot';
+  source: 'live' | 'replay' | 'replay_unavailable' | 'result' | 'baseline' | 'snapshot';
   branchId: string | null;
   branchTitle: string | null;
   round: number | null;
@@ -387,6 +388,55 @@ describe('AgentProfileSheet', () => {
     expect(screen.getByTestId('agent-profile-sheet-current-state')).toHaveTextContent('cautious');
     expect(screen.getByTestId('agent-profile-sheet-current-state')).not.toHaveTextContent(
       'stale-other-branch',
+    );
+  });
+
+  it('labels result emotion with both the target branch and actual evidence coordinates', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(
+      makeAgent({ emotion: 'stale-result-value' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: 'cautious',
+        source: 'result',
+        branchId: 'root',
+        branchTitle: 'Shared history',
+        round: 1,
+        selectedBranchId: 'child',
+        selectedBranchTitle: 'Diplomatic fork',
+      },
+    );
+
+    const state = await screen.findByTestId('agent-profile-sheet-current-state');
+    expect(state).toHaveTextContent(
+      'Result branch Diplomatic fork; latest matching observation Shared history · R1',
+    );
+    expect(state).toHaveTextContent('Observed emotioncautious');
+    expect(state).not.toHaveTextContent('stale-result-value');
+  });
+
+  it('labels a result without matching evidence as the configured baseline', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(
+      makeAgent({ emotion: 'configured-calm' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: 'configured-calm',
+        source: 'baseline',
+        branchId: null,
+        branchTitle: null,
+        round: null,
+      },
+    );
+
+    const state = await screen.findByTestId('agent-profile-sheet-current-state');
+    expect(state).toHaveTextContent('Configured starting emotionconfigured-calm');
+    expect(state).toHaveTextContent(
+      'No message observation yet; showing the configured starting emotion.',
     );
   });
 
