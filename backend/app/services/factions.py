@@ -79,15 +79,15 @@ def process_round(
                 session.add(edge)
 
         # ── 2. Cluster agents into factions ────────────────
-        sorted_agents = sorted(agent_stances, key=lambda x: x[1])
+        sorted_agents = sorted(agent_stances, key=lambda x: (x[1], x[0]))
 
         groups: list[list[tuple[str, float]]] = []
         current_group: list[tuple[str, float]] = [sorted_agents[0]]
 
         for idx in range(1, len(sorted_agents)):
-            _, prev_stance = sorted_agents[idx - 1]
+            _, anchor_stance = current_group[0]
             _, cur_stance = sorted_agents[idx]
-            if cur_stance - prev_stance < _STANCE_GROUP_THRESHOLD:
+            if cur_stance - anchor_stance < _STANCE_GROUP_THRESHOLD:
                 current_group.append(sorted_agents[idx])
             else:
                 groups.append(current_group)

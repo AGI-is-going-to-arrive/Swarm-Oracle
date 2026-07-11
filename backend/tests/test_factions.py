@@ -12,7 +12,12 @@ from app.main import app
 from app.models.checkpoint import AgentRelationEdge, FactionEvent, FactionSnapshot
 from app.models.database import Branch, Scenario, ScenarioStatus, get_engine
 from app.services.causal_graph import append_round_nodes
-from app.services.factions import get_faction_relations, get_faction_timeline, process_round
+from app.services.factions import (
+    _STANCE_GROUP_THRESHOLD,
+    get_faction_relations,
+    get_faction_timeline,
+    process_round,
+)
 
 # ── Mock message ────────────────────────────────────────
 
@@ -177,12 +182,93 @@ class TestProcessRound:
             all_members.extend(f["members"])
         assert set(all_members) == {"a1", "a2", "a3", "a4"}
 
+    def test_faction_chain_never_exceeds_maximum_stance_range(self):
+        messages = [
+            MockMessage(agent_id="agent-hesitant", emotion="hesitant"),
+            MockMessage(agent_id="agent-aggressive", emotion="aggressive"),
+            MockMessage(agent_id="agent-worried", emotion="worried"),
+            MockMessage(agent_id="agent-angry", emotion="angry"),
+        ]
+        stance_by_agent = {
+            "agent-aggressive": -0.7,
+            "agent-angry": -0.5,
+            "agent-worried": -0.3,
+            "agent-hesitant": -0.1,
+        }
+
+        result = process_round("faction-range-chain", "branch-1", 1, messages)
+
+        assert result is not None
+        factions = result["factions"]
+        assert [faction["members"] for faction in factions] == [
+            ["agent-aggressive", "agent-angry"],
+            ["agent-worried", "agent-hesitant"],
+        ]
+        for faction in factions:
+            scores = [stance_by_agent[agent_id] for agent_id in faction["members"]]
+            assert max(scores) - min(scores) < _STANCE_GROUP_THRESHOLD
+
+    def test_equal_stances_are_ordered_by_agent_id_across_input_orders(self):
+        def faction_members(scenario_id: str, agent_ids: list[str]) -> list[str]:
+            result = process_round(
+                scenario_id,
+                f"{scenario_id}-branch",
+                1,
+                [
+                    MockMessage(agent_id=agent_id, emotion="cooperative")
+                    for agent_id in agent_ids
+                ],
+            )
+            assert result is not None
+            return result["factions"][0]["members"]
+
+        expected = ["agent-a", "agent-b", "agent-c", "agent-d"]
+        assert faction_members(
+            "faction-tie-order-a",
+            ["agent-d", "agent-b", "agent-a", "agent-c"],
+        ) == expected
+        assert faction_members(
+            "faction-tie-order-b",
+            ["agent-c", "agent-a", "agent-d", "agent-b"],
+        ) == expected
+
+    def test_exact_stance_threshold_starts_a_new_faction(self, monkeypatch):
+        from app.services import factions as factions_service
+
+        exact_scores = {
+            "agent-low": -1.0,
+            "agent-anchor": 0.0,
+            "agent-boundary": _STANCE_GROUP_THRESHOLD,
+            "agent-high": 1.0,
+        }
+        monkeypatch.setattr(
+            factions_service,
+            "derive_stance_score",
+            lambda message: exact_scores[message.agent_id],
+        )
+        messages = [
+            MockMessage(agent_id="agent-boundary"),
+            MockMessage(agent_id="agent-high"),
+            MockMessage(agent_id="agent-anchor"),
+            MockMessage(agent_id="agent-low"),
+        ]
+
+        result = process_round("faction-strict-boundary", "branch-1", 1, messages)
+
+        assert result is not None
+        assert [faction["members"] for faction in result["factions"]] == [
+            ["agent-low"],
+            ["agent-anchor"],
+            ["agent-boundary"],
+            ["agent-high"],
+        ]
+
     def test_detects_majority_minority_when_one_cluster_dominates(self):
         """When one faction has >= 80% of agents → single_sided."""
         msgs = [
             MockMessage(agent_id="a1", emotion="cooperative", id="m1"),  # 0.5
             MockMessage(agent_id="a2", emotion="confident", id="m2"),    # 0.7
-            MockMessage(agent_id="a3", emotion="hopeful", id="m3"),      # 0.3
+            MockMessage(agent_id="a3", emotion="cooperative", id="m3"),  # 0.5
             MockMessage(agent_id="a4", emotion="cooperative", id="m4"),  # 0.5
             MockMessage(agent_id="a5", emotion="aggressive", id="m5"),   # -0.7
         ]
