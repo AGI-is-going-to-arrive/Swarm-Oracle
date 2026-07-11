@@ -482,6 +482,22 @@ class TestGetIdentityMemories:
 class TestL2CosineMatching:
     """P1-10: Layer 2 fuzzy matching via ChromaDB cosine similarity."""
 
+    @staticmethod
+    def _seed_identity(user_id: str, label: str) -> tuple[str, str]:
+        identity = AgentIdentity(
+            user_id=user_id,
+            kind="generated",
+            display_name=f"{label} Name",
+            role=f"{label} Role",
+            persona=f"{label} persona",
+            continuity_key=f"{user_id}-key",
+        )
+        identity_id, identity_role = identity.id, identity.role
+        with Session(get_engine()) as session:
+            session.add(identity)
+            session.commit()
+        return identity_id, identity_role
+
     def test_l2_fallback_matches_similar_persona(self):
         """L2 should match when L1 hash misses but persona is semantically similar."""
         # Create identity with L1 + L2 profile
@@ -609,6 +625,73 @@ class TestL2CosineMatching:
             persona="Constitutional law expert and legal scholar",
         )
         assert id_1 != id_2, "Different users should never share identities via L2"
+
+    def test_preview_skips_l2_candidate_owned_by_another_user(self):
+        foreign_id, foreign_role = self._seed_identity(
+            "owner-b-preview", "Owner B Secret",
+        )
+
+        fake_candidates = [{
+            "identity_id": foreign_id,
+            "distance": 0.04,
+            "similarity": 0.96,
+            "role": foreign_role,
+        }]
+        with patch(
+            "app.services.agent_identity.search_identity_candidates",
+            return_value=fake_candidates,
+        ):
+            preview = preview_identity_match(
+                "owner-a-preview",
+                "Owner A Candidate",
+                "Owner A Role",
+                "Owner A persona",
+            )
+
+        assert preview["match_kind"] == "new"
+        assert preview["candidate_identity"] is None
+        assert "Owner B Secret Name" not in repr(preview)
+        assert "Owner B secret persona" not in repr(preview)
+
+    def test_resolve_skips_foreign_l2_candidate_and_uses_owned_candidate(self):
+        foreign_id, foreign_role = self._seed_identity(
+            "owner-b-resolve", "Foreign Candidate",
+        )
+        owned_id, owned_role = self._seed_identity(
+            "owner-a-resolve", "Owned Candidate",
+        )
+
+        fake_candidates = [
+            {
+                "identity_id": foreign_id,
+                "distance": 0.03,
+                "similarity": 0.97,
+                "role": foreign_role,
+            },
+            {
+                "identity_id": owned_id,
+                "distance": 0.05,
+                "similarity": 0.95,
+                "role": owned_role,
+            },
+        ]
+        with (
+            patch(
+                "app.services.agent_identity.search_identity_candidates",
+                return_value=fake_candidates,
+            ),
+            Session(get_engine()) as caller_session,
+        ):
+            result = resolve_identity(
+                "owner-a-resolve",
+                "Owner A Candidate",
+                "Owner A New Role",
+                "Owner A new persona",
+                session=caller_session,
+            )
+            caller_session.rollback()
+
+        assert result == owned_id
 
     def test_resolve_with_mock_l2_candidates(self):
         """L2 fallback uses search_identity_candidates when L1 misses."""

@@ -119,20 +119,19 @@ def preview_identity_match(
         candidates = search_identity_candidates(user_id, role, persona)
         for candidate in candidates:
             db_identity = session.get(AgentIdentity, candidate["identity_id"])
-            if db_identity is None:
-                continue
-            return {
-                "name": name,
-                "role": role,
-                "persona": persona,
-                "continuity_key": key,
-                "match_kind": "l2_candidate",
-                "needs_confirmation": True,
-                "candidate_identity": _serialize_identity(
-                    db_identity,
-                    similarity=candidate["similarity"],
-                ),
-            }
+            if db_identity is not None and db_identity.user_id == user_id:
+                return {
+                    "name": name,
+                    "role": role,
+                    "persona": persona,
+                    "continuity_key": key,
+                    "match_kind": "l2_candidate",
+                    "needs_confirmation": True,
+                    "candidate_identity": _serialize_identity(
+                        db_identity,
+                        similarity=candidate["similarity"],
+                    ),
+                }
 
     return {
         "name": name,
@@ -214,7 +213,7 @@ def resolve_identity(
             for candidate in candidates:
                 # Verify L2 candidate still exists in DB (ChromaDB may be stale)
                 db_identity = session_obj.get(AgentIdentity, candidate["identity_id"])
-                if db_identity is not None:
+                if db_identity is not None and db_identity.user_id == user_id:
                     logger.info(
                         "L2 resolved identity %s for user=%s (similarity=%.4f)",
                         candidate["identity_id"], user_id, candidate["similarity"],
