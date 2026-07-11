@@ -443,6 +443,42 @@ def _persisted_report(scenario_id: str) -> dict[str, Any]:
         return report
 
 
+def _cancellation_outline() -> builder.ReportOutline:
+    return builder.ReportOutline(
+        title_i18n={"zh": "取消报告", "en": "Cancellation report"},
+        summary_i18n={"zh": "取消摘要", "en": "Cancellation summary"},
+        sections=[
+            builder.SectionPlan(
+                section_id=section_id,
+                title_i18n={"zh": section_id, "en": section_id.title()},
+                intent=f"Explain {section_id}.",
+            )
+            for section_id in ("timeline", "sources")
+        ],
+    )
+
+
+def _generated_cancellation_section(
+    section_plan: builder.SectionPlan,
+) -> builder.SectionBuildResult:
+    return builder.SectionBuildResult(
+        section=ReportSection(
+            id=section_plan.section_id,
+            title=section_plan.title_i18n["en"],
+            title_i18n=I18nText.model_validate(section_plan.title_i18n),
+            intent=section_plan.intent,
+            body_md_i18n=I18nText(
+                zh=f"{section_plan.section_id} 已完成。",
+                en=f"{section_plan.section_id} completed.",
+            ),
+            evidence_refs=["ev_001"],
+            tier="generation",
+        ),
+        tier="generation",
+        tool_trace=[],
+    )
+
+
 def _seed_suppressed_likelihood_report_scenario() -> str:
     scenario_id = "scenario-report-suppressed-zh"
     with Session(get_engine()) as session:
@@ -1177,7 +1213,7 @@ async def test_oversize_report_truncates_fail_closed(monkeypatch):
         ],
     )
     monkeypatch.setattr(builder, "llm_call_json", fake_llm)
-    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", 3600)
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", 4096)
 
     report = await builder.build_report(
         scenario_id,
@@ -1186,9 +1222,61 @@ async def test_oversize_report_truncates_fail_closed(monkeypatch):
     )
     payload = report.model_dump(mode="json")
 
-    assert report.status == "partial"
-    assert utf8_json_size_bytes(payload) <= 3600
-    assert validate_full_report_payload(payload, max_bytes=3600).status == "partial"
+    assert report.status == "failed"
+    assert utf8_json_size_bytes(payload) <= 4096
+    assert validate_full_report_payload(payload, max_bytes=4096).status == "failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_status"),
+    [
+        ("generating", "generating"),
+        ("complete", "failed"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+        ("skipped", "skipped"),
+        ("partial", "partial"),
+    ],
+)
+def test_byte_cap_preserves_terminal_authority_and_fails_closed_complete(
+    monkeypatch,
+    status,
+    expected_status,
+):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    payload = _legal_full_report()
+    payload["status"] = status
+    payload["summary"] = "summary " * 2_000
+    payload["summary_i18n"] = {
+        "zh": "摘要" * 4_000,
+        "en": "summary " * 2_000,
+    }
+    payload["sections"][0]["body_md_i18n"] = {
+        "zh": "章节" * 6_000,
+        "en": "section " * 3_000,
+    }
+    payload["evidence"][0]["quote"] = "evidence " * 2_000
+    payload["limitations"] = "unsafe-sized-limitations " * 1_000
+    report = FullReport.model_validate(payload)
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", 4096)
+
+    fitted = builder._fit_report_to_byte_cap(report)
+    fitted_payload = fitted.model_dump(mode="json")
+
+    assert fitted.status == expected_status
+    assert utf8_json_size_bytes(fitted_payload) <= 4096
+    assert validate_full_report_payload(fitted_payload, max_bytes=4096) == fitted
+    assert fitted.limitations == (
+        "Report was truncated to fit the configured UTF-8 byte budget."
+    )
+    evidence_ids = {item.id for item in fitted.evidence}
+    assert all(set(section.evidence_refs) <= evidence_ids for section in fitted.sections)
+    assert all(
+        set(indicator.evidence_refs) <= evidence_ids
+        for indicator in fitted.indicators_to_watch
+    )
 
 
 def test_byte_cap_prunes_indicator_refs_when_evidence_is_truncated(monkeypatch):
@@ -1989,6 +2077,128 @@ def test_report_runtime_lock_short_ttl_expires_and_becomes_preemptible(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_build_report_cancel_preserves_persisted_sections_and_reraises(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    outline = _cancellation_outline()
+    second_section_started = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    async def fixed_outline(*_args: Any, **_kwargs: Any):
+        return outline
+
+    async def block_second_section(*args: Any, **_kwargs: Any):
+        section_plan = args[1]
+        if section_plan.section_id == "timeline":
+            return _generated_cancellation_section(section_plan)
+        second_section_started.set()
+        await never_complete.wait()
+        raise AssertionError("cancelled section unexpectedly resumed")
+
+    monkeypatch.setattr(builder, "plan_outline", fixed_outline)
+    monkeypatch.setattr(builder, "generate_section_react", block_second_section)
+
+    task = asyncio.create_task(
+        builder.build_report(scenario_id, "branch-a", overrides=None),
+    )
+    await asyncio.wait_for(second_section_started.wait(), timeout=1)
+    before = validate_full_report_payload(_persisted_report(scenario_id))
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert before.status == "generating"
+    assert persisted.status == "cancelled"
+    assert persisted.target_branch_id == "branch-a"
+    assert persisted.sections == before.sections
+    assert persisted.evidence == before.evidence
+    assert persisted.tier == before.tier == "generation"
+    before_payload = before.model_dump(mode="json")
+    cancelled_payload = persisted.model_dump(mode="json")
+    for field in ("status", "generated_at"):
+        before_payload.pop(field)
+        cancelled_payload.pop(field)
+    assert cancelled_payload == before_payload
+
+
+@pytest.mark.asyncio
+async def test_build_report_cancel_before_first_persist_creates_cancelled_marker(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    outline_started = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    async def blocked_outline(*_args: Any, **_kwargs: Any):
+        outline_started.set()
+        await never_complete.wait()
+        raise AssertionError("cancelled outline unexpectedly resumed")
+
+    monkeypatch.setattr(builder, "plan_outline", blocked_outline)
+    task = asyncio.create_task(
+        builder.build_report(scenario_id, "branch-a", overrides=None),
+    )
+    await asyncio.wait_for(outline_started.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "cancelled"
+    assert persisted.target_branch_id == "branch-a"
+    assert persisted.sections == []
+    assert persisted.evidence == []
+
+
+@pytest.mark.asyncio
+async def test_build_report_cancel_does_not_overwrite_after_runtime_lock_loss(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    outline = _cancellation_outline()
+    second_section_started = asyncio.Event()
+    never_complete = asyncio.Event()
+    lease_is_authoritative = True
+    original_is_alive = builder._report_runtime_lock_is_alive
+
+    async def fixed_outline(*_args: Any, **_kwargs: Any):
+        return outline
+
+    async def block_second_section(*args: Any, **_kwargs: Any):
+        section_plan = args[1]
+        if section_plan.section_id == "timeline":
+            return _generated_cancellation_section(section_plan)
+        second_section_started.set()
+        await never_complete.wait()
+        raise AssertionError("cancelled section unexpectedly resumed")
+
+    def controlled_lease_check(lease_holder):
+        return lease_is_authoritative and original_is_alive(lease_holder)
+
+    monkeypatch.setattr(builder, "plan_outline", fixed_outline)
+    monkeypatch.setattr(builder, "generate_section_react", block_second_section)
+    monkeypatch.setattr(builder, "_report_runtime_lock_is_alive", controlled_lease_check)
+
+    task = asyncio.create_task(
+        builder.build_report(scenario_id, "branch-a", overrides=None),
+    )
+    await asyncio.wait_for(second_section_started.wait(), timeout=1)
+    before = _persisted_report(scenario_id)
+    lease_is_authoritative = False
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert _persisted_report(scenario_id) == before
+    assert validate_full_report_payload(before).status == "generating"
+
+
+@pytest.mark.asyncio
 async def test_build_report_refreshes_runtime_lock_during_generation(monkeypatch):
     from app.services.result_report import builder
     from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
@@ -2057,6 +2267,56 @@ async def test_report_sse_stream_times_out_stalled_generation(monkeypatch):
     assert '"report_id": "scenario-report"' in payload
     assert '"status": "failed"' in payload
     assert validate_full_report_payload(_persisted_report(scenario_id)).status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_report_sse_stall_timeout_forces_failed_story_authority(monkeypatch):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    outline = _cancellation_outline()
+    second_section_started = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    async def fixed_outline(*_args: Any, **_kwargs: Any):
+        return outline
+
+    async def block_second_section(*args: Any, **_kwargs: Any):
+        section_plan = args[1]
+        if section_plan.section_id == "timeline":
+            return _generated_cancellation_section(section_plan)
+        second_section_started.set()
+        await never_complete.wait()
+        raise AssertionError("timed-out section unexpectedly resumed")
+
+    monkeypatch.setattr(builder, "plan_outline", fixed_outline)
+    monkeypatch.setattr(builder, "generate_section_react", block_second_section)
+    monkeypatch.setattr(builder, "_report_sse_stall_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+
+    frames: list[str] = []
+    async for frame in builder.build_report_sse_stream(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    ):
+        frames.append(frame)
+
+    assert second_section_started.is_set()
+    payload = "".join(frames)
+    assert "event: report_failed" in payload
+    assert "REPORT_TIMEOUT" in payload
+    assert "event: report_complete" in payload
+    assert '"status": "failed"' in payload
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "failed"
+    assert [section.id for section in persisted.sections] == ["timeline"]
+    story = await scenarios_api.get_story(scenario_id, principal=None)
+    assert story["full_report"]["status"] == "failed"
+    assert [section["id"] for section in story["full_report"]["sections"]] == [
+        "timeline",
+    ]
 
 
 @pytest.mark.asyncio
@@ -2553,6 +2813,56 @@ async def test_report_generate_sse_stream_cancels_builder_on_client_disconnect(
         await pending_frame
 
     await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_report_sse_aclose_persists_cancelled_story_authority(monkeypatch):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    outline = _cancellation_outline()
+    second_section_started = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    async def fixed_outline(*_args: Any, **_kwargs: Any):
+        return outline
+
+    async def block_second_section(*args: Any, **_kwargs: Any):
+        section_plan = args[1]
+        if section_plan.section_id == "timeline":
+            return _generated_cancellation_section(section_plan)
+        second_section_started.set()
+        await never_complete.wait()
+        raise AssertionError("cancelled section unexpectedly resumed")
+
+    monkeypatch.setattr(builder, "plan_outline", fixed_outline)
+    monkeypatch.setattr(builder, "generate_section_react", block_second_section)
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+
+    stream = builder.build_report_sse_stream(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+    frames = [await anext(stream)]
+    for _ in range(3):
+        frames.append(await asyncio.wait_for(anext(stream), timeout=1))
+    await asyncio.wait_for(second_section_started.wait(), timeout=1)
+
+    await stream.aclose()
+
+    payload = "".join(frames)
+    assert "event: report_started" in payload
+    assert "event: report_complete" not in payload
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "cancelled"
+    assert [section.id for section in persisted.sections] == ["timeline"]
+    story = await scenarios_api.get_story(scenario_id, principal=None)
+    assert story["full_report"]["status"] == "cancelled"
+    assert [section["id"] for section in story["full_report"]["sections"]] == [
+        "timeline",
+    ]
 
 
 @pytest.mark.asyncio

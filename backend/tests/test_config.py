@@ -66,6 +66,39 @@ def test_result_report_feature_is_enabled_by_default(monkeypatch):
     assert s.FEATURE_RESULT_REPORT is True
 
 
+@pytest.mark.parametrize("configured_value", [1, 4095])
+def test_result_report_byte_cap_rejects_values_below_minimum(
+    monkeypatch,
+    configured_value,
+):
+    monkeypatch.setenv("REPORT_FULL_REPORT_MAX_BYTES", str(configured_value))
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError, match="REPORT_FULL_REPORT_MAX_BYTES"):
+        Settings(_env_file=None)
+
+
+def test_result_report_byte_cap_accepts_minimum_from_environment(monkeypatch):
+    monkeypatch.setenv("REPORT_FULL_REPORT_MAX_BYTES", "4096")
+
+    from app.config import Settings
+
+    assert Settings(_env_file=None).REPORT_FULL_REPORT_MAX_BYTES == 4096
+
+
+def test_result_report_byte_cap_exports_floor_and_default_respects_it(monkeypatch):
+    monkeypatch.delenv("REPORT_FULL_REPORT_MAX_BYTES", raising=False)
+
+    from app.config import REPORT_FULL_REPORT_MIN_BYTES, Settings
+
+    assert REPORT_FULL_REPORT_MIN_BYTES == 4096
+    assert (
+        Settings(_env_file=None).REPORT_FULL_REPORT_MAX_BYTES
+        >= REPORT_FULL_REPORT_MIN_BYTES
+    )
+
+
 def test_settings_from_env(monkeypatch):
     """Settings should load from environment variables."""
     monkeypatch.setenv("LLM_MODEL_NAME", "test-model-name")

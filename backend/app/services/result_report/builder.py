@@ -417,6 +417,21 @@ async def build_report(
                     progress=progress,
                     report_lock_holder=lease_holder,
                 )
+            except asyncio.CancelledError:
+                if _report_runtime_lock_is_alive(lease_holder):
+                    try:
+                        await asyncio.to_thread(
+                            _persist_cancelled_report_if_absent,
+                            scenario_id,
+                            dominant_branch_id,
+                        )
+                    except Exception:  # noqa: BLE001 - preserve cancellation
+                        logger.warning("Failed to persist result report cancellation marker")
+                else:
+                    logger.warning(
+                        "Skipping result report cancellation marker after runtime lock loss"
+                    )
+                raise
             except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
                 if _report_runtime_lock_is_alive(lease_holder):
                     try:
@@ -842,6 +857,7 @@ async def build_report_sse_stream(
                             _persist_failed_report_if_lock_available,
                             scenario_id,
                             dominant_branch_id,
+                            replace_cancelled=True,
                         )
                     yield encode_sse_event(
                         ResultReportSSEEvent(
@@ -2606,7 +2622,8 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
     if utf8_json_size_bytes(payload) <= max_bytes:
         return report
 
-    payload["status"] = "partial" if payload.get("status") != "failed" else "failed"
+    if payload.get("status") == "complete":
+        payload["status"] = "failed"
     payload["summary"] = _truncate_text(str(payload.get("summary") or ""), 180)
     payload["summary_i18n"] = _truncate_i18n(payload.get("summary_i18n"), 180)
     payload["limitations"] = (
@@ -2755,6 +2772,17 @@ def _persist_failed_report_if_absent(
     )
 
 
+def _persist_cancelled_report_if_absent(
+    scenario_id: str,
+    dominant_branch_id: str,
+) -> FullReport:
+    return _persist_placeholder_report_if_absent(
+        scenario_id,
+        dominant_branch_id,
+        status="cancelled",
+    )
+
+
 def persist_generating_report_placeholder_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
@@ -2819,9 +2847,10 @@ def _persist_placeholder_report_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
     *,
-    status: Literal["failed", "generating"],
+    status: Literal["failed", "generating", "cancelled"],
     replace_failed: bool = False,
     replace_unenhanced: bool = False,
+    replace_cancelled: bool = False,
 ) -> FullReport:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -2840,12 +2869,16 @@ def _persist_placeholder_report_if_absent(
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
         if existing is not None and existing.target_branch_id == target_branch_id:
             if status == "failed":
-                should_transition = existing.status == "generating" or (
-                    existing.status == "failed"
-                    and replace_unenhanced
-                    and not _report_has_llm_enhanced_sections(existing)
+                should_transition = (
+                    existing.status == "generating"
+                    or (existing.status == "cancelled" and replace_cancelled)
+                    or (
+                        existing.status == "failed"
+                        and replace_unenhanced
+                        and not _report_has_llm_enhanced_sections(existing)
+                    )
                 )
-            else:
+            elif status == "generating":
                 should_transition = existing.status == "failed" and (
                     replace_failed
                     or (
@@ -2853,6 +2886,8 @@ def _persist_placeholder_report_if_absent(
                         and not _report_has_llm_enhanced_sections(existing)
                     )
                 )
+            else:
+                should_transition = existing.status == "generating"
             if not should_transition:
                 return existing
             payload = existing.model_copy(
@@ -2880,6 +2915,8 @@ def _persist_placeholder_report_if_absent(
 def _persist_failed_report_if_lock_available(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    replace_cancelled: bool = False,
 ) -> FullReport | None:
     lease = acquire_runtime_lock(
         _report_runtime_lock_key(scenario_id),
@@ -2891,7 +2928,12 @@ def _persist_failed_report_if_lock_available(
         )
         return _load_existing_full_report(scenario_id)
     try:
-        return _persist_failed_report_if_absent(scenario_id, dominant_branch_id)
+        return _persist_placeholder_report_if_absent(
+            scenario_id,
+            dominant_branch_id,
+            status="failed",
+            replace_cancelled=replace_cancelled,
+        )
     finally:
         release_runtime_lock(lease)
 
@@ -2946,7 +2988,7 @@ def _placeholder_report_payload(
     branch: Branch | None,
     dominant_branch_id: str,
     *,
-    status: Literal["failed", "generating"],
+    status: Literal["failed", "generating", "cancelled"],
 ) -> dict[str, Any]:
     language = _detect_language(scenario.question or "", parsed_context)
     target_branch_id = branch.id if branch is not None else (dominant_branch_id or scenario.id)
@@ -2978,6 +3020,32 @@ def _placeholder_report_payload(
             completed_agents=0,
             truncated_agents=0,
             message="Report generation has not reached interview extraction yet.",
+        )
+    elif status == "cancelled":
+        title_i18n = I18nText(
+            zh="完整报告已取消",
+            en="Full report cancelled",
+        )
+        summary_i18n = I18nText(
+            zh="报告生成已取消，模拟结果仍可正常查看。",
+            en="Report generation was cancelled; the simulation result remains available.",
+        )
+        headline_answer = (
+            "报告生成已取消，未生成可展示章节。"
+            if language == "zh"
+            else "Report generation was cancelled before renderable sections were produced."
+        )
+        confidence_basis = "The report builder was cancelled before completing the report."
+        limitations = (
+            "Report generation was cancelled before any renderable section was produced. "
+            "Existing simulation results remain available."
+        )
+        interview_status = InterviewStatus(
+            status="skipped",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            message="Report generation was cancelled before interviews could run.",
         )
     else:
         title_i18n = I18nText(

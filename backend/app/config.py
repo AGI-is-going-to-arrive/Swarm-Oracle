@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
+REPORT_FULL_REPORT_MIN_BYTES = 4096
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 _PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678", "your-api-key-here"}
 DEFAULT_LLM_RESPONSES_URL = "http://127.0.0.1:8317/v1"
@@ -257,7 +258,10 @@ class Settings(BaseSettings):
     REPORT_PLAN_TIMEOUT_SECONDS: float = Field(default=20.0, gt=0)
     REPORT_MAX_EVIDENCE_PER_SECTION: int = Field(default=5, ge=0)
     REPORT_SECTION_CONTENT_MAX_CHARS: int = Field(default=12_000, ge=1)
-    REPORT_FULL_REPORT_MAX_BYTES: int = Field(default=262_144, ge=1)
+    REPORT_FULL_REPORT_MAX_BYTES: int = Field(
+        default=262_144,
+        ge=REPORT_FULL_REPORT_MIN_BYTES,
+    )
     REPORT_EVIDENCE_EXCERPT_MAX_CHARS: int = Field(default=600, ge=1)
     # DPD Hallucination Verification Gate — warning-only post-verdict check.
     FEATURE_HALLUCINATION_GATE: bool = Field(default=False)
