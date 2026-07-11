@@ -862,7 +862,7 @@ def _faction_share_data(
             "label": snap.label or snap.faction_key,
             "member_count": len(_parse_json_list(snap.member_agent_ids_json)),
             "share": round(len(_parse_json_list(snap.member_agent_ids_json)) / total_members, 4),
-            "stance_center": _clamp_probability(snap.stance_center),
+            "stance_center": _clamp_probability((snap.stance_center + 1.0) / 2.0),
             "confidence": _clamp_probability(snap.confidence),
         }
         for snap in snapshots

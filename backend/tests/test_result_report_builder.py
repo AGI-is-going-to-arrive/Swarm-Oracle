@@ -702,7 +702,7 @@ async def test_build_report_attaches_reducer_charts_to_semantic_sections(monkeyp
         "label": "Pro approval",
         "member_count": 2,
         "share": pytest.approx(0.6667),
-        "stance_center": 0.82,
+        "stance_center": pytest.approx(0.91),
         "confidence": 0.9,
     }
 

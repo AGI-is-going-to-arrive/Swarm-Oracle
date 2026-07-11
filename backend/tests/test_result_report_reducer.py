@@ -397,6 +397,158 @@ def test_dissenting_runner_up_uses_strongest_other_terminal_leaf():
     assert dissenting.runner_up_branch_id != mid.id
 
 
+def test_faction_share_projects_signed_stance_without_changing_other_fields(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+    snapshots = [
+        FactionSnapshot(
+            scenario_id="scenario-signed-factions",
+            branch_id="branch-signed-factions",
+            round_number=1,
+            faction_key="negative-extreme",
+            label="Negative extreme",
+            stance_center=-1.0,
+            member_agent_ids_json=json.dumps(["a1", "a2", "a3", "a4"]),
+            confidence=0.9,
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-signed-factions",
+            branch_id="branch-signed-factions",
+            round_number=1,
+            faction_key="neutral",
+            label="Neutral",
+            stance_center=0.0,
+            member_agent_ids_json=json.dumps(["a5", "a6", "a7"]),
+            confidence=0.8,
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-signed-factions",
+            branch_id="branch-signed-factions",
+            round_number=1,
+            faction_key="positive-extreme",
+            label="Positive extreme",
+            stance_center=1.0,
+            member_agent_ids_json=json.dumps(["a8", "a9"]),
+            confidence=0.7,
+        ),
+        FactionSnapshot(
+            scenario_id="scenario-signed-factions",
+            branch_id="branch-signed-factions",
+            round_number=1,
+            faction_key="negative-mid",
+            label="Negative midpoint",
+            stance_center=-0.6,
+            member_agent_ids_json=json.dumps(["a10"]),
+            confidence=0.6,
+        ),
+    ]
+    relation_stats = reducer_module.LatestRelationStats(
+        count=5,
+        avg_opposition=0.35,
+        max_opposition=0.8,
+    )
+
+    chart = reducer_module.Chart(
+        kind="faction_share",
+        data=reducer_module._faction_share_data(snapshots, relation_stats),
+    ).model_dump(mode="json")
+
+    assert chart == {
+        "kind": "faction_share",
+        "type": "faction_share",
+        "data": {
+            "status": "available",
+            "reason": None,
+            "factions": [
+                {
+                    "faction_key": "negative-extreme",
+                    "label": "Negative extreme",
+                    "member_count": 4,
+                    "share": 0.4,
+                    "stance_center": 0.0,
+                    "confidence": 0.9,
+                },
+                {
+                    "faction_key": "neutral",
+                    "label": "Neutral",
+                    "member_count": 3,
+                    "share": 0.3,
+                    "stance_center": 0.5,
+                    "confidence": 0.8,
+                },
+                {
+                    "faction_key": "positive-extreme",
+                    "label": "Positive extreme",
+                    "member_count": 2,
+                    "share": 0.2,
+                    "stance_center": 1.0,
+                    "confidence": 0.7,
+                },
+                {
+                    "faction_key": "negative-mid",
+                    "label": "Negative midpoint",
+                    "member_count": 1,
+                    "share": 0.1,
+                    "stance_center": 0.2,
+                    "confidence": 0.6,
+                },
+            ],
+            "relation_edge_count": 5,
+            "avg_opposition": 0.35,
+        },
+    }
+
+
+@pytest.mark.parametrize("stance_center", [float("nan"), float("inf"), float("-inf")])
+def test_faction_share_non_finite_signed_stance_remains_schema_safe(
+    monkeypatch,
+    stance_center,
+):
+    monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+    snapshot = FactionSnapshot(
+        scenario_id="scenario-non-finite-faction",
+        branch_id="branch-non-finite-faction",
+        round_number=1,
+        faction_key="legacy-non-finite",
+        label="Legacy non-finite",
+        stance_center=stance_center,
+        member_agent_ids_json=json.dumps(["agent-legacy"]),
+        confidence=0.4,
+    )
+    relation_stats = reducer_module.LatestRelationStats(
+        count=0,
+        avg_opposition=None,
+        max_opposition=None,
+    )
+
+    chart = reducer_module.Chart(
+        kind="faction_share",
+        data=reducer_module._faction_share_data([snapshot], relation_stats),
+    ).model_dump(mode="json")
+
+    assert chart == {
+        "kind": "faction_share",
+        "type": "faction_share",
+        "data": {
+            "status": "partial",
+            "reason": "relation_edges_missing",
+            "factions": [
+                {
+                    "faction_key": "legacy-non-finite",
+                    "label": "Legacy non-finite",
+                    "member_count": 1,
+                    "share": 1.0,
+                    "stance_center": 0.0,
+                    "confidence": 0.4,
+                }
+            ],
+            "relation_edge_count": 0,
+            "avg_opposition": None,
+        },
+    }
+
+
 def test_reduce_computes_consensus_polarization_charts_and_participants():
     scenario_id = _seed_scenario()
 
