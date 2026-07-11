@@ -28,6 +28,7 @@ class SSEEvent:
     event_id: str | None = None
     retry: int | None = None
     delay_seconds: float = 0.0
+    space_after_data_colon: bool = True
 
     def __post_init__(self) -> None:
         if self.delay_seconds < 0:
@@ -53,7 +54,8 @@ class SSEEvent:
             else json.dumps(self.data, ensure_ascii=False, separators=(",", ":"))
         )
         for data_line in data.splitlines() or [""]:
-            lines.append(f"data: {data_line}")
+            separator = " " if self.space_after_data_colon else ""
+            lines.append(f"data:{separator}{data_line}")
         return ("\n".join(lines) + "\n\n").encode()
 
 

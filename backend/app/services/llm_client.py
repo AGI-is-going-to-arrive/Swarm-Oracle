@@ -3319,6 +3319,28 @@ async def llm_call_json(
     return _parse_json_response(cleaned, fallback_mode=fallback_mode)
 
 
+class _TruncatedSSEStreamError(Exception):
+    """Raised internally when an SSE response ends without a terminal frame."""
+
+
+def _extract_sse_data(line: str) -> str | None:
+    """Return an SSE data field with or without the optional post-colon space."""
+    if not line.startswith("data:"):
+        return None
+    return line[5:].strip()
+
+
+def _is_stream_terminal(chunk: dict[str, Any], *, is_chat: bool) -> bool:
+    if not is_chat:
+        return chunk.get("type") == "response.completed"
+
+    choices = chunk.get("choices")
+    return isinstance(choices, list) and any(
+        isinstance(choice, dict) and choice.get("finish_reason") is not None
+        for choice in choices
+    )
+
+
 async def llm_call_stream(
     input_text: str,
     *,
@@ -3408,6 +3430,7 @@ async def llm_call_stream(
 
         for attempt in range(max_retries + 1):
             emitted_content = False
+            terminal_received = False
             try:
                 async with client.stream(
                     "POST",
@@ -3421,10 +3444,11 @@ async def llm_call_stream(
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
+                        data_str = _extract_sse_data(line)
+                        if data_str is None:
                             continue
-                        data_str = line[6:].strip()
                         if data_str == "[DONE]":
+                            terminal_received = True
                             break
                         try:
                             chunk = json.loads(data_str)
@@ -3455,8 +3479,32 @@ async def llm_call_stream(
                                 yield content
                         except (json.JSONDecodeError, IndexError, KeyError):
                             continue
+                        if _is_stream_terminal(chunk, is_chat=is_chat):
+                            terminal_received = True
+                            break
+                if not terminal_received:
+                    raise _TruncatedSSEStreamError
                 await _record_provider_success(provider_key)
                 break
+            except _TruncatedSSEStreamError as exc:
+                last_exc = exc
+                if not emitted_content and attempt < max_retries:
+                    wait = retry_delay * (2 ** attempt)
+                    logger.warning(
+                        "LLM stream ended without a terminal frame "
+                        "(attempt %d/%d), retrying in %.1fs",
+                        attempt + 1,
+                        max_retries + 1,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                await _record_provider_failure(provider_key)
+                logger.error("LLM stream ended without a terminal frame")
+                raise LLMError(
+                    _LLM_SAFE_ERROR_MESSAGES["LLM_UNREACHABLE"],
+                    code="LLM_UNREACHABLE",
+                ) from exc
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 status_code = exc.response.status_code

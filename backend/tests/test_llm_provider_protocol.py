@@ -10,7 +10,12 @@ import pytest
 
 from app.services import llm_client
 from app.services.llm_client import llm_call
-from tests.fake_llm_provider import FakeLLMProvider, RecordedRequest, ScriptedResponse
+from tests.fake_llm_provider import (
+    FakeLLMProvider,
+    RecordedRequest,
+    ScriptedResponse,
+    SSEEvent,
+)
 
 
 @pytest.fixture
@@ -81,6 +86,174 @@ async def test_real_http_harness_records_openai_request(isolated_llm_provider):
     assert json.loads(request.body) == request.json_body
     assert request.json_body["messages"] == [{"role": "user", "content": prompt}]
     assert provider.server_errors == ()
+
+
+async def test_chat_stream_accepts_optional_space_data_and_done_terminal(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {"choices": [{"delta": {"content": "no-space"}}]},
+                    space_after_data_colon=False,
+                ),
+                SSEEvent("[DONE]", space_after_data_colon=False),
+            )
+        )
+    )
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "stream with optional SSE whitespace",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["no-space"]
+    assert len(provider.requests) == 1
+
+
+async def test_chat_stream_finish_reason_terminal_does_not_require_done(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "chat complete"}}]}),
+                SSEEvent(
+                    {
+                        "choices": [
+                            {"delta": {}, "finish_reason": None},
+                            {"delta": {}, "finish_reason": "stop"},
+                        ]
+                    }
+                ),
+                SSEEvent({"choices": [{"delta": {"content": " late"}}]}),
+            )
+        )
+    )
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "stream until finish reason",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["chat complete"]
+    assert len(provider.requests) == 1
+
+
+async def test_responses_stream_completed_terminal_does_not_require_done(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent(
+                    {
+                        "type": "response.output_text.delta",
+                        "delta": "responses complete",
+                    }
+                ),
+                SSEEvent({"type": "response.completed", "response": {"id": "resp_1"}}),
+                SSEEvent(
+                    {
+                        "type": "response.output_text.delta",
+                        "delta": " late",
+                    }
+                ),
+            )
+        )
+    )
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "stream until response completed",
+            api_key="test-only-provider-key",
+            base_url=f"{provider.base_url}/responses",
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["responses complete"]
+    assert len(provider.requests) == 1
+
+
+async def test_empty_sse_eof_retries_before_output(isolated_llm_provider, monkeypatch):
+    provider = isolated_llm_provider
+    provider.enqueue(ScriptedResponse.sse(()))
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "retry ok"}}]}),
+                SSEEvent("[DONE]"),
+            )
+        )
+    )
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(llm_client.asyncio, "sleep", _record_sleep)
+
+    chunks = [
+        chunk
+        async for chunk in llm_client.llm_call_stream(
+            "retry empty stream",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        )
+    ]
+
+    assert chunks == ["retry ok"]
+    assert sleep_calls == [1.0]
+    assert len(provider.requests) == 2
+
+
+async def test_partial_sse_eof_preserves_chunk_and_does_not_retry(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (SSEEvent({"choices": [{"delta": {"content": "partial"}}]}),)
+        )
+    )
+    chunks: list[str] = []
+
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        async for chunk in llm_client.llm_call_stream(
+            "do not replay partial stream",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ["partial"]
+    assert exc_info.value.code == "LLM_UNREACHABLE"
+    assert len(provider.requests) == 1
+    provider_key = llm_client._provider_key(f"{provider.base_url}/chat/completions")
+    assert llm_client._provider_failures[provider_key] == 1
 
 
 def test_close_interrupts_incomplete_request_body():
