@@ -14,16 +14,33 @@ test("result-report fixture fulfills a finite in-page SSE response without a fix
 });
 
 test("finite report SSE ends with a real report_complete frame", () => {
-  const frames = __test__.buildToolTraceSseBody()
+  const rawFrames = __test__.buildToolTraceSseBody()
     .trim()
-    .split(/\r?\n\r?\n/u)
-    .map((frame) => JSON.parse(frame.replace(/^data:\s*/u, "")));
+    .split(/\r?\n\r?\n/u);
+  const frames = rawFrames.map((frame) => {
+    const eventLine = frame.split(/\r?\n/u).find((line) => line.startsWith("event:"));
+    const dataLine = frame.split(/\r?\n/u).find((line) => line.startsWith("data:"));
+    assert.ok(eventLine);
+    assert.ok(dataLine);
+    const event = eventLine.replace(/^event:\s*/u, "");
+    const data = JSON.parse(dataLine.replace(/^data:\s*/u, ""));
+    assert.equal(data.event, undefined);
+    return { event, data };
+  });
 
   assert.equal(frames.length, 3);
+  for (const frame of frames) {
+    assert.equal(typeof frame.data.status, "string");
+    assert.ok(Array.isArray(frame.data.tool_trace));
+  }
   assert.equal(frames[1].event, "report_section_complete");
-  assert.equal(frames[1].tool_trace.length, 2);
+  assert.equal(frames[1].data.status, "complete");
+  assert.equal(frames[1].data.tier, "generation");
+  assert.equal(frames[1].data.tool_trace.length, 2);
   assert.equal(frames[2].event, "report_complete");
-  assert.equal(frames[2].error_code, undefined);
+  assert.equal(frames[2].data.status, "complete");
+  assert.equal(frames[2].data.error_code, undefined);
+  assert.equal(frames.filter((frame) => frame.event === "report_complete").length, 1);
 });
 
 test("browser coverage checks the bounded SSE lifecycle instead of a transient tool-trace chip", () => {

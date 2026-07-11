@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../api/client';
 import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
-import type { Scenario, YouVsOracleComparison } from '../types';
+import type { FullReport, ReportStatus, Scenario, YouVsOracleComparison } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
@@ -29,6 +29,69 @@ function jsonResponse(body: unknown, status = 200): Response {
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response;
+}
+
+const REPORT_SECTION: FullReport['sections'][number] = {
+  id: 'drivers',
+  title: 'Key Drivers',
+  title_i18n: { zh: '关键驱动力', en: 'Key Drivers' },
+  intent: 'Explain the primary drivers.',
+  body_md_i18n: { zh: '已保存的章节正文。', en: 'Saved section body.' },
+  evidence_refs: [],
+  charts: [],
+};
+
+function fullReportFixture(
+  status: ReportStatus = 'complete',
+  sections: FullReport['sections'] = [REPORT_SECTION],
+): FullReport {
+  return {
+    version: '1',
+    generated_at: '2026-03-17T00:00:00Z',
+    generation_mode: 'generation',
+    target_branch_id: 'branch-1',
+    target_branch_sort: ['branch-1'],
+    language: 'en',
+    available_languages: ['en'],
+    title: 'Test Report Title',
+    title_i18n: { zh: '测试报告标题', en: 'Test Report Title' },
+    summary: 'Test summary',
+    summary_i18n: { zh: '测试摘要', en: 'Test summary' },
+    sections,
+    evidence: [],
+    indicators_to_watch: [],
+    limitations: 'Test limitations',
+    dissenting: null,
+    key_participants: [],
+    follow_ups: [],
+    interview_evidence: [],
+    premortem: [],
+    language_status: null,
+    tier: 'generation',
+    status,
+    verdict: {
+      headline_answer: 'Test headline answer',
+      likelihood: {
+        probability: 0.9,
+        interval: [0.8, 1],
+        wep: 'almost_certain',
+      },
+      analytic_confidence: {
+        level: 'high',
+        basis: 'Test basis',
+      },
+      disclaimer: null,
+    },
+  };
+}
+
+function readBlobText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
 }
 
 const {
@@ -332,6 +395,14 @@ describe('ResultView locale contracts', () => {
     expect(zh.translation.result.bridge_full_report_generate_title).toBe('生成完整报告');
     expect(en.translation.result.bridge_full_report_read_title).toBe('Read Full Report');
     expect(zh.translation.result.bridge_full_report_read_title).toBe('阅读完整报告');
+    expect(en.translation.result.bridge_full_report_progress_title).toBe('View Report Progress');
+    expect(zh.translation.result.bridge_full_report_progress_title).toBe('查看报告进度');
+    expect(en.translation.result.bridge_full_report_retry_title).toBe('Retry Full Report');
+    expect(zh.translation.result.bridge_full_report_retry_title).toBe('重试完整报告');
+    expect(en.translation.result.bridge_full_report_saved_title).toBe('Review Saved Sections');
+    expect(zh.translation.result.bridge_full_report_saved_title).toBe('查看已保存章节');
+    expect(en.translation.result.bridge_full_report_status_title).toBe('View Report Status');
+    expect(zh.translation.result.bridge_full_report_status_title).toBe('查看报告状态');
   });
 });
 
@@ -4487,7 +4558,7 @@ describe('ResultView explore deeper bridge', () => {
     expect(screen.queryByRole('link', { name: 'result.open_workbench_link' })).not.toBeInTheDocument();
   });
 
-  it('enables data-backed graph and replay links and labels an existing report as readable', async () => {
+  it('enables data-backed graph and replay links and labels a complete report with sections as readable', async () => {
     setMockCapabilities({
       causal_graph: { enabled: true },
       kg_explorer: { enabled: true },
@@ -4513,7 +4584,7 @@ describe('ResultView explore deeper bridge', () => {
       scenario_id: 'scenario-1',
       question: 'What if the archive had to sync?',
       status: 'done',
-      full_report: { status: 'partial', truncated: true },
+      full_report: fullReportFixture(),
       branches: [
         {
           id: 'branch-1',
@@ -4568,6 +4639,88 @@ describe('ResultView explore deeper bridge', () => {
       'href',
       '/workbench/scenario-1?view=graph&branch=branch-1',
     );
+  });
+
+  it.each([
+    ['generating', [] as FullReport['sections'], 'result.bridge_full_report_progress_title'],
+    ['generating', [REPORT_SECTION], 'result.bridge_full_report_progress_title'],
+    ['failed', [] as FullReport['sections'], 'result.bridge_full_report_retry_title'],
+    ['cancelled', [] as FullReport['sections'], 'result.bridge_full_report_retry_title'],
+    ['skipped', [] as FullReport['sections'], 'result.bridge_full_report_status_title'],
+    ['partial', [REPORT_SECTION], 'result.bridge_full_report_saved_title'],
+    ['failed', [REPORT_SECTION], 'result.bridge_full_report_saved_title'],
+    ['cancelled', [REPORT_SECTION], 'result.bridge_full_report_saved_title'],
+  ] as const)(
+    'labels a %s report with truthful outer-state copy',
+    async (status, sections, expectedTitle) => {
+      setMockCapabilities({ result_report: { enabled: true } });
+      vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'Primary branch.',
+          insight: 'Primary insight.',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        }],
+        full_report: fullReportFixture(status, [...sections]),
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const bridge = (await screen.findByRole('heading', { name: 'result.next_steps_heading' }))
+        .closest('section') as HTMLElement;
+      expect(within(bridge).getByRole('link', { name: new RegExp(expectedTitle) }))
+        .toHaveAttribute('href', '/result/scenario-1/report');
+      expect(bridge).not.toHaveTextContent('result.bridge_full_report_read_title');
+    },
+  );
+
+  it('does not present a truncated report marker as readable content', async () => {
+    setMockCapabilities({ result_report: { enabled: true } });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [{
+        id: 'branch-1',
+        title: 'Archive Branch',
+        probability: 1,
+        status: 'COMPLETED',
+        story: 'Primary branch.',
+        insight: 'Primary insight.',
+        key_moments: [],
+        parent_branch_id: null,
+        fork_reason: '',
+      }],
+      full_report: { status: 'partial', truncated: true },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridge = (await screen.findByRole('heading', { name: 'result.next_steps_heading' }))
+      .closest('section') as HTMLElement;
+    expect(within(bridge).getByRole('link', { name: /result.bridge_full_report_retry_title/ }))
+      .toHaveAttribute('href', '/result/scenario-1/report');
+    expect(bridge).not.toHaveTextContent('result.bridge_full_report_read_title');
   });
 
   it('passes only populated source families into share image artifacts', async () => {
@@ -5131,6 +5284,92 @@ describe('ResultView export flow', () => {
     expect(blobText).toContain('This probability is a narrative simulation result, not a real-world prediction.');
     expect(blobText).not.toContain('Disclaimer: null');
     expect(blobText).not.toContain('Disclaimer: undefined');
+  });
+
+  it.each([
+    ['partial', 'partial (legacy report; saved content may be incomplete)'],
+    ['failed', 'failed (saved sections only)'],
+    ['cancelled', 'cancelled (saved sections only)'],
+  ] as const)(
+    'exports saved report sections and the truthful %s terminal status',
+    async (status, expectedStatusText) => {
+      const user = userEvent.setup();
+      const createObjectURLMock = vi.mocked(URL.createObjectURL);
+      createObjectURLMock.mockClear();
+      setMockCapabilities({ result_report: { enabled: true } });
+      vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+        scenario_id: 'scenario-1',
+        question: 'What if?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        }],
+        full_report: fullReportFixture(status),
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await user.click(await screen.findByRole('button', { name: 'result.export' }));
+      await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+
+      const blob = createObjectURLMock.mock.calls[0][0] as Blob;
+      const blobText = await readBlobText(blob);
+      expect(blobText).toContain('**Report status**');
+      expect(blobText).toContain(expectedStatusText);
+      expect(blobText).toContain('## Key Drivers');
+      expect(blobText).toContain('Saved section body.');
+    },
+  );
+
+  it('does not append an empty failed report to the scenario export', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+    setMockCapabilities({ result_report: { enabled: true } });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if?',
+      status: 'done',
+      branches: [{
+        id: 'branch-1',
+        title: 'Archive Branch',
+        probability: 1,
+        status: 'COMPLETED',
+        story: 'A complete branch story.',
+        insight: 'A durable insight.',
+        key_moments: [],
+        parent_branch_id: null,
+        fork_reason: '',
+      }],
+      full_report: fullReportFixture('failed', []),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'result.export' }));
+    await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+    const blob = createObjectURLMock.mock.calls[0][0] as Blob;
+    expect(await readBlobText(blob)).toBe('# export');
   });
 });
 

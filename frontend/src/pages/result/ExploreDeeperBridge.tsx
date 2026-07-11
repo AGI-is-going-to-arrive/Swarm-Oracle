@@ -4,8 +4,81 @@
 
 import { useCallback, useState } from 'react';
 import { ScenarioAgentPicker } from '../../components/result/ScenarioAgentPicker';
-import type { AgentInfo } from '../../types';
+import type { AgentInfo, StoryData } from '../../types';
 import { useResultContext } from './ResultContext';
+
+type FullReportBridgeCopy = {
+  titleKey: string;
+  titleDefault: string;
+  descKey: string;
+  descDefault: string;
+};
+
+function getFullReportBridgeCopy(
+  report: StoryData['full_report'],
+): FullReportBridgeCopy {
+  if (!report) {
+    return {
+      titleKey: 'result.bridge_full_report_generate_title',
+      titleDefault: 'Generate Full Report',
+      descKey: 'result.bridge_full_report_generate_desc',
+      descDefault: 'Generate a full report for this run.',
+    };
+  }
+
+  if ('truncated' in report) {
+    return {
+      titleKey: 'result.bridge_full_report_retry_title',
+      titleDefault: 'Retry Full Report',
+      descKey: 'result.bridge_full_report_retry_desc',
+      descDefault: 'The saved response was truncated. Open the report to retry.',
+    };
+  }
+
+  const hasSavedSections = report.sections.length > 0;
+  if (report.status === 'generating') {
+    return {
+      titleKey: 'result.bridge_full_report_progress_title',
+      titleDefault: 'View Report Progress',
+      descKey: 'result.bridge_full_report_progress_desc',
+      descDefault: 'The report is still being generated. Open it to see saved progress.',
+    };
+  }
+
+  if (report.status === 'complete' && hasSavedSections) {
+    return {
+      titleKey: 'result.bridge_full_report_read_title',
+      titleDefault: 'Read Full Report',
+      descKey: 'result.bridge_full_report_read_desc',
+      descDefault: 'Read the full report for this run.',
+    };
+  }
+
+  if (hasSavedSections) {
+    return {
+      titleKey: 'result.bridge_full_report_saved_title',
+      titleDefault: 'Review Saved Sections',
+      descKey: 'result.bridge_full_report_saved_desc',
+      descDefault: 'Review the sections saved before generation stopped.',
+    };
+  }
+
+  if (report.status === 'skipped') {
+    return {
+      titleKey: 'result.bridge_full_report_status_title',
+      titleDefault: 'View Report Status',
+      descKey: 'result.bridge_full_report_status_desc',
+      descDefault: 'No report content was generated. Open the report to view its status.',
+    };
+  }
+
+  return {
+    titleKey: 'result.bridge_full_report_retry_title',
+    titleDefault: 'Retry Full Report',
+    descKey: 'result.bridge_full_report_retry_desc',
+    descDefault: 'No readable report sections were saved. Open the report to retry.',
+  };
+}
 
 export default function ExploreDeeperBridge() {
   const {
@@ -84,7 +157,7 @@ export default function ExploreDeeperBridge() {
   const hasCausalGraph = Boolean(scenario?.causal_graph_id);
   const hasReplayLineage = branches.some((branch) => Boolean(branch.replay_source_branch_id));
   const hasReplayData = hasReplayLineage || (causalEnabled && hasCausalGraph);
-  const hasFullReport = Boolean(storyData?.full_report);
+  const fullReportCopy = getFullReportBridgeCopy(storyData?.full_report);
   const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false)
     && branches.length > 1;
   const agentConvEnabled = !!capabilities?.agent_conversation?.enabled;
@@ -139,16 +212,7 @@ export default function ExploreDeeperBridge() {
       key: 'full-report',
       kind: 'link',
       icon: '\u{1F4D1}',
-      titleKey: hasFullReport
-        ? 'result.bridge_full_report_read_title'
-        : 'result.bridge_full_report_generate_title',
-      titleDefault: hasFullReport ? 'Read Full Report' : 'Generate Full Report',
-      descKey: hasFullReport
-        ? 'result.bridge_full_report_read_desc'
-        : 'result.bridge_full_report_generate_desc',
-      descDefault: hasFullReport
-        ? 'Read the full report for this run.'
-        : 'Generate a full report for this run.',
+      ...fullReportCopy,
       enabled: (capabilities?.result_report?.enabled ?? false) && !isReplayMode,
       href: `/result/${scenarioId}/report`,
       disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',

@@ -823,9 +823,26 @@ export default function ResultView() {
 
       if (storyData?.full_report && 'verdict' in storyData.full_report) {
         const report = storyData.full_report;
-        if (report.status === 'complete' || report.status === 'partial') {
+        const hasSavedSections = report.sections.length > 0;
+        const isExportableTerminal = report.status === 'complete'
+          || report.status === 'partial'
+          || ((report.status === 'failed' || report.status === 'cancelled') && hasSavedSections);
+        if (isExportableTerminal) {
           const title = isZh ? report.title_i18n?.zh || report.title : report.title_i18n?.en || report.title;
           const summary = isZh ? report.summary_i18n?.zh || report.summary : report.summary_i18n?.en || report.summary;
+          const statusText = isZh
+              ? ({
+                complete: '已完成',
+                partial: '部分完成（旧版报告，已保存内容可能不完整）',
+                failed: '失败（仅包含已保存章节）',
+                cancelled: '已取消（仅包含已保存章节）',
+              } as const)[report.status as 'complete' | 'partial' | 'failed' | 'cancelled']
+            : ({
+                complete: 'complete',
+                partial: 'partial (legacy report; saved content may be incomplete)',
+                failed: 'failed (saved sections only)',
+                cancelled: 'cancelled (saved sections only)',
+              } as const)[report.status as 'complete' | 'partial' | 'failed' | 'cancelled'];
           const sections = report.sections.map((section) => {
             const sectionTitle = isZh ? section.title_i18n?.zh || section.title : section.title_i18n?.en || section.title;
             const body = isZh ? section.body_md_i18n?.zh || '' : section.body_md_i18n?.en || '';
@@ -839,6 +856,7 @@ export default function ResultView() {
           ));
           const reportMd = [
             `\n\n# ${title}`,
+            `\n**${isZh ? '报告状态' : 'Report status'}**: ${statusText}`,
             `\n**${isZh ? '摘要' : 'Summary'}**: ${summary}`,
             `\n**${isZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`,
             `\n**${isZh ? '置信度' : 'Confidence'}**: ${report.verdict.analytic_confidence.level} — ${report.verdict.analytic_confidence.basis}`,

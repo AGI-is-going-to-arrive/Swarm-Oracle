@@ -464,18 +464,24 @@ function storyWithReport(report) {
 function buildToolTraceSseBody() {
   const sectionComplete = {
     event: "report_section_complete",
-    section_id: "timeline",
-    tool_trace: [
-      { tool: "web_search", query: "renewable adoption timeline", item_count: 8, elapsed_ms: 1234 },
-      { tool: "vector_lookup", query: "", item_count: 3, elapsed_ms: 56 },
-    ],
+    data: {
+      status: "complete",
+      section_id: "timeline",
+      tier: "generation",
+      tool_trace: [
+        { tool: "web_search", query: "renewable adoption timeline", item_count: 8, elapsed_ms: 1234 },
+        { tool: "vector_lookup", query: "", item_count: 3, elapsed_ms: 56 },
+      ],
+    },
   };
   const events = [
-    { event: "report_started", scenario_id: FIXTURE_SCENARIO_ID },
+    { event: "report_started", data: { status: "generating", tool_trace: [] } },
     sectionComplete,
-    { event: "report_complete", scenario_id: FIXTURE_SCENARIO_ID },
+    { event: "report_complete", data: { status: "complete", tool_trace: [] } },
   ];
-  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}`;
+  return events
+    .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    .join("");
 }
 
 async function installFixtures(page, state, report, options = {}) {
@@ -666,7 +672,7 @@ async function assertChartsRender(page, steps, isZh) {
 
   if (probVisible) {
     const probText = await probChart.textContent().catch(() => "") || "";
-    const expectedTitle = isZh ? "分支概率" : "Branch likelihoods";
+    const expectedTitle = isZh ? "模拟分支分布" : "Simulated branch distribution";
     steps.push(createStep(`${locale}-probability-title`, probText.includes(expectedTitle), probText));
     steps.push(createStep(`${locale}-probability-label-green`, probText.includes("Green Transition"), probText));
     steps.push(createStep(`${locale}-probability-pct-64`, probText.includes("64%"), probText));
@@ -677,7 +683,7 @@ async function assertChartsRender(page, steps, isZh) {
     const badgeVisible = await dominantBadge.isVisible().catch(() => false);
     steps.push(createStep(`${locale}-probability-dominant-badge`, badgeVisible));
 
-    const expectedDominantSr = isZh ? "最可能的结果" : "Most likely outcome";
+    const expectedDominantSr = isZh ? "主导模拟路径" : "Dominant simulated path";
     const badgeText = await dominantBadge.textContent().catch(() => "") || "";
     steps.push(createStep(`${locale}-probability-dominant-sr`, badgeText.includes(expectedDominantSr), badgeText));
 
@@ -754,13 +760,20 @@ function parseSseJsonFrames(body) {
   return String(body)
     .trim()
     .split(/\r?\n\r?\n/u)
-    .map((frame) => frame
-      .split(/\r?\n/u)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n"))
-    .filter(Boolean)
-    .map((data) => JSON.parse(data));
+    .map((frame) => {
+      const lines = frame.split(/\r?\n/u);
+      const event = lines
+        .find((line) => line.startsWith("event:"))
+        ?.slice(6)
+        .trimStart();
+      const data = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (!event || !data) return null;
+      return { event, ...JSON.parse(data) };
+    })
+    .filter(Boolean);
 }
 
 async function waitForCondition(predicate, timeoutMs = 5000, intervalMs = 50) {
@@ -815,15 +828,14 @@ async function runToolTraceSseLifecycleTest(page, steps, isZh, state, locale) {
   ));
 
   const refreshed = await waitForCondition(
-    () => state.storyRequests.length >= storyCountBefore + 1,
+    () => state.storyRequests.length >= storyCountBefore + 2,
     8000,
   );
-  await page.waitForTimeout(100);
   const generateCount = state.reportGenerateRequests.length - generateCountBefore;
   const refreshCount = state.storyRequests.length - storyCountBefore;
   steps.push(createStep(
     `tooltrace-refresh-count-bounded-${locale}`,
-    generateCount === 1 && refreshCount === 1,
+    generateCount === 1 && refreshCount === 2,
     { generateCount, refreshCount },
   ));
 
