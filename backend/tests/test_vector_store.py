@@ -954,6 +954,65 @@ class TestIdentityMemory:
         with pytest.raises(Exception):
             vs._client.get_collection(name=_identity_collection_name("user-profile"))
 
+    def test_allowed_identity_filter_precedes_top_n_in_colliding_collection(
+        self,
+        temp_dir,
+        monkeypatch,
+    ):
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+        assert _identity_profile_collection_name("user-a") == (
+            _identity_profile_collection_name("user_a")
+        )
+
+        collection = vs._client.get_or_create_collection(
+            name=_identity_profile_collection_name("user-a"),
+            metadata={"hnsw:space": "cosine"},
+        )
+        foreign_ids = [f"foreign-{index}" for index in range(5)]
+        owned_id = "owned-candidate"
+        collection.add(
+            ids=[*foreign_ids, owned_id],
+            documents=[
+                *(["Analyst — Exact target profile"] * len(foreign_ids)),
+                "Botanist — Studies rare alpine mosses",
+            ],
+            metadatas=[
+                *[
+                    {
+                        "identity_id": identity_id,
+                        "doc_type": "identity_profile",
+                        "role": "Analyst",
+                    }
+                    for identity_id in foreign_ids
+                ],
+                {
+                    "identity_id": owned_id,
+                    "doc_type": "identity_profile",
+                    "role": "Botanist",
+                },
+            ],
+        )
+
+        unfiltered = search_identity_candidates(
+            "user-a",
+            "Analyst",
+            "Exact target profile",
+            threshold=2.1,
+            max_candidates=1,
+        )
+        filtered = search_identity_candidates(
+            "user-a",
+            "Analyst",
+            "Exact target profile",
+            threshold=2.1,
+            max_candidates=1,
+            allowed_identity_ids=frozenset({owned_id}),
+        )
+
+        assert unfiltered[0]["identity_id"] in foreign_ids
+        assert [candidate["identity_id"] for candidate in filtered] == [owned_id]
+
     def test_profile_write_timeout_releases_pending_gate(self, monkeypatch):
         """A timed-out profile write should not make all future writes skip."""
         release_first_write = threading.Event()

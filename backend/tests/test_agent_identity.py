@@ -138,7 +138,11 @@ class TestResolveIdentity:
                 session.commit()
 
         profile_calls: list[str] = []
-        monkeypatch.setattr(identity_service, "search_identity_candidates", lambda *_a: [])
+        monkeypatch.setattr(
+            identity_service,
+            "search_identity_candidates",
+            lambda *_a, **_kw: [],
+        )
         monkeypatch.setattr(
             identity_service,
             "store_identity_profile",
@@ -193,7 +197,11 @@ class TestResolveIdentity:
                 (identity.id, identity.continuity_key) if identity else None
             )
 
-        monkeypatch.setattr(identity_service, "search_identity_candidates", lambda *_a: [])
+        monkeypatch.setattr(
+            identity_service,
+            "search_identity_candidates",
+            lambda *_a, **_kw: [],
+        )
         monkeypatch.setattr(identity_service, "store_identity_profile", observe_profile)
 
         identity_id = resolve_identity(
@@ -211,7 +219,11 @@ class TestResolveIdentity:
         from app.services import agent_identity as identity_service
 
         profile_calls: list[str] = []
-        monkeypatch.setattr(identity_service, "search_identity_candidates", lambda *_a: [])
+        monkeypatch.setattr(
+            identity_service,
+            "search_identity_candidates",
+            lambda *_a, **_kw: [],
+        )
         monkeypatch.setattr(
             identity_service,
             "store_identity_profile",
@@ -630,6 +642,9 @@ class TestL2CosineMatching:
         foreign_id, foreign_role = self._seed_identity(
             "owner-b-preview", "Owner B Secret",
         )
+        owned_id, _owned_role = self._seed_identity(
+            "owner-a-preview", "Owner A Existing",
+        )
 
         fake_candidates = [{
             "identity_id": foreign_id,
@@ -637,9 +652,15 @@ class TestL2CosineMatching:
             "similarity": 0.96,
             "role": foreign_role,
         }]
+        allowed_identity_ids: list[frozenset[str] | None] = []
+
+        def fake_search(*_args, **kwargs):
+            allowed_identity_ids.append(kwargs.get("allowed_identity_ids"))
+            return fake_candidates
+
         with patch(
             "app.services.agent_identity.search_identity_candidates",
-            return_value=fake_candidates,
+            side_effect=fake_search,
         ):
             preview = preview_identity_match(
                 "owner-a-preview",
@@ -652,6 +673,7 @@ class TestL2CosineMatching:
         assert preview["candidate_identity"] is None
         assert "Owner B Secret Name" not in repr(preview)
         assert "Owner B secret persona" not in repr(preview)
+        assert allowed_identity_ids == [frozenset({owned_id})]
 
     def test_resolve_skips_foreign_l2_candidate_and_uses_owned_candidate(self):
         foreign_id, foreign_role = self._seed_identity(
@@ -675,10 +697,16 @@ class TestL2CosineMatching:
                 "role": owned_role,
             },
         ]
+        allowed_identity_ids: list[frozenset[str] | None] = []
+
+        def fake_search(*_args, **kwargs):
+            allowed_identity_ids.append(kwargs.get("allowed_identity_ids"))
+            return fake_candidates
+
         with (
             patch(
                 "app.services.agent_identity.search_identity_candidates",
-                return_value=fake_candidates,
+                side_effect=fake_search,
             ),
             Session(get_engine()) as caller_session,
         ):
@@ -692,6 +720,71 @@ class TestL2CosineMatching:
             caller_session.rollback()
 
         assert result == owned_id
+        assert allowed_identity_ids == [frozenset({owned_id})]
+
+    @pytest.mark.parametrize("operation", ["preview", "resolve"])
+    def test_l2_search_skipped_when_owner_has_no_identities(self, operation):
+        with patch("app.services.agent_identity.search_identity_candidates") as search:
+            if operation == "preview":
+                result = preview_identity_match(
+                    "owner-without-identities-preview",
+                    "New Candidate",
+                    "New Role",
+                    "New persona",
+                )
+                assert result["match_kind"] == "new"
+            else:
+                with Session(get_engine()) as caller_session:
+                    result = resolve_identity(
+                        "owner-without-identities-resolve",
+                        "New Candidate",
+                        "New Role",
+                        "New persona",
+                        session=caller_session,
+                    )
+                    assert result
+                    caller_session.rollback()
+
+        search.assert_not_called()
+
+    def test_caller_owned_l2_ids_are_loaded_once_without_growing(self, monkeypatch):
+        existing_id, _existing_role = self._seed_identity(
+            "owner-cached-resolve", "Existing Candidate",
+        )
+        allowed_identity_ids: list[frozenset[str] | None] = []
+
+        def fake_search(*_args, **kwargs):
+            allowed_identity_ids.append(kwargs.get("allowed_identity_ids"))
+            return []
+
+        with Session(get_engine()) as caller_session:
+            original_exec = caller_session.exec
+            owned_id_queries = 0
+
+            def counting_exec(statement, *args, **kwargs):
+                nonlocal owned_id_queries
+                sql = " ".join(str(statement).split())
+                if sql.startswith("SELECT agent_identity.id FROM agent_identity"):
+                    owned_id_queries += 1
+                return original_exec(statement, *args, **kwargs)
+
+            monkeypatch.setattr(caller_session, "exec", counting_exec)
+            monkeypatch.setattr(
+                "app.services.agent_identity.search_identity_candidates",
+                fake_search,
+            )
+            for index in range(3):
+                resolve_identity(
+                    "owner-cached-resolve",
+                    f"New Candidate {index}",
+                    f"New Role {index}",
+                    f"New persona {index}",
+                    session=caller_session,
+                )
+            caller_session.rollback()
+
+        assert owned_id_queries == 1
+        assert allowed_identity_ids == [frozenset({existing_id})] * 3
 
     def test_resolve_with_mock_l2_candidates(self):
         """L2 fallback uses search_identity_candidates when L1 misses."""

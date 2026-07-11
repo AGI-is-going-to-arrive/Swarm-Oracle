@@ -1224,6 +1224,7 @@ def search_identity_candidates(
     persona: str | None,
     threshold: float = _L2_COSINE_DISTANCE_THRESHOLD,
     max_candidates: int = 5,
+    allowed_identity_ids: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Search for identity candidates via L2 cosine similarity.
 
@@ -1237,6 +1238,18 @@ def search_identity_candidates(
     query_text = f"{role} — {(persona or '')[:200]}".strip()
     if not query_text:
         return []
+
+    profile_where: dict[str, Any] = {"doc_type": "identity_profile"}
+    if allowed_identity_ids is not None:
+        sorted_allowed_ids = sorted(allowed_identity_ids)
+        if not sorted_allowed_ids:
+            return []
+        profile_where = {
+            "$and": [
+                {"doc_type": {"$eq": "identity_profile"}},
+                {"identity_id": {"$in": sorted_allowed_ids}},
+            ],
+        }
 
     store = get_vector_store()
     if not store.available:
@@ -1254,7 +1267,7 @@ def search_identity_candidates(
             continue
 
         try:
-            all_docs = collection.get(where={"doc_type": "identity_profile"})
+            all_docs = collection.get(where=profile_where)
             if not all_docs or not all_docs.get("ids"):
                 continue
             profile_count = len(all_docs["ids"])
@@ -1264,7 +1277,7 @@ def search_identity_candidates(
             results = collection.query(
                 query_texts=[query_text],
                 n_results=min(max_candidates * 2, profile_count),
-                where={"doc_type": "identity_profile"},
+                where=profile_where,
             )
 
             if not results or not results.get("documents"):

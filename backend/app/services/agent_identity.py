@@ -23,6 +23,7 @@ from app.services.vector_store import (
 logger = logging.getLogger(__name__)
 
 _IDENTITY_MEMORY_MAX = 200
+_OWNED_IDENTITY_IDS_CACHE_KEY = "agent_identity_owned_ids"
 
 
 def _continuity_key(role: str, persona: str | None) -> str:
@@ -64,6 +65,28 @@ def _serialize_identity(
     if similarity is not None:
         payload["similarity"] = similarity
     return payload
+
+
+def _owned_identity_ids(session: Session, user_id: str) -> frozenset[str]:
+    """Cache IDs eligible for L2 reuse within the current transaction.
+
+    Caller-owned creates receive profiles only after commit, so identities added
+    later in this transaction are intentionally excluded from the cached set.
+    """
+    cache: dict[str, tuple[Any, frozenset[str]]] = session.info.setdefault(
+        _OWNED_IDENTITY_IDS_CACHE_KEY,
+        {},
+    )
+    transaction = session.get_transaction()
+    cached = cache.get(user_id)
+    if transaction is not None and cached is not None and cached[0] is transaction:
+        return cached[1]
+
+    identity_ids = frozenset(session.exec(
+        select(AgentIdentity.id).where(AgentIdentity.user_id == user_id),
+    ).all())
+    cache[user_id] = (session.get_transaction(), identity_ids)
+    return identity_ids
 
 
 def preview_identity_match(
@@ -116,22 +139,29 @@ def preview_identity_match(
                     ),
                 }
 
-        candidates = search_identity_candidates(user_id, role, persona)
-        for candidate in candidates:
-            db_identity = session.get(AgentIdentity, candidate["identity_id"])
-            if db_identity is not None and db_identity.user_id == user_id:
-                return {
-                    "name": name,
-                    "role": role,
-                    "persona": persona,
-                    "continuity_key": key,
-                    "match_kind": "l2_candidate",
-                    "needs_confirmation": True,
-                    "candidate_identity": _serialize_identity(
-                        db_identity,
-                        similarity=candidate["similarity"],
-                    ),
-                }
+        owned_identity_ids = _owned_identity_ids(session, user_id)
+        if owned_identity_ids:
+            candidates = search_identity_candidates(
+                user_id,
+                role,
+                persona,
+                allowed_identity_ids=owned_identity_ids,
+            )
+            for candidate in candidates:
+                db_identity = session.get(AgentIdentity, candidate["identity_id"])
+                if db_identity is not None and db_identity.user_id == user_id:
+                    return {
+                        "name": name,
+                        "role": role,
+                        "persona": persona,
+                        "continuity_key": key,
+                        "match_kind": "l2_candidate",
+                        "needs_confirmation": True,
+                        "candidate_identity": _serialize_identity(
+                            db_identity,
+                            similarity=candidate["similarity"],
+                        ),
+                    }
 
     return {
         "name": name,
@@ -209,16 +239,23 @@ def resolve_identity(
 
         # ── L2: cosine similarity fallback ──
         if allow_l2:
-            candidates = search_identity_candidates(user_id, role, persona)
-            for candidate in candidates:
-                # Verify L2 candidate still exists in DB (ChromaDB may be stale)
-                db_identity = session_obj.get(AgentIdentity, candidate["identity_id"])
-                if db_identity is not None and db_identity.user_id == user_id:
-                    logger.info(
-                        "L2 resolved identity %s for user=%s (similarity=%.4f)",
-                        candidate["identity_id"], user_id, candidate["similarity"],
-                    )
-                    return candidate["identity_id"]
+            owned_identity_ids = _owned_identity_ids(session_obj, user_id)
+            if owned_identity_ids:
+                candidates = search_identity_candidates(
+                    user_id,
+                    role,
+                    persona,
+                    allowed_identity_ids=owned_identity_ids,
+                )
+                for candidate in candidates:
+                    # Verify L2 candidate still exists in DB (ChromaDB may be stale)
+                    db_identity = session_obj.get(AgentIdentity, candidate["identity_id"])
+                    if db_identity is not None and db_identity.user_id == user_id:
+                        logger.info(
+                            "L2 resolved identity %s for user=%s (similarity=%.4f)",
+                            candidate["identity_id"], user_id, candidate["similarity"],
+                        )
+                        return candidate["identity_id"]
 
         # ── No match: create new identity + store L2 profile ──
         identity = AgentIdentity(
