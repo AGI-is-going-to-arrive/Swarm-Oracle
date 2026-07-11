@@ -1,6 +1,7 @@
 """Tests for factions service — F5 Phase D2."""
 
 import json
+import math
 
 import pytest
 from fastapi.testclient import TestClient
@@ -214,6 +215,38 @@ class TestProcessRound:
             # trust + opposition should sum to 1.0
             for e in edges:
                 assert e.trust_score + e.opposition_score == pytest.approx(1.0)
+
+    def test_persisted_relation_scores_are_bounded_for_extreme_stances(self):
+        messages = [
+            MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
+            MockMessage(agent_id="a2", emotion="confident", id="m2"),
+            MockMessage(agent_id="a3", emotion="aggressive", id="m3"),
+            MockMessage(agent_id="a4", emotion="confident", id="m4"),
+        ]
+
+        result = process_round("bounded-relations", "branch-1", 1, messages)
+
+        assert result is not None
+        with Session(get_engine()) as session:
+            edges = session.exec(
+                select(AgentRelationEdge).where(
+                    AgentRelationEdge.scenario_id == "bounded-relations"
+                )
+            ).all()
+        assert len(edges) == 6
+        for edge in edges:
+            assert math.isfinite(edge.trust_score)
+            assert math.isfinite(edge.opposition_score)
+            assert 0.0 <= edge.trust_score <= 1.0
+            assert 0.0 <= edge.opposition_score <= 1.0
+            assert edge.trust_score + edge.opposition_score == pytest.approx(1.0)
+
+        extreme_edges = [
+            edge for edge in edges if edge.evidence_summary == "stance diff=1.40"
+        ]
+        assert len(extreme_edges) == 4
+        assert all(edge.trust_score == 0.0 for edge in extreme_edges)
+        assert all(edge.opposition_score == 1.0 for edge in extreme_edges)
 
     def test_stores_faction_snapshots(self):
         msgs = [

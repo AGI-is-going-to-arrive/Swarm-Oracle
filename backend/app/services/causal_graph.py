@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +42,58 @@ _LATIN_NAME_RE = re.compile(r"[A-Za-z]")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
 _FORK_REASON_QUOTE_RE = re.compile(r"[“\"]([^”\"]+)[”\"]")
+_EMOTION_TOKEN_SPLIT_RE = re.compile(r"[/|,，;；]+")
+_EMOTION_STANCE_SCORES = {
+    "aggressive": -0.7,
+    "anxious": -0.3,
+    "fearful": -0.2,
+    "cautious": 0.0,
+    "cooperative": 0.5,
+    "confident": 0.7,
+    "neutral": 0.0,
+    "激动": 0.3,
+    "excited": 0.3,
+    "忧虑": -0.3,
+    "worried": -0.3,
+    "冷静": 0.1,
+    "calm": 0.1,
+    "愤怒": -0.5,
+    "angry": -0.5,
+    "期待": 0.3,
+    "hopeful": 0.3,
+    "释然": 0.1,
+    "relieved": 0.1,
+    "讽刺": -0.2,
+    "sardonic": -0.2,
+    "无奈": -0.2,
+    "resigned": -0.2,
+    "坚定": 0.7,
+    "resolute": 0.7,
+    "犹豫": -0.1,
+    "hesitant": -0.1,
+    "警觉": -0.1,
+    "alert": -0.1,
+    "心寒": -0.3,
+    "chilled": -0.3,
+    "振奋": 0.3,
+    "energized": 0.3,
+    "焦躁": -0.3,
+    "restless": -0.3,
+    "沉痛": -0.3,
+    "grieving": -0.3,
+    "嘲弄": -0.3,
+    "mocking": -0.3,
+    "恳切": 0.2,
+    "earnest": 0.2,
+    "疲倦": -0.2,
+    "weary": -0.2,
+    "隐忍": -0.1,
+    "restraining": -0.1,
+    "得意": 0.2,
+    "smug": 0.2,
+    "不屑": -0.2,
+    "dismissive": -0.2,
+}
 
 
 def _node_label_i18n(key: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -66,6 +119,15 @@ def _getfield(msg, key, default=None):
     if isinstance(msg, dict):
         return msg.get(key, default)
     return getattr(msg, key, default)
+
+
+def _normalized_emotion_tokens(value: object) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
+    return [
+        token.strip()
+        for token in _EMOTION_TOKEN_SPLIT_RE.split(normalized)
+        if token.strip()
+    ]
 
 
 def _safe_parse_payload(s: str | None) -> dict[str, Any]:
@@ -967,30 +1029,32 @@ def _add_edge_if_missing(
 
 
 def derive_stance_score(message) -> float:
-    """v1 provisional heuristic — not a stable contract."""
+    """Derive a provisional emotion-derived interaction proxy.
+
+    This is not a topic-grounded political stance or verified real-world signal.
+    """
     score = 0.0
     diverge = _getfield(message, "diverge", None)
     # diverge is Optional[str], not bool
     if diverge and str(diverge).strip():
         score = -0.6
 
-    EMOTION_MAP = {
-        "aggressive": -0.7,
-        "angry": -0.5,
-        "anxious": -0.3,
-        "fearful": -0.2,
-        "cautious": 0.0,
-        "calm": 0.1,
-        "hopeful": 0.3,
-        "cooperative": 0.5,
-        "confident": 0.7,
-        "neutral": 0.0,
-    }
-    emotion_score = EMOTION_MAP.get(_getfield(message, "emotion", "") or "", 0.0)
+    emotion_score = next(
+        (
+            _EMOTION_STANCE_SCORES[token]
+            for token in _normalized_emotion_tokens(
+                _getfield(message, "emotion", "")
+            )
+            if token in _EMOTION_STANCE_SCORES
+        ),
+        0.0,
+    )
 
     if diverge and str(diverge).strip():
-        return score * 0.6 + emotion_score * 0.4
-    return emotion_score
+        score = score * 0.6 + emotion_score * 0.4
+    else:
+        score = emotion_score
+    return min(max(score, -1.0), 1.0)
 
 
 # ── Graph construction ──────────────────────────────────

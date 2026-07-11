@@ -63,8 +63,8 @@ def process_round(
                 aid_a, stance_a = agent_stances[i]
                 aid_b, stance_b = agent_stances[j]
                 diff = abs(stance_a - stance_b)
-                trust = 1.0 - diff
-                opposition = diff
+                opposition = min(max(diff, 0.0), 1.0)
+                trust = 1.0 - opposition
 
                 edge = AgentRelationEdge(
                     scenario_id=scenario_id,
