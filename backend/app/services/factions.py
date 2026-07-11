@@ -291,8 +291,10 @@ def get_faction_relations(
     threshold = min(max(float(threshold), 0.0), 1.0)
     top_k = max(int(top_k), 1)
 
+    from sqlalchemy import case as sa_case
     from sqlalchemy import func as sa_func
     from sqlalchemy import or_ as sa_or
+    from sqlalchemy import select as sa_select
 
     with Session(get_engine()) as session:
         base_where = [
@@ -306,8 +308,41 @@ def get_faction_relations(
             select(sa_func.count(AgentRelationEdge.id)).where(*base_where)
         ).one()
 
-        stmt = (
-            select(AgentRelationEdge)
+        trust_score = sa_case(
+            (AgentRelationEdge.trust_score < 0.0, 0.0),
+            (AgentRelationEdge.trust_score > 1.0, 1.0),
+            else_=AgentRelationEdge.trust_score,
+        )
+        opposition_score = sa_case(
+            (AgentRelationEdge.opposition_score < 0.0, 0.0),
+            (AgentRelationEdge.opposition_score > 1.0, 1.0),
+            else_=AgentRelationEdge.opposition_score,
+        )
+        weight = sa_case(
+            (trust_score >= opposition_score, trust_score),
+            else_=opposition_score,
+        )
+        row_rank = sa_func.row_number().over(
+            partition_by=AgentRelationEdge.round_number,
+            order_by=(
+                weight.desc(),
+                AgentRelationEdge.trust_score.desc(),
+                AgentRelationEdge.opposition_score.desc(),
+                AgentRelationEdge.id.desc(),
+            ),
+        )
+        ranked_relations = (
+            sa_select(
+                AgentRelationEdge.id.label("id"),
+                AgentRelationEdge.round_number.label("round_number"),
+                AgentRelationEdge.source_agent_id.label("source_agent_id"),
+                AgentRelationEdge.target_agent_id.label("target_agent_id"),
+                AgentRelationEdge.evidence_summary.label("evidence_summary"),
+                trust_score.label("trust_score"),
+                opposition_score.label("opposition_score"),
+                weight.label("weight"),
+                row_rank.label("row_rank"),
+            )
             .where(
                 *base_where,
                 sa_or(
@@ -315,48 +350,40 @@ def get_faction_relations(
                     AgentRelationEdge.opposition_score >= threshold,
                 ),
             )
-            .order_by(AgentRelationEdge.round_number, AgentRelationEdge.id)
+            .subquery()
         )
-        relation_edges = session.exec(stmt).all()
-
-    by_round: dict[int, list[tuple[AgentRelationEdge, float]]] = {}
-    for edge in relation_edges:
-        trust_score = min(max(float(edge.trust_score), 0.0), 1.0)
-        opposition_score = min(max(float(edge.opposition_score), 0.0), 1.0)
-        weight = max(trust_score, opposition_score)
-        by_round.setdefault(edge.round_number, []).append((edge, weight))
+        stmt = (
+            sa_select(ranked_relations)
+            .where(ranked_relations.c.row_rank <= top_k + 1)
+            .order_by(
+                ranked_relations.c.round_number.asc(),
+                ranked_relations.c.row_rank.asc(),
+            )
+        )
+        relation_rows = session.exec(stmt).all()
 
     response_edges: list[dict] = []
     truncated = False
-    for round_number in sorted(by_round):
-        round_edges = sorted(
-            by_round[round_number],
-            key=lambda item: (
-                item[1],
-                item[0].trust_score,
-                item[0].opposition_score,
-                item[0].id,
-            ),
-            reverse=True,
-        )
-        if len(round_edges) > top_k:
+    for row in relation_rows:
+        relation = row._mapping
+        if relation["row_rank"] > top_k:
             truncated = True
-        for edge, weight in round_edges[:top_k]:
-            trust_score = min(max(float(edge.trust_score), 0.0), 1.0)
-            opposition_score = min(max(float(edge.opposition_score), 0.0), 1.0)
-            response_edges.append({
-                "id": edge.id,
-                "round": edge.round_number,
-                "source_agent_id": edge.source_agent_id,
-                "target_agent_id": edge.target_agent_id,
-                "relation_type": (
-                    "trust" if trust_score > opposition_score else "opposition"
-                ),
-                "weight": weight,
-                "trust_score": trust_score,
-                "opposition_score": opposition_score,
-                "evidence_summary": edge.evidence_summary,
-            })
+            continue
+        trust_value = float(relation["trust_score"])
+        opposition_value = float(relation["opposition_score"])
+        response_edges.append({
+            "id": relation["id"],
+            "round": relation["round_number"],
+            "source_agent_id": relation["source_agent_id"],
+            "target_agent_id": relation["target_agent_id"],
+            "relation_type": (
+                "trust" if trust_value > opposition_value else "opposition"
+            ),
+            "weight": float(relation["weight"]),
+            "trust_score": trust_value,
+            "opposition_score": opposition_value,
+            "evidence_summary": relation["evidence_summary"],
+        })
 
     return {
         "edges": response_edges,

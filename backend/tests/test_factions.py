@@ -78,6 +78,25 @@ def _insert_relation(
         session.commit()
 
 
+def _insert_relation_rows(
+    scenario_id: str,
+    branch_id: str,
+    rows: list[dict],
+) -> None:
+    with Session(get_engine()) as session:
+        session.add_all(
+            [
+                AgentRelationEdge(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    **row,
+                )
+                for row in rows
+            ]
+        )
+        session.commit()
+
+
 # ── process_round ───────────────────────────────────────
 
 
@@ -691,6 +710,348 @@ class TestFactionTimelineEndpoint:
 
 
 class TestGetFactionRelations:
+    def test_preserves_python_golden_order_per_round_and_strict_relation_type(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation_rows(
+            scenario_id,
+            branch_id,
+            [
+                {
+                    "id": "r1-a",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a2",
+                    "trust_score": 1.3,
+                    "opposition_score": 0.2,
+                },
+                {
+                    "id": "r1-b",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a3",
+                    "trust_score": 1.2,
+                    "opposition_score": 1.4,
+                },
+                {
+                    "id": "r1-c",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a4",
+                    "trust_score": 1.2,
+                    "opposition_score": 1.1,
+                },
+                {
+                    "id": "r1-d",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a5",
+                    "trust_score": 1.2,
+                    "opposition_score": 1.1,
+                },
+                {
+                    "id": "r1-e",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a6",
+                    "trust_score": 0.95,
+                    "opposition_score": 0.1,
+                },
+                {
+                    "id": "r2-a",
+                    "round_number": 2,
+                    "source_agent_id": "b1",
+                    "target_agent_id": "b2",
+                    "trust_score": 0.4,
+                    "opposition_score": 0.9,
+                },
+                {
+                    "id": "r2-b",
+                    "round_number": 2,
+                    "source_agent_id": "b1",
+                    "target_agent_id": "b3",
+                    "trust_score": 0.9,
+                    "opposition_score": 0.4,
+                },
+                {
+                    "id": "r2-c",
+                    "round_number": 2,
+                    "source_agent_id": "b1",
+                    "target_agent_id": "b4",
+                    "trust_score": 0.6,
+                    "opposition_score": 0.6,
+                },
+            ],
+        )
+
+        result = get_faction_relations(
+            scenario_id,
+            branch_id,
+            threshold=0.0,
+            top_k=5,
+        )
+
+        assert [
+            (edge["round"], edge["id"], edge["relation_type"], edge["weight"])
+            for edge in result["edges"]
+        ] == [
+            (1, "r1-a", "trust", 1.0),
+            (1, "r1-b", "opposition", 1.0),
+            (1, "r1-d", "opposition", 1.0),
+            (1, "r1-c", "opposition", 1.0),
+            (1, "r1-e", "trust", 0.95),
+            (2, "r2-b", "trust", 0.9),
+            (2, "r2-a", "opposition", 0.9),
+            (2, "r2-c", "opposition", 0.6),
+        ]
+        assert result["truncated"] is False
+
+    def test_threshold_uses_inclusive_raw_scores_and_total_precedes_filters(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation_rows(
+            scenario_id,
+            branch_id,
+            [
+                {
+                    "id": "above",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a2",
+                    "trust_score": 0.9,
+                    "opposition_score": 0.1,
+                },
+                {
+                    "id": "trust-at-threshold",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a3",
+                    "trust_score": 0.65,
+                    "opposition_score": 0.1,
+                },
+                {
+                    "id": "opposition-at-threshold",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a4",
+                    "trust_score": 0.1,
+                    "opposition_score": 0.65,
+                },
+                {
+                    "id": "below",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a5",
+                    "trust_score": 0.64,
+                    "opposition_score": 0.64,
+                },
+                {
+                    "id": "negative-raw",
+                    "round_number": 1,
+                    "source_agent_id": "a1",
+                    "target_agent_id": "a6",
+                    "trust_score": -0.1,
+                    "opposition_score": -0.2,
+                },
+            ],
+        )
+
+        inclusive = get_faction_relations(
+            scenario_id,
+            branch_id,
+            threshold=0.65,
+            top_k=3,
+        )
+        limited = get_faction_relations(
+            scenario_id,
+            branch_id,
+            threshold=0.65,
+            top_k=1,
+        )
+        raw_zero = get_faction_relations(
+            scenario_id,
+            branch_id,
+            threshold=0.0,
+            top_k=10,
+        )
+
+        assert [edge["id"] for edge in inclusive["edges"]] == [
+            "above",
+            "trust-at-threshold",
+            "opposition-at-threshold",
+        ]
+        assert inclusive["total_before_filter"] == 5
+        assert len(limited["edges"]) == 1
+        assert limited["total_before_filter"] == 5
+        assert "negative-raw" not in {edge["id"] for edge in raw_zero["edges"]}
+        assert raw_zero["total_before_filter"] == 5
+
+    def test_round_max_is_inclusive_for_edges_and_total(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation_rows(
+            scenario_id,
+            branch_id,
+            [
+                {
+                    "id": f"round-{round_number}",
+                    "round_number": round_number,
+                    "source_agent_id": "a1",
+                    "target_agent_id": f"a{round_number + 1}",
+                    "trust_score": 0.8,
+                    "opposition_score": 0.1,
+                }
+                for round_number in (1, 2, 3)
+            ],
+        )
+
+        result = get_faction_relations(
+            scenario_id,
+            branch_id,
+            round_max=2,
+            threshold=0.0,
+            top_k=1,
+        )
+
+        assert [edge["id"] for edge in result["edges"]] == ["round-1", "round-2"]
+        assert result["total_before_filter"] == 2
+
+    @pytest.mark.parametrize(
+        ("case", "rows", "kwargs", "expected_edge_count", "expected_truncated", "expected_total"),
+        [
+            (
+                "exactly-k",
+                [(1, 0.9), (1, 0.8)],
+                {"threshold": 0.5, "top_k": 2},
+                2,
+                False,
+                2,
+            ),
+            (
+                "k-plus-one",
+                [(1, 0.9), (1, 0.8), (1, 0.7)],
+                {"threshold": 0.5, "top_k": 2},
+                2,
+                True,
+                3,
+            ),
+            (
+                "weak-extra-row",
+                [(1, 0.9), (1, 0.8), (1, 0.2)],
+                {"threshold": 0.5, "top_k": 2},
+                2,
+                False,
+                3,
+            ),
+            (
+                "outside-round-max",
+                [(1, 0.9), (1, 0.8), (2, 0.95)],
+                {"round_max": 1, "threshold": 0.5, "top_k": 2},
+                2,
+                False,
+                2,
+            ),
+            (
+                "zero-hits",
+                [(1, 0.2), (1, 0.1)],
+                {"threshold": 0.5, "top_k": 2},
+                0,
+                False,
+                2,
+            ),
+        ],
+    )
+    def test_truncated_only_reflects_eligible_rows_within_round_limit(
+        self,
+        case,
+        rows,
+        kwargs,
+        expected_edge_count,
+        expected_truncated,
+        expected_total,
+    ):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation_rows(
+            scenario_id,
+            branch_id,
+            [
+                {
+                    "id": f"{case}-{index}",
+                    "round_number": round_number,
+                    "source_agent_id": f"source-{round_number}",
+                    "target_agent_id": f"target-{index}",
+                    "trust_score": trust_score,
+                    "opposition_score": 0.0,
+                }
+                for index, (round_number, trust_score) in enumerate(rows)
+            ],
+        )
+
+        result = get_faction_relations(scenario_id, branch_id, **kwargs)
+
+        assert len(result["edges"]) == expected_edge_count
+        assert result["truncated"] is expected_truncated
+        assert result["total_before_filter"] == expected_total
+
+    def test_second_select_materializes_only_per_round_topk_plus_sentinel(
+        self,
+        monkeypatch,
+    ):
+        from app.services import factions as factions_service
+
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        round_count = 3
+        rows_per_round = 20
+        top_k = 3
+        _insert_relation_rows(
+            scenario_id,
+            branch_id,
+            [
+                {
+                    "id": f"scale-{round_number:02d}-{index:02d}",
+                    "round_number": round_number,
+                    "source_agent_id": f"source-{round_number}",
+                    "target_agent_id": f"target-{round_number}-{index}",
+                    "trust_score": 0.95 - index / 1000,
+                    "opposition_score": 0.1,
+                }
+                for round_number in range(1, round_count + 1)
+                for index in range(rows_per_round)
+            ],
+        )
+
+        original_exec = factions_service.Session.exec
+        select_statements = []
+        materialized_row_counts = []
+
+        class ObservedResult:
+            def __init__(self, result):
+                self._result = result
+
+            def all(self):
+                rows = self._result.all()
+                materialized_row_counts.append(len(rows))
+                return rows
+
+            def __getattr__(self, name):
+                return getattr(self._result, name)
+
+        def observed_exec(session, statement, *args, **kwargs):
+            if getattr(statement, "is_select", False):
+                select_statements.append(statement)
+            return ObservedResult(original_exec(session, statement, *args, **kwargs))
+
+        monkeypatch.setattr(factions_service.Session, "exec", observed_exec)
+
+        result = get_faction_relations(
+            scenario_id,
+            branch_id,
+            threshold=0.65,
+            top_k=top_k,
+        )
+
+        assert len(select_statements) == 2
+        assert materialized_row_counts == [round_count * (top_k + 1)]
+        assert len(result["edges"]) == round_count * top_k
+        assert result["truncated"] is True
+
     def test_filters_weak_relations_by_threshold(self):
         scenario_id, branch_id = _seed_scenario_with_branch()
         _insert_relation(
