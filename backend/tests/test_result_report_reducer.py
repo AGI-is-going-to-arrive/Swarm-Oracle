@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from sqlmodel import Session
 
+import app.services.result_report.queries as report_queries
 import app.services.result_report.reducer as reducer_module
 from app.config import settings
 from app.models import (
@@ -28,7 +29,12 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
-from app.services.result_report.queries import load_evidence_message_coords
+from app.services.branch_lineage import BranchLineageError
+from app.services.result_report.queries import (
+    ReportLineageScope,
+    ReportRoundRef,
+    load_evidence_message_coords,
+)
 from app.services.result_report.reducer import (
     TARGET_BRANCH_SORT,
     _derive_likelihood,
@@ -81,7 +87,7 @@ def _seed_scenario() -> str:
                     insight="Privacy compromise keeps the coalition intact.",
                     key_moments=json.dumps(["privacy compromise"]),
                     probability=0.62,
-                    fork_round=2,
+                    fork_round=0,
                     status=BranchStatus.COMPLETED,
                 ),
                 Branch(
@@ -90,7 +96,7 @@ def _seed_scenario() -> str:
                     title="Delay for committee review",
                     insight="A review delay almost wins when labor hesitates.",
                     probability=0.62,
-                    fork_round=2,
+                    fork_round=0,
                     status=BranchStatus.COMPLETED,
                 ),
                 Branch(
@@ -99,7 +105,7 @@ def _seed_scenario() -> str:
                     title="Plan rejected",
                     insight="Opposition hardens after data-access concerns.",
                     probability=0.31,
-                    fork_round=1,
+                    fork_round=0,
                     status=BranchStatus.COMPLETED,
                 ),
             ],
@@ -207,6 +213,48 @@ def _seed_scenario() -> str:
         return scenario.id
 
 
+def _mock_report_scope(
+    scenario_id: str,
+    branch_id: str,
+    *round_numbers: int,
+) -> ReportLineageScope:
+    return report_queries._create_report_lineage_scope(
+        scenario_id=scenario_id,
+        target_branch_id=branch_id,
+        rounds=tuple(
+            ReportRoundRef(
+                round_id=f"mock-{branch_id}-{round_number}",
+                branch_id=branch_id,
+                round_number=round_number,
+            )
+            for round_number in round_numbers
+        ),
+    )
+
+
+def _premortem_evidence_row(
+    message_id: str,
+    *,
+    branch_id: str = "branch-a",
+    round_number: int = 1,
+    agent_id: str = "agent-privacy",
+    content: str | None = None,
+    diverge: str | None = "explicit failure path",
+    emotion: str | None = "neutral",
+) -> dict[str, Any]:
+    return {
+        "branch_id": branch_id,
+        "round_id": f"{branch_id}-round-{round_number}",
+        "round_number": round_number,
+        "agent_id": agent_id,
+        "agent_name": agent_id,
+        "message_id": message_id,
+        "content": content if content is not None else f"Evidence {message_id}",
+        "emotion": emotion,
+        "diverge": diverge,
+    }
+
+
 def test_reduce_sorts_branches_and_populates_structured_ir_models():
     scenario_id = _seed_scenario()
 
@@ -243,8 +291,17 @@ def test_reduce_uses_fork_round_asc_when_probability_ties():
         session.add_all(
             [
                 Branch(
+                    id="branch-sort-root",
+                    scenario_id=scenario.id,
+                    title="Sort fixture root",
+                    probability=0.0,
+                    fork_round=0,
+                    status=BranchStatus.PRUNED,
+                ),
+                Branch(
                     id="branch-late",
                     scenario_id=scenario.id,
+                    parent_branch_id="branch-sort-root",
                     title="Late fork",
                     probability=0.5,
                     fork_round=4,
@@ -253,6 +310,7 @@ def test_reduce_uses_fork_round_asc_when_probability_ties():
                 Branch(
                     id="branch-early",
                     scenario_id=scenario.id,
+                    parent_branch_id="branch-sort-root",
                     title="Early fork",
                     probability=0.5,
                     fork_round=1,
@@ -260,6 +318,14 @@ def test_reduce_uses_fork_round_asc_when_probability_ties():
                 ),
             ],
         )
+        session.add_all([
+            Round(
+                id=f"fork-sort-root-{round_number}",
+                branch_id="branch-sort-root",
+                round_number=round_number,
+            )
+            for round_number in range(1, 5)
+        ])
         session.commit()
 
     result = reduce(engine, scenario_id)
@@ -286,8 +352,17 @@ def test_reduce_selects_target_after_probability_clamp():
         session.add_all(
             [
                 Branch(
+                    id="branch-clamp-root",
+                    scenario_id=scenario.id,
+                    title="Clamp fixture root",
+                    probability=0.0,
+                    fork_round=0,
+                    status=BranchStatus.PRUNED,
+                ),
+                Branch(
                     id="branch-raw-over-one",
                     scenario_id=scenario.id,
+                    parent_branch_id="branch-clamp-root",
                     title="Late over-one raw branch",
                     probability=1.2,
                     fork_round=4,
@@ -296,6 +371,7 @@ def test_reduce_selects_target_after_probability_clamp():
                 Branch(
                     id="branch-clamped-tie-earlier",
                     scenario_id=scenario.id,
+                    parent_branch_id="branch-clamp-root",
                     title="Earlier clamped tie branch",
                     probability=1.0,
                     fork_round=1,
@@ -303,6 +379,14 @@ def test_reduce_selects_target_after_probability_clamp():
                 ),
             ],
         )
+        session.add_all([
+            Round(
+                id=f"clamp-root-{round_number}",
+                branch_id="branch-clamp-root",
+                round_number=round_number,
+            )
+            for round_number in range(1, 5)
+        ])
         session.commit()
 
     result = reduce(engine, scenario_id)
@@ -383,6 +467,14 @@ def test_reduce_counts_only_completed_terminal_leaves_for_likelihood_and_confide
                 ),
             ],
         )
+        session.add_all([
+            Round(
+                id=f"single-terminal-root-{round_number}",
+                branch_id="branch-completed-parent",
+                round_number=round_number,
+            )
+            for round_number in range(1, 3)
+        ])
         session.commit()
 
     result = reduce(
@@ -667,6 +759,11 @@ def test_agent_affect_convergence_uses_the_full_signed_proxy_range(monkeypatch):
         get_engine(),
         "scenario-extremes",
         "branch-extremes",
+        report_scope=_mock_report_scope(
+            "scenario-extremes",
+            "branch-extremes",
+            1,
+        ),
     ) == reducer_module.StatResult(status="available", value=0.0)
 
 
@@ -705,6 +802,12 @@ def test_agent_affect_convergence_discloses_metadata_unavailable(monkeypatch):
         get_engine(),
         "scenario-partial",
         "branch-partial",
+        report_scope=_mock_report_scope(
+            "scenario-partial",
+            "branch-partial",
+            1,
+            2,
+        ),
     ) == reducer_module.StatResult(
         status="partial",
         value=pytest.approx(0.5),
@@ -743,6 +846,12 @@ def test_latest_all_unavailable_round_does_not_reuse_old_agent_consensus(monkeyp
         get_engine(),
         "scenario-stale",
         "branch-stale",
+        report_scope=_mock_report_scope(
+            "scenario-stale",
+            "branch-stale",
+            1,
+            2,
+        ),
     ) == reducer_module.StatResult(
         status="missing",
         value=None,
@@ -801,11 +910,23 @@ def test_latest_metadata_gap_marks_old_faction_proxies_partial(monkeypatch):
         get_engine(),
         "scenario-faction-stale",
         "branch-faction-stale",
+        report_scope=_mock_report_scope(
+            "scenario-faction-stale",
+            "branch-faction-stale",
+            1,
+            2,
+        ),
     )
     polarization = reducer_module.reduce_polarization(
         get_engine(),
         "scenario-faction-stale",
         "branch-faction-stale",
+        report_scope=_mock_report_scope(
+            "scenario-faction-stale",
+            "branch-faction-stale",
+            1,
+            2,
+        ),
     )
 
     assert faction.status == "partial"
@@ -863,11 +984,23 @@ def test_same_round_metadata_gap_marks_faction_proxies_partial(monkeypatch):
         get_engine(),
         "scenario-faction-partial",
         "branch-faction-partial",
+        report_scope=_mock_report_scope(
+            "scenario-faction-partial",
+            "branch-faction-partial",
+            1,
+            2,
+        ),
     )
     polarization = reducer_module.reduce_polarization(
         get_engine(),
         "scenario-faction-partial",
         "branch-faction-partial",
+        report_scope=_mock_report_scope(
+            "scenario-faction-partial",
+            "branch-faction-partial",
+            1,
+            2,
+        ),
     )
 
     assert faction.status == "partial"
@@ -925,11 +1058,23 @@ def test_mixed_faction_proxy_rounds_are_not_reported_available(monkeypatch):
         get_engine(),
         "scenario-faction-mixed",
         "branch-faction-mixed",
+        report_scope=_mock_report_scope(
+            "scenario-faction-mixed",
+            "branch-faction-mixed",
+            1,
+            2,
+        ),
     )
     polarization = reducer_module.reduce_polarization(
         get_engine(),
         "scenario-faction-mixed",
         "branch-faction-mixed",
+        report_scope=_mock_report_scope(
+            "scenario-faction-mixed",
+            "branch-faction-mixed",
+            1,
+            2,
+        ),
     )
 
     assert faction.status == "partial"
@@ -963,6 +1108,12 @@ def test_disabled_factions_keep_feature_disabled_reason_with_current_messages(mo
         get_engine(),
         "scenario-disabled",
         "branch-disabled",
+        report_scope=_mock_report_scope(
+            "scenario-disabled",
+            "branch-disabled",
+            1,
+            2,
+        ),
     ) == reducer_module.StatResult(
         status="missing",
         value=None,
@@ -972,6 +1123,12 @@ def test_disabled_factions_keep_feature_disabled_reason_with_current_messages(mo
         get_engine(),
         "scenario-disabled",
         "branch-disabled",
+        report_scope=_mock_report_scope(
+            "scenario-disabled",
+            "branch-disabled",
+            1,
+            2,
+        ),
     ) == reducer_module.StatResult(
         status="missing",
         value=None,
@@ -1025,7 +1182,17 @@ def test_evidence_query_does_not_rank_or_expose_metadata_sentinel():
 
     rows = load_evidence_message_coords(
         engine,
-        "branch-metadata-evidence",
+        report_queries._create_report_lineage_scope(
+            scenario_id="scenario-metadata-evidence",
+            target_branch_id="branch-metadata-evidence",
+            rounds=(
+                ReportRoundRef(
+                    round_id="round-metadata-evidence",
+                    branch_id="branch-metadata-evidence",
+                    round_number=1,
+                ),
+            ),
+        ),
         key_moments=[],
         limit=2,
     )
@@ -1250,12 +1417,13 @@ def test_collect_evidence_pool_uses_bounded_candidate_window(monkeypatch):
 
     def fake_loader(
         _engine: Any,
-        branch_id: str,
+        report_scope: ReportLineageScope,
         *,
         key_moments: list[str],
         limit: int,
     ) -> list[dict[str, Any]]:
-        observed["branch_id"] = branch_id
+        observed["branch_id"] = report_scope.target_branch_id
+        observed["round_ids"] = report_scope.round_ids
         observed["key_moments"] = key_moments
         observed["limit"] = limit
         return []
@@ -1267,6 +1435,7 @@ def test_collect_evidence_pool_uses_bounded_candidate_window(monkeypatch):
     assert result == []
     assert observed == {
         "branch_id": "branch-a",
+        "round_ids": ("round-1", "round-2"),
         "key_moments": ["privacy compromise"],
         "limit": 2 * reducer_module.EVIDENCE_CANDIDATE_MULTIPLIER,
     }
@@ -1281,6 +1450,241 @@ def test_collect_evidence_pool_max_evidence_zero_skips_message_query(monkeypatch
     monkeypatch.setattr(reducer_module, "load_evidence_message_coords", fail_loader)
 
     assert collect_evidence_pool(get_engine(), scenario_id, "branch-a", max_evidence=0) == []
+
+
+def test_reduce_appends_independent_premortem_evidence_with_stable_pool_ids(
+    monkeypatch,
+):
+    scenario_id = _seed_scenario()
+    observed_scopes: list[ReportLineageScope] = []
+    observed_key_moments: list[list[str]] = []
+
+    outcome_rows = [
+        _premortem_evidence_row(
+            "outcome-diverge",
+            content="privacy compromise outcome",
+        ),
+        _premortem_evidence_row(
+            "outcome-support",
+            round_number=2,
+            agent_id="agent-planner",
+            content="privacy compromise support",
+            diverge=None,
+        ),
+    ]
+    premortem_rows = [
+        outcome_rows[0],
+        _premortem_evidence_row("premortem-early"),
+        _premortem_evidence_row(
+            "premortem-diverse",
+            branch_id="branch-child",
+            round_number=2,
+            agent_id="agent-finance",
+        ),
+    ]
+
+    def fake_loader(
+        _engine: Any,
+        report_scope: ReportLineageScope,
+        *,
+        key_moments: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        assert limit > 0
+        observed_scopes.append(report_scope)
+        observed_key_moments.append(key_moments)
+        return outcome_rows if key_moments else premortem_rows
+
+    monkeypatch.setattr(reducer_module, "load_evidence_message_coords", fake_loader)
+
+    result = reduce(get_engine(), scenario_id, max_evidence=2)
+
+    assert observed_key_moments == [["privacy compromise"], []]
+    assert observed_scopes == [result.report_scope, result.report_scope]
+    assert observed_scopes[0] is observed_scopes[1]
+    assert [item.message_id for item in result.evidence] == [
+        "outcome-diverge",
+        "outcome-support",
+        "premortem-early",
+        "premortem-diverse",
+    ]
+    assert result.outcome_evidence_ids == ("ev_001", "ev_002")
+    assert result.premortem_evidence_ids == ("ev_003", "ev_004")
+    assert tuple(item.id for item in result.evidence) == (
+        *result.outcome_evidence_ids,
+        *result.premortem_evidence_ids,
+    )
+    assert result.analytic_confidence.basis.endswith("evidence_count=2")
+    with pytest.raises(AttributeError):
+        result.premortem_evidence_ids.append("ev_999")
+
+
+def test_premortem_evidence_requires_explicit_nonblank_diverge_and_excludes_overlap(
+    monkeypatch,
+):
+    rows = [
+        _premortem_evidence_row("overlap"),
+        _premortem_evidence_row("valid"),
+        _premortem_evidence_row("none", diverge=None, emotion="alarmed"),
+        _premortem_evidence_row("empty", diverge="", emotion="angry"),
+        _premortem_evidence_row("blank", diverge="   ", emotion="fearful"),
+        _premortem_evidence_row("empty-quote", content="   "),
+    ]
+    scope = _mock_report_scope("scenario-pm", "branch-a", 1)
+
+    def fake_loader(
+        _engine: Any,
+        report_scope: ReportLineageScope,
+        *,
+        key_moments: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        assert report_scope is scope
+        assert key_moments == []
+        assert limit >= 3
+        return rows
+
+    monkeypatch.setattr(reducer_module, "load_evidence_message_coords", fake_loader)
+
+    evidence = reducer_module.collect_premortem_evidence_pool(
+        get_engine(),
+        "scenario-pm",
+        "branch-a",
+        max_evidence=3,
+        exclude_message_ids={"overlap"},
+        starting_index=3,
+        report_scope=scope,
+    )
+
+    assert [(item.id, item.message_id) for item in evidence] == [("ev_003", "valid")]
+
+
+def test_premortem_evidence_never_backfills_outcome_when_no_candidate_qualifies(
+    monkeypatch,
+):
+    scope = _mock_report_scope("scenario-pm-empty", "branch-a", 1)
+    rows = [
+        _premortem_evidence_row("outcome-overlap"),
+        _premortem_evidence_row("emotion-only", diverge=None, emotion="alarmed"),
+    ]
+    monkeypatch.setattr(
+        reducer_module,
+        "load_evidence_message_coords",
+        lambda *_args, **_kwargs: rows,
+    )
+
+    evidence = reducer_module.collect_premortem_evidence_pool(
+        get_engine(),
+        "scenario-pm-empty",
+        "branch-a",
+        max_evidence=2,
+        exclude_message_ids={"outcome-overlap"},
+        starting_index=2,
+        report_scope=scope,
+    )
+
+    assert evidence == []
+
+
+def test_premortem_evidence_greedy_diversity_is_deterministic_and_capped(
+    monkeypatch,
+):
+    rows = [
+        _premortem_evidence_row(
+            "m-30", branch_id="branch-b", round_number=3, agent_id="agent-e"
+        ),
+        _premortem_evidence_row(
+            "m-90", branch_id="branch-b", round_number=9, agent_id="agent-b"
+        ),
+        _premortem_evidence_row(
+            "m-02", branch_id="branch-a", round_number=1, agent_id="agent-a"
+        ),
+        _premortem_evidence_row(
+            "m-21", branch_id="branch-d", round_number=2, agent_id="agent-a"
+        ),
+        _premortem_evidence_row(
+            "m-91", branch_id="branch-c", round_number=10, agent_id="agent-c"
+        ),
+        _premortem_evidence_row(
+            "m-01", branch_id="branch-a", round_number=1, agent_id="agent-a"
+        ),
+        _premortem_evidence_row(
+            "m-20", branch_id="branch-a", round_number=2, agent_id="agent-d"
+        ),
+    ]
+    scope = _mock_report_scope("scenario-pm-greedy", "branch-a", 1)
+    monkeypatch.setattr(
+        reducer_module,
+        "load_evidence_message_coords",
+        lambda *_args, **_kwargs: list(rows),
+    )
+
+    def collect() -> list[str]:
+        return [
+            item.message_id
+            for item in reducer_module.collect_premortem_evidence_pool(
+                get_engine(),
+                "scenario-pm-greedy",
+                "branch-a",
+                max_evidence=20,
+                exclude_message_ids=set(),
+                starting_index=1,
+                report_scope=scope,
+            )
+        ]
+
+    expected = ["m-01", "m-30", "m-91", "m-20", "m-21", "m-90"]
+    assert collect() == expected
+    assert collect() == expected
+    assert len(expected) == reducer_module.PREMORTEM_EVIDENCE_LIMIT
+
+
+def test_premortem_evidence_candidate_window_stays_bounded_for_large_outcome_pool(
+    monkeypatch,
+):
+    scope = _mock_report_scope("scenario-pm-window", "branch-a", 1)
+    observed: dict[str, int] = {}
+
+    def fake_loader(
+        _engine: Any,
+        _report_scope: ReportLineageScope,
+        *,
+        key_moments: list[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        assert key_moments == []
+        observed["limit"] = limit
+        return []
+
+    monkeypatch.setattr(reducer_module, "load_evidence_message_coords", fake_loader)
+
+    evidence = reducer_module.collect_premortem_evidence_pool(
+        get_engine(),
+        "scenario-pm-window",
+        "branch-a",
+        max_evidence=10_000,
+        exclude_message_ids={f"outcome-{index}" for index in range(10_000)},
+        starting_index=10_001,
+        report_scope=scope,
+    )
+
+    assert evidence == []
+    assert observed["limit"] == 96
+
+
+def test_reduce_max_evidence_zero_skips_both_evidence_pools(monkeypatch):
+    scenario_id = _seed_scenario()
+
+    def fail_loader(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        raise AssertionError("zero evidence limit must skip both evidence loaders")
+
+    monkeypatch.setattr(reducer_module, "load_evidence_message_coords", fail_loader)
+
+    result = reduce(get_engine(), scenario_id, max_evidence=0)
+
+    assert result.evidence == []
+    assert result.outcome_evidence_ids == ()
+    assert result.premortem_evidence_ids == ()
 
 
 def test_reduce_handles_empty_single_and_missing_snapshot_cases(monkeypatch):
@@ -1315,6 +1719,8 @@ def test_reduce_handles_empty_single_and_missing_snapshot_cases(monkeypatch):
     assert empty_result.target_branch_id is None
     assert empty_result.likelihood.wep == "missing"
     assert empty_result.evidence == []
+    assert empty_result.outcome_evidence_ids == ()
+    assert empty_result.premortem_evidence_ids == ()
     empty_charts = {chart.type: chart.data for chart in empty_result.charts}
     assert empty_charts["probability_bar"] == {
         "status": "missing",
@@ -1624,6 +2030,14 @@ def _seed_split_brain_scenario(
                 ),
             ],
         )
+        session.add_all([
+            Round(
+                id=f"split-brain-root-{round_number}",
+                branch_id="branch-root",
+                round_number=round_number,
+            )
+            for round_number in range(1, 5)
+        ])
         session.commit()
     return "scenario-split-brain"
 
@@ -1723,7 +2137,17 @@ def test_reduce_uses_pruned_answer_branch_for_likelihood_when_root_is_legacy_fal
                 ),
             ]
         )
-        session.add(Round(id="round-answer", branch_id="branch-answer", round_number=1))
+        session.add_all([
+            Round(
+                id=f"pruned-answer-root-{round_number}",
+                branch_id="branch-root",
+                round_number=round_number,
+            )
+            for round_number in range(1, 5)
+        ])
+        session.add(
+            Round(id="round-answer", branch_id="branch-answer", round_number=5)
+        )
         session.add(
             AgentMessage(
                 id="msg-answer",
@@ -1806,7 +2230,21 @@ def test_reduce_answer_branch_fallback_prefers_later_terminal_quality_match():
                 ),
             ]
         )
-        session.add(Round(id="round-ranked-answer", branch_id="branch-high-answer", round_number=1))
+        session.add_all([
+            Round(
+                id=f"ranked-answer-root-{round_number}",
+                branch_id="branch-root-ranked",
+                round_number=round_number,
+            )
+            for round_number in range(1, 4)
+        ])
+        session.add(
+            Round(
+                id="round-ranked-answer",
+                branch_id="branch-high-answer",
+                round_number=4,
+            )
+        )
         session.add(
             AgentMessage(
                 id="msg-ranked-answer",
@@ -1873,3 +2311,947 @@ def test_derive_confidence_ceiling_preserves_count_based_medium():
         confidence_ceiling="high",
     )
     assert not_raised.level == "low"
+
+
+def _seed_report_lineage_scope_scenario() -> str:
+    scenario_id = "scenario-report-lineage-scope"
+    with Session(get_engine()) as session:
+        session.add(
+            Scenario(
+                id=scenario_id,
+                question="Which materialized worldline evidence is authoritative?",
+                status=ScenarioStatus.DONE,
+            )
+        )
+        session.add_all([
+            Agent(
+                id="agent-lineage-root",
+                scenario_id=scenario_id,
+                name="Root Analyst",
+            ),
+            Agent(
+                id="agent-lineage-child",
+                scenario_id=scenario_id,
+                name="Child Analyst",
+            ),
+            Agent(
+                id="agent-lineage-leaf",
+                scenario_id=scenario_id,
+                name="Leaf Analyst",
+            ),
+            Agent(
+                id="agent-lineage-noise",
+                scenario_id=scenario_id,
+                name="Noise Analyst",
+            ),
+            Agent(
+                id="agent-lineage-clone",
+                scenario_id=scenario_id,
+                name="Clone Analyst",
+            ),
+        ])
+        session.add_all([
+            Branch(
+                id="report-root",
+                scenario_id=scenario_id,
+                title="Root aggregate",
+                probability=0.99,
+                fork_round=0,
+                status=BranchStatus.COMPLETED,
+            ),
+            Branch(
+                id="report-child",
+                scenario_id=scenario_id,
+                parent_branch_id="report-root",
+                title="Child aggregate",
+                story="The child lineage carries the middle rounds.",
+                probability=0.8,
+                fork_round=2,
+                status=BranchStatus.COMPLETED,
+            ),
+            Branch(
+                id="report-leaf",
+                scenario_id=scenario_id,
+                parent_branch_id="report-child",
+                title="Answer leaf",
+                story="The leaf owns the final materialized round.",
+                key_moments=json.dumps(["legal signal"]),
+                probability=0.7,
+                fork_round=4,
+                status=BranchStatus.COMPLETED,
+            ),
+            Branch(
+                id="report-sibling",
+                scenario_id=scenario_id,
+                parent_branch_id="report-root",
+                title="Sibling answer",
+                story="A sibling worldline remains globally relevant.",
+                probability=0.6,
+                fork_round=2,
+                status=BranchStatus.COMPLETED,
+            ),
+            Branch(
+                id="report-clone",
+                scenario_id=scenario_id,
+                parent_branch_id="report-leaf",
+                title="Self-contained replay",
+                story="The replay materializes its own complete transcript.",
+                key_moments=json.dumps(["clone signal"]),
+                probability=0.5,
+                fork_round=5,
+                status=BranchStatus.COMPLETED,
+                replay_kind="resume",
+            ),
+        ])
+        round_rows = [
+            Round(id="report-root-1", branch_id="report-root", round_number=1),
+            Round(id="report-root-2", branch_id="report-root", round_number=2),
+            Round(id="report-root-future-3", branch_id="report-root", round_number=3),
+            Round(id="report-child-stale-2", branch_id="report-child", round_number=2),
+            Round(id="report-child-3", branch_id="report-child", round_number=3),
+            Round(id="report-child-4", branch_id="report-child", round_number=4),
+            Round(id="report-child-future-5", branch_id="report-child", round_number=5),
+            Round(id="report-leaf-stale-3", branch_id="report-leaf", round_number=3),
+            Round(id="report-leaf-5", branch_id="report-leaf", round_number=5),
+            Round(id="report-sibling-3", branch_id="report-sibling", round_number=3),
+            Round(id="report-clone-1", branch_id="report-clone", round_number=1),
+            Round(id="report-clone-2", branch_id="report-clone", round_number=2),
+        ]
+        session.add_all(round_rows)
+        message_specs = [
+            ("legal-root-1", "report-root-1", "agent-lineage-root"),
+            ("legal-root-2", "report-root-2", "agent-lineage-root"),
+            ("noise-root-future", "report-root-future-3", "agent-lineage-noise"),
+            ("noise-child-stale", "report-child-stale-2", "agent-lineage-noise"),
+            ("legal-child-3", "report-child-3", "agent-lineage-child"),
+            ("legal-child-4", "report-child-4", "agent-lineage-child"),
+            ("noise-child-future", "report-child-future-5", "agent-lineage-noise"),
+            ("noise-leaf-stale", "report-leaf-stale-3", "agent-lineage-noise"),
+            ("legal-leaf-5", "report-leaf-5", "agent-lineage-leaf"),
+            ("noise-sibling", "report-sibling-3", "agent-lineage-noise"),
+        ]
+        session.add_all([
+            AgentMessage(
+                id=message_id,
+                round_id=round_id,
+                agent_id=agent_id,
+                content=f"legal signal {message_id}",
+                emotion="focused",
+                diverge=(
+                    "explicit failure path"
+                    if message_id
+                    in {"legal-root-2", "legal-child-4", "legal-leaf-5"}
+                    else "high-signal"
+                    if message_id.startswith("noise-")
+                    else None
+                ),
+            )
+            for message_id, round_id, agent_id in message_specs
+        ])
+        session.add_all([
+            AgentMessage(
+                id="clone-message-1",
+                round_id="report-clone-1",
+                agent_id="agent-lineage-clone",
+                content="clone signal one",
+                emotion="focused",
+                diverge="clone failure path one",
+            ),
+            AgentMessage(
+                id="clone-message-2",
+                round_id="report-clone-2",
+                agent_id="agent-lineage-clone",
+                content="clone signal two",
+                emotion="focused",
+                diverge="clone failure path two",
+            ),
+        ])
+        session.add_all([
+            AgentStateFrame(
+                id="legal-frame-negative",
+                scenario_id=scenario_id,
+                branch_id="report-child",
+                round_number=4,
+                agent_id="agent-lineage-root",
+                stance_score=-0.4,
+            ),
+            AgentStateFrame(
+                id="legal-frame-positive",
+                scenario_id=scenario_id,
+                branch_id="report-child",
+                round_number=4,
+                agent_id="agent-lineage-child",
+                stance_score=0.4,
+            ),
+            AgentStateFrame(
+                id="illegal-leaf-frame-one",
+                scenario_id=scenario_id,
+                branch_id="report-leaf",
+                round_number=99,
+                agent_id="agent-lineage-root",
+                stance_score=1.0,
+            ),
+            AgentStateFrame(
+                id="illegal-leaf-frame-two",
+                scenario_id=scenario_id,
+                branch_id="report-leaf",
+                round_number=99,
+                agent_id="agent-lineage-child",
+                stance_score=1.0,
+            ),
+            AgentStateFrame(
+                id="clone-frame-one",
+                scenario_id=scenario_id,
+                branch_id="report-clone",
+                round_number=2,
+                agent_id="agent-lineage-clone",
+                stance_score=0.5,
+            ),
+            AgentStateFrame(
+                id="clone-frame-two",
+                scenario_id=scenario_id,
+                branch_id="report-clone",
+                round_number=2,
+                agent_id="agent-lineage-leaf",
+                stance_score=0.5,
+            ),
+        ])
+        session.add_all([
+            FactionSnapshot(
+                id="legal-faction-a",
+                scenario_id=scenario_id,
+                branch_id="report-child",
+                round_number=4,
+                faction_key="legal-a",
+                stance_center=-0.2,
+                member_agent_ids_json=json.dumps(["agent-lineage-root"]),
+                confidence=0.8,
+            ),
+            FactionSnapshot(
+                id="legal-faction-b",
+                scenario_id=scenario_id,
+                branch_id="report-child",
+                round_number=4,
+                faction_key="legal-b",
+                stance_center=0.2,
+                member_agent_ids_json=json.dumps(["agent-lineage-child"]),
+                confidence=0.8,
+            ),
+            FactionSnapshot(
+                id="illegal-leaf-faction",
+                scenario_id=scenario_id,
+                branch_id="report-leaf",
+                round_number=99,
+                faction_key="illegal-leaf",
+                stance_center=0.0,
+                member_agent_ids_json=json.dumps(["agent-lineage-noise"]),
+                confidence=1.0,
+            ),
+            FactionSnapshot(
+                id="clone-faction",
+                scenario_id=scenario_id,
+                branch_id="report-clone",
+                round_number=2,
+                faction_key="clone-only",
+                stance_center=0.5,
+                member_agent_ids_json=json.dumps(["agent-lineage-clone"]),
+                confidence=1.0,
+            ),
+        ])
+        session.add_all([
+            AgentRelationEdge(
+                id="legal-relation",
+                scenario_id=scenario_id,
+                branch_id="report-child",
+                round_number=4,
+                source_agent_id="agent-lineage-root",
+                target_agent_id="agent-lineage-child",
+                opposition_score=0.8,
+            ),
+            AgentRelationEdge(
+                id="illegal-leaf-relation",
+                scenario_id=scenario_id,
+                branch_id="report-leaf",
+                round_number=99,
+                source_agent_id="agent-lineage-root",
+                target_agent_id="agent-lineage-noise",
+                opposition_score=0.1,
+            ),
+            AgentRelationEdge(
+                id="clone-relation",
+                scenario_id=scenario_id,
+                branch_id="report-clone",
+                round_number=2,
+                source_agent_id="agent-lineage-clone",
+                target_agent_id="agent-lineage-leaf",
+                opposition_score=0.3,
+            ),
+        ])
+        session.commit()
+    return scenario_id
+
+
+def test_reduce_uses_one_exact_lineage_scope_for_all_target_artifacts() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        max_evidence=20,
+    )
+
+    assert result.report_scope is not None
+    assert result.report_scope.scenario_id == scenario_id
+    assert result.report_scope.target_branch_id == "report-leaf"
+    assert [
+        (item.round_id, item.branch_id, item.round_number)
+        for item in result.report_scope.rounds
+    ] == [
+        ("report-root-1", "report-root", 1),
+        ("report-root-2", "report-root", 2),
+        ("report-child-3", "report-child", 3),
+        ("report-child-4", "report-child", 4),
+        ("report-leaf-5", "report-leaf", 5),
+    ]
+    assert result.round_count == 5
+    assert {item.message_id for item in result.evidence} == {
+        "legal-root-1",
+        "legal-root-2",
+        "legal-child-3",
+        "legal-child-4",
+        "legal-leaf-5",
+    }
+    assert {
+        (item.message_id, item.branch_id, item.round_id, item.round_number)
+        for item in result.evidence
+    } == {
+        ("legal-root-1", "report-root", "report-root-1", 1),
+        ("legal-root-2", "report-root", "report-root-2", 2),
+        ("legal-child-3", "report-child", "report-child-3", 3),
+        ("legal-child-4", "report-child", "report-child-4", 4),
+        ("legal-leaf-5", "report-leaf", "report-leaf-5", 5),
+    }
+    assert {item.agent_name for item in result.key_participants} == {
+        "Root Analyst",
+        "Child Analyst",
+        "Leaf Analyst",
+    }
+    assert result.agent_consensus == reducer_module.StatResult(
+        status="partial",
+        value=pytest.approx(0.6),
+        reason="stale_agent_state_round",
+    )
+    assert result.faction_consensus == reducer_module.StatResult(
+        status="partial",
+        value=pytest.approx(0.8),
+        reason="stale_proxy_round",
+    )
+    assert result.polarization == reducer_module.StatResult(
+        status="partial",
+        value=pytest.approx(0.8),
+        reason="stale_proxy_round",
+    )
+    faction_chart = next(chart.data for chart in result.charts if chart.kind == "faction_share")
+    assert [item["faction_key"] for item in faction_chart["factions"]] == [
+        "legal-a",
+        "legal-b",
+    ]
+    assert faction_chart["relation_edge_count"] == 1
+    assert faction_chart["avg_opposition"] == pytest.approx(0.8)
+    assert {item["branch_id"] for item in result.branch_distribution} == {
+        "report-root",
+        "report-child",
+        "report-leaf",
+        "report-sibling",
+        "report-clone",
+    }
+    assert result.dissenting is not None
+    assert result.dissenting.runner_up_branch_id == "report-sibling"
+
+
+def test_premortem_evidence_preserves_true_ancestor_and_leaf_coordinates() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+    scope = reducer_module.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+    )
+    assert scope is not None
+
+    evidence = reducer_module.collect_premortem_evidence_pool(
+        get_engine(),
+        scenario_id,
+        "report-leaf",
+        max_evidence=6,
+        exclude_message_ids=set(),
+        starting_index=1,
+        report_scope=scope,
+    )
+
+    assert [
+        (
+            item.id,
+            item.message_id,
+            item.branch_id,
+            item.round_id,
+            item.round_number,
+            item.agent_id,
+        )
+        for item in evidence
+    ] == [
+        (
+            "ev_001",
+            "legal-root-2",
+            "report-root",
+            "report-root-2",
+            2,
+            "agent-lineage-root",
+        ),
+        (
+            "ev_002",
+            "legal-child-4",
+            "report-child",
+            "report-child-4",
+            4,
+            "agent-lineage-child",
+        ),
+        (
+            "ev_003",
+            "legal-leaf-5",
+            "report-leaf",
+            "report-leaf-5",
+            5,
+            "agent-lineage-leaf",
+        ),
+    ]
+
+
+def test_reduce_self_contained_replay_uses_only_replay_materialization() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=20,
+    )
+
+    assert result.report_scope is not None
+    assert [
+        (item.round_id, item.branch_id, item.round_number)
+        for item in result.report_scope.rounds
+    ] == [
+        ("report-clone-1", "report-clone", 1),
+        ("report-clone-2", "report-clone", 2),
+    ]
+    assert result.round_count == 2
+    assert {item.message_id for item in result.evidence} == {
+        "clone-message-1",
+        "clone-message-2",
+    }
+    assert [item.agent_name for item in result.key_participants] == ["Clone Analyst"]
+    faction_chart = next(chart.data for chart in result.charts if chart.kind == "faction_share")
+    assert [item["faction_key"] for item in faction_chart["factions"]] == [
+        "clone-only"
+    ]
+    assert result.agent_consensus.value == pytest.approx(1.0)
+    assert result.polarization.value == pytest.approx(0.3)
+    assert {item["branch_id"] for item in result.branch_distribution} == {
+        "report-root",
+        "report-child",
+        "report-leaf",
+        "report-sibling",
+        "report-clone",
+    }
+
+
+def test_premortem_evidence_self_contained_clone_never_reads_parent_lineage() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=1,
+    )
+
+    assert result.outcome_evidence_ids == ("ev_001",)
+    assert result.premortem_evidence_ids == ("ev_002",)
+    assert [
+        (item.message_id, item.branch_id, item.round_id, item.round_number)
+        for item in result.evidence
+    ] == [
+        ("clone-message-1", "report-clone", "report-clone-1", 1),
+        ("clone-message-2", "report-clone", "report-clone-2", 2),
+    ]
+
+
+def test_reduce_reuses_matching_preflight_report_scope(monkeypatch) -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+    first = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=2,
+    )
+    assert first.report_scope is not None
+
+    def fail_lineage_resolution(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("matching preflight scope must not be resolved twice")
+
+    monkeypatch.setattr(reducer_module, "select_branch_rounds", fail_lineage_resolution)
+
+    second = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=2,
+        report_scope=first.report_scope,
+    )
+
+    assert second.report_scope is first.report_scope
+    assert [item.message_id for item in second.evidence] == [
+        item.message_id for item in first.evidence
+    ]
+
+
+def test_resolve_report_lineage_scope_matches_viable_preferred_target() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+
+    report_scope = reducer_module.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+    )
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        report_scope=report_scope,
+    )
+
+    assert report_scope is not None
+    assert report_scope.target_branch_id == "report-leaf"
+    assert result.target_branch_id == report_scope.target_branch_id
+    assert result.report_scope is report_scope
+
+
+def test_resolve_report_lineage_scope_matches_unsafe_root_answer_fallback() -> None:
+    scenario_id = "scenario-preflight-answer-fallback"
+    with Session(get_engine()) as session:
+        session.add(
+            Scenario(
+                id=scenario_id,
+                question="Will the policy pass?",
+                status=ScenarioStatus.DONE,
+                parsed_context={
+                    "result_quality": {
+                        "question_answer": "The answer branch has a 45% chance.",
+                        "branch_question_answers": {
+                            "preflight-answer": "The answer branch has a 45% chance."
+                        },
+                    }
+                },
+            )
+        )
+        session.add_all(
+            [
+                Branch(
+                    id="preflight-root",
+                    scenario_id=scenario_id,
+                    title="Root aggregate",
+                    story="",
+                    insight="",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="preflight-answer",
+                    scenario_id=scenario_id,
+                    parent_branch_id="preflight-root",
+                    title="Answer branch",
+                    story="The policy passes after safeguards are accepted.",
+                    insight="Safeguards unlock the answer-bearing route.",
+                    probability=0.45,
+                    fork_round=1,
+                    status=BranchStatus.PRUNED,
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                Round(id="preflight-root-1", branch_id="preflight-root", round_number=1),
+                Round(
+                    id="preflight-answer-2",
+                    branch_id="preflight-answer",
+                    round_number=2,
+                ),
+            ]
+        )
+        session.commit()
+
+    report_scope = reducer_module.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="preflight-root",
+    )
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="preflight-root",
+        report_scope=report_scope,
+    )
+
+    assert report_scope is not None
+    assert report_scope.target_branch_id == "preflight-answer"
+    assert result.target_branch_id == report_scope.target_branch_id
+    assert result.report_scope is report_scope
+
+
+def test_resolve_report_lineage_scope_returns_none_for_missing_or_branchless_scenario() -> None:
+    scenario_id = "scenario-preflight-empty"
+    with Session(get_engine()) as session:
+        session.add(
+            Scenario(
+                id=scenario_id,
+                question="Can an empty scenario resolve report lineage?",
+                status=ScenarioStatus.DONE,
+            )
+        )
+        session.commit()
+
+    assert (
+        reducer_module.resolve_report_lineage_scope(
+            get_engine(),
+            "scenario-preflight-missing",
+            dominant_branch_id="missing-branch",
+        )
+        is None
+    )
+    assert (
+        reducer_module.resolve_report_lineage_scope(
+            get_engine(),
+            scenario_id,
+            dominant_branch_id="missing-branch",
+        )
+        is None
+    )
+
+
+def test_preflight_scope_and_reduce_call_lineage_authority_once(monkeypatch) -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+    original_select_branch_rounds = reducer_module.select_branch_rounds
+    authority_calls = 0
+
+    def count_lineage_authority(*args: Any, **kwargs: Any):
+        nonlocal authority_calls
+        authority_calls += 1
+        return original_select_branch_rounds(*args, **kwargs)
+
+    monkeypatch.setattr(
+        reducer_module,
+        "select_branch_rounds",
+        count_lineage_authority,
+    )
+
+    report_scope = reducer_module.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+    )
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        report_scope=report_scope,
+    )
+
+    assert report_scope is not None
+    assert result.report_scope is report_scope
+    assert authority_calls == 1
+
+
+def test_reduce_invalid_lineage_fails_closed() -> None:
+    scenario_id = "scenario-report-invalid-lineage"
+    with Session(get_engine()) as session:
+        session.add(
+            Scenario(
+                id=scenario_id,
+                question="Can an invalid parent lineage produce a report?",
+                status=ScenarioStatus.DONE,
+            )
+        )
+        session.add(
+            Branch(
+                id="report-invalid-leaf",
+                scenario_id=scenario_id,
+                parent_branch_id="report-missing-parent",
+                title="Invalid leaf",
+                story="This branch must fail closed.",
+                probability=1.0,
+                fork_round=1,
+                status=BranchStatus.COMPLETED,
+            )
+        )
+        session.commit()
+
+    with pytest.raises(BranchLineageError) as exc_info:
+        reduce(
+            get_engine(),
+            scenario_id,
+            dominant_branch_id="report-invalid-leaf",
+        )
+
+    assert exc_info.value.code == "BRANCH_LINEAGE_MISSING_PARENT"
+
+
+@pytest.mark.parametrize(
+    ("round_id", "branch_id", "round_number"),
+    [
+        ("", "branch", 1),
+        ("   ", "branch", 1),
+        ("round", "", 1),
+        ("round", "   ", 1),
+        ("round", "branch", 0),
+        ("round", "branch", -1),
+        ("round", "branch", True),
+        ("round", "branch", 1.5),
+    ],
+    ids=[
+        "empty-round-id",
+        "blank-round-id",
+        "empty-branch-id",
+        "blank-branch-id",
+        "zero-round",
+        "negative-round",
+        "bool-round",
+        "non-integer-round",
+    ],
+)
+def test_report_round_ref_rejects_invalid_scalar_fields(
+    round_id,
+    branch_id,
+    round_number,
+) -> None:
+    with pytest.raises(ValueError):
+        ReportRoundRef(
+            round_id=round_id,
+            branch_id=branch_id,
+            round_number=round_number,
+        )
+
+
+def test_report_lineage_scope_cannot_be_constructed_without_authority() -> None:
+    with pytest.raises(TypeError):
+        ReportLineageScope(
+            scenario_id="scenario",
+            target_branch_id="branch",
+            rounds=(),
+        )
+
+
+def test_resolve_rejects_object_new_scope_with_safe_exception() -> None:
+    forged_scope = object.__new__(ReportLineageScope)
+    object.__setattr__(forged_scope, "scenario_id", "scenario")
+    object.__setattr__(forged_scope, "target_branch_id", "branch")
+    object.__setattr__(forged_scope, "rounds", ())
+
+    with pytest.raises(ValueError):
+        reducer_module._resolve_report_scope(
+            get_engine(),
+            "scenario",
+            "branch",
+            report_scope=forged_scope,
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_rounds",
+    [
+        (
+            ReportRoundRef("duplicate-id", "branch-a", 1),
+            ReportRoundRef("duplicate-id", "branch-b", 2),
+        ),
+        (
+            ReportRoundRef("round-a", "branch-a", 1),
+            ReportRoundRef("round-b", "branch-a", 1),
+        ),
+        (
+            ReportRoundRef("round-a", "branch-a", 1),
+            ReportRoundRef("round-c", "branch-c", 3),
+        ),
+        (
+            ReportRoundRef("round-b", "branch-b", 2),
+            ReportRoundRef("round-a", "branch-a", 1),
+        ),
+    ],
+    ids=["duplicate-round-id", "duplicate-coordinate", "round-gap", "unstable-order"],
+)
+def test_reduce_rejects_structurally_invalid_reused_scope(invalid_rounds) -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=0,
+    )
+    assert result.report_scope is not None
+    object.__setattr__(result.report_scope, "rounds", invalid_rounds)
+
+    with pytest.raises(ValueError):
+        reducer_module._resolve_report_scope(
+            get_engine(),
+            scenario_id,
+            "report-clone",
+            report_scope=result.report_scope,
+        )
+
+
+def test_reduce_revalidates_tampered_round_ref_scalars() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=0,
+    )
+    assert result.report_scope is not None
+    object.__setattr__(result.report_scope.rounds[0], "round_id", "   ")
+
+    with pytest.raises(ValueError):
+        reducer_module._resolve_report_scope(
+            get_engine(),
+            scenario_id,
+            "report-clone",
+            report_scope=result.report_scope,
+        )
+
+
+def test_genuine_scope_does_not_leak_round_rebound_to_foreign_scenario() -> None:
+    scenario_id = _seed_report_lineage_scope_scenario()
+    result = reduce(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=0,
+    )
+    report_scope = result.report_scope
+    assert report_scope is not None
+
+    with Session(get_engine()) as session:
+        session.add(
+            Scenario(
+                id="foreign-report-scenario",
+                question="Foreign scope injection",
+                status=ScenarioStatus.DONE,
+            )
+        )
+        session.add(
+            Branch(
+                id="foreign-report-branch",
+                scenario_id="foreign-report-scenario",
+                title="Foreign branch",
+                fork_round=0,
+                status=BranchStatus.COMPLETED,
+            )
+        )
+        session.add(
+            Agent(
+                id="foreign-report-agent",
+                scenario_id="foreign-report-scenario",
+                name="Foreign Analyst",
+            )
+        )
+        stale_round = session.get(Round, "report-clone-1")
+        assert stale_round is not None
+        stale_round.branch_id = "foreign-report-branch"
+        stale_round.round_number = 9
+        session.add(stale_round)
+        session.add(
+            AgentMessage(
+                id="foreign-report-message",
+                round_id=stale_round.id,
+                agent_id="foreign-report-agent",
+                content="clone signal from a foreign scenario",
+                emotion="__swarmoracle_metadata_unavailable__:LLM_TIMEOUT",
+            )
+        )
+        session.commit()
+
+    evidence_rows = report_queries.load_evidence_message_coords(
+        get_engine(),
+        report_scope,
+        key_moments=["clone signal"],
+        limit=10,
+    )
+    participant_rows = report_queries.load_key_participant_stats(
+        get_engine(),
+        report_scope,
+        key_moments=["clone signal"],
+    )
+    coverage = report_queries.load_latest_message_metadata_coverage(
+        get_engine(),
+        report_scope,
+    )
+
+    assert [row["message_id"] for row in evidence_rows] == ["clone-message-2"]
+    assert participant_rows == [
+        {
+            "agent_id": "agent-lineage-clone",
+            "agent_name": "Clone Analyst",
+            "message_count": 1,
+            "round_count": 1,
+            "key_moment_hits": 1,
+        }
+    ]
+    assert coverage == report_queries.LatestMessageMetadataCoverage(2, 1, 0)
+    assert report_queries.count_metadata_unavailable_messages(
+        get_engine(),
+        report_scope,
+        1,
+    ) == 0
+    assert [
+        item.message_id
+        for item in collect_evidence_pool(
+            get_engine(),
+            scenario_id,
+            "report-clone",
+            max_evidence=10,
+            report_scope=report_scope,
+        )
+    ] == ["clone-message-2"]
+
+
+def test_main_reduce_loads_metadata_coverage_and_proxy_rounds_once(
+    monkeypatch,
+) -> None:
+    scenario_id = _seed_scenario()
+    calls = {"coverage": 0, "proxy": 0}
+    original_coverage = reducer_module.load_latest_message_metadata_coverage
+    original_proxy = reducer_module.load_latest_faction_proxy_rounds
+
+    def observed_coverage(*args, **kwargs):
+        calls["coverage"] += 1
+        return original_coverage(*args, **kwargs)
+
+    def observed_proxy(*args, **kwargs):
+        calls["proxy"] += 1
+        return original_proxy(*args, **kwargs)
+
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_message_metadata_coverage",
+        observed_coverage,
+    )
+    monkeypatch.setattr(
+        reducer_module,
+        "load_latest_faction_proxy_rounds",
+        observed_proxy,
+    )
+
+    result = reduce(get_engine(), scenario_id, max_evidence=2)
+
+    assert result.target_branch_id == "branch-a"
+    assert calls == {"coverage": 1, "proxy": 1}

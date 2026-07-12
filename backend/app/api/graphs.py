@@ -27,6 +27,7 @@ from app.api.schemas import ResumeRequest
 from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioStatus, get_engine
+from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_relations, get_faction_timeline
 from app.services.graph_analysis import analyze_graph
@@ -83,6 +84,16 @@ def _runtime_lock_lease_alive(lease_holder: list[RuntimeLockLease | None]) -> bo
 
 def _feature_disabled(name: str):
     return api_error(404, "FEATURE_DISABLED", f"Feature '{name}' is not enabled")
+
+
+def _branch_lineage_api_error(exc: BranchLineageError):
+    if exc.code == "BRANCH_LINEAGE_BRANCH_NOT_FOUND":
+        return api_error(
+            404,
+            "BRANCH_NOT_FOUND",
+            "Branch not found in scenario",
+        )
+    return api_error(409, exc.code, "Branch lineage is invalid")
 
 
 def _replay_branch_lock_key(scenario_id: str) -> str:
@@ -251,17 +262,40 @@ def _load_resimulatable_counterfactual(
 def _validate_counterfactual_target_message(
     session: Session,
     *,
+    scenario_id: str,
     source_branch_id: str,
     round_number: int,
     agent_id: str,
     source_message_content: str | None = None,
 ) -> None:
+    try:
+        source_selection = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=source_branch_id,
+            requested_cutoff=round_number,
+        )
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
+    source_round = next(
+        (
+            round_
+            for round_ in source_selection.rounds
+            if round_.round_number == round_number
+        ),
+        None,
+    )
+    if source_round is None:
+        raise api_error(
+            400,
+            "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
+            f"round_number {round_number} exceeds available rounds",
+        )
+
     candidate_messages = session.exec(
         select(AgentMessage.content)
-        .join(Round, AgentMessage.round_id == Round.id)
         .where(
-            Round.branch_id == source_branch_id,
-            Round.round_number == round_number,
+            AgentMessage.round_id == source_round.id,
             AgentMessage.agent_id == agent_id,
         )
     ).all()
@@ -322,6 +356,30 @@ def _raise_if_replay_limit_reached(session: Session, scenario_id: str) -> None:
         )
 
 
+def _validate_resume_lineage_round(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+) -> None:
+    try:
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            requested_cutoff=round_number,
+        )
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
+    if not selection.contains(round_number):
+        raise api_error(
+            400,
+            "RESUME_ROUND_OUT_OF_RANGE",
+            f"round_number {round_number} exceeds available rounds",
+        )
+
+
 router = APIRouter(prefix="/api", tags=["graphs"], dependencies=[Depends(verify_session)])
 
 
@@ -357,10 +415,16 @@ async def get_causal_graph(
                 raise api_error(
                     404,
                     "BRANCH_NOT_FOUND",
-                    f"Branch {normalized_branch_id} not found in scenario",
+                    "Branch not found in scenario",
                 )
-    graph = await asyncio.to_thread(build_snapshot, scenario_id, branch_id=normalized_branch_id)
-    return graph
+    try:
+        return await asyncio.to_thread(
+            build_snapshot,
+            scenario_id,
+            branch_id=normalized_branch_id,
+        )
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
 
 
 @router.get("/scenario/{scenario_id}/graph-analysis")
@@ -388,9 +452,16 @@ async def get_graph_analysis(
                 raise api_error(
                     404,
                     "BRANCH_NOT_FOUND",
-                    f"Branch {normalized_branch_id} not found in scenario",
+                    "Branch not found in scenario",
                 )
-    return await asyncio.to_thread(analyze_graph, scenario_id, branch_id=normalized_branch_id)
+    try:
+        return await asyncio.to_thread(
+            analyze_graph,
+            scenario_id,
+            branch_id=normalized_branch_id,
+        )
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
 
 
 @router.post("/scenario/{scenario_id}/counterfactual")
@@ -424,20 +495,9 @@ async def create_counterfactual(
                 f"Branch {body.source_branch_id} not found in scenario",
             )
 
-        max_round = session.exec(
-            select(Round.round_number)
-            .where(Round.branch_id == body.source_branch_id)
-            .order_by(Round.round_number.desc())
-        ).first()
-        if max_round is None or body.round_number > max_round:
-            raise api_error(
-                400,
-                "COUNTERFACTUAL_ROUND_OUT_OF_RANGE",
-                f"round_number {body.round_number} exceeds available rounds",
-            )
-
         _validate_counterfactual_target_message(
             session,
+            scenario_id=scenario_id,
             source_branch_id=body.source_branch_id,
             round_number=body.round_number,
             agent_id=body.agent_id,
@@ -482,12 +542,15 @@ async def create_counterfactual(
             lease_seconds=_REPLAY_BRANCH_LOCK_LEASE_SECONDS,
             lock_label=f"replay-branch:{scenario_id}",
         )
-        new_branch_id = clone_until_round(
-            scenario_id,
-            body.source_branch_id,
-            body.round_number,
-            ensure_lock=ensure_replay_branch_lock,
-        )
+        try:
+            new_branch_id = clone_until_round(
+                scenario_id,
+                body.source_branch_id,
+                body.round_number,
+                ensure_lock=ensure_replay_branch_lock,
+            )
+        except BranchLineageError as exc:
+            raise _branch_lineage_api_error(exc) from exc
         try:
             ensure_replay_branch_lock()
             seed_counterfactual(
@@ -649,6 +712,8 @@ async def compare_branches_endpoint(
 
     try:
         result = compare_branches(scenario_id, branch_a, branch_b)
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
     except ValueError as exc:
         raise api_error(404, "COMPARE_BRANCH_NOT_FOUND", str(exc)) from exc
     return result
@@ -675,10 +740,16 @@ async def get_faction_timeline_endpoint(
             raise api_error(
                 404,
                 "BRANCH_NOT_FOUND",
-                f"Branch {branch_id} not found in scenario",
+                "Branch not found in scenario",
             )
-    timeline = get_faction_timeline(scenario_id, branch_id)
-    return timeline
+    try:
+        return await asyncio.to_thread(
+            get_faction_timeline,
+            scenario_id,
+            branch_id,
+        )
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
 
 
 @router.get("/scenario/{scenario_id}/faction-relations")
@@ -705,16 +776,19 @@ async def get_faction_relations_endpoint(
             raise api_error(
                 404,
                 "BRANCH_NOT_FOUND",
-                f"Branch {branch_id} not found in scenario",
+                "Branch not found in scenario",
             )
-    return await asyncio.to_thread(
-        get_faction_relations,
-        scenario_id,
-        branch_id,
-        round_max=round_max,
-        threshold=threshold,
-        top_k=top_k,
-    )
+    try:
+        return await asyncio.to_thread(
+            get_faction_relations,
+            scenario_id,
+            branch_id,
+            round_max=round_max,
+            threshold=threshold,
+            top_k=top_k,
+        )
+    except BranchLineageError as exc:
+        raise _branch_lineage_api_error(exc) from exc
 
 
 @router.get("/scenario/{scenario_id}/personality-drift")
@@ -807,17 +881,12 @@ async def resume_from_round(
                 f"Branch {body.source_branch_id} not found",
             )
 
-        max_round = session.exec(
-            select(Round.round_number)
-            .where(Round.branch_id == body.source_branch_id)
-            .order_by(Round.round_number.desc())
-        ).first()
-        if max_round is None or body.round_number > max_round:
-            raise api_error(
-                400,
-                "RESUME_ROUND_OUT_OF_RANGE",
-                f"round_number {body.round_number} exceeds available rounds",
-            )
+        _validate_resume_lineage_round(
+            session,
+            scenario_id=scenario_id,
+            branch_id=body.source_branch_id,
+            round_number=body.round_number,
+        )
 
     lease = await asyncio.to_thread(_acquire_replay_branch_lock, scenario_id)
     if lease is None:
@@ -864,17 +933,12 @@ async def resume_from_round(
                     f"Branch {body.source_branch_id} not found",
                 )
 
-            max_round = session.exec(
-                select(Round.round_number)
-                .where(Round.branch_id == body.source_branch_id)
-                .order_by(Round.round_number.desc())
-            ).first()
-            if max_round is None or body.round_number > max_round:
-                raise api_error(
-                    400,
-                    "RESUME_ROUND_OUT_OF_RANGE",
-                    f"round_number {body.round_number} exceeds available rounds",
-                )
+            _validate_resume_lineage_round(
+                session,
+                scenario_id=scenario_id,
+                branch_id=body.source_branch_id,
+                round_number=body.round_number,
+            )
 
             _raise_if_replay_limit_reached(session, scenario_id)
             simulation_lease = _acquire_simulation_lock_for_resume(scenario_id)

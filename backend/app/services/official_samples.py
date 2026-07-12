@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,7 @@ from typing import Any
 from app.services.snapshot_export import MAX_IMPORT_ZIP_BYTES
 
 MAX_SAMPLE_CATALOG_BYTES = 2 * 1024 * 1024
+_SAMPLE_READ_CHUNK_BYTES = 64 * 1024
 _SAMPLE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
 
 
@@ -21,6 +24,7 @@ class OfficialSampleCatalogError(ValueError):
 @dataclass(frozen=True)
 class OfficialSample:
     id: str
+    filename: str
     question: str
     scene_theme: str | None
     title: dict[str, str]
@@ -28,6 +32,11 @@ class OfficialSample:
     agent_count: int
     outcome_count: int
     bundle_path: Path
+    bundle_device: int
+    bundle_inode: int
+    bundle_size: int
+    bundle_mtime_ns: int
+    bundle_ctime_ns: int
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +57,15 @@ class OfficialSampleCatalog:
 
     def get(self, sample_id: str) -> OfficialSample | None:
         return next((sample for sample in self.samples if sample.id == sample_id), None)
+
+    def get_by_filename(self, filename: str) -> OfficialSample | None:
+        """Return only an exact, catalog-whitelisted snapshot filename."""
+        if Path(filename).name != filename or not filename.endswith(".swarm"):
+            return None
+        return next(
+            (sample for sample in self.samples if sample.filename == filename),
+            None,
+        )
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -73,15 +91,72 @@ def _bilingual_text(value: Any, field: str, *, max_chars: int) -> dict[str, str]
     }
 
 
+def _metadata_fingerprint(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _read_bounded_file_descriptor(file_descriptor: int, max_bytes: int) -> bytes:
+    blob = bytearray()
+    while len(blob) < max_bytes + 1:
+        chunk = os.read(
+            file_descriptor,
+            min(_SAMPLE_READ_CHUNK_BYTES, max_bytes + 1 - len(blob)),
+        )
+        if not chunk:
+            break
+        blob.extend(chunk)
+    return bytes(blob)
+
+
 def _read_catalog_json(catalog_path: Path) -> dict[str, Any]:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise OfficialSampleCatalogError("Catalog cannot be read")
+
+    catalog_fd: int | None = None
     try:
-        size = catalog_path.stat().st_size
-        if size <= 0 or size > MAX_SAMPLE_CATALOG_BYTES:
-            raise OfficialSampleCatalogError("Catalog size is invalid")
-        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog_fd = os.open(
+            catalog_path,
+            os.O_RDONLY
+            | no_follow
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        initial_metadata = os.fstat(catalog_fd)
+        initial_fingerprint = _metadata_fingerprint(initial_metadata)
+        if (
+            not stat.S_ISREG(initial_metadata.st_mode)
+            or initial_metadata.st_size <= 0
+            or initial_metadata.st_size > MAX_SAMPLE_CATALOG_BYTES
+        ):
+            raise OfficialSampleCatalogError("Catalog cannot be read")
+
+        blob = _read_bounded_file_descriptor(
+            catalog_fd,
+            MAX_SAMPLE_CATALOG_BYTES,
+        )
+        final_metadata = os.fstat(catalog_fd)
+        if _metadata_fingerprint(final_metadata) != initial_fingerprint:
+            raise OfficialSampleCatalogError("Catalog cannot be read")
     except OfficialSampleCatalogError:
         raise
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except OSError as exc:
+        raise OfficialSampleCatalogError("Catalog cannot be read") from exc
+    finally:
+        if catalog_fd is not None:
+            os.close(catalog_fd)
+
+    if not blob or len(blob) > MAX_SAMPLE_CATALOG_BYTES:
+        raise OfficialSampleCatalogError("Catalog cannot be read")
+    try:
+        payload = json.loads(blob.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OfficialSampleCatalogError("Catalog cannot be read") from exc
     if not isinstance(payload, dict):
         raise OfficialSampleCatalogError("Catalog must be an object")
@@ -91,7 +166,16 @@ def _read_catalog_json(catalog_path: Path) -> dict[str, Any]:
 def load_official_sample_catalog(samples_dir: str | Path) -> OfficialSampleCatalog:
     """Load a bounded catalog whose bundle paths stay inside ``snapshots/``."""
     root = Path(samples_dir).resolve()
-    snapshots_root = (root / "snapshots").resolve()
+    snapshots_path = root / "snapshots"
+    try:
+        snapshots_metadata = snapshots_path.lstat()
+    except OSError as exc:
+        raise OfficialSampleCatalogError("Snapshots directory is unavailable") from exc
+    if not stat.S_ISDIR(snapshots_metadata.st_mode):
+        raise OfficialSampleCatalogError("Snapshots directory is invalid")
+    snapshots_root = snapshots_path.resolve()
+    if snapshots_root.parent != root:
+        raise OfficialSampleCatalogError("Snapshots directory escapes samples root")
     payload = _read_catalog_json(root / "catalog.v1.json")
     version = _required_text(payload.get("catalog_version"), "catalog_version", max_chars=20)
     if version != "1.0":
@@ -116,14 +200,18 @@ def load_official_sample_catalog(samples_dir: str | Path) -> OfficialSampleCatal
             or not filename.endswith(".swarm")
         ):
             raise OfficialSampleCatalogError("Sample filename is invalid or duplicated")
-        bundle_path = (snapshots_root / filename).resolve()
+        bundle_path = snapshots_root / filename
         if bundle_path.parent != snapshots_root:
             raise OfficialSampleCatalogError("Sample bundle escapes snapshots directory")
         try:
-            bundle_size = bundle_path.stat().st_size
+            bundle_metadata = bundle_path.lstat()
         except OSError as exc:
             raise OfficialSampleCatalogError("Sample bundle is unavailable") from exc
-        if not bundle_path.is_file() or bundle_size <= 0 or bundle_size > MAX_IMPORT_ZIP_BYTES:
+        if (
+            not stat.S_ISREG(bundle_metadata.st_mode)
+            or bundle_metadata.st_size <= 0
+            or bundle_metadata.st_size > MAX_IMPORT_ZIP_BYTES
+        ):
             raise OfficialSampleCatalogError("Sample bundle size is invalid")
 
         agents = raw.get("agents")
@@ -141,6 +229,7 @@ def load_official_sample_catalog(samples_dir: str | Path) -> OfficialSampleCatal
         samples.append(
             OfficialSample(
                 id=sample_id,
+                filename=filename,
                 question=_required_text(raw.get("question"), "question", max_chars=1_000),
                 scene_theme=scene_theme,
                 title=_bilingual_text(raw.get("title"), "title", max_chars=200),
@@ -148,6 +237,11 @@ def load_official_sample_catalog(samples_dir: str | Path) -> OfficialSampleCatal
                 agent_count=len(agents),
                 outcome_count=len(outcomes),
                 bundle_path=bundle_path,
+                bundle_device=bundle_metadata.st_dev,
+                bundle_inode=bundle_metadata.st_ino,
+                bundle_size=bundle_metadata.st_size,
+                bundle_mtime_ns=bundle_metadata.st_mtime_ns,
+                bundle_ctime_ns=bundle_metadata.st_ctime_ns,
             )
         )
         seen_ids.add(sample_id)
@@ -157,11 +251,61 @@ def load_official_sample_catalog(samples_dir: str | Path) -> OfficialSampleCatal
 
 
 def read_official_sample_bundle(sample: OfficialSample) -> bytes:
-    """Read a previously whitelisted bundle with a second size check."""
+    """Read a whitelisted regular file through one bounded, no-follow descriptor."""
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_only = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_only is None:
+        raise OfficialSampleCatalogError("Safe sample bundle reads are unavailable")
+    if sample.bundle_path.name != sample.filename:
+        raise OfficialSampleCatalogError("Sample bundle path is invalid")
+
+    common_flags = (
+        os.O_RDONLY
+        | no_follow
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    directory_fd: int | None = None
+    bundle_fd: int | None = None
     try:
-        blob = sample.bundle_path.read_bytes()
+        directory_fd = os.open(
+            sample.bundle_path.parent,
+            common_flags | directory_only,
+        )
+        bundle_fd = os.open(
+            sample.filename,
+            common_flags,
+            dir_fd=directory_fd,
+        )
+        bundle_metadata = os.fstat(bundle_fd)
+        expected_fingerprint = (
+            sample.bundle_device,
+            sample.bundle_inode,
+            sample.bundle_size,
+            sample.bundle_mtime_ns,
+            sample.bundle_ctime_ns,
+        )
+        if _metadata_fingerprint(bundle_metadata) != expected_fingerprint:
+            raise OfficialSampleCatalogError("Sample bundle changed after catalog load")
+        if (
+            not stat.S_ISREG(bundle_metadata.st_mode)
+            or bundle_metadata.st_size <= 0
+            or bundle_metadata.st_size > MAX_IMPORT_ZIP_BYTES
+        ):
+            raise OfficialSampleCatalogError("Sample bundle size is invalid")
+
+        blob = _read_bounded_file_descriptor(bundle_fd, MAX_IMPORT_ZIP_BYTES)
+        final_metadata = os.fstat(bundle_fd)
+        if _metadata_fingerprint(final_metadata) != expected_fingerprint:
+            raise OfficialSampleCatalogError("Sample bundle changed while being read")
     except OSError as exc:
         raise OfficialSampleCatalogError("Sample bundle cannot be read") from exc
+    finally:
+        if bundle_fd is not None:
+            os.close(bundle_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
     if not blob or len(blob) > MAX_IMPORT_ZIP_BYTES:
         raise OfficialSampleCatalogError("Sample bundle size is invalid")
     return blob

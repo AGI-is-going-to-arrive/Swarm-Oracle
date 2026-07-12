@@ -811,6 +811,7 @@ async def test_previous_round_adjacent_relationship_enters_next_turn_prompt(monk
     engine = get_engine()
     scenario_id = _make_scenario(engine)
     branch_id = _create_branch(engine, scenario_id, title="Relationship branch")
+    _create_round(engine, branch_id, 1)
     alice = _add_agent(engine, scenario_id, name="Alice")
     bob = _add_agent(engine, scenario_id, name="Bob")
 
@@ -891,6 +892,7 @@ def test_relationship_context_is_agent_perspective_and_bounded():
     engine = get_engine()
     scenario_id = _make_scenario(engine)
     branch_id = _create_branch(engine, scenario_id, title="Bounded relationships")
+    _create_round(engine, branch_id, 1)
     alice = _add_agent(engine, scenario_id, name="Alice")
     peers = [
         _add_agent(engine, scenario_id, name=f"Peer {index}")
@@ -936,6 +938,8 @@ def test_relationship_context_exactly_filters_and_preserves_bidirectional_self_v
     scenario_id = _make_scenario(engine)
     branch_id = _create_branch(engine, scenario_id, title="Relationship truth")
     other_branch_id = _create_branch(engine, scenario_id, title="Other branch")
+    _create_round(engine, branch_id, 1)
+    _create_round(engine, branch_id, 2)
     other_scenario_id = _make_scenario(engine)
     alice = _add_agent(engine, scenario_id, name="Alice Database")
     bob = _add_agent(engine, scenario_id, name="Bob Database")
@@ -1055,10 +1059,128 @@ def test_relationship_context_exactly_filters_and_preserves_bidirectional_self_v
     assert "MUST_NOT_APPEAR" not in "\n".join(english.values())
 
 
+def test_relationship_context_uses_exact_lineage_previous_owner_and_clone_boundary():
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    root_id = _create_branch(engine, scenario_id, title="Root relationships")
+    child_id = _create_branch(
+        engine,
+        scenario_id,
+        parent_branch_id=root_id,
+        fork_round=2,
+        title="Child relationships",
+    )
+    clone_id = _create_branch(
+        engine,
+        scenario_id,
+        parent_branch_id=root_id,
+        fork_round=2,
+        title="Clone relationships",
+    )
+    with Session(engine) as session:
+        clone = session.get(Branch, clone_id)
+        assert clone is not None
+        clone.replay_kind = "resume"
+        session.add(clone)
+        session.add_all([
+            Round(branch_id=root_id, round_number=1),
+            Round(branch_id=root_id, round_number=2),
+            Round(branch_id=root_id, round_number=3),
+            Round(branch_id=child_id, round_number=2),
+            Round(branch_id=child_id, round_number=3),
+            Round(branch_id=clone_id, round_number=1),
+            Round(branch_id=clone_id, round_number=2),
+        ])
+        session.commit()
+
+    alice = _add_agent(engine, scenario_id, name="Alice")
+    bob = _add_agent(engine, scenario_id, name="Bob")
+    with Session(engine) as session:
+        session.add_all([
+            AgentRelationEdge(
+                id="lineage-parent-owner",
+                scenario_id=scenario_id,
+                branch_id=root_id,
+                round_number=2,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.82,
+                opposition_score=0.18,
+                evidence_summary="PARENT_FORK_OWNER",
+            ),
+            AgentRelationEdge(
+                id="lineage-child-stale",
+                scenario_id=scenario_id,
+                branch_id=child_id,
+                round_number=2,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.01,
+                opposition_score=0.99,
+                evidence_summary="CHILD_STALE_MUST_NOT_APPEAR",
+            ),
+            AgentRelationEdge(
+                id="lineage-source-for-clone",
+                scenario_id=scenario_id,
+                branch_id=root_id,
+                round_number=1,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.02,
+                opposition_score=0.98,
+                evidence_summary="SOURCE_MUST_NOT_APPEAR",
+            ),
+            AgentRelationEdge(
+                id="lineage-clone-owner",
+                scenario_id=scenario_id,
+                branch_id=clone_id,
+                round_number=1,
+                source_agent_id=alice["id"],
+                target_agent_id=bob["id"],
+                trust_score=0.74,
+                opposition_score=0.26,
+                evidence_summary="CLONE_OWNER",
+            ),
+        ])
+        session.commit()
+
+    child_contexts = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        child_id,
+        3,
+        [alice, bob],
+        language="English",
+    )
+    clone_contexts = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        clone_id,
+        2,
+        [alice, bob],
+        language="English",
+    )
+    missing_contexts = build_previous_round_relationship_contexts(
+        engine,
+        scenario_id,
+        child_id,
+        5,
+        [alice, bob],
+        language="English",
+    )
+
+    assert "PARENT_FORK_OWNER" in child_contexts[alice["id"]]
+    assert "CHILD_STALE_MUST_NOT_APPEAR" not in child_contexts[alice["id"]]
+    assert "CLONE_OWNER" in clone_contexts[alice["id"]]
+    assert "SOURCE_MUST_NOT_APPEAR" not in clone_contexts[alice["id"]]
+    assert missing_contexts == {}
+
+
 def test_relationship_context_ranks_by_clamped_weight_runtime_binary_alias_and_edge_id():
     engine = get_engine()
     scenario_id = _make_scenario(engine)
     branch_id = _create_branch(engine, scenario_id, title="Relationship ranking")
+    _create_round(engine, branch_id, 1)
     owner = _add_agent(engine, scenario_id, name="Owner Database")
     zeta = _add_agent(engine, scenario_id, name="Zeta Database")
     lower_alpha = _add_agent(engine, scenario_id, name="Alpha Database")
@@ -1163,6 +1285,7 @@ def test_relationship_context_preserves_bilingual_evidence_and_total_character_l
     engine = get_engine()
     scenario_id = _make_scenario(engine)
     branch_id = _create_branch(engine, scenario_id, title="Relationship truncation")
+    _create_round(engine, branch_id, 1)
     owner = {"id": "owner", "name": "Owner Runtime"}
     peer = {"id": "peer", "name": "Peer Runtime"}
     with Session(engine) as session:
@@ -1225,6 +1348,7 @@ def test_relationship_context_single_query_materializes_only_ranked_agent_edges(
     engine = get_engine()
     scenario_id = _make_scenario(engine)
     branch_id = _create_branch(engine, scenario_id, title="Dense relationships")
+    _create_round(engine, branch_id, 1)
     agent_count = 200
     edge_limit = 4
     agents = [
@@ -1282,8 +1406,8 @@ def test_relationship_context_single_query_materializes_only_ranked_agent_edges(
     )
 
     assert len(edge_rows) == 19_900
-    assert len(executed_statements) == 1
-    assert materialized_row_counts == [agent_count * edge_limit]
+    assert len(executed_statements) == 3
+    assert materialized_row_counts == [1, agent_count * edge_limit]
     assert len(contexts) == agent_count
     assert all(context.count("- With ") <= edge_limit for context in contexts.values())
     assert sum(context.count("- With ") for context in contexts.values()) == (
@@ -1329,6 +1453,7 @@ async def test_resume_restores_only_active_branch_state_and_keeps_sibling_checkp
         session.add(resumed)
         session.add(sibling)
         session.flush()
+        session.add(Round(branch_id=source.id, round_number=1))
         session.add(Round(branch_id=resumed.id, round_number=1))
         session.add(Round(branch_id=sibling.id, round_number=1))
         session.commit()

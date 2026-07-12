@@ -21,6 +21,7 @@ import type {
   ScorePredictionResultItem,
   SocialFeedResponse,
   ModelProfile, ModelProfileInput, ModelProfilePatchInput,
+  KnowledgeDomain,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -583,6 +584,47 @@ export interface PersonaExportPayload {
   };
 }
 
+export interface AgentPackDecisionBias {
+  caution: number;
+  optimism: number;
+  conservatism: number;
+  risk_tolerance: number;
+  creativity: number;
+}
+
+export interface AgentPackAgent {
+  name: string;
+  role: string;
+  persona_text: string;
+  decision_bias: AgentPackDecisionBias;
+  tags: KnowledgeDomain[];
+}
+
+export interface AgentPackV1 {
+  format: 'swarmoracle.agent_pack';
+  schema_version: 1;
+  exported_at: string;
+  title: string;
+  agents: AgentPackAgent[];
+}
+
+export interface AgentPackExportRequest {
+  title: string;
+  identity_ids: string[];
+}
+
+export interface AgentPackImportResponse {
+  success: true;
+  title: string;
+  imported_count: number;
+  identities: Array<{
+    slot_order: number;
+    identity_id: string;
+    display_name: string;
+    role: string;
+  }>;
+}
+
 /** Education template type — pre-built classroom scenarios with suggested config. */
 export type EducationTemplate = {
   id: string;
@@ -1049,8 +1091,8 @@ export async function predictDebate(
 }
 
 /** GET /api/scenario/:id — get scenario status + agents + branches */
-export async function getScenario(id: string): Promise<Scenario> {
-  return safeGet(`/scenario/${encodeURIComponent(id)}`);
+export async function getScenario(id: string, options?: RequestOptions): Promise<Scenario> {
+  return safeGet(`/scenario/${encodeURIComponent(id)}`, options);
 }
 
 /** POST /api/scenario/import-replay — persist a replay snapshot as a local scenario */
@@ -1680,16 +1722,36 @@ export async function updateAgent(
   });
 }
 
+export interface ReplayTraceOptions {
+  cursor?: string;
+  limit?: number;
+  /** Target branch whose effective lineage should be returned. */
+  targetBranchId?: string;
+  /** Legacy root/subtree traversal anchor. */
+  rootBranchId?: string;
+  /** @deprecated Use rootBranchId for legacy root/subtree traversal. */
+  branch_id?: string;
+}
+
 /** GET /api/scenario/:id/replay-trace — P1-1 replay lineage for a scenario (paginated) */
 export async function getReplayTrace(
   scenarioId: string,
-  opts?: { cursor?: string; limit?: number; branch_id?: string },
+  opts?: ReplayTraceOptions,
   options?: RequestOptions,
 ): Promise<ReplayTraceResponse> {
+  const cursor = opts?.cursor?.trim() || undefined;
+  const targetBranchId = opts?.targetBranchId?.trim() || undefined;
+  const explicitRootBranchId = opts?.rootBranchId?.trim() || undefined;
+  const legacyRootBranchId = opts?.branch_id?.trim() || undefined;
+  if (targetBranchId && (explicitRootBranchId || legacyRootBranchId)) {
+    throw new Error('targetBranchId cannot be combined with rootBranchId or branch_id');
+  }
+  const rootBranchId = explicitRootBranchId ?? legacyRootBranchId;
   const params = new URLSearchParams();
-  if (opts?.cursor) params.set('after', opts.cursor);
+  if (cursor) params.set('after', cursor);
   if (opts?.limit != null) params.set('limit', String(opts.limit));
-  if (opts?.branch_id) params.set('root_branch_id', opts.branch_id);
+  if (targetBranchId) params.set('branch_id', targetBranchId);
+  if (rootBranchId) params.set('root_branch_id', rootBranchId);
   const query = params.toString();
   const suffix = query ? `?${query}` : '';
   return safeGet(
@@ -1698,32 +1760,46 @@ export async function getReplayTrace(
   );
 }
 
+export interface FactionTimelineFaction {
+  key: string;
+  label: string | null;
+  members: string[];
+  metric_kind?: 'affect_proxy';
+  caveat?: string | null;
+  affect_center?: number;
+  member_share?: number;
+  stance_center?: number;
+  confidence?: number;
+}
+
+export interface FactionTimelineEvent {
+  type?: string | null;
+  display_type?: string | null;
+  metric_kind?: 'affect_proxy';
+  caveat?: string | null;
+  actor_agent_id?: string | null;
+  agent_id?: string | null;
+  faction_key: string;
+}
+
+export interface FactionTimelineEntry {
+  round: number;
+  /** Optional only for legacy payloads emitted before branch-lineage attribution. */
+  branch_id?: string | null;
+  /** Legacy payloads may omit this or report the former segment-only scope. */
+  scope_kind?: 'branch_lineage' | 'branch_segment_only' | null;
+  scope_caveat?: string | null;
+  metric_kind?: 'affect_proxy';
+  caveat?: string | null;
+  factions: FactionTimelineFaction[];
+  events: FactionTimelineEvent[];
+}
+
 /** GET /api/scenario/:id/faction-timeline — P1-8 faction overlay data */
 export async function getFactionTimeline(
   scenarioId: string,
   branchId: string,
-): Promise<Array<{
-  round: number;
-  factions: Array<{
-    key: string;
-    label: string | null;
-    members: string[];
-    metric_kind?: 'affect_proxy';
-    caveat?: string;
-    affect_center?: number;
-    member_share?: number;
-    stance_center?: number;
-    confidence?: number;
-  }>;
-  events: Array<{
-    type: string;
-    display_type?: string;
-    metric_kind?: 'affect_proxy';
-    caveat?: string;
-    actor_agent_id: string;
-    faction_key: string;
-  }>;
-}>> {
+): Promise<FactionTimelineEntry[]> {
   return safeGet(
     `/scenario/${encodeURIComponent(scenarioId)}/faction-timeline?branch_id=${encodeURIComponent(branchId)}`,
   );
@@ -2063,6 +2139,30 @@ export async function importPersona(
   });
 }
 
+/** POST /api/agents/packs/export — export an ordered Agent Pack v1 payload. */
+export async function exportAgentPack(
+  payload: AgentPackExportRequest,
+  options?: RequestOptions,
+): Promise<AgentPackV1> {
+  return request<AgentPackV1>(withUserIdQuery('/agents/packs/export'), {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    signal: options?.signal,
+  });
+}
+
+/** POST /api/agents/packs/import — atomically import one Agent Pack v1 payload. */
+export async function importAgentPack(
+  payload: AgentPackV1,
+  options?: RequestOptions,
+): Promise<AgentPackImportResponse> {
+  return request<AgentPackImportResponse>(withUserIdQuery('/agents/packs/import'), {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    signal: options?.signal,
+  });
+}
+
 /** POST /api/admin/test-llm — admin LLM connection probe */
 export async function adminTestLlm<T = unknown>(
   body: { base_url: string; api_key: string },
@@ -2349,6 +2449,25 @@ export async function listLocalPacks(): Promise<ListPacksResponse> {
 /** GET /api/packs/:id — Fetch a single local pack detail */
 export async function getLocalPack(id: string): Promise<LocalPack> {
   return safeGet(`/packs/${encodeURIComponent(id)}`);
+}
+
+export interface LocalPackDemoSnapshotImportResponse {
+  scenario_id: string;
+  pack_id: string;
+  demo_snapshot_id: string;
+  status: 'imported';
+}
+
+/** POST /api/packs/:packId/demo-snapshots/:demoId/import — Import one bundled demo snapshot. */
+export async function importLocalPackDemoSnapshot(
+  packId: string,
+  demoId: string,
+  options?: RequestOptions,
+): Promise<LocalPackDemoSnapshotImportResponse> {
+  return request<LocalPackDemoSnapshotImportResponse>(
+    `/packs/${encodeURIComponent(packId)}/demo-snapshots/${encodeURIComponent(demoId)}/import`,
+    { method: 'POST', signal: options?.signal },
+  );
 }
 
 /** POST /api/packs/refresh — Refresh all local packs from disk */

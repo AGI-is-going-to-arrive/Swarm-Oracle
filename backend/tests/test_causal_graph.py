@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from fastapi import HTTPException
 from sqlmodel import Session, SQLModel, create_engine, select
 
+import app.api.graphs as graphs_api
+import app.services.graph_analysis as graph_analysis_service
 from alembic import command as alembic_command
 from app.config import settings
 from app.models.database import (
@@ -22,6 +25,7 @@ from app.models.database import (
     get_engine,
 )
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
+from app.services.branch_lineage import BranchLineageError
 from app.services.causal_graph import (
     _SCENARIO_LOCK_STRIPE_COUNT,
     _display_fork_reason,
@@ -100,6 +104,35 @@ def _seed_snapshot_edge(
                 evidence_json=evidence_json,
             )
         )
+        session.commit()
+
+
+def _seed_branch_authority(
+    scenario_id: str,
+    rounds_by_branch: dict[str, tuple[int, ...]],
+    *,
+    parent_by_branch: dict[str, tuple[str, int]] | None = None,
+) -> None:
+    parent_by_branch = parent_by_branch or {}
+    with Session(get_engine()) as session:
+        session.add(Scenario(id=scenario_id, question="Causal graph test"))
+        for branch_id in rounds_by_branch:
+            parent_branch_id, fork_round = parent_by_branch.get(branch_id, (None, 0))
+            session.add(
+                Branch(
+                    id=branch_id,
+                    scenario_id=scenario_id,
+                    parent_branch_id=parent_branch_id,
+                    fork_round=fork_round,
+                )
+            )
+        for branch_id, round_numbers in rounds_by_branch.items():
+            session.add_all(
+                [
+                    Round(branch_id=branch_id, round_number=round_number)
+                    for round_number in round_numbers
+                ]
+            )
         session.commit()
 
 
@@ -380,7 +413,7 @@ class TestAppendRoundNodes:
         updated_edges = [record for record in delta.updated if record["kind"] == "edge"]
         assert any(
             record["id"] == edge_id
-            and record["evidence"]["source_round_number"] == 2
+            and record["evidence"]["source_round_number"] == 1
             for record in updated_edges
         )
 
@@ -414,6 +447,7 @@ class TestAppendRoundNodes:
             assert all(n.node_type == "event" for n in nodes)
 
     def test_metadata_unavailable_keeps_event_but_excludes_affect_state(self):
+        _seed_branch_authority("sc_metadata_gap", {"br1": (1,)})
         initial_messages = [
             {
                 "agent_id": "a1",
@@ -672,6 +706,7 @@ class TestAppendRoundNodes:
 
     def test_same_round_nodes_are_isolated_per_branch(self):
         """Same-round nodes from different branches must not reuse the same event node."""
+        _seed_branch_authority("sc3d", {"br1": (1,), "br2": (1,)})
         append_round_nodes(
             "sc3d",
             "br1",
@@ -694,6 +729,7 @@ class TestAppendRoundNodes:
 
     def test_same_round_duplicate_message_ids_are_isolated_per_branch(self):
         """Identical msg ids in different branches must still produce separate event nodes."""
+        _seed_branch_authority("sc3e", {"br1": (1,), "br2": (1,)})
         append_round_nodes(
             "sc3e",
             "br1",
@@ -729,6 +765,7 @@ class TestAppendRoundNodes:
 
     def test_same_round_duplicate_message_ids_are_isolated_per_agent(self):
         """Identical msg ids in the same branch/round must not overwrite another agent."""
+        _seed_branch_authority("sc3f", {"br1": (1,)})
         append_round_nodes(
             "sc3f",
             "br1",
@@ -758,6 +795,7 @@ class TestAppendRoundNodes:
 
     def test_message_event_payload_serializes_origin_message_id(self):
         """Replay deep-links need the originating message id in serialized graph payloads."""
+        _seed_branch_authority("sc3f-message-link", {"br1": (1, 2)})
         append_round_nodes(
             "sc3f-message-link",
             "br1",
@@ -778,6 +816,7 @@ class TestAppendRoundNodes:
 
     def test_message_event_payload_omits_unknown_message_id(self):
         """Unknown message ids must not be fabricated for replay deep-links."""
+        _seed_branch_authority("sc3f-message-link-unknown", {"br1": (1, 2)})
         append_round_nodes(
             "sc3f-message-link-unknown",
             "br1",
@@ -798,6 +837,7 @@ class TestAppendRoundNodes:
 
     def test_concurrent_append_same_message_id_reuses_single_event_node(self):
         """Concurrent appends for the same agent/message should not create duplicate nodes."""
+        _seed_branch_authority("sc3g", {"br1": (1,)})
 
         def append_once():
             append_round_nodes(
@@ -833,6 +873,7 @@ class TestAppendRoundNodes:
         assert len(locks) <= _SCENARIO_LOCK_STRIPE_COUNT
 
     def test_repeated_round_append_removes_stale_idless_event_nodes(self):
+        _seed_branch_authority("sc3h", {"br1": (1,)})
         append_round_nodes(
             "sc3h",
             "br1",
@@ -861,6 +902,7 @@ class TestAppendRoundNodes:
         assert [node["label"] for node in result["nodes"]] == ["first draft revised"]
 
     def test_replaying_round_removes_stale_state_frames_and_stance_shifts(self):
+        _seed_branch_authority("sc3i", {"br1": (1, 2)})
         append_round_nodes(
             "sc3i",
             "br1",
@@ -1223,6 +1265,10 @@ class TestInterAgentEdges:
         } == {"a2"}
 
     def test_replay_cleanup_preserves_same_round_other_branch_edges(self):
+        _seed_branch_authority(
+            "sc_ia_branch_cleanup",
+            {"br1": (1,), "br2": (1,)},
+        )
         branch_one_initial = [
             {
                 "agent_id": "a1",
@@ -1889,8 +1935,6 @@ class TestBuildSnapshot:
         result = build_snapshot("nonexistent_scenario")
         assert result == {
             "id": None,
-            "scope_kind": "branch_segment_only",
-            "scope_caveat": result["scope_caveat"],
             "available_branches": [],
             "nodes": [],
             "edges": [],
@@ -2019,7 +2063,637 @@ class TestBuildSnapshot:
             "detail": None,
         }
 
+    def test_branch_filter_uses_authoritative_three_generation_lineage(self):
+        scenario_id = "sc_lineage_graph"
+        root_id = "br_lineage_root"
+        child_id = "br_lineage_child"
+        grandchild_id = "br_lineage_grandchild"
+        sibling_id = "br_lineage_sibling"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Which lineage?"))
+            session.add_all(
+                [
+                    Branch(
+                        id=root_id,
+                        scenario_id=scenario_id,
+                        status=BranchStatus.COMPLETED,
+                        title="Root outcome",
+                    ),
+                    Branch(
+                        id=child_id,
+                        scenario_id=scenario_id,
+                        parent_branch_id=root_id,
+                        fork_round=2,
+                        status=BranchStatus.COMPLETED,
+                        title="Child outcome",
+                    ),
+                    Branch(
+                        id=grandchild_id,
+                        scenario_id=scenario_id,
+                        parent_branch_id=child_id,
+                        fork_round=3,
+                        status=BranchStatus.COMPLETED,
+                        title="Grandchild outcome",
+                    ),
+                    Branch(
+                        id=sibling_id,
+                        scenario_id=scenario_id,
+                        parent_branch_id=root_id,
+                        fork_round=2,
+                        status=BranchStatus.COMPLETED,
+                        title="Sibling outcome",
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    Round(branch_id=root_id, round_number=1),
+                    Round(branch_id=root_id, round_number=2),
+                    Round(branch_id=root_id, round_number=3),
+                    Round(branch_id=child_id, round_number=3),
+                    Round(branch_id=child_id, round_number=4),
+                    Round(branch_id=grandchild_id, round_number=4),
+                    Round(branch_id=sibling_id, round_number=3),
+                ]
+            )
+            session.commit()
+
+        append_round_nodes(
+            scenario_id,
+            root_id,
+            1,
+            [MockMessage(agent_id="root-agent", id="root-r1", content="root r1")],
+        )
+        append_round_nodes(
+            scenario_id,
+            root_id,
+            2,
+            [MockMessage(agent_id="root-agent", id="root-r2", content="root r2")],
+            fork_event={
+                "branch_id": child_id,
+                "children": [child_id, sibling_id],
+                "reason": "root fork",
+            },
+        )
+        append_round_nodes(
+            scenario_id,
+            root_id,
+            3,
+            [MockMessage(agent_id="root-agent", id="root-r3", content="root post-fork r3")],
+        )
+        append_round_nodes(
+            scenario_id,
+            child_id,
+            3,
+            [MockMessage(agent_id="child-agent", id="child-r3", content="child r3")],
+            fork_event={
+                "branch_id": grandchild_id,
+                "children": [grandchild_id],
+                "reason": "child fork",
+            },
+        )
+        append_round_nodes(
+            scenario_id,
+            child_id,
+            4,
+            [MockMessage(agent_id="child-agent", id="child-r4", content="child post-fork r4")],
+        )
+        append_round_nodes(
+            scenario_id,
+            grandchild_id,
+            4,
+            [
+                MockMessage(
+                    agent_id="grandchild-agent",
+                    id="grandchild-r4",
+                    content="grandchild r4",
+                )
+            ],
+        )
+        append_round_nodes(
+            scenario_id,
+            sibling_id,
+            3,
+            [MockMessage(agent_id="sibling-agent", id="sibling-r3", content="sibling r3")],
+        )
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == scenario_id)
+            ).one()
+            session.add_all(
+                [
+                    GraphNode(
+                        snapshot_id=snapshot.id,
+                        node_key="missing_round",
+                        node_type="event",
+                        label="missing round metadata",
+                        round_number=None,
+                        payload_json=f'{{"branch_id":"{grandchild_id}"}}',
+                    ),
+                    GraphNode(
+                        snapshot_id=snapshot.id,
+                        node_key="missing_branch",
+                        node_type="event",
+                        label="missing branch metadata",
+                        round_number=4,
+                        payload_json="{}",
+                    ),
+                    GraphNode(
+                        snapshot_id=snapshot.id,
+                        node_key="beyond_global_cutoff",
+                        node_type="event",
+                        label="beyond global cutoff",
+                        round_number=5,
+                        payload_json=f'{{"branch_id":"{grandchild_id}"}}',
+                    ),
+                ]
+            )
+            session.commit()
+
+        result = build_snapshot(scenario_id, branch_id=grandchild_id)
+
+        assert result["scope_kind"] == "branch_lineage"
+        assert "ancestor" in result["scope_caveat"].lower()
+        event_labels = {
+            node["label"] for node in result["nodes"] if node["type"] == "event"
+        }
+        assert event_labels == {"root r1", "root r2", "child r3", "grandchild r4"}
+        assert {
+            (node["payload"]["source_branch_id"], node["round"])
+            for node in result["nodes"]
+            if node["type"] == "fork"
+        } == {(root_id, 2), (child_id, 3)}
+        assert [
+            node["payload"]["branch_id"]
+            for node in result["nodes"]
+            if node["type"] == "outcome"
+        ] == [grandchild_id]
+        visible_node_ids = {node["id"] for node in result["nodes"]}
+        assert all(
+            edge["source"] in visible_node_ids and edge["target"] in visible_node_ids
+            for edge in result["edges"]
+        )
+        assert len([edge for edge in result["edges"] if edge["label"] == "triggered fork"]) == 2
+
+    def test_replay_branch_filter_is_self_contained_at_overlapping_coordinates(self):
+        scenario_id = "sc_replay_graph"
+        source_id = "br_replay_source"
+        clone_id = "br_replay_clone"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Replay scope?"))
+            session.add_all(
+                [
+                    Branch(id=source_id, scenario_id=scenario_id),
+                    Branch(
+                        id=clone_id,
+                        scenario_id=scenario_id,
+                        parent_branch_id=source_id,
+                        fork_round=2,
+                        replay_kind="resume",
+                        replay_source_branch_id=source_id,
+                        replay_source_round=2,
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    Round(branch_id=source_id, round_number=1),
+                    Round(branch_id=source_id, round_number=2),
+                    Round(branch_id=clone_id, round_number=1),
+                    Round(branch_id=clone_id, round_number=2),
+                ]
+            )
+            session.commit()
+
+        append_round_nodes(
+            scenario_id,
+            source_id,
+            1,
+            [MockMessage(agent_id="source", id="source-r1", content="source r1")],
+        )
+        append_round_nodes(
+            scenario_id,
+            source_id,
+            2,
+            [MockMessage(agent_id="source", id="source-r2", content="source r2")],
+            fork_event={
+                "branch_id": clone_id,
+                "children": [clone_id],
+                "reason": "replay fork",
+            },
+        )
+        append_round_nodes(
+            scenario_id,
+            clone_id,
+            1,
+            [MockMessage(agent_id="clone", id="clone-r1", content="clone r1")],
+        )
+        append_round_nodes(
+            scenario_id,
+            clone_id,
+            2,
+            [MockMessage(agent_id="clone", id="clone-r2", content="clone r2")],
+        )
+
+        result = build_snapshot(scenario_id, branch_id=clone_id)
+
+        assert result["scope_kind"] == "branch_lineage"
+        assert "self-contained replay" in result["scope_caveat"].lower()
+        assert {
+            node["label"] for node in result["nodes"] if node["type"] == "event"
+        } == {"clone r1", "clone r2"}
+        assert all(node["type"] != "fork" for node in result["nodes"])
+
+    def test_branch_filter_excludes_graph_nodes_when_root_has_no_materialized_rounds(self):
+        scenario_id = "sc_empty_root_graph"
+        branch_id = "br_empty_root_graph"
+        _seed_branch_authority(scenario_id, {branch_id: ()})
+        append_round_nodes(
+            scenario_id,
+            branch_id,
+            1,
+            [MockMessage(agent_id="ghost", id="ghost-root-r1", content="ghost root")],
+        )
+
+        result = build_snapshot(scenario_id, branch_id=branch_id)
+
+        assert [node for node in result["nodes"] if node["type"] == "event"] == []
+
+    def test_branch_filter_excludes_graph_nodes_when_replay_has_no_materialized_rounds(self):
+        scenario_id = "sc_empty_replay_graph"
+        source_id = "br_empty_replay_source"
+        replay_id = "br_empty_replay_clone"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Empty replay scope?"))
+            session.add_all(
+                [
+                    Branch(id=source_id, scenario_id=scenario_id),
+                    Branch(
+                        id=replay_id,
+                        scenario_id=scenario_id,
+                        parent_branch_id=source_id,
+                        fork_round=1,
+                        replay_kind="resume",
+                        replay_source_branch_id=source_id,
+                        replay_source_round=1,
+                    ),
+                    Round(branch_id=source_id, round_number=1),
+                ]
+            )
+            session.commit()
+        append_round_nodes(
+            scenario_id,
+            source_id,
+            1,
+            [MockMessage(agent_id="source", id="source-r1", content="source r1")],
+        )
+        append_round_nodes(
+            scenario_id,
+            replay_id,
+            1,
+            [MockMessage(agent_id="ghost", id="ghost-replay-r1", content="ghost replay")],
+        )
+
+        result = build_snapshot(scenario_id, branch_id=replay_id)
+
+        assert [node for node in result["nodes"] if node["type"] == "event"] == []
+        assert all(node["type"] != "fork" for node in result["nodes"])
+
+    def test_branch_filter_requires_exact_materialized_round_coordinates(self):
+        scenario_id = "sc_exact_coordinate_graph"
+        branch_id = "br_exact_coordinate_graph"
+        _seed_branch_authority(scenario_id, {branch_id: (1,)})
+        append_round_nodes(
+            scenario_id,
+            branch_id,
+            1,
+            [MockMessage(agent_id="real", id="real-r1", content="materialized")],
+        )
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == scenario_id)
+            ).one()
+            session.add_all(
+                [
+                    GraphNode(
+                        snapshot_id=snapshot.id,
+                        node_key="ghost_round_zero",
+                        node_type="event",
+                        label="ghost round zero",
+                        round_number=0,
+                        payload_json=f'{{"branch_id":"{branch_id}"}}',
+                    ),
+                    GraphNode(
+                        snapshot_id=snapshot.id,
+                        node_key="ghost_missing_round",
+                        node_type="event",
+                        label="ghost missing round",
+                        round_number=None,
+                        payload_json=f'{{"branch_id":"{branch_id}"}}',
+                    ),
+                ]
+            )
+            session.commit()
+
+        result = build_snapshot(scenario_id, branch_id=branch_id)
+
+        assert [
+            node["label"] for node in result["nodes"] if node["type"] == "event"
+        ] == ["materialized"]
+
+    def test_empty_native_leaf_keeps_only_materialized_ancestor_segment(self):
+        scenario_id = "sc_empty_native_leaf_graph"
+        root_id = "br_empty_native_root"
+        child_id = "br_empty_native_child"
+        _seed_branch_authority(
+            scenario_id,
+            {root_id: (1, 2), child_id: ()},
+            parent_by_branch={child_id: (root_id, 2)},
+        )
+        append_round_nodes(
+            scenario_id,
+            root_id,
+            1,
+            [MockMessage(agent_id="root", id="root-r1", content="root r1")],
+        )
+        append_round_nodes(
+            scenario_id,
+            root_id,
+            2,
+            [MockMessage(agent_id="root", id="root-r2", content="root r2")],
+            fork_event={
+                "branch_id": child_id,
+                "children": [child_id],
+                "reason": "native fork",
+            },
+        )
+        append_round_nodes(
+            scenario_id,
+            root_id,
+            3,
+            [MockMessage(agent_id="ghost", id="ghost-root-r3", content="ghost root r3")],
+        )
+        append_round_nodes(
+            scenario_id,
+            child_id,
+            3,
+            [MockMessage(agent_id="ghost", id="ghost-child-r3", content="ghost child r3")],
+        )
+
+        result = build_snapshot(scenario_id, branch_id=child_id)
+
+        assert {
+            node["label"] for node in result["nodes"] if node["type"] == "event"
+        } == {"root r1", "root r2"}
+        assert {
+            (node["payload"]["source_branch_id"], node["round"])
+            for node in result["nodes"]
+            if node["type"] == "fork"
+        } == {(root_id, 2)}
+
+    @pytest.mark.parametrize("endpoint_name", ["get_causal_graph", "get_graph_analysis"])
+    @pytest.mark.asyncio
+    async def test_graph_api_maps_corrupt_lineage_to_stable_conflict(
+        self,
+        endpoint_name,
+        monkeypatch,
+    ):
+        scenario_id = f"sc_corrupt_graph_{endpoint_name}"
+        branch_id = f"br_corrupt_graph_{endpoint_name}"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Corrupt lineage?"))
+            session.add(
+                Branch(
+                    id=branch_id,
+                    scenario_id=scenario_id,
+                    parent_branch_id="missing-parent",
+                    fork_round=1,
+                )
+            )
+            session.add(
+                GraphSnapshot(
+                    owner_type="scenario",
+                    owner_id=scenario_id,
+                    graph_kind="causal_review",
+                )
+            )
+            session.commit()
+
+        with pytest.raises(BranchLineageError) as service_error:
+            build_snapshot(scenario_id, branch_id=branch_id)
+        assert service_error.value.code == "BRANCH_LINEAGE_MISSING_PARENT"
+
+        monkeypatch.setattr(graphs_api.settings, "SESSION_SECRET", "")
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_GRAPH_ANALYSIS", True)
+        endpoint = getattr(graphs_api, endpoint_name)
+
+        with pytest.raises(HTTPException) as api_error:
+            await endpoint(scenario_id, branch_id=branch_id, principal=None)
+
+        assert api_error.value.status_code == 409
+        assert api_error.value.detail == {
+            "code": "BRANCH_LINEAGE_MISSING_PARENT",
+            "message": "Branch lineage is invalid",
+        }
+        assert branch_id not in str(api_error.value.detail)
+        assert "missing-parent" not in str(api_error.value.detail)
+
+    @pytest.mark.parametrize("endpoint_name", ["get_causal_graph", "get_graph_analysis"])
+    @pytest.mark.asyncio
+    async def test_graph_api_redacts_cross_scenario_parent_details(
+        self,
+        endpoint_name,
+        monkeypatch,
+    ):
+        scenario_id = f"sc_cross_parent_{endpoint_name}"
+        foreign_scenario_id = f"sc_foreign_parent_{endpoint_name}"
+        branch_id = f"br_cross_parent_{endpoint_name}"
+        foreign_parent_id = f"br_foreign_parent_{endpoint_name}"
+        with Session(get_engine()) as session:
+            session.add_all(
+                [
+                    Scenario(id=scenario_id, question="Cross-scenario parent?"),
+                    Scenario(id=foreign_scenario_id, question="Foreign scenario"),
+                    Branch(id=foreign_parent_id, scenario_id=foreign_scenario_id),
+                    Branch(
+                        id=branch_id,
+                        scenario_id=scenario_id,
+                        parent_branch_id=foreign_parent_id,
+                        fork_round=1,
+                    ),
+                ]
+            )
+            session.commit()
+
+        monkeypatch.setattr(graphs_api.settings, "SESSION_SECRET", "")
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_GRAPH_ANALYSIS", True)
+        endpoint = getattr(graphs_api, endpoint_name)
+
+        with pytest.raises(HTTPException) as error:
+            await endpoint(scenario_id, branch_id=branch_id, principal=None)
+
+        assert error.value.status_code == 409
+        assert error.value.detail == {
+            "code": "BRANCH_LINEAGE_CROSS_SCENARIO_PARENT",
+            "message": "Branch lineage is invalid",
+        }
+        detail_text = str(error.value.detail)
+        assert branch_id not in detail_text
+        assert foreign_parent_id not in detail_text
+        assert foreign_scenario_id not in detail_text
+
+    @pytest.mark.parametrize("endpoint_name", ["get_causal_graph", "get_graph_analysis"])
+    @pytest.mark.asyncio
+    async def test_graph_api_maps_post_precheck_branch_deletion_to_safe_not_found(
+        self,
+        endpoint_name,
+        monkeypatch,
+    ):
+        scenario_id = f"sc_deleted_race_{endpoint_name}"
+        branch_id = f"br_deleted_race_{endpoint_name}"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Deletion race?"))
+            session.add(Branch(id=branch_id, scenario_id=scenario_id))
+            session.add(
+                GraphSnapshot(
+                    owner_type="scenario",
+                    owner_id=scenario_id,
+                    graph_kind="causal_review",
+                )
+            )
+            session.commit()
+
+        async def delete_branch_then_run(func, *args, **kwargs):
+            with Session(get_engine()) as session:
+                branch = session.get(Branch, branch_id)
+                assert branch is not None
+                session.delete(branch)
+                session.commit()
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(graphs_api.settings, "SESSION_SECRET", "")
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_GRAPH_ANALYSIS", True)
+        monkeypatch.setattr(graphs_api.asyncio, "to_thread", delete_branch_then_run)
+        endpoint = getattr(graphs_api, endpoint_name)
+
+        with pytest.raises(HTTPException) as error:
+            await endpoint(scenario_id, branch_id=branch_id, principal=None)
+
+        assert error.value.status_code == 404
+        assert error.value.detail == {
+            "code": "BRANCH_NOT_FOUND",
+            "message": "Branch not found in scenario",
+        }
+        assert branch_id not in str(error.value.detail)
+        assert scenario_id not in str(error.value.detail)
+
+    @pytest.mark.parametrize("surface", ["service", "api"])
+    @pytest.mark.asyncio
+    async def test_graph_analysis_validates_corrupt_lineage_without_snapshot(
+        self,
+        surface,
+        monkeypatch,
+    ):
+        scenario_id = f"sc_analysis_no_snapshot_{surface}"
+        branch_id = f"br_analysis_no_snapshot_{surface}"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Missing snapshot?"))
+            session.add(
+                Branch(
+                    id=branch_id,
+                    scenario_id=scenario_id,
+                    parent_branch_id="missing-parent",
+                    fork_round=1,
+                )
+            )
+            session.commit()
+
+        if surface == "service":
+            with pytest.raises(BranchLineageError) as error:
+                graph_analysis_service.analyze_graph(scenario_id, branch_id=branch_id)
+            assert error.value.code == "BRANCH_LINEAGE_MISSING_PARENT"
+            return
+
+        monkeypatch.setattr(graphs_api.settings, "SESSION_SECRET", "")
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_GRAPH_ANALYSIS", True)
+        with pytest.raises(HTTPException) as error:
+            await graphs_api.get_graph_analysis(
+                scenario_id,
+                branch_id=branch_id,
+                principal=None,
+            )
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "BRANCH_LINEAGE_MISSING_PARENT"
+
+    @pytest.mark.parametrize("surface", ["service", "api"])
+    @pytest.mark.asyncio
+    async def test_graph_analysis_validates_corrupt_lineage_before_oversized_return(
+        self,
+        surface,
+        monkeypatch,
+    ):
+        scenario_id = f"sc_analysis_oversized_{surface}"
+        branch_id = f"br_analysis_oversized_{surface}"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="Oversized graph?"))
+            session.add(
+                Branch(
+                    id=branch_id,
+                    scenario_id=scenario_id,
+                    parent_branch_id="missing-parent",
+                    fork_round=1,
+                )
+            )
+            session.commit()
+
+        monkeypatch.setattr(
+            graph_analysis_service,
+            "_latest_snapshot_size",
+            lambda *_args, **_kwargs: (5001, 0),
+        )
+        if surface == "service":
+            with pytest.raises(BranchLineageError) as error:
+                graph_analysis_service.analyze_graph(scenario_id, branch_id=branch_id)
+            assert error.value.code == "BRANCH_LINEAGE_MISSING_PARENT"
+            return
+
+        monkeypatch.setattr(graphs_api.settings, "SESSION_SECRET", "")
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_GRAPH_ANALYSIS", True)
+        with pytest.raises(HTTPException) as error:
+            await graphs_api.get_graph_analysis(
+                scenario_id,
+                branch_id=branch_id,
+                principal=None,
+            )
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "BRANCH_LINEAGE_MISSING_PARENT"
+
+    def test_graph_analysis_unscoped_skips_lineage_validation(self, monkeypatch):
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("unscoped analysis must not resolve branch lineage")
+
+        monkeypatch.setattr(
+            graph_analysis_service,
+            "select_branch_rounds",
+            fail_if_called,
+        )
+        monkeypatch.setattr(
+            graph_analysis_service,
+            "_latest_snapshot_size",
+            lambda *_args, **_kwargs: None,
+        )
+
+        result = graph_analysis_service.analyze_graph("sc_analysis_unscoped")
+
+        assert result["summary"]["total_nodes"] == 0
+
     def test_branch_filter(self):
+        _seed_branch_authority("sc6", {"br1": (1,), "br2": (1, 2)})
         m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
         m2 = [MockMessage(emotion="angry", agent_id="a2", id="m2")]
         append_round_nodes("sc6", "br1", 1, m1)
@@ -2070,6 +2744,13 @@ class TestBuildSnapshot:
             "story_excerpt": "The country stabilizes after a costly final round.",
             "insight": "Institutions mattered more than one battle.",
             "parent_branch_id": None,
+            "provenance_kind": "runtime_projection",
+            "synthetic_provenance": True,
+            "evidence_status": "unavailable",
+            "evidence_caveat": (
+                "Runtime projection from a completed simulated branch; no persisted "
+                "causal evidence is available, and it is not a real-world probability."
+            ),
         }
 
         led_to_edges = [edge for edge in result["edges"] if edge["type"] == "led_to"]
@@ -2082,6 +2763,13 @@ class TestBuildSnapshot:
                 "weight": 1.0,
                 "label": None,
                 "evidence": None,
+                "provenance_kind": "runtime_projection",
+                "synthetic_provenance": True,
+                "evidence_status": "unavailable",
+                "evidence_caveat": (
+                    "Runtime projection from a completed simulated branch; no persisted "
+                    "causal evidence is available, and it is not a real-world probability."
+                ),
             }
         ]
 
@@ -2165,6 +2853,7 @@ class TestBuildSnapshot:
         )
 
     def test_branch_filter_keeps_available_branches_for_selector_and_fork_children(self):
+        _seed_branch_authority("sc6b", {"br1": (1,)})
         append_round_nodes("sc6b", "br1", 1, [MockMessage(emotion="calm", agent_id="a1", id="m1")])
         append_round_nodes("sc6b", "br2", 2, [MockMessage(emotion="angry", agent_id="a2", id="m2")])
         append_round_nodes(
@@ -2180,6 +2869,11 @@ class TestBuildSnapshot:
         assert set(result["available_branches"]) == {"br1", "br2", "br_parent", "br_child"}
 
     def test_child_branch_filter_keeps_fork_provenance_source_and_edge(self):
+        _seed_branch_authority(
+            "sc6c",
+            {"br_parent": (1, 2, 3), "br_child": (4,)},
+            parent_by_branch={"br_child": ("br_parent", 3)},
+        )
         append_round_nodes(
             "sc6c",
             "br_parent",
@@ -2224,6 +2918,11 @@ class TestBuildSnapshot:
         assert caused_edges[0]["label"] == "triggered fork"
 
     def test_child_branch_filter_keeps_explicit_trigger_ids_provenance(self):
+        _seed_branch_authority(
+            "sc6d",
+            {"br_parent": (1, 2), "br_child": (3,)},
+            parent_by_branch={"br_child": ("br_parent", 2)},
+        )
         append_round_nodes(
             "sc6d",
             "br_parent",
@@ -2332,6 +3031,7 @@ class TestSafeParsePayload:
 class TestBuildSnapshotSafeParse:
     def test_excludes_fork_on_invalid_json(self):
         """Fork node with corrupt payload_json should be excluded from branch filter."""
+        _seed_branch_authority("sc_sp1", {"br1": (1,)})
         m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
         append_round_nodes("sc_sp1", "br1", 1, m1)
         # Manually corrupt a fork node's payload
@@ -2379,6 +3079,11 @@ class TestBuildSnapshotSafeParse:
 
     def test_includes_fork_for_child_branch(self):
         """Fork node should be included when branch_id is in children list."""
+        _seed_branch_authority(
+            "sc_sp3",
+            {"br_parent": (1,), "br_child1": ()},
+            parent_by_branch={"br_child1": ("br_parent", 1)},
+        )
         m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
         fork = {"branch_id": "br_parent", "children": ["br_child1", "br_child2"], "reason": "split"}
         append_round_nodes("sc_sp3", "br_parent", 1, m1, fork_event=fork)
@@ -2403,8 +3108,59 @@ class TestTemporalEdges:
         temporal = [e for e in result["edges"] if e["type"] == "temporal"]
         assert len(temporal) == 1
 
-    def test_existing_temporal_edge_backfills_missing_evidence(self):
-        """Replaying a round should enrich legacy edges without duplicating them."""
+    def test_temporal_evidence_uses_actual_source_round_across_branches(self):
+        append_round_nodes(
+            "sc_te_source_round",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_br1_r1")],
+        )
+        append_round_nodes(
+            "sc_te_source_round",
+            "br1",
+            2,
+            [MockMessage(emotion="angry", agent_id="a1", id="m_br1_r2")],
+        )
+        append_round_nodes(
+            "sc_te_source_round",
+            "br2",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_br2_r2")],
+        )
+        append_round_nodes(
+            "sc_te_source_round",
+            "br2",
+            3,
+            [MockMessage(emotion="angry", agent_id="a1", id="m_br2_r3")],
+        )
+
+        result = build_snapshot("sc_te_source_round")
+        nodes_by_id = {node["id"]: node for node in result["nodes"]}
+        temporal = [edge for edge in result["edges"] if edge["type"] == "temporal"]
+
+        assert {
+            (
+                nodes_by_id[edge["source"]]["payload"]["branch_id"],
+                nodes_by_id[edge["source"]]["round"],
+                nodes_by_id[edge["target"]]["round"],
+                edge["evidence"]["source_round_number"],
+            )
+            for edge in temporal
+        } == {
+            ("br1", 1, 2, 1),
+            ("br2", 2, 3, 2),
+        }
+
+    @pytest.mark.parametrize(
+        "stored_source_round",
+        [None, 2],
+        ids=("missing", "legacy-target-round"),
+    )
+    def test_existing_temporal_edge_reconciles_source_round_evidence(
+        self,
+        stored_source_round,
+    ):
+        """Replaying a round should correct legacy evidence without duplicating edges."""
         round_one = [MockMessage(emotion="calm", agent_id="a1", id="m_backfill_1")]
         round_two = [MockMessage(emotion="angry", agent_id="a1", id="m_backfill_2")]
         append_round_nodes("sc_te_backfill", "br1", 1, round_one)
@@ -2414,10 +3170,9 @@ class TestTemporalEdges:
             edge = session.exec(
                 select(GraphEdge).where(
                     GraphEdge.edge_type == "temporal",
-                    GraphEdge.source_round_number == 2,
                 )
             ).one()
-            edge.source_round_number = None
+            edge.source_round_number = stored_source_round
             session.add(edge)
             session.commit()
 
@@ -2429,7 +3184,7 @@ class TestTemporalEdges:
         assert temporal[0]["evidence"] == {
             "confidence_tier": None,
             "source_ref": None,
-            "source_round_number": 2,
+            "source_round_number": 1,
             "detail": None,
         }
 
@@ -2492,6 +3247,7 @@ class TestTemporalEdges:
         edge = temporal[0]
         assert nodes_by_id[edge["source"]]["label"] == "new"
         assert nodes_by_id[edge["target"]]["label"] == "next"
+        assert edge["evidence"]["source_round_number"] == 1
 
 
 # ── Fork edge fallback (A2) ───────────────────────────────
@@ -2620,6 +3376,68 @@ class TestForkEdgeFallback:
         assert len(caused) == 1
         assert caused[0]["label"] == "triggered fork"
 
+    def test_orphan_fork_provenance_cannot_read_foreign_scenario_messages(self):
+        foreign_secret = "FOREIGN-SCENARIO-ORPHAN-SECRET"
+        with Session(get_engine()) as session:
+            victim_scenario = Scenario(id="sc_orphan_victim", question="Victim")
+            foreign_scenario = Scenario(id="sc_orphan_foreign", question="Foreign")
+            session.add_all([victim_scenario, foreign_scenario])
+            session.add_all(
+                [
+                    Branch(id="br_orphan_victim", scenario_id=victim_scenario.id),
+                    Branch(id="br_orphan_foreign", scenario_id=foreign_scenario.id),
+                    Agent(
+                        id="agent_orphan_foreign",
+                        scenario_id=foreign_scenario.id,
+                        name="Foreign Agent Name",
+                    ),
+                ]
+            )
+            session.add(
+                Round(
+                    id="round_orphan_foreign",
+                    branch_id="br_orphan_foreign",
+                    round_number=1,
+                )
+            )
+            session.add(
+                AgentMessage(
+                    id="message_orphan_foreign",
+                    round_id="round_orphan_foreign",
+                    agent_id="agent_orphan_foreign",
+                    content=foreign_secret,
+                )
+            )
+            snapshot = GraphSnapshot(
+                owner_type="scenario",
+                owner_id=victim_scenario.id,
+                graph_kind="causal_review",
+            )
+            session.add(snapshot)
+            session.flush()
+            session.add(
+                GraphNode(
+                    snapshot_id=snapshot.id,
+                    node_key="fork_foreign_source",
+                    node_type="fork",
+                    label="Foreign source fork",
+                    round_number=1,
+                    payload_json=(
+                        '{"branch_id":"br_orphan_victim",'
+                        '"source_branch_id":"br_orphan_foreign"}'
+                    ),
+                )
+            )
+            session.commit()
+
+        result = build_snapshot("sc_orphan_victim")
+
+        assert foreign_secret not in str(result)
+        assert not any(
+            node["payload"].get("synthetic_provenance")
+            for node in result["nodes"]
+        )
+
     def test_explicit_trigger_ids_replace_same_round_fallback_edges(self):
         """Replaying a fork with explicit trigger ids should not keep stale fallback provenance."""
         append_round_nodes(
@@ -2729,6 +3547,15 @@ class TestForkEdgeFallback:
 
     def test_explicit_trigger_ids_ignore_unrelated_branch_nodes_for_child_branch(self):
         """Child branch provenance should ignore explicit triggers from unrelated branches."""
+        _seed_branch_authority(
+            "sc_fef5",
+            {
+                "br_parent": (1, 2),
+                "br_child": (3,),
+                "br_sibling": (1,),
+            },
+            parent_by_branch={"br_child": ("br_parent", 2)},
+        )
         append_round_nodes(
             "sc_fef5",
             "br_parent",
@@ -2795,6 +3622,7 @@ class TestForkEdgeFallback:
 
         assert {node["label"] for node in result["nodes"]} == {
             "parent event",
+            "fork round",
             "forked",
             "child event",
         }
@@ -2852,8 +3680,8 @@ class TestStanceShift:
         append_round_nodes("sc_ss_i18n", "br1", 2, m2)
 
         result = build_snapshot("sc_ss_i18n")
-        assert result["scope_kind"] == "branch_segment_only"
-        assert "pre-fork" in result["scope_caveat"].lower()
+        assert "scope_kind" not in result
+        assert "scope_caveat" not in result
         shift = next(node for node in result["nodes"] if node["type"] == "stance_shift")
 
         assert shift["label"] == "a1 affect proxy shifted"

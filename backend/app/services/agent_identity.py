@@ -50,6 +50,16 @@ def build_continuity_key(role: str, persona: str | None) -> str:
     return _continuity_key(role, persona)
 
 
+def build_continuity_key_candidates(
+    role: str,
+    persona: str | None,
+) -> tuple[str, ...]:
+    """Return the canonical key plus supported legacy lookup keys."""
+    return tuple(
+        dict.fromkeys([_continuity_key(role, persona), *_legacy_continuity_keys(role, persona)])
+    )
+
+
 def _serialize_identity(
     identity: AgentIdentity,
     *,

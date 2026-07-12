@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter, defaultdict, deque
 from typing import Any
 
@@ -11,7 +10,13 @@ from sqlmodel import Session, select
 
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode
-from app.services.causal_graph import _load_latest_snapshot, build_snapshot
+from app.services.branch_lineage import BranchRoundSelection, select_branch_rounds
+from app.services.causal_graph import (
+    _RUNTIME_PROJECTION_KIND,
+    _filter_nodes_for_branch_selection,
+    _load_latest_snapshot,
+    build_snapshot,
+)
 
 _DEGREE_BUCKETS = ("0", "1", "2", "3", "4+")
 
@@ -54,6 +59,23 @@ def _target_branch_ids(node: dict[str, Any]) -> set[str]:
     return {branch_id} if branch_id is not None else set()
 
 
+def _is_runtime_projection_node(node: dict[str, Any]) -> bool:
+    if node.get("type") != "outcome":
+        return False
+    payload = node.get("payload")
+    return (
+        isinstance(payload, dict)
+        and payload.get("provenance_kind") == _RUNTIME_PROJECTION_KIND
+    )
+
+
+def _is_runtime_projection_edge(edge: dict[str, Any]) -> bool:
+    return (
+        edge.get("type") == "led_to"
+        and edge.get("provenance_kind") == _RUNTIME_PROJECTION_KIND
+    )
+
+
 def _connected_components(
     node_ids: set[str],
     adjacency: dict[str, set[str]],
@@ -80,52 +102,18 @@ _MAX_ANALYZABLE_NODES = 5000
 _MAX_ANALYZABLE_EDGES = 20000
 
 
-def _safe_parse_payload(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 def _branch_snapshot_size(
     session: Session,
     snapshot_id: str,
-    branch_id: str,
+    branch_selection: BranchRoundSelection,
 ) -> tuple[int, int]:
-    node_rows = session.exec(
-        select(GraphNode.id, GraphNode.node_type, GraphNode.payload_json).where(
-            GraphNode.snapshot_id == snapshot_id,
-        )
+    all_nodes = session.exec(
+        select(GraphNode).where(GraphNode.snapshot_id == snapshot_id)
     ).all()
-    node_ids: set[str] = set()
-    child_branch_fork_ids: set[str] = set()
-
-    for node_id, node_type, payload_json in node_rows:
-        payload = _safe_parse_payload(payload_json)
-        if node_type == "fork":
-            fork_branch = payload.get("branch_id")
-            children = payload.get("children")
-            child_branches = {
-                child for child in children if isinstance(child, str) and child
-            } if isinstance(children, list) else set()
-            if fork_branch == branch_id or branch_id in child_branches:
-                node_ids.add(node_id)
-                if branch_id in child_branches:
-                    child_branch_fork_ids.add(node_id)
-        elif payload.get("branch_id") == branch_id:
-            node_ids.add(node_id)
-
-    if child_branch_fork_ids:
-        provenance_source_ids = session.exec(
-            select(GraphEdge.source_node_id).where(
-                GraphEdge.snapshot_id == snapshot_id,
-                GraphEdge.target_node_id.in_(child_branch_fork_ids),
-            )
-        ).all()
-        node_ids.update(provenance_source_ids)
+    node_ids = {
+        node.id
+        for node in _filter_nodes_for_branch_selection(all_nodes, branch_selection)
+    }
 
     if not node_ids:
         return 0, 0
@@ -143,13 +131,24 @@ def _branch_snapshot_size(
     return len(node_ids), edge_count
 
 
-def _latest_snapshot_size(scenario_id: str, branch_id: str | None = None) -> tuple[int, int] | None:
+def _latest_snapshot_size(
+    scenario_id: str,
+    branch_id: str | None = None,
+    *,
+    branch_selection: BranchRoundSelection | None = None,
+) -> tuple[int, int] | None:
     with Session(get_engine()) as session:
         snapshot = _load_latest_snapshot(session, scenario_id)
         if snapshot is None:
             return None
         if branch_id is not None:
-            return _branch_snapshot_size(session, snapshot.id, branch_id)
+            if branch_selection is None:
+                branch_selection = select_branch_rounds(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                )
+            return _branch_snapshot_size(session, snapshot.id, branch_selection)
         node_count = int(
             session.exec(
                 select(func.count(GraphNode.id)).where(GraphNode.snapshot_id == snapshot.id)
@@ -187,20 +186,56 @@ def analyze_graph(
     top_n: int = _GOD_NODES_MAX,
 ) -> dict:
     """Analyze a causal graph snapshot in O(nodes + edges)."""
-    snapshot_size = _latest_snapshot_size(scenario_id, branch_id=branch_id)
+    branch_selection: BranchRoundSelection | None = None
+    if branch_id is not None:
+        with Session(get_engine()) as session:
+            branch_selection = select_branch_rounds(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+            )
+    snapshot_size = (
+        _latest_snapshot_size(
+            scenario_id,
+            branch_id=branch_id,
+            branch_selection=branch_selection,
+        )
+        if branch_selection is not None
+        else _latest_snapshot_size(scenario_id, branch_id=branch_id)
+    )
     if snapshot_size is None:
         return _empty_result()
     node_count, edge_count = snapshot_size
     if node_count > _MAX_ANALYZABLE_NODES or edge_count > _MAX_ANALYZABLE_EDGES:
         return _truncated_result(node_count, edge_count)
 
-    snapshot = build_snapshot(scenario_id, branch_id)
+    snapshot = (
+        build_snapshot(
+            scenario_id,
+            branch_id,
+            branch_selection=branch_selection,
+        )
+        if branch_selection is not None
+        else build_snapshot(scenario_id, branch_id)
+    )
     nodes = snapshot.get("nodes", [])
     edges = snapshot.get("edges", [])
     node_count = len(nodes)
     edge_count = len(edges)
     if node_count > _MAX_ANALYZABLE_NODES or edge_count > _MAX_ANALYZABLE_EDGES:
         return _truncated_result(node_count, edge_count)
+
+    nodes = [node for node in nodes if not _is_runtime_projection_node(node)]
+    analytic_node_ids = {
+        node["id"] for node in nodes if isinstance(node.get("id"), str)
+    }
+    edges = [
+        edge
+        for edge in edges
+        if not _is_runtime_projection_edge(edge)
+        and edge.get("source") in analytic_node_ids
+        and edge.get("target") in analytic_node_ids
+    ]
     if not nodes:
         return _empty_result()
 

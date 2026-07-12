@@ -1197,6 +1197,169 @@
   margin-right: 4px;
 }
 
+/* ════════ STRUCTURED PREMORTEM ════════ */
+.report-doc .report-premortem {
+  margin-top: var(--space-8);
+}
+.report-doc .report-premortem__status {
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.report-doc .report-premortem__status--available {
+  color: var(--color-success);
+}
+.report-doc .report-premortem__status--partial,
+.report-doc .report-premortem__status--missing {
+  color: var(--color-warning, var(--text-secondary));
+}
+.report-doc .report-premortem__notice,
+.report-doc .report-premortem__disclosure {
+  max-width: var(--report-measure);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.report-doc .report-premortem__notice {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.report-doc .report-premortem__disclosure {
+  margin: 0 0 18px;
+  color: var(--text-muted);
+}
+.report-doc .report-premortem__items,
+.report-doc .report-premortem__chain ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.report-doc .report-premortem__items {
+  display: grid;
+  gap: 16px;
+}
+.report-doc .report-premortem__item {
+  margin: 0;
+}
+.report-doc .report-premortem__item article {
+  padding: 20px 22px;
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+}
+.report-doc .report-premortem__item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.report-doc .report-premortem__item-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.report-doc .report-premortem__item-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 1.2rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.report-doc .report-premortem__details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.report-doc .report-premortem__details > div {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.report-doc .report-premortem__details dt {
+  margin-bottom: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.report-doc .report-premortem__details dd {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.report-doc .report-premortem__chain {
+  margin-top: 18px;
+}
+.report-doc .report-premortem__chain h5 {
+  margin: 0 0 10px;
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.report-doc .report-premortem__chain li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.report-doc .report-premortem__chain-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.report-doc .report-premortem__role {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.report-doc .report-premortem__evidence-btn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+.report-doc .report-premortem__evidence-btn:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-glow);
+}
 /* ════════ CONSOLE (tool trace) — collapsible ink strip ════════ */
 .report-doc .report-console {
   margin-top: 36px;
@@ -1437,6 +1600,13 @@
     grid-template-columns: 1fr;
     gap: 8px;
   }
+  .report-doc .report-premortem__details {
+    grid-template-columns: 1fr;
+  }
+  .report-doc .report-premortem__chain li {
+    display: grid;
+    gap: 8px;
+  }
 }
 
 /* ── forced-colors a11y (§G: mapped to namespaced selectors) ── */
@@ -1447,7 +1617,11 @@
   .report-doc .report-watch,
   .report-doc .report-console,
   .report-doc .report-section__evidence-btn,
-  .report-doc .report-personas__notice {
+  .report-doc .report-personas__notice,
+  .report-doc .report-premortem__notice,
+  .report-doc .report-premortem__item article,
+  .report-doc .report-premortem__details > div,
+  .report-doc .report-premortem__evidence-btn {
     border: 1px solid CanvasText;
   }
   .report-doc .report-meter__seg.is-on {
@@ -1457,7 +1631,9 @@
   .report-doc .report-section__id,
   .report-doc .report-toc__num,
   .report-doc .report-persona-card__coord,
-  .report-doc .report-watch__dir {
+  .report-doc .report-watch__dir,
+  .report-doc .report-premortem__status,
+  .report-doc .report-premortem__evidence-btn {
     color: CanvasText;
   }
   .report-doc .report-toc__item:hover {

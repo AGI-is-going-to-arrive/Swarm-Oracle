@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import type { TFunction } from 'i18next';
 import { ExportPanel } from '../ExportPanel';
-import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
+import { NodeDetailPanel, type NodeDetail, type NodeDetailEvidence } from '../NodeDetailPanel';
 import { NodeConversationSheet, type NodeConversationOrigin } from '../kg/NodeConversationSheet';
 import GraphNodeCard from '../GraphNodeCard';
 import { useScenarioGraph, type GraphErrorState } from '../../hooks/useScenarioGraph';
@@ -182,6 +182,48 @@ function getCausalEdgeRelationLabel(edge: GraphEdgeData, t: CausalTranslate): st
   const roundNum = edge.evidence?.source_round_number;
   if (roundNum != null) return `${base} (R${roundNum})`;
   return base;
+}
+
+function buildAdjacentEvidence(
+  nodeId: string,
+  edges: GraphEdgeData[],
+  t: CausalTranslate,
+): NodeDetailEvidence[] {
+  const seen = new Set<string>();
+  const evidenceList: NodeDetailEvidence[] = [];
+
+  for (const edge of edges) {
+    if (edge.source !== nodeId && edge.target !== nodeId) continue;
+    const evidence = edge.evidence;
+    if (!evidence || (
+      evidence.confidence_tier == null
+      && evidence.source_ref == null
+      && evidence.source_round_number == null
+      && evidence.detail == null
+    )) continue;
+
+    const entry: NodeDetailEvidence = {
+      confidence_tier: evidence.confidence_tier,
+      source_ref: evidence.source_ref,
+      source_round_number: evidence.source_round_number,
+      detail: evidence.detail,
+      relation: getCausalEdgeBaseRelationLabel(edge, t),
+      direction: edge.source === nodeId ? 'outgoing' : 'incoming',
+    };
+    const dedupeKey = JSON.stringify([
+      entry.direction,
+      entry.relation,
+      entry.confidence_tier,
+      entry.source_ref,
+      entry.source_round_number,
+      entry.detail,
+    ]);
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    evidenceList.push(entry);
+  }
+
+  return evidenceList;
 }
 
 function getCausalErrorMessage(error: CausalGraphErrorState, t: CausalTranslate): string {
@@ -507,7 +549,15 @@ export default function CausalGraphBoard({
     const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
     setDetailRestoreFocusTarget(triggerElement?.isConnected ? triggerElement : null);
-    setSelectedNode({ id: raw.id, label: raw.label || raw.key, type: raw.type, round: raw.round, payload: raw.payload });
+    const adjacentEvidence = buildAdjacentEvidence(nodeId, filteredData?.edges ?? [], t);
+    setSelectedNode({
+      id: raw.id,
+      label: raw.label || raw.key,
+      type: raw.type,
+      round: raw.round,
+      payload: raw.payload,
+      ...(adjacentEvidence.length > 0 ? { evidenceList: adjacentEvidence } : {}),
+    });
     externalOnNodeClick?.(raw);
 
     const rawPayload = typeof raw.payload === 'object' && raw.payload !== null && !Array.isArray(raw.payload)
@@ -530,7 +580,7 @@ export default function CausalGraphBoard({
         typeColor: NODE_TYPE_COLORS_HEX[raw.type] ?? NODE_TYPE_COLORS_HEX.event,
       },
     });
-  }, [rawNodeMap, externalOnNodeClick, scenarioId]);
+  }, [rawNodeMap, filteredData?.edges, t, externalOnNodeClick, scenarioId]);
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const trigger = _event.target instanceof Element
@@ -543,6 +593,13 @@ export default function CausalGraphBoard({
     setSelectedNode(null);
     setSheetState(prev => prev.open ? { ...prev, open: false } : prev);
   }, []);
+
+  const branchLineageScopeMessage = graphData?.scope_kind === 'branch_lineage'
+    ? t(
+        'causal.scope_branch_lineage',
+        'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
+      )
+    : null;
 
   if (loading) {
     return (
@@ -579,7 +636,12 @@ export default function CausalGraphBoard({
 
   if (nodeCount === 0) {
     return (
-      <div data-testid="causal-graph-board" className={className} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
+      <div data-testid="causal-graph-board" className={className} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 200, gap: '0.5rem' }}>
+        {branchLineageScopeMessage && (
+          <p role="note" style={{ margin: 0, color: COLORS.textMuted, fontSize: '0.78rem' }}>
+            {branchLineageScopeMessage}
+          </p>
+        )}
         <p style={{ color: COLORS.textMuted }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
       </div>
     );
@@ -587,12 +649,9 @@ export default function CausalGraphBoard({
 
   return (
     <div data-testid="causal-graph-board" className={className} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 320, position: 'relative' }}>
-      {graphData?.scope_kind === 'branch_segment_only' && (
+      {branchLineageScopeMessage && (
         <p role="note" style={{ margin: '0.5rem 0.5rem 0', color: COLORS.textMuted, fontSize: '0.78rem' }}>
-          {t(
-            'causal.scope_branch_segment_only',
-            'Selected branch segment only; pre-fork ancestor rounds are not merged.',
-          )}
+          {branchLineageScopeMessage}
         </p>
       )}
       {/* Search bar */}

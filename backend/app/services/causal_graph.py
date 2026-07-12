@@ -25,6 +25,7 @@ from app.services.agent_message_metadata import (
     message_emotion_if_available,
     message_metadata_failure_code,
 )
+from app.services.branch_lineage import BranchRoundSelection, select_branch_rounds
 
 logger = logging.getLogger(__name__)
 _schema_lock = threading.Lock()
@@ -42,6 +43,11 @@ _GRAPH_EDGE_EVIDENCE_COLUMNS = {
     "evidence_json",
 }
 INTER_AGENT_EDGE_TYPES = ("responds_to", "supports_stance", "opposes_stance")
+_RUNTIME_PROJECTION_KIND = "runtime_projection"
+_RUNTIME_PROJECTION_EVIDENCE_CAVEAT = (
+    "Runtime projection from a completed simulated branch; no persisted causal "
+    "evidence is available, and it is not a real-world probability."
+)
 _LATIN_NAME_RE = re.compile(r"[A-Za-z]")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
@@ -447,6 +453,7 @@ def _synthetic_message_label(agent_name: str | None, content: str) -> str:
 def _load_orphan_fork_provenance(
     session: Session,
     *,
+    scenario_id: str,
     nodes: Sequence[GraphNode],
     edges: Sequence[GraphEdge],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -477,6 +484,10 @@ def _load_orphan_fork_provenance(
         if not source_branch_id or fork_node.round_number is None:
             continue
 
+        source_branch = session.get(Branch, source_branch_id)
+        if source_branch is None or source_branch.scenario_id != scenario_id:
+            continue
+
         source_round = session.exec(
             select(Round).where(
                 Round.branch_id == source_branch_id,
@@ -488,7 +499,9 @@ def _load_orphan_fork_provenance(
 
         messages = session.exec(
             select(AgentMessage)
+            .join(Agent)
             .where(AgentMessage.round_id == source_round.id)
+            .where(Agent.scenario_id == scenario_id)
             .order_by(AgentMessage.id.asc())
         ).all()
         if not messages:
@@ -824,6 +837,47 @@ def _fork_source_branch_id(node: GraphNode) -> str | None:
     return None
 
 
+def _fork_targets_branch(node: GraphNode, branch_id: str) -> bool:
+    payload = _safe_parse_payload(node.payload_json)
+    target_branch_id = payload.get("branch_id")
+    if isinstance(target_branch_id, str) and target_branch_id == branch_id:
+        return True
+    children = payload.get("children")
+    return isinstance(children, list) and branch_id in children
+
+
+def _filter_nodes_for_branch_selection(
+    nodes: Sequence[GraphNode],
+    selection: BranchRoundSelection,
+) -> list[GraphNode]:
+    visible_coordinates = {
+        (round_.branch_id, round_.round_number) for round_ in selection.rounds
+    }
+    visible_nodes: list[GraphNode] = []
+    segments = selection.lineage.segments
+    transitions = tuple(zip(segments, segments[1:], strict=False))
+    for node in nodes:
+        if node.node_type != "fork":
+            if (_node_branch_id(node), node.round_number) in visible_coordinates:
+                visible_nodes.append(node)
+            continue
+
+        round_number = node.round_number
+        if not isinstance(round_number, int) or isinstance(round_number, bool):
+            continue
+        for parent_segment, child_segment in transitions:
+            fork_round = child_segment.round_min - 1
+            if (
+                round_number == fork_round
+                and (parent_segment.branch_id, fork_round) in visible_coordinates
+                and _fork_source_branch_id(node) == parent_segment.branch_id
+                and _fork_targets_branch(node, child_segment.branch_id)
+            ):
+                visible_nodes.append(node)
+                break
+    return visible_nodes
+
+
 def _message_node_key(
     round_number: int,
     msg_id: str | None,
@@ -1079,7 +1133,13 @@ def _add_edge_if_missing(
                 existing_edge.confidence_tier = confidence_tier
             if existing_edge.source_ref is None and source_ref is not None:
                 existing_edge.source_ref = source_ref
-            if existing_edge.source_round_number is None and source_round_number is not None:
+            if source_round_number is not None and (
+                existing_edge.source_round_number is None
+                or (
+                    edge_type == "temporal"
+                    and existing_edge.source_round_number != source_round_number
+                )
+            ):
                 existing_edge.source_round_number = source_round_number
             if existing_edge.evidence_json is None and evidence_json is not None:
                 existing_edge.evidence_json = evidence_json
@@ -1383,6 +1443,7 @@ def append_round_nodes(
                     "emotion_metadata_available": metadata_failure_code is None,
                     "content": content,
                     "node_id": node.id,
+                    "round_number": node.round_number,
                 })
 
             latest_record_by_agent: dict[str, dict[str, Any]] = {}
@@ -1581,24 +1642,25 @@ def append_round_nodes(
                     GraphNode.round_number == round_number - 1,
                 )
                 prev_nodes = session.exec(prev_stmt).all()
-                prev_by_agent: dict[str, str] = {}
+                prev_by_agent: dict[str, GraphNode] = {}
                 for prev_node in prev_nodes:
                     payload = _safe_parse_payload(prev_node.payload_json)
                     if payload.get("branch_id") == branch_id:
-                        prev_by_agent[payload.get("agent_id", "")] = prev_node.id
+                        prev_by_agent[payload.get("agent_id", "")] = prev_node
 
                 for record in message_records:
                     aid = record["agent_id"]
                     if aid in prev_by_agent:
+                        source_node = prev_by_agent[aid]
                         _add_edge_if_missing(
                             session,
                             existing_edge_signatures,
                             snapshot_id=snapshot.id,
-                            source_node_id=prev_by_agent[aid],
+                            source_node_id=source_node.id,
                             target_node_id=record["node_id"],
                             edge_type="temporal",
                             weight=0.5,
-                            source_round_number=round_number,
+                            source_round_number=source_node.round_number,
                             added_records=added_records,
                             updated_records=updated_records,
                         )
@@ -1642,7 +1704,7 @@ def append_round_nodes(
                         target_node_id=next_node_id,
                         edge_type="temporal",
                         weight=0.5,
-                        source_round_number=round_number,
+                        source_round_number=record["round_number"],
                         added_records=added_records,
                         updated_records=updated_records,
                     )
@@ -1820,24 +1882,51 @@ def append_round_nodes(
 # ── Snapshot serialization ──────────────────────────────
 
 
-def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
+def build_snapshot(
+    scenario_id: str,
+    branch_id: str | None = None,
+    *,
+    branch_selection: BranchRoundSelection | None = None,
+) -> dict:
     """Build and return a serialized causal graph snapshot."""
-    scope_metadata = {
-        "scope_kind": "branch_segment_only",
-        "scope_caveat": (
-            "Branch-filtered snapshots cover the selected segment only; pre-fork "
-            "ancestor rounds are not merged."
-        ),
-    }
-    empty = {
-        "id": None,
-        "available_branches": [],
-        "nodes": [],
-        "edges": [],
-        **scope_metadata,
-    }
-
+    scope_metadata = (
+        {
+            "scope_kind": "branch_lineage",
+            "scope_caveat": (
+                "Branch-filtered snapshots include pre-fork ancestor segments through "
+                "the effective root-to-leaf lineage; parent post-fork and sibling "
+                "rounds are excluded."
+            ),
+        }
+        if branch_id is not None
+        else {}
+    )
     with Session(get_engine()) as session:
+        if branch_id is not None:
+            if branch_selection is None:
+                branch_selection = select_branch_rounds(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                )
+            elif (
+                branch_selection.lineage.scenario_id != scenario_id
+                or branch_selection.lineage.leaf_branch_id != branch_id
+            ):
+                raise ValueError("branch_selection does not match requested graph scope")
+            lineage = branch_selection.lineage
+            if lineage.is_self_contained_replay:
+                scope_metadata["scope_caveat"] = (
+                    "Branch-filtered snapshots for a self-contained replay include only "
+                    "the replay branch coordinates; source branch coordinates are excluded."
+                )
+        empty = {
+            "id": None,
+            "available_branches": [],
+            "nodes": [],
+            "edges": [],
+            **scope_metadata,
+        }
         snapshot = _load_latest_snapshot(session, scenario_id)
         if snapshot is None:
             return empty
@@ -1856,31 +1945,10 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
         nodes = all_nodes
         visible_outcome_branches = outcome_branches
 
-        # Optionally filter by branch_id via payload
+        # Filter branch-scoped snapshots by the authoritative effective lineage.
         if branch_id is not None:
-            filtered_nodes_by_id: dict[str, GraphNode] = {}
-            child_branch_fork_ids: set[str] = set()
-            node_by_id = {node.id: node for node in all_nodes}
-            for n in all_nodes:
-                payload = _safe_parse_payload(n.payload_json)
-                if n.node_type == "fork":
-                    fork_branch = payload.get("branch_id")
-                    fork_children = payload.get("children", [])
-                    if fork_branch == branch_id or branch_id in fork_children:
-                        filtered_nodes_by_id[n.id] = n
-                        if branch_id in fork_children:
-                            child_branch_fork_ids.add(n.id)
-                elif payload.get("branch_id") == branch_id:
-                    filtered_nodes_by_id[n.id] = n
-
-            # Preserve the direct provenance for a child branch's fork node.
-            for edge in all_edges:
-                if edge.target_node_id in child_branch_fork_ids:
-                    source_node = node_by_id.get(edge.source_node_id)
-                    if source_node is not None:
-                        filtered_nodes_by_id[source_node.id] = source_node
-
-            nodes = list(filtered_nodes_by_id.values())
+            assert branch_selection is not None
+            nodes = _filter_nodes_for_branch_selection(all_nodes, branch_selection)
             visible_outcome_branches = [
                 branch for branch in outcome_branches if branch.id == branch_id
             ]
@@ -1894,6 +1962,12 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
         ]
         outcome_nodes: list[dict[str, Any]] = []
         outcome_edges: list[dict[str, Any]] = []
+        runtime_projection_metadata = {
+            "provenance_kind": _RUNTIME_PROJECTION_KIND,
+            "synthetic_provenance": True,
+            "evidence_status": "unavailable",
+            "evidence_caveat": _RUNTIME_PROJECTION_EVIDENCE_CAVEAT,
+        }
         for branch in visible_outcome_branches:
             outcome_id = f"outcome:{branch.id}"
             source_node = _latest_source_node_for_outcome(nodes, branch.id)
@@ -1906,6 +1980,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                 "story_excerpt": _story_excerpt(branch.story),
                 "insight": branch.insight,
                 "parent_branch_id": branch.parent_branch_id,
+                **runtime_projection_metadata,
             }
             if not branch.title:
                 outcome_payload["label_i18n"] = _node_label_i18n("outcome")
@@ -1929,11 +2004,13 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                         "weight": 1.0,
                         "label": None,
                         "evidence": None,
+                        **runtime_projection_metadata,
                     }
                 )
 
         provenance_nodes, provenance_edges = _load_orphan_fork_provenance(
             session,
+            scenario_id=scenario_id,
             nodes=nodes,
             edges=edges,
         )

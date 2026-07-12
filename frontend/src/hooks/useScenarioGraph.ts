@@ -35,7 +35,7 @@ export interface GraphPayload {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
   available_branches?: string[];
-  scope_kind?: 'branch_segment_only';
+  scope_kind?: 'branch_lineage';
   scope_caveat?: string;
 }
 

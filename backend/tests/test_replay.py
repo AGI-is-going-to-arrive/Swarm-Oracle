@@ -241,7 +241,8 @@ class TestCloneUntilRound:
         engine = get_engine()
         sid = _seed_scenario(engine, question="如果刘备赢了会怎样？")
         bid = _seed_branch(engine, sid)
-        _seed_round(engine, bid, 3)
+        for round_number in range(1, 4):
+            _seed_round(engine, bid, round_number)
 
         new_bid = clone_until_round(sid, bid, 3)
 
@@ -254,7 +255,8 @@ class TestCloneUntilRound:
         engine = get_engine()
         sid = _seed_scenario(engine, question="What if Rome survived?")
         bid = _seed_branch(engine, sid)
-        _seed_round(engine, bid, 4)
+        for round_number in range(1, 5):
+            _seed_round(engine, bid, round_number)
 
         new_bid = clone_until_round(sid, bid, 4, replay_kind="resume")
 
@@ -267,7 +269,8 @@ class TestCloneUntilRound:
         engine = get_engine()
         sid = _seed_scenario(engine, question="如果秦朝延续会怎样？")
         bid = _seed_branch(engine, sid)
-        _seed_round(engine, bid, 4)
+        for round_number in range(1, 5):
+            _seed_round(engine, bid, round_number)
 
         new_bid = clone_until_round(sid, bid, 4, replay_kind="resume")
 
@@ -275,6 +278,116 @@ class TestCloneUntilRound:
             branch = session.get(Branch, new_bid)
             assert branch is not None
             assert branch.title == "续演：从第4轮起"
+
+    def test_clone_native_multigeneration_lineage_into_self_contained_replay(self):
+        from app.services.branch_lineage import select_branch_rounds
+
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        aid = _seed_agent(engine, sid)
+        root_id = _seed_branch(engine, sid, title="root")
+        child_id = _seed_branch(
+            engine,
+            sid,
+            title="child",
+            parent_branch_id=root_id,
+            fork_round=2,
+        )
+        grandchild_id = _seed_branch(
+            engine,
+            sid,
+            title="grandchild",
+            parent_branch_id=child_id,
+            fork_round=4,
+        )
+
+        for branch_id, round_number in (
+            (root_id, 1),
+            (root_id, 2),
+            (child_id, 3),
+            (child_id, 4),
+            (grandchild_id, 5),
+        ):
+            round_id = _seed_round(
+                engine,
+                branch_id,
+                round_number,
+                summary=f"summary-{round_number}",
+            )
+            _seed_message(
+                engine,
+                round_id,
+                aid,
+                content=f"message-{round_number}",
+            )
+
+        clone_id = clone_until_round(sid, grandchild_id, 5, replay_kind="resume")
+
+        with Session(engine) as session:
+            clone = session.get(Branch, clone_id)
+            assert clone is not None
+            assert clone.parent_branch_id == grandchild_id
+            assert clone.replay_source_branch_id == grandchild_id
+            assert clone.replay_kind == "resume"
+
+            cloned_rounds = session.exec(
+                select(Round)
+                .where(Round.branch_id == clone_id)
+                .order_by(Round.round_number)
+            ).all()
+            cloned_messages = [
+                session.exec(
+                    select(AgentMessage).where(AgentMessage.round_id == round_.id)
+                ).one()
+                for round_ in cloned_rounds
+            ]
+            replay_selection = select_branch_rounds(
+                session,
+                scenario_id=sid,
+                branch_id=clone_id,
+            )
+
+        assert [round_.round_number for round_ in cloned_rounds] == [1, 2, 3, 4, 5]
+        assert [round_.compressed_summary for round_ in cloned_rounds] == [
+            "summary-1",
+            "summary-2",
+            "summary-3",
+            "summary-4",
+            "summary-5",
+        ]
+        assert [message.content for message in cloned_messages] == [
+            "message-1",
+            "message-2",
+            "message-3",
+            "message-4",
+            "message-5",
+        ]
+        assert [round_.branch_id for round_ in replay_selection.rounds] == [clone_id] * 5
+
+    def test_clone_rejects_unavailable_cutoff_before_flushing_target_branch(self):
+        from app.services.branch_lineage import BranchLineageError
+
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_id = _seed_branch(engine, sid, title="source")
+        _seed_round(engine, source_id, 1)
+        _seed_round(engine, source_id, 2)
+
+        with Session(engine) as session:
+            with pytest.raises(BranchLineageError) as exc_info:
+                clone_until_round(
+                    sid,
+                    source_id,
+                    3,
+                    replay_kind="resume",
+                    session=session,
+                )
+            branches = session.exec(
+                select(Branch).where(Branch.scenario_id == sid)
+            ).all()
+
+        assert exc_info.value.code == "BRANCH_LINEAGE_ROUND_NOT_FOUND"
+        assert [branch.id for branch in branches] == [source_id]
 
 
 # ── seed_counterfactual tests ────────────────────────────
@@ -638,6 +751,62 @@ class TestCompareBranches:
             "replacement_content": "改写后的刘备发言",
         }
 
+    def test_counterfactual_compare_uses_ancestor_source_round(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        root_id = _seed_branch(engine, sid, title="root")
+        agent_id = _seed_agent(engine, sid, name="Lineage Agent")
+        root_round_id = _seed_round(engine, root_id, 1)
+        _seed_message(
+            engine,
+            root_round_id,
+            agent_id,
+            content="Original message owned by the ancestor",
+        )
+        source_id = _seed_branch(
+            engine,
+            sid,
+            title="empty native source",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        counterfactual_id = _seed_branch(
+            engine,
+            sid,
+            title="counterfactual",
+            parent_branch_id=source_id,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_branch_id=source_id,
+            replay_source_round=1,
+            replay_source_agent_id=agent_id,
+        )
+        counterfactual_round_id = _seed_round(engine, counterfactual_id, 1)
+        _seed_message(
+            engine,
+            counterfactual_round_id,
+            agent_id,
+            content="Replacement message on the replay",
+        )
+
+        result = compare_branches(sid, source_id, counterfactual_id)
+
+        assert result["rounds"][0]["branch_a_messages"][0]["content"] == (
+            "Original message owned by the ancestor"
+        )
+        assert result["rounds"][0]["branch_b_messages"][0]["content"] == (
+            "Replacement message on the replay"
+        )
+        assert result["rounds"][0]["is_identical"] is False
+        assert result["rounds"][0]["divergence_score"] > 0
+        assert result["intervention"] == {
+            "round": 1,
+            "agent_id": agent_id,
+            "agent_name": "Lineage Agent",
+            "original_content": "Original message owned by the ancestor",
+            "replacement_content": "Replacement message on the replay",
+        }
+
     def test_returns_intervention_for_retrospective_branch(self):
         engine = get_engine()
         sid = _seed_scenario(engine)
@@ -681,6 +850,73 @@ class TestCompareBranches:
             "source_branch_id": source_bid,
             "source_round": 2,
             "intervention_text": "第二轮加入外部冲击",
+        }
+
+    def test_retrospective_compare_uses_ancestor_source_timeline(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        root_id = _seed_branch(engine, sid, title="root")
+        agent_id = _seed_agent(engine, sid, name="Lineage Agent")
+        root_round_1 = _seed_round(engine, root_id, 1)
+        root_round_2 = _seed_round(engine, root_id, 2)
+        _seed_message(engine, root_round_1, agent_id, content="Shared first round")
+        _seed_message(engine, root_round_2, agent_id, content="Original second round")
+        source_id = _seed_branch(
+            engine,
+            sid,
+            title="empty native source",
+            parent_branch_id=root_id,
+            fork_round=2,
+        )
+        retrospective_id = _seed_branch(
+            engine,
+            sid,
+            title="retrospective",
+            parent_branch_id=source_id,
+            fork_round=1,
+            replay_kind="retrospective",
+            replay_source_branch_id=source_id,
+            replay_source_round=2,
+        )
+        retrospective_round_1 = _seed_round(engine, retrospective_id, 1)
+        retrospective_round_2 = _seed_round(engine, retrospective_id, 2)
+        _seed_message(
+            engine,
+            retrospective_round_1,
+            agent_id,
+            content="Shared first round",
+        )
+        _seed_message(
+            engine,
+            retrospective_round_2,
+            agent_id,
+            content="Regenerated second round",
+        )
+        with Session(engine) as session:
+            session.add(
+                InterventionLog(
+                    scenario_id=sid,
+                    branch_id=retrospective_id,
+                    round_number=2,
+                    user_input="Change inherited round two",
+                )
+            )
+            session.commit()
+
+        result = compare_branches(sid, source_id, retrospective_id)
+
+        assert [round_diff["round"] for round_diff in result["rounds"]] == [1, 2]
+        assert result["rounds"][0]["branch_a_summary"] == "Shared first round"
+        assert result["rounds"][0]["is_identical"] is True
+        assert result["rounds"][1]["branch_a_summary"] == "Original second round"
+        assert result["rounds"][1]["branch_b_summary"] == "Regenerated second round"
+        assert result["rounds"][1]["is_identical"] is False
+        assert result["common_rounds"] == 1
+        assert result["intervention"] == {
+            "replay_kind": "retrospective",
+            "source_branch_id": source_id,
+            "source_round": 2,
+            "intervention_text": "Change inherited round two",
         }
 
     def test_retrospective_common_rounds_use_source_boundary_for_regenerated_round(self):

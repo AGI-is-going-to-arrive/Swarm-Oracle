@@ -10,15 +10,17 @@ from pathlib import Path
 from typing import Any
 
 import anyio.to_process
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
 from app.api.helpers import (
     SessionPrincipal,
+    _store_identity_profiles_background,
     require_session_principal,
     resolve_authenticated_user_id,
+    schedule_background_task,
     verify_session,
 )
 from app.api.schemas import CreateScenarioRequest, WorldContext
@@ -27,6 +29,13 @@ from app.log_sanitize import _scrub_sensitive_text
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine
 from app.services.agent_identity import preview_identity_match
+from app.services.agent_packs import (
+    AGENT_PACK_MAX_BYTES,
+    AgentPackExportRequest,
+    AgentPackServiceError,
+    export_agent_pack,
+    import_agent_pack,
+)
 from app.services.document_ingestion import (
     build_world_context_from_document,
     chunk_document,
@@ -1715,6 +1724,90 @@ async def delete_workshop_agent(
 
 
 # ── Persona Export / Import ─────────────────────────────
+
+
+def _require_agent_pack_features() -> None:
+    if not settings.FEATURE_PERSONA_EXPORT or not settings.FEATURE_CUSTOM_AGENTS:
+        raise api_error(404, "FEATURE_DISABLED", "Agent Pack feature is not enabled")
+
+
+def _resolve_agent_pack_owner(
+    user_id: str | None,
+    principal: SessionPrincipal | None,
+) -> str:
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
+    return effective_user_id
+
+
+async def _read_agent_pack_body(request: Request) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > AGENT_PACK_MAX_BYTES:
+            raise api_error(
+                413,
+                "AGENT_PACK_TOO_LARGE",
+                "Agent Pack payload exceeds 262144 bytes",
+            )
+        body.extend(chunk)
+    return bytes(body)
+
+
+def _raise_agent_pack_error(exc: AgentPackServiceError) -> None:
+    raise api_error(exc.status_code, exc.code, exc.message) from exc
+
+
+@router.post("/packs/export")
+async def export_agent_pack_endpoint(
+    body: AgentPackExportRequest,
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Export an ordered Agent Pack v1 payload."""
+    _require_agent_pack_features()
+    effective_user_id = _resolve_agent_pack_owner(user_id, principal)
+    try:
+        return await asyncio.to_thread(
+            export_agent_pack,
+            user_id=effective_user_id,
+            title=body.title,
+            identity_ids=body.identity_ids,
+        )
+    except AgentPackServiceError as exc:
+        _raise_agent_pack_error(exc)
+
+
+@router.post("/packs/import", status_code=201)
+async def import_agent_pack_endpoint(
+    request: Request,
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Stream, validate, and atomically import one Agent Pack v1 payload."""
+    _require_agent_pack_features()
+    effective_user_id = _resolve_agent_pack_owner(user_id, principal)
+    raw = await _read_agent_pack_body(request)
+    try:
+        outcome = await asyncio.to_thread(
+            import_agent_pack,
+            raw,
+            user_id=effective_user_id,
+        )
+    except AgentPackServiceError as exc:
+        _raise_agent_pack_error(exc)
+
+    if outcome.profiles:
+        profile_coro = _store_identity_profiles_background(list(outcome.profiles))
+        try:
+            schedule_background_task(profile_coro)
+        except Exception:
+            profile_coro.close()
+            logger.warning(
+                "Agent Pack post-commit profile scheduling failed",
+                exc_info=True,
+            )
+    return outcome.response
 
 
 class BulkExportRequest(BaseModel):

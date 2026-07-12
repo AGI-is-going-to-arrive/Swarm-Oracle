@@ -48,10 +48,10 @@ def _reset_scenario_status(engine, scenario_id, status):
 
 
 def _seed_branch(engine, scenario_id, *, title="主线", probability=1.0,
-                 status=BranchStatus.ACTIVE, parent_branch_id=None):
+                 status=BranchStatus.ACTIVE, parent_branch_id=None, fork_round=0):
     b = Branch(
         scenario_id=scenario_id, title=title, probability=probability,
-        status=status, parent_branch_id=parent_branch_id,
+        status=status, parent_branch_id=parent_branch_id, fork_round=fork_round,
     )
     with Session(engine) as session:
         session.add(b)
@@ -117,6 +117,70 @@ class TestRetrospectiveIntervention:
 
         assert resp.status_code == 404
         assert resp.json()["detail"]["code"] == "FEATURE_DISABLED"
+
+    def test_clone_lineage_error_maps_to_stable_conflict(self, monkeypatch):
+        import app.api.interventions as interventions_module
+        from app.services.branch_lineage import BranchLineageError
+
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 1)
+
+        def fail_clone(*_args, **_kwargs):
+            raise BranchLineageError(
+                "BRANCH_LINEAGE_INVALID_FORK_BOUNDARY",
+                "unsafe imported lineage detail",
+            )
+
+        monkeypatch.setattr(interventions_module, "clone_until_round", fail_clone)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/intervene/retrospective",
+                json={
+                    "branch_id": bid,
+                    "round_number": 1,
+                    "text": "test invalid lineage",
+                },
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "BRANCH_LINEAGE_INVALID_FORK_BOUNDARY",
+            "message": "Branch lineage is invalid",
+        }
+
+    def test_accepts_ancestor_round_for_empty_native_leaf(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        root_id = _seed_branch(engine, sid, title="root")
+        _seed_round(engine, root_id, 1)
+        child_id = _seed_branch(
+            engine,
+            sid,
+            title="empty native child",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+
+        response = client.post(
+            f"/api/scenario/{sid}/intervene/retrospective",
+            json={
+                "branch_id": child_id,
+                "round_number": 1,
+                "text": "Regenerate the inherited first round",
+            },
+        )
+
+        assert response.status_code == 200
+        with Session(engine) as session:
+            new_branch = session.get(Branch, response.json()["new_branch_id"])
+
+        assert new_branch is not None
+        assert new_branch.parent_branch_id == child_id
+        assert new_branch.fork_round == 0
+        assert new_branch.replay_source_round == 1
 
     def test_success(self, client):
         """Should create a new branch forked at specified round."""

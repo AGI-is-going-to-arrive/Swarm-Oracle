@@ -20,18 +20,17 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 - 辩论竞技场、结局会客厅和世界线圆桌
 - 反事实续跑、分支对比、Replay Trace
 - 因果图谱、知识图谱与时间线视图
-- 推演内 Agent 档案、分支记忆、自定义 Agent、人物备份、预测日志与 Snapshot
-- 有界 Local Pack 原子导入，以及结果结论、透明完整报告、分享卡片与可选搜索增强
+- 推演内 Agent 档案、分支记忆、自定义 Agent、人物备份、有序 Agent Pack、预测日志与 Snapshot
+- 有界 Local Pack 原子导入与可点击 Snapshot 演示，以及结果结论、透明完整报告、脱敏离线 Gallery 与可选搜索增强
 
-## W2.0 可见性与真值边界
+## W2.1 可见性与真值边界
 
 - Agent 档案会区分配置立场与已观察情绪。成长事件始终显示场景、分支、轮次与 `event_type` 坐标；只有事件同时匹配当前路由场景和明确选中的分支时，才标为“当前（Current）· 所选分支片段”，其它可判定事件标为“历史（Past）”。
 - 如果 Agent 发言成功但第二阶段结构化元数据解析失败，真实发言仍会保留，情绪、立场和关系观测会明确标为不可用并携带有界错误码；live、Replay、Snapshot 和 Pixel Theater 都不会把缺失观测伪装成 `neutral`。
-- 因果图和阵营时间线中的旧 `stance` / `trust` / `opposition` 字段只是由模型生成的 `emotion` / `diverge` 推导出的情绪代理值（affect proxy），不是已验证的立场、信任、关系或因果证据。当前视图只覆盖所选分支片段，不会合并分叉前的祖先轮次。
-- 报告的 likelihood 与分析置信度只把已完成的终局叶分支当作分支样本，并结合实际证据条目数；分叉父节点不计数，带符号的情绪收敛代理值也不会抬高分析置信度。已执行的章节工具轨迹有界保存，生成、重写或静态回退后刷新/重开仍可查看；实时“当前章节”位置仍是瞬时状态。
-- Local Pack 刷新会重新读取当前同 ID 包的详情，切换包时先清除旧详情与操作，并隔离迟到响应。包内 `demo_snapshots` 目前只展示标签和文件名元数据，不能点击或直接导入。
-
-W2.1 尚未完成两项能力：因果/阵营视图的分支谱系祖先拼接，以及可交互、可直接导入的 Local Pack `demo_snapshots`。
+- 因果图和阵营时间线中的旧 `stance` / `trust` / `opposition` 字段只是由模型生成的 `emotion` / `diverge` 推导出的情绪代理值（affect proxy），不是已验证的立场、信任、关系或因果证据。带 `branch_id` 的 causal、faction、report、Replay 和 compare 统一读取有效的 root-to-leaf 谱系：包含轮次截点内的分叉前祖先轮次，排除父分支分叉后的未来、兄弟分支和 cutoff 之后的数据；自包含 Replay 在自己的 Replay 边界停止。
+- 报告的 likelihood 与分析置信度只把已完成的终局叶分支当作分支样本，并结合实际证据条目数；分叉父节点不计数，带符号的情绪收敛代理值也不会抬高分析置信度。已执行的章节工具轨迹有界保存，生成、重写或静态回退后刷新/重开仍可查看；结构化 premortem 为每个失败模式保留独立证据链与不确定性，实时“当前章节”位置仍是瞬时状态。
+- Local Pack 刷新会重新读取当前同 ID 包的详情，切换包时先清除旧详情与操作，并隔离迟到响应。包内 `demo_snapshots` 可点击、按目录白名单和 Snapshot 合同校验并直接导入；明确失败可重试，无法确认结果时会提示先检查历史记录，避免重复导入。
+- Agent Pack 按资料库选择顺序原子导入或导出，不携带身份 ID、owner、记忆、成长历史、对话或单独存储的凭据，并脱敏常见凭据模式。Public Artifact 可导出脱敏 JSON、单文件 HTML 或离线 Gallery hash 链接，也可由 `gallery.html` 打开本地文件；它不是 hosted registry、社区索引或 marketplace。
 
 类别级能力与路由见 [功能索引](docs/FEATURES.md)，操作步骤见 [使用指南](docs/USAGE.md)。
 
@@ -62,7 +61,7 @@ cp .env.docker.example .env.docker
 docker compose up -d
 ```
 
-打开 http://127.0.0.1:18928 。默认端口只发布到 loopback：前端 `18928`，后端 `18927`。后端镜像随附 `packs/` 和 `samples/`，容器内可直接使用 Local Packs 与官方样例；随附主题包的 `demo_snapshots` 只显示实际存在 Snapshot 的标签与文件名元数据。如需从源码重建镜像，运行 `docker compose up --build -d`。
+打开 http://127.0.0.1:18928 。默认端口只发布到 loopback：前端 `18928`，后端 `18927`。后端镜像随附 `packs/` 和 `samples/`，容器内可直接使用 Local Packs 与官方样例；随附主题包的 `demo_snapshots` 只引用实际存在的 Snapshot，可从包详情直接导入。如需从源码重建镜像，运行 `docker compose up --build -d`。
 
 ### 本地开发
 

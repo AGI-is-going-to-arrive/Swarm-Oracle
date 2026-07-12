@@ -88,7 +88,7 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.node_card_summary_outcome': 'Endpoint · {{causeCount}} sources',
     'causal.node.stance_shift': '{{agent_name}} stance shifted',
     'causal.type_affect_shift_proxy': 'Affect shift (proxy)',
-    'causal.scope_branch_segment_only': 'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+    'causal.scope_branch_lineage': 'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
     'causal.node.outcome': 'Outcome',
     'causal.type_outcome': 'Outcome',
     'node_context_banner.meaning_event_title': 'Event card',
@@ -161,7 +161,7 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.node_card_summary_outcome': '结局 · {{causeCount}} 个来源',
     'causal.node.stance_shift': '{{agent_name}} 立场转变',
     'causal.type_affect_shift_proxy': '情绪变化（代理）',
-    'causal.scope_branch_segment_only': '仅展示所选分支片段；不会合并分叉前祖先轮次。',
+    'causal.scope_branch_lineage': '仅展示所选分支的有效范围；父分支分叉后的轮次、兄弟分支轮次及无关源分支坐标均已排除。',
     'causal.node.outcome': '结局',
     'causal.type_outcome': '结局',
     'node_context_banner.meaning_event_title': '事件卡',
@@ -522,14 +522,14 @@ const changeUiLanguage = async (locale: TestLocale) => {
 };
 
 describe('CausalReviewView', () => {
-  it('uses affect-proxy display types and exposes the branch-segment boundary', async () => {
+  it('uses affect-proxy display types and the truthful localized scope baseline', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           id: 'g-affect-proxy',
-          scope_kind: 'branch_segment_only',
-          scope_caveat: 'Backend caveat',
+          scope_kind: 'branch_lineage',
+          scope_caveat: 'Selected branch lineage includes pre-fork ancestor rounds.',
           nodes: [
             {
               id: 'n1',
@@ -568,9 +568,122 @@ describe('CausalReviewView', () => {
         'Affect shift (proxy)',
       );
     });
-    expect(screen.getByRole('note')).toHaveTextContent(
-      'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+    const scopeNote = screen.getByRole('note');
+    expect(scopeNote).toHaveTextContent(
+      'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
     );
+    expect(scopeNote).not.toHaveTextContent(/ancestor/i);
+  });
+
+  it.each([
+    {
+      locale: 'en' as const,
+      expected: 'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
+    },
+    {
+      locale: 'zh' as const,
+      expected: '仅展示所选分支的有效范围；父分支分叉后的轮次、兄弟分支轮次及无关源分支坐标均已排除。',
+    },
+  ])('uses the $locale localized branch-lineage baseline when the server caveat is absent', async ({ locale, expected }) => {
+    applyTestLocale(locale);
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: `g-lineage-${locale}`,
+          scope_kind: 'branch_lineage',
+          nodes: [
+            { id: 'n1', key: 'event-1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          ],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1');
+
+    expect(await screen.findByRole('note')).toHaveTextContent(expected);
+  });
+
+  it('keeps a nonempty English server caveat localized in Chinese without promising ancestors', async () => {
+    applyTestLocale('zh');
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-lineage-server-caveat-zh',
+          scope_kind: 'branch_lineage',
+          scope_caveat: 'Selected branch lineage includes pre-fork ancestor rounds.',
+          nodes: [
+            { id: 'n1', key: 'event-1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          ],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1');
+
+    const scopeNote = await screen.findByRole('note');
+    expect(scopeNote).toHaveTextContent(
+      '仅展示所选分支的有效范围；父分支分叉后的轮次、兄弟分支轮次及无关源分支坐标均已排除。',
+    );
+    expect(scopeNote).not.toHaveTextContent(/ancestor|祖先/i);
+  });
+
+  it('ignores a malformed server caveat and renders the localized scope baseline', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-lineage-malformed-caveat',
+          scope_kind: 'branch_lineage',
+          scope_caveat: { unexpected: true },
+          nodes: [
+            { id: 'n1', key: 'event-1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          ],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView('/sim/test-id/causal-map?branch_id=branch-1');
+
+    expect(await screen.findByRole('note')).toHaveTextContent(
+      'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
+    );
+  });
+
+  it('does not render a lineage scope note for an unscoped graph response', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-unscoped',
+          nodes: [
+            { id: 'n1', key: 'event-1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          ],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView();
+
+    expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 
   it('shows loading state initially', () => {

@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { buildSessionHeaders, getReplayTrace, isApiError, getScenario } from '../api/client';
+import {
+  getCausalGraph,
+  getReplayTrace,
+  getScenario,
+  isApiError,
+} from '../api/client';
 import type { ReplayTraceNode, ReplayTraceResponse, BranchInfo } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
@@ -30,6 +41,7 @@ interface CausalGraphResponse {
   id: string;
   nodes: CausalGraphNode[];
   edges: unknown[];
+  available_branches?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -159,8 +171,10 @@ const EMOTION_ICONS: Record<string, string> = {
 export function ReplayView() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const targetBranchId = searchParams.get('branch');
+  const targetBranchId = searchParams.get('branch')?.trim() || '';
   const targetMessageId = searchParams.get('message');
   const targetRoundRaw = searchParams.get('round');
   const targetRoundNumber = targetRoundRaw != null && /^\d+$/.test(targetRoundRaw)
@@ -178,82 +192,137 @@ export function ReplayView() {
   const [branchesInfo, setBranchesInfo] = useState<BranchInfo[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState<number | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const [branchFilter, setBranchFilter] = useState<string>(targetBranchId || '');
+  const [resolvedScopeKey, setResolvedScopeKey] = useState<string | null>(null);
   // The specific replay node a `?message=Y` deep-link resolved to (used to highlight it).
   // Stays null when no frame/node carries that message_id — the graceful no-match fallback.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fetchSeqRef = useRef(0);
   const loadMoreSeqRef = useRef(0);
-
-  const encodedId = id ? encodeURIComponent(id) : '';
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const scopeKey = `${id ?? ''}\u0000${targetBranchId}`;
+  const currentScopeRef = useRef(scopeKey);
+  currentScopeRef.current = scopeKey;
 
   const fetchAll = useCallback(async () => {
-    if (!id || !encodedId) return;
+    if (!id) return;
     const requestId = fetchSeqRef.current + 1;
     fetchSeqRef.current = requestId;
+    const requestScopeKey = scopeKey;
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
+    loadMoreSeqRef.current += 1;
+    loadMoreAbortRef.current?.abort();
+    loadMoreAbortRef.current = null;
+    setLoadingMore(false);
     setLoadingData(true);
     setError(null);
+    setErrorCode(null);
     setTrace(null);
     setGraph(null);
     setBranchesInfo([]);
-    // Preserve a `?branch=` deep-link filter across (re)fetches; only options-validation clears it.
-    setBranchFilter(targetBranchId || '');
+    setResolvedScopeKey(null);
+    setHighlightMessageId(null);
     setLoadMoreError(null);
+
+    const isCurrentRequest = () => (
+      fetchSeqRef.current === requestId
+      && currentScopeRef.current === requestScopeKey
+      && !controller.signal.aborted
+    );
+
     try {
-      const [traceResult, graphRes, scenarioRes] = await Promise.allSettled([
-        getReplayTrace(id),
-        fetch(`/api/scenario/${encodedId}/causal-graph`, { headers: buildSessionHeaders() }),
-        getScenario(id),
+      const [traceResult, graphResult, scenarioResult] = await Promise.allSettled([
+        getReplayTrace(
+          id,
+          targetBranchId ? { targetBranchId } : undefined,
+          { signal: controller.signal },
+        ),
+        getCausalGraph<CausalGraphResponse>(
+          id,
+          targetBranchId || undefined,
+          { signal: controller.signal },
+        ),
+        getScenario(id, { signal: controller.signal }),
       ]);
-      if (fetchSeqRef.current !== requestId) return;
+      if (!isCurrentRequest()) return;
       if (traceResult.status === 'fulfilled') {
         setTrace(traceResult.value);
       } else {
         const reason = traceResult.reason;
         if (isApiError(reason)) {
           setError(reason.status);
+          setErrorCode(reason.code);
         } else {
           setError(-1);
+          setErrorCode(null);
         }
         setTrace(null);
       }
-      if (graphRes.status === 'fulfilled' && graphRes.value.ok) {
-        setGraph((await graphRes.value.json()) as CausalGraphResponse);
+      if (graphResult.status === 'fulfilled') {
+        setGraph(graphResult.value);
       } else {
         setGraph(null);
       }
-      if (scenarioRes.status === 'fulfilled') {
-        setBranchesInfo(scenarioRes.value.branches ?? []);
+      if (scenarioResult.status === 'fulfilled') {
+        setBranchesInfo(scenarioResult.value.branches ?? []);
       } else {
         setBranchesInfo([]);
       }
+      setResolvedScopeKey(requestScopeKey);
     } catch {
-      if (fetchSeqRef.current !== requestId) return;
+      if (!isCurrentRequest()) return;
       setError(-1);
+      setErrorCode(null);
       setTrace(null);
       setGraph(null);
       setBranchesInfo([]);
+      setResolvedScopeKey(requestScopeKey);
     } finally {
-      if (fetchSeqRef.current === requestId) {
+      if (isCurrentRequest()) {
         setLoadingData(false);
       }
     }
-  }, [encodedId, id, targetBranchId]);
+  }, [id, scopeKey, targetBranchId]);
 
   const loadMore = useCallback(async () => {
     if (!id || !trace?.next_cursor || loadingMore) return;
     const cursor = trace.next_cursor;
     const requestId = loadMoreSeqRef.current + 1;
     loadMoreSeqRef.current = requestId;
+    const parentRequestId = fetchSeqRef.current;
+    const requestScopeKey = scopeKey;
+    loadMoreAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
     setLoadingMore(true);
     setLoadMoreError(null);
+
+    const isCurrentRequest = () => (
+      loadMoreSeqRef.current === requestId
+      && fetchSeqRef.current === parentRequestId
+      && currentScopeRef.current === requestScopeKey
+      && !controller.signal.aborted
+    );
+
     try {
-      const next = await getReplayTrace(id, { cursor });
-      if (loadMoreSeqRef.current !== requestId) return;
+      const next = await getReplayTrace(
+        id,
+        {
+          cursor,
+          ...(targetBranchId ? { targetBranchId } : {}),
+        },
+        { signal: controller.signal },
+      );
+      if (!isCurrentRequest()) return;
       setTrace((prev) => {
+        if (!isCurrentRequest()) return prev;
         if (!prev) return next;
         if (prev.next_cursor !== cursor) return prev;
         const seen = new Set(prev.nodes.map((n) => n.branch_id));
@@ -265,20 +334,26 @@ export function ReplayView() {
         return { nodes: merged, next_cursor: nextCursor };
       });
     } catch (err) {
-      if (loadMoreSeqRef.current !== requestId) return;
+      if (!isCurrentRequest()) return;
       // Non-fatal: keep current trace; surface inline error so user may retry.
       const message = getLocalizedApiErrorMessage(err, t, t('replay.load_more_error'));
       setLoadMoreError(message);
     } finally {
-      if (loadMoreSeqRef.current === requestId) {
+      if (isCurrentRequest()) {
         setLoadingMore(false);
       }
     }
-  }, [id, trace, loadingMore, t]);
+  }, [id, loadingMore, scopeKey, t, targetBranchId, trace]);
 
   useEffect(() => {
     if (!enabled || capabilityError) return;
-    fetchAll();
+    void fetchAll();
+    return () => {
+      fetchSeqRef.current += 1;
+      fetchAbortRef.current?.abort();
+      loadMoreSeqRef.current += 1;
+      loadMoreAbortRef.current?.abort();
+    };
   }, [capabilityError, enabled, fetchAll]);
 
   const { count: totalFrames, nodeByFrame, nodesByFrame, frameToRound } = useMemo(
@@ -300,7 +375,7 @@ export function ReplayView() {
   } = useReplayTimeline({ totalFrames });
 
   // Evidence deep-link: `/replay/{id}?branch=X&message=Y&round=N`.
-  //  - branch X is already applied via `branchFilter` (seeded from `targetBranchId`);
+  //  - branch X scopes the server-side lineage requests;
   //  - round N is mapped to the current frame index because frames can differ from rounds;
   //  - here we refine to the exact message: if a frame/node carries `payload.message_id === Y`,
   //    jump to that frame and flag it for highlight; otherwise fall back gracefully to the
@@ -310,7 +385,11 @@ export function ReplayView() {
   // unrelated node. When the backend omits `payload.message_id`, nothing matches and the
   // deep-link degrades to the branch+turn view (still no crash).
   useEffect(() => {
-    if (loadingData || totalFrames <= 0 || (!targetMessageId && targetRoundNumber == null)) return;
+    if (
+      loadingData
+      || resolvedScopeKey !== scopeKey
+      || (!targetMessageId && targetRoundNumber == null)
+    ) return;
 
     let foundFrame = -1;
     let matchedKey: string | null = null;
@@ -333,22 +412,38 @@ export function ReplayView() {
       setFrame(foundFrame);
       setHighlightMessageId(matchedKey);
     } else {
-      // No-match fallback: keep the hash-derived turn frame and branch filter as-is, and
+      // No-match fallback: keep the hash-derived turn frame and target scope as-is, and
       // surface nothing — the deep-link simply degrades to the branch+turn view.
       setHighlightMessageId(null);
     }
 
     // Either way, consume one-shot params so scrubbing/refetch doesn't snap back to them.
     // Preserve any existing hash for older links and the `branch` filter in the URL.
-    searchParams.delete('message');
-    searchParams.delete('round');
-    const query = searchParams.toString();
-    try {
-      window.history.replaceState(null, '', `${query ? `?${query}` : ''}${window.location.hash}`);
-    } catch {
-      /* jsdom / sandboxes may reject replaceState — non-fatal. */
-    }
-  }, [frameToRound, loadingData, targetMessageId, targetRoundNumber, totalFrames, nodesByFrame, setFrame, searchParams]);
+    const nextSearchParams = new URLSearchParams(searchParams);
+    nextSearchParams.delete('message');
+    nextSearchParams.delete('round');
+    const query = nextSearchParams.toString();
+    const browserHash = typeof window === 'undefined' ? '' : window.location.hash;
+    navigate({
+      pathname: location.pathname,
+      search: query ? `?${query}` : '',
+      hash: browserHash || location.hash,
+    }, { replace: true });
+  }, [
+    frameToRound,
+    loadingData,
+    location.hash,
+    location.pathname,
+    navigate,
+    nodesByFrame,
+    resolvedScopeKey,
+    scopeKey,
+    searchParams,
+    setFrame,
+    targetMessageId,
+    targetRoundNumber,
+    totalFrames,
+  ]);
 
   useEffect(() => {
     if (rootRef.current && typeof rootRef.current.focus === 'function') {
@@ -365,16 +460,27 @@ export function ReplayView() {
 
   const branchOptions = useMemo<string[]>(() => {
     const seen = new Set<string>();
+    const addBranch = (branchId: string | null | undefined) => {
+      const normalized = branchId?.trim();
+      if (normalized) seen.add(normalized);
+    };
+    addBranch(targetBranchId);
+    for (const branchId of graph?.available_branches ?? []) {
+      addBranch(branchId);
+    }
+    for (const branch of branchesInfo) {
+      addBranch(branch.id);
+    }
     for (const node of trace?.nodes ?? []) {
-      if (node.branch_id) seen.add(node.branch_id);
+      addBranch(node.branch_id);
     }
     for (const node of graph?.nodes ?? []) {
       const payload = readPayload(node);
       const branchId = typeof payload.branch_id === 'string' ? payload.branch_id : null;
-      if (branchId) seen.add(branchId);
+      addBranch(branchId);
     }
     return [...seen].sort();
-  }, [graph, trace]);
+  }, [branchesInfo, graph, targetBranchId, trace]);
 
   const branchOptionMap = useMemo(() => {
     return new Map(branchesInfo.map((b) => [b.id, b]));
@@ -388,25 +494,32 @@ export function ReplayView() {
     return `${title} · ${(info.probability * 100).toFixed(1)}%`;
   }, [branchOptionMap]);
 
-  // Reset filter when current selection becomes invalid (e.g., after refetch).
-  useEffect(() => {
-    if (branchFilter && !branchOptions.includes(branchFilter)) {
-      setBranchFilter('');
+  const selectTargetBranch = useCallback((nextBranchId: string) => {
+    const normalized = nextBranchId.trim();
+    const nextSearchParams = new URLSearchParams(searchParams);
+    if (normalized) {
+      nextSearchParams.set('branch', normalized);
+    } else {
+      nextSearchParams.delete('branch');
     }
-  }, [branchFilter, branchOptions]);
+    const query = nextSearchParams.toString();
+    const browserHash = typeof window === 'undefined' ? '' : window.location.hash;
+    navigate({
+      pathname: location.pathname,
+      search: query ? `?${query}` : '',
+      hash: browserHash || location.hash,
+    }, { replace: true });
+  }, [location.hash, location.pathname, navigate, searchParams]);
 
   const visibleFrameNodes = useMemo(() => {
-    const nodes = nodesByFrame.get(frameIndex) ?? [];
-    if (!branchFilter) return nodes;
-    return nodes.filter((node) => {
-      const payload = readPayload(node);
-      const nodeBranchId = typeof payload.branch_id === 'string' ? payload.branch_id : null;
-      return nodeBranchId === branchFilter;
-    });
-  }, [branchFilter, frameIndex, nodesByFrame]);
+    return nodesByFrame.get(frameIndex) ?? [];
+  }, [frameIndex, nodesByFrame]);
 
   // Loading state
-  if (capLoading || (!capabilityError && enabled && loadingData)) {
+  if (
+    capLoading
+    || (!capabilityError && enabled && (loadingData || resolvedScopeKey !== scopeKey))
+  ) {
     return (
       <div ref={rootRef} data-testid="replay-view-root" className="replay-view-root replay-shell" tabIndex={-1}>
         <div className="replay-loading">
@@ -446,6 +559,11 @@ export function ReplayView() {
   const hasFrames = totalFrames > 0;
   const hasPendingPage = Boolean(trace?.next_cursor);
   const showEmpty = !!error || (!hasTrace && !hasGraph) || !hasFrames;
+  const canClearInvalidTarget = Boolean(
+    targetBranchId
+    && errorCode
+    && ['BRANCH_NOT_FOUND', 'BRANCH_LINEAGE_BRANCH_NOT_FOUND'].includes(errorCode),
+  );
   const currentRound = frameToRound[frameIndex];
 
   return (
@@ -488,6 +606,17 @@ export function ReplayView() {
             retryLabel={t('replay.empty.retry', 'Retry')}
             title={t('replay.empty.title', 'No replay trace available')}
           />
+          {canClearInvalidTarget && (
+            <div className="replay-trace__load-more">
+              <button
+                type="button"
+                className="replay-trace__load-more-btn"
+                onClick={() => selectTargetBranch('')}
+              >
+                {t('replay.all_branches', 'All branches')}
+              </button>
+            </div>
+          )}
           {!error && hasPendingPage && (
             <div className="replay-trace__load-more">
               <button
@@ -565,8 +694,8 @@ export function ReplayView() {
                 id="replay-branch-filter-select"
                 data-testid="replay-branch-filter-select"
                 className="replay-branch-filter__select"
-                value={branchFilter}
-                onChange={(e) => setBranchFilter(e.target.value)}
+                value={targetBranchId}
+                onChange={(e) => selectTargetBranch(e.target.value)}
               >
                 <option value="">{t('replay.all_branches', 'All branches')}</option>
                 {branchOptions.map((branchId) => (

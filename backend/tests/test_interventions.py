@@ -364,6 +364,55 @@ async def test_claim_next_pending_intervention_claims_oldest_pending_row():
         assert second.status == "pending"
 
 
+@pytest.mark.filterwarnings("error::DeprecationWarning")
+@pytest.mark.asyncio
+async def test_claim_persists_legacy_sqlite_datetime_format_and_exact_lease(
+    monkeypatch,
+):
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    scenario_id = _seed_scenario(engine)
+    branch_id = _seed_branch(engine, scenario_id)
+    key = f"{scenario_id}:{branch_id}"
+    item_id = _seed_pending_intervention(
+        engine,
+        scenario_id,
+        branch_id,
+        text="精确租约",
+    )
+    now = datetime(2026, 7, 12, 12, 34, 56, 123456)
+    lease_seconds = 137
+    monkeypatch.setattr(simulator_module, "_pending_intervention_now", lambda: now)
+
+    claimed = await simulator_module.claim_next_pending_intervention(
+        key,
+        "exact-lease-token",
+        lease_seconds=lease_seconds,
+    )
+
+    assert claimed is not None
+    assert claimed.id == item_id
+    with engine.connect() as conn:
+        raw_claimed_at, raw_lease_expires_at = conn.exec_driver_sql(
+            "SELECT claimed_at, lease_expires_at "
+            "FROM pending_intervention WHERE id = ?",
+            (item_id,),
+        ).one()
+    assert raw_claimed_at == now.isoformat(" ")
+    assert raw_lease_expires_at == (
+        now + timedelta(seconds=lease_seconds)
+    ).isoformat(" ")
+    with Session(engine) as session:
+        item = session.get(PendingIntervention, item_id)
+        assert item is not None
+        assert item.claimed_at == now
+        assert item.lease_expires_at == now + timedelta(seconds=lease_seconds)
+        assert item.lease_expires_at - item.claimed_at == timedelta(
+            seconds=lease_seconds
+        )
+
+
 @pytest.mark.asyncio
 async def test_concurrent_claim_next_pending_intervention_allows_one_winner():
     from app.services.simulator import claim_next_pending_intervention
@@ -742,6 +791,54 @@ async def test_expire_stale_claims_resets_claimed_row():
         assert item.claim_token is None
         assert item.claimed_at is None
         assert item.lease_expires_at is None
+
+
+@pytest.mark.filterwarnings("error::DeprecationWarning")
+@pytest.mark.asyncio
+async def test_expire_stale_claims_uses_strict_less_than_now(monkeypatch):
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    scenario_id = _seed_scenario(engine)
+    branch_id = _seed_branch(engine, scenario_id)
+    key = f"{scenario_id}:{branch_id}"
+    now = datetime(2026, 7, 12, 13, 0, 0, 654321)
+    stale_id = _seed_pending_intervention(
+        engine,
+        scenario_id,
+        branch_id,
+        text="已过期",
+        status="claimed",
+        claim_token="stale-token",
+        claimed_at=now - timedelta(minutes=1),
+        lease_expires_at=now - timedelta(microseconds=1),
+    )
+    equal_id = _seed_pending_intervention(
+        engine,
+        scenario_id,
+        branch_id,
+        text="边界仍有效",
+        status="claimed",
+        claim_token="equal-token",
+        claimed_at=now - timedelta(minutes=1),
+        lease_expires_at=now,
+    )
+    monkeypatch.setattr(simulator_module, "_pending_intervention_now", lambda: now)
+
+    await simulator_module.expire_stale_claims(key)
+
+    with Session(engine) as session:
+        stale = session.get(PendingIntervention, stale_id)
+        equal = session.get(PendingIntervention, equal_id)
+        assert stale is not None
+        assert equal is not None
+        assert stale.status == "pending"
+        assert stale.claim_token is None
+        assert stale.claimed_at is None
+        assert stale.lease_expires_at is None
+        assert equal.status == "claimed"
+        assert equal.claim_token == "equal-token"
+        assert equal.lease_expires_at == now
 
 
 @pytest.mark.asyncio

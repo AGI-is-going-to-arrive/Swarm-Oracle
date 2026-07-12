@@ -43,6 +43,7 @@ from app.services.agent_message_metadata import (
     public_emotion_metadata,
 )
 from app.services.blackboard import Blackboard
+from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     classify_llm_error_code,
@@ -169,6 +170,7 @@ class AgentTurnBatchFailure(RuntimeError):
 
 
 _NARRATE_MAX_CHARS = 3000
+_TERMINAL_NARRATION_NEWEST_MESSAGE_LIMIT = 96
 _DEFAULT_AGENT_TURN_GENERATION_REQUEST_TIMEOUT_SECONDS = 45.0
 _DEFAULT_AGENT_TURN_METADATA_REQUEST_TIMEOUT_SECONDS = 120.0
 _DEFAULT_AGENT_TURN_TOTAL_TIMEOUT_SECONDS = 180.0
@@ -1495,6 +1497,12 @@ def _pending_intervention_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _sqlite_legacy_datetime(value: datetime) -> str:
+    """Match sqlite3's legacy datetime adapter for raw driver parameters."""
+
+    return value.isoformat(" ")
+
+
 def _expire_stale_claims_on_connection(
     conn,
     scenario_id: str,
@@ -1513,7 +1521,7 @@ def _expire_stale_claims_on_connection(
           AND status = 'claimed'
           AND lease_expires_at < ?
         """,
-        (scenario_id, branch_id, now),
+        (scenario_id, branch_id, _sqlite_legacy_datetime(now)),
     )
 
 
@@ -1553,7 +1561,14 @@ def _claim_pending_intervention_on_connection(
           AND branch_id = ?
           AND status = 'pending'
         """,
-        (claim_token, now, lease_expires_at, row[0], scenario_id, branch_id),
+        (
+            claim_token,
+            _sqlite_legacy_datetime(now),
+            _sqlite_legacy_datetime(lease_expires_at),
+            row[0],
+            scenario_id,
+            branch_id,
+        ),
     )
     if (result.rowcount or 0) != 1:
         return None
@@ -5652,15 +5667,31 @@ async def _compress_round_memory(
 def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: int) -> dict | None:
     """Load the latest structured summary before the current compression window."""
     with Session(engine) as session:
-        round_row = session.exec(
-            select(Round)
-            .where(
-                Round.branch_id == branch_id,
-                Round.round_number < before_round,
-                Round.compressed_summary != None,  # noqa: E711
+        branch = session.get(Branch, branch_id)
+        if branch is None:
+            return None
+        try:
+            selection = select_branch_rounds(
+                session,
+                scenario_id=branch.scenario_id,
+                branch_id=branch.id,
+                requested_cutoff=max(0, before_round - 1),
             )
-            .order_by(Round.round_number.desc())
-        ).first()
+        except BranchLineageError as exc:
+            logger.warning(
+                "Compressed briefing lineage resolution failed; fallback skipped",
+                extra={"lineage_error_code": exc.code},
+            )
+            return None
+        round_row = next(
+            (
+                round_
+                for round_ in reversed(selection.rounds)
+                if round_.round_number < before_round
+                and round_.compressed_summary
+            ),
+            None,
+        )
 
     if round_row is None or not round_row.compressed_summary:
         return None
@@ -5685,6 +5716,280 @@ def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: in
     return parsed if isinstance(parsed, dict) else None
 
 
+def _load_terminal_narration_messages(engine, branch_id: str) -> list[dict[str, Any]]:
+    """Load the exact effective lineage transcript for terminal narration."""
+    with Session(engine) as session:
+        target_branch = session.get(Branch, branch_id)
+        if target_branch is None:
+            return []
+        scenario = session.get(Scenario, target_branch.scenario_id)
+        if scenario is None:
+            return []
+
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario.id,
+            branch_id=target_branch.id,
+        )
+        if not selection.rounds:
+            return []
+
+        segment_index_by_branch: dict[str, int] = {
+            segment.branch_id: index
+            for index, segment in enumerate(selection.lineage.segments)
+        }
+        round_ids_by_segment: dict[int, list[str]] = {
+            index: [] for index in range(len(selection.lineage.segments))
+        }
+        for round_ in selection.rounds:
+            round_ids_by_segment[segment_index_by_branch[round_.branch_id]].append(
+                round_.id
+            )
+        selected_round_ids = tuple(round_.id for round_ in selection.rounds)
+        agent_name_column = func.coalesce(Agent.name, "Unknown").label("agent_name")
+
+        def message_statement(round_ids: tuple[str, ...]):
+            return (
+                select(
+                    AgentMessage.id,
+                    AgentMessage.round_id,
+                    AgentMessage.agent_id,
+                    AgentMessage.content,
+                    AgentMessage.emotion,
+                    Round.round_number,
+                    Round.branch_id,
+                    agent_name_column,
+                )
+                .join(Round, AgentMessage.round_id == Round.id)
+                .outerjoin(Agent, AgentMessage.agent_id == Agent.id)
+                .where(AgentMessage.round_id.in_(round_ids))
+            )
+
+        messages_by_id: dict[str, dict[str, Any]] = {}
+
+        def add_message(row, segment_index: int) -> None:
+            if row is None:
+                return
+            (
+                message_id,
+                round_id,
+                agent_id,
+                content,
+                emotion,
+                round_number,
+                owner_branch_id,
+                agent_name,
+            ) = row
+            message_id = str(message_id)
+            messages_by_id[message_id] = {
+                "message_id": message_id,
+                "round_id": str(round_id),
+                "branch_id": str(owner_branch_id),
+                "segment_index": int(segment_index),
+                "agent_id": str(agent_id),
+                "agent_name": str(agent_name or "Unknown"),
+                "content": str(content or ""),
+                **public_emotion_metadata({"emotion": emotion}),
+                "round": int(round_number),
+            }
+
+        for segment_index, segment_round_ids in round_ids_by_segment.items():
+            if not segment_round_ids:
+                continue
+            round_ids = tuple(segment_round_ids)
+            ascending = (
+                Round.round_number.asc(),
+                agent_name_column.asc(),
+                AgentMessage.id.asc(),
+            )
+            descending = (
+                Round.round_number.desc(),
+                agent_name_column.desc(),
+                AgentMessage.id.desc(),
+            )
+            add_message(
+                session.exec(
+                    message_statement(round_ids).order_by(*ascending).limit(1)
+                ).first(),
+                segment_index,
+            )
+            add_message(
+                session.exec(
+                    message_statement(round_ids).order_by(*descending).limit(1)
+                ).first(),
+                segment_index,
+            )
+
+        newest_rows = session.exec(
+            message_statement(selected_round_ids)
+            .order_by(
+                Round.round_number.desc(),
+                agent_name_column.desc(),
+                AgentMessage.id.desc(),
+            )
+            .limit(_TERMINAL_NARRATION_NEWEST_MESSAGE_LIMIT)
+        ).all()
+        for row in newest_rows:
+            owner_branch_id = str(row[6])
+            add_message(row, segment_index_by_branch[owner_branch_id])
+
+    messages = list(messages_by_id.values())
+    messages.sort(
+        key=lambda message: (
+            message["round"],
+            message["segment_index"],
+            message["agent_name"],
+            message["message_id"],
+        )
+    )
+    return messages
+
+
+def _terminal_narration_message_key(message: dict[str, Any]) -> tuple[int, int, str, str]:
+    def coordinate(name: str) -> int:
+        try:
+            return int(message.get(name, 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        coordinate("round"),
+        coordinate("segment_index"),
+        str(message.get("agent_name") or "Unknown"),
+        str(message.get("message_id") or ""),
+    )
+
+
+def _terminal_narration_timeline_line(message: dict[str, Any]) -> str:
+    round_number = message.get("round", "?")
+    agent_name = " ".join(str(message.get("agent_name") or "Unknown").split())
+    content = " ".join(str(message.get("content") or "").split())
+    return f"[R{round_number} {agent_name}]: {content}"
+
+
+def _head_tail_elide(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars == 1:
+        return "…"
+
+    marker_index = text.find("]: ")
+    prefix = text[: marker_index + 3] if marker_index >= 0 else ""
+    if prefix and len(prefix) + 2 < max_chars:
+        body = text[len(prefix) :]
+        body_budget = max_chars - len(prefix) - 1
+        head_chars = (body_budget + 1) // 2
+        tail_chars = body_budget // 2
+        tail = body[-tail_chars:] if tail_chars else ""
+        return f"{prefix}{body[:head_chars]}…{tail}"
+
+    body_budget = max_chars - 1
+    head_chars = (body_budget + 1) // 2
+    tail_chars = body_budget // 2
+    tail = text[-tail_chars:] if tail_chars else ""
+    return f"{text[:head_chars]}…{tail}"
+
+
+def _fair_terminal_anchor_budgets(lines: list[str], max_chars: int) -> list[int]:
+    if not lines:
+        return []
+    available = max(0, max_chars - (len(lines) - 1))
+    budgets = [0] * len(lines)
+    pending = set(range(len(lines)))
+    while pending:
+        share, remainder = divmod(available, len(pending))
+        completed = {index for index in pending if len(lines[index]) <= share}
+        if completed:
+            for index in completed:
+                budgets[index] = len(lines[index])
+                available -= budgets[index]
+            pending.difference_update(completed)
+            continue
+        for offset, index in enumerate(sorted(pending)):
+            budgets[index] = share + (1 if offset < remainder else 0)
+        break
+    return budgets
+
+
+def _format_terminal_narration_rounds(
+    messages: list[dict[str, Any]],
+    *,
+    max_chars: int = _NARRATE_MAX_CHARS,
+) -> str:
+    """Build a bounded lineage timeline without dropping fork-boundary anchors."""
+    if not messages or max_chars <= 0:
+        return ""
+
+    ordered = sorted(messages, key=_terminal_narration_message_key)
+    messages_by_segment: dict[int, list[dict[str, Any]]] = {}
+    for message in ordered:
+        segment_index = _terminal_narration_message_key(message)[1]
+        messages_by_segment.setdefault(segment_index, []).append(message)
+    segment_indices = sorted(messages_by_segment)
+
+    anchor_by_key: dict[tuple[int, int, str, str], dict[str, Any]] = {}
+    for current_index, successor_index in zip(
+        segment_indices,
+        segment_indices[1:],
+        strict=False,
+    ):
+        for message in (
+            messages_by_segment[current_index][-1],
+            messages_by_segment[successor_index][0],
+        ):
+            anchor_by_key[_terminal_narration_message_key(message)] = message
+    effective_last = messages_by_segment[segment_indices[-1]][-1]
+    anchor_by_key[_terminal_narration_message_key(effective_last)] = effective_last
+
+    anchors = sorted(anchor_by_key.values(), key=_terminal_narration_message_key)
+    anchor_lines = [_terminal_narration_timeline_line(message) for message in anchors]
+    minimum_anchor_chars = len(anchor_lines) + max(0, len(anchor_lines) - 1)
+    if max_chars < minimum_anchor_chars:
+        return "…"
+    anchor_budgets = _fair_terminal_anchor_budgets(anchor_lines, max_chars)
+    rendered_by_key = {
+        _terminal_narration_message_key(message): _head_tail_elide(line, budget)
+        for message, line, budget in zip(
+            anchors,
+            anchor_lines,
+            anchor_budgets,
+            strict=True,
+        )
+    }
+    used_chars = sum(len(line) for line in rendered_by_key.values()) + max(
+        0,
+        len(rendered_by_key) - 1,
+    )
+
+    for message in reversed(ordered):
+        message_key = _terminal_narration_message_key(message)
+        if message_key in rendered_by_key:
+            continue
+        line = _terminal_narration_timeline_line(message)
+        added_chars = len(line) + (1 if rendered_by_key else 0)
+        if used_chars + added_chars > max_chars:
+            break
+        rendered_by_key[message_key] = line
+        used_chars += added_chars
+
+    rendered = "\n".join(
+        rendered_by_key[_terminal_narration_message_key(message)]
+        for message in ordered
+        if _terminal_narration_message_key(message) in rendered_by_key
+    )
+    return rendered if len(rendered) <= max_chars else "…"
+
+
+def _load_terminal_narration_context(engine, branch_id: str) -> tuple[dict, str]:
+    branch_info = _get_branch(engine, branch_id)
+    raw_rounds = _format_terminal_narration_rounds(
+        _load_terminal_narration_messages(engine, branch_id)
+    )
+    return branch_info, raw_rounds
+
+
 async def _narrate_branch_data(
     engine,
     branch_id,
@@ -5694,18 +5999,30 @@ async def _narrate_branch_data(
     llm_overrides: dict | None = None,
     web_context_block: str = "",
     question: str = "",
+    raw_rounds: str | None = None,
+    branch_info: dict[str, Any] | None = None,
 ) -> dict:
     """Collect branch data and narrate it."""
-    branch_info = _get_branch(engine, branch_id)
-    all_msgs = _get_recent_messages(engine, branch_id, max_rounds=100)
-    raw_text = "\n".join(f"[R{m.get('round', '?')} {m['agent_name']}]: {m['content']}" for m in all_msgs)  # noqa: E501
+    resolved_branch_info = branch_info
+    resolved_raw_rounds = raw_rounds
+    if resolved_branch_info is None or resolved_raw_rounds is None:
+        loaded_branch_info, loaded_raw_rounds = await asyncio.to_thread(
+            _load_terminal_narration_context,
+            engine,
+            branch_id,
+        )
+        if resolved_branch_info is None:
+            resolved_branch_info = loaded_branch_info
+        resolved_raw_rounds = (
+            loaded_raw_rounds if resolved_raw_rounds is None else resolved_raw_rounds
+        )
     agents_summary = ", ".join(f"{a['name']}({a['role']})" for a in agents[:10])
 
     result = await narrate_branch(
-        branch_title=branch_info.get("title", ""),
-        probability=branch_info.get("probability", 0.5),
+        branch_title=resolved_branch_info.get("title", ""),
+        probability=resolved_branch_info.get("probability", 0.5),
         agents_summary=agents_summary,
-        raw_rounds=raw_text[:_NARRATE_MAX_CHARS],  # limit to ~3K chars
+        raw_rounds=resolved_raw_rounds,
         language=language,
         api_key=(llm_overrides or {}).get("api_key"),
         base_url=(llm_overrides or {}).get("base_url"),
@@ -5714,7 +6031,7 @@ async def _narrate_branch_data(
         web_context_block=web_context_block,
         question=question,
     )
-    result["title"] = branch_info.get("title", "未命名")
+    result["title"] = resolved_branch_info.get("title", "未命名")
     return result
 
 
@@ -5745,21 +6062,29 @@ def _build_local_branch_narration_fallback(
     *,
     language: str,
     question: str,
+    raw_rounds: str | None = None,
+    branch_info: dict[str, Any] | None = None,
 ) -> dict:
-    branch_info = _get_branch(engine, branch_id)
-    all_msgs = _get_recent_messages(engine, branch_id, max_rounds=100)
-    raw_text = "\n".join(
-        f"[R{m.get('round', '?')} {m['agent_name']}]: {m['content']}"
-        for m in all_msgs
-    )
+    resolved_branch_info = branch_info
+    resolved_raw_rounds = raw_rounds
+    if resolved_branch_info is None or resolved_raw_rounds is None:
+        loaded_branch_info, loaded_raw_rounds = _load_terminal_narration_context(
+            engine,
+            branch_id,
+        )
+        if resolved_branch_info is None:
+            resolved_branch_info = loaded_branch_info
+        resolved_raw_rounds = (
+            loaded_raw_rounds if resolved_raw_rounds is None else resolved_raw_rounds
+        )
     result = _build_fallback_narration(
-        branch_info.get("title", ""),
-        branch_info.get("probability", 0.5),
-        raw_text[:_NARRATE_MAX_CHARS],
+        resolved_branch_info.get("title", ""),
+        resolved_branch_info.get("probability", 0.5),
+        resolved_raw_rounds,
         language=language,
         question=question,
     )
-    result["title"] = branch_info.get(
+    result["title"] = resolved_branch_info.get(
         "title",
         "未命名" if _is_chinese_language(language) else "Untitled",
     )
@@ -5778,6 +6103,19 @@ async def _narrate_branch_data_fail_soft(
     question: str = "",
 ) -> dict:
     try:
+        branch_info, raw_rounds = await asyncio.to_thread(
+            _load_terminal_narration_context,
+            engine,
+            branch_id,
+        )
+    except BranchLineageError as exc:
+        logger.warning(
+            "Terminal narration lineage resolution failed",
+            extra={"lineage_error_code": exc.code},
+        )
+        raise
+
+    try:
         narration = await _narrate_branch_data(
             engine,
             branch_id,
@@ -5786,10 +6124,18 @@ async def _narrate_branch_data_fail_soft(
             llm_overrides=llm_overrides,
             web_context_block=web_context_block,
             question=question,
+            raw_rounds=raw_rounds,
+            branch_info=branch_info,
         )
     except SimulationCancelled:
         raise
     except asyncio.CancelledError:
+        raise
+    except BranchLineageError as exc:
+        logger.warning(
+            "Terminal narration lineage resolution failed",
+            extra={"lineage_error_code": exc.code},
+        )
         raise
     except Exception as exc:
         logger.warning(
@@ -5803,6 +6149,8 @@ async def _narrate_branch_data_fail_soft(
             branch_id,
             language=language,
             question=question,
+            raw_rounds=raw_rounds,
+            branch_info=branch_info,
         )
     return _ensure_completable_narration(narration, language=language)
 

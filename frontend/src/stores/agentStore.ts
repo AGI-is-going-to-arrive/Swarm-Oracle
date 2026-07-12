@@ -112,7 +112,15 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   clearSelection: () => set({ selectedIds: new Set() }),
 
   setIdentities: (identities) => {
-    const prunedSelected = pruneSelectedIds(get().selectedIds, identities);
-    set({ identities, selectedIds: prunedSelected });
+    const effectiveUserId = getSessionBoundUserId();
+    set((state) => ({
+      identities,
+      selectedIds: pruneSelectedIds(state.selectedIds, identities),
+      requestSeq: state.requestSeq + 1,
+      loading: false,
+      loadingUserId: null,
+      loadedUserId: effectiveUserId,
+      error: null,
+    }));
   },
 }));

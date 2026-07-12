@@ -751,6 +751,42 @@ export interface ReportEvidence {
   kind: 'utterance' | 'causal_fact' | 'faction_event' | 'interview';
 }
 
+export type PremortemStatus = 'available' | 'partial' | 'missing';
+
+export type PremortemReason =
+  | 'no_distinct_evidence'
+  | 'insufficient_source_diversity'
+  | 'generation_failed'
+  | 'lineage_unavailable'
+  | 'report_generation_failed'
+  | 'byte_budget_truncated';
+
+export type PremortemEvidenceRole =
+  | 'failure_signal'
+  | 'failure_mechanism'
+  | 'counterevidence';
+
+export interface PremortemEvidenceLink {
+  evidence_ref: string;
+  role: PremortemEvidenceRole;
+  rationale_i18n: { zh: string; en: string };
+}
+
+export interface PremortemFailureMode {
+  id: string;
+  failure_mode_i18n: { zh: string; en: string };
+  mechanism_i18n: { zh: string; en: string };
+  early_warning_i18n: { zh: string; en: string };
+  uncertainty_i18n: { zh: string; en: string };
+  evidence_chain: PremortemEvidenceLink[];
+}
+
+export interface PremortemAnalysis {
+  status: PremortemStatus;
+  reason: PremortemReason | null;
+  items: PremortemFailureMode[];
+}
+
 export interface IndicatorToWatch {
   signal: string;
   direction: 'up' | 'down';
@@ -816,6 +852,7 @@ export interface FullReport {
   interview_evidence: (InterviewEvidenceEntry | Record<string, unknown>)[];
   interview_status?: InterviewStatus | null;
   premortem: Record<string, unknown>[];
+  premortem_analysis?: PremortemAnalysis | null;
   language_status: { zh: 'available' | 'missing'; en: 'available' | 'missing' } | null;
   tool_trace?: ToolTraceSummary[];
 }

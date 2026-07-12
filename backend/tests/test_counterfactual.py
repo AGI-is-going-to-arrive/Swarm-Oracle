@@ -135,6 +135,90 @@ def _setup_full_scenario(engine):
 
 
 class TestCreateCounterfactual:
+    def test_accepts_ancestor_message_for_empty_native_leaf(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        root_id = _seed_branch(engine, sid, title="root")
+        agent_id = _seed_agent(engine, sid)
+        root_round_id = _seed_round(engine, root_id, 1)
+        _seed_message(
+            engine,
+            root_round_id,
+            agent_id,
+            content="Ancestor message selected from the child timeline",
+        )
+        child_id = _seed_branch(
+            engine,
+            sid,
+            title="empty native child",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+
+        response = client.post(
+            f"/api/scenario/{sid}/counterfactual",
+            json={
+                "source_branch_id": child_id,
+                "round_number": 1,
+                "agent_id": agent_id,
+                "source_message_content": (
+                    "Ancestor message selected from the child timeline"
+                ),
+                "replacement_content": "Replacement on the effective timeline",
+                "simulate": False,
+            },
+        )
+
+        assert response.status_code == 201
+        with Session(engine) as session:
+            new_branch_id = response.json()["branch_id"]
+            cloned_round = session.exec(
+                select(Round).where(
+                    Round.branch_id == new_branch_id,
+                    Round.round_number == 1,
+                )
+            ).one()
+            cloned_message = session.exec(
+                select(AgentMessage).where(
+                    AgentMessage.round_id == cloned_round.id,
+                    AgentMessage.agent_id == agent_id,
+                )
+            ).one()
+
+        assert cloned_message.content == "Replacement on the effective timeline"
+
+    def test_clone_lineage_error_maps_to_stable_conflict(self, monkeypatch):
+        from app.services.branch_lineage import BranchLineageError
+
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        def fail_clone(*_args, **_kwargs):
+            raise BranchLineageError(
+                "BRANCH_LINEAGE_INVALID_FORK_BOUNDARY",
+                "unsafe imported lineage detail",
+            )
+
+        monkeypatch.setattr("app.api.graphs.clone_until_round", fail_clone)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual",
+                json={
+                    "source_branch_id": bid,
+                    "round_number": 2,
+                    "agent_id": aid,
+                    "replacement_content": "Alternative stance",
+                    "simulate": False,
+                },
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "BRANCH_LINEAGE_INVALID_FORK_BOUNDARY",
+            "message": "Branch lineage is invalid",
+        }
+
     def test_simulate_false_creates_branch_without_starting_simulation(self, client, monkeypatch):
         """simulate=false preserves the legacy clone+seed-only behavior."""
         engine = get_engine()
@@ -1182,6 +1266,30 @@ class TestCompare:
             params={"branch_a": "a", "branch_b": "b"},
         )
         assert resp.status_code == 404
+
+    def test_invalid_lineage_returns_stable_conflict(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        valid_id = _seed_branch(engine, sid, title="valid")
+        _seed_round(engine, valid_id, 1)
+        invalid_id = _seed_branch(
+            engine,
+            sid,
+            title="invalid lineage",
+            parent_branch_id="unsafe-internal-missing-parent",
+            fork_round=1,
+        )
+
+        response = client.get(
+            f"/api/scenario/{sid}/compare",
+            params={"branch_a": valid_id, "branch_b": invalid_id},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "BRANCH_LINEAGE_MISSING_PARENT",
+            "message": "Branch lineage is invalid",
+        }
 
     @pytest.mark.parametrize(
         ("use_missing_branch_a", "expected_message"),

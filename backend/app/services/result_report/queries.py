@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import and_, case, distinct, func, or_
+from sqlalchemy import and_, case, distinct, false, func, or_, tuple_
 from sqlmodel import Session, select
 
 from app.models import (
@@ -13,6 +13,7 @@ from app.models import (
     AgentMessage,
     AgentRelationEdge,
     AgentStateFrame,
+    Branch,
     FactionSnapshot,
     Round,
 )
@@ -20,6 +21,107 @@ from app.services.agent_message_metadata import (
     METADATA_UNAVAILABLE_EMOTION_PREFIX,
     public_emotion_metadata,
 )
+
+_REPORT_SCOPE_AUTHORITY = object()
+
+
+def _require_nonblank_id(value: object, *, label: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a nonblank string")
+
+
+@dataclass(frozen=True)
+class ReportRoundRef:
+    round_id: str
+    branch_id: str
+    round_number: int
+
+    def __post_init__(self) -> None:
+        _require_nonblank_id(self.round_id, label="round_id")
+        _require_nonblank_id(self.branch_id, label="branch_id")
+        if (
+            not isinstance(self.round_number, int)
+            or isinstance(self.round_number, bool)
+            or self.round_number < 1
+        ):
+            raise ValueError("round_number must be a positive integer")
+
+
+@dataclass(frozen=True, init=False)
+class ReportLineageScope:
+    scenario_id: str
+    target_branch_id: str
+    rounds: tuple[ReportRoundRef, ...]
+    _authority: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if getattr(self, "_authority", None) is not _REPORT_SCOPE_AUTHORITY:
+            raise ValueError("report scope was not created by lineage authority")
+        _require_nonblank_id(self.scenario_id, label="scenario_id")
+        _require_nonblank_id(self.target_branch_id, label="target_branch_id")
+        if not isinstance(self.rounds, tuple):
+            raise ValueError("report scope rounds must be an immutable tuple")
+        if not all(isinstance(round_, ReportRoundRef) for round_ in self.rounds):
+            raise ValueError("report scope rounds must contain ReportRoundRef values")
+        for round_ in self.rounds:
+            round_.__post_init__()
+        round_ids = tuple(round_.round_id for round_ in self.rounds)
+        if len(set(round_ids)) != len(round_ids):
+            raise ValueError("report scope round IDs must be unique")
+        coordinates = self.artifact_coordinates
+        if len(set(coordinates)) != len(coordinates):
+            raise ValueError("report scope artifact coordinates must be unique")
+        round_numbers = tuple(round_.round_number for round_ in self.rounds)
+        expected_rounds = tuple(range(1, len(self.rounds) + 1))
+        if round_numbers != expected_rounds:
+            raise ValueError(
+                "report scope rounds must be ordered and contiguous from round 1"
+            )
+
+    @property
+    def round_ids(self) -> tuple[str, ...]:
+        return tuple(round_.round_id for round_ in self.rounds)
+
+    @property
+    def artifact_coordinates(self) -> tuple[tuple[str, int], ...]:
+        return tuple(
+            (round_.branch_id, round_.round_number)
+            for round_ in self.rounds
+        )
+
+    def round_refs_for_number(
+        self,
+        round_number: int,
+    ) -> tuple[ReportRoundRef, ...]:
+        return tuple(
+            round_
+            for round_ in self.rounds
+            if round_.round_number == round_number
+        )
+
+
+def _create_report_lineage_scope(
+    *,
+    scenario_id: str,
+    target_branch_id: str,
+    rounds: tuple[ReportRoundRef, ...],
+) -> ReportLineageScope:
+    scope = object.__new__(ReportLineageScope)
+    object.__setattr__(scope, "scenario_id", scenario_id)
+    object.__setattr__(scope, "target_branch_id", target_branch_id)
+    object.__setattr__(scope, "rounds", rounds)
+    object.__setattr__(scope, "_authority", _REPORT_SCOPE_AUTHORITY)
+    scope.__post_init__()
+    return scope
+
+
+def _validate_report_lineage_scope(
+    report_scope: object,
+) -> ReportLineageScope:
+    if not isinstance(report_scope, ReportLineageScope):
+        raise ValueError("report_scope must be authority-created")
+    report_scope.__post_init__()
+    return report_scope
 
 
 @dataclass(frozen=True)
@@ -44,14 +146,17 @@ class LatestFactionProxyRounds:
 
 def load_evidence_message_coords(
     engine,
-    branch_id: str,
+    report_scope: ReportLineageScope,
     *,
     key_moments: list[str],
     limit: int,
 ) -> list[dict[str, Any]]:
     """Return a bounded candidate window of scored message coordinates."""
 
+    report_scope = _validate_report_lineage_scope(report_scope)
     if limit <= 0:
+        return []
+    if not report_scope.round_ids:
         return []
 
     score_expr = _message_score_expr(key_moments)
@@ -71,8 +176,12 @@ def load_evidence_message_coords(
                 AgentMessage.diverge,
             )
             .join(AgentMessage, AgentMessage.round_id == Round.id)
+            .join(Branch, Round.branch_id == Branch.id)
             .join(Agent, AgentMessage.agent_id == Agent.id, isouter=True)
-            .where(Round.branch_id == branch_id)
+            .where(
+                Branch.scenario_id == report_scope.scenario_id,
+                _round_scope_predicate(report_scope),
+            )
             .order_by(score_expr.desc(), Round.round_number.asc(), AgentMessage.id.asc())
             .limit(limit)
         ).all()
@@ -82,11 +191,15 @@ def load_evidence_message_coords(
 
 def load_key_participant_stats(
     engine,
-    branch_id: str,
+    report_scope: ReportLineageScope,
     *,
     key_moments: list[str],
 ) -> list[dict[str, Any]]:
     """Return per-agent transcript stats without loading every message."""
+
+    report_scope = _validate_report_lineage_scope(report_scope)
+    if not report_scope.round_ids:
+        return []
 
     key_moment_hit = _key_moment_hit_expr(key_moments)
     with Session(engine) as session:
@@ -95,12 +208,16 @@ def load_key_participant_stats(
                 AgentMessage.agent_id,
                 Agent.name,
                 func.count(AgentMessage.id),
-                func.count(distinct(Round.round_number)),
+                func.count(distinct(Round.id)),
                 func.sum(key_moment_hit),
             )
             .join(Round, AgentMessage.round_id == Round.id)
+            .join(Branch, Round.branch_id == Branch.id)
             .join(Agent, AgentMessage.agent_id == Agent.id, isouter=True)
-            .where(Round.branch_id == branch_id)
+            .where(
+                Branch.scenario_id == report_scope.scenario_id,
+                _round_scope_predicate(report_scope),
+            )
             .group_by(AgentMessage.agent_id, Agent.name)
             .order_by(AgentMessage.agent_id.asc())
         ).all()
@@ -119,14 +236,17 @@ def load_key_participant_stats(
 
 def load_latest_agent_state_frames(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> list[AgentStateFrame]:
+    report_scope = _validate_report_lineage_scope(report_scope)
+    if not report_scope.artifact_coordinates:
+        return []
+    exact_rounds = _artifact_scope_predicate(AgentStateFrame, report_scope)
     latest_round = (
         select(func.max(AgentStateFrame.round_number))
         .where(
-            AgentStateFrame.scenario_id == scenario_id,
-            AgentStateFrame.branch_id == branch_id,
+            AgentStateFrame.scenario_id == report_scope.scenario_id,
+            exact_rounds,
         )
         .scalar_subquery()
     )
@@ -135,8 +255,8 @@ def load_latest_agent_state_frames(
             session.exec(
                 select(AgentStateFrame)
                 .where(
-                    AgentStateFrame.scenario_id == scenario_id,
-                    AgentStateFrame.branch_id == branch_id,
+                    AgentStateFrame.scenario_id == report_scope.scenario_id,
+                    _artifact_scope_predicate(AgentStateFrame, report_scope),
                     AgentStateFrame.round_number == latest_round,
                 )
                 .order_by(AgentStateFrame.agent_id)
@@ -146,14 +266,17 @@ def load_latest_agent_state_frames(
 
 def load_latest_faction_snapshots(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> list[FactionSnapshot]:
+    report_scope = _validate_report_lineage_scope(report_scope)
+    if not report_scope.artifact_coordinates:
+        return []
+    exact_rounds = _artifact_scope_predicate(FactionSnapshot, report_scope)
     latest_round = (
         select(func.max(FactionSnapshot.round_number))
         .where(
-            FactionSnapshot.scenario_id == scenario_id,
-            FactionSnapshot.branch_id == branch_id,
+            FactionSnapshot.scenario_id == report_scope.scenario_id,
+            exact_rounds,
         )
         .scalar_subquery()
     )
@@ -162,8 +285,8 @@ def load_latest_faction_snapshots(
             session.exec(
                 select(FactionSnapshot)
                 .where(
-                    FactionSnapshot.scenario_id == scenario_id,
-                    FactionSnapshot.branch_id == branch_id,
+                    FactionSnapshot.scenario_id == report_scope.scenario_id,
+                    _artifact_scope_predicate(FactionSnapshot, report_scope),
                     FactionSnapshot.round_number == latest_round,
                 )
                 .order_by(FactionSnapshot.faction_key)
@@ -173,15 +296,18 @@ def load_latest_faction_snapshots(
 
 def load_latest_relation_stats(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> LatestRelationStats:
+    report_scope = _validate_report_lineage_scope(report_scope)
+    if not report_scope.artifact_coordinates:
+        return LatestRelationStats(0, None, None)
     opposition = _clamped_probability_expr(AgentRelationEdge.opposition_score)
+    exact_rounds = _artifact_scope_predicate(AgentRelationEdge, report_scope)
     latest_round = (
         select(func.max(AgentRelationEdge.round_number))
         .where(
-            AgentRelationEdge.scenario_id == scenario_id,
-            AgentRelationEdge.branch_id == branch_id,
+            AgentRelationEdge.scenario_id == report_scope.scenario_id,
+            exact_rounds,
         )
         .scalar_subquery()
     )
@@ -192,8 +318,8 @@ def load_latest_relation_stats(
                 func.avg(opposition),
                 func.max(opposition),
             ).where(
-                AgentRelationEdge.scenario_id == scenario_id,
-                AgentRelationEdge.branch_id == branch_id,
+                AgentRelationEdge.scenario_id == report_scope.scenario_id,
+                _artifact_scope_predicate(AgentRelationEdge, report_scope),
                 AgentRelationEdge.round_number == latest_round,
             )
         ).one()
@@ -205,12 +331,10 @@ def load_latest_relation_stats(
     )
 
 
-def count_branch_rounds(engine, branch_id: str) -> int:
-    with Session(engine) as session:
-        count = session.exec(
-            select(func.count(Round.id)).where(Round.branch_id == branch_id),
-        ).one()
-    return int(count or 0)
+def count_branch_rounds(engine, report_scope: ReportLineageScope) -> int:
+    del engine
+    report_scope = _validate_report_lineage_scope(report_scope)
+    return len(report_scope.rounds)
 
 
 def _message_coord_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -294,17 +418,22 @@ def _has_non_neutral_emotion():
 
 def count_metadata_unavailable_messages(
     engine,
-    branch_id: str,
+    report_scope: ReportLineageScope,
     round_number: int,
 ) -> int:
+    report_scope = _validate_report_lineage_scope(report_scope)
+    round_refs = report_scope.round_refs_for_number(round_number)
+    if not round_refs:
+        return 0
     emotion = func.lower(func.trim(func.coalesce(AgentMessage.emotion, "")))
     with Session(engine) as session:
         count = session.exec(
             select(func.count(AgentMessage.id))
             .join(Round, AgentMessage.round_id == Round.id)
+            .join(Branch, Round.branch_id == Branch.id)
             .where(
-                Round.branch_id == branch_id,
-                Round.round_number == round_number,
+                Branch.scenario_id == report_scope.scenario_id,
+                _round_scope_predicate(report_scope, round_refs=round_refs),
                 func.substr(
                     emotion,
                     1,
@@ -317,8 +446,11 @@ def count_metadata_unavailable_messages(
 
 def load_latest_message_metadata_coverage(
     engine,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> LatestMessageMetadataCoverage:
+    report_scope = _validate_report_lineage_scope(report_scope)
+    if not report_scope.round_ids:
+        return LatestMessageMetadataCoverage(None, 0, 0)
     emotion = func.lower(func.trim(func.coalesce(AgentMessage.emotion, "")))
     unavailable = (
         func.substr(
@@ -331,19 +463,28 @@ def load_latest_message_metadata_coverage(
         latest_round = session.exec(
             select(func.max(Round.round_number))
             .join(AgentMessage, AgentMessage.round_id == Round.id)
-            .where(Round.branch_id == branch_id)
+            .join(Branch, Round.branch_id == Branch.id)
+            .where(
+                Branch.scenario_id == report_scope.scenario_id,
+                _round_scope_predicate(report_scope),
+            )
         ).one()
         if latest_round is None:
             return LatestMessageMetadataCoverage(None, 0, 0)
+        latest_round_refs = report_scope.round_refs_for_number(int(latest_round))
         total_count, unavailable_count = session.exec(
             select(
                 func.count(AgentMessage.id),
                 func.sum(case((unavailable, 1), else_=0)),
             )
             .join(Round, AgentMessage.round_id == Round.id)
+            .join(Branch, Round.branch_id == Branch.id)
             .where(
-                Round.branch_id == branch_id,
-                Round.round_number == int(latest_round),
+                Branch.scenario_id == report_scope.scenario_id,
+                _round_scope_predicate(
+                    report_scope,
+                    round_refs=latest_round_refs,
+                ),
             )
         ).one()
     return LatestMessageMetadataCoverage(
@@ -355,26 +496,52 @@ def load_latest_message_metadata_coverage(
 
 def load_latest_faction_proxy_rounds(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> LatestFactionProxyRounds:
+    report_scope = _validate_report_lineage_scope(report_scope)
+    if not report_scope.artifact_coordinates:
+        return LatestFactionProxyRounds(None, None)
+    snapshot_rounds = _artifact_scope_predicate(FactionSnapshot, report_scope)
+    relation_rounds = _artifact_scope_predicate(AgentRelationEdge, report_scope)
     with Session(engine) as session:
         snapshot_round = session.exec(
             select(func.max(FactionSnapshot.round_number)).where(
-                FactionSnapshot.scenario_id == scenario_id,
-                FactionSnapshot.branch_id == branch_id,
+                FactionSnapshot.scenario_id == report_scope.scenario_id,
+                snapshot_rounds,
             )
         ).one()
         relation_round = session.exec(
             select(func.max(AgentRelationEdge.round_number)).where(
-                AgentRelationEdge.scenario_id == scenario_id,
-                AgentRelationEdge.branch_id == branch_id,
+                AgentRelationEdge.scenario_id == report_scope.scenario_id,
+                relation_rounds,
             )
         ).one()
     return LatestFactionProxyRounds(
         snapshot_round=int(snapshot_round) if snapshot_round is not None else None,
         relation_round=int(relation_round) if relation_round is not None else None,
     )
+
+
+def _artifact_scope_predicate(model: Any, report_scope: ReportLineageScope):
+    coordinates = report_scope.artifact_coordinates
+    if not coordinates:
+        return false()
+    return tuple_(model.branch_id, model.round_number).in_(coordinates)
+
+
+def _round_scope_predicate(
+    report_scope: ReportLineageScope,
+    *,
+    round_refs: tuple[ReportRoundRef, ...] | None = None,
+):
+    refs = report_scope.rounds if round_refs is None else round_refs
+    if not refs:
+        return false()
+    coordinates = tuple(
+        (round_.round_id, round_.branch_id, round_.round_number)
+        for round_ in refs
+    )
+    return tuple_(Round.id, Round.branch_id, Round.round_number).in_(coordinates)
 
 
 def _clamped_probability_expr(value):

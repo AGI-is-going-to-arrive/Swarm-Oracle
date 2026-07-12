@@ -14,6 +14,10 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 - A Setup completion gate that requires a successful test of the current connection or explicit acceptance of saving it unverified.
 - Sanitized Snapshot demo path for browsing saved runs without a live LLM.
 - Standalone result reports, model profiles, Local Packs, multi-run results, and public sharing artifacts.
+- Clickable Local Pack `demo_snapshots` with catalog-whitelisted, validated direct import and explicit recovery for definite failures or unknown transport outcomes.
+- Structured premortem analysis with explicit availability, failure modes, uncertainty, and per-mode evidence chains independent from ordinary report sections.
+- Ordered Agent Pack v1 export and atomic import for portable Agent groups, excluding identity IDs, owner data, memories, growth history, conversations, and separately stored credentials while redacting common credential patterns.
+- Offline Public Artifact sharing through redacted JSON, single-file HTML, Gallery hash links, and local-file loading; no hosted registry or community publishing is implied.
 - Bilingual screenshots, static showcase, and contributor/security guidance.
 
 ### Changed
@@ -31,8 +35,8 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 - Report likelihood and analytic confidence use completed terminal leaves and evidence counts only; fork parents and signed affect-convergence proxies do not raise analytic confidence.
 - Exact-local OpenAI-compatible endpoints can run without a key or `Authorization` header; all other custom and remote endpoints remain key-required.
 - Local Pack selection now atomically imports bounded question, language, settings, world context, stakes, and cast preview. Casts do not create persistent Agent identities, but their bounded fields enter the run as untrusted world context; author prompts remain explicitly untrusted reference evidence.
-- Agent observations are projected from the selected branch lineage and, in replay, its round cutoff. Legacy causal/faction `stance`, `trust`, and `opposition` fields are now disclosed as affect proxies derived from model-generated `emotion` / `diverge`; current causal/faction responses cover the selected branch segment only and do not merge pre-fork ancestors.
-- Pack demo entries now reference only shipped Snapshots that actually exist and display as read-only label/filename metadata rather than a clickable import action.
+- Agent observations and branch-scoped causal, faction, report, Replay, and compare paths now use one effective root-to-leaf lineage and round cutoff. Eligible pre-fork ancestor rounds are included, while siblings, parent post-fork future data, and post-cutoff data are excluded; self-contained Replay branches stop at their Replay boundary. Legacy causal/faction `stance`, `trust`, and `opposition` fields remain disclosed as affect proxies derived from model-generated `emotion` / `diverge`.
+- Pack demo entries now reference only shipped Snapshots that actually exist and provide a clickable direct-import action when Snapshot import is enabled.
 - Release publication now verifies the exact CI-passed SHA, builds an immutable backend/frontend pair, promotes both tags only after both images succeed, triggers and verifies pair rollback if either promotion fails, requires an executed signoff for version tags, skips stale edge publication, labels dry-run work as planned, and propagates browser teardown failures.
 
 ### Fixed
@@ -47,12 +51,9 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 - Prevented an old profile secret, model, rate limit, or capability policy from following a changed endpoint or Debate role profile; detached the old profile on complete provider overrides; rejected partial session overrides before they can mix with a recovered scenario profile; kept unchanged profile mirrors out of result-page session overrides; required complete remote tuples for model edits; and prevented the server default key from being injected into an explicit keyless local request.
 - Prevented Local Pack context and cast previews from leaking into a later Quick Start or other non-pack launch.
 - Reloaded selected Local Pack detail after same-ID refresh, cleared stale detail/template/actions before switching, and prevented late detail responses from overwriting the new selection.
+- Distinguished a definite Local Pack demo import failure from an unknown transport outcome, directing users to History before a retry when the request may already have committed.
+- Rejected duplicate Agent, Message, and Graph Node source IDs, plus conflicting reuse of one Round source ID, before the first Snapshot import database write.
 - Kept failed, cancelled, skipped, stalled, truncated, and partial report states visible without discarding saved sections or presenting historical excerpts as live interviews.
 - Made counterfactual Agent and round selectors fit narrow phone viewports without horizontal overflow.
-
-### Known limitations
-
-- W2.0 causal and faction views do not yet stitch pre-fork ancestor rounds into the selected branch segment; lineage-aware ancestor stitching remains W2.1.
-- Local Pack `demo_snapshots` are metadata only in W2.0; clickable, directly importable demos remain W2.1.
 
 [Unreleased]: https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/commits/main

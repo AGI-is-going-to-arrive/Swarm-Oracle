@@ -5,34 +5,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getFactionTimeline, isApiError } from '../api/client';
+import { getFactionTimeline, isApiError, type FactionTimelineEntry } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { FactionForceGraph } from './FactionForceGraph';
 import { NodeConversationSheet } from './kg/NodeConversationSheet';
-
-interface FactionInfo {
-  key: string;
-  label: string | null;
-  members: string[];
-  affect_center?: number;
-  member_share?: number;
-  stance_center?: number;
-  confidence?: number;
-}
-
-interface FactionEventInfo {
-  type?: string | null;
-  display_type?: string | null;
-  actor_agent_id?: string | null;
-  agent_id?: string | null;
-  faction_key: string;
-}
-
-interface RoundFactionData {
-  round: number;
-  factions: FactionInfo[];
-  events: FactionEventInfo[];
-}
 
 const FACTION_COLORS = ['#4a90d9', '#e74c3c', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#f1c40f', '#e91e63'];
 const FACTION_EVENT_ICONS: Record<string, string> = {
@@ -50,9 +26,17 @@ interface Props {
   agentNames?: Record<string, string>;
 }
 
-function normalizeText(value?: string | null): string | null {
-  const normalized = value?.trim();
+function normalizeText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
   return normalized ? normalized : null;
+}
+
+function shortBranchId(value: unknown): string | null {
+  const normalized = normalizeText(value);
+  if (!normalized) return null;
+  if (normalized.length <= 16) return normalized;
+  return `${normalized.slice(0, 8)}…${normalized.slice(-4)}`;
 }
 
 function formatMetric(value?: number | null): string {
@@ -61,7 +45,7 @@ function formatMetric(value?: number | null): string {
 
 export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, agentNames }: Props) {
   const { t, i18n } = useTranslation();
-  const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
+  const [timeline, setTimeline] = useState<FactionTimelineEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorStatus, setErrorStatus] = useState<number | 'unknown' | null>(null);
   const fetchRequestIdRef = useRef(0);
@@ -79,7 +63,10 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
     origin: { nodeId: '', nodeType: '' },
   });
 
-  const branchDisplayName = normalizeText(branchLabel) ?? normalizeText(branchId) ?? t('factions.current_branch', 'Current branch');
+  const selectedBranchId = normalizeText(branchId);
+  const branchDisplayName = normalizeText(branchLabel)
+    ?? shortBranchId(selectedBranchId)
+    ?? t('factions.current_branch', 'Current branch');
   const membersLabel = t('factions.members', 'members');
   const scopeLabel = t('factions.branch_scope', 'Branch scope');
   const roundSpanLabel = t('factions.round_span', 'Round span');
@@ -91,6 +78,20 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
   const eventTypeLabel = t('factions.event_type', 'Type');
   const roundEventsLabel = t('factions.round_events', 'Round events');
   const unknownEventLabel = t('factions.event_labels.unknown', 'Unknown event');
+  const describeRoundSource = useCallback((sourceBranchId: unknown) => {
+    const normalizedSourceId = normalizeText(sourceBranchId);
+    if (!normalizedSourceId) {
+      return t('factions.source_unknown', 'Source branch unavailable');
+    }
+    if (normalizedSourceId === selectedBranchId) {
+      return t('factions.source_selected', 'Selected branch: {{branch}}', {
+        branch: branchDisplayName,
+      });
+    }
+    return t('factions.source_ancestor', 'Ancestor/source branch: {{branch}}', {
+      branch: shortBranchId(normalizedSourceId),
+    });
+  }, [branchDisplayName, selectedBranchId, t]);
   const errorMessage = useMemo(() => {
     if (errorStatus === 401 || errorStatus === 403) {
       return t('factions.error_forbidden', 'You do not have permission to view this faction timeline.');
@@ -129,7 +130,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
     setLoading(true);
     setErrorStatus(null);
     try {
-      const data = await getFactionTimeline(scenarioId, branchId) as RoundFactionData[];
+      const data = await getFactionTimeline(scenarioId, branchId);
       if (requestId !== fetchRequestIdRef.current) return;
       setTimeline(data);
       setErrorStatus(null);
@@ -164,6 +165,8 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
   );
   const firstRound = timeline[0]?.round ?? 0;
   const lastRound = timeline[timeline.length - 1]?.round ?? firstRound;
+  const hasLineageScope = timeline.length > 0
+    && timeline.every((round) => round.scope_kind === 'branch_lineage');
   const roundSpan = firstRound === lastRound
     ? t('factions.round_label', 'Round {{round}}', { round: firstRound })
     : t('factions.round_span_range', {
@@ -222,6 +225,17 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
               'Derived from model-generated emotion/diverge fields; not verified trust, relationships, or stances.',
             )}
           </p>
+          {hasLineageScope && (
+            <p
+              role="note"
+              style={{ margin: '0.35rem 0 0', fontSize: '0.72rem', color: '#8b98ab', maxWidth: '54rem' }}
+            >
+              {t(
+                'factions.scope_branch_lineage',
+                "This timeline follows the selected branch's effective lineage. Earlier rounds may come from a parent branch; replay branches may be self-contained. Sibling and unrelated source branches are excluded.",
+              )}
+            </p>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
           <span
@@ -342,7 +356,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
                   {t('factions.round_label', 'Round {{round}}', { round: round.round })}
                 </div>
                 <div style={{ marginTop: '0.2rem', fontSize: '0.72rem', color: '#8b98ab' }}>
-                  {scopeLabel}: {branchDisplayName}
+                  {describeRoundSource(round.branch_id)}
                 </div>
               </div>
               {round.events.length > 0 && (

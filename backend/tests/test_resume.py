@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import gc
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -119,7 +120,10 @@ class TestCheckpointLoaders:
         mock_session.exec.return_value.first.return_value = cp
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
-        with patch("app.services.replay.Session", return_value=mock_session):
+        with patch(
+            "app.services.replay._checkpoint_branch_id_for_visible_round",
+            return_value="b1",
+        ), patch("app.services.replay.Session", return_value=mock_session):
             result = load_checkpoint_agent_states("sc1", "b1", 5)
 
         assert result == agent_data
@@ -136,7 +140,10 @@ class TestCheckpointLoaders:
         mock_session.exec.return_value.first.return_value = cp
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
-        with patch("app.services.replay.Session", return_value=mock_session):
+        with patch(
+            "app.services.replay._checkpoint_branch_id_for_visible_round",
+            return_value="b1",
+        ), patch("app.services.replay.Session", return_value=mock_session):
             result = load_checkpoint_blackboard("sc1", "b1", 5)
 
         assert result == bb_data
@@ -152,10 +159,111 @@ class TestCheckpointLoaders:
         mock_session.exec.return_value.first.return_value = cp
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
-        with patch("app.services.replay.Session", return_value=mock_session):
+        with patch(
+            "app.services.replay._checkpoint_branch_id_for_visible_round",
+            return_value="b1",
+        ), patch("app.services.replay.Session", return_value=mock_session):
             result = load_checkpoint_blackboard("sc1", "b1", 5)
 
         assert result is None
+
+    def test_lineage_error_is_nonblocking_and_logged(self, caplog):
+        from app.services.replay import load_checkpoint_agent_states
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = Scenario(question="checkpoint lineage error", status=ScenarioStatus.DONE)
+            session.add(scenario)
+            session.flush()
+            orphan = Branch(
+                scenario_id=scenario.id,
+                parent_branch_id="missing-parent",
+                fork_round=1,
+                title="orphan",
+            )
+            session.add(orphan)
+            session.commit()
+            scenario_id = scenario.id
+            orphan_id = orphan.id
+
+        caplog.set_level(logging.WARNING, logger="app.services.replay")
+
+        result = load_checkpoint_agent_states(scenario_id, orphan_id, 1)
+
+        assert result is None
+        assert "Checkpoint lineage resolution failed; restore skipped" in caplog.text
+
+    def test_checkpoint_lookup_does_not_cross_self_contained_replay_parent(self):
+        from app.services.blackboard import Blackboard
+        from app.services.replay import (
+            load_checkpoint_agent_states,
+            load_checkpoint_blackboard,
+            write_checkpoint,
+        )
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = Scenario(question="replay boundary", status=ScenarioStatus.DONE)
+            session.add(scenario)
+            session.flush()
+            source = Branch(scenario_id=scenario.id, title="source")
+            session.add(source)
+            session.flush()
+            session.add_all(
+                [
+                    Round(branch_id=source.id, round_number=1),
+                    Round(branch_id=source.id, round_number=2),
+                ]
+            )
+            replay = Branch(
+                scenario_id=scenario.id,
+                parent_branch_id=source.id,
+                fork_round=1,
+                replay_kind="resume",
+                replay_source_branch_id=source.id,
+                replay_source_round=1,
+                title="self-contained replay",
+            )
+            session.add(replay)
+            session.flush()
+            session.add_all(
+                [
+                    Round(branch_id=replay.id, round_number=1),
+                    Round(branch_id=replay.id, round_number=2),
+                ]
+            )
+            native_child = Branch(
+                scenario_id=scenario.id,
+                parent_branch_id=replay.id,
+                fork_round=2,
+                title="native replay child",
+            )
+            session.add(native_child)
+            session.flush()
+            scenario_id = scenario.id
+            source_id = source.id
+            native_child_id = native_child.id
+            session.commit()
+
+        stale_blackboard = Blackboard()
+        stale_blackboard.update_global_summary(
+            {
+                "situation": "MUST_NOT_CROSS_REPLAY_BOUNDARY",
+                "active_debates": [],
+                "tension_points": [],
+                "consensus": "",
+            }
+        )
+        write_checkpoint(
+            scenario_id,
+            source_id,
+            2,
+            [{"id": "agent", "stance": "stale", "emotion": "stale"}],
+            blackboard=stale_blackboard.export_snapshot(),
+        )
+
+        assert load_checkpoint_agent_states(scenario_id, native_child_id, 2) is None
+        assert load_checkpoint_blackboard(scenario_id, native_child_id, 2) is None
 
 
 # ── TestCloneForResume ──────────────────────────────────
@@ -173,8 +281,14 @@ class TestCloneForResume:
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.exec.return_value.all.return_value = []
 
+        source_selection = MagicMock()
+        source_selection.rounds = ()
+        source_selection.contains.return_value = True
         with patch("app.services.replay.Session", return_value=mock_session):
-            with patch("app.services.replay.Branch") as MockBranch:
+            with patch(
+                "app.services.replay.select_branch_rounds",
+                return_value=source_selection,
+            ), patch("app.services.replay.Branch") as MockBranch:
                 MockBranch.return_value = mock_branch
                 result = clone_until_round(
                     "sc1", "b1", 5,
@@ -198,8 +312,14 @@ class TestCloneForResume:
         mock_session.__exit__ = MagicMock(return_value=False)
         mock_session.exec.return_value.all.return_value = []
 
+        source_selection = MagicMock()
+        source_selection.rounds = ()
+        source_selection.contains.return_value = True
         with patch("app.services.replay.Session", return_value=mock_session):
-            with patch("app.services.replay.Branch") as MockBranch:
+            with patch(
+                "app.services.replay.select_branch_rounds",
+                return_value=source_selection,
+            ), patch("app.services.replay.Branch") as MockBranch:
                 MockBranch.return_value = mock_branch
                 clone_until_round("sc1", "b1", 3)
 
@@ -352,20 +472,21 @@ class TestResumeEndpoint:
         def exec_side_effect(query):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] in {1, 4}:
+            if call_count[0] in {1, 3}:
                 result.first.return_value = scenario
-            elif call_count[0] in {2, 5}:
+            elif call_count[0] in {2, 4}:
                 result.first.return_value = branch
-            elif call_count[0] in {3, 6}:
-                result.first.return_value = 10  # max round
-            elif call_count[0] == 7:
+            elif call_count[0] == 5:
                 result.all.return_value = []  # no replay branches
             return result
 
         mock_session.exec = MagicMock(side_effect=exec_side_effect)
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
-        with patch("app.api.graphs.Session", return_value=mock_session):
+        with patch(
+            "app.api.graphs.Session",
+            return_value=mock_session,
+        ), patch("app.api.graphs._validate_resume_lineage_round"):
             from fastapi import FastAPI
 
             from app.api.graphs import router
@@ -411,13 +532,11 @@ class TestResumeEndpoint:
         def exec_side_effect(query):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] in {1, 4}:
+            if call_count[0] in {1, 3}:
                 result.first.return_value = scenario
-            elif call_count[0] in {2, 5}:
+            elif call_count[0] in {2, 4}:
                 result.first.return_value = branch
-            elif call_count[0] in {3, 6}:
-                result.first.return_value = 10
-            elif call_count[0] == 7:
+            elif call_count[0] == 5:
                 result.all.return_value = []
             return result
 
@@ -425,7 +544,10 @@ class TestResumeEndpoint:
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
 
-        with patch("app.api.graphs.Session", return_value=mock_session):
+        with patch(
+            "app.api.graphs.Session",
+            return_value=mock_session,
+        ), patch("app.api.graphs._validate_resume_lineage_round"):
             from fastapi import FastAPI
 
             from app.api.graphs import router
@@ -523,15 +645,25 @@ class TestResumeEndpoint:
                 result.first.return_value = scenario
             elif call_count[0] == 2:
                 result.first.return_value = branch
-            elif call_count[0] == 3:
-                result.first.return_value = 2
             return result
 
         mock_session.exec = MagicMock(side_effect=exec_side_effect)
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
 
-        with patch("app.api.graphs.Session", return_value=mock_session):
+        from app.api.errors import api_error
+
+        with patch(
+            "app.api.graphs.Session",
+            return_value=mock_session,
+        ), patch(
+            "app.api.graphs._validate_resume_lineage_round",
+            side_effect=api_error(
+                400,
+                "RESUME_ROUND_OUT_OF_RANGE",
+                "round_number 3 exceeds available rounds",
+            ),
+        ):
             from fastapi import FastAPI
 
             from app.api.graphs import router
@@ -549,6 +681,75 @@ class TestResumeEndpoint:
             "code": "RESUME_ROUND_OUT_OF_RANGE",
             "message": "round_number 3 exceeds available rounds",
         }
+
+    def test_resume_accepts_ancestor_round_for_empty_native_leaf(self, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, root_id = _seed_resume_scenario(engine)
+        with Session(engine) as session:
+            child = Branch(
+                scenario_id=sid,
+                parent_branch_id=root_id,
+                fork_round=1,
+                title="empty child",
+            )
+            session.add(child)
+            session.commit()
+            session.refresh(child)
+            child_id = child.id
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_stop_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", lambda *_args: True)
+
+        async def fake_run_sim_background(*_args, **_kwargs):
+            return None
+
+        def close_background_coroutine(coro):
+            coro.close()
+
+        monkeypatch.setattr(graphs_module, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(
+            graphs_module,
+            "schedule_background_task",
+            close_background_coroutine,
+        )
+
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/scenario/{sid}/resume",
+                json={"source_branch_id": child_id, "round_number": 1},
+            )
+
+        assert response.status_code == 201
+        clone_id = response.json()["branch_id"]
+        with Session(engine) as session:
+            cloned_rounds = session.exec(
+                select(Round)
+                .where(Round.branch_id == clone_id)
+                .order_by(Round.round_number)
+            ).all()
+        assert [round_.round_number for round_ in cloned_rounds] == [1]
 
     def test_schedule_failure_rolls_back_branch_and_status_without_unawaited_coroutine(
         self,
@@ -890,13 +1091,11 @@ class TestBranchLimitShared:
         def exec_side_effect(query):
             call_count[0] += 1
             result = MagicMock()
-            if call_count[0] in {1, 4}:
+            if call_count[0] in {1, 3}:
                 result.first.return_value = scenario
-            elif call_count[0] in {2, 5}:
+            elif call_count[0] in {2, 4}:
                 result.first.return_value = branch
-            elif call_count[0] in {3, 6}:
-                result.first.return_value = 10
-            elif call_count[0] == 7:
+            elif call_count[0] == 5:
                 # 3 existing replay branches
                 result.all.return_value = [MagicMock(), MagicMock(), MagicMock()]
             return result
@@ -904,7 +1103,10 @@ class TestBranchLimitShared:
         mock_session.exec = MagicMock(side_effect=exec_side_effect)
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
-        with patch("app.api.graphs.Session", return_value=mock_session):
+        with patch(
+            "app.api.graphs.Session",
+            return_value=mock_session,
+        ), patch("app.api.graphs._validate_resume_lineage_round"):
             from fastapi import FastAPI
 
             from app.api.graphs import router

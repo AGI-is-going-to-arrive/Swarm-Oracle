@@ -7,13 +7,16 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+import app.api.graphs as graphs_api
 from app.config import settings
 from app.main import app
 from app.models.checkpoint import AgentRelationEdge, FactionEvent, FactionSnapshot
-from app.models.database import Branch, Scenario, ScenarioStatus, get_engine
+from app.models.database import Branch, Round, Scenario, ScenarioStatus, get_engine
+from app.models.graph import AgentStateFrame
 from app.services.causal_graph import append_round_nodes
 from app.services.factions import (
     _STANCE_GROUP_THRESHOLD,
+    _get_previous_frames,
     get_faction_relations,
     get_faction_timeline,
     process_round,
@@ -51,6 +54,116 @@ def _seed_scenario_with_branch(*, branch_id: str | None = None) -> tuple[str, st
         return scenario.id, branch.id
 
 
+def _seed_three_generation_lineage() -> dict[str, str]:
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="faction lineage authority",
+            status=ScenarioStatus.DONE,
+        )
+        session.add(scenario)
+        session.flush()
+        branch_ids = {
+            "root": f"{scenario.id}-root",
+            "child": f"{scenario.id}-child",
+            "leaf": f"{scenario.id}-leaf",
+            "sibling": f"{scenario.id}-sibling",
+            "clone": f"{scenario.id}-clone",
+        }
+        session.add_all([
+            Branch(
+                id=branch_ids["root"],
+                scenario_id=scenario.id,
+                fork_round=0,
+                title="Root",
+            ),
+            Branch(
+                id=branch_ids["child"],
+                scenario_id=scenario.id,
+                parent_branch_id=branch_ids["root"],
+                fork_round=2,
+                title="Child",
+            ),
+            Branch(
+                id=branch_ids["leaf"],
+                scenario_id=scenario.id,
+                parent_branch_id=branch_ids["child"],
+                fork_round=4,
+                title="Leaf",
+            ),
+            Branch(
+                id=branch_ids["sibling"],
+                scenario_id=scenario.id,
+                parent_branch_id=branch_ids["root"],
+                fork_round=2,
+                title="Sibling",
+            ),
+            Branch(
+                id=branch_ids["clone"],
+                scenario_id=scenario.id,
+                parent_branch_id=branch_ids["leaf"],
+                fork_round=5,
+                replay_kind="resume",
+                title="Self-contained clone",
+            ),
+        ])
+        session.flush()
+        session.add_all([
+            Round(branch_id=branch_ids["root"], round_number=1),
+            Round(branch_id=branch_ids["root"], round_number=2),
+            Round(branch_id=branch_ids["root"], round_number=3),
+            Round(branch_id=branch_ids["child"], round_number=2),
+            Round(branch_id=branch_ids["child"], round_number=3),
+            Round(branch_id=branch_ids["child"], round_number=4),
+            Round(branch_id=branch_ids["child"], round_number=5),
+            Round(branch_id=branch_ids["leaf"], round_number=5),
+            Round(branch_id=branch_ids["sibling"], round_number=3),
+            Round(branch_id=branch_ids["clone"], round_number=1),
+            Round(branch_id=branch_ids["clone"], round_number=2),
+        ])
+        session.commit()
+        return {"scenario": scenario.id, **branch_ids}
+
+
+def _materialize_native_branch_rounds(
+    scenario_id: str,
+    branch_id: str,
+    through_round: int,
+) -> None:
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            session.add(
+                Scenario(
+                    id=scenario_id,
+                    question="faction fixture",
+                    status=ScenarioStatus.DONE,
+                )
+            )
+            session.flush()
+        branch = session.get(Branch, branch_id)
+        if branch is None:
+            session.add(
+                Branch(
+                    id=branch_id,
+                    scenario_id=scenario_id,
+                    fork_round=0,
+                    title="Fixture branch",
+                )
+            )
+            session.flush()
+        existing_rounds = set(
+            session.exec(
+                select(Round.round_number).where(Round.branch_id == branch_id)
+            ).all()
+        )
+        session.add_all([
+            Round(branch_id=branch_id, round_number=round_number)
+            for round_number in range(1, through_round + 1)
+            if round_number not in existing_rounds
+        ])
+        session.commit()
+
+
 def _insert_relation(
     scenario_id: str,
     branch_id: str,
@@ -62,6 +175,7 @@ def _insert_relation(
     opposition_score: float,
     evidence_summary: str | None = None,
 ) -> None:
+    _materialize_native_branch_rounds(scenario_id, branch_id, round_number)
     with Session(get_engine()) as session:
         session.add(
             AgentRelationEdge(
@@ -83,6 +197,12 @@ def _insert_relation_rows(
     branch_id: str,
     rows: list[dict],
 ) -> None:
+    if rows:
+        _materialize_native_branch_rounds(
+            scenario_id,
+            branch_id,
+            max(int(row["round_number"]) for row in rows),
+        )
     with Session(get_engine()) as session:
         session.add_all(
             [
@@ -210,6 +330,8 @@ class TestProcessRound:
         assert result["excluded_agent_count"] == 1
         assert result["required_agent_count"] == 4
         assert result["partial"] is True
+        assert result["scope_kind"] == "branch_segment_only"
+        assert result["scope_kind"] != "branch_lineage"
         member_ids = {
             agent_id
             for faction in result["factions"]
@@ -484,6 +606,7 @@ class TestProcessRound:
 
     def test_detects_betrayal_event(self):
         """Agent shifts stance > 0.5 between rounds → betrayal."""
+        _materialize_native_branch_rounds("s7", "b1", 2)
         # Round 1: populate previous AgentStateFrame via causal_graph
         r1_msgs = [
             MockMessage(agent_id="a1", emotion="cooperative", id="m1"),  # 0.5
@@ -521,8 +644,67 @@ class TestProcessRound:
         assert result is not None
         assert result["events"] == []
 
+    def test_previous_frames_use_exact_lineage_owner_clone_boundary_and_no_fallback(self):
+        lineage = _seed_three_generation_lineage()
+        with Session(get_engine()) as session:
+            session.add_all([
+                AgentStateFrame(
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["root"],
+                    round_number=2,
+                    agent_id="agent",
+                    stance_score=0.6,
+                ),
+                AgentStateFrame(
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["child"],
+                    round_number=2,
+                    agent_id="agent",
+                    stance_score=-0.9,
+                ),
+                AgentStateFrame(
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["root"],
+                    round_number=1,
+                    agent_id="agent",
+                    stance_score=-0.4,
+                ),
+                AgentStateFrame(
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["clone"],
+                    round_number=1,
+                    agent_id="agent",
+                    stance_score=0.8,
+                ),
+            ])
+            session.commit()
+
+            child_first = _get_previous_frames(
+                session,
+                lineage["scenario"],
+                lineage["child"],
+                3,
+            )
+            clone_second = _get_previous_frames(
+                session,
+                lineage["scenario"],
+                lineage["clone"],
+                2,
+            )
+            missing_exact_round = _get_previous_frames(
+                session,
+                lineage["scenario"],
+                lineage["leaf"],
+                7,
+            )
+
+        assert child_first == {"agent": 0.6}
+        assert clone_second == {"agent": 0.8}
+        assert missing_exact_round == {}
+
     def test_stores_betrayal_event_in_db(self):
         """Betrayal events are persisted as FactionEvent rows."""
+        _materialize_native_branch_rounds("s9", "b1", 2)
         r1_msgs = [
             MockMessage(agent_id="a1", emotion="cooperative", id="m1"),
             MockMessage(agent_id="a2", emotion="cooperative", id="m2"),
@@ -557,6 +739,7 @@ class TestProcessRound:
 
         scenario_id = "betrayal-membership-index"
         branch_id = "betrayal-membership-branch"
+        _materialize_native_branch_rounds(scenario_id, branch_id, 2)
         round_one = [
             MockMessage(agent_id="a1", emotion="cooperative", id="index-m1"),
             MockMessage(agent_id="a2", emotion="cooperative", id="index-m2"),
@@ -641,11 +824,212 @@ class TestProcessRound:
 
 
 class TestGetFactionTimeline:
+    def test_uses_exact_materialized_lineage_coordinates_and_true_branch_ids(self):
+        lineage = _seed_three_generation_lineage()
+        selected_coordinates = [
+            (lineage["root"], 1),
+            (lineage["root"], 2),
+            (lineage["child"], 3),
+            (lineage["child"], 4),
+            (lineage["leaf"], 5),
+        ]
+        noise_coordinates = [
+            (lineage["root"], 3),
+            (lineage["child"], 2),
+            (lineage["child"], 5),
+            (lineage["sibling"], 3),
+        ]
+        with Session(get_engine()) as session:
+            for index, (branch_id, round_number) in enumerate(
+                reversed(selected_coordinates)
+            ):
+                session.add(
+                    FactionSnapshot(
+                        id=f"selected-snapshot-{index}",
+                        scenario_id=lineage["scenario"],
+                        branch_id=branch_id,
+                        round_number=round_number,
+                        faction_key=f"selected-{round_number}",
+                        member_agent_ids_json="[]",
+                    )
+                )
+            for index, (branch_id, round_number) in enumerate(noise_coordinates):
+                session.add(
+                    FactionSnapshot(
+                        id=f"noise-snapshot-{index}",
+                        scenario_id=lineage["scenario"],
+                        branch_id=branch_id,
+                        round_number=round_number,
+                        faction_key=f"noise-{index}",
+                        member_agent_ids_json="[]",
+                    )
+                )
+            session.add_all([
+                FactionEvent(
+                    id="selected-event",
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["child"],
+                    round_number=3,
+                    event_type="betrayal",
+                    actor_agent_id="agent-selected",
+                    faction_key="selected-3",
+                ),
+                FactionEvent(
+                    id="noise-event",
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["root"],
+                    round_number=3,
+                    event_type="betrayal",
+                    actor_agent_id="agent-noise",
+                    faction_key="noise",
+                ),
+            ])
+            session.commit()
+
+        timeline = get_faction_timeline(lineage["scenario"], lineage["leaf"])
+
+        assert [
+            (entry["branch_id"], entry["round"])
+            for entry in timeline
+        ] == selected_coordinates
+        assert all(entry["scope_kind"] == "branch_lineage" for entry in timeline)
+        assert all(
+            "self-contained replay" in entry["scope_caveat"].lower()
+            for entry in timeline
+        )
+        assert timeline[2]["events"][0]["agent_id"] == "agent-selected"
+        assert "noise" not in json.dumps(timeline)
+
+    def test_self_contained_clone_stops_at_replay_boundary(self):
+        lineage = _seed_three_generation_lineage()
+        with Session(get_engine()) as session:
+            session.add_all([
+                FactionSnapshot(
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["root"],
+                    round_number=1,
+                    faction_key="source-must-not-appear",
+                    member_agent_ids_json="[]",
+                ),
+                FactionSnapshot(
+                    scenario_id=lineage["scenario"],
+                    branch_id=lineage["clone"],
+                    round_number=1,
+                    faction_key="clone-only",
+                    member_agent_ids_json="[]",
+                ),
+            ])
+            session.commit()
+
+        timeline = get_faction_timeline(lineage["scenario"], lineage["clone"])
+
+        assert [(entry["branch_id"], entry["round"]) for entry in timeline] == [
+            (lineage["clone"], 1)
+        ]
+        assert timeline[0]["factions"][0]["key"] == "clone-only"
+        assert timeline[0]["scope_kind"] == "branch_lineage"
+
     def test_returns_empty_for_no_data(self):
-        result = get_faction_timeline("nonexistent", "b1")
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        result = get_faction_timeline(scenario_id, branch_id)
         assert result == []
 
+    @pytest.mark.parametrize(
+        "member_agent_ids_json",
+        [
+            "{invalid-json",
+            "null",
+            '{"agent": "agent-a"}',
+            '"agent-a"',
+            '["agent-a", 7]',
+            '["agent-a", ""]',
+            '["agent-a", "   "]',
+        ],
+        ids=[
+            "invalid-json",
+            "null",
+            "object",
+            "string",
+            "non-string-member",
+            "empty-member",
+            "blank-member",
+        ],
+    )
+    def test_skips_snapshot_with_invalid_members_payload(
+        self,
+        member_agent_ids_json,
+    ):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _materialize_native_branch_rounds(scenario_id, branch_id, 1)
+        with Session(get_engine()) as session:
+            session.add(
+                FactionSnapshot(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_number=1,
+                    faction_key="malformed-members",
+                    member_agent_ids_json=member_agent_ids_json,
+                )
+            )
+            session.commit()
+
+        assert get_faction_timeline(scenario_id, branch_id) == []
+
+    def test_keeps_valid_snapshot_and_event_when_corrupt_snapshot_is_skipped(
+        self,
+        caplog,
+    ):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _materialize_native_branch_rounds(scenario_id, branch_id, 1)
+        raw_corrupt_payload = '["SECRET_MEMBER_PAYLOAD"'
+        with Session(get_engine()) as session:
+            session.add_all([
+                FactionSnapshot(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_number=1,
+                    faction_key="corrupt",
+                    member_agent_ids_json=raw_corrupt_payload,
+                ),
+                FactionSnapshot(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_number=1,
+                    faction_key="valid",
+                    member_agent_ids_json=json.dumps(
+                        ["agent-a", "  agent-b  "]
+                    ),
+                ),
+                FactionEvent(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_number=1,
+                    event_type="betrayal",
+                    actor_agent_id="agent-a",
+                    faction_key="valid",
+                ),
+            ])
+            session.commit()
+
+        caplog.set_level("WARNING", logger="app.services.factions")
+        timeline = get_faction_timeline(scenario_id, branch_id)
+
+        assert [(entry["branch_id"], entry["round"]) for entry in timeline] == [
+            (branch_id, 1)
+        ]
+        assert [faction["key"] for faction in timeline[0]["factions"]] == [
+            "valid"
+        ]
+        assert timeline[0]["factions"][0]["members"] == [
+            "agent-a",
+            "  agent-b  ",
+        ]
+        assert timeline[0]["events"][0]["agent_id"] == "agent-a"
+        assert "skipped malformed faction snapshot members" in caplog.text
+        assert raw_corrupt_payload not in caplog.text
+
     def test_timeline_exposes_machine_readable_affect_proxy_semantics(self):
+        _materialize_native_branch_rounds("truthful-timeline", "b1", 1)
         messages = [
             MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
             MockMessage(agent_id="a2", emotion="angry", id="m2"),
@@ -657,7 +1041,7 @@ class TestGetFactionTimeline:
         timeline = get_faction_timeline("truthful-timeline", "b1")
 
         assert timeline[0]["metric_kind"] == "affect_proxy"
-        assert timeline[0]["scope_kind"] == "branch_segment_only"
+        assert timeline[0]["scope_kind"] == "branch_lineage"
         assert "pre-fork" in timeline[0]["scope_caveat"].lower()
         assert "not verified" in timeline[0]["caveat"].lower()
         faction = timeline[0]["factions"][0]
@@ -667,6 +1051,7 @@ class TestGetFactionTimeline:
 
     def test_returns_populated_timeline(self):
         """Multiple rounds produce a multi-entry timeline."""
+        _materialize_native_branch_rounds("s10", "b1", 2)
         r1_msgs = [
             MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
             MockMessage(agent_id="a2", emotion="angry", id="m2"),
@@ -695,6 +1080,7 @@ class TestGetFactionTimeline:
 
     def test_timeline_sorted_by_round(self):
         """Timeline entries are ordered by round number."""
+        _materialize_native_branch_rounds("s11", "b1", 3)
         msgs = [
             MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
             MockMessage(agent_id="a2", emotion="angry", id="m2"),
@@ -711,6 +1097,7 @@ class TestGetFactionTimeline:
 
     def test_timeline_includes_betrayal_events(self):
         """Events (betrayals) appear in the timeline."""
+        _materialize_native_branch_rounds("s12", "b1", 2)
         r1_msgs = [
             MockMessage(agent_id="a1", emotion="cooperative", id="m1"),
             MockMessage(agent_id="a2", emotion="cooperative", id="m2"),
@@ -738,6 +1125,8 @@ class TestGetFactionTimeline:
 
     def test_timeline_scoped_to_branch(self):
         """Timeline only returns data for the requested branch."""
+        _materialize_native_branch_rounds("s13", "b1", 1)
+        _materialize_native_branch_rounds("s13", "b2", 1)
         msgs = [
             MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
             MockMessage(agent_id="a2", emotion="angry", id="m2"),
@@ -810,11 +1199,99 @@ class TestFactionTimelineEndpoint:
         assert response.status_code == 200
         assert response.json() == []
 
+    def test_sync_timeline_service_runs_via_to_thread(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        calls = []
+        original_to_thread = graphs_api.asyncio.to_thread
+
+        async def observed_to_thread(function, /, *args, **kwargs):
+            calls.append((function, args, kwargs))
+            return await original_to_thread(function, *args, **kwargs)
+
+        monkeypatch.setattr(graphs_api.asyncio, "to_thread", observed_to_thread)
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-timeline",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 200
+        assert len(calls) == 1
+        assert calls[0][0] is graphs_api.get_faction_timeline
+
 
 # ── get_faction_relations / endpoint ─────────────────────
 
 
 class TestGetFactionRelations:
+    def test_lineage_cutoff_uses_exact_coordinates_for_count_ranking_and_branch_id(self):
+        lineage = _seed_three_generation_lineage()
+        selected_rows = [
+            ("root-1-high", lineage["root"], 1, 0.80),
+            ("root-1-inclusive", lineage["root"], 1, 0.65),
+            ("root-1-weak", lineage["root"], 1, 0.20),
+            ("root-2-high", lineage["root"], 2, 0.90),
+            ("root-2-second", lineage["root"], 2, 0.70),
+            ("child-3-high", lineage["child"], 3, 0.95),
+            ("child-3-second", lineage["child"], 3, 0.66),
+        ]
+        noise_rows = [
+            ("root-future", lineage["root"], 3),
+            ("child-stale", lineage["child"], 2),
+            ("child-after-cutoff", lineage["child"], 4),
+            ("sibling", lineage["sibling"], 3),
+            ("leaf-after-cutoff", lineage["leaf"], 5),
+        ]
+        with Session(get_engine()) as session:
+            session.add_all([
+                AgentRelationEdge(
+                    id=edge_id,
+                    scenario_id=lineage["scenario"],
+                    branch_id=branch_id,
+                    round_number=round_number,
+                    source_agent_id="owner",
+                    target_agent_id=edge_id,
+                    trust_score=score,
+                    opposition_score=0.1,
+                )
+                for edge_id, branch_id, round_number, score in selected_rows
+            ])
+            session.add_all([
+                AgentRelationEdge(
+                    id=edge_id,
+                    scenario_id=lineage["scenario"],
+                    branch_id=branch_id,
+                    round_number=round_number,
+                    source_agent_id="owner",
+                    target_agent_id=edge_id,
+                    trust_score=0.99,
+                    opposition_score=0.01,
+                )
+                for edge_id, branch_id, round_number in noise_rows
+            ])
+            session.commit()
+
+        result = get_faction_relations(
+            lineage["scenario"],
+            lineage["leaf"],
+            round_max=3,
+            threshold=0.65,
+            top_k=1,
+        )
+
+        assert result["total_before_filter"] == len(selected_rows)
+        assert result["truncated"] is True
+        assert [
+            (edge["branch_id"], edge["round"], edge["id"])
+            for edge in result["edges"]
+        ] == [
+            (lineage["root"], 1, "root-1-high"),
+            (lineage["root"], 2, "root-2-high"),
+            (lineage["child"], 3, "child-3-high"),
+        ]
+        assert result["scope_kind"] == "branch_lineage"
+
     def test_preserves_python_golden_order_per_round_and_strict_relation_type(self):
         scenario_id, branch_id = _seed_scenario_with_branch()
         _insert_relation_rows(
@@ -1152,8 +1629,11 @@ class TestGetFactionRelations:
             top_k=top_k,
         )
 
-        assert len(select_statements) == 2
-        assert materialized_row_counts == [round_count * (top_k + 1)]
+        assert len(select_statements) == 4
+        assert materialized_row_counts == [
+            round_count,
+            round_count * (top_k + 1),
+        ]
         assert len(result["edges"]) == round_count * top_k
         assert result["truncated"] is True
 
@@ -1256,6 +1736,7 @@ class TestGetFactionRelations:
 
         assert set(edge) == {
             "id",
+            "branch_id",
             "round",
             "source_agent_id",
             "target_agent_id",
@@ -1276,7 +1757,7 @@ class TestGetFactionRelations:
         assert edge["affect_alignment"] == edge["trust_score"]
         assert edge["affect_distance"] == edge["opposition_score"]
         assert "not verified" in edge["caveat"].lower()
-        assert result["scope_kind"] == "branch_segment_only"
+        assert result["scope_kind"] == "branch_lineage"
         assert edge["weight"] == 1.0
         assert edge["trust_score"] == 1.0
         assert edge["evidence_summary"] == "stance diff=0.30"
@@ -1368,7 +1849,7 @@ class TestFactionRelationsEndpoint:
         assert response.json() == {
             "metric_kind": "affect_proxy",
             "caveat": response.json()["caveat"],
-            "scope_kind": "branch_segment_only",
+            "scope_kind": "branch_lineage",
             "scope_caveat": response.json()["scope_caveat"],
             "edges": [],
             "truncated": False,
@@ -1424,3 +1905,81 @@ class TestFactionRelationsEndpoint:
             "opposition_score": 0.85,
             "evidence_summary": "stance diff=0.85",
         }
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "service_name"),
+    [
+        ("faction-timeline", "get_faction_timeline"),
+        ("faction-relations", "get_faction_relations"),
+    ],
+)
+def test_faction_endpoints_map_post_precheck_delete_to_safe_404(
+    monkeypatch,
+    endpoint,
+    service_name,
+):
+    monkeypatch.setattr(settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+    scenario_id, branch_id = _seed_scenario_with_branch()
+    original_service = getattr(graphs_api, service_name)
+
+    def delete_after_precheck(*args, **kwargs):
+        with Session(get_engine()) as session:
+            branch = session.get(Branch, branch_id)
+            assert branch is not None
+            session.delete(branch)
+            session.commit()
+        return original_service(*args, **kwargs)
+
+    monkeypatch.setattr(graphs_api, service_name, delete_after_precheck)
+
+    response = TestClient(app, raise_server_exceptions=False).get(
+        f"/api/scenario/{scenario_id}/{endpoint}",
+        params={"branch_id": branch_id},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "BRANCH_NOT_FOUND",
+        "message": "Branch not found in scenario",
+    }
+    assert scenario_id not in response.text
+    assert branch_id not in response.text
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["faction-timeline", "faction-relations"],
+)
+def test_faction_endpoints_map_corrupt_lineage_to_safe_409(monkeypatch, endpoint):
+    monkeypatch.setattr(settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+    scenario_id, _branch_id = _seed_scenario_with_branch()
+    corrupt_branch_id = f"{scenario_id}-corrupt"
+    missing_parent_id = f"{scenario_id}-missing-parent"
+    with Session(get_engine()) as session:
+        session.add(
+            Branch(
+                id=corrupt_branch_id,
+                scenario_id=scenario_id,
+                parent_branch_id=missing_parent_id,
+                fork_round=2,
+                title="Corrupt lineage",
+            )
+        )
+        session.commit()
+
+    response = TestClient(app, raise_server_exceptions=False).get(
+        f"/api/scenario/{scenario_id}/{endpoint}",
+        params={"branch_id": corrupt_branch_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "BRANCH_LINEAGE_MISSING_PARENT",
+        "message": "Branch lineage is invalid",
+    }
+    assert scenario_id not in response.text
+    assert corrupt_branch_id not in response.text
+    assert missing_parent_id not in response.text

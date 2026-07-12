@@ -9,6 +9,7 @@ deterministically return 200, removing conditional assertion branches.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -282,8 +283,12 @@ class TestCreateScenarioWithWebSearch:
             cached=False,
         )
 
-        def _close_background(coro):
-            coro.close()
+        scheduled_outer = None
+
+        def _capture_background(coro):
+            nonlocal scheduled_outer
+            assert scheduled_outer is None
+            scheduled_outer = coro
             return None
 
         with (
@@ -301,34 +306,50 @@ class TestCreateScenarioWithWebSearch:
                 "app.api.scenarios.parse_and_run_background",
                 new_callable=AsyncMock,
             ) as parse_mock,
-            patch("app.api.scenarios.schedule_background_task", side_effect=_close_background),
+            patch(
+                "app.api.scenarios.schedule_background_task",
+                side_effect=_capture_background,
+            ) as schedule_mock,
             patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
         ):
-            resp = client.post("/api/scenario", json={
-                "question": "What if deep search?",
-                "web_search_enabled": True,
-                "web_search_intensity": "deep",
-                "web_search_families": ["finance"],
-                "web_search_provider": "exa",
-                "web_search_api_key": "exa-test-key",
-                "web_search_base_url": "https://api.exa.ai/search",
-            })
+            parse_mock.return_value = None
+            try:
+                resp = client.post("/api/scenario", json={
+                    "question": "What if deep search?",
+                    "web_search_enabled": True,
+                    "web_search_intensity": "deep",
+                    "web_search_families": ["finance"],
+                    "web_search_provider": "exa",
+                    "web_search_api_key": "exa-test-key",
+                    "web_search_base_url": "https://api.exa.ai/search",
+                })
 
-        assert resp.status_code == 200
-        mock_fetch.assert_awaited_once_with(
-            "What if deep search?",
-            provider_override="exa",
-            api_key_override="exa-test-key",
-            base_url_override="https://api.exa.ai/search",
-            intensity="deep",
-        )
-        family_config = mock_family.call_args.kwargs["request_config"]
-        assert family_config.provider == "exa"
-        assert family_config.max_results == 10
-        assert family_config.snippet_limit == 8
-        assert parse_mock.call_args.kwargs["web_search_intensity"] == "deep"
-        assert parse_mock.call_args.kwargs["web_search_max_results"] == 10
-        assert parse_mock.call_args.kwargs["web_search_snippet_limit"] == 8
+                assert resp.status_code == 200
+                assert scheduled_outer is not None
+                asyncio.run(scheduled_outer)
+                scheduled_outer = None
+
+                mock_fetch.assert_awaited_once_with(
+                    "What if deep search?",
+                    provider_override="exa",
+                    api_key_override="exa-test-key",
+                    base_url_override="https://api.exa.ai/search",
+                    intensity="deep",
+                )
+                family_config = mock_family.call_args.kwargs["request_config"]
+                assert family_config.provider == "exa"
+                assert family_config.max_results == 10
+                assert family_config.snippet_limit == 8
+                schedule_mock.assert_called_once()
+                parse_mock.assert_awaited_once()
+                assert parse_mock.await_args is not None
+                assert parse_mock.await_args.args == (resp.json()["id"],)
+                assert parse_mock.await_args.kwargs["web_search_intensity"] == "deep"
+                assert parse_mock.await_args.kwargs["web_search_max_results"] == 10
+                assert parse_mock.await_args.kwargs["web_search_snippet_limit"] == 8
+            finally:
+                if scheduled_outer is not None:
+                    scheduled_outer.close()
 
     def test_web_search_disabled_no_fetch(self, client):
         """web_search_enabled=false → fetch_web_context never called."""

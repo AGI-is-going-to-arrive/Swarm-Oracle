@@ -1777,6 +1777,10 @@ export function InputView() {
     });
   }, [clearLaunchError, i18n, setAgentsPreview, setWorldContext]);
 
+  const handleLocalPackDemoImported = useCallback((scenarioId: string) => {
+    navigate(`/result/${encodeURIComponent(scenarioId)}`);
+  }, [navigate]);
+
   const handleQuickStartSelect = async (preset: QuickStartPreset) => {
     clearLaunchError();
     clearScenarioSourceContext();
@@ -3121,7 +3125,10 @@ export function InputView() {
 
                   <div className="iv-advanced__divider" style={{ margin: '16px 0', borderTop: '1px solid rgba(64, 48, 40, 0.08)' }} />
 
-                  <LocalPackPicker onImport={handleImportPack} />
+                  <LocalPackPicker
+                    onImport={handleImportPack}
+                    onDemoImported={handleLocalPackDemoImported}
+                  />
                 </div>
               </div>
             </div>

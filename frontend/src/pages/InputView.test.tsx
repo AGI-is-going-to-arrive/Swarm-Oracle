@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OfficialSampleSummary } from '../api/client';
@@ -37,6 +37,8 @@ const {
   stableTranslator,
   getLocalPackImportHandler,
   setLocalPackImportHandler,
+  getLocalPackDemoImportedHandler,
+  setLocalPackDemoImportedHandler,
 } = vi.hoisted(() => {
   const translations: Record<string, Record<string, string>> = {
     en: {
@@ -70,6 +72,7 @@ const {
   };
   let currentLanguage = 'en';
   let localPackImportHandler: ((payload: unknown) => void) | null = null;
+  let localPackDemoImportedHandler: ((scenarioId: string) => void) | null = null;
   const setMockLanguage = (language: string) => {
     currentLanguage = language;
   };
@@ -180,6 +183,10 @@ const {
     getLocalPackImportHandler: () => localPackImportHandler,
     setLocalPackImportHandler: (handler: ((payload: unknown) => void) | null) => {
       localPackImportHandler = handler;
+    },
+    getLocalPackDemoImportedHandler: () => localPackDemoImportedHandler,
+    setLocalPackDemoImportedHandler: (handler: ((scenarioId: string) => void) | null) => {
+      localPackDemoImportedHandler = handler;
     },
   };
 });
@@ -331,13 +338,21 @@ vi.mock('../components/QuickStartCards', () => ({
 vi.mock('../components/LocalPackPicker', () => ({
   LocalPackPicker: ({
     onImport,
+    onDemoImported,
   }: {
     onImport: (payload: MaterializedLocalPackImport) => void;
+    onDemoImported: (scenarioId: string) => void;
   }) => {
     setLocalPackImportHandler(onImport as (payload: unknown) => void);
+    setLocalPackDemoImportedHandler(onDemoImported);
     return <div data-testid="local-pack-picker-stub" />;
   },
 }));
+
+function LocationPathProbe() {
+  const location = useLocation();
+  return <div data-testid="location-path-probe">{location.pathname}</div>;
+}
 
 async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
   // Open the iv-advanced accordion (mode selectors, source families)
@@ -442,6 +457,7 @@ describe('InputView campaign progress', () => {
     });
     setMockLanguage('en');
     setLocalPackImportHandler(null);
+    setLocalPackDemoImportedHandler(null);
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();
     startSimulationMock.mockClear();
@@ -670,6 +686,30 @@ describe('InputView campaign progress', () => {
       forkDetectorActiveBranchLimit: 0,
       worldContext: secondImport.worldContext,
     })));
+  });
+
+  it('navigates an imported local-pack demo to an encoded result path', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: true,
+      local_packs: { enabled: true },
+      snapshot_export: { enabled: true },
+    });
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/result/:id" element={<LocationPathProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(getLocalPackDemoImportedHandler()).not.toBeNull());
+    act(() => getLocalPackDemoImportedHandler()?.('demo/id with space'));
+
+    expect(await screen.findByTestId('location-path-probe')).toHaveTextContent(
+      '/result/demo%2Fid%20with%20space',
+    );
   });
 
   it('does not carry imported pack context into an immediate Quick Start launch', async () => {

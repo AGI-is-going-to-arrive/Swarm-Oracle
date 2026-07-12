@@ -20,15 +20,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import inspect
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, select
 
 from app.api import replay_trace as replay_trace_module
 from app.api.replay_trace import router as replay_trace_router
 from app.main import app
+from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import (
     Agent,
     AgentMessage,
@@ -39,6 +43,7 @@ from app.models.database import (
     ScenarioStatus,
     get_engine,
 )
+from app.services.branch_lineage import BranchLineageError
 
 # ── Fixtures ─────────────────────────────────────────────
 
@@ -82,8 +87,17 @@ def _make_signed_token(secret: str, subject: str) -> str:
 # ── Seeding helpers ──────────────────────────────────────
 
 
-def _seed_scenario(engine, *, status=ScenarioStatus.DONE, user_id=None):
-    s = Scenario(question="q", status=status, user_id=user_id)
+def _seed_scenario(
+    engine,
+    *,
+    status=ScenarioStatus.DONE,
+    user_id=None,
+    created_at=None,
+):
+    scenario_kwargs = {"question": "q", "status": status, "user_id": user_id}
+    if created_at is not None:
+        scenario_kwargs["created_at"] = created_at
+    s = Scenario(**scenario_kwargs)
     with Session(engine) as session:
         session.add(s)
         session.commit()
@@ -95,6 +109,7 @@ def _seed_branch(
     engine,
     scenario_id: str,
     *,
+    branch_id: str | None = None,
     title: str = "root",
     status=BranchStatus.ACTIVE,
     replay_kind=None,
@@ -103,7 +118,7 @@ def _seed_branch(
     fork_round: int = 0,
     replay_source_round=None,
 ) -> str:
-    b = Branch(
+    branch_kwargs = dict(
         scenario_id=scenario_id,
         title=title,
         status=status,
@@ -113,6 +128,9 @@ def _seed_branch(
         fork_round=fork_round,
         replay_source_round=replay_source_round,
     )
+    if branch_id is not None:
+        branch_kwargs["id"] = branch_id
+    b = Branch(**branch_kwargs)
     with Session(engine) as session:
         session.add(b)
         session.commit()
@@ -145,6 +163,26 @@ def _seed_message(engine, round_id, agent_id, content="msg"):
         session.commit()
         session.refresh(m)
         return m.id
+
+
+def _seed_checkpoint(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    round_number: int,
+    created_at: datetime,
+) -> None:
+    with Session(engine) as session:
+        session.add(
+            ScenarioCheckpoint(
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=round_number,
+                created_at=created_at,
+            )
+        )
+        session.commit()
 
 
 def _seed_scenario_with_lineage(engine, *, user_id=None, branch_count=3):
@@ -208,6 +246,32 @@ class TestAuth:
         # Must not leak existence or ownership
         assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
 
+    def test_owner_concealment_precedes_conflicting_branch_filters(
+        self,
+        client,
+        monkeypatch,
+    ):
+        secret = "s3cret"
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", secret)
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, user_id="owner_u")
+        foreign_token = _make_signed_token(secret, "intruder_u")
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={
+                "branch_id": "private-target",
+                "root_branch_id": "private-root",
+            },
+            headers={"X-Session-Token": foreign_token},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == {
+            "code": "SCENARIO_NOT_FOUND",
+            "message": "Scenario not found",
+        }
+
 
 class TestPagination:
     def test_cursor_and_limit_produce_stable_pages(self, client):
@@ -267,6 +331,554 @@ class TestPagination:
         assert resp.status_code == 200
         returned = {n["branch_id"] for n in resp.json()["nodes"]}
         assert returned == set(children)
+
+
+class TestTargetLineage:
+    def test_target_orders_root_to_leaf_by_lineage_not_uuid(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id, branch_id="zz-root")
+        child_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="mm-child",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        leaf_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="aa-leaf",
+            parent_branch_id=child_id,
+            fork_round=2,
+        )
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": f"  {leaf_id}  "},
+        )
+
+        assert response.status_code == 200
+        assert [node["branch_id"] for node in response.json()["nodes"]] == [
+            root_id,
+            child_id,
+            leaf_id,
+        ]
+
+    def test_target_paginates_by_lineage_position_and_validates_cursor(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id, branch_id="zz-page-root")
+        child_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="mm-page-child",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        leaf_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="aa-page-leaf",
+            parent_branch_id=child_id,
+            fork_round=2,
+        )
+        outside_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="outside-current-lineage",
+        )
+
+        page_one = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": leaf_id, "limit": 2},
+        )
+        assert page_one.status_code == 200
+        assert [node["branch_id"] for node in page_one.json()["nodes"]] == [
+            root_id,
+            child_id,
+        ]
+        assert page_one.json()["next_cursor"] == child_id
+
+        page_two = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": leaf_id, "limit": 2, "after": child_id},
+        )
+        assert page_two.status_code == 200
+        assert [node["branch_id"] for node in page_two.json()["nodes"]] == [leaf_id]
+        assert page_two.json()["next_cursor"] is None
+
+        final_page = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": leaf_id, "limit": 2, "after": leaf_id},
+        )
+        assert final_page.status_code == 200
+        assert final_page.json() == {"nodes": [], "next_cursor": None}
+
+        invalid_cursor = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": leaf_id, "after": outside_id},
+        )
+        assert invalid_cursor.status_code == 400
+        assert invalid_cursor.json()["detail"] == {
+            "code": "REPLAY_TRACE_CURSOR_INVALID",
+            "message": "Cursor branch is not in the selected lineage",
+        }
+
+    def test_replay_target_is_self_contained_and_ignores_replay_source(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id, branch_id="native-root")
+        clone_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="resume-clone",
+            replay_kind="resume",
+            replay_source_branch_id=root_id,
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="unrelated-replay",
+            replay_kind="counterfactual",
+            replay_source_branch_id=root_id,
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": clone_id},
+        )
+
+        assert response.status_code == 200
+        assert [node["branch_id"] for node in response.json()["nodes"]] == [clone_id]
+
+    def test_native_descendant_stops_at_replay_parent(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        native_root_id = _seed_branch(engine, scenario_id, branch_id="native-before-replay")
+        replay_parent_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="replay-parent",
+            replay_kind="resume",
+            replay_source_branch_id=native_root_id,
+            parent_branch_id=native_root_id,
+            fork_round=1,
+        )
+        native_child_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="native-after-replay",
+            parent_branch_id=replay_parent_id,
+            fork_round=2,
+        )
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": native_child_id},
+        )
+
+        assert response.status_code == 200
+        assert [node["branch_id"] for node in response.json()["nodes"]] == [
+            replay_parent_id,
+            native_child_id,
+        ]
+        assert native_root_id not in {
+            node["branch_id"] for node in response.json()["nodes"]
+        }
+
+    def test_unstarted_target_without_rounds_is_valid(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, scenario_id, branch_id="empty-unstarted")
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 200
+        assert [node["branch_id"] for node in response.json()["nodes"]] == [branch_id]
+
+    def test_blank_target_keeps_legacy_unfiltered_contract(self, client):
+        engine = get_engine()
+        scenario_id, *_ = _seed_scenario_with_lineage(engine, branch_count=3)
+
+        unfiltered = client.get(f"/api/scenario/{scenario_id}/replay-trace?limit=50")
+        blank_target = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"limit": 50, "branch_id": "   "},
+        )
+
+        assert blank_target.status_code == 200
+        assert blank_target.json() == unfiltered.json()
+
+    def test_target_and_legacy_root_conflict_is_fixed_400(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id)
+        target_id = _seed_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": target_id, "root_branch_id": root_id},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == {
+            "code": "REPLAY_TRACE_BRANCH_FILTER_CONFLICT",
+            "message": "branch_id cannot be combined with root_branch_id",
+        }
+
+    def test_endpoint_is_sync_for_fastapi_threadpool(self):
+        assert inspect.iscoroutinefunction(replay_trace_module.get_replay_trace) is False
+
+    def test_target_avoids_duplicate_scoped_branch_precheck(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, scenario_id, branch_id="single-target-lookup")
+        branch_selects: list[str] = []
+
+        def capture_branch_selects(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            normalized = " ".join(str(statement).split()).lower()
+            if normalized.startswith("select") and " from branch " in normalized:
+                branch_selects.append(normalized)
+
+        event.listen(engine, "before_cursor_execute", capture_branch_selects)
+        try:
+            response = client.get(
+                f"/api/scenario/{scenario_id}/replay-trace",
+                params={"branch_id": branch_id},
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_branch_selects)
+
+        assert response.status_code == 200
+        assert len(branch_selects) == 2
+
+    def test_target_response_preserves_exact_existing_wire_keys(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, scenario_id, branch_id="wire-target")
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert set(payload) == {"nodes", "next_cursor"}
+        assert len(payload["nodes"]) == 1
+        assert set(payload["nodes"][0]) == {
+            "branch_id",
+            "parent_branch_id",
+            "replay_source_branch_id",
+            "origin_round",
+            "replay_kind",
+            "status",
+            "created_at",
+        }
+
+
+class TestTargetLineageErrors:
+    def test_missing_target_is_generic_404(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        missing_id = "sensitive-missing-target"
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": missing_id},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == {
+            "code": "BRANCH_NOT_FOUND",
+            "message": "Branch not found in scenario",
+        }
+        assert missing_id not in response.text
+
+    def test_cross_scenario_target_is_generic_404(self, client):
+        engine = get_engine()
+        requested_scenario_id = _seed_scenario(engine)
+        foreign_scenario_id = _seed_scenario(engine)
+        foreign_branch_id = _seed_branch(
+            engine,
+            foreign_scenario_id,
+            branch_id="sensitive-foreign-target",
+        )
+
+        response = client.get(
+            f"/api/scenario/{requested_scenario_id}/replay-trace",
+            params={"branch_id": foreign_branch_id},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == {
+            "code": "BRANCH_NOT_FOUND",
+            "message": "Branch not found in scenario",
+        }
+        assert foreign_branch_id not in response.text
+
+    def test_resolver_not_found_is_generic_404(self, client, monkeypatch):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, scenario_id, branch_id="race-target")
+
+        def resolver_not_found(*_args, **_kwargs):
+            raise BranchLineageError(
+                "BRANCH_LINEAGE_BRANCH_NOT_FOUND",
+                "sensitive race target details",
+            )
+
+        monkeypatch.setattr(
+            replay_trace_module,
+            "resolve_branch_lineage",
+            resolver_not_found,
+            raising=False,
+        )
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == {
+            "code": "BRANCH_NOT_FOUND",
+            "message": "Branch not found in scenario",
+        }
+        assert "sensitive" not in response.text
+
+    def test_page_branch_disappearing_after_resolution_is_generic_404(
+        self,
+        client,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, scenario_id, branch_id="sensitive-page-race")
+        real_resolver = replay_trace_module.resolve_branch_lineage
+
+        def resolve_then_delete_page_branch(session, **kwargs):
+            lineage = real_resolver(session, **kwargs)
+            session.rollback()
+            with Session(engine) as delete_session:
+                page_branch = delete_session.get(Branch, branch_id)
+                assert page_branch is not None
+                delete_session.delete(page_branch)
+                delete_session.commit()
+            return lineage
+
+        monkeypatch.setattr(
+            replay_trace_module,
+            "resolve_branch_lineage",
+            resolve_then_delete_page_branch,
+        )
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == {
+            "code": "BRANCH_NOT_FOUND",
+            "message": "Branch not found in scenario",
+        }
+        assert branch_id not in response.text
+
+    @pytest.mark.parametrize(
+        ("corruption", "expected_code"),
+        [
+            ("missing_parent", "BRANCH_LINEAGE_MISSING_PARENT"),
+            ("cycle", "BRANCH_LINEAGE_CYCLE"),
+            ("cross_scenario_parent", "BRANCH_LINEAGE_CROSS_SCENARIO_PARENT"),
+            ("invalid_fork", "BRANCH_LINEAGE_INVALID_FORK_BOUNDARY"),
+        ],
+    )
+    def test_corrupt_target_is_stable_409_without_ids(
+        self,
+        client,
+        corruption,
+        expected_code,
+    ):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id, branch_id=f"secret-{corruption}-root")
+        target_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id=f"secret-{corruption}-target",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        sensitive_ids = {root_id, target_id}
+
+        if corruption == "missing_parent":
+            missing_parent_id = "secret-absent-parent"
+            sensitive_ids.add(missing_parent_id)
+            with engine.connect() as connection:
+                connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+                connection.exec_driver_sql(
+                    "UPDATE branch SET parent_branch_id = ? WHERE id = ?",
+                    (missing_parent_id, target_id),
+                )
+                connection.commit()
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        elif corruption == "cycle":
+            with engine.connect() as connection:
+                connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+                connection.exec_driver_sql(
+                    "UPDATE branch SET parent_branch_id = ? WHERE id = ?",
+                    (target_id, root_id),
+                )
+                connection.commit()
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        elif corruption == "cross_scenario_parent":
+            foreign_scenario_id = _seed_scenario(engine)
+            foreign_parent_id = _seed_branch(
+                engine,
+                foreign_scenario_id,
+                branch_id="secret-foreign-parent",
+            )
+            sensitive_ids.add(foreign_parent_id)
+            with Session(engine) as session:
+                target = session.get(Branch, target_id)
+                assert target is not None
+                target.parent_branch_id = foreign_parent_id
+                session.add(target)
+                session.commit()
+        else:
+            with Session(engine) as session:
+                target = session.get(Branch, target_id)
+                assert target is not None
+                target.fork_round = 0
+                session.add(target)
+                session.commit()
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/replay-trace",
+            params={"branch_id": target_id},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": expected_code,
+            "message": "Branch lineage is invalid",
+        }
+        assert all(branch_id not in response.text for branch_id in sensitive_ids)
+
+
+class TestCheckpointBatching:
+    def test_target_batches_earliest_checkpoint_timestamps_with_fallback(self, client):
+        engine = get_engine()
+        scenario_created_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        root_earliest = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        root_later = datetime(2024, 1, 3, tzinfo=timezone.utc)
+        leaf_created_at = datetime(2024, 1, 4, tzinfo=timezone.utc)
+        scenario_id = _seed_scenario(engine, created_at=scenario_created_at)
+        root_id = _seed_branch(engine, scenario_id, branch_id="checkpoint-root")
+        child_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="checkpoint-child",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        leaf_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="checkpoint-leaf",
+            parent_branch_id=child_id,
+            fork_round=2,
+        )
+        outside_id = _seed_branch(
+            engine,
+            scenario_id,
+            branch_id="checkpoint-outside-page",
+        )
+        _seed_checkpoint(
+            engine,
+            scenario_id,
+            root_id,
+            round_number=2,
+            created_at=root_later,
+        )
+        _seed_checkpoint(
+            engine,
+            scenario_id,
+            root_id,
+            round_number=1,
+            created_at=root_earliest,
+        )
+        _seed_checkpoint(
+            engine,
+            scenario_id,
+            leaf_id,
+            round_number=1,
+            created_at=leaf_created_at,
+        )
+        _seed_checkpoint(
+            engine,
+            scenario_id,
+            outside_id,
+            round_number=1,
+            created_at=datetime(2023, 1, 1, tzinfo=timezone.utc),
+        )
+        checkpoint_selects: list[tuple[str, tuple[object, ...]]] = []
+
+        def capture_checkpoint_selects(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            normalized = " ".join(str(statement).split()).lower()
+            if normalized.startswith("select") and "scenario_checkpoint" in normalized:
+                checkpoint_selects.append((normalized, tuple(_parameters)))
+
+        event.listen(engine, "before_cursor_execute", capture_checkpoint_selects)
+        try:
+            response = client.get(
+                f"/api/scenario/{scenario_id}/replay-trace",
+                params={"branch_id": leaf_id},
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_checkpoint_selects)
+
+        assert response.status_code == 200
+        assert len(checkpoint_selects) == 1
+        checkpoint_sql, checkpoint_parameters = checkpoint_selects[0]
+        assert " group by " in checkpoint_sql
+        assert "scenario_checkpoint.branch_id in (" in checkpoint_sql
+        assert set(checkpoint_parameters) == {root_id, child_id, leaf_id}
+        assert outside_id not in checkpoint_parameters
+        nodes_by_id = {
+            node["branch_id"]: node for node in response.json()["nodes"]
+        }
+        assert nodes_by_id[root_id]["created_at"].startswith("2024-01-02T00:00:00")
+        assert nodes_by_id[child_id]["created_at"].startswith("2024-01-01T00:00:00")
+        assert nodes_by_id[leaf_id]["created_at"].startswith("2024-01-04T00:00:00")
 
 
 class TestSharedQuota:

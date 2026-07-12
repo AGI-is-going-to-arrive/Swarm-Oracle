@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalPackPicker } from './LocalPackPicker';
+import type { CapabilitiesResponse } from '../api/client';
 import type {
   LocalPackSummary,
   LocalPack,
@@ -20,6 +21,7 @@ const listLocalPacksMock = vi.hoisted(() => vi.fn());
 const getLocalPackMock = vi.hoisted(() => vi.fn());
 const refreshLocalPacksMock = vi.hoisted(() => vi.fn());
 const getLocalPackDiagnosticsMock = vi.hoisted(() => vi.fn());
+const importLocalPackDemoSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: useCapabilityCheckMock,
@@ -30,6 +32,7 @@ vi.mock('../api/client', () => ({
   getLocalPack: getLocalPackMock,
   refreshLocalPacks: refreshLocalPacksMock,
   getLocalPackDiagnostics: getLocalPackDiagnosticsMock,
+  importLocalPackDemoSnapshot: importLocalPackDemoSnapshotMock,
 }));
 
 // Mock clipboard API
@@ -47,8 +50,24 @@ afterEach(() => {
   getLocalPackMock.mockReset();
   refreshLocalPacksMock.mockReset();
   getLocalPackDiagnosticsMock.mockReset();
+  importLocalPackDemoSnapshotMock.mockReset();
   writeTextMock.mockClear();
 });
+
+function localPackCapabilities(
+  snapshotExportEnabled: boolean,
+): Pick<CapabilitiesResponse, 'local_packs' | 'snapshot_export'> {
+  const capabilityEntry = (enabled: boolean) => ({
+    enabled,
+    version: '1',
+    server_only: true,
+    degraded_mode: null,
+  });
+  return {
+    local_packs: capabilityEntry(true),
+    snapshot_export: capabilityEntry(snapshotExportEnabled),
+  };
+}
 
 const mockPacksSummaryList: LocalPackSummary[] = [
   {
@@ -205,10 +224,12 @@ const mockDiagnosticsResponse: PackDiagnostic[] = [
 
 const createDeferred = <T,>() => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
     resolve = promiseResolve;
+    reject = promiseReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 };
 
 describe('LocalPackPicker', () => {
@@ -221,7 +242,7 @@ describe('LocalPackPicker', () => {
       reload: vi.fn(),
     });
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     expect(screen.getByText('Loading local packs...')).toBeInTheDocument();
   });
@@ -235,7 +256,7 @@ describe('LocalPackPicker', () => {
       reload: vi.fn(),
     });
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     expect(
       screen.getByText('This feature is turned off on this server. Ask the admin to enable it.')
@@ -256,12 +277,401 @@ describe('LocalPackPicker', () => {
       reload: reloadMock,
     });
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     expect(screen.getByText('Capability error')).toBeInTheDocument();
     const retryBtn = screen.getByRole('button', { name: 'Retry' });
     fireEvent.click(retryBtn);
     expect(reloadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores demo actions from the retried local-packs capability response without remounting', async () => {
+    await i18n.changeLanguage('en');
+    const latestLocalPacksResult = {
+      loading: false,
+      enabled: false,
+      capabilities: null as ReturnType<typeof localPackCapabilities> | null,
+      error: new Error('Capability error') as Error | null,
+      reload: vi.fn(async () => {
+        latestLocalPacksResult.enabled = true;
+        latestLocalPacksResult.capabilities = localPackCapabilities(true);
+        latestLocalPacksResult.error = null;
+      }),
+    };
+    useCapabilityCheckMock.mockImplementation((key: string) => (
+      key === 'local_packs'
+        ? latestLocalPacksResult
+        : {
+            loading: false,
+            enabled: false,
+            capabilities: null,
+            error: null,
+            reload: vi.fn(),
+          }
+    ));
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    const onImport = vi.fn();
+    const onDemoImported = vi.fn();
+    const { rerender } = render(
+      <LocalPackPicker onImport={onImport} onDemoImported={onDemoImported} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(latestLocalPacksResult.reload).toHaveBeenCalledTimes(1));
+    rerender(<LocalPackPicker onImport={onImport} onDemoImported={onDemoImported} />);
+
+    expect(await screen.findByRole('button', { name: /Demo one/ })).toBeInTheDocument();
+    expect(useCapabilityCheckMock).not.toHaveBeenCalledWith('snapshot_export');
+  });
+
+  it('renders demo snapshot metadata as an action when snapshot export is enabled', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: /Demo one/ })).toBeInTheDocument();
+  });
+
+  it('keeps disabled demo snapshot metadata visible without issuing an import', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(false),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
+
+    const filename = await screen.findByText('demo_one.json');
+    expect(filename.closest('li')).toHaveTextContent('Demo one');
+    expect(screen.queryByRole('button', { name: /Demo one/ })).not.toBeInTheDocument();
+    fireEvent.click(filename.closest('li')!);
+    expect(importLocalPackDemoSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates demo snapshot clicks and reports the current success once', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    const imported = createDeferred<{
+      scenario_id: string;
+      pack_id: string;
+      demo_snapshot_id: string;
+      status: 'imported';
+    }>();
+    importLocalPackDemoSnapshotMock.mockReturnValue(imported.promise);
+    const onDemoImported = vi.fn();
+
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={onDemoImported} />);
+
+    const action = await screen.findByRole('button', { name: /Demo one/ });
+    fireEvent.click(action);
+    fireEvent.click(action);
+
+    expect(importLocalPackDemoSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(importLocalPackDemoSnapshotMock).toHaveBeenCalledWith('pack-one', 'snap-1', {
+      signal: expect.any(AbortSignal),
+    });
+
+    await act(async () => {
+      imported.resolve({
+        scenario_id: 'imported-demo-1',
+        pack_id: 'pack-one',
+        demo_snapshot_id: 'snap-1',
+        status: 'imported',
+      });
+      await imported.promise;
+    });
+
+    expect(onDemoImported).toHaveBeenCalledTimes(1);
+    expect(onDemoImported).toHaveBeenCalledWith('imported-demo-1');
+  });
+
+  it('localizes demo snapshot failures without leaking raw text and allows retry', async () => {
+    await i18n.changeLanguage('en');
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    importLocalPackDemoSnapshotMock
+      .mockRejectedValueOnce({
+        status: 422,
+        code: 'SNAPSHOT_IMPORT_INVALID',
+        message: '<script>unsafe backend detail</script>',
+      })
+      .mockResolvedValueOnce({
+        scenario_id: 'retried-demo',
+        pack_id: 'pack-one',
+        demo_snapshot_id: 'snap-1',
+        status: 'imported',
+      });
+    const onDemoImported = vi.fn();
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={onDemoImported} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Demo one/ }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Snapshot import failed. Please try again.',
+    );
+    expect(screen.queryByText(/unsafe backend detail/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Demo one/ }));
+    await waitFor(() => expect(onDemoImported).toHaveBeenCalledWith('retried-demo'));
+    expect(importLocalPackDemoSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a transport failure as an unknown import outcome', async () => {
+    await i18n.changeLanguage('en');
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    importLocalPackDemoSnapshotMock.mockRejectedValue(
+      new Error('response lost after the server may have committed'),
+    );
+
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Demo one/ }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The import result is unknown. Check Simulation History before trying again.',
+    );
+    expect(screen.queryByText(/response lost/)).not.toBeInTheDocument();
+  });
+
+  it('aborts a demo snapshot import on pack switch and ignores its late success', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    const packTwoWithDemo: LocalPack = {
+      ...mockPackDetailOne,
+      id: 'pack-two',
+      title: { zh: '主题包二', en: 'Pack Two' },
+      demo_snapshots: [{
+        id: 'snap-2',
+        label: { zh: '演示二', en: 'Demo two' },
+        filename: 'demo_two.json',
+      }],
+    };
+    listLocalPacksMock.mockResolvedValue({ packs: mockPacksSummaryList, count: 2 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockImplementation((id: string) => Promise.resolve(
+      id === 'pack-two' ? packTwoWithDemo : mockPackDetailOne,
+    ));
+    const first = createDeferred<{
+      scenario_id: string;
+      pack_id: string;
+      demo_snapshot_id: string;
+      status: 'imported';
+    }>();
+    const second = createDeferred<{
+      scenario_id: string;
+      pack_id: string;
+      demo_snapshot_id: string;
+      status: 'imported';
+    }>();
+    let firstSignal: AbortSignal | undefined;
+    importLocalPackDemoSnapshotMock
+      .mockImplementationOnce((_packId, _demoId, options?: { signal?: AbortSignal }) => {
+        firstSignal = options?.signal;
+        return first.promise;
+      })
+      .mockReturnValueOnce(second.promise);
+    const onDemoImported = vi.fn();
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={onDemoImported} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Demo one/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Pack Two/ }));
+
+    expect(firstSignal?.aborted).toBe(true);
+    const secondAction = await screen.findByRole('button', { name: /Demo two/ });
+    fireEvent.click(secondAction);
+    expect(importLocalPackDemoSnapshotMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.resolve({
+        scenario_id: 'stale-success',
+        pack_id: 'pack-one',
+        demo_snapshot_id: 'snap-1',
+        status: 'imported',
+      });
+      await first.promise;
+    });
+    expect(onDemoImported).not.toHaveBeenCalled();
+    expect(secondAction).toBeDisabled();
+
+    await act(async () => {
+      second.resolve({
+        scenario_id: 'current-success',
+        pack_id: 'pack-two',
+        demo_snapshot_id: 'snap-2',
+        status: 'imported',
+      });
+      await second.promise;
+    });
+    expect(onDemoImported).toHaveBeenCalledTimes(1);
+    expect(onDemoImported).toHaveBeenCalledWith('current-success');
+  });
+
+  it('aborts a demo snapshot import on refresh and ignores its late failure', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    refreshLocalPacksMock.mockResolvedValue({
+      packs: [mockPacksSummaryList[0]],
+      count: 1,
+      diagnostics: [],
+      diagnostic_count: 0,
+    });
+    const first = createDeferred<never>();
+    const second = createDeferred<{
+      scenario_id: string;
+      pack_id: string;
+      demo_snapshot_id: string;
+      status: 'imported';
+    }>();
+    let firstSignal: AbortSignal | undefined;
+    importLocalPackDemoSnapshotMock
+      .mockImplementationOnce((_packId, _demoId, options?: { signal?: AbortSignal }) => {
+        firstSignal = options?.signal;
+        return first.promise;
+      })
+      .mockReturnValueOnce(second.promise);
+    const onDemoImported = vi.fn();
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={onDemoImported} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Demo one/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Packs' }));
+
+    expect(firstSignal?.aborted).toBe(true);
+    await waitFor(() => expect(getLocalPackMock).toHaveBeenCalledTimes(2));
+    const secondAction = await screen.findByRole('button', { name: /Demo one/ });
+    fireEvent.click(secondAction);
+    expect(importLocalPackDemoSnapshotMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      first.reject(new Error('late unsafe failure'));
+      await first.promise.catch(() => undefined);
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(secondAction).toBeDisabled();
+
+    await act(async () => {
+      second.resolve({
+        scenario_id: 'refreshed-success',
+        pack_id: 'pack-one',
+        demo_snapshot_id: 'snap-1',
+        status: 'imported',
+      });
+      await second.promise;
+    });
+    expect(onDemoImported).toHaveBeenCalledWith('refreshed-success');
+  });
+
+  it('does not start a demo snapshot import while a refresh is pending', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    const refresh = createDeferred<{
+      packs: LocalPackSummary[];
+      count: number;
+      diagnostics: PackDiagnostic[];
+      diagnostic_count: number;
+    }>();
+    refreshLocalPacksMock.mockReturnValue(refresh.promise);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
+
+    const demoAction = await screen.findByRole('button', { name: /Demo one/ });
+    const refreshAction = screen.getByRole('button', { name: 'Refresh Packs' });
+    fireEvent.click(refreshAction);
+    await waitFor(() => expect(refreshAction).toBeDisabled());
+
+    const demoWasDisabledDuringRefresh = demoAction.hasAttribute('disabled');
+    demoAction.removeAttribute('disabled');
+    fireEvent.click(demoAction);
+
+    expect(importLocalPackDemoSnapshotMock).not.toHaveBeenCalled();
+    expect(demoWasDisabledDuringRefresh).toBe(true);
+  });
+
+  it('aborts a demo snapshot import when the picker unmounts', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: localPackCapabilities(true),
+      error: null,
+      reload: vi.fn(),
+    });
+    listLocalPacksMock.mockResolvedValue({ packs: [mockPacksSummaryList[0]], count: 1 });
+    getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
+    getLocalPackMock.mockResolvedValue(mockPackDetailOne);
+    let importSignal: AbortSignal | undefined;
+    importLocalPackDemoSnapshotMock.mockImplementation(
+      (_packId, _demoId, options?: { signal?: AbortSignal }) => {
+        importSignal = options?.signal;
+        return new Promise(() => undefined);
+      },
+    );
+    const { unmount } = render(
+      <LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Demo one/ }));
+    unmount();
+
+    expect(importSignal?.aborted).toBe(true);
   });
 
   it('loads packs, renders compact tiles + genre segments, and filters by search incl. tag text', async () => {
@@ -278,7 +688,7 @@ describe('LocalPackPicker', () => {
     // P0-3 soft-select fetches the first pack's detail on mount
     getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(listLocalPacksMock).toHaveBeenCalledTimes(1);
@@ -325,7 +735,7 @@ describe('LocalPackPicker', () => {
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
     getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
@@ -366,7 +776,7 @@ describe('LocalPackPicker', () => {
       diagnostic_count: 0,
     });
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
@@ -400,7 +810,7 @@ describe('LocalPackPicker', () => {
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
     getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
@@ -438,7 +848,7 @@ describe('LocalPackPicker', () => {
     getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
     const onImportMock = vi.fn();
-    render(<LocalPackPicker onImport={onImportMock} />);
+    render(<LocalPackPicker onImport={onImportMock} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
@@ -511,7 +921,7 @@ describe('LocalPackPicker', () => {
     getLocalPackMock.mockResolvedValue(englishDetail);
 
     const onImportMock = vi.fn();
-    render(<LocalPackPicker onImport={onImportMock} />);
+    render(<LocalPackPicker onImport={onImportMock} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /主题包一/ })).toBeInTheDocument();
@@ -557,7 +967,7 @@ describe('LocalPackPicker', () => {
       getLocalPackMock.mockResolvedValue(mockPackDetailTwo);
 
       const onImportMock = vi.fn();
-      render(<LocalPackPicker onImport={onImportMock} />);
+      render(<LocalPackPicker onImport={onImportMock} onDemoImported={vi.fn()} />);
 
       const importButton = await screen.findByRole('button', { name: importLabel });
       fireEvent.click(importButton);
@@ -601,7 +1011,7 @@ describe('LocalPackPicker', () => {
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
     getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Pack One/ })).toBeInTheDocument();
@@ -641,7 +1051,7 @@ describe('LocalPackPicker', () => {
       diagnostic_count: 2,
     });
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Refresh Packs' })).toBeInTheDocument();
@@ -702,7 +1112,7 @@ describe('LocalPackPicker', () => {
       diagnostic_count: 0,
     });
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     expect(await screen.findByText('Prompt one')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Packs' }));
@@ -731,7 +1141,7 @@ describe('LocalPackPicker', () => {
         : Promise.reject(new Error('pack two detail failed')),
     );
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     expect(await screen.findByText('Prompt one')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Pack Two/ }));
@@ -759,7 +1169,7 @@ describe('LocalPackPicker', () => {
       id === 'pack-one' ? packADetail.promise : Promise.resolve(mockPackDetailTwo),
     );
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => expect(getLocalPackMock).toHaveBeenCalledWith('pack-one'));
     fireEvent.click(screen.getByRole('button', { name: /Pack Two/ }));
@@ -792,7 +1202,7 @@ describe('LocalPackPicker', () => {
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
     getLocalPackMock.mockResolvedValue(mockPackDetailTwo);
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Pack Two/ })).toBeInTheDocument();
@@ -825,7 +1235,7 @@ describe('LocalPackPicker', () => {
       Promise.resolve(id === 'pack-two' ? mockPackDetailTwo : mockPackDetailOne),
     );
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     // pack-one is auto-selected on mount (P0-3) and its detail loads first
     await waitFor(() => {
@@ -860,7 +1270,7 @@ describe('LocalPackPicker', () => {
     getLocalPackDiagnosticsMock.mockResolvedValue({ diagnostics: [], count: 0 });
     getLocalPackMock.mockResolvedValue(mockPackDetailOne);
 
-    render(<LocalPackPicker onImport={vi.fn()} />);
+    render(<LocalPackPicker onImport={vi.fn()} onDemoImported={vi.fn()} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Society Pack/ })).toBeInTheDocument();

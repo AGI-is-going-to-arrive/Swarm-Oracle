@@ -7,7 +7,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../api/client';
 import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
-import type { FullReport, ReportStatus, Scenario, YouVsOracleComparison } from '../types';
+import type {
+  FullReport,
+  PremortemAnalysis,
+  ReportStatus,
+  Scenario,
+  YouVsOracleComparison,
+} from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
@@ -17,6 +23,7 @@ import {
 import en from '../i18n/locales/en.json';
 import zh from '../i18n/locales/zh.json';
 import ResultView from './ResultView';
+import { formatPremortemMarkdown } from './result/PremortemAnalysisBlock';
 import { useUIPreferencesStore } from '../stores/uiPreferencesStore';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -83,6 +90,47 @@ function fullReportFixture(
       disclaimer: null,
     },
   };
+}
+
+const structuredPremortemFixture: PremortemAnalysis = {
+  status: 'partial',
+  reason: 'insufficient_source_diversity',
+  items: [
+    {
+      id: 'pm_001',
+      failure_mode_i18n: { zh: '供应链停摆', en: 'Supply chain stalls' },
+      mechanism_i18n: { zh: '缓冲库存耗尽', en: 'Buffer inventory is exhausted' },
+      early_warning_i18n: { zh: '库存跌破两周', en: 'Inventory falls below two weeks' },
+      uncertainty_i18n: { zh: '替代产能时间未知', en: 'Replacement timing remains uncertain' },
+      evidence_chain: [
+        {
+          evidence_ref: 'ev-1',
+          role: 'failure_signal',
+          rationale_i18n: { zh: '库存是早期信号', en: 'Inventory is the early signal' },
+        },
+      ],
+    },
+  ],
+};
+
+function mockStoryWithFullReport(report: FullReport) {
+  vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+    scenario_id: 'scenario-1',
+    question: 'What if?',
+    status: 'done',
+    branches: [{
+      id: 'branch-1',
+      title: 'Archive Branch',
+      probability: 1,
+      status: 'COMPLETED',
+      story: 'A complete branch story.',
+      insight: 'A durable insight.',
+      key_moments: [],
+      parent_branch_id: null,
+      fork_reason: '',
+    }],
+    full_report: report,
+  });
 }
 
 function readBlobText(blob: Blob): Promise<string> {
@@ -794,6 +842,11 @@ beforeEach(() => {
     value: vi.fn(() => 'blob:mock-export'),
   });
   Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    writable: true,
+    value: vi.fn(),
+  });
+  Object.defineProperty(HTMLAnchorElement.prototype, 'click', {
     configurable: true,
     writable: true,
     value: vi.fn(),
@@ -5467,6 +5520,367 @@ describe('ResultView export flow', () => {
     expect(blobText).toContain('This probability is a narrative simulation result, not a real-world prediction.');
     expect(blobText).not.toContain('Disclaimer: null');
     expect(blobText).not.toContain('Disclaimer: undefined');
+  });
+
+  it('exports structured premortem status, failure-mode fields, and evidence-chain roles', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+    setMockCapabilities({ result_report: { enabled: true } });
+    mockStoryWithFullReport({
+      ...fullReportFixture(),
+      evidence: [
+        {
+          id: 'ev-1',
+          branch_id: 'branch-1',
+          round_id: 'round-1',
+          round_number: 1,
+          agent_id: 'agent-1',
+          agent_name: 'Analyst',
+          message_id: 'message-1',
+          quote: 'Inventories fell below the operating buffer.',
+          kind: 'utterance',
+        },
+      ],
+      premortem_analysis: structuredPremortemFixture,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'result.export' }));
+    await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+    const blobText = await readBlobText(createObjectURLMock.mock.calls[0][0] as Blob);
+
+    expect(blobText).toContain('## Premortem analysis');
+    expect(blobText).toContain('**Status**: Partial analysis');
+    expect(blobText).toContain('**Reason**: Simulation source diversity was insufficient');
+    expect(blobText).toContain('### pm_001 — Supply chain stalls');
+    expect(blobText).toContain('**Mechanism**: Buffer inventory is exhausted');
+    expect(blobText).toContain('**Early warning**: Inventory falls below two weeks');
+    expect(blobText).toContain('**Uncertainty**: Replacement timing remains uncertain');
+    expect(blobText).toContain('[ev-1] Failure signal — Inventory is the early signal');
+    expect(blobText).toContain(
+      'Simulation evidence does not establish statistical independence or real-world proof.',
+    );
+    expect(blobText).not.toContain('independent sources');
+  });
+
+  it.each([
+    [
+      'legacy null',
+      null,
+      'Structured premortem is not available for this legacy or unimplemented report.',
+    ],
+    [
+      'explicit missing',
+      { status: 'missing', reason: 'lineage_unavailable', items: [] } as PremortemAnalysis,
+      'Branch lineage evidence was unavailable.',
+    ],
+  ] as const)(
+    'exports %s premortem as unavailable without fabricating risks',
+    async (_label, analysis, expectedExplanation) => {
+      const user = userEvent.setup();
+      const createObjectURLMock = vi.mocked(URL.createObjectURL);
+      createObjectURLMock.mockClear();
+      setMockCapabilities({ result_report: { enabled: true } });
+      mockStoryWithFullReport({
+        ...fullReportFixture(),
+        premortem_analysis: analysis,
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await user.click(await screen.findByRole('button', { name: 'result.export' }));
+      await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+      const blobText = await readBlobText(createObjectURLMock.mock.calls[0][0] as Blob);
+
+      expect(blobText).toContain('## Premortem analysis');
+      expect(blobText).toContain('**Status**: Analysis unavailable');
+      expect(blobText).toContain(expectedExplanation);
+      expect(blobText).not.toContain('### pm_');
+      expect(blobText).not.toContain('No risks');
+    },
+  );
+
+  it('fails safe when malformed premortem data reaches Markdown export', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+    setMockCapabilities({ result_report: { enabled: true } });
+    const report = fullReportFixture();
+    (report as unknown as { premortem_analysis?: unknown }).premortem_analysis = {
+      status: 'available',
+      reason: null,
+      items: 'TOP-SECRET-RAW-JSON',
+    };
+    mockStoryWithFullReport(report);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'result.export' }));
+    await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+    const blobText = await readBlobText(createObjectURLMock.mock.calls[0][0] as Blob);
+
+    expect(blobText).toContain('The structured premortem could not be displayed');
+    expect(blobText).not.toContain('TOP-SECRET-RAW-JSON');
+  });
+
+  it.each([
+    [
+      'analysis',
+      'RAW-ANALYSIS-EXTRA',
+      { ...structuredPremortemFixture, unexpected: 'RAW-ANALYSIS-EXTRA' },
+    ],
+    [
+      'failure mode',
+      'RAW-ITEM-EXTRA',
+      {
+        ...structuredPremortemFixture,
+        items: [{ ...structuredPremortemFixture.items[0], unexpected: 'RAW-ITEM-EXTRA' }],
+      },
+    ],
+    [
+      'evidence link',
+      'RAW-LINK-EXTRA',
+      {
+        ...structuredPremortemFixture,
+        items: [{
+          ...structuredPremortemFixture.items[0],
+          evidence_chain: [{
+            ...structuredPremortemFixture.items[0].evidence_chain[0],
+            unexpected: 'RAW-LINK-EXTRA',
+          }],
+        }],
+      },
+    ],
+    [
+      'localized text',
+      'RAW-I18N-EXTRA',
+      {
+        ...structuredPremortemFixture,
+        items: [{
+          ...structuredPremortemFixture.items[0],
+          uncertainty_i18n: {
+            ...structuredPremortemFixture.items[0].uncertainty_i18n,
+            fr: 'RAW-I18N-EXTRA',
+          },
+        }],
+      },
+    ],
+  ] as const)('rejects extra keys at the %s level in Markdown', (_level, marker, payload) => {
+    const markdown = formatPremortemMarkdown(
+      payload as unknown as PremortemAnalysis,
+      'en',
+      (_key, defaultValue) => defaultValue,
+      [{
+        id: 'ev-1',
+        branch_id: 'branch-1',
+        round_id: 'round-1',
+        round_number: 1,
+        agent_id: 'agent-1',
+        agent_name: 'Analyst',
+        message_id: 'message-1',
+        quote: 'Inventory warning.',
+        kind: 'utterance',
+      }],
+    );
+
+    expect(markdown).toContain('The structured premortem could not be displayed');
+    expect(markdown).not.toContain(marker);
+    expect(markdown).not.toContain('### pm_001');
+  });
+
+  it('uses the same evidence normalization for all-dangling Markdown analysis', () => {
+    const analysis = {
+      status: 'available',
+      reason: null,
+      items: [{
+        ...structuredPremortemFixture.items[0],
+        evidence_chain: [
+          {
+            ...structuredPremortemFixture.items[0].evidence_chain[0],
+            evidence_ref: 'ev-missing-1',
+          },
+          {
+            ...structuredPremortemFixture.items[0].evidence_chain[0],
+            evidence_ref: 'ev-missing-2',
+            role: 'failure_mechanism' as const,
+          },
+        ],
+      }],
+    } satisfies PremortemAnalysis;
+
+    const markdown = formatPremortemMarkdown(
+      analysis,
+      'en',
+      (_key, defaultValue) => defaultValue,
+      [],
+    );
+
+    expect(markdown).toContain('**Status**: Analysis unavailable');
+    expect(markdown).toContain('**Reason**: Branch lineage evidence was unavailable.');
+    expect(markdown).not.toContain('### pm_001');
+    expect(markdown).not.toContain('Available');
+  });
+
+  it.each([
+    {
+      label: 'a unique all-dangling item',
+      itemId: 'pm_002',
+      marker: 'RAW-DANGLING-MARKDOWN-ITEM',
+      expected: '**Status**: Partial analysis',
+      expectedExplanation: 'Simulation source diversity was insufficient',
+      keepsValidItem: true,
+    },
+    {
+      label: 'an all-dangling item with a duplicate id',
+      itemId: 'pm_001',
+      marker: 'RAW-DUPLICATE-MARKDOWN-ITEM',
+      expected: 'The structured premortem could not be displayed',
+      expectedExplanation: null,
+      keepsValidItem: false,
+    },
+  ] as const)(
+    'normalizes a valid item mixed with $label before Markdown export',
+    ({ itemId, marker, expected, expectedExplanation, keepsValidItem }) => {
+      const validItem = {
+        ...structuredPremortemFixture.items[0],
+        evidence_chain: [
+          structuredPremortemFixture.items[0].evidence_chain[0],
+          {
+            ...structuredPremortemFixture.items[0].evidence_chain[0],
+            evidence_ref: 'ev-2',
+            role: 'failure_mechanism' as const,
+          },
+        ],
+      };
+      const analysis = {
+        status: 'available' as const,
+        reason: null,
+        items: [
+          validItem,
+          {
+            ...validItem,
+            id: itemId,
+            failure_mode_i18n: { zh: marker, en: marker },
+            evidence_chain: validItem.evidence_chain.map((link, index) => ({
+              ...link,
+              evidence_ref: `ev-missing-${index + 1}`,
+            })),
+          },
+        ],
+      };
+      const evidence: FullReport['evidence'] = [
+        {
+          id: 'ev-1',
+          branch_id: 'branch-1',
+          round_id: 'round-1',
+          round_number: 1,
+          agent_id: 'agent-1',
+          agent_name: 'Analyst One',
+          message_id: 'message-1',
+          quote: 'Inventory warning.',
+          kind: 'utterance',
+        },
+        {
+          id: 'ev-2',
+          branch_id: 'branch-2',
+          round_id: 'round-2',
+          round_number: 2,
+          agent_id: 'agent-2',
+          agent_name: 'Analyst Two',
+          message_id: 'message-2',
+          quote: 'Capacity warning.',
+          kind: 'causal_fact',
+        },
+      ];
+
+      const markdown = formatPremortemMarkdown(
+        analysis,
+        'en',
+        (_key, defaultValue) => defaultValue,
+        evidence,
+      );
+
+      expect(markdown).toContain(expected);
+      if (expectedExplanation) expect(markdown).toContain(expectedExplanation);
+      expect(markdown.includes('### pm_001')).toBe(keepsValidItem);
+      expect(markdown).not.toContain('**Status**: Available');
+      expect(markdown).not.toContain(marker);
+      expect(markdown).not.toContain('ev-missing');
+    },
+  );
+
+  it('downgrades same-coordinate Markdown evidence to partial while preserving uncertainty', () => {
+    const analysis = {
+      status: 'available',
+      reason: null,
+      items: [{
+        ...structuredPremortemFixture.items[0],
+        evidence_chain: [
+          structuredPremortemFixture.items[0].evidence_chain[0],
+          {
+            ...structuredPremortemFixture.items[0].evidence_chain[0],
+            evidence_ref: 'ev-2',
+            role: 'failure_mechanism' as const,
+          },
+        ],
+      }],
+    } satisfies PremortemAnalysis;
+    const evidence: FullReport['evidence'] = [
+      {
+        id: 'ev-1',
+        branch_id: 'branch-1',
+        round_id: 'round-1',
+        round_number: 1,
+        agent_id: 'agent-1',
+        agent_name: 'Analyst',
+        message_id: 'message-1',
+        quote: 'Inventory warning.',
+        kind: 'utterance',
+      },
+      {
+        id: 'ev-2',
+        branch_id: 'branch-1',
+        round_id: 'round-1',
+        round_number: 1,
+        agent_id: 'agent-1',
+        agent_name: 'Analyst',
+        message_id: 'message-1',
+        quote: 'Same coordinate, different evidence id.',
+        kind: 'causal_fact',
+      },
+    ];
+
+    const markdown = formatPremortemMarkdown(
+      analysis,
+      'en',
+      (_key, defaultValue) => defaultValue,
+      evidence,
+    );
+
+    expect(markdown).toContain('**Status**: Partial analysis');
+    expect(markdown).toContain('Simulation source diversity was insufficient');
+    expect(markdown).toContain('**Uncertainty**: Replacement timing remains uncertain');
+    expect(markdown).not.toContain('**Status**: Available');
   });
 
   it.each([

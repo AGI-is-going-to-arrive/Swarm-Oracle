@@ -68,7 +68,7 @@ export function validatePersonaPayload(raw: unknown): ValidationOk | ValidationE
 }
 
 /** Trigger a browser download for a JSON payload. Exported for testing. */
-export function triggerJsonDownload(payload: PersonaExportPayload, fileName: string): void {
+export function triggerJsonDownload(payload: unknown, fileName: string): void {
   const json = JSON.stringify(payload, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

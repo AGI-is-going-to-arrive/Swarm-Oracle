@@ -8,6 +8,7 @@ import { ReportConfidenceBadge } from './ReportConfidenceBadge';
 import { ReportToc } from './ReportToc';
 import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
+import { PremortemAnalysisBlock } from './PremortemAnalysisBlock';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
 import {
@@ -1160,6 +1161,13 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
                   </section>
                 ))}
             </div>
+
+            <PremortemAnalysisBlock
+              analysis={report.premortem_analysis}
+              evidence={report.evidence}
+              isZh={isZh}
+              onOpenEvidence={handleOpenEvidence}
+            />
 
             {hasInterviews && (
               <section

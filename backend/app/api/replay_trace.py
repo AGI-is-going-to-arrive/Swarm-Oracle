@@ -31,6 +31,7 @@ from app.api.schemas import ReplayTraceNode, ReplayTraceResponse
 from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import Branch, get_engine
+from app.services.branch_lineage import BranchLineageError, resolve_branch_lineage
 
 logger = logging.getLogger(__name__)
 
@@ -75,37 +76,94 @@ def _resolve_cursor_position(
     return cursor_row
 
 
-def _earliest_branch_timestamp(
+def _earliest_branch_timestamps(
     session: Session,
     *,
-    branch_id: str,
-    fallback: datetime | None,
-) -> datetime:
-    """Best-effort ``created_at`` proxy.
+    branch_ids: tuple[str, ...],
+) -> dict[str, datetime]:
+    """Load each branch's earliest checkpoint timestamp in one query.
 
     ``Branch`` rows have no timestamp column (by design — see
     ``backend/app/models/database.py:Branch``).  Prefer the earliest
-    ``ScenarioCheckpoint.created_at`` for the branch, then fall back to the
-    parent scenario's ``created_at``.  Returns ``datetime.utcfromtimestamp(0)``
-    as a stable sentinel when both are missing.
+    ``ScenarioCheckpoint.created_at`` for each branch.  Callers retain the
+    scenario timestamp and epoch fallbacks when no checkpoint exists.
     """
-    checkpoint_ts = session.exec(
-        select(func.min(ScenarioCheckpoint.created_at)).where(
-            ScenarioCheckpoint.branch_id == branch_id
+    if not branch_ids:
+        return {}
+    rows = session.exec(
+        select(
+            ScenarioCheckpoint.branch_id,
+            func.min(ScenarioCheckpoint.created_at),
         )
-    ).first()
-    if checkpoint_ts is not None:
-        return checkpoint_ts
-    if fallback is not None:
-        return fallback
-    return datetime.utcfromtimestamp(0)
+        .where(ScenarioCheckpoint.branch_id.in_(branch_ids))
+        .group_by(ScenarioCheckpoint.branch_id)
+    ).all()
+    return {
+        str(branch_id): checkpoint_ts
+        for branch_id, checkpoint_ts in rows
+        if checkpoint_ts is not None
+    }
+
+
+def _target_lineage_error(exc: BranchLineageError):
+    if exc.code == "BRANCH_LINEAGE_BRANCH_NOT_FOUND":
+        return api_error(404, "BRANCH_NOT_FOUND", "Branch not found in scenario")
+    return api_error(409, exc.code, "Branch lineage is invalid")
+
+
+def _target_lineage_page(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    after: str | None,
+    limit: int,
+) -> tuple[list[Branch], bool]:
+    try:
+        lineage = resolve_branch_lineage(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+        )
+    except BranchLineageError as exc:
+        raise _target_lineage_error(exc) from None
+
+    lineage_ids = tuple(segment.branch_id for segment in lineage.segments)
+    start = 0
+    if after is not None:
+        if not after.strip():
+            raise api_error(400, "REPLAY_TRACE_CURSOR_INVALID", "Malformed cursor value")
+        try:
+            start = lineage_ids.index(after) + 1
+        except ValueError:
+            raise api_error(
+                400,
+                "REPLAY_TRACE_CURSOR_INVALID",
+                "Cursor branch is not in the selected lineage",
+            ) from None
+
+    page_ids = lineage_ids[start : start + limit]
+    has_more = start + len(page_ids) < len(lineage_ids)
+    if not page_ids:
+        return [], has_more
+
+    rows = session.exec(
+        select(Branch).where(
+            Branch.scenario_id == scenario_id,
+            Branch.id.in_(page_ids),
+        )
+    ).all()
+    rows_by_id = {branch.id: branch for branch in rows}
+    if any(branch_id not in rows_by_id for branch_id in page_ids):
+        raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found in scenario")
+    return [rows_by_id[page_id] for page_id in page_ids], has_more
 
 
 @router.get(
     "/scenario/{scenario_id}/replay-trace",
     response_model=ReplayTraceResponse,
 )
-async def get_replay_trace(
+def get_replay_trace(
     scenario_id: str,
     after: Optional[str] = Query(default=None, description="Cursor: branch_id of previous page"),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
@@ -117,15 +175,18 @@ async def get_replay_trace(
             "``idx_branch_replay_source`` index directly (HC-20)."
         ),
     ),
+    branch_id: Optional[str] = Query(
+        default=None,
+        description="Optional target branch whose effective root-to-target lineage is returned.",
+    ),
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> ReplayTraceResponse:
     """Return replay lineage for ``scenario_id`` as a cursor-paginated node list.
 
-    The query targets the ``idx_branch_replay_source`` index by filtering on
-    ``replay_source_branch_id`` OR primary-key equality with the root branch
-    id(s).  Ordering is stable by ``branch.id ASC`` (UUID is unique and
-    keyset-friendly).  The endpoint never writes and never counts against the
-    shared ``MAX_REPLAY_BRANCHES=3`` quota.
+    ``branch_id`` selects the authoritative metadata-only effective lineage in
+    root-to-target order.  Without it, the legacy replay-source query and UUID
+    keyset pagination remain unchanged.  The endpoint never writes and never
+    counts against the shared ``MAX_REPLAY_BRANCHES=3`` quota.
     """
     with Session(get_engine()) as session:
         # Ownership concealment — foreign scenarios surface as 404, never 403.
@@ -133,38 +194,63 @@ async def get_replay_trace(
         scenario_created_at = getattr(scenario, "created_at", None)
 
         normalized_root = (root_branch_id or "").strip() or None
-        if normalized_root is not None:
-            # Exact-match lineage walk — hits ``idx_branch_replay_source``
-            # directly in EXPLAIN QUERY PLAN (HC-20).
-            stmt = select(Branch).where(
-                Branch.scenario_id == scenario_id,
-                Branch.replay_source_branch_id == normalized_root,  # type: ignore[union-attr]
-            )
-        else:
-            stmt = select(Branch).where(
-                Branch.scenario_id == scenario_id,
-                Branch.replay_source_branch_id.isnot(None),  # type: ignore[union-attr]
+        normalized_target = (branch_id or "").strip() or None
+        if normalized_root is not None and normalized_target is not None:
+            raise api_error(
+                400,
+                "REPLAY_TRACE_BRANCH_FILTER_CONFLICT",
+                "branch_id cannot be combined with root_branch_id",
             )
 
-        if after is not None:
-            cursor_id = _resolve_cursor_position(
+        if normalized_target is not None:
+            page_rows, has_more = _target_lineage_page(
                 session,
                 scenario_id=scenario_id,
-                cursor_branch_id=after,
+                branch_id=normalized_target,
+                after=after,
+                limit=limit,
             )
-            stmt = stmt.where(Branch.id > cursor_id)
+        else:
+            if normalized_root is not None:
+                # Exact-match lineage walk — hits ``idx_branch_replay_source``
+                # directly in EXPLAIN QUERY PLAN (HC-20).
+                stmt = select(Branch).where(
+                    Branch.scenario_id == scenario_id,
+                    Branch.replay_source_branch_id == normalized_root,  # type: ignore[union-attr]
+                )
+            else:
+                stmt = select(Branch).where(
+                    Branch.scenario_id == scenario_id,
+                    Branch.replay_source_branch_id.isnot(None),  # type: ignore[union-attr]
+                )
 
-        stmt = stmt.order_by(Branch.id.asc()).limit(limit + 1)  # type: ignore[union-attr]
-        rows = session.exec(stmt).all()
+            if after is not None:
+                cursor_id = _resolve_cursor_position(
+                    session,
+                    scenario_id=scenario_id,
+                    cursor_branch_id=after,
+                )
+                stmt = stmt.where(Branch.id > cursor_id)
 
-        has_more = len(rows) > limit
-        page_rows = rows[:limit]
+            stmt = stmt.order_by(Branch.id.asc()).limit(limit + 1)  # type: ignore[union-attr]
+            rows = session.exec(stmt).all()
+            has_more = len(rows) > limit
+            page_rows = rows[:limit]
+
+        checkpoint_timestamps = _earliest_branch_timestamps(
+            session,
+            branch_ids=tuple(branch.id for branch in page_rows),
+        )
 
         nodes: list[ReplayTraceNode] = []
         for branch in page_rows:
-            created_at = _earliest_branch_timestamp(
-                session, branch_id=branch.id, fallback=scenario_created_at,
-            )
+            created_at = checkpoint_timestamps.get(branch.id)
+            if created_at is None:
+                created_at = (
+                    scenario_created_at
+                    if scenario_created_at is not None
+                    else datetime.utcfromtimestamp(0)
+                )
             nodes.append(
                 ReplayTraceNode(
                     branch_id=branch.id,
@@ -172,8 +258,10 @@ async def get_replay_trace(
                     replay_source_branch_id=branch.replay_source_branch_id,
                     origin_round=branch.replay_source_round or branch.fork_round or 0,
                     replay_kind=branch.replay_kind or "",
-                    status=branch.status.value if hasattr(branch.status, "value") else str(
-                        branch.status
+                    status=(
+                        branch.status.value
+                        if hasattr(branch.status, "value")
+                        else str(branch.status)
                     ),
                     created_at=created_at,
                 )

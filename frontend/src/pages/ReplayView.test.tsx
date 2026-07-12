@@ -10,9 +10,17 @@
  *   - scrubber drag updates hash
  *   - data-testid contract: replay-view-root rendered
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  type NavigateFunction,
+} from 'react-router-dom';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -29,6 +37,23 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ReplayView } from './ReplayView';
 
 const mockedCap = vi.mocked(useCapabilityCheck);
+let navigateForTest: NavigateFunction | null = null;
+
+function RouterProbe() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => {
+    navigateForTest = navigate;
+    return () => {
+      if (navigateForTest === navigate) navigateForTest = null;
+    };
+  }, [navigate]);
+  return (
+    <output data-testid="router-location">
+      {`${location.pathname}${location.search}${location.hash}`}
+    </output>
+  );
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -42,26 +67,37 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function renderAt(pathWithHash: string) {
-  // MemoryRouter does not parse hashes; update `window.location.hash`
-  // directly so the hook's parseHashToFrame sees it on mount.
-  const [path, hashPart] = pathWithHash.split('#');
+  // Keep the browser hash in sync because useReplayTimeline reads window.location.
+  const [, hashPart] = pathWithHash.split('#');
   if (hashPart) {
     window.history.replaceState(null, '', `#${hashPart}`);
   } else {
     window.history.replaceState(null, '', '#');
   }
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={[pathWithHash]}>
       <Routes>
         <Route path="/replay/:id" element={<ReplayView />} />
       </Routes>
+      <RouterProbe />
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
   mockedCap.mockReset();
+  navigateForTest = null;
   window.history.replaceState(null, '', '#');
 });
 
@@ -477,7 +513,7 @@ describe('ReplayView — pagination (cursor-based load more)', () => {
     expect(screen.queryByTestId('replay-load-more')).toBeNull();
   });
 
-  it('clicking "Load more" issues a second fetch carrying the cursor', async () => {
+  it('clicking "Load more" repeats the selected target branch with the cursor', async () => {
     // Note: client maps `cursor` arg → `after=` query param in the request URL.
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
@@ -503,7 +539,7 @@ describe('ReplayView — pagination (cursor-based load more)', () => {
       return jsonResponse({}, 404);
     });
 
-    renderAt('/replay/sc-cursor');
+    renderAt('/replay/sc-cursor?branch=b1');
 
     const btn = await screen.findByTestId('replay-load-more') as HTMLButtonElement;
     btn.click();
@@ -515,6 +551,7 @@ describe('ReplayView — pagination (cursor-based load more)', () => {
     const replayCalls = findReplayTraceCalls(fetchSpy);
     const secondCall = String(replayCalls[1][0]);
     expect(secondCall).toContain('after=cursor-page-2');
+    expect(new URL(secondCall, 'http://localhost').searchParams.get('branch_id')).toBe('b1');
   });
 
   it('merges nodes after loading more and dedups by branch_id', async () => {
@@ -643,6 +680,113 @@ describe('ReplayView — pagination (cursor-based load more)', () => {
   });
 });
 
+describe('ReplayView — target lineage scope', () => {
+  beforeEach(() => {
+    mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
+  });
+
+  function traceNode(branchId: string, originRound: number) {
+    return {
+      branch_id: branchId,
+      parent_branch_id: null,
+      replay_source_branch_id: null,
+      origin_round: originRound,
+      replay_kind: 'counterfactual',
+      status: 'active',
+      created_at: '2026-04-17T00:00:00Z',
+    };
+  }
+
+  function graphNode(id: string, round: number, branchId: string, content: string) {
+    return {
+      id,
+      key: `key-${id}`,
+      type: 'stance',
+      label: content,
+      round,
+      payload: {
+        agent_id: 'agent-1',
+        agent_name: 'Agent One',
+        branch_id: branchId,
+        content,
+      },
+    };
+  }
+
+  it.each([
+    ['/replay/sc-scope?branch=%20child%2Fleaf%20', 'child/leaf'],
+    ['/replay/sc-scope?branch=%20%20', null],
+    ['/replay/sc-scope', null],
+  ])('scopes both initial endpoints from the normalized URL target: %s', async (path, expectedBranch) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({ nodes: [traceNode(expectedBranch ?? 'root', 0)], next_cursor: null });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'graph-scope',
+          nodes: [graphNode('scope-node', 0, expectedBranch ?? 'root', 'scope content')],
+          edges: [],
+          available_branches: [expectedBranch ?? 'root'],
+        });
+      }
+      return jsonResponse({ id: 'sc-scope', branches: [] });
+    });
+
+    renderAt(path);
+    await screen.findByText('scope content');
+
+    const traceUrl = fetchSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes('/replay-trace'))!;
+    const graphUrl = fetchSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes('/causal-graph'))!;
+    expect(new URL(traceUrl, 'http://localhost').searchParams.get('branch_id')).toBe(expectedBranch);
+    expect(new URL(graphUrl, 'http://localhost').searchParams.get('branch_id')).toBe(expectedBranch);
+  });
+
+  it('keeps legal ancestor nodes and merges causal plus scenario branch options', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({ nodes: [traceNode('child', 1)], next_cursor: null });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'graph-lineage',
+          nodes: [
+            graphNode('ancestor-node', 0, 'parent', 'Ancestor context'),
+            graphNode('child-node', 1, 'child', 'Target child'),
+          ],
+          edges: [],
+          available_branches: ['parent', 'child', 'sibling'],
+        });
+      }
+      return jsonResponse({
+        id: 'sc-lineage',
+        branches: [
+          { id: 'scenario-only', title: 'Scenario only', probability: 0.25, status: 'ACTIVE' },
+        ],
+      });
+    });
+
+    renderAt('/replay/sc-lineage?branch=child');
+
+    expect(await screen.findByText('Ancestor context')).toBeInTheDocument();
+    const select = screen.getByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    expect(select.value).toBe('child');
+    expect(Array.from(select.options).map((option) => option.value)).toEqual([
+      '',
+      'child',
+      'parent',
+      'scenario-only',
+      'sibling',
+    ]);
+  });
+});
+
 describe('ReplayView — branch filter dropdown', () => {
   beforeEach(() => {
     mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
@@ -726,24 +870,74 @@ describe('ReplayView — branch filter dropdown', () => {
     expect(screen.queryByTestId('replay-branch-filter-select')).toBeNull();
   });
 
-  it('filters visible frame nodes when a branch is selected', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+  it('can clear a stale target branch from the error surface', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
+      const branchId = new URL(url, 'http://localhost').searchParams.get('branch_id');
       if (url.includes('/replay-trace')) {
-        return jsonResponse({
-          nodes: [makeNode('b1', 0), makeNode('b2', 0)],
-          next_cursor: null,
-        });
+        if (branchId === 'stale-branch') {
+          return jsonResponse({
+            detail: {
+              code: 'BRANCH_NOT_FOUND',
+              message: 'Branch not found in scenario',
+            },
+          }, 404);
+        }
+        return jsonResponse({ nodes: [makeNode('b1', 0)], next_cursor: null });
       }
       if (url.includes('/causal-graph')) {
         return jsonResponse({
           id: 'g1',
-          // Two graph nodes at round=0 → both fall in frame 0.
-          nodes: [
-            makeGraphNode('n1', 0, 'b1'),
-            makeGraphNode('n2', 0, 'b2'),
-          ],
+          nodes: branchId ? [] : [makeGraphNode('n1', 0, 'b1')],
           edges: [],
+          available_branches: ['b1'],
+        });
+      }
+      return jsonResponse({
+        id: 'sc-stale-branch',
+        branches: [
+          { id: 'b1', title: 'Main', probability: 1, status: 'COMPLETED' },
+        ],
+      });
+    });
+
+    renderAt('/replay/sc-stale-branch?branch=stale-branch');
+
+    const clearButton = await screen.findByRole('button', { name: 'All branches' });
+    fireEvent.click(clearButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('router-location')).toHaveTextContent(
+        '/replay/sc-stale-branch',
+      );
+      expect(screen.getByTestId('router-location')).not.toHaveTextContent('branch=');
+    });
+    await screen.findByText('payload from b1');
+    expect(fetchSpy.mock.calls.some(([input]) => (
+      String(input).includes('/replay-trace')
+      && !new URL(String(input), 'http://localhost').searchParams.has('branch_id')
+    ))).toBe(true);
+  });
+
+  it('treats branch selection and All as URL-backed target scope changes', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        const branchId = new URL(url, 'http://localhost').searchParams.get('branch_id');
+        return jsonResponse({
+          nodes: branchId ? [makeNode(branchId, 0)] : [makeNode('b1', 0), makeNode('b2', 0)],
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        const branchId = new URL(url, 'http://localhost').searchParams.get('branch_id');
+        return jsonResponse({
+          id: 'g1',
+          nodes: branchId
+            ? [makeGraphNode(`n-${branchId}`, 0, branchId)]
+            : [makeGraphNode('n1', 0, 'b1'), makeGraphNode('n2', 0, 'b2')],
+          edges: [],
+          available_branches: ['b1', 'b2'],
         });
       }
       return jsonResponse({}, 404);
@@ -756,75 +950,238 @@ describe('ReplayView — branch filter dropdown', () => {
     expect(screen.getByText('payload from b1')).toBeInTheDocument();
     expect(screen.getByText('payload from b2')).toBeInTheDocument();
 
-    // Select b1 — only that payload should remain.
-    select.value = 'b1';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    fireEvent.change(select, { target: { value: 'b1' } });
 
     await waitFor(() => {
+      expect(screen.getByTestId('router-location')).toHaveTextContent('?branch=b1');
       expect(screen.queryByText('payload from b2')).toBeNull();
     });
     expect(screen.getByText('payload from b1')).toBeInTheDocument();
+
+    const scopedTraceCall = fetchSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes('/replay-trace') && url.includes('branch_id=b1'));
+    const scopedGraphCall = fetchSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes('/causal-graph') && url.includes('branch_id=b1'));
+    expect(scopedTraceCall).toBeDefined();
+    expect(scopedGraphCall).toBeDefined();
+
+    fireEvent.change(screen.getByTestId('replay-branch-filter-select'), {
+      target: { value: '' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('router-location')).not.toHaveTextContent('branch=');
+      expect(screen.getByText('payload from b2')).toBeInTheDocument();
+    });
+    const replayCalls = fetchSpy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.includes('/replay-trace'));
+    const graphCalls = fetchSpy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.includes('/causal-graph'));
+    expect(new URL(replayCalls.at(-1)!, 'http://localhost').searchParams.has('branch_id')).toBe(false);
+    expect(new URL(graphCalls.at(-1)!, 'http://localhost').searchParams.has('branch_id')).toBe(false);
   });
 
-  it('resets selection when current branch becomes invalid after refetch', async () => {
-    let callIndex = 0;
+  it('keeps the URL target selected even when scoped nodes omit that exact leaf', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/replay-trace')) {
-        callIndex += 1;
-        if (callIndex === 1) {
-          return jsonResponse({
-            nodes: [makeNode('b1', 0), makeNode('b2', 0)],
-            next_cursor: null,
-          });
-        }
-        // After remount: only b3 remains; previously-selected b1 is gone.
         return jsonResponse({
-          nodes: [makeNode('b3', 0)],
+          nodes: [makeNode('ancestor', 0)],
           next_cursor: null,
         });
       }
       if (url.includes('/causal-graph')) {
-        if (callIndex <= 1) {
-          return jsonResponse({
-            id: 'g1',
-            nodes: [
-              makeGraphNode('n1', 0, 'b1'),
-              makeGraphNode('n2', 0, 'b2'),
-            ],
-            edges: [],
-          });
-        }
         return jsonResponse({
           id: 'g1',
-          nodes: [makeGraphNode('n3', 0, 'b3')],
+          nodes: [makeGraphNode('n-ancestor', 0, 'ancestor')],
           edges: [],
+          available_branches: ['ancestor'],
         });
       }
       return jsonResponse({}, 404);
     });
 
-    renderAt('/replay/sc-filter-reset');
+    renderAt('/replay/sc-filter-target?branch=leaf');
 
     const select = await screen.findByTestId('replay-branch-filter-select') as HTMLSelectElement;
-    select.value = 'b1';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => {
-      expect(
-        (screen.getByTestId('replay-branch-filter-select') as HTMLSelectElement).value,
-      ).toBe('b1');
+    expect(select.value).toBe('leaf');
+    expect(Array.from(select.options).map((o) => o.value)).toEqual([
+      '',
+      'ancestor',
+      'leaf',
+    ]);
+  });
+});
+
+describe('ReplayView — request epochs and cancellation', () => {
+  beforeEach(() => {
+    mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
+  });
+
+  function traceNode(branchId: string, originRound = 0) {
+    return {
+      branch_id: branchId,
+      parent_branch_id: null,
+      replay_source_branch_id: null,
+      origin_round: originRound,
+      replay_kind: 'counterfactual',
+      status: 'active',
+      created_at: '2026-04-17T00:00:00Z',
+    };
+  }
+
+  function graphBody(branchId: string, content: string, includeSibling = false) {
+    return {
+      id: `graph-${branchId}`,
+      nodes: [
+        {
+          id: `node-${branchId}`,
+          key: `key-${branchId}`,
+          type: 'stance',
+          label: content,
+          round: 0,
+          payload: {
+            agent_id: 'agent-1',
+            agent_name: 'Agent One',
+            branch_id: branchId,
+            content,
+          },
+        },
+        ...(includeSibling ? [{
+          id: 'node-new-option',
+          key: 'key-new-option',
+          type: 'stance',
+          label: 'Future target option',
+          round: 1,
+          payload: {
+            agent_id: 'agent-1',
+            agent_name: 'Agent One',
+            branch_id: 'new',
+            content: 'Future target option',
+          },
+        }] : []),
+      ],
+      edges: [],
+      available_branches: includeSibling ? [branchId, 'new'] : [branchId],
+    };
+  }
+
+  it('aborts all old-scope requests and ignores their late responses', async () => {
+    const oldTrace = deferred<Response>();
+    const oldGraph = deferred<Response>();
+    const oldScenario = deferred<Response>();
+    const oldSignals: Array<AbortSignal | null | undefined> = [];
+    let traceCalls = 0;
+    let graphCalls = 0;
+    let scenarioCalls = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        traceCalls += 1;
+        if (traceCalls === 1) {
+          oldSignals.push(init?.signal);
+          return oldTrace.promise;
+        }
+        return jsonResponse({ nodes: [traceNode('new')], next_cursor: null });
+      }
+      if (url.includes('/causal-graph')) {
+        graphCalls += 1;
+        if (graphCalls === 1) {
+          oldSignals.push(init?.signal);
+          return oldGraph.promise;
+        }
+        return jsonResponse(graphBody('new', 'New scope content'));
+      }
+      scenarioCalls += 1;
+      if (scenarioCalls === 1) {
+        oldSignals.push(init?.signal);
+        return oldScenario.promise;
+      }
+      return jsonResponse({ id: 'sc-race', branches: [{ id: 'new', title: 'New', status: 'ACTIVE' }] });
     });
 
-    // Simulate a route remount → fetchAll re-runs and produces a different
-    // branch set. The component must reset branchFilter to '' (all branches)
-    // because the previously-selected branch is no longer in branchOptions.
-    cleanup();
-    renderAt('/replay/sc-filter-reset-2');
+    renderAt('/replay/sc-race?branch=old');
+    await waitFor(() => {
+      expect(traceCalls).toBe(1);
+      expect(graphCalls).toBe(1);
+      expect(scenarioCalls).toBe(1);
+    });
 
-    const select2 = await screen.findByTestId('replay-branch-filter-select') as HTMLSelectElement;
-    expect(select2.value).toBe('');
-    const optionValues = Array.from(select2.options).map((o) => o.value);
-    expect(optionValues).toEqual(['', 'b3']);
+    await act(async () => {
+      navigateForTest?.('/replay/sc-race?branch=new');
+    });
+    expect(await screen.findByText('New scope content')).toBeInTheDocument();
+    expect(oldSignals).toHaveLength(3);
+    expect(oldSignals.every((signal) => signal instanceof AbortSignal && signal.aborted)).toBe(true);
+
+    await act(async () => {
+      oldTrace.resolve(jsonResponse({ nodes: [traceNode('old')], next_cursor: null }));
+      oldGraph.resolve(jsonResponse(graphBody('old', 'Late old scope content')));
+      oldScenario.resolve(jsonResponse({ id: 'sc-race', branches: [{ id: 'old', title: 'Old', status: 'ACTIVE' }] }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('New scope content')).toBeInTheDocument();
+    expect(screen.queryByText('Late old scope content')).toBeNull();
+  });
+
+  it('aborts an old page and prevents it from merging into a new target scope', async () => {
+    const latePage = deferred<Response>();
+    let latePageSignal: AbortSignal | null | undefined;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const params = new URL(url, 'http://localhost').searchParams;
+      if (url.includes('/replay-trace')) {
+        if (params.has('after')) {
+          latePageSignal = init?.signal;
+          return latePage.promise;
+        }
+        const branchId = params.get('branch_id') ?? 'old';
+        return jsonResponse({
+          nodes: [traceNode(branchId)],
+          next_cursor: branchId === 'old' ? 'old-page-2' : null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        const branchId = params.get('branch_id') ?? 'old';
+        return jsonResponse(graphBody(
+          branchId,
+          branchId === 'new' ? 'New scoped content' : 'Old scoped content',
+          branchId === 'old',
+        ));
+      }
+      return jsonResponse({
+        id: 'sc-page-race',
+        branches: [
+          { id: 'old', title: 'Old', status: 'ACTIVE' },
+          { id: 'new', title: 'New', status: 'ACTIVE' },
+        ],
+      });
+    });
+
+    renderAt('/replay/sc-page-race?branch=old');
+    const loadMore = await screen.findByTestId('replay-load-more');
+    fireEvent.click(loadMore);
+    await waitFor(() => expect(latePageSignal).toBeInstanceOf(AbortSignal));
+
+    fireEvent.change(screen.getByTestId('replay-branch-filter-select'), {
+      target: { value: 'new' },
+    });
+    expect(await screen.findByText('New scoped content')).toBeInTheDocument();
+    expect(latePageSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      latePage.resolve(jsonResponse({ nodes: [traceNode('late-old')], next_cursor: null }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('Branch late-old')).toBeNull();
+    expect(screen.getByText('New scoped content')).toBeInTheDocument();
   });
 });
 
@@ -832,6 +1189,18 @@ describe('ReplayView — evidence deep-link (?message=Y)', () => {
   beforeEach(() => {
     mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
   });
+
+  function makeDeepLinkTraceNode(branchId: string, originRound: number) {
+    return {
+      branch_id: branchId,
+      parent_branch_id: null,
+      replay_source_branch_id: null,
+      origin_round: originRound,
+      replay_kind: 'counterfactual',
+      status: 'active',
+      created_at: '2026-04-17T00:00:00Z',
+    };
+  }
 
   function installGraph() {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -859,6 +1228,75 @@ describe('ReplayView — evidence deep-link (?message=Y)', () => {
       return jsonResponse({}, 404);
     });
   }
+
+  it('consumes one-shot params only after the matching target scope settles', async () => {
+    const traceResponse = deferred<Response>();
+    const graphResponse = deferred<Response>();
+    const scenarioResponse = deferred<Response>();
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) return traceResponse.promise;
+      if (url.includes('/causal-graph')) return graphResponse.promise;
+      return scenarioResponse.promise;
+    });
+
+    renderAt('/replay/sc-deep-settle?branch=child&message=msg-target&round=2#t=turn_0');
+    expect(screen.getByTestId('router-location')).toHaveTextContent('branch=child');
+    expect(screen.getByTestId('router-location')).toHaveTextContent('message=msg-target');
+    expect(screen.getByTestId('router-location')).toHaveTextContent('round=2');
+
+    await act(async () => {
+      traceResponse.resolve(jsonResponse({
+        nodes: [
+          { ...makeDeepLinkTraceNode('child', 0) },
+          { ...makeDeepLinkTraceNode('child', 2) },
+        ],
+        next_cursor: null,
+      }));
+      graphResponse.resolve(jsonResponse({
+        id: 'graph-deep-settle',
+        nodes: [
+          {
+            id: 'target-node',
+            key: 'target-key',
+            type: 'stance',
+            label: 'Deep target content',
+            round: 2,
+            payload: {
+              agent_id: 'agent-1',
+              agent_name: 'Agent One',
+              branch_id: 'child',
+              message_id: 'msg-target',
+              content: 'Deep target content',
+            },
+          },
+        ],
+        edges: [],
+        available_branches: ['child'],
+      }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('router-location')).toHaveTextContent('message=msg-target');
+    expect(screen.getByTestId('router-location')).toHaveTextContent('round=2');
+
+    await act(async () => {
+      scenarioResponse.resolve(jsonResponse({
+        id: 'sc-deep-settle',
+        branches: [{ id: 'child', title: 'Child', status: 'ACTIVE' }],
+      }));
+    });
+
+    expect(await screen.findByTestId('replay-card-highlighted')).toHaveTextContent('Deep target content');
+    await waitFor(() => {
+      const locationText = screen.getByTestId('router-location').textContent ?? '';
+      expect(locationText).toContain('branch=child');
+      expect(locationText).not.toContain('message=');
+      expect(locationText).not.toContain('round=');
+      expect(locationText).toContain('#t=turn_');
+    });
+  });
 
   it('jumps to and highlights the node whose payload.message_id matches', async () => {
     installGraph();

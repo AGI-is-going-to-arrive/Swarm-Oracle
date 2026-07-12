@@ -12,8 +12,15 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.models import Branch, BranchStatus, FactionSnapshot, Scenario
+from app.services.branch_lineage import select_branch_rounds
 from app.services.result_report.queries import (
+    LatestFactionProxyRounds,
+    LatestMessageMetadataCoverage,
     LatestRelationStats,
+    ReportLineageScope,
+    ReportRoundRef,
+    _create_report_lineage_scope,
+    _validate_report_lineage_scope,
     count_branch_rounds,
     count_metadata_unavailable_messages,
     load_evidence_message_coords,
@@ -36,6 +43,11 @@ from app.services.result_report.schema import (
 
 TARGET_BRANCH_SORT = ["probability_desc", "fork_round_asc", "id_asc"]
 EVIDENCE_CANDIDATE_MULTIPLIER = 8
+PREMORTEM_EVIDENCE_LIMIT = 6
+PREMORTEM_EVIDENCE_CANDIDATE_LIMIT = (
+    PREMORTEM_EVIDENCE_LIMIT * EVIDENCE_CANDIDATE_MULTIPLIER
+)
+PREMORTEM_EVIDENCE_MAX_CANDIDATES = PREMORTEM_EVIDENCE_CANDIDATE_LIMIT * 2
 StatStatus = Literal["available", "partial", "missing"]
 T = TypeVar("T")
 
@@ -57,6 +69,8 @@ class ReducerResult:
     likelihood: Likelihood
     analytic_confidence: AnalyticConfidence
     evidence: list[EvidenceRef]
+    outcome_evidence_ids: tuple[str, ...]
+    premortem_evidence_ids: tuple[str, ...]
     key_participants: list[KeyParticipant]
     dissenting: DissentingView | None
     charts: list[Chart]
@@ -64,53 +78,60 @@ class ReducerResult:
     polarization: StatResult[float]
     agent_consensus: StatResult[float]
     round_count: int
+    report_scope: ReportLineageScope | None
     verdict_disclaimer: str | None = None
 
 
-def reduce(
+@dataclass(frozen=True)
+class _ReportTargetResolution:
+    scenario: Scenario | None
+    all_branches: list[Branch]
+    fallback_branches: list[Branch]
+    target: Branch | None
+    status: StatStatus
+    reason: str | None
+    verdict_disclaimer: str | None
+
+
+def _resolve_report_target(
     engine,
     scenario_id: str,
     *,
-    max_evidence: int | None = None,
-    dominant_branch_id: str | None = None,
-) -> ReducerResult:
-    """Reduce one scenario into deterministic structured report fields.
+    dominant_branch_id: str | None,
+) -> _ReportTargetResolution:
+    """Load report branches once and apply the canonical target-selection policy."""
 
-    ``dominant_branch_id`` is the answer-leaf the calling endpoint already
-    selected (``scenarios.py`` ``_terminal_completed_branches``). When provided
-    and viable, every anchored field (likelihood/confidence/evidence/dissenting/
-    key_participants) is derived from it instead of the bare highest-probability
-    branch, which is typically the prologue root (``fork_round=0``, ``p=1.0``)
-    with empty story/insight. ``branch_distribution`` always stays full-sorted.
-    """
-
-    evidence_limit = (
-        settings.REPORT_MAX_EVIDENCE_PER_SECTION
-        if max_evidence is None
-        else max(0, int(max_evidence))
-    )
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         completed_branches = _sort_branches_for_report(
             _load_branches(session, scenario_id, completed_only=True)
         )
         all_branches = _load_branches(session, scenario_id, completed_only=False)
-        parent_branch_ids = {
-            branch.parent_branch_id
-            for branch in all_branches
-            if branch.parent_branch_id
-        }
-        fallback_branches = (
-            completed_branches
-            if completed_branches
-            else _sort_branches_for_report(all_branches)
-        )
-        result_quality_confidence = _scenario_result_quality_confidence(scenario)
-
+    fallback_branches = (
+        completed_branches
+        if completed_branches
+        else _sort_branches_for_report(all_branches)
+    )
     if scenario is None:
-        return _missing_result("scenario_not_found")
+        return _ReportTargetResolution(
+            scenario=None,
+            all_branches=all_branches,
+            fallback_branches=fallback_branches,
+            target=None,
+            status="missing",
+            reason="scenario_not_found",
+            verdict_disclaimer=None,
+        )
     if not fallback_branches:
-        return _missing_result("no_branches")
+        return _ReportTargetResolution(
+            scenario=scenario,
+            all_branches=all_branches,
+            fallback_branches=fallback_branches,
+            target=None,
+            status="missing",
+            reason="no_branches",
+            verdict_disclaimer=None,
+        )
 
     status: StatStatus = "available" if completed_branches else "partial"
     reason = None if completed_branches else "no_completed_branches"
@@ -129,7 +150,100 @@ def reduce(
                 reason = "answer_branch_not_completed"
         else:
             verdict_disclaimer = _root_likelihood_disclaimer(_scenario_language(scenario))
+    return _ReportTargetResolution(
+        scenario=scenario,
+        all_branches=all_branches,
+        fallback_branches=fallback_branches,
+        target=target,
+        status=status,
+        reason=reason,
+        verdict_disclaimer=verdict_disclaimer,
+    )
+
+
+def resolve_report_lineage_scope(
+    engine,
+    scenario_id: str,
+    *,
+    dominant_branch_id: str | None,
+) -> ReportLineageScope | None:
+    """Resolve the canonical report target and its exact lineage once."""
+
+    resolution = _resolve_report_target(
+        engine,
+        scenario_id,
+        dominant_branch_id=dominant_branch_id,
+    )
+    if resolution.target is None:
+        return None
+    return _resolve_report_scope(
+        engine,
+        scenario_id,
+        resolution.target.id,
+        report_scope=None,
+    )
+
+
+def reduce(
+    engine,
+    scenario_id: str,
+    *,
+    max_evidence: int | None = None,
+    dominant_branch_id: str | None = None,
+    report_scope: ReportLineageScope | None = None,
+) -> ReducerResult:
+    """Reduce one scenario into deterministic structured report fields.
+
+    ``dominant_branch_id`` is the answer-leaf the calling endpoint already
+    selected (``scenarios.py`` ``_terminal_completed_branches``). When provided
+    and viable, every anchored field (likelihood/confidence/evidence/dissenting/
+    key_participants) is derived from it instead of the bare highest-probability
+    branch, which is typically the prologue root (``fork_round=0``, ``p=1.0``)
+    with empty story/insight. ``branch_distribution`` always stays full-sorted.
+    """
+
+    evidence_limit = (
+        settings.REPORT_MAX_EVIDENCE_PER_SECTION
+        if max_evidence is None
+        else max(0, int(max_evidence))
+    )
+    resolution = _resolve_report_target(
+        engine,
+        scenario_id,
+        dominant_branch_id=dominant_branch_id,
+    )
+    scenario = resolution.scenario
+    all_branches = resolution.all_branches
+    fallback_branches = resolution.fallback_branches
+    if scenario is None:
+        return _missing_result("scenario_not_found")
+    if resolution.target is None:
+        return _missing_result("no_branches")
+    parent_branch_ids = {
+        branch.parent_branch_id
+        for branch in all_branches
+        if branch.parent_branch_id
+    }
+    result_quality_confidence = _scenario_result_quality_confidence(scenario)
+    status = resolution.status
+    reason = resolution.reason
+    target = resolution.target
+    verdict_disclaimer = resolution.verdict_disclaimer
     target_branch_id = target.id
+    resolved_scope = _resolve_report_scope(
+        engine,
+        scenario_id,
+        target_branch_id,
+        report_scope=report_scope,
+    )
+    metadata_coverage = load_latest_message_metadata_coverage(
+        engine,
+        resolved_scope,
+    )
+    faction_proxy_rounds = load_latest_faction_proxy_rounds(
+        engine,
+        resolved_scope,
+    )
     distribution_branches = (
         _sort_branches_for_report(all_branches)
         if target_branch_id not in {branch.id for branch in fallback_branches}
@@ -155,19 +269,46 @@ def reduce(
         if verdict_disclaimer is not None
         else _derive_likelihood(target.probability, likelihood_branch_count)
     )
-    evidence = collect_evidence_pool(
+    outcome_evidence = collect_evidence_pool(
         engine,
         scenario_id,
         target_branch_id,
         max_evidence=evidence_limit,
+        report_scope=resolved_scope,
     )
-    agent_consensus = reduce_agent_consensus(engine, scenario_id, target_branch_id)
-    faction_snapshots = _latest_faction_snapshots(engine, scenario_id, target_branch_id)
-    relation_stats = _latest_relation_stats(engine, scenario_id, target_branch_id)
-    faction_consensus = _reduce_faction_consensus_from_snapshots(faction_snapshots)
-    polarization = _reduce_polarization_from_stats(faction_snapshots, relation_stats)
+    premortem_evidence = collect_premortem_evidence_pool(
+        engine,
+        scenario_id,
+        target_branch_id,
+        max_evidence=min(evidence_limit, PREMORTEM_EVIDENCE_LIMIT),
+        exclude_message_ids={item.message_id for item in outcome_evidence},
+        starting_index=len(outcome_evidence) + 1,
+        report_scope=resolved_scope,
+    )
+    evidence = [*outcome_evidence, *premortem_evidence]
+    agent_consensus = reduce_agent_consensus(
+        engine,
+        scenario_id,
+        target_branch_id,
+        report_scope=resolved_scope,
+        metadata_coverage=metadata_coverage,
+    )
+    faction_snapshots = _latest_faction_snapshots(engine, resolved_scope)
+    relation_stats = _latest_relation_stats(engine, resolved_scope)
+    faction_consensus = _mark_stale_faction_proxy_partial(
+        _reduce_faction_consensus_from_snapshots(faction_snapshots),
+        metadata_coverage=metadata_coverage,
+        faction_proxy_rounds=faction_proxy_rounds,
+        require_relation_round=False,
+    )
+    polarization = _mark_stale_faction_proxy_partial(
+        _reduce_polarization_from_stats(faction_snapshots, relation_stats),
+        metadata_coverage=metadata_coverage,
+        faction_proxy_rounds=faction_proxy_rounds,
+        require_relation_round=True,
+    )
     analytic_confidence = derive_confidence(
-        evidence_count=len(evidence),
+        evidence_count=len(outcome_evidence),
         branch_count=terminal_leaf_count,
         agent_consensus_status=agent_consensus.status,
         agent_consensus=agent_consensus.value,
@@ -190,7 +331,13 @@ def reduce(
         likelihood=likelihood,
         analytic_confidence=analytic_confidence,
         evidence=evidence,
-        key_participants=reduce_key_participants(engine, target),
+        outcome_evidence_ids=tuple(item.id for item in outcome_evidence),
+        premortem_evidence_ids=tuple(item.id for item in premortem_evidence),
+        key_participants=reduce_key_participants(
+            engine,
+            target,
+            report_scope=resolved_scope,
+        ),
         dissenting=reduce_dissenting_view(
             fallback_branches,
             dominant=target,
@@ -200,7 +347,8 @@ def reduce(
         faction_consensus=faction_consensus,
         polarization=polarization,
         agent_consensus=agent_consensus,
-        round_count=_count_rounds(engine, target_branch_id),
+        round_count=_count_rounds(engine, resolved_scope),
+        report_scope=resolved_scope,
         verdict_disclaimer=verdict_disclaimer,
     )
 
@@ -328,14 +476,39 @@ def derive_confidence(
     )
 
 
-def reduce_faction_consensus(engine, scenario_id: str, branch_id: str) -> StatResult[float]:
-    snapshots = _latest_faction_snapshots(engine, scenario_id, branch_id)
-    result = _reduce_faction_consensus_from_snapshots(snapshots)
-    return _mark_stale_faction_proxy_partial(
+def reduce_faction_consensus(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
+    metadata_coverage: LatestMessageMetadataCoverage | None = None,
+    faction_proxy_rounds: LatestFactionProxyRounds | None = None,
+) -> StatResult[float]:
+    resolved_scope = _resolve_report_scope(
         engine,
         scenario_id,
         branch_id,
+        report_scope=report_scope,
+    )
+    snapshots = _latest_faction_snapshots(engine, resolved_scope)
+    result = _reduce_faction_consensus_from_snapshots(snapshots)
+    if result.reason == "feature_disabled":
+        return result
+    if metadata_coverage is None:
+        metadata_coverage = load_latest_message_metadata_coverage(
+            engine,
+            resolved_scope,
+        )
+    if faction_proxy_rounds is None:
+        faction_proxy_rounds = load_latest_faction_proxy_rounds(
+            engine,
+            resolved_scope,
+        )
+    return _mark_stale_faction_proxy_partial(
         result,
+        metadata_coverage=metadata_coverage,
+        faction_proxy_rounds=faction_proxy_rounds,
         require_relation_round=False,
     )
 
@@ -353,46 +526,69 @@ def _reduce_faction_consensus_from_snapshots(
     return StatResult(status="available", value=round(1.0 - _weighted_std(centers, weights), 4))
 
 
-def reduce_polarization(engine, scenario_id: str, branch_id: str) -> StatResult[float]:
-    snapshots = _latest_faction_snapshots(engine, scenario_id, branch_id)
-    relation_stats = _latest_relation_stats(engine, scenario_id, branch_id)
-    result = _reduce_polarization_from_stats(snapshots, relation_stats)
-    return _mark_stale_faction_proxy_partial(
+def reduce_polarization(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
+    metadata_coverage: LatestMessageMetadataCoverage | None = None,
+    faction_proxy_rounds: LatestFactionProxyRounds | None = None,
+) -> StatResult[float]:
+    resolved_scope = _resolve_report_scope(
         engine,
         scenario_id,
         branch_id,
+        report_scope=report_scope,
+    )
+    snapshots = _latest_faction_snapshots(engine, resolved_scope)
+    relation_stats = _latest_relation_stats(engine, resolved_scope)
+    result = _reduce_polarization_from_stats(snapshots, relation_stats)
+    if result.reason == "feature_disabled":
+        return result
+    if metadata_coverage is None:
+        metadata_coverage = load_latest_message_metadata_coverage(
+            engine,
+            resolved_scope,
+        )
+    if faction_proxy_rounds is None:
+        faction_proxy_rounds = load_latest_faction_proxy_rounds(
+            engine,
+            resolved_scope,
+        )
+    return _mark_stale_faction_proxy_partial(
         result,
+        metadata_coverage=metadata_coverage,
+        faction_proxy_rounds=faction_proxy_rounds,
         require_relation_round=True,
     )
 
 
 def _mark_stale_faction_proxy_partial(
-    engine,
-    scenario_id: str,
-    branch_id: str,
     result: StatResult[float],
     *,
+    metadata_coverage: LatestMessageMetadataCoverage,
+    faction_proxy_rounds: LatestFactionProxyRounds,
     require_relation_round: bool,
 ) -> StatResult[float]:
     if result.reason == "feature_disabled":
         return result
-    coverage = load_latest_message_metadata_coverage(engine, branch_id)
-    proxy_rounds = load_latest_faction_proxy_rounds(engine, scenario_id, branch_id)
-    if coverage.round_number is None:
+    if metadata_coverage.round_number is None:
         return result
-    required_rounds = [proxy_rounds.snapshot_round]
+    required_rounds = [faction_proxy_rounds.snapshot_round]
     if require_relation_round:
-        required_rounds.append(proxy_rounds.relation_round)
+        required_rounds.append(faction_proxy_rounds.relation_round)
     has_stale_input = any(
-        proxy_round != coverage.round_number for proxy_round in required_rounds
+        proxy_round != metadata_coverage.round_number
+        for proxy_round in required_rounds
     )
-    if coverage.unavailable_count <= 0 and result.value is None:
+    if metadata_coverage.unavailable_count <= 0 and result.value is None:
         return result
-    if coverage.unavailable_count <= 0 and not has_stale_input:
+    if metadata_coverage.unavailable_count <= 0 and not has_stale_input:
         return result
     reason = (
         "metadata_unavailable"
-        if coverage.unavailable_count > 0
+        if metadata_coverage.unavailable_count > 0
         else "stale_proxy_round"
     )
     status: StatStatus = "partial" if result.value is not None else "missing"
@@ -434,9 +630,24 @@ def _reduce_polarization_from_stats(
     return StatResult(status="available", value=round(max(values), 4))
 
 
-def reduce_agent_consensus(engine, scenario_id: str, branch_id: str) -> StatResult[float]:
-    frames = load_latest_agent_state_frames(engine, scenario_id, branch_id)
-    coverage = load_latest_message_metadata_coverage(engine, branch_id)
+def reduce_agent_consensus(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
+    metadata_coverage: LatestMessageMetadataCoverage | None = None,
+) -> StatResult[float]:
+    resolved_scope = _resolve_report_scope(
+        engine,
+        scenario_id,
+        branch_id,
+        report_scope=report_scope,
+    )
+    frames = load_latest_agent_state_frames(engine, resolved_scope)
+    coverage = metadata_coverage
+    if coverage is None:
+        coverage = load_latest_message_metadata_coverage(engine, resolved_scope)
     if not frames:
         reason = (
             "metadata_unavailable"
@@ -450,7 +661,7 @@ def reduce_agent_consensus(engine, scenario_id: str, branch_id: str) -> StatResu
     if coverage.round_number is None:
         unavailable_count = count_metadata_unavailable_messages(
             engine,
-            branch_id,
+            resolved_scope,
             frame_round,
         )
     else:
@@ -486,19 +697,30 @@ def collect_evidence_pool(
     branch_id: str,
     *,
     max_evidence: int,
+    report_scope: ReportLineageScope | None = None,
 ) -> list[EvidenceRef]:
-    del scenario_id  # branch ownership is established by the caller's branch query.
     if max_evidence <= 0:
         return []
+    resolved_scope = _resolve_report_scope(
+        engine,
+        scenario_id,
+        branch_id,
+        report_scope=report_scope,
+    )
     with Session(engine) as session:
-        branch = session.get(Branch, branch_id)
+        branch = session.exec(
+            select(Branch).where(
+                Branch.id == resolved_scope.target_branch_id,
+                Branch.scenario_id == resolved_scope.scenario_id,
+            )
+        ).first()
     if branch is None:
         return []
 
     key_moments = _parse_key_moments(branch.key_moments)
     rows = load_evidence_message_coords(
         engine,
-        branch_id,
+        resolved_scope,
         key_moments=key_moments,
         limit=_evidence_candidate_limit(max_evidence),
     )
@@ -537,9 +759,122 @@ def collect_evidence_pool(
     return evidence
 
 
-def reduce_key_participants(engine, branch: Branch) -> list[KeyParticipant]:
+def collect_premortem_evidence_pool(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    max_evidence: int,
+    exclude_message_ids: set[str],
+    starting_index: int,
+    report_scope: ReportLineageScope | None = None,
+) -> list[EvidenceRef]:
+    """Collect a distinct, diversity-first pool of explicit failure signals."""
+
+    budget = min(max(0, int(max_evidence)), PREMORTEM_EVIDENCE_LIMIT)
+    if budget <= 0:
+        return []
+    if starting_index < 1:
+        raise ValueError("starting_index must be positive")
+
+    resolved_scope = _resolve_report_scope(
+        engine,
+        scenario_id,
+        branch_id,
+        report_scope=report_scope,
+    )
+    excluded = set(exclude_message_ids)
+    rows = load_evidence_message_coords(
+        engine,
+        resolved_scope,
+        key_moments=[],
+        limit=min(
+            PREMORTEM_EVIDENCE_MAX_CANDIDATES,
+            PREMORTEM_EVIDENCE_CANDIDATE_LIMIT + len(excluded),
+        ),
+    )
+
+    eligible: list[tuple[dict[str, Any], str]] = []
+    for row in rows:
+        message_id = str(row.get("message_id") or "")
+        if not message_id or message_id in excluded:
+            continue
+        if not str(row.get("diverge") or "").strip():
+            continue
+        quote = _truncate_quote(
+            row.get("content") or "",
+            max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+        )
+        if not quote:
+            continue
+        eligible.append((row, quote))
+
+    eligible.sort(key=lambda candidate: _premortem_evidence_tiebreak(candidate[0]))
+    deduplicated: list[tuple[dict[str, Any], str]] = []
+    seen_message_ids: set[str] = set()
+    for row, quote in eligible:
+        message_id = str(row["message_id"])
+        if message_id in seen_message_ids:
+            continue
+        seen_message_ids.add(message_id)
+        deduplicated.append((row, quote))
+
+    selected: list[tuple[dict[str, Any], str]] = []
+    seen_branch_ids: set[str] = set()
+    seen_agent_ids: set[str] = set()
+    remaining = deduplicated
+    while remaining and len(selected) < budget:
+        winner = min(
+            remaining,
+            key=lambda candidate: (
+                -_premortem_diversity_score(
+                    candidate[0],
+                    seen_branch_ids=seen_branch_ids,
+                    seen_agent_ids=seen_agent_ids,
+                ),
+                *_premortem_evidence_tiebreak(candidate[0]),
+            ),
+        )
+        remaining.remove(winner)
+        row, _quote = winner
+        seen_branch_ids.add(str(row.get("branch_id") or ""))
+        seen_agent_ids.add(str(row.get("agent_id") or ""))
+        selected.append(winner)
+
+    return [
+        EvidenceRef(
+            id=f"ev_{starting_index + offset:03d}",
+            branch_id=row["branch_id"],
+            round_id=row["round_id"],
+            round_number=row["round_number"],
+            agent_id=row["agent_id"],
+            agent_name=row["agent_name"],
+            message_id=row["message_id"],
+            quote=quote,
+            kind="utterance",
+        )
+        for offset, (row, quote) in enumerate(selected)
+    ]
+
+
+def reduce_key_participants(
+    engine,
+    branch: Branch,
+    *,
+    report_scope: ReportLineageScope | None = None,
+) -> list[KeyParticipant]:
+    resolved_scope = _resolve_report_scope(
+        engine,
+        branch.scenario_id,
+        branch.id,
+        report_scope=report_scope,
+    )
     key_moments = _parse_key_moments(branch.key_moments)
-    stats = load_key_participant_stats(engine, branch.id, key_moments=key_moments)
+    stats = load_key_participant_stats(
+        engine,
+        resolved_scope,
+        key_moments=key_moments,
+    )
     if not stats:
         return []
 
@@ -840,6 +1175,42 @@ def _load_branches(
     )
 
 
+def _resolve_report_scope(
+    engine,
+    scenario_id: str,
+    target_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None,
+) -> ReportLineageScope:
+    if report_scope is not None:
+        report_scope = _validate_report_lineage_scope(report_scope)
+        if (
+            report_scope.scenario_id != scenario_id
+            or report_scope.target_branch_id != target_branch_id
+        ):
+            raise ValueError("report_scope does not match the resolved report target")
+        return report_scope
+
+    with Session(engine) as session:
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=target_branch_id,
+        )
+        return _create_report_lineage_scope(
+            scenario_id=scenario_id,
+            target_branch_id=target_branch_id,
+            rounds=tuple(
+                ReportRoundRef(
+                    round_id=round_.id,
+                    branch_id=round_.branch_id,
+                    round_number=round_.round_number,
+                )
+                for round_ in selection.rounds
+            ),
+        )
+
+
 def _missing_result(reason: str) -> ReducerResult:
     agent_consensus: StatResult[float] = StatResult(
         status="missing",
@@ -860,6 +1231,8 @@ def _missing_result(reason: str) -> ReducerResult:
             agent_consensus=agent_consensus.value,
         ),
         evidence=[],
+        outcome_evidence_ids=(),
+        premortem_evidence_ids=(),
         key_participants=[],
         dissenting=None,
         charts=[
@@ -870,6 +1243,7 @@ def _missing_result(reason: str) -> ReducerResult:
         polarization=StatResult(status="missing", value=None, reason=reason),
         agent_consensus=agent_consensus,
         round_count=0,
+        report_scope=None,
     )
 
 
@@ -1002,26 +1376,23 @@ def _empty_faction_share_data(
 
 def _latest_faction_snapshots(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> list[FactionSnapshot]:
-    return load_latest_faction_snapshots(engine, scenario_id, branch_id)
+    return load_latest_faction_snapshots(engine, report_scope)
 
 
 def _latest_relation_edges(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> LatestRelationStats:
-    return _latest_relation_stats(engine, scenario_id, branch_id)
+    return _latest_relation_stats(engine, report_scope)
 
 
 def _latest_relation_stats(
     engine,
-    scenario_id: str,
-    branch_id: str,
+    report_scope: ReportLineageScope,
 ) -> LatestRelationStats:
-    return load_latest_relation_stats(engine, scenario_id, branch_id)
+    return load_latest_relation_stats(engine, report_scope)
 
 
 def _stance_centers_and_weights(
@@ -1038,12 +1409,32 @@ def _stance_centers_and_weights(
     return centers, weights
 
 
-def _count_rounds(engine, branch_id: str) -> int:
-    return count_branch_rounds(engine, branch_id)
+def _count_rounds(engine, report_scope: ReportLineageScope) -> int:
+    return count_branch_rounds(engine, report_scope)
 
 
 def _evidence_candidate_limit(max_evidence: int) -> int:
     return max(max_evidence, max_evidence * EVIDENCE_CANDIDATE_MULTIPLIER)
+
+
+def _premortem_diversity_score(
+    row: dict[str, Any],
+    *,
+    seen_branch_ids: set[str],
+    seen_agent_ids: set[str],
+) -> int:
+    return int(str(row.get("branch_id") or "") not in seen_branch_ids) + int(
+        str(row.get("agent_id") or "") not in seen_agent_ids
+    )
+
+
+def _premortem_evidence_tiebreak(row: dict[str, Any]) -> tuple[int, str, str, str]:
+    return (
+        int(row.get("round_number") or 0),
+        str(row.get("message_id") or ""),
+        str(row.get("branch_id") or ""),
+        str(row.get("agent_id") or ""),
+    )
 
 
 def _evidence_score(row: dict[str, Any], key_moments: list[str]) -> float:
@@ -1131,6 +1522,7 @@ __all__ = [
     "StatResult",
     "TARGET_BRANCH_SORT",
     "collect_evidence_pool",
+    "collect_premortem_evidence_pool",
     "derive_confidence",
     "derive_likelihood_label",
     "reduce",

@@ -122,6 +122,110 @@ describe('NodeDetailPanel', () => {
     expect(screen.getByText(/Probability/)).toBeInTheDocument();
   });
 
+  it('renders event provenance as distinct semantic fields instead of relying on raw JSON', () => {
+    const node: NodeDetail = {
+      id: 'event-1',
+      label: 'Policy response',
+      type: 'event',
+      payload: {
+        agent_name: 'Ada Lovelace',
+        agent_id: 'agent-ada',
+        branch_id: 'branch-main',
+        message_id: 'message-42',
+        emotion: 'determined',
+        emotion_metadata_status: 'available',
+        synthetic_provenance: true,
+        content: 'We should respond now.',
+      },
+    };
+
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Agent Name')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Agent ID')).toBeInTheDocument();
+    expect(screen.getByText('agent-ada')).toBeInTheDocument();
+    expect(screen.getByText('Branch')).toBeInTheDocument();
+    expect(screen.getByText('branch-main')).toBeInTheDocument();
+    expect(screen.getByText('Message ID')).toBeInTheDocument();
+    expect(screen.getByText('message-42')).toBeInTheDocument();
+    expect(screen.getByTestId('emotion-metadata-status')).toHaveTextContent('Available');
+    expect(screen.getByTestId('emotion-metadata-failure')).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Synthetic provenance')).toBeInTheDocument();
+    expect(screen.getByTestId('synthetic-provenance')).toHaveTextContent('Yes');
+    expect(screen.queryByText(/"message_id"/)).not.toBeInTheDocument();
+  });
+
+  it('marks missing or failed emotion metadata unavailable without fabricating neutral emotion', () => {
+    const unavailableNode: NodeDetail = {
+      id: 'event-unavailable',
+      label: 'Metadata gap',
+      type: 'event',
+      payload: {
+        agent_name: 'Grace Hopper',
+        agent_id: 'agent-grace',
+        content: 'The real speech remains visible.',
+        emotion: 'neutral',
+        emotion_metadata_status: 'unavailable',
+        emotion_metadata_failure_code: 'LLM_TIMEOUT',
+      },
+    };
+
+    const { rerender } = render(<NodeDetailPanel node={unavailableNode} onClose={vi.fn()} />);
+
+    expect(screen.getByTestId('emotion-metadata-status')).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Emotion metadata failure')).toBeInTheDocument();
+    expect(screen.getByTestId('emotion-metadata-failure')).toHaveTextContent('LLM_TIMEOUT');
+    expect(screen.queryByText(/neutral/i)).not.toBeInTheDocument();
+
+    rerender(
+      <NodeDetailPanel
+        node={{
+          ...unavailableNode,
+          id: 'event-missing-metadata',
+          payload: {
+            agent_name: 'Grace Hopper',
+            emotion: 'confident',
+            content: 'No emotion metadata status was emitted.',
+          },
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('emotion-metadata-status')).toHaveTextContent('Unavailable');
+    expect(screen.getByText(/confident/)).toBeInTheDocument();
+    expect(screen.queryByText(/neutral/i)).not.toBeInTheDocument();
+  });
+
+  it('bounds event identifiers and content while rendering markup-like values as text', () => {
+    const longAgentId = `agent-${'x'.repeat(180)}`;
+    const longContent = `content-${'y'.repeat(700)}`;
+    const node: NodeDetail = {
+      id: 'event-bounded',
+      label: 'Bounded event',
+      type: 'event',
+      payload: {
+        agent_name: '<img src=x onerror=alert(1)>',
+        agent_id: longAgentId,
+        content: longContent,
+      },
+    };
+
+    const { container } = render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+    expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
+    const boundedAgentId = screen.getByTestId('event-agent-id');
+    const boundedContent = screen.getByTestId('event-content');
+    expect(boundedAgentId).toHaveTextContent(/…$/);
+    expect(boundedContent).toHaveTextContent(/…$/);
+    expect(Array.from(boundedAgentId.textContent ?? '')).toHaveLength(121);
+    expect(Array.from(boundedContent.textContent ?? '')).toHaveLength(501);
+    expect(screen.queryByText(longAgentId)).not.toBeInTheDocument();
+    expect(screen.queryByText(longContent)).not.toBeInTheDocument();
+  });
+
   it('renders fork payload with display reason instead of raw template text first', () => {
     const node: NodeDetail = {
       id: 'fork-1',
@@ -444,6 +548,29 @@ describe('NodeDetailPanel evidence rendering', () => {
     render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
     expect(screen.getByText('Evidence')).toBeInTheDocument();
     expect(screen.getByText('ref-2')).toBeInTheDocument();
+  });
+
+  it('renders relation and direction context for edge evidence', () => {
+    const node: NodeDetail = {
+      id: 'ev-context',
+      label: 'Contextual evidence',
+      type: 'event',
+      evidence: {
+        confidence_tier: 'medium',
+        source_ref: 'message-7',
+        source_round_number: 4,
+        detail: 'A direct response.',
+        relation: 'responds to',
+        direction: 'incoming',
+      },
+    };
+
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Relation')).toBeInTheDocument();
+    expect(screen.getByText('responds to')).toBeInTheDocument();
+    expect(screen.getByText('Direction')).toBeInTheDocument();
+    expect(screen.getByText('Incoming')).toBeInTheDocument();
   });
 
   it('truncates string detail to 200 characters with ellipsis', () => {

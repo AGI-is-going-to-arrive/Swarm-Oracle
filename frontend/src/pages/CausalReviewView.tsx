@@ -189,7 +189,7 @@ interface CausalGraphData {
   nodes: GraphNodeData[];
   edges: GraphEdgeData[];
   available_branches?: string[];
-  scope_kind?: 'branch_segment_only';
+  scope_kind?: 'branch_lineage';
   scope_caveat?: string;
 }
 
@@ -1596,11 +1596,11 @@ export function CausalReviewView() {
                   {nodeCount} {t('causal.nodes', 'nodes')} &middot; {edgeCount} {t('causal.edges', 'edges')}
                 </span>
               </div>
-              {graphData?.scope_kind === 'branch_segment_only' && (
+              {graphData?.scope_kind === 'branch_lineage' && (
                 <p role="note" style={{ margin: 0, color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem' }}>
                   {t(
-                    'causal.scope_branch_segment_only',
-                    'Selected branch segment only; pre-fork ancestor rounds are not merged.',
+                    'causal.scope_branch_lineage',
+                    'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
                   )}
                 </p>
               )}

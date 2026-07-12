@@ -32,8 +32,11 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.causal_graph import append_round_nodes, build_snapshot
 from app.services.snapshot_export import (
     SnapshotImportError,
+    _remap_full_report_coordinates,
+    _remap_payload_json,
     build_snapshot_manifest,
     export_snapshot_zip,
     import_snapshot_zip,
@@ -129,6 +132,40 @@ def _seed_full_report_coordinate_rows(scenario_id: str) -> None:
         session.commit()
 
 
+def _seed_second_full_report_coordinate_row(scenario_id: str) -> None:
+    with Session(get_engine()) as session:
+        branch = Branch(
+            id="branch-2",
+            scenario_id=scenario_id,
+            title="Budget opposition",
+            probability=0.32,
+            status=BranchStatus.COMPLETED,
+        )
+        agent = Agent(
+            id="agent-2",
+            scenario_id=scenario_id,
+            name="Budget Skeptic",
+            role="Skeptic",
+            tier=AgentTier.IMPORTANT,
+        )
+        session.add_all([branch, agent])
+        session.flush()
+        round_row = Round(id="round-2", branch_id=branch.id, round_number=4)
+        session.add(round_row)
+        session.flush()
+        session.add(
+            AgentMessage(
+                id="msg-2",
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content="Budget opposition can dissolve the coalition.",
+                emotion="concerned",
+                diverge="budget failure path",
+            )
+        )
+        session.commit()
+
+
 def _full_report_snapshot_fixture(status: str) -> dict:
     report = _legal_full_report()
     report["status"] = status
@@ -172,6 +209,61 @@ def _full_report_snapshot_fixture(status: str) -> dict:
     if report["sections"]:
         report["sections"][0]["evidence_refs"].append("ev-stale")
     return report
+
+
+def _structured_premortem_analysis(*evidence_refs: str) -> dict[str, Any]:
+    return {
+        "status": "available",
+        "reason": None,
+        "items": [
+            {
+                "id": "pm_001",
+                "failure_mode_i18n": {
+                    "zh": "联盟瓦解",
+                    "en": "The coalition collapses",
+                },
+                "mechanism_i18n": {
+                    "zh": "保障条款撤回后支持者退出。",
+                    "en": "Supporters exit after safeguards are withdrawn.",
+                },
+                "early_warning_i18n": {
+                    "zh": "委员会停止承诺保障条款。",
+                    "en": "The committee stops committing to safeguards.",
+                },
+                "uncertainty_i18n": {
+                    "zh": "模拟只覆盖有限轮次。",
+                    "en": "The simulation covers bounded rounds.",
+                },
+                "evidence_chain": [
+                    {
+                        "evidence_ref": evidence_ref,
+                        "role": (
+                            "failure_signal" if index == 0 else "failure_mechanism"
+                        ),
+                        "rationale_i18n": {
+                            "zh": f"证据 {evidence_ref} 标记失败路径。",
+                            "en": f"Evidence {evidence_ref} marks the failure path.",
+                        },
+                    }
+                    for index, evidence_ref in enumerate(evidence_refs)
+                ],
+            }
+        ],
+    }
+
+
+def _second_report_evidence() -> dict[str, Any]:
+    return {
+        "id": "ev-2",
+        "branch_id": "branch-2",
+        "round_id": "round-2",
+        "round_number": 4,
+        "agent_id": "agent-2",
+        "agent_name": "Budget Skeptic",
+        "message_id": "msg-2",
+        "quote": "Budget opposition can dissolve the coalition.",
+        "kind": "utterance",
+    }
 
 
 def _rewrite_snapshot_scenario_json(
@@ -263,31 +355,30 @@ def _seed_agents(scenario_id: str) -> tuple[str, str]:
         return a1.id, a2.id
 
 
-def _seed_messages(branch_id: str, agent_id: str) -> None:
+def _seed_messages(branch_id: str, agent_id: str) -> tuple[str, str]:
     with Session(get_engine()) as session:
         round_row = Round(branch_id=branch_id, round_number=1)
         session.add(round_row)
         session.flush()
-        session.add(
-            AgentMessage(
-                round_id=round_row.id,
-                agent_id=agent_id,
-                content="第一回合发言",
-                emotion="neutral",
-            )
+        first_message = AgentMessage(
+            round_id=round_row.id,
+            agent_id=agent_id,
+            content="第一回合发言",
+            emotion="neutral",
         )
+        session.add(first_message)
         round_row2 = Round(branch_id=branch_id, round_number=2)
         session.add(round_row2)
         session.flush()
-        session.add(
-            AgentMessage(
-                round_id=round_row2.id,
-                agent_id=agent_id,
-                content="第二回合发言",
-                emotion="excited",
-            )
+        second_message = AgentMessage(
+            round_id=round_row2.id,
+            agent_id=agent_id,
+            content="第二回合发言",
+            emotion="excited",
         )
+        session.add(second_message)
         session.commit()
+        return first_message.id, second_message.id
 
 
 def _seed_intervention_receipt(
@@ -328,7 +419,14 @@ def _seed_intervention_receipt(
         return log.id
 
 
-def _seed_causal_graph(scenario_id: str, branch_id: str, agent_id: str) -> None:
+def _seed_causal_graph(
+    scenario_id: str,
+    branch_id: str,
+    agent_id: str,
+    *,
+    source_ref: str = "msg-1",
+    opaque_source_ref: str | None = None,
+) -> None:
     with Session(get_engine()) as session:
         snapshot = GraphSnapshot(
             owner_type="scenario",
@@ -365,10 +463,23 @@ def _seed_causal_graph(scenario_id: str, branch_id: str, agent_id: str) -> None:
                 edge_type="caused",
                 weight=0.8,
                 confidence_tier="high",
-                source_ref="msg-1",
+                source_ref=source_ref,
                 source_round_number=1,
             )
         )
+        if opaque_source_ref is not None:
+            session.add(
+                GraphEdge(
+                    snapshot_id=snapshot.id,
+                    source_node_id=node_a.id,
+                    target_node_id=node_b.id,
+                    edge_type="supports",
+                    weight=0.6,
+                    confidence_tier="medium",
+                    source_ref=opaque_source_ref,
+                    source_round_number=1,
+                )
+            )
         session.commit()
 
 
@@ -643,6 +754,121 @@ def test_export_redacts_causal_graph_payload_json_strings():
         b"sk-edge-secret",
     ):
         assert needle not in raw
+
+
+def test_remap_payload_json_maps_known_branches_and_strips_unknown_coordinates():
+    payload = {
+        "source_branch_id": "branch-old",
+        "branch_id": "branch-old",
+        "nested": {
+            "source_branch_id": "branch-old",
+            "future_coordinate": {"branch_alias": "leave-me"},
+        },
+        "items": [
+            {"source_branch_id": "branch-old", "future_flag": True},
+            {
+                "source_branch_id": "branch-not-exported",
+                "branch_id": "branch-not-exported",
+            },
+            "literal-value",
+        ],
+        "unknown_top_level": {"value": 7},
+    }
+
+    remapped_raw = _remap_payload_json(
+        json.dumps(payload),
+        branch_id_map={"branch-old": "branch-new"},
+        agent_id_map={},
+        message_id_map={},
+    )
+
+    assert json.loads(remapped_raw) == {
+        "source_branch_id": "branch-new",
+        "branch_id": "branch-new",
+        "nested": {
+            "source_branch_id": "branch-new",
+            "future_coordinate": {"branch_alias": "leave-me"},
+        },
+        "items": [
+            {"source_branch_id": "branch-new", "future_flag": True},
+            {},
+            "literal-value",
+        ],
+        "unknown_top_level": {"value": 7},
+    }
+
+
+def test_imported_orphan_fork_cannot_repair_provenance_from_foreign_scenario():
+    foreign_secret = "FOREIGN-OWNER-SECRET-MESSAGE"
+    with Session(get_engine()) as session:
+        foreign_scenario = Scenario(question="Foreign owner scenario")
+        session.add(foreign_scenario)
+        session.flush()
+        foreign_branch = Branch(scenario_id=foreign_scenario.id)
+        foreign_agent = Agent(
+            scenario_id=foreign_scenario.id,
+            name="Foreign Secret Agent",
+        )
+        session.add_all([foreign_branch, foreign_agent])
+        session.flush()
+        foreign_round = Round(branch_id=foreign_branch.id, round_number=1)
+        session.add(foreign_round)
+        session.flush()
+        session.add(
+            AgentMessage(
+                round_id=foreign_round.id,
+                agent_id=foreign_agent.id,
+                content=foreign_secret,
+            )
+        )
+        session.commit()
+        foreign_branch_id = foreign_branch.id
+
+    graph_payload = {
+        "snapshot": {"graph_kind": "causal_review"},
+        "nodes": [
+            {
+                "id": "fork-old",
+                "node_key": "fork_r1_imported-child",
+                "node_type": "fork",
+                "label": "Imported orphan fork",
+                "round_number": 1,
+                "payload_json": json.dumps(
+                    {
+                        "branch_id": "branch-old",
+                        "source_branch_id": foreign_branch_id,
+                        "reason": "Imported fork",
+                    }
+                ),
+            }
+        ],
+        "edges": [],
+    }
+    payloads = {
+        "scenario.json": json.dumps({"question": "Imported scenario"}).encode(),
+        "branches.jsonl": b'{"id":"branch-old","status":"ACTIVE"}',
+        "agents.jsonl": b"",
+        "messages.jsonl": b"",
+        "causal_graph.json": json.dumps(graph_payload).encode(),
+    }
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        imported_scenario_id = import_snapshot_zip(blob, "importer-owner", session)
+        imported_snapshot = session.exec(
+            select(GraphSnapshot).where(
+                GraphSnapshot.owner_id == imported_scenario_id,
+                GraphSnapshot.graph_kind == "causal_review",
+            )
+        ).one()
+        imported_fork = session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id == imported_snapshot.id)
+        ).one()
+
+    result = build_snapshot(imported_scenario_id)
+
+    assert foreign_secret not in str(result)
+    assert "source_branch_id" not in json.loads(imported_fork.payload_json or "{}")
 
 
 def test_export_scrubs_credentials_from_free_text_without_changing_normal_content():
@@ -1114,6 +1340,182 @@ def test_include_private_keeps_user_id_but_still_redacts_secrets():
     assert b"sk-secret-context" not in raw
 
 
+def test_structured_premortem_snapshot_full_round_trip_preserves_legacy_and_refs():
+    report = _legal_full_report()
+    report["evidence"].append(_second_report_evidence())
+    report["premortem_analysis"] = _structured_premortem_analysis("ev-1", "ev-2")
+    legacy_premortem = [{"opaque": {"order": [3, 1, 2], "label": "legacy"}}]
+    report["premortem"] = legacy_premortem
+    scenario_id = _seed_scenario_with_full_report_snapshot(report)
+    _seed_full_report_coordinate_rows(scenario_id)
+    _seed_second_full_report_coordinate_row(scenario_id)
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(raw, "importer-2", session)
+
+    with Session(get_engine()) as session:
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        imported_report = imported.parsed_context["full_report"]
+
+    analysis = imported_report["premortem_analysis"]
+    assert analysis["status"] == "available"
+    assert [
+        link["evidence_ref"]
+        for link in analysis["items"][0]["evidence_chain"]
+    ] == ["ev-1", "ev-2"]
+    assert imported_report["premortem"] == legacy_premortem
+    evidence_by_id = {item["id"]: item for item in imported_report["evidence"]}
+    assert evidence_by_id["ev-1"]["message_id"] != "msg-1"
+    assert evidence_by_id["ev-2"]["message_id"] != "msg-2"
+
+
+def test_snapshot_premortem_dedupes_coordinates_and_downgrades_available():
+    report = _legal_full_report()
+    report["evidence"].append(_second_report_evidence())
+    report["premortem_analysis"] = _structured_premortem_analysis(
+        "ev-1",
+        "ev-2",
+        "ev-missing",
+        "ev-1",
+    )
+    legacy_premortem = [{"opaque": ["must", "not", "change"]}]
+    report["premortem"] = legacy_premortem
+    report["sections"][0]["evidence_refs"] = ["ev-2"]
+    report["indicators_to_watch"][0]["evidence_refs"] = ["ev-2"]
+
+    remapped = _remap_full_report_coordinates(
+        report,
+        branch_id_map={"branch-1": "new-branch", "branch-2": "new-branch"},
+        agent_id_map={"agent-1": "new-agent", "agent-2": "new-agent"},
+        round_id_map={"round-1": "new-round", "round-2": "new-round"},
+        message_id_map={"msg-1": "new-message", "msg-2": "new-message"},
+    )
+
+    assert remapped is not None
+    analysis = remapped["premortem_analysis"]
+    assert analysis["status"] == "partial"
+    assert analysis["reason"] == "insufficient_source_diversity"
+    assert [
+        link["evidence_ref"]
+        for link in analysis["items"][0]["evidence_chain"]
+    ] == ["ev-1"]
+    assert remapped["sections"][0]["evidence_refs"] == []
+    assert remapped["indicators_to_watch"][0]["evidence_refs"] == []
+    assert remapped["premortem"] == legacy_premortem
+
+
+def test_snapshot_removes_structured_premortem_refs_from_ordinary_views():
+    report = _legal_full_report()
+    report["evidence"].append(_second_report_evidence())
+    report["premortem_analysis"] = {
+        **_structured_premortem_analysis("ev-2"),
+        "status": "partial",
+        "reason": "insufficient_source_diversity",
+    }
+    report["sections"][0]["evidence_refs"] = ["ev-1", "ev-2"]
+    report["indicators_to_watch"][0]["evidence_refs"] = ["ev-1", "ev-2"]
+
+    remapped = _remap_full_report_coordinates(
+        report,
+        branch_id_map={"branch-1": "new-branch-1", "branch-2": "new-branch-2"},
+        agent_id_map={"agent-1": "new-agent-1", "agent-2": "new-agent-2"},
+        round_id_map={"round-1": "new-round-1", "round-2": "new-round-2"},
+        message_id_map={"msg-1": "new-message-1", "msg-2": "new-message-2"},
+    )
+
+    assert remapped is not None
+    assert remapped["sections"][0]["evidence_refs"] == ["ev-1"]
+    assert remapped["indicators_to_watch"][0]["evidence_refs"] == ["ev-1"]
+    assert remapped["premortem_analysis"]["items"][0]["evidence_chain"][0][
+        "evidence_ref"
+    ] == "ev-2"
+
+
+def test_snapshot_premortem_missing_after_all_refs_drop_uses_lineage_reason():
+    report = _legal_full_report()
+    report["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "insufficient_source_diversity",
+        "items": [
+            {
+                **_structured_premortem_analysis("ev-1")["items"][0],
+                "evidence_chain": _structured_premortem_analysis("ev-1")["items"][0][
+                    "evidence_chain"
+                ],
+            }
+        ],
+    }
+
+    remapped = _remap_full_report_coordinates(
+        report,
+        branch_id_map={"branch-1": "new-branch"},
+        agent_id_map={},
+        round_id_map={},
+        message_id_map={},
+    )
+
+    assert remapped is not None
+    assert remapped["premortem_analysis"] == {
+        "status": "missing",
+        "reason": "lineage_unavailable",
+        "items": [],
+    }
+
+
+def test_snapshot_preserves_preexisting_missing_premortem_reason():
+    report = _legal_full_report()
+    report["premortem_analysis"] = {
+        "status": "missing",
+        "reason": "generation_failed",
+        "items": [],
+    }
+
+    remapped = _remap_full_report_coordinates(
+        report,
+        branch_id_map={"branch-1": "new-branch"},
+        agent_id_map={"agent-1": "new-agent"},
+        round_id_map={"round-1": "new-round"},
+        message_id_map={"msg-1": "new-message"},
+    )
+
+    assert remapped is not None
+    assert remapped["premortem_analysis"] == {
+        "status": "missing",
+        "reason": "generation_failed",
+        "items": [],
+    }
+
+
+def test_snapshot_failed_report_uses_terminal_premortem_reason():
+    report = _legal_full_report()
+    report["status"] = "failed"
+    report["evidence"].append(_second_report_evidence())
+    report["premortem_analysis"] = _structured_premortem_analysis("ev-1", "ev-2")
+    legacy_premortem = [{"opaque": {"legacy": True}}]
+    report["premortem"] = legacy_premortem
+
+    remapped = _remap_full_report_coordinates(
+        report,
+        branch_id_map={"branch-1": "new-branch-1", "branch-2": "new-branch-2"},
+        agent_id_map={"agent-1": "new-agent-1", "agent-2": "new-agent-2"},
+        round_id_map={"round-1": "new-round-1", "round-2": "new-round-2"},
+        message_id_map={"msg-1": "new-message-1", "msg-2": "new-message-2"},
+    )
+
+    assert remapped is not None
+    assert remapped["premortem_analysis"] == {
+        "status": "missing",
+        "reason": "report_generation_failed",
+        "items": [],
+    }
+    assert remapped["sections"][0]["evidence_refs"] == []
+    assert remapped["indicators_to_watch"][0]["evidence_refs"] == []
+    assert remapped["premortem"] == legacy_premortem
+
+
 @pytest.mark.parametrize(
     ("status", "expected_status"),
     [
@@ -1232,6 +1634,152 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
     assert imported_report["premortem"] == exported_report["premortem"]
 
 
+def test_full_report_snapshot_remaps_leaf_target_and_ancestor_evidence_coordinates():
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Should lineage-aware reports survive snapshot import?",
+            status=ScenarioStatus.DONE,
+            user_id="owner-1",
+            parsed_context={"mode": "blackboard", "simulation_rounds": 3},
+        )
+        session.add(scenario)
+        session.flush()
+        root = Branch(
+            scenario_id=scenario.id,
+            fork_round=0,
+            title="Report lineage root",
+            probability=0.3,
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(root)
+        session.flush()
+        child = Branch(
+            scenario_id=scenario.id,
+            parent_branch_id=root.id,
+            fork_round=1,
+            title="Report lineage child",
+            probability=0.6,
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(child)
+        session.flush()
+        grandchild = Branch(
+            scenario_id=scenario.id,
+            parent_branch_id=child.id,
+            fork_round=2,
+            title="Report lineage grandchild",
+            probability=0.9,
+            status=BranchStatus.COMPLETED,
+        )
+        agent = Agent(
+            scenario_id=scenario.id,
+            name="Root evidence agent",
+            role="Analyst",
+            tier=AgentTier.IMPORTANT,
+        )
+        session.add_all([grandchild, agent])
+        session.flush()
+        root_round = Round(
+            branch_id=root.id,
+            round_number=1,
+        )
+        session.add(root_round)
+        session.flush()
+        root_message = AgentMessage(
+            round_id=root_round.id,
+            agent_id=agent.id,
+            content="The ancestor round contains the decisive evidence.",
+            emotion="confident",
+        )
+        session.add(root_message)
+        session.flush()
+
+        report = _legal_full_report()
+        report["target_branch_id"] = grandchild.id
+        report["dissenting"] = None
+        report["evidence"] = [
+            {
+                "id": "ev-ancestor",
+                "branch_id": root.id,
+                "round_id": root_round.id,
+                "round_number": root_round.round_number,
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+                "message_id": root_message.id,
+                "quote": root_message.content,
+                "kind": "utterance",
+            }
+        ]
+        report["sections"][0]["evidence_refs"] = ["ev-ancestor"]
+        report["sections"][0]["charts"][0]["data"]["branches"][0]["branch_id"] = grandchild.id
+        report["indicators_to_watch"][0]["evidence_refs"] = ["ev-ancestor"]
+        scenario.parsed_context = {
+            "mode": "blackboard",
+            "simulation_rounds": 3,
+            "full_report": report,
+        }
+        session.add(scenario)
+        session.commit()
+        original_ids = {
+            "scenario": scenario.id,
+            "root": root.id,
+            "child": child.id,
+            "grandchild": grandchild.id,
+            "round": root_round.id,
+            "agent": agent.id,
+            "message": root_message.id,
+        }
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(original_ids["scenario"], session).getvalue()
+    with Session(get_engine()) as session:
+        imported_scenario_id = import_snapshot_zip(raw, "importer-2", session)
+
+    with Session(get_engine()) as session:
+        imported = session.get(Scenario, imported_scenario_id)
+        assert imported is not None
+        imported_branches = session.exec(
+            select(Branch).where(Branch.scenario_id == imported_scenario_id)
+        ).all()
+        branches_by_title = {branch.title: branch for branch in imported_branches}
+        imported_root = branches_by_title["Report lineage root"]
+        imported_child = branches_by_title["Report lineage child"]
+        imported_grandchild = branches_by_title["Report lineage grandchild"]
+        imported_report = imported.parsed_context["full_report"]
+        imported_evidence = imported_report["evidence"][0]
+        imported_round = session.get(Round, imported_evidence["round_id"])
+        imported_agent = session.get(Agent, imported_evidence["agent_id"])
+        imported_message = session.get(AgentMessage, imported_evidence["message_id"])
+
+    assert imported_child.parent_branch_id == imported_root.id
+    assert imported_grandchild.parent_branch_id == imported_child.id
+    assert imported_report["target_branch_id"] == imported_grandchild.id
+    assert imported_report["target_branch_id"] != original_ids["grandchild"]
+    assert imported_evidence["branch_id"] == imported_root.id
+    assert imported_evidence["branch_id"] != imported_grandchild.id
+    assert imported_evidence["branch_id"] != original_ids["root"]
+    assert imported_evidence["round_id"] != original_ids["round"]
+    assert imported_evidence["agent_id"] != original_ids["agent"]
+    assert imported_evidence["message_id"] != original_ids["message"]
+    assert imported_round is not None
+    assert imported_round.branch_id == imported_root.id
+    assert imported_round.round_number == 1
+    assert imported_agent is not None
+    assert imported_agent.scenario_id == imported_scenario_id
+    assert imported_message is not None
+    assert imported_message.round_id == imported_round.id
+    assert imported_message.agent_id == imported_agent.id
+    assert (
+        imported_report["sections"][0]["charts"][0]["data"]["branches"][0]["branch_id"]
+        == imported_grandchild.id
+    )
+    assert imported_report["sections"][0]["evidence_refs"] == ["ev-ancestor"]
+    assert imported_report["indicators_to_watch"][0]["evidence_refs"] == ["ev-ancestor"]
+    valid_evidence_ids = {item["id"] for item in imported_report["evidence"]}
+    assert set(imported_report["sections"][0]["evidence_refs"]) <= valid_evidence_ids
+    assert set(imported_report["indicators_to_watch"][0]["evidence_refs"]) <= valid_evidence_ids
+
+
 def test_snapshot_import_heals_legacy_generating_full_report_status():
     report = _full_report_snapshot_fixture("partial")
     scenario_id = _seed_scenario_with_full_report_snapshot(report)
@@ -1343,6 +1891,137 @@ def test_import_creates_new_scenario_with_remapped_ids():
         node_ids = {n.id for n in nodes}
         assert edges[0].source_node_id in node_ids
         assert edges[0].target_node_id in node_ids
+
+
+def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _child_id = _seed_branch_tree(scenario_id)
+    agent_id, _other_agent_id = _seed_agents(scenario_id)
+    original_message_id, second_message_id = _seed_messages(root_id, agent_id)
+    opaque_source_ref = "external-evidence:document-42"
+    append_round_nodes(
+        scenario_id,
+        root_id,
+        1,
+        [
+            {
+                "id": original_message_id,
+                "agent_id": agent_id,
+                "content": "第一回合发言",
+                "emotion": "neutral",
+            }
+        ],
+    )
+    append_round_nodes(
+        scenario_id,
+        root_id,
+        2,
+        [
+            {
+                "id": second_message_id,
+                "agent_id": agent_id,
+                "content": "第二回合发言",
+                "emotion": "excited",
+            }
+        ],
+    )
+    with Session(get_engine()) as session:
+        snapshot = session.exec(
+            select(GraphSnapshot).where(GraphSnapshot.owner_id == scenario_id)
+        ).one()
+        runtime_nodes = session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
+        ).all()
+        nodes_by_round = {node.round_number: node for node in runtime_nodes}
+        temporal_edge = session.exec(
+            select(GraphEdge).where(
+                GraphEdge.snapshot_id == snapshot.id,
+                GraphEdge.edge_type == "temporal",
+            )
+        ).one()
+        temporal_edge.source_ref = original_message_id
+        session.add(temporal_edge)
+        session.add(
+            GraphNode(
+                snapshot_id=snapshot.id,
+                node_key="opaque-custom-event-key",
+                node_type="event",
+                label="Custom event key",
+                round_number=1,
+                ref_model="agent_message",
+                ref_id=original_message_id,
+                payload_json=json.dumps(
+                    {"branch_id": root_id, "agent_id": agent_id}
+                ),
+            )
+        )
+        session.add(
+            GraphEdge(
+                snapshot_id=snapshot.id,
+                source_node_id=nodes_by_round[1].id,
+                target_node_id=nodes_by_round[2].id,
+                edge_type="supports",
+                source_ref=opaque_source_ref,
+                source_round_number=1,
+            )
+        )
+        session.commit()
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with Session(get_engine()) as session:
+        imported_scenario_id = import_snapshot_zip(blob, "importer-source-ref", session)
+
+    with Session(get_engine()) as session:
+        imported_branch_ids = session.exec(
+            select(Branch.id).where(Branch.scenario_id == imported_scenario_id)
+        ).all()
+        imported_round_ids = session.exec(
+            select(Round.id).where(Round.branch_id.in_(imported_branch_ids))
+        ).all()
+        imported_messages = session.exec(
+            select(AgentMessage).where(
+                AgentMessage.round_id.in_(imported_round_ids),
+            )
+        ).all()
+        imported_messages_by_content = {
+            message.content: message for message in imported_messages
+        }
+        imported_message = imported_messages_by_content["第一回合发言"]
+        imported_second_message = imported_messages_by_content["第二回合发言"]
+        imported_snapshot = session.exec(
+            select(GraphSnapshot).where(
+                GraphSnapshot.owner_type == "scenario",
+                GraphSnapshot.owner_id == imported_scenario_id,
+            )
+        ).one()
+        imported_edges = session.exec(
+            select(GraphEdge).where(GraphEdge.snapshot_id == imported_snapshot.id)
+        ).all()
+        imported_nodes = session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id == imported_snapshot.id)
+        ).all()
+
+    imported_source_refs = {edge.source_ref for edge in imported_edges}
+    assert imported_message.id != original_message_id
+    assert imported_source_refs == {imported_message.id, opaque_source_ref}
+    assert original_message_id not in imported_source_refs
+    assert {node.node_key for node in imported_nodes} == {
+        f"r1_{imported_message.agent_id}_{imported_message.id}",
+        f"r2_{imported_second_message.agent_id}_{imported_second_message.id}",
+        "opaque-custom-event-key",
+    }
+    imported_graph_text = json.dumps(
+        {
+            "node_keys": [node.node_key for node in imported_nodes],
+            "ref_ids": [node.ref_id for node in imported_nodes],
+            "payloads": [node.payload_json for node in imported_nodes],
+            "source_refs": [edge.source_ref for edge in imported_edges],
+        }
+    )
+    assert original_message_id not in imported_graph_text
+    assert second_message_id not in imported_graph_text
+    assert agent_id not in imported_graph_text
 
 
 @pytest.mark.parametrize(
@@ -1848,6 +2527,209 @@ def test_import_rejects_invalid_branch_graph_before_persisting(
         after_ids = set(session.exec(select(Scenario.id)).all())
 
     assert after_ids == before_ids
+
+
+@pytest.mark.parametrize(
+    ("duplicate_kind", "error_pattern"),
+    [
+        ("agent", "Duplicate agent id: 'agent-duplicate'"),
+        ("message", "Duplicate message id: 'message-duplicate'"),
+        ("round-coordinate", "Round id 'round-duplicate' maps to conflicting coordinates"),
+        ("graph-node", "Duplicate graph node id: 'node-duplicate'"),
+        ("graph-node-numeric", "Duplicate graph node id: '0'"),
+    ],
+)
+def test_api_import_rejects_ambiguous_source_ids_without_persisting(
+    client: TestClient,
+    duplicate_kind: str,
+    error_pattern: str,
+):
+    branch_rows = [
+        {"id": "branch-one", "status": "COMPLETED"},
+        {"id": "branch-two", "status": "COMPLETED"},
+    ]
+    agent_rows = [{"id": "agent-one", "name": "Agent One"}]
+    message_rows = [
+        {
+            "id": "message-one",
+            "round_id": "round-one",
+            "branch_id": "branch-one",
+            "round_number": 1,
+            "agent_id": "agent-one",
+            "content": "First message",
+        }
+    ]
+    graph_payload: dict[str, Any] = {
+        "snapshot": None,
+        "nodes": [],
+        "edges": [],
+    }
+
+    if duplicate_kind == "agent":
+        agent_rows = [
+            {"id": "agent-duplicate", "name": "First Agent"},
+            {"id": "agent-duplicate", "name": "Second Agent"},
+        ]
+        message_rows[0]["agent_id"] = "agent-duplicate"
+    elif duplicate_kind == "message":
+        message_rows = [
+            {
+                **message_rows[0],
+                "id": "message-duplicate",
+                "content": "First message body",
+            },
+            {
+                **message_rows[0],
+                "id": "message-duplicate",
+                "content": "Second message body",
+            },
+        ]
+    elif duplicate_kind == "round-coordinate":
+        message_rows = [
+            {
+                **message_rows[0],
+                "id": "message-one",
+                "round_id": "round-duplicate",
+            },
+            {
+                **message_rows[0],
+                "id": "message-two",
+                "round_id": "round-duplicate",
+                "branch_id": "branch-two",
+            },
+        ]
+    else:
+        node_source_id: str | int = (
+            0 if duplicate_kind == "graph-node-numeric" else "node-duplicate"
+        )
+        graph_payload = {
+            "snapshot": {"graph_kind": "causal_review"},
+            "nodes": [
+                {
+                    "id": node_source_id,
+                    "node_key": "first-node",
+                    "node_type": "event",
+                },
+                {
+                    "id": node_source_id,
+                    "node_key": "second-node",
+                    "node_type": "event",
+                },
+            ],
+            "edges": [
+                {
+                    "source_node_id": str(node_source_id),
+                    "target_node_id": str(node_source_id),
+                    "edge_type": "caused",
+                }
+            ],
+        }
+
+    payloads = {
+        "scenario.json": json.dumps({"question": "ambiguous ids"}).encode(),
+        "branches.jsonl": "\n".join(
+            json.dumps(row) for row in branch_rows
+        ).encode(),
+        "agents.jsonl": "\n".join(json.dumps(row) for row in agent_rows).encode(),
+        "messages.jsonl": "\n".join(
+            json.dumps(row) for row in message_rows
+        ).encode(),
+        "causal_graph.json": json.dumps(graph_payload).encode(),
+    }
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        before_rows = tuple(
+            len(session.exec(select(model.id)).all())
+            for model in (
+                Scenario,
+                Branch,
+                Agent,
+                Round,
+                AgentMessage,
+                GraphSnapshot,
+                GraphNode,
+                GraphEdge,
+            )
+        )
+
+    response = client.post(
+        "/api/scenario/import-snapshot",
+        files={"file": ("ambiguous.swarm", blob, "application/zip")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SNAPSHOT_IMPORT_INVALID"
+    assert error_pattern in response.json()["detail"]["message"]
+    with Session(get_engine()) as session:
+        after_rows = tuple(
+            len(session.exec(select(model.id)).all())
+            for model in (
+                Scenario,
+                Branch,
+                Agent,
+                Round,
+                AgentMessage,
+                GraphSnapshot,
+                GraphNode,
+                GraphEdge,
+            )
+        )
+    assert after_rows == before_rows
+
+
+def test_api_import_allows_shared_round_id_at_the_same_coordinate(
+    client: TestClient,
+):
+    payloads = {
+        "scenario.json": json.dumps({"question": "shared round id"}).encode(),
+        "branches.jsonl": b'{"id":"branch-one","status":"COMPLETED"}',
+        "agents.jsonl": b'{"id":"agent-one","name":"Agent One"}',
+        "messages.jsonl": "\n".join(
+            json.dumps(
+                {
+                    "id": message_id,
+                    "round_id": "round-shared",
+                    "branch_id": "branch-one",
+                    "round_number": 1,
+                    "agent_id": "agent-one",
+                    "content": content,
+                }
+            )
+            for message_id, content in (
+                ("message-one", "First message"),
+                ("message-two", "Second message"),
+            )
+        ).encode(),
+        "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+    }
+
+    response = client.post(
+        "/api/scenario/import-snapshot",
+        files={
+            "file": (
+                "shared-round.swarm",
+                _build_snapshot_zip_from_payloads(payloads),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    scenario_id = response.json()["scenario_id"]
+    with Session(get_engine()) as session:
+        imported_rounds = session.exec(
+            select(Round)
+            .join(Branch, Round.branch_id == Branch.id)
+            .where(Branch.scenario_id == scenario_id)
+        ).all()
+        imported_messages = session.exec(
+            select(AgentMessage).where(
+                AgentMessage.round_id.in_([row.id for row in imported_rounds])
+            )
+        ).all()
+    assert len(imported_rounds) == 1
+    assert len(imported_messages) == 2
 
 
 def test_build_snapshot_manifest_lists_expected_files():

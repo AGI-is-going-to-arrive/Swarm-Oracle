@@ -14,13 +14,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, get_args
 
-from sqlalchemy import case, func, update
+from sqlalchemy import case, func, tuple_, update
 from sqlmodel import Session, select
 
 from app.config import settings
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario
 from app.models.database import get_engine
+from app.services.branch_lineage import BranchLineageError
 from app.services.llm_client import (
     format_untrusted_text_block,
     is_local_provider_url,
@@ -28,17 +29,26 @@ from app.services.llm_client import (
     llm_request_scope,
     normalize_native_search_upstream,
 )
-from app.services.result_report.reducer import TARGET_BRANCH_SORT, ReducerResult
+from app.services.result_report.queries import ReportLineageScope
+from app.services.result_report.reducer import (
+    TARGET_BRANCH_SORT,
+    ReducerResult,
+    resolve_report_lineage_scope,
+)
 from app.services.result_report.reducer import reduce as reduce_report
 from app.services.result_report.schema import (
     AnalyticConfidence,
     Chart,
+    EvidenceRef,
     FullReport,
     I18nText,
     IndicatorToWatch,
     InterviewStatus,
     LanguageStatus,
     Likelihood,
+    PremortemAnalysis,
+    PremortemEvidenceLink,
+    PremortemFailureMode,
     ReportSection,
     ReportStatus,
     ReportTier,
@@ -72,7 +82,6 @@ _ALLOWED_SECTION_IDS = (
     "timeline",
     "factions",
     "conflicts",
-    "premortem",
     "indicators",
     "sources",
 )
@@ -91,6 +100,9 @@ _AUTO_REPORT_RETRY_MAX_DELAY_SECONDS = 8.0
 _INTERVIEW_AGENT_BUDGET = 3
 _INTERVIEW_CANDIDATE_LIMIT = 8
 _INTERVIEW_EVIDENCE_PER_AGENT_CAP = 5
+_PREMORTEM_MAX_ITEMS = 3
+_PREMORTEM_TEXT_MAX_CHARS = 600
+_PREMORTEM_RATIONALE_MAX_CHARS = 320
 _SECTION_FAILURE_REASONS = frozenset(get_args(SectionFailureReason))
 
 
@@ -143,6 +155,7 @@ class BuilderContext:
     branch_story: str
     branch_insight: str
     web_context_blocks: list[str]
+    is_self_contained_replay: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,15 +412,39 @@ def resolve_dominant_branch_id(scenario_id: str) -> str | None:
         return branches[0].id if branches else None
 
 
+async def _resolve_builder_report_scope(
+    scenario_id: str,
+    dominant_branch_id: str,
+    report_scope: ReportLineageScope | None,
+) -> ReportLineageScope:
+    if report_scope is not None:
+        return report_scope
+    resolved_scope = await asyncio.to_thread(
+        resolve_report_lineage_scope,
+        get_engine(),
+        scenario_id,
+        dominant_branch_id=dominant_branch_id,
+    )
+    if resolved_scope is None:
+        raise ResultReportBuilderError("No dominant branch is available")
+    return resolved_scope
+
+
 async def build_report(
     scenario_id: str,
     dominant_branch_id: str,
     *,
     overrides: Mapping[str, Any] | ReportGenerationOverrides | None,
     progress: ProgressCallback | None = None,
+    report_scope: ReportLineageScope | None = None,
 ) -> FullReport:
     """Build and incrementally persist one full report for a scenario."""
 
+    resolved_scope = await _resolve_builder_report_scope(
+        scenario_id,
+        dominant_branch_id,
+        report_scope,
+    )
     lock = _REPORT_LOCKS.setdefault(scenario_id, asyncio.Lock())
     try:
         async with lock:
@@ -438,6 +475,7 @@ async def build_report(
                     overrides=normalized_overrides,
                     progress=progress,
                     report_lock_holder=lease_holder,
+                    report_scope=resolved_scope,
                 )
             except asyncio.CancelledError:
                 if _report_runtime_lock_is_alive(lease_holder):
@@ -446,6 +484,7 @@ async def build_report(
                             _persist_cancelled_report_if_absent,
                             scenario_id,
                             dominant_branch_id,
+                            report_scope=resolved_scope,
                         )
                     except Exception:  # noqa: BLE001 - preserve cancellation
                         logger.warning("Failed to persist result report cancellation marker")
@@ -454,6 +493,8 @@ async def build_report(
                         "Skipping result report cancellation marker after runtime lock loss"
                     )
                 raise
+            except BranchLineageError:
+                raise
             except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
                 if _report_runtime_lock_is_alive(lease_holder):
                     try:
@@ -461,6 +502,7 @@ async def build_report(
                             _persist_failed_report_if_absent,
                             scenario_id,
                             dominant_branch_id,
+                            report_scope=resolved_scope,
                         )
                     except Exception:  # noqa: BLE001 - preserve original builder error
                         logger.warning("Failed to persist result report failure marker")
@@ -488,14 +530,21 @@ async def _build_report_unlocked(
     overrides: ReportGenerationOverrides | None,
     progress: ProgressCallback | None,
     report_lock_holder: list[RuntimeLockLease | None] | None = None,
+    report_scope: ReportLineageScope | None = None,
 ) -> FullReport:
     engine = get_engine()
+    resolved_scope = await _resolve_builder_report_scope(
+        scenario_id,
+        dominant_branch_id,
+        report_scope,
+    )
     reducer_result = await asyncio.to_thread(
         reduce_report,
         engine,
         scenario_id,
         max_evidence=settings.REPORT_MAX_EVIDENCE_PER_SECTION,
         dominant_branch_id=dominant_branch_id,
+        report_scope=resolved_scope,
     )
     # M-1 (W1-1 follow-up): defer to the reducer's resolved anchor. ``_pick_target``
     # already rejected a content-less dominant leaf and chose a viable
@@ -513,15 +562,28 @@ async def _build_report_unlocked(
         reducer_result,
         overrides=overrides,
     )
+    existing_report = _load_existing_full_report(scenario_id)
+    reusable_premortem = _reusable_existing_premortem(
+        existing_report,
+        reducer_result,
+        target_branch_id=target_branch_id,
+    )
+    initial_premortem = reusable_premortem
+    if initial_premortem is None and not reducer_result.premortem_evidence_ids:
+        initial_premortem = PremortemAnalysis(
+            status="missing",
+            reason="no_distinct_evidence",
+            items=[],
+        )
     reusable_sections, reusable_tiers = _reusable_existing_sections(
         scenario_id,
         target_branch_id,
         outline,
+        current_evidence=_outcome_evidence(reducer_result),
     )
     completed_sections: list[ReportSection] = list(reusable_sections)
     section_tiers: list[SectionTier] = list(reusable_tiers)
     reused_section_ids = {section.id for section in reusable_sections}
-    existing_report = _load_existing_full_report(scenario_id)
     tool_trace: list[ToolTraceSummary] = [
         item
         for item in (existing_report.tool_trace if existing_report is not None else [])
@@ -535,6 +597,7 @@ async def _build_report_unlocked(
         sections=completed_sections,
         status="generating",
         tier=_worst_tier(section_tiers) if completed_sections else "generation",
+        premortem_analysis=initial_premortem,
         tool_trace=tool_trace,
     )
     report = _fit_report_to_byte_cap(report)
@@ -594,6 +657,7 @@ async def _build_report_unlocked(
                 sections=completed_sections,
                 status="generating",
                 tier=_worst_tier(section_tiers),
+                premortem_analysis=initial_premortem,
                 tool_trace=tool_trace,
             )
             report = _fit_report_to_byte_cap(report)
@@ -616,6 +680,7 @@ async def _build_report_unlocked(
             sections=completed_sections,
             status="generating",
             tier=_worst_tier(section_tiers),
+            premortem_analysis=initial_premortem,
             tool_trace=tool_trace,
         )
         report = _fit_report_to_byte_cap(report)
@@ -655,6 +720,11 @@ async def _build_report_unlocked(
             truncated_agents=0,
             message="Report sections failed before interviews could run.",
         )
+        premortem_analysis = PremortemAnalysis(
+            status="missing",
+            reason="report_generation_failed",
+            items=[],
+        )
     else:
         # M-2: the interview-evidence and indicators-to-watch LLM calls share no
         # state (indicators does not consume interview_evidence; both take the same
@@ -666,9 +736,15 @@ async def _build_report_unlocked(
         # cross-contamination. return_exceptions keeps one failure from aborting the
         # whole report — a raised error degrades to the same skipped/None tiers the
         # failed path uses.
-        interview_result, indicators_result = await asyncio.gather(
+        premortem_task = (
+            _build_premortem_analysis(context, reducer_result, overrides=overrides)
+            if reusable_premortem is None
+            else asyncio.sleep(0, result=reusable_premortem)
+        )
+        interview_result, indicators_result, premortem_result = await asyncio.gather(
             _build_interview_evidence(context, reducer_result, overrides=overrides),
             _build_indicators_llm(context, reducer_result, overrides=overrides),
+            premortem_task,
             return_exceptions=True,
         )
         if isinstance(interview_result, BaseException):
@@ -702,6 +778,14 @@ async def _build_report_unlocked(
             llm_indicators = None
         else:
             llm_indicators = indicators_result
+        if isinstance(premortem_result, BaseException):
+            premortem_analysis = PremortemAnalysis(
+                status="missing",
+                reason="generation_failed",
+                items=[],
+            )
+        else:
+            premortem_analysis = premortem_result
     report = _assemble_report(
         context,
         reducer_result,
@@ -712,6 +796,7 @@ async def _build_report_unlocked(
         interview_evidence=interview_evidence,
         interview_status=interview_status,
         indicators_to_watch=llm_indicators,
+        premortem_analysis=premortem_analysis,
         tool_trace=tool_trace,
     )
     report = _fit_report_to_byte_cap(report)
@@ -726,17 +811,26 @@ async def build_report_safe(
     *,
     overrides: Mapping[str, Any] | ReportGenerationOverrides | None,
     progress: ProgressCallback | None = None,
+    report_scope: ReportLineageScope | None = None,
 ) -> FullReport | None:
     """Run report generation for fire-and-forget callers without surfacing errors."""
 
+    resolved_scope = report_scope
     max_attempts = _auto_report_max_attempts()
     for attempt in range(1, max_attempts + 1):
         try:
+            if resolved_scope is None:
+                resolved_scope = await _resolve_builder_report_scope(
+                    scenario_id,
+                    dominant_branch_id,
+                    None,
+                )
             report = await build_report(
                 scenario_id,
                 dominant_branch_id,
                 overrides=overrides,
                 progress=progress,
+                report_scope=resolved_scope,
             )
         except ResultReportAlreadyRunningError:
             logger.info("Result report generation skipped because another worker owns the lease")
@@ -744,6 +838,8 @@ async def build_report_safe(
         except ResultReportRuntimeLockLostError:
             logger.info("Result report generation stopped after losing the runtime lock")
             return await asyncio.to_thread(_load_existing_full_report, scenario_id)
+        except BranchLineageError:
+            raise
         except Exception as exc:  # noqa: BLE001 - auto report generation is best-effort
             if attempt < max_attempts:
                 logger.info(
@@ -756,6 +852,10 @@ async def build_report_safe(
                     scenario_id,
                     dominant_branch_id,
                     attempt=attempt,
+                    report_scope=resolved_scope,
+                    known_target_branch_id=(
+                        dominant_branch_id if resolved_scope is None else None
+                    ),
                 )
                 continue
             logger.info(
@@ -768,7 +868,13 @@ async def build_report_safe(
                     _persist_failed_report_if_lock_available,
                     scenario_id,
                     dominant_branch_id,
+                    report_scope=resolved_scope,
+                    known_target_branch_id=(
+                        dominant_branch_id if resolved_scope is None else None
+                    ),
                 )
+            except BranchLineageError:
+                raise
             except Exception:  # noqa: BLE001 - simulator completion must stay fail-soft
                 logger.warning("Failed to persist result report failure marker")
                 return None
@@ -780,6 +886,8 @@ async def build_report_safe(
                 scenario_id,
                 dominant_branch_id,
                 fallback_report=report,
+                report_scope=resolved_scope,
+                known_target_branch_id=None,
             )
         logger.info(
             "Result report generation produced failed report on attempt %d/%d; retrying",
@@ -790,6 +898,8 @@ async def build_report_safe(
             scenario_id,
             dominant_branch_id,
             attempt=attempt,
+            report_scope=resolved_scope,
+            known_target_branch_id=None,
         )
     return await asyncio.to_thread(_load_existing_full_report, scenario_id)
 
@@ -816,14 +926,20 @@ async def _finalize_auto_report_retry_exhausted(
     dominant_branch_id: str,
     *,
     fallback_report: FullReport | None,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> FullReport | None:
     try:
         failed = await asyncio.to_thread(
             _persist_failed_report_after_auto_retry_exhausted,
             scenario_id,
             dominant_branch_id,
+            report_scope=report_scope,
+            known_target_branch_id=known_target_branch_id,
         )
         return failed or fallback_report
+    except BranchLineageError:
+        raise
     except Exception:  # noqa: BLE001 - simulator completion must stay fail-soft
         logger.warning("Failed to persist exhausted result report retry marker")
         return fallback_report
@@ -834,13 +950,19 @@ async def _prepare_auto_report_retry(
     dominant_branch_id: str,
     *,
     attempt: int,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> None:
     try:
         await asyncio.to_thread(
             _persist_generating_report_placeholder_for_retry,
             scenario_id,
             dominant_branch_id,
+            report_scope=report_scope,
+            known_target_branch_id=known_target_branch_id,
         )
+    except BranchLineageError:
+        raise
     except Exception:  # noqa: BLE001 - retry should proceed even if marker repair fails
         logger.warning("Failed to restore result report retry placeholder")
     delay = _auto_report_retry_delay_seconds(attempt)
@@ -853,9 +975,15 @@ async def build_report_sse_stream(
     dominant_branch_id: str,
     *,
     overrides: Mapping[str, Any] | ReportGenerationOverrides | None,
+    report_scope: ReportLineageScope | None = None,
 ):
     """Yield frozen SSE frames while running ``build_report``."""
 
+    resolved_scope = await _resolve_builder_report_scope(
+        scenario_id,
+        dominant_branch_id,
+        report_scope,
+    )
     yield encode_sse_event(
         ResultReportSSEEvent(
             event="report_started",
@@ -873,6 +1001,7 @@ async def build_report_sse_stream(
             dominant_branch_id,
             overrides=overrides,
             progress=progress,
+            report_scope=resolved_scope,
         )
     )
     last_heartbeat = time.monotonic()
@@ -895,6 +1024,7 @@ async def build_report_sse_stream(
                             scenario_id,
                             dominant_branch_id,
                             replace_cancelled=True,
+                            report_scope=resolved_scope,
                         )
                     yield encode_sse_event(
                         ResultReportSSEEvent(
@@ -942,6 +1072,8 @@ async def build_report_sse_stream(
                 ),
             )
             return
+        except BranchLineageError:
+            raise
         except Exception:  # noqa: BLE001 - SSE should fail-soft
             yield encode_sse_event(
                 ResultReportSSEEvent(
@@ -1219,6 +1351,7 @@ def _load_builder_context(scenario_id: str, branch_id: str) -> BuilderContext:
             branch_story=branch.story or "",
             branch_insight=branch.insight or "",
             web_context_blocks=_safe_web_context_blocks(scenario.web_context_json),
+            is_self_contained_replay=bool(str(branch.replay_kind or "").strip()),
         )
 
 
@@ -1504,15 +1637,16 @@ def _section_result_from_payload(
         "zh": _truncate_text(body_i18n["zh"], settings.REPORT_SECTION_CONTENT_MAX_CHARS),
         "en": _truncate_text(body_i18n["en"], settings.REPORT_SECTION_CONTENT_MAX_CHARS),
     }
-    allowed_refs = {item.id for item in reducer_result.evidence}
+    outcome_evidence = _outcome_evidence(reducer_result)
+    allowed_refs = set(reducer_result.outcome_evidence_ids)
     raw_refs = payload.get("evidence_refs")
     evidence_refs = [
         str(item)
         for item in (raw_refs if isinstance(raw_refs, list) else [])
         if str(item) in allowed_refs
     ]
-    if not evidence_refs and reducer_result.evidence:
-        evidence_refs = [reducer_result.evidence[0].id]
+    if not evidence_refs and outcome_evidence:
+        evidence_refs = [outcome_evidence[0].id]
     report_section = ReportSection(
         id=section.section_id,
         title=section.title_i18n.get("en") or section.section_id,
@@ -1537,7 +1671,7 @@ def _static_section_from_context(
 ) -> SectionBuildResult:
     probability = reducer_result.likelihood.probability
     branch_count = len(reducer_result.branch_distribution)
-    evidence_refs = [item.id for item in reducer_result.evidence[:2]]
+    evidence_refs = [item.id for item in _outcome_evidence(reducer_result)[:2]]
     has_source_body = bool(context.branch_insight or context.branch_story)
     # When neither insight nor story exists, the static body is just the
     # boilerplate fallback line — record that as ``empty_body`` so diagnostics
@@ -1642,6 +1776,7 @@ def _assemble_report(
     interview_evidence: list[dict[str, Any]] | None = None,
     interview_status: InterviewStatus | None = None,
     indicators_to_watch: list[IndicatorToWatch] | None = None,
+    premortem_analysis: PremortemAnalysis | None = None,
     tool_trace: list[ToolTraceSummary] | None = None,
 ) -> FullReport:
     result_quality = (
@@ -1659,7 +1794,18 @@ def _assemble_report(
         I18nText.model_validate(outline.title_i18n),
         I18nText.model_validate(outline.summary_i18n),
     )
-    sections_with_charts = _attach_reducer_charts(sections, reducer_result)
+    ordinary_sections = _sanitize_ordinary_section_refs(
+        sections,
+        allowed_ids=set(reducer_result.outcome_evidence_ids),
+    )
+    sections_with_charts = _attach_reducer_charts(ordinary_sections, reducer_result)
+    resolved_premortem_analysis = premortem_analysis
+    if status == "failed":
+        resolved_premortem_analysis = PremortemAnalysis(
+            status="missing",
+            reason="report_generation_failed",
+            items=[],
+        )
     report = FullReport(
         version="1.0",
         generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -1690,15 +1836,11 @@ def _assemble_report(
         dissenting=reducer_result.dissenting,
         key_participants=reducer_result.key_participants,
         follow_ups=_follow_ups(context),
-        limitations=(
-            "Report content is generated from a bounded simulation transcript, "
-            "deterministic reducer stats, and available evidence coordinates. "
-            "Branch-scoped evidence covers the selected terminal leaf segment only; "
-            "pre-fork ancestor rounds are not merged in W2.0."
-        ),
+        limitations=_report_lineage_limitations(context),
         interview_evidence=interview_evidence or [],
         interview_status=interview_status,
         premortem=[],
+        premortem_analysis=resolved_premortem_analysis,
         language_status=LanguageStatus(zh="available", en="available"),
         tool_trace=list(tool_trace or [])[:64],
     )
@@ -1711,6 +1853,24 @@ def _assemble_report(
         )
         return FullReport.model_validate(payload)
     return report
+
+
+def _report_lineage_limitations(context: BuilderContext) -> str:
+    basis = (
+        "Report content is generated from a bounded simulation transcript, "
+        "deterministic reducer stats, and available evidence coordinates. "
+    )
+    if context.is_self_contained_replay:
+        return (
+            basis
+            + "This self-contained replay is limited to the replay clone's own "
+            "materialized rounds; source or ancestor branch transcripts are not merged."
+        )
+    return (
+        basis
+        + "Branch-scoped evidence covers the selected branch's effective root-to-leaf "
+        "lineage, including inherited pre-fork ancestor rounds."
+    )
 
 
 async def _build_interview_evidence(
@@ -1793,12 +1953,23 @@ def _load_interview_candidates(
     context: BuilderContext,
     reducer_result: ReducerResult,
 ) -> list[InterviewCandidate]:
+    report_scope = reducer_result.report_scope
+    if (
+        report_scope is None
+        or report_scope.scenario_id != context.scenario_id
+        or report_scope.target_branch_id != context.branch_id
+        or not report_scope.round_ids
+    ):
+        return []
     branch_index_by_id = {
         str(item.get("branch_id")): index
         for index, item in enumerate(reducer_result.branch_distribution)
         if isinstance(item, dict) and item.get("branch_id")
     }
-    branch_index = branch_index_by_id.get(context.branch_id, 0)
+    authority_rounds = tuple(
+        (round_.round_id, round_.branch_id, round_.round_number)
+        for round_ in report_scope.rounds
+    )
     candidates: list[InterviewCandidate] = []
     seen_agents: set[str] = set()
 
@@ -1807,8 +1978,12 @@ def _load_interview_candidates(
             select(AgentMessage, Round, Agent)
             .join(Round, AgentMessage.round_id == Round.id)
             .join(Agent, AgentMessage.agent_id == Agent.id)
+            .join(Branch, Round.branch_id == Branch.id)
             .where(
-                Round.branch_id == context.branch_id,
+                tuple_(Round.id, Round.branch_id, Round.round_number).in_(
+                    authority_rounds
+                ),
+                Branch.scenario_id == report_scope.scenario_id,
                 Agent.scenario_id == context.scenario_id,
             )
             .order_by(Round.round_number.asc(), Agent.name.asc(), AgentMessage.id.asc())
@@ -1826,7 +2001,7 @@ def _load_interview_candidates(
         seen_agents.add(agent.id)
         candidates.append(
             InterviewCandidate(
-                branch_index=branch_index,
+                branch_index=branch_index_by_id.get(round_.branch_id, 0),
                 round_number=round_.round_number,
                 agent_name=_truncate_text(agent.name, 120),
                 persona=_truncate_text(agent.persona or agent.role or agent.name, 900),
@@ -1940,6 +2115,25 @@ def _normalize_interview_payload(
     return evidence
 
 
+def _sanitize_ordinary_section_refs(
+    sections: list[ReportSection],
+    *,
+    allowed_ids: set[str],
+) -> list[ReportSection]:
+    return [
+        section.model_copy(
+            update={
+                "evidence_refs": [
+                    evidence_id
+                    for evidence_id in section.evidence_refs
+                    if evidence_id in allowed_ids
+                ]
+            }
+        )
+        for section in sections
+    ]
+
+
 def _attach_reducer_charts(
     sections: list[ReportSection],
     reducer_result: ReducerResult,
@@ -1988,6 +2182,241 @@ def _assign_chart_sections(
         )
         assignments[chart.type] = target_section_id
     return assignments
+
+
+async def _build_premortem_analysis(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+    *,
+    overrides: ReportGenerationOverrides | None,
+) -> PremortemAnalysis:
+    candidates = _premortem_evidence(reducer_result)
+    if not candidates:
+        return PremortemAnalysis(
+            status="missing",
+            reason="no_distinct_evidence",
+            items=[],
+        )
+
+    try:
+        prompt = _build_premortem_prompt(context, reducer_result)
+        with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
+            payload = await asyncio.wait_for(
+                llm_call_json(
+                    prompt,
+                    api_key=overrides.api_key if overrides else None,
+                    base_url=overrides.base_url if overrides else None,
+                    model=overrides.model if overrides else None,
+                    temperature=(
+                        overrides.temperature
+                        if overrides and overrides.temperature is not None
+                        else 0.35
+                    ),
+                    reasoning_effort="medium",
+                ),
+                timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
+            )
+        return _normalize_premortem_payload(payload, reducer_result)
+    except Exception:  # noqa: BLE001 - premortem must remain fail-soft
+        logger.info("Result report premortem generation failed", exc_info=True)
+        return PremortemAnalysis(
+            status="missing",
+            reason="generation_failed",
+            items=[],
+        )
+
+
+def _build_premortem_prompt(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+) -> str:
+    allowed_ids = list(reducer_result.premortem_evidence_ids)
+    evidence_digest = _evidence_digest(
+        reducer_result,
+        max_items=6,
+        evidence_ids=reducer_result.premortem_evidence_ids,
+    )
+    return "\n\n".join(
+        [
+            "REPORT_PREMORTEM",
+            "Construct 1-3 failure modes for the simulated dominant outcome. Return "
+            "strict JSON only. Treat the supplied coordinates as diverse internal "
+            "simulation signals, never as statistical independence or independent "
+            "real-world sources.",
+            "Every evidence_chain entry must use one exact evidence_ref from the "
+            "allowed list. Do not cite outcome-support evidence, invent ids, repeat a "
+            "ref, or fill missing links from any first evidence item.",
+            "Required JSON shape: "
+            '{"action":"premortem_analysis","items":[{'
+            '"failure_mode_i18n":{"zh":"...","en":"..."},'
+            '"mechanism_i18n":{"zh":"...","en":"..."},'
+            '"early_warning_i18n":{"zh":"...","en":"..."},'
+            '"uncertainty_i18n":{"zh":"...","en":"..."},'
+            '"evidence_chain":[{"evidence_ref":"<allowed_premortem_id>",'
+            '"role":"failure_signal|failure_mechanism|counterevidence",'
+            '"rationale_i18n":{"zh":"...","en":"..."}}]}]}',
+            f"Allowed premortem evidence ids: {json.dumps(allowed_ids)}",
+            format_untrusted_text_block(
+                "Original what-if question",
+                context.question,
+                max_chars=1200,
+            ),
+            format_untrusted_text_block(
+                "Dominant branch outcome",
+                json.dumps(
+                    {
+                        "title": context.branch_title,
+                        "story": context.branch_story,
+                        "insight": context.branch_insight,
+                    },
+                    ensure_ascii=False,
+                ),
+                max_chars=2600,
+            ),
+            format_untrusted_text_block(
+                "Premortem evidence coordinates",
+                evidence_digest,
+                max_chars=3600,
+            ),
+        ]
+    )
+
+
+def _normalize_premortem_payload(
+    payload: object,
+    reducer_result: ReducerResult,
+) -> PremortemAnalysis:
+    if not isinstance(payload, dict):
+        raise ResultReportBuilderError("Premortem payload must be an object")
+    if str(payload.get("action") or "").strip() != "premortem_analysis":
+        raise ResultReportBuilderError("Premortem payload action is invalid")
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ResultReportBuilderError("Premortem items must be a non-empty list")
+
+    evidence_by_id = {
+        item.id: item for item in _premortem_evidence(reducer_result)
+    }
+    allowed_ids = set(evidence_by_id)
+    items: list[PremortemFailureMode] = []
+    diversity_complete = True
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        failure_mode = _strict_premortem_i18n(raw_item.get("failure_mode_i18n"))
+        mechanism = _strict_premortem_i18n(raw_item.get("mechanism_i18n"))
+        early_warning = _strict_premortem_i18n(raw_item.get("early_warning_i18n"))
+        uncertainty = _strict_premortem_i18n(raw_item.get("uncertainty_i18n"))
+        if any(
+            value is None
+            for value in (failure_mode, mechanism, early_warning, uncertainty)
+        ):
+            continue
+
+        links: list[PremortemEvidenceLink] = []
+        seen_refs: set[str] = set()
+        seen_coordinates: set[tuple[str, str, int, str, str]] = set()
+        raw_chain = raw_item.get("evidence_chain")
+        for raw_link in raw_chain if isinstance(raw_chain, list) else []:
+            if not isinstance(raw_link, dict):
+                continue
+            evidence_ref = str(raw_link.get("evidence_ref") or "").strip()
+            role = str(raw_link.get("role") or "").strip()
+            rationale = _strict_premortem_i18n(
+                raw_link.get("rationale_i18n"),
+                max_chars=_PREMORTEM_RATIONALE_MAX_CHARS,
+            )
+            evidence = evidence_by_id.get(evidence_ref)
+            if (
+                evidence is None
+                or evidence_ref not in allowed_ids
+                or evidence_ref in seen_refs
+                or role
+                not in {"failure_signal", "failure_mechanism", "counterevidence"}
+                or rationale is None
+            ):
+                continue
+            coordinate = _premortem_source_coordinate(evidence)
+            if coordinate in seen_coordinates:
+                continue
+            seen_refs.add(evidence_ref)
+            seen_coordinates.add(coordinate)
+            links.append(
+                PremortemEvidenceLink(
+                    evidence_ref=evidence_ref,
+                    role=role,
+                    rationale_i18n=rationale,
+                )
+            )
+        if not links:
+            continue
+        item = PremortemFailureMode(
+            id=f"pm_{len(items) + 1:03d}",
+            failure_mode_i18n=failure_mode,
+            mechanism_i18n=mechanism,
+            early_warning_i18n=early_warning,
+            uncertainty_i18n=uncertainty,
+            evidence_chain=links,
+        )
+        if not _premortem_item_has_source_diversity(item, evidence_by_id):
+            diversity_complete = False
+        items.append(item)
+        if len(items) >= _PREMORTEM_MAX_ITEMS:
+            break
+
+    if not items:
+        raise ResultReportBuilderError("Premortem payload yielded no usable items")
+    if not diversity_complete:
+        return PremortemAnalysis(
+            status="partial",
+            reason="insufficient_source_diversity",
+            items=items,
+        )
+    return PremortemAnalysis(status="available", reason=None, items=items)
+
+
+def _strict_premortem_i18n(
+    value: object,
+    *,
+    max_chars: int = _PREMORTEM_TEXT_MAX_CHARS,
+) -> I18nText | None:
+    if not isinstance(value, dict):
+        return None
+    raw_zh = _scrub_sensitive_text(str(value.get("zh") or "").strip()).strip()
+    raw_en = _scrub_sensitive_text(str(value.get("en") or "").strip()).strip()
+    if not raw_zh or not raw_en:
+        return None
+    return I18nText(
+        zh=_truncate_text(raw_zh, max_chars),
+        en=_truncate_text(raw_en, max_chars),
+    )
+
+
+def _premortem_source_coordinate(
+    evidence: EvidenceRef,
+) -> tuple[str, str, int, str, str]:
+    return (
+        evidence.branch_id,
+        evidence.round_id,
+        evidence.round_number,
+        evidence.agent_id,
+        evidence.message_id,
+    )
+
+
+def _premortem_item_has_source_diversity(
+    item: PremortemFailureMode,
+    evidence_by_id: dict[str, EvidenceRef],
+) -> bool:
+    evidence = [
+        evidence_by_id[link.evidence_ref]
+        for link in item.evidence_chain
+        if link.evidence_ref in evidence_by_id
+    ]
+    coordinates = {_premortem_source_coordinate(item) for item in evidence}
+    agent_ids = {item.agent_id for item in evidence}
+    branch_ids = {item.branch_id for item in evidence}
+    return len(coordinates) >= 2 and (len(agent_ids) >= 2 or len(branch_ids) >= 2)
 
 
 # S3 anti-slop blacklist (AC-4): generic, says-nothing indicator phrasing that the
@@ -2064,7 +2493,7 @@ async def _build_indicators_llm(
     (no new ``validate_llm_base_url`` bypass — AC-12).
     """
 
-    if not reducer_result.evidence:
+    if not reducer_result.outcome_evidence_ids:
         # Without at least one real evidence coordinate the LLM tier cannot bind
         # tripwires to anything verifiable; let the template tier handle it.
         return None
@@ -2141,7 +2570,7 @@ def _build_indicators_prompt(
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    allowed_ids = [item.id for item in reducer_result.evidence]
+    allowed_ids = list(reducer_result.outcome_evidence_ids)
     if language == "zh":
         directive = (
             "你是情报分析师，为这份「如果…会怎样」推演报告写『后续观察指标 "
@@ -2219,7 +2648,7 @@ def _normalize_indicators_payload(
         raise ResultReportBuilderError("Indicators must be a non-empty list")
 
     language = "zh" if context.language == "zh" else "en"
-    evidence_ids = {item.id for item in reducer_result.evidence}
+    evidence_ids = set(reducer_result.outcome_evidence_ids)
     indicators: list[IndicatorToWatch] = []
     for raw in raw_entries:
         if not isinstance(raw, dict):
@@ -2281,11 +2710,11 @@ def _build_indicators_to_watch(
     # original what-if question instead of the generic "信号持续出现 → 强化主导路线"
     # / "同一议题被另一位参与者再次提及" boilerplate the proposal called out.
     indicators: list[IndicatorToWatch] = []
-    evidence_ids = {item.id for item in reducer_result.evidence}
+    evidence_ids = set(reducer_result.outcome_evidence_ids)
     language = "zh" if context.language == "zh" else "en"
     question_focus = _indicator_question_focus(context.question, language)
 
-    for evidence in reducer_result.evidence[:2]:
+    for evidence in _outcome_evidence(reducer_result)[:2]:
         claim = _truncate_indicator_text(evidence.quote, 150, language)
         if language == "zh":
             signal = f"{evidence.agent_name}（第 {evidence.round_number} 轮）的主张是否被复现"
@@ -2611,11 +3040,24 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
 
     if payload.get("status") == "complete":
         payload["status"] = "failed"
+        payload["premortem_analysis"] = {
+            "status": "missing",
+            "reason": "report_generation_failed",
+            "items": [],
+        }
     payload["summary"] = _truncate_text(str(payload.get("summary") or ""), 180)
     payload["summary_i18n"] = _truncate_i18n(payload.get("summary_i18n"), 180)
     payload["limitations"] = (
         "Report was truncated to fit the configured UTF-8 byte budget."
     )
+    _bound_payload_premortem_text(payload)
+    if utf8_json_size_bytes(payload) <= max_bytes:
+        _sync_payload_evidence_refs(payload)
+        return validate_full_report_payload(payload, max_bytes=max_bytes)
+    _prune_payload_premortem_items(payload, max_bytes=max_bytes)
+    if utf8_json_size_bytes(payload) <= max_bytes:
+        _sync_payload_evidence_refs(payload)
+        return validate_full_report_payload(payload, max_bytes=max_bytes)
     for item in payload.get("evidence") or []:
         if isinstance(item, dict):
             item["quote"] = _truncate_text(str(item.get("quote") or ""), 160)
@@ -2652,6 +3094,75 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
     return validate_full_report_payload(payload, max_bytes=max_bytes)
 
 
+def _bound_payload_premortem_text(payload: dict[str, Any]) -> None:
+    analysis = payload.get("premortem_analysis")
+    if not isinstance(analysis, dict):
+        return
+    for item in analysis.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        for field in (
+            "failure_mode_i18n",
+            "mechanism_i18n",
+            "early_warning_i18n",
+            "uncertainty_i18n",
+        ):
+            item[field] = _truncate_i18n(
+                item.get(field),
+                _PREMORTEM_TEXT_MAX_CHARS,
+            )
+        for link in item.get("evidence_chain") or []:
+            if isinstance(link, dict):
+                link["rationale_i18n"] = _truncate_i18n(
+                    link.get("rationale_i18n"),
+                    _PREMORTEM_RATIONALE_MAX_CHARS,
+                )
+
+
+def _prune_payload_premortem_items(
+    payload: dict[str, Any],
+    *,
+    max_bytes: int,
+) -> None:
+    analysis = payload.get("premortem_analysis")
+    if not isinstance(analysis, dict):
+        return
+    items = analysis.get("items")
+    if not isinstance(items, list):
+        return
+    while items and utf8_json_size_bytes(payload) > max_bytes:
+        dropped = items.pop()
+        dropped_refs = _payload_premortem_item_refs(dropped)
+        retained_refs = {
+            evidence_ref
+            for item in items
+            for evidence_ref in _payload_premortem_item_refs(item)
+        }
+        orphan_refs = dropped_refs - retained_refs
+        payload["evidence"] = [
+            evidence
+            for evidence in payload.get("evidence") or []
+            if not (
+                isinstance(evidence, dict)
+                and str(evidence.get("id") or "") in orphan_refs
+            )
+        ]
+        analysis["status"] = "partial" if items else "missing"
+        analysis["reason"] = "byte_budget_truncated"
+    _sync_payload_evidence_refs(payload)
+
+
+def _payload_premortem_item_refs(value: object) -> set[str]:
+    if not isinstance(value, dict):
+        return set()
+    chain = value.get("evidence_chain")
+    return {
+        str(link.get("evidence_ref") or "").strip()
+        for link in (chain if isinstance(chain, list) else [])
+        if isinstance(link, dict) and str(link.get("evidence_ref") or "").strip()
+    }
+
+
 def _shrink_payload_indicators(payload: dict[str, Any]) -> None:
     """Tighten indicator text fields under byte pressure before dropping rows."""
 
@@ -2676,6 +3187,8 @@ def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
         for item in (payload.get("evidence") or [])
         if isinstance(item, dict) and item.get("id")
     }
+    premortem_refs = _sync_payload_premortem_refs(payload, evidence_ids)
+    ordinary_evidence_ids = evidence_ids - premortem_refs
     for section in payload.get("sections") or []:
         if not isinstance(section, dict):
             continue
@@ -2683,7 +3196,7 @@ def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
         section["evidence_refs"] = [
             str(ref)
             for ref in (refs if isinstance(refs, list) else [])
-            if str(ref) in evidence_ids
+            if str(ref) in ordinary_evidence_ids
         ]
     for indicator in payload.get("indicators_to_watch") or []:
         if not isinstance(indicator, dict):
@@ -2692,8 +3205,84 @@ def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
         indicator["evidence_refs"] = [
             str(ref)
             for ref in (refs if isinstance(refs, list) else [])
-            if str(ref) in evidence_ids
+            if str(ref) in ordinary_evidence_ids
         ]
+
+
+def _sync_payload_premortem_refs(
+    payload: dict[str, Any],
+    evidence_ids: set[str],
+) -> set[str]:
+    analysis = payload.get("premortem_analysis")
+    if not isinstance(analysis, dict):
+        return set()
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in payload.get("evidence") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    raw_items = analysis.get("items")
+    had_items = isinstance(raw_items, list) and bool(raw_items)
+    cleaned_items: list[dict[str, Any]] = []
+    diversity_complete = True
+    premortem_truncated = False
+    referenced_ids: set[str] = set()
+    for raw_item in raw_items if isinstance(raw_items, list) else []:
+        if not isinstance(raw_item, dict):
+            premortem_truncated = True
+            continue
+        chain = raw_item.get("evidence_chain")
+        cleaned_chain: list[dict[str, Any]] = []
+        seen_refs: set[str] = set()
+        seen_coordinates: set[tuple[str, str, int, str, str]] = set()
+        for raw_link in chain if isinstance(chain, list) else []:
+            if not isinstance(raw_link, dict):
+                continue
+            evidence_ref = str(raw_link.get("evidence_ref") or "").strip()
+            evidence = evidence_by_id.get(evidence_ref)
+            if evidence_ref not in evidence_ids or evidence is None or evidence_ref in seen_refs:
+                continue
+            coordinate = (
+                str(evidence.get("branch_id") or ""),
+                str(evidence.get("round_id") or ""),
+                int(evidence.get("round_number") or 0),
+                str(evidence.get("agent_id") or ""),
+                str(evidence.get("message_id") or ""),
+            )
+            if coordinate in seen_coordinates:
+                continue
+            seen_refs.add(evidence_ref)
+            seen_coordinates.add(coordinate)
+            referenced_ids.add(evidence_ref)
+            cleaned_chain.append(raw_link)
+        if not isinstance(chain, list) or len(cleaned_chain) != len(chain):
+            premortem_truncated = True
+        if not cleaned_chain:
+            continue
+        raw_item["evidence_chain"] = cleaned_chain
+        agents = {
+            str(evidence_by_id[link["evidence_ref"]].get("agent_id") or "")
+            for link in cleaned_chain
+        }
+        branches = {
+            str(evidence_by_id[link["evidence_ref"]].get("branch_id") or "")
+            for link in cleaned_chain
+        }
+        if len(seen_coordinates) < 2 or (len(agents) < 2 and len(branches) < 2):
+            diversity_complete = False
+        cleaned_items.append(raw_item)
+    analysis["items"] = cleaned_items
+    if not cleaned_items:
+        if had_items or analysis.get("reason") == "byte_budget_truncated":
+            analysis["status"] = "missing"
+            analysis["reason"] = "byte_budget_truncated"
+    elif premortem_truncated or analysis.get("reason") == "byte_budget_truncated":
+        analysis["status"] = "partial"
+        analysis["reason"] = "byte_budget_truncated"
+    elif not diversity_complete and analysis.get("status") == "available":
+        analysis["status"] = "partial"
+        analysis["reason"] = "insufficient_source_diversity"
+    return referenced_ids
 
 
 def _load_existing_full_report(scenario_id: str) -> FullReport | None:
@@ -2716,10 +3305,74 @@ def _coerce_existing_full_report(payload: object) -> FullReport | None:
         return None
 
 
+def _evidence_coordinate_identity(
+    evidence: EvidenceRef,
+) -> tuple[str, str, int, str, str, str]:
+    return (
+        evidence.branch_id,
+        evidence.round_id,
+        evidence.round_number,
+        evidence.agent_id,
+        evidence.message_id,
+        evidence.kind,
+    )
+
+
+def _evidence_identity_map(
+    evidence: list[EvidenceRef],
+) -> dict[str, tuple[str, str, int, str, str, str]] | None:
+    identities: dict[str, tuple[str, str, int, str, str, str]] = {}
+    for item in evidence:
+        identity = _evidence_coordinate_identity(item)
+        if item.id in identities:
+            return None
+        identities[item.id] = identity
+    return identities
+
+
+def _reusable_existing_premortem(
+    existing: FullReport | None,
+    reducer_result: ReducerResult,
+    *,
+    target_branch_id: str | None = None,
+) -> PremortemAnalysis | None:
+    expected_target_branch_id = target_branch_id or reducer_result.target_branch_id
+    if (
+        existing is None
+        or expected_target_branch_id is None
+        or existing.target_branch_id != expected_target_branch_id
+        or existing.premortem_analysis is None
+        or not existing.premortem_analysis.items
+    ):
+        return None
+    referenced_ids = {
+        link.evidence_ref
+        for item in existing.premortem_analysis.items
+        for link in item.evidence_chain
+    }
+    if not referenced_ids or not referenced_ids <= set(
+        reducer_result.premortem_evidence_ids
+    ):
+        return None
+    existing_identities = _evidence_identity_map(existing.evidence)
+    current_identities = _evidence_identity_map(reducer_result.evidence)
+    if existing_identities is None or current_identities is None:
+        return None
+    if any(
+        existing_identities.get(evidence_id)
+        != current_identities.get(evidence_id)
+        for evidence_id in referenced_ids
+    ):
+        return None
+    return existing.premortem_analysis
+
+
 def _reusable_existing_sections(
     scenario_id: str,
     target_branch_id: str,
     outline: ReportOutline,
+    *,
+    current_evidence: list[EvidenceRef] | None = None,
 ) -> tuple[list[ReportSection], list[SectionTier]]:
     existing = _load_existing_full_report(scenario_id)
     if (
@@ -2746,47 +3399,88 @@ def _reusable_existing_sections(
         for section in outline.sections
         if section.section_id in existing_by_id
     ]
+    legacy_premortem = next(
+        (section for section in existing.sections if section.id == "premortem"),
+        None,
+    )
+    if legacy_premortem is not None:
+        reusable.append(legacy_premortem)
     if not reusable:
         return [], []
+    referenced_evidence_ids = {
+        evidence_id
+        for section in reusable
+        for evidence_id in section.evidence_refs
+    }
+    referenced_evidence_ids.update(
+        evidence_id
+        for indicator in existing.indicators_to_watch
+        for evidence_id in indicator.evidence_refs
+    )
+    if referenced_evidence_ids:
+        if current_evidence is None:
+            return [], []
+        existing_identities = _evidence_identity_map(existing.evidence)
+        current_identities = _evidence_identity_map(current_evidence)
+        if existing_identities is None or current_identities is None:
+            return [], []
+        if any(
+            existing_identities.get(evidence_id)
+            != current_identities.get(evidence_id)
+            for evidence_id in referenced_evidence_ids
+        ):
+            return [], []
     return reusable, [section.tier for section in reusable]
 
 
 def _persist_failed_report_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
 ) -> FullReport:
     return _persist_placeholder_report_if_absent(
         scenario_id,
         dominant_branch_id,
         status="failed",
+        report_scope=report_scope,
     )
 
 
 def _persist_cancelled_report_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
 ) -> FullReport:
     return _persist_placeholder_report_if_absent(
         scenario_id,
         dominant_branch_id,
         status="cancelled",
+        report_scope=report_scope,
     )
 
 
 def persist_generating_report_placeholder_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
 ) -> FullReport:
     return _persist_placeholder_report_if_absent(
         scenario_id,
         dominant_branch_id,
         status="generating",
+        report_scope=report_scope,
     )
 
 
 def _persist_generating_report_placeholder_for_retry(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> FullReport | None:
     lease = acquire_runtime_lock(
         _report_runtime_lock_key(scenario_id),
@@ -2804,6 +3498,8 @@ def _persist_generating_report_placeholder_for_retry(
             status="generating",
             replace_failed=True,
             replace_unenhanced=True,
+            report_scope=report_scope,
+            known_target_branch_id=known_target_branch_id,
         )
     finally:
         release_runtime_lock(lease)
@@ -2812,6 +3508,9 @@ def _persist_generating_report_placeholder_for_retry(
 def _persist_failed_report_after_auto_retry_exhausted(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> FullReport | None:
     lease = acquire_runtime_lock(
         _report_runtime_lock_key(scenario_id),
@@ -2829,6 +3528,8 @@ def _persist_failed_report_after_auto_retry_exhausted(
             status="failed",
             replace_unenhanced=True,
             refresh_failed_copy=True,
+            report_scope=report_scope,
+            known_target_branch_id=known_target_branch_id,
         )
     finally:
         release_runtime_lock(lease)
@@ -2843,6 +3544,8 @@ def _persist_placeholder_report_if_absent(
     replace_unenhanced: bool = False,
     replace_cancelled: bool = False,
     refresh_failed_copy: bool = False,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> FullReport:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -2857,6 +3560,8 @@ def _persist_placeholder_report_if_absent(
         target_branch_id = _resolve_failed_report_target_branch_id(
             scenario_id,
             dominant_branch_id,
+            report_scope=report_scope,
+            known_target_branch_id=known_target_branch_id,
         )
         branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
@@ -3045,6 +3750,10 @@ def _transition_report_status_payload(
         if isinstance(canonical_interview_status, dict):
             payload["interview_status"] = dict(canonical_interview_status)
             payload["interview_status"]["message"] = partial_copy["interview_message"]
+    if status == "failed":
+        canonical_premortem = canonical_payload.get("premortem_analysis")
+        if isinstance(canonical_premortem, dict):
+            payload["premortem_analysis"] = dict(canonical_premortem)
     return payload
 
 
@@ -3053,6 +3762,8 @@ def _persist_failed_report_if_lock_available(
     dominant_branch_id: str,
     *,
     replace_cancelled: bool = False,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> FullReport | None:
     lease = acquire_runtime_lock(
         _report_runtime_lock_key(scenario_id),
@@ -3069,6 +3780,8 @@ def _persist_failed_report_if_lock_available(
             dominant_branch_id,
             status="failed",
             replace_cancelled=replace_cancelled,
+            report_scope=report_scope,
+            known_target_branch_id=known_target_branch_id,
         )
     finally:
         release_runtime_lock(lease)
@@ -3077,18 +3790,30 @@ def _persist_failed_report_if_lock_available(
 def _resolve_failed_report_target_branch_id(
     scenario_id: str,
     dominant_branch_id: str,
+    *,
+    report_scope: ReportLineageScope | None = None,
+    known_target_branch_id: str | None = None,
 ) -> str:
+    if report_scope is not None:
+        return report_scope.target_branch_id
+    if known_target_branch_id is not None:
+        return known_target_branch_id
     try:
-        reducer_result = reduce_report(
+        resolved_scope = resolve_report_lineage_scope(
             get_engine(),
             scenario_id,
-            max_evidence=0,
             dominant_branch_id=dominant_branch_id,
         )
+    except BranchLineageError:
+        raise
     except Exception:  # noqa: BLE001 - failure marker must stay fail-soft
         logger.debug("Failed to resolve failed report target branch", exc_info=True)
         return dominant_branch_id
-    return reducer_result.target_branch_id or dominant_branch_id
+    return (
+        resolved_scope.target_branch_id
+        if resolved_scope is not None
+        else dominant_branch_id
+    )
 
 
 def _load_failed_report_branch(
@@ -3247,6 +3972,15 @@ def _placeholder_report_payload(
         interview_evidence=[],
         interview_status=interview_status,
         premortem=[],
+        premortem_analysis=(
+            PremortemAnalysis(
+                status="missing",
+                reason="report_generation_failed",
+                items=[],
+            )
+            if status == "failed"
+            else None
+        ),
         language_status=LanguageStatus(zh="available", en="available"),
     )
     return _fit_report_to_byte_cap(report).model_dump(mode="json")
@@ -3301,7 +4035,9 @@ def _tool_query_branch_messages(
     section: SectionPlan,
 ) -> tuple[str, int]:
     rows: list[dict[str, Any]] = []
-    for evidence in reducer_result.evidence[: settings.REPORT_MAX_EVIDENCE_PER_SECTION]:
+    for evidence in _outcome_evidence(reducer_result)[
+        : settings.REPORT_MAX_EVIDENCE_PER_SECTION
+    ]:
         rows.append(
             {
                 "id": evidence.id,
@@ -3356,9 +4092,21 @@ def _safe_web_context_blocks(raw: str | None) -> list[str]:
     return blocks
 
 
-def _evidence_digest(reducer_result: ReducerResult, *, max_items: int) -> str:
+def _evidence_digest(
+    reducer_result: ReducerResult,
+    *,
+    max_items: int,
+    evidence_ids: tuple[str, ...] | None = None,
+) -> str:
+    allowed_ids = set(
+        reducer_result.outcome_evidence_ids
+        if evidence_ids is None
+        else evidence_ids
+    )
     rows = []
-    for evidence in reducer_result.evidence[:max_items]:
+    for evidence in reducer_result.evidence:
+        if evidence.id not in allowed_ids:
+            continue
         rows.append(
             {
                 "id": evidence.id,
@@ -3373,7 +4121,25 @@ def _evidence_digest(reducer_result: ReducerResult, *, max_items: int) -> str:
                 ),
             }
         )
+        if len(rows) >= max_items:
+            break
     return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+
+
+def _evidence_for_ids(
+    reducer_result: ReducerResult,
+    evidence_ids: tuple[str, ...],
+) -> list[EvidenceRef]:
+    by_id = {item.id: item for item in reducer_result.evidence}
+    return [by_id[evidence_id] for evidence_id in evidence_ids if evidence_id in by_id]
+
+
+def _outcome_evidence(reducer_result: ReducerResult) -> list[EvidenceRef]:
+    return _evidence_for_ids(reducer_result, reducer_result.outcome_evidence_ids)
+
+
+def _premortem_evidence(reducer_result: ReducerResult) -> list[EvidenceRef]:
+    return _evidence_for_ids(reducer_result, reducer_result.premortem_evidence_ids)
 
 
 def _normalize_overrides(

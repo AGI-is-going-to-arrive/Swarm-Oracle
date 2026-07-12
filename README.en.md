@@ -20,18 +20,17 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 - Debate Arena, Ending Chambers, and Worldline Roundtable
 - Counterfactual reruns, branch comparison, and Replay Trace
 - Causal graph, knowledge graph, and timeline views
-- In-run Agent profiles, branch-scoped memory, Custom Agents, persona backups, prediction journal, and snapshots
-- Bounded, atomic Local Pack imports plus result verdicts, transparent full reports, share cards, and optional search augmentation
+- In-run Agent profiles, branch-scoped memory, Custom Agents, persona backups, ordered Agent Packs, prediction journal, and snapshots
+- Bounded, atomic Local Pack imports with clickable Snapshot demos, plus result verdicts, transparent full reports, a redacted offline Gallery, and optional search augmentation
 
-## W2.0 Visibility and Truth Boundaries
+## W2.1 Visibility and Truth Boundaries
 
 - Agent profiles separate configured stance from observed emotion. Every growth event shows scenario, branch, round, and `event_type` coordinates; it is labeled “Current · selected branch segment” only when it matches both the routed scenario and an explicitly selected branch. Other classifiable events are labeled “Past.”
 - If an Agent's speech succeeds but the second-pass structured-metadata parse fails, the real speech is preserved while emotion, stance, and relationship observations are explicitly unavailable with a bounded error code. Live views, Replay, Snapshots, and Pixel Theater never invent `neutral` metadata.
-- Legacy `stance` / `trust` / `opposition` fields in causal and faction views are affect proxies derived from model-generated `emotion` / `diverge`, not verified stance, trust, relationships, or causal evidence. The current view covers the selected branch segment only and does not merge pre-fork ancestor rounds.
-- Report likelihood and analytic confidence count only completed terminal leaves as branch samples and use persisted evidence-item counts; fork parents do not count, and signed affect-convergence proxies do not raise analytic confidence. Bounded per-section tool traces remain available after generated, rewritten, or static-fallback sections and survive refresh/reopen; the live “current section” cursor remains transient.
-- Local Pack refresh reloads details even when the selected pack keeps the same ID, clears old details and actions before switching, and isolates late responses. Pack `demo_snapshots` currently show read-only label and filename metadata; they are not clickable or directly importable.
-
-Two items remain for W2.1: ancestor-lineage stitching in causal/faction views and interactive, directly importable Local Pack `demo_snapshots`.
+- Legacy `stance` / `trust` / `opposition` fields in causal and faction views are affect proxies derived from model-generated `emotion` / `diverge`, not verified stance, trust, relationships, or causal evidence. Branch-scoped causal, faction, report, Replay, and compare paths now use one effective root-to-leaf lineage: eligible pre-fork ancestor rounds are included up to the round cutoff, while parent post-fork future data, siblings, and post-cutoff data are excluded. A self-contained Replay stops at its own Replay boundary.
+- Report likelihood and analytic confidence count only completed terminal leaves as branch samples and use persisted evidence-item counts; fork parents do not count, and signed affect-convergence proxies do not raise analytic confidence. Bounded per-section tool traces remain available after generated, rewritten, or static-fallback sections and survive refresh/reopen. Structured premortem analysis keeps a separate evidence chain and uncertainty for each failure mode; the live “current section” cursor remains transient.
+- Local Pack refresh reloads details even when the selected pack keeps the same ID, clears old details and actions before switching, and isolates late responses. Pack `demo_snapshots` are clickable, catalog-whitelisted, validated against the Snapshot contract, and directly importable. Definite failures are retryable; when the outcome cannot be confirmed, the UI asks you to check History before another attempt.
+- Agent Packs atomically import or export Agents in library selection order without identity IDs, owner data, memories, growth history, conversations, or separately stored credentials, and redact common credential patterns. Public Artifacts can be exported as redacted JSON, single-file HTML, or an offline Gallery hash link, while `gallery.html` can open a local file. This is not a hosted registry, community index, or marketplace.
 
 See the [feature index](docs/FEATURES.en.md) for capability groups and routes, and the [usage guide](docs/USAGE.en.md) for operation.
 
@@ -62,7 +61,7 @@ cp .env.docker.example .env.docker
 docker compose up -d
 ```
 
-Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. The backend image bundles `packs/` and `samples/`, so Local Packs and official samples are available inside the container; bundled pack `demo_snapshots` show label/filename metadata only for Snapshots that actually exist. To rebuild the images from source, run `docker compose up --build -d`.
+Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. The backend image bundles `packs/` and `samples/`, so Local Packs and official samples are available inside the container; bundled pack `demo_snapshots` reference only Snapshots that actually exist and can be imported directly from pack details. To rebuild the images from source, run `docker compose up --build -d`.
 
 ### Local Development
 

@@ -143,8 +143,14 @@ def create_custom_agent(
     decision_bias: dict | None,
     knowledge_domains: list[str] | None,
     preferred_tier: str = "IMPORTANT",
+    *,
+    session: Session | None = None,
 ) -> str:
-    """Create a custom agent identity, return identity_id."""
+    """Create a custom agent identity, return identity_id.
+
+    A caller-supplied session keeps commit and post-commit profile ownership
+    with the caller; this function only adds and flushes in that mode.
+    """
     _validate_knowledge_domains(knowledge_domains)
     validated_preferred_tier = _validate_preferred_tier(preferred_tier)
 
@@ -158,12 +164,12 @@ def create_custom_agent(
 
     # Store sanitized raw persona text. Prompt builders add guard markup at injection time.
     sanitized_persona = None
-    raw_persona_for_key: str | None = None
+    unwrapped_persona: str | None = None
     if persona:
-        raw_persona_for_key = _unwrap_untrusted_text_block(persona)
-        sanitized_persona = sanitize_untrusted_text(raw_persona_for_key, max_chars=2000)
+        unwrapped_persona = _unwrap_untrusted_text_block(persona)
+        sanitized_persona = sanitize_untrusted_text(unwrapped_persona, max_chars=2000)
 
-    continuity_key = _make_continuity_key(role, raw_persona_for_key)
+    continuity_key = _make_continuity_key(role, sanitized_persona)
 
     identity = AgentIdentity(
         user_id=user_id,
@@ -177,10 +183,20 @@ def create_custom_agent(
         preferred_tier=validated_preferred_tier,
     )
 
-    with Session(get_engine()) as session:
-        session.add(identity)
-        session.commit()
-        session.refresh(identity)
+    own_session = session is None
+    session_obj = session if session is not None else Session(get_engine())
+    try:
+        session_obj.add(identity)
+        if own_session:
+            session_obj.commit()
+            session_obj.refresh(identity)
+        else:
+            session_obj.flush()
+    finally:
+        if own_session:
+            session_obj.close()
+
+    if own_session:
         store_identity_profile(
             user_id=user_id,
             identity_id=identity.id,
@@ -188,7 +204,7 @@ def create_custom_agent(
             persona=identity.persona,
         )
         logger.info("Created custom agent %s for user %s", identity.id, user_id)
-        return identity.id
+    return identity.id
 
 
 def update_custom_agent(identity_id: str, **kwargs) -> None:
@@ -214,11 +230,10 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
 
         role_changed = False
         persona_changed = False
-        # W-9: track the raw (pre-sanitization) persona so the continuity
-        # key is hashed from the same surface area regardless of whether
-        # ``persona`` is part of this update or has to be reused from the
-        # already-stored (possibly legacy-wrapped) value.
-        raw_persona_for_key: str | None = _unwrap_untrusted_text_block(identity.persona) \
+        # Hash the same user-visible persona value that is persisted. Legacy
+        # guarded rows are unwrapped so role-only edits also converge on the
+        # current portable identity representation.
+        persona_for_key: str | None = _unwrap_untrusted_text_block(identity.persona) \
             if identity.persona else None
 
         if "role" in kwargs:
@@ -230,10 +245,10 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
             if raw_persona:
                 raw_persona = _unwrap_untrusted_text_block(raw_persona)
                 identity.persona = sanitize_untrusted_text(raw_persona, max_chars=2000)
-                raw_persona_for_key = raw_persona
+                persona_for_key = identity.persona
             else:
                 identity.persona = None
-                raw_persona_for_key = None
+                persona_for_key = None
             persona_changed = True
 
         if "decision_bias" in kwargs:
@@ -250,12 +265,10 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
         if "preferred_tier" in kwargs:
             identity.preferred_tier = _validate_preferred_tier(kwargs["preferred_tier"])
 
-        # Regenerate continuity_key if role or persona changed.  Uses the
-        # raw (unwrapped) persona so it stays byte-equivalent to the value
-        # ``create_custom_agent`` hashed at creation time.
+        # Regenerate continuity_key if role or persona changed.
         if role_changed or persona_changed:
             identity.continuity_key = _make_continuity_key(
-                identity.role, raw_persona_for_key,
+                identity.role, persona_for_key,
             )
 
         from datetime import datetime, timezone

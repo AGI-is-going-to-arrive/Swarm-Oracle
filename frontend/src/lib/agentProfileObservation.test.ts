@@ -98,33 +98,33 @@ describe('buildAgentProfileObservation', () => {
     });
   });
 
-  it('scopes replay to lineage and round, preferring the selected branch at equal round', () => {
+  it('scopes replay to lineage and round, selecting the child after its fork boundary', () => {
     const observation = buildAgentProfileObservation({
       agent,
       branches: [root, child, unrelated],
       messages: [
-        message({ emotion: 'child-at-fork', branch: 'child', round: 2 }),
+        message({ emotion: 'child-after-fork', branch: 'child', round: 3 }),
         message({ emotion: 'ancestor-at-fork-later', branch: 'root', round: 2 }),
-        message({ emotion: 'child-future', branch: 'child', round: 3 }),
+        message({ emotion: 'child-future', branch: 'child', round: 4 }),
         message({ emotion: 'unrelated-future', branch: 'unrelated', round: 9 }),
       ],
       selection: {
         kind: 'replay',
         branchId: 'child',
         branchTitle: 'Diplomatic fork',
-        round: 2,
+        round: 3,
       },
     });
 
     expect(observation).toMatchObject({
       source: 'replay',
-      emotion: 'child-at-fork',
+      emotion: 'child-after-fork',
       branchId: 'child',
       branchTitle: 'Diplomatic fork',
-      round: 2,
+      round: 3,
       selectedBranchId: 'child',
       selectedBranchTitle: 'Diplomatic fork',
-      selectedRound: 2,
+      selectedRound: 3,
     });
   });
 
@@ -179,7 +179,7 @@ describe('buildAgentProfileObservation', () => {
       branches: [root, child, unrelated],
       messages: [
         message({ emotion: 'shared', branch: 'root', round: 1 }),
-        message({ emotion: 'target', branch: 'child', round: 2 }),
+        message({ emotion: 'target', branch: 'child', round: 3 }),
         message({ emotion: 'wrong-worldline', branch: 'unrelated', round: 9 }),
       ],
       selection: { kind: 'result', branchId: 'child', branchTitle: 'Diplomatic fork' },
@@ -190,7 +190,7 @@ describe('buildAgentProfileObservation', () => {
       emotion: 'target',
       branchId: 'child',
       branchTitle: 'Diplomatic fork',
-      round: 2,
+      round: 3,
       selectedBranchId: 'child',
       selectedBranchTitle: 'Diplomatic fork',
     });

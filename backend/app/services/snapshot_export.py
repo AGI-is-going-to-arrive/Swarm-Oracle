@@ -53,6 +53,7 @@ from app.services.agent_message_metadata import (
     persisted_emotion_from_public_message,
     public_emotion_metadata,
 )
+from app.services.causal_graph import _message_node_key
 from app.services.result_report.schema import validate_full_report_payload
 
 logger = logging.getLogger(__name__)
@@ -275,6 +276,12 @@ def _scrub_export_text(value: Any) -> Any:
     for index, phrase in enumerate(protected_bearer_phrases):
         cleaned = cleaned.replace(f"\ue000{index}\ue001", phrase)
     return cleaned
+
+
+def scrub_export_text(value: str) -> str:
+    """Redact common credential shapes from user-authored portable text."""
+    cleaned = _scrub_export_text(value)
+    return cleaned if isinstance(cleaned, str) else ""
 
 
 def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
@@ -711,6 +718,64 @@ def _validate_snapshot_branch_graph(branch_rows: list[dict[str, Any]]) -> None:
             states[path_id] = 2
 
 
+def _validate_unique_snapshot_ids(
+    rows: list[Any],
+    *,
+    entity_name: str,
+) -> None:
+    """Reject source ids whose remap target would otherwise be overwritten."""
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        source_id = str(row.get("id", "")).strip()
+        if not source_id:
+            continue
+        if source_id in seen:
+            raise SnapshotImportError(
+                f"Duplicate {entity_name} id: {source_id!r}"
+            )
+        seen.add(source_id)
+
+
+def _validate_snapshot_message_coordinates(
+    message_rows: list[dict[str, Any]],
+) -> None:
+    """Allow shared rounds, but reject one source round id with two coordinates."""
+    _validate_unique_snapshot_ids(message_rows, entity_name="message")
+    round_coordinates: dict[str, tuple[str, int]] = {}
+    for row in message_rows:
+        source_round_id = str(row.get("round_id") or "").strip()
+        if not source_round_id:
+            continue
+        round_number = _coerce_int_field(
+            row.get("round_number"),
+            "messages.round_number",
+            default=1,
+            min_value=1,
+        )
+        coordinate = (
+            str(row.get("branch_id") or "").strip(),
+            round_number if round_number is not None else 1,
+        )
+        previous = round_coordinates.get(source_round_id)
+        if previous is not None and previous != coordinate:
+            raise SnapshotImportError(
+                f"Round id {source_round_id!r} maps to conflicting coordinates"
+            )
+        round_coordinates[source_round_id] = coordinate
+
+
+def _validate_snapshot_graph_node_ids(graph_payload: Any) -> None:
+    if not isinstance(graph_payload, dict):
+        return
+    if not isinstance(graph_payload.get("snapshot"), dict):
+        return
+    nodes = graph_payload.get("nodes") or []
+    if isinstance(nodes, list):
+        _validate_unique_snapshot_ids(nodes, entity_name="graph node")
+
+
 def _is_safe_zip_member_name(name: str) -> bool:
     if not name or "\x00" in name or "\\" in name:
         return False
@@ -1054,13 +1119,15 @@ def _remap_full_report_coordinates(
     report["evidence"] = evidence
 
     valid_evidence_ids = {str(item.get("id")) for item in evidence if item.get("id")}
+    premortem_evidence_ids = _sync_snapshot_premortem_analysis(report, evidence)
+    ordinary_evidence_ids = valid_evidence_ids - premortem_evidence_ids
     for section in report.get("sections") or []:
         if isinstance(section, dict):
             refs = section.get("evidence_refs")
             section["evidence_refs"] = [
                 str(ref)
                 for ref in (refs if isinstance(refs, list) else [])
-                if str(ref) in valid_evidence_ids
+                if str(ref) in ordinary_evidence_ids
             ]
             for chart in section.get("charts") or []:
                 if not isinstance(chart, dict):
@@ -1094,10 +1161,120 @@ def _remap_full_report_coordinates(
             indicator["evidence_refs"] = [
                 str(ref)
                 for ref in (refs if isinstance(refs, list) else [])
-                if str(ref) in valid_evidence_ids
+                if str(ref) in ordinary_evidence_ids
             ]
 
     return report
+
+
+def _sync_snapshot_premortem_analysis(
+    report: dict[str, Any],
+    evidence: list[dict[str, Any]],
+) -> set[str]:
+    """Repair structured premortem lineage after snapshot coordinate remapping."""
+
+    analysis = report.get("premortem_analysis")
+    if not isinstance(analysis, dict):
+        return set()
+
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in evidence
+        if str(item.get("id") or "").strip()
+    }
+    raw_items = analysis.get("items")
+    had_items = isinstance(raw_items, list) and bool(raw_items)
+    candidate_ids = {
+        evidence_ref
+        for raw_item in (raw_items if isinstance(raw_items, list) else [])
+        if isinstance(raw_item, dict)
+        for raw_link in (
+            raw_item.get("evidence_chain")
+            if isinstance(raw_item.get("evidence_chain"), list)
+            else []
+        )
+        if isinstance(raw_link, dict)
+        if (evidence_ref := str(raw_link.get("evidence_ref") or "").strip())
+        in evidence_by_id
+    }
+    if report.get("status") == "failed":
+        report["premortem_analysis"] = {
+            "status": "missing",
+            "reason": "report_generation_failed",
+            "items": [],
+        }
+        return candidate_ids
+
+    retained_items: list[dict[str, Any]] = []
+    diversity_complete = True
+    for raw_item in raw_items if isinstance(raw_items, list) else []:
+        if not isinstance(raw_item, dict):
+            continue
+        seen_refs: set[str] = set()
+        seen_coordinates: set[tuple[str, str, str, str]] = set()
+        retained_chain: list[dict[str, Any]] = []
+        raw_chain = raw_item.get("evidence_chain")
+        for raw_link in raw_chain if isinstance(raw_chain, list) else []:
+            if not isinstance(raw_link, dict):
+                continue
+            evidence_ref = str(raw_link.get("evidence_ref") or "").strip()
+            source = evidence_by_id.get(evidence_ref)
+            if source is None or evidence_ref in seen_refs:
+                continue
+            coordinate = _snapshot_evidence_coordinate(source)
+            if coordinate in seen_coordinates:
+                continue
+            seen_refs.add(evidence_ref)
+            seen_coordinates.add(coordinate)
+            retained_link = dict(raw_link)
+            retained_link["evidence_ref"] = evidence_ref
+            retained_chain.append(retained_link)
+        if not retained_chain:
+            continue
+
+        item = dict(raw_item)
+        item["evidence_chain"] = retained_chain
+        retained_items.append(item)
+        agent_ids = {
+            str(evidence_by_id[link["evidence_ref"]].get("agent_id") or "")
+            for link in retained_chain
+        }
+        branch_ids = {
+            str(evidence_by_id[link["evidence_ref"]].get("branch_id") or "")
+            for link in retained_chain
+        }
+        if len(seen_coordinates) < 2 or (
+            len(agent_ids) < 2 and len(branch_ids) < 2
+        ):
+            diversity_complete = False
+
+    if not retained_items:
+        if not had_items:
+            analysis["items"] = []
+            return candidate_ids
+        report["premortem_analysis"] = {
+            "status": "missing",
+            "reason": "lineage_unavailable",
+            "items": [],
+        }
+        return candidate_ids
+
+    analysis["items"] = retained_items
+    if not diversity_complete:
+        analysis["status"] = "partial"
+        analysis["reason"] = "insufficient_source_diversity"
+    return candidate_ids
+
+
+def _snapshot_evidence_coordinate(
+    evidence: dict[str, Any],
+) -> tuple[str, str, str, str]:
+    return (
+        str(evidence.get("branch_id") or ""),
+        str(evidence.get("round_id") or ""),
+        str(evidence.get("agent_id") or ""),
+        str(evidence.get("message_id") or ""),
+    )
 
 
 def _remap_result_quality_coordinates(
@@ -1151,6 +1328,9 @@ def import_snapshot_zip(
         )
         or {}
     )
+    _validate_unique_snapshot_ids(agents_rows, entity_name="agent")
+    _validate_snapshot_message_coordinates(messages_rows)
+    _validate_snapshot_graph_node_ids(graph_payload)
 
     from app.models import (
         AgentTier as _AgentTier,
@@ -1525,17 +1705,53 @@ def _import_causal_graph(
             remapped_ref_id = branch_id_map.get(source_ref_id)
         else:
             remapped_ref_id = None
+        node_type = str(raw.get("node_type") or "event")
+        node_round_number = _coerce_int_field(
+            raw.get("round_number"),
+            "causal_graph.nodes.round_number",
+            default=None,
+            min_value=1,
+        )
+        node_key = str(raw.get("node_key") or original_id or "")
+        if (
+            node_type == "event"
+            and ref_model == "agent_message"
+            and node_round_number is not None
+            and source_ref_id
+            and remapped_ref_id is not None
+            and isinstance(payload_json, str)
+        ):
+            try:
+                original_payload = json.loads(payload_json)
+            except json.JSONDecodeError:
+                original_payload = None
+            if isinstance(original_payload, dict):
+                original_agent_id = original_payload.get("agent_id")
+                remapped_agent_id = (
+                    agent_id_map.get(original_agent_id)
+                    if isinstance(original_agent_id, str)
+                    else None
+                )
+                if (
+                    remapped_agent_id is not None
+                    and node_key
+                    == _message_node_key(
+                        node_round_number,
+                        source_ref_id,
+                        original_agent_id,
+                    )
+                ):
+                    node_key = _message_node_key(
+                        node_round_number,
+                        remapped_ref_id,
+                        remapped_agent_id,
+                    )
         node = GraphNode(
             snapshot_id=new_snapshot_id,
-            node_key=str(raw.get("node_key") or original_id or ""),
-            node_type=str(raw.get("node_type") or "event"),
+            node_key=node_key,
+            node_type=node_type,
             label=str(raw.get("label") or ""),
-            round_number=_coerce_int_field(
-                raw.get("round_number"),
-                "causal_graph.nodes.round_number",
-                default=None,
-                min_value=1,
-            ),
+            round_number=node_round_number,
             ref_model=ref_model,
             ref_id=remapped_ref_id,
             payload_json=remapped_payload,
@@ -1557,6 +1773,9 @@ def _import_causal_graph(
                 f"Edge references unknown node(s): {src_orig!r} -> {tgt_orig!r}"
             )
         weight = raw.get("weight")
+        source_ref = raw.get("source_ref")
+        if isinstance(source_ref, str) and source_ref in message_id_map:
+            source_ref = message_id_map[source_ref]
         edge = GraphEdge(
             snapshot_id=new_snapshot_id,
             source_node_id=new_src,
@@ -1575,7 +1794,7 @@ def _import_causal_graph(
                 message_id_map=message_id_map,
             ),
             confidence_tier=raw.get("confidence_tier"),
-            source_ref=raw.get("source_ref"),
+            source_ref=source_ref,
             source_round_number=_coerce_int_field(
                 raw.get("source_round_number"),
                 "causal_graph.edges.source_round_number",
@@ -1614,8 +1833,10 @@ def _remap_payload_json(
         if isinstance(value, dict):
             new_dict: dict[str, Any] = {}
             for key, sub in value.items():
-                if key == "branch_id" and isinstance(sub, str):
-                    new_dict[key] = branch_id_map.get(sub, sub)
+                if key in {"branch_id", "source_branch_id"} and isinstance(sub, str):
+                    mapped_branch_id = branch_id_map.get(sub)
+                    if mapped_branch_id:
+                        new_dict[key] = mapped_branch_id
                 elif key == "agent_id" and isinstance(sub, str):
                     new_dict[key] = agent_id_map.get(sub, sub)
                 elif key == "message_id" and isinstance(sub, str):
@@ -1623,10 +1844,15 @@ def _remap_payload_json(
                     if mapped_message_id:
                         new_dict[key] = mapped_message_id
                 elif key == "children" and isinstance(sub, list):
-                    new_dict[key] = [
-                        branch_id_map.get(child, child) if isinstance(child, str) else _walk(child)
-                        for child in sub
-                    ]
+                    remapped_children: list[Any] = []
+                    for child in sub:
+                        if isinstance(child, str):
+                            mapped_child = branch_id_map.get(child)
+                            if mapped_child:
+                                remapped_children.append(mapped_child)
+                        else:
+                            remapped_children.append(_walk(child))
+                    new_dict[key] = remapped_children
                 else:
                     new_dict[key] = _walk(sub)
             return new_dict

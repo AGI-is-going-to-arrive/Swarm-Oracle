@@ -119,6 +119,34 @@ class TestCreateCustomAgent:
         assert len(stored["ids"]) == 1
         assert stored["metadatas"][0]["doc_type"] == "identity_profile"
 
+    def test_caller_owned_session_flushes_without_commit_or_profile(self, monkeypatch):
+        profile_calls: list[tuple] = []
+        monkeypatch.setattr(
+            "app.services.persona_workshop.store_identity_profile",
+            lambda *args, **kwargs: profile_calls.append((args, kwargs)),
+        )
+
+        with Session(get_engine()) as session:
+            identity_id = create_custom_agent(
+                user_id="caller-owned-session",
+                display_name="Atomic Import Agent",
+                role="Forecaster",
+                persona="Keeps the outer transaction atomic.",
+                decision_bias={"caution": 0.7},
+                knowledge_domains=["science"],
+                session=session,
+            )
+
+            identity = session.get(AgentIdentity, identity_id)
+            assert identity is not None
+            assert identity.display_name == "Atomic Import Agent"
+            assert profile_calls == []
+            session.rollback()
+
+        with Session(get_engine()) as session:
+            assert session.get(AgentIdentity, identity_id) is None
+        assert profile_calls == []
+
 
 class TestListCustomAgents:
     def test_list_filters_by_user_id(self):

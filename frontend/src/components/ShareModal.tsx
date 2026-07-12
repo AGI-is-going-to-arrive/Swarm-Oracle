@@ -19,6 +19,7 @@ import ShareableHeadlineCard, {
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { buildSingleFileGalleryHtml } from '../gallery/exportSingleFileHtml';
+import { buildPublicArtifactLink } from '../gallery/artifactLink';
 import './ShareModal.css';
 
 interface Platform {
@@ -157,41 +158,107 @@ export default function ShareModal({
 
   const [exportingPublicArtifact, setExportingPublicArtifact] = useState(false);
   const [publicArtifactError, setPublicArtifactError] = useState('');
+  const [publicArtifactNotice, setPublicArtifactNotice] = useState<
+    'copied' | 'too_large_downloaded' | null
+  >(null);
+  const publicArtifactBusyRef = useRef(false);
+  const publicArtifactControllerRef = useRef<AbortController | null>(null);
 
   const handleDownloadPublicJson = useCallback(async () => {
-    if (exportingPublicArtifact) return;
+    if (publicArtifactBusyRef.current) return;
+    publicArtifactBusyRef.current = true;
     setPublicArtifactError('');
+    setPublicArtifactNotice(null);
     setExportingPublicArtifact(true);
     try {
       const artifact = await buildPublicArtifact(scenarioId);
+      if (!mountedRef.current) return;
       const jsonStr = JSON.stringify(artifact, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       downloadBlobAsFile(blob, `swarmoracle_public_artifact_${Date.now()}.json`);
     } catch (err) {
+      if (!mountedRef.current) return;
       console.error('[ShareModal] public artifact JSON export failed', err);
       setPublicArtifactError(getLocalizedApiErrorMessage(err, t, t('public_artifacts.export_error')));
     } finally {
-      setExportingPublicArtifact(false);
+      publicArtifactBusyRef.current = false;
+      if (mountedRef.current) setExportingPublicArtifact(false);
     }
-  }, [scenarioId, exportingPublicArtifact, t]);
+  }, [scenarioId, t]);
 
   const handleDownloadPublicHtml = useCallback(async () => {
-    if (exportingPublicArtifact) return;
+    if (publicArtifactBusyRef.current) return;
+    publicArtifactBusyRef.current = true;
     setPublicArtifactError('');
+    setPublicArtifactNotice(null);
     setExportingPublicArtifact(true);
     try {
       const artifact = await buildPublicArtifact(scenarioId);
+      if (!mountedRef.current) return;
       const lang = artifact.language === 'zh' ? 'zh' : 'en';
       const htmlStr = buildSingleFileGalleryHtml(artifact, lang);
       const blob = new Blob([htmlStr], { type: 'text/html' });
       downloadBlobAsFile(blob, `swarmoracle_gallery_${Date.now()}.html`);
     } catch (err) {
+      if (!mountedRef.current) return;
       console.error('[ShareModal] public artifact HTML export failed', err);
       setPublicArtifactError(getLocalizedApiErrorMessage(err, t, t('public_artifacts.export_error')));
     } finally {
-      setExportingPublicArtifact(false);
+      publicArtifactBusyRef.current = false;
+      if (mountedRef.current) setExportingPublicArtifact(false);
     }
-  }, [scenarioId, exportingPublicArtifact, t]);
+  }, [scenarioId, t]);
+
+  const handleCopyPublicGalleryLink = useCallback(async () => {
+    if (!publicArtifactsEnabled || publicArtifactBusyRef.current) return;
+    publicArtifactBusyRef.current = true;
+    setPublicArtifactError('');
+    setPublicArtifactNotice(null);
+    setExportingPublicArtifact(true);
+
+    const controller = new AbortController();
+    publicArtifactControllerRef.current = controller;
+    try {
+      const artifact = await buildPublicArtifact(scenarioId, { signal: controller.signal });
+      if (!mountedRef.current || controller.signal.aborted) return;
+
+      const linkResult = buildPublicArtifactLink(artifact);
+      if (!linkResult.ok) {
+        if (linkResult.reason === 'too_large') {
+          const blob = new Blob([linkResult.json], { type: 'application/json' });
+          downloadBlobAsFile(blob, `swarmoracle_public_artifact_${Date.now()}.json`);
+          setPublicArtifactNotice('too_large_downloaded');
+        } else {
+          setPublicArtifactError(t('public_artifacts.gallery_link_copy_error'));
+        }
+        return;
+      }
+
+      try {
+        if (typeof navigator.clipboard?.writeText !== 'function') {
+          throw new Error('clipboard-unavailable');
+        }
+        await navigator.clipboard.writeText(linkResult.url);
+      } catch {
+        if (!mountedRef.current || controller.signal.aborted) return;
+        setPublicArtifactError(t('public_artifacts.gallery_link_copy_error'));
+        return;
+      }
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setPublicArtifactNotice('copied');
+    } catch (err) {
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setPublicArtifactError(getLocalizedApiErrorMessage(err, t, t('public_artifacts.export_error')));
+    } finally {
+      publicArtifactBusyRef.current = false;
+      if (publicArtifactControllerRef.current === controller) {
+        publicArtifactControllerRef.current = null;
+      }
+      if (mountedRef.current && !controller.signal.aborted) {
+        setExportingPublicArtifact(false);
+      }
+    }
+  }, [publicArtifactsEnabled, scenarioId, t]);
 
   useFocusTrap(dialogRef, true);
 
@@ -217,6 +284,8 @@ export default function ShareModal({
   const handleClose = useCallback(() => {
     requestControllerRef.current?.abort();
     requestControllerRef.current = null;
+    publicArtifactControllerRef.current?.abort();
+    publicArtifactControllerRef.current = null;
     clearCopiedTimers();
     onCloseRef.current();
   }, [clearCopiedTimers]);
@@ -234,6 +303,8 @@ export default function ShareModal({
       mountedRef.current = false;
       requestControllerRef.current?.abort();
       requestControllerRef.current = null;
+      publicArtifactControllerRef.current?.abort();
+      publicArtifactControllerRef.current = null;
       clearCopiedTimers();
       window.removeEventListener('keydown', onKey);
     };
@@ -557,6 +628,7 @@ export default function ShareModal({
       prediction_card_clipboard_supported: clipboardSupportsImages,
       exporting_public_artifact: exportingPublicArtifact,
       public_artifact_error: publicArtifactError || null,
+      public_artifact_notice: publicArtifactNotice,
       public_artifacts_enabled: publicArtifactsEnabled,
       exporting_headline_card: exportingHeadlineCard,
       headline_card_error: headlineCardError || null,
@@ -567,7 +639,7 @@ export default function ShareModal({
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError, exportingPredictionCard, predictionCardError, predictionCardCopied, clipboardSupportsImages, exportingPublicArtifact, publicArtifactError, publicArtifactsEnabled, exportingHeadlineCard, headlineCardError, headlineCardCopied, headlinesEnabled]);
+  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError, exportingPredictionCard, predictionCardError, predictionCardCopied, clipboardSupportsImages, exportingPublicArtifact, publicArtifactError, publicArtifactNotice, publicArtifactsEnabled, exportingHeadlineCard, headlineCardError, headlineCardCopied, headlinesEnabled]);
 
   return (
     <div className="share-overlay" onClick={handleClose}>
@@ -847,11 +919,47 @@ export default function ShareModal({
                 {t('public_artifacts.download_html')}
               </span>
             </button>
+
+            {publicArtifactsEnabled && (
+              <button
+                type="button"
+                className="share-platform-btn"
+                onClick={handleCopyPublicGalleryLink}
+                disabled={exportingPublicArtifact || loading}
+                aria-busy={exportingPublicArtifact}
+                style={{
+                  borderColor: 'oklch(70% 0.1 275)',
+                  color: 'oklch(40% 0.15 275)',
+                  height: '36px',
+                  minHeight: '36px',
+                  padding: '6px 12px'
+                }}
+              >
+                <span className="share-platform-icon" aria-hidden="true">🔗</span>
+                <span className="share-platform-label">
+                  {publicArtifactNotice === 'copied'
+                    ? t('public_artifacts.gallery_link_copied')
+                    : t('public_artifacts.copy_gallery_link')}
+                </span>
+              </button>
+            )}
           </div>
 
           {!publicArtifactsEnabled && !capLoading && (
             <p style={{ margin: '4px 0 0 0', fontSize: '0.75rem', color: 'var(--color-danger, oklch(60% 0.18 25))' }}>
               ⚠️ {t('public_artifacts.disabled_hint')}
+            </p>
+          )}
+
+          {publicArtifactNotice && (
+            <p
+              role="status"
+              aria-live="polite"
+              style={{ margin: '4px 0 0 0', fontSize: '0.75rem' }}
+            >
+              {publicArtifactNotice === 'copied'
+                ? t('public_artifacts.gallery_link_copied')
+                : t('public_artifacts.gallery_link_too_large_downloaded')}
             </p>
           )}
 

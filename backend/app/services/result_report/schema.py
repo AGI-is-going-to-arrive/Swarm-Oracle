@@ -58,6 +58,20 @@ ResultReportSSEStatus = Literal[
     "skipped",
 ]
 InterviewStatusValue = Literal["skipped", "complete", "partial", "failed"]
+PremortemStatus = Literal["available", "partial", "missing"]
+PremortemReason = Literal[
+    "no_distinct_evidence",
+    "insufficient_source_diversity",
+    "generation_failed",
+    "lineage_unavailable",
+    "report_generation_failed",
+    "byte_budget_truncated",
+]
+PremortemEvidenceRole = Literal[
+    "failure_signal",
+    "failure_mechanism",
+    "counterevidence",
+]
 
 _TARGET_BRANCH_SORT = ["probability_desc", "fork_round_asc", "id_asc"]
 _SENSITIVE_KEYS = frozenset(
@@ -360,6 +374,77 @@ class EvidenceRef(_StrictModel):
     kind: EvidenceKind
 
 
+def _validate_premortem_i18n(value: I18nText, *, label: str) -> None:
+    if not value.zh.strip() or not value.en.strip():
+        raise ValueError(f"{label} must contain nonblank zh and en text")
+
+
+class PremortemEvidenceLink(_StrictModel):
+    evidence_ref: str = Field(min_length=1)
+    role: PremortemEvidenceRole
+    rationale_i18n: I18nText
+
+    @model_validator(mode="after")
+    def validate_link(self) -> "PremortemEvidenceLink":
+        if not self.evidence_ref.strip():
+            raise ValueError("premortem evidence_ref must be nonblank")
+        _validate_premortem_i18n(
+            self.rationale_i18n,
+            label="premortem rationale_i18n",
+        )
+        return self
+
+
+class PremortemFailureMode(_StrictModel):
+    id: str = Field(pattern=r"^pm_\d{3}$")
+    failure_mode_i18n: I18nText
+    mechanism_i18n: I18nText
+    early_warning_i18n: I18nText
+    uncertainty_i18n: I18nText
+    evidence_chain: list[PremortemEvidenceLink] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_item(self) -> "PremortemFailureMode":
+        for label in (
+            "failure_mode_i18n",
+            "mechanism_i18n",
+            "early_warning_i18n",
+            "uncertainty_i18n",
+        ):
+            _validate_premortem_i18n(getattr(self, label), label=f"premortem {label}")
+        evidence_refs = [link.evidence_ref for link in self.evidence_chain]
+        if len(set(evidence_refs)) != len(evidence_refs):
+            raise ValueError("premortem evidence_chain cannot contain duplicate refs")
+        return self
+
+
+class PremortemAnalysis(_StrictModel):
+    status: PremortemStatus
+    reason: PremortemReason | None = None
+    items: list[PremortemFailureMode] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_status_contract(self) -> "PremortemAnalysis":
+        item_ids = [item.id for item in self.items]
+        if len(set(item_ids)) != len(item_ids):
+            raise ValueError("premortem failure-mode ids must be unique")
+        if self.status == "missing":
+            if self.items or self.reason is None:
+                raise ValueError("missing premortem requires empty items and a reason")
+            return self
+        if not self.items:
+            raise ValueError("available or partial premortem requires nonempty items")
+        if self.status == "partial":
+            if self.reason is None:
+                raise ValueError("partial premortem requires a reason")
+            return self
+        if self.reason is not None:
+            raise ValueError("available premortem cannot include a reason")
+        if any(len(item.evidence_chain) < 2 for item in self.items):
+            raise ValueError("available premortem items require at least two evidence refs")
+        return self
+
+
 class IndicatorToWatch(_StrictModel):
     signal: str = Field(min_length=1)
     direction: IndicatorDirection
@@ -425,6 +510,7 @@ class FullReport(_StrictModel):
     interview_evidence: list[dict[str, Any]] = Field(default_factory=list)
     interview_status: InterviewStatus | None = None
     premortem: list[dict[str, Any]] = Field(default_factory=list)
+    premortem_analysis: PremortemAnalysis | None = None
     language_status: LanguageStatus | None = None
     tool_trace: list[ToolTraceSummary] = Field(default_factory=list, max_length=64)
 
@@ -453,6 +539,44 @@ class FullReport(_StrictModel):
             ]
             if unknown_refs:
                 raise ValueError("indicator evidence_refs must reference report evidence ids")
+        if self.premortem_analysis is not None:
+            if len(evidence_ids) != len(self.evidence):
+                raise ValueError(
+                    "structured premortem requires unique report evidence ids"
+                )
+            evidence_by_id = {item.id: item for item in self.evidence}
+            for item in self.premortem_analysis.items:
+                referenced_ids = [link.evidence_ref for link in item.evidence_chain]
+                unknown_refs = [
+                    evidence_id
+                    for evidence_id in referenced_ids
+                    if evidence_id not in evidence_by_id
+                ]
+                if unknown_refs:
+                    raise ValueError(
+                        "premortem evidence_chain must reference report evidence ids"
+                    )
+                if self.premortem_analysis.status != "available":
+                    continue
+                referenced = [evidence_by_id[evidence_id] for evidence_id in referenced_ids]
+                source_coordinates = {
+                    (
+                        evidence.branch_id,
+                        evidence.round_id,
+                        evidence.round_number,
+                        evidence.agent_id,
+                        evidence.message_id,
+                    )
+                    for evidence in referenced
+                }
+                agent_ids = {evidence.agent_id for evidence in referenced}
+                branch_ids = {evidence.branch_id for evidence in referenced}
+                if len(source_coordinates) < 2 or (
+                    len(agent_ids) < 2 and len(branch_ids) < 2
+                ):
+                    raise ValueError(
+                        "available premortem items require source diversity"
+                    )
         _assert_no_sensitive_material(self.model_dump(mode="json"))
         return self
 

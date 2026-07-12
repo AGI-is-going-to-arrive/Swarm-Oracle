@@ -28,6 +28,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.branch_lineage import BranchLineageError
 from app.services.result_report import builder
 from app.services.result_report.reducer import StatResult
 from app.services.result_report.schema import (
@@ -352,6 +353,140 @@ def _section_payload(section_id: str, *, body: str | None = None) -> dict[str, A
     }
 
 
+def _builder_context() -> builder.BuilderContext:
+    return builder.BuilderContext(
+        scenario_id="scenario-report",
+        question="Should the city approve the AI transit plan?",
+        language="en",
+        parsed_context={},
+        branch_id="branch-a",
+        branch_title="Approval with safeguards",
+        branch_story="The proposal passes with safeguards.",
+        branch_insight="Safeguards unlock support.",
+        web_context_blocks=[],
+    )
+
+
+def _reducer_result_with_premortem_evidence():
+    scenario_id = _seed_report_scenario()
+    base = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+        max_evidence=2,
+    )
+    outcome = [
+        item for item in base.evidence if item.id in set(base.outcome_evidence_ids)
+    ]
+    assert outcome
+    next_index = len(outcome) + 1
+    first = outcome[0].model_copy(
+        update={
+            "id": f"ev_{next_index:03d}",
+            "round_id": "pm-round-a",
+            "round_number": 3,
+            "message_id": "pm-message-a",
+            "quote": "The safeguards can fail if the amendment is withdrawn.",
+        }
+    )
+    second = outcome[0].model_copy(
+        update={
+            "id": f"ev_{next_index + 1:03d}",
+            "branch_id": "branch-b",
+            "round_id": "pm-round-b",
+            "round_number": 4,
+            "agent_id": "agent-planner",
+            "agent_name": "Transit Planner",
+            "message_id": "pm-message-b",
+            "quote": "Budget opposition can dissolve the coalition.",
+        }
+    )
+    return replace(
+        base,
+        evidence=[*outcome, first, second],
+        outcome_evidence_ids=tuple(item.id for item in outcome),
+        premortem_evidence_ids=(first.id, second.id),
+    )
+
+
+def _premortem_payload(*evidence_refs: str) -> dict[str, Any]:
+    return {
+        "action": "premortem_analysis",
+        "items": [
+            {
+                "failure_mode_i18n": {
+                    "zh": "隐私与预算联盟瓦解",
+                    "en": "The privacy and budget coalition collapses",
+                },
+                "mechanism_i18n": {
+                    "zh": "保障条款撤回后，关键支持者退出。",
+                    "en": "Key supporters exit after safeguards are withdrawn.",
+                },
+                "early_warning_i18n": {
+                    "zh": "委员会停止承诺保障条款。",
+                    "en": "The committee stops committing to safeguards.",
+                },
+                "uncertainty_i18n": {
+                    "zh": "模拟只覆盖有限轮次。",
+                    "en": "The simulation covers only bounded rounds.",
+                },
+                "evidence_chain": [
+                    {
+                        "evidence_ref": evidence_ref,
+                        "role": (
+                            "failure_signal" if index == 0 else "failure_mechanism"
+                        ),
+                        "rationale_i18n": {
+                            "zh": f"证据 {evidence_ref} 标记失败路径。",
+                            "en": f"Evidence {evidence_ref} marks the failure path.",
+                        },
+                    }
+                    for index, evidence_ref in enumerate(evidence_refs)
+                ],
+            }
+        ],
+    }
+
+
+def _assembled_report_with_partial_premortem(item_count: int = 2):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    raw_items = [
+        _premortem_payload(evidence_id)["items"][0]
+        for evidence_id in reducer_result.premortem_evidence_ids[:item_count]
+    ]
+    analysis = builder._normalize_premortem_payload(
+        {"action": "premortem_analysis", "items": raw_items},
+        reducer_result,
+    )
+    context = _builder_context()
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "标题", "en": "Title"},
+        summary_i18n={"zh": "摘要", "en": "Summary"},
+        sections=[],
+    )
+    section = builder.ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="关键转折", en="Timeline"),
+        intent="Explain timeline.",
+        body_md_i18n=I18nText(zh="短正文", en="Short body"),
+        evidence_refs=[reducer_result.outcome_evidence_ids[0]],
+        charts=[],
+        tier="generation",
+        failure_reason=None,
+    )
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        outline,
+        sections=[section],
+        status="partial",
+        tier="generation",
+        premortem_analysis=analysis,
+    )
+    return report, reducer_result
+
+
 def test_outline_prompt_requires_publication_voice_for_title_and_summary():
     scenario_id = _seed_report_scenario()
     reducer_result = builder.reduce_report(get_engine(), scenario_id)
@@ -373,6 +508,437 @@ def test_outline_prompt_requires_publication_voice_for_title_and_summary():
     assert "提纲" in prompt
     assert "This report will" in prompt
     assert "completed voice" in prompt
+
+
+def test_ordinary_report_views_expose_only_outcome_evidence_ids():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = _builder_context()
+    outcome_id = reducer_result.outcome_evidence_ids[0]
+    premortem_ids = set(reducer_result.premortem_evidence_ids)
+    section = builder.SectionPlan(
+        section_id="timeline",
+        title_i18n={"zh": "关键转折", "en": "Turning points"},
+        intent="Explain the turning points.",
+    )
+
+    prompts = [
+        builder._build_outline_prompt(context, reducer_result),
+        builder._build_section_prompt(
+            context,
+            section,
+            reducer_result,
+            tier="generation",
+            history=[],
+        ),
+        builder._build_indicators_prompt(context, reducer_result),
+    ]
+    tool_payload, _item_count = builder._tool_query_branch_messages(
+        context,
+        reducer_result,
+        section,
+    )
+    ordinary_blob = "\n".join([*prompts, tool_payload])
+    assert outcome_id in ordinary_blob
+    assert all(evidence_id not in ordinary_blob for evidence_id in premortem_ids)
+
+    section_result = builder._section_result_from_payload(
+        section,
+        {
+            "action": "final_section",
+            "body_md_i18n": {"zh": "正文", "en": "Body"},
+            "evidence_refs": [
+                reducer_result.premortem_evidence_ids[0],
+                outcome_id,
+            ],
+        },
+        reducer_result,
+        tier="generation",
+        trace=[],
+    )
+    static_result = builder._static_section_from_context(
+        context,
+        section,
+        reducer_result,
+    )
+    indicators = builder._normalize_indicators_payload(
+        {
+            "action": "indicators_to_watch",
+            "indicators": [
+                {
+                    "signal": "A binding amendment is published",
+                    "direction": "up",
+                    "note": "The amendment would preserve the coalition.",
+                    "threshold": "A recorded vote adopts the safeguards.",
+                    "evidence_refs": [
+                        reducer_result.premortem_evidence_ids[0],
+                        outcome_id,
+                    ],
+                }
+            ],
+        },
+        context,
+        reducer_result,
+    )
+
+    assert section_result.section.evidence_refs == [outcome_id]
+    assert set(static_result.section.evidence_refs) <= set(
+        reducer_result.outcome_evidence_ids
+    )
+    assert indicators[0].evidence_refs == [outcome_id]
+
+
+def test_new_outline_filters_ordinary_premortem_section():
+    outline = builder._normalize_outline_payload(
+        _outline_payload(["premortem", "timeline"]),
+        _builder_context(),
+    )
+
+    assert "premortem" not in {section.section_id for section in outline.sections}
+
+
+@pytest.mark.asyncio
+async def test_premortem_without_independent_evidence_skips_llm(monkeypatch):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    reducer_result = replace(
+        reducer_result,
+        evidence=[
+            item
+            for item in reducer_result.evidence
+            if item.id in set(reducer_result.outcome_evidence_ids)
+        ],
+        premortem_evidence_ids=(),
+    )
+
+    async def fail_llm(*_args: Any, **_kwargs: Any):
+        raise AssertionError("premortem LLM must be skipped without independent ids")
+
+    monkeypatch.setattr(builder, "llm_call_json", fail_llm)
+
+    analysis = await builder._build_premortem_analysis(
+        _builder_context(),
+        reducer_result,
+        overrides=None,
+    )
+
+    assert analysis.status == "missing"
+    assert analysis.reason == "no_distinct_evidence"
+    assert analysis.items == []
+
+
+@pytest.mark.asyncio
+async def test_premortem_llm_valid_payload_uses_only_independent_pool(monkeypatch):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    fake_llm = QueuedLlm(
+        [_premortem_payload(*reducer_result.premortem_evidence_ids)]
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    analysis = await builder._build_premortem_analysis(
+        _builder_context(),
+        reducer_result,
+        overrides=None,
+    )
+
+    assert analysis.status == "available"
+    assert analysis.reason is None
+    assert [item.id for item in analysis.items] == ["pm_001"]
+    assert [
+        link.evidence_ref for link in analysis.items[0].evidence_chain
+    ] == list(reducer_result.premortem_evidence_ids)
+    assert reducer_result.outcome_evidence_ids[0] not in fake_llm.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_premortem_normalizer_filters_overlap_unknown_blank_and_duplicates(
+    monkeypatch,
+):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    valid_pm_id = reducer_result.premortem_evidence_ids[0]
+    payload = _premortem_payload(
+        reducer_result.outcome_evidence_ids[0],
+        "ev_unknown",
+        "",
+        valid_pm_id,
+        valid_pm_id,
+    )
+    monkeypatch.setattr(builder, "llm_call_json", QueuedLlm([payload]))
+
+    analysis = await builder._build_premortem_analysis(
+        _builder_context(),
+        reducer_result,
+        overrides=None,
+    )
+
+    assert analysis.status == "partial"
+    assert analysis.reason == "insufficient_source_diversity"
+    assert [
+        link.evidence_ref for link in analysis.items[0].evidence_chain
+    ] == [valid_pm_id]
+
+
+@pytest.mark.asyncio
+async def test_premortem_normalizer_rejects_blank_i18n_and_rationale(monkeypatch):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    evidence_ids = reducer_result.premortem_evidence_ids
+    invalid_item = _premortem_payload(*evidence_ids)["items"][0]
+    invalid_item["failure_mode_i18n"]["zh"] = "   "
+    valid_item = _premortem_payload(*evidence_ids)["items"][0]
+    valid_item["failure_mode_i18n"] = {
+        "zh": "有效失败模式",
+        "en": "Valid failure mode",
+    }
+    valid_item["evidence_chain"][0]["rationale_i18n"]["en"] = "   "
+    monkeypatch.setattr(
+        builder,
+        "llm_call_json",
+        QueuedLlm([
+            {
+                "action": "premortem_analysis",
+                "items": [invalid_item, valid_item],
+            }
+        ]),
+    )
+
+    analysis = await builder._build_premortem_analysis(
+        _builder_context(),
+        reducer_result,
+        overrides=None,
+    )
+
+    assert [item.failure_mode_i18n.en for item in analysis.items] == [
+        "Valid failure mode"
+    ]
+    assert [
+        link.evidence_ref for link in analysis.items[0].evidence_chain
+    ] == [evidence_ids[1]]
+    assert analysis.status == "partial"
+    assert analysis.reason == "insufficient_source_diversity"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        RuntimeError("provider failed"),
+        {"action": "premortem_analysis", "items": []},
+    ],
+)
+async def test_premortem_failure_or_empty_normalization_is_missing(
+    monkeypatch,
+    response,
+):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    monkeypatch.setattr(builder, "llm_call_json", QueuedLlm([response]))
+
+    analysis = await builder._build_premortem_analysis(
+        _builder_context(),
+        reducer_result,
+        overrides=None,
+    )
+
+    assert analysis.status == "missing"
+    assert analysis.reason == "generation_failed"
+    assert analysis.items == []
+
+
+@pytest.mark.asyncio
+async def test_build_report_persists_structured_premortem_and_pool_boundaries(
+    monkeypatch,
+):
+    reducer_result = _reducer_result_with_premortem_evidence()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+            _premortem_payload(*reducer_result.premortem_evidence_ids),
+        ]
+    )
+    monkeypatch.setattr(builder, "reduce_report", lambda *_args, **_kwargs: reducer_result)
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        "scenario-report",
+        "branch-a",
+        overrides=None,
+    )
+    persisted = validate_full_report_payload(_persisted_report("scenario-report"))
+
+    assert report.premortem == []
+    assert report.premortem_analysis is not None
+    assert report.premortem_analysis.status == "available"
+    assert persisted.premortem_analysis == report.premortem_analysis
+    outcome_ids = set(reducer_result.outcome_evidence_ids)
+    premortem_ids = set(reducer_result.premortem_evidence_ids)
+    assert all(set(section.evidence_refs) <= outcome_ids for section in report.sections)
+    assert all(
+        set(indicator.evidence_refs) <= outcome_ids
+        for indicator in report.indicators_to_watch
+    )
+    assert {
+        link.evidence_ref
+        for item in report.premortem_analysis.items
+        for link in item.evidence_chain
+    } <= premortem_ids
+
+
+def test_failed_report_placeholder_persists_structured_terminal_reason():
+    scenario_id = _seed_report_scenario()
+
+    report = builder._persist_failed_report_if_absent(scenario_id, "branch-a")
+
+    assert report.premortem_analysis is not None
+    assert report.premortem_analysis.status == "missing"
+    assert report.premortem_analysis.reason == "report_generation_failed"
+    assert _persisted_report(scenario_id)["premortem_analysis"] == {
+        "status": "missing",
+        "reason": "report_generation_failed",
+        "items": [],
+    }
+
+
+def test_failed_report_assembly_overrides_nonterminal_premortem_state():
+    partial_report, reducer_result = _assembled_report_with_partial_premortem(1)
+    assert partial_report.premortem_analysis is not None
+    failed = builder._assemble_report(
+        _builder_context(),
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "标题", "en": "Title"},
+            summary_i18n={"zh": "摘要", "en": "Summary"},
+            sections=[],
+        ),
+        sections=partial_report.sections,
+        status="failed",
+        tier="generation",
+        premortem_analysis=partial_report.premortem_analysis,
+    )
+
+    assert failed.premortem_analysis is not None
+    assert failed.premortem_analysis.status == "missing"
+    assert failed.premortem_analysis.reason == "report_generation_failed"
+    assert failed.premortem_analysis.items == []
+
+
+def test_structured_premortem_reuse_requires_stable_evidence_coordinates():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    analysis = builder._normalize_premortem_payload(
+        _premortem_payload(*reducer_result.premortem_evidence_ids),
+        reducer_result,
+    )
+    context = _builder_context()
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "标题", "en": "Title"},
+        summary_i18n={"zh": "摘要", "en": "Summary"},
+        sections=[],
+    )
+    existing = builder._assemble_report(
+        context,
+        reducer_result,
+        outline,
+        sections=[],
+        status="complete",
+        tier="generation",
+        premortem_analysis=analysis,
+    )
+
+    assert builder._reusable_existing_premortem(existing, reducer_result) == analysis
+
+    rebound = replace(
+        reducer_result,
+        evidence=[
+            item.model_copy(update={"message_id": "rebound-message"})
+            if item.id == reducer_result.premortem_evidence_ids[0]
+            else item
+            for item in reducer_result.evidence
+        ],
+    )
+    assert builder._reusable_existing_premortem(existing, rebound) is None
+
+
+def test_structured_premortem_reuse_requires_same_target_branch():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    analysis = builder._normalize_premortem_payload(
+        _premortem_payload(*reducer_result.premortem_evidence_ids),
+        reducer_result,
+    )
+    existing = builder._assemble_report(
+        _builder_context(),
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "标题", "en": "Title"},
+            summary_i18n={"zh": "摘要", "en": "Summary"},
+            sections=[],
+        ),
+        sections=[],
+        status="complete",
+        tier="generation",
+        premortem_analysis=analysis,
+    )
+    assert existing.target_branch_id == "branch-a"
+
+    retargeted = replace(reducer_result, target_branch_id="branch-b")
+
+    assert builder._reusable_existing_premortem(existing, retargeted) is None
+
+
+def test_legacy_premortem_section_is_reused_but_never_newly_planned():
+    from tests.test_result_report_contract import _legal_full_report
+
+    reducer_result = _reducer_result_with_premortem_evidence()
+    existing = _legal_full_report()
+    existing["status"] = "partial"
+    existing["target_branch_id"] = "branch-a"
+    existing["sections"][0]["intent"] = "Explain timeline."
+    existing["sections"][0]["evidence_refs"] = [
+        reducer_result.outcome_evidence_ids[0]
+    ]
+    existing["sections"].append(
+        {
+            "id": "premortem",
+            "title": "Legacy premortem",
+            "title_i18n": {"zh": "旧失败预演", "en": "Legacy premortem"},
+            "intent": "Render the persisted legacy premortem.",
+            "body_md_i18n": {"zh": "旧内容", "en": "Legacy content"},
+            "evidence_refs": [],
+            "charts": [],
+            "tier": "generation",
+            "failure_reason": None,
+        }
+    )
+    existing["evidence"] = [
+        item.model_dump(mode="json")
+        for item in reducer_result.evidence
+        if item.id in set(reducer_result.outcome_evidence_ids)
+    ]
+    existing["indicators_to_watch"][0]["evidence_refs"] = [
+        reducer_result.outcome_evidence_ids[0]
+    ]
+    builder._persist_report_payload("scenario-report", existing)
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "标题", "en": "Title"},
+        summary_i18n={"zh": "摘要", "en": "Summary"},
+        sections=[
+            builder.SectionPlan(
+                section_id="timeline",
+                title_i18n={"zh": "关键转折", "en": "Turning points"},
+                intent="Explain timeline.",
+            )
+        ],
+    )
+
+    sections, _tiers = builder._reusable_existing_sections(
+        "scenario-report",
+        "branch-a",
+        outline,
+        current_evidence=[
+            item
+            for item in reducer_result.evidence
+            if item.id in set(reducer_result.outcome_evidence_ids)
+        ],
+    )
+
+    assert [section.id for section in sections] == ["timeline", "premortem"]
 
 
 def test_polish_report_title_summary_removes_planning_voice_examples():
@@ -431,6 +997,7 @@ class QueuedLlm:
     _PROMPT_ACTION = {
         "REPORT_INTERVIEWS": "interview_agents",
         "REPORT_INDICATORS": "indicators_to_watch",
+        "REPORT_PREMORTEM": "premortem_analysis",
     }
 
     def __init__(self, responses: list[Any]) -> None:
@@ -635,11 +1202,98 @@ async def test_build_report_persists_complete_report_with_evidence_coords(monkey
     # Boilerplate disclaimer is no longer persisted; the frontend renders its
     # own localized fallback when the field is absent.
     assert report.verdict.disclaimer is None
-    assert "terminal leaf segment only" in report.limitations
+    assert "effective root-to-leaf lineage" in report.limitations
 
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.status == "complete"
     assert persisted.evidence[0].agent_name == "Privacy Advocate"
+
+
+@pytest.mark.asyncio
+async def test_build_report_resolves_lineage_once_and_passes_scope_to_reducer(
+    monkeypatch,
+):
+    scenario_id = _seed_report_scenario()
+    real_resolver = builder.resolve_report_lineage_scope
+    real_reduce = builder.reduce_report
+    resolved_scopes = []
+    reducer_scopes = []
+
+    def capture_resolver(*args: Any, **kwargs: Any):
+        report_scope = real_resolver(*args, **kwargs)
+        resolved_scopes.append(report_scope)
+        return report_scope
+
+    def capture_reduce(*args: Any, **kwargs: Any):
+        reducer_scopes.append(kwargs.get("report_scope"))
+        return real_reduce(*args, **kwargs)
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", capture_resolver)
+    monkeypatch.setattr(builder, "reduce_report", capture_reduce)
+    monkeypatch.setattr(
+        builder,
+        "llm_call_json",
+        QueuedLlm(
+            [
+                _outline_payload(["timeline", "sources"]),
+                _section_payload("timeline"),
+                _section_payload("sources"),
+            ]
+        ),
+    )
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert len(resolved_scopes) == 1
+    assert resolved_scopes[0] is not None
+    assert reducer_scopes == [resolved_scopes[0]]
+    assert report.target_branch_id == resolved_scopes[0].target_branch_id
+
+
+@pytest.mark.asyncio
+async def test_build_report_reuses_genuine_preflight_scope_without_resolving_again(
+    monkeypatch,
+):
+    scenario_id = _seed_report_scenario()
+    report_scope = builder.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+    )
+    assert report_scope is not None
+    real_reduce = builder.reduce_report
+    reducer_scopes = []
+
+    def fail_resolver(*_args: Any, **_kwargs: Any):
+        raise AssertionError("genuine preflight scope must not resolve again")
+
+    def capture_reduce(*args: Any, **kwargs: Any):
+        reducer_scopes.append(kwargs.get("report_scope"))
+        return real_reduce(*args, **kwargs)
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", fail_resolver)
+    monkeypatch.setattr(builder, "reduce_report", capture_reduce)
+    monkeypatch.setattr(
+        builder,
+        "llm_call_json",
+        QueuedLlm(
+            [
+                _outline_payload(["timeline", "sources"]),
+                _section_payload("timeline"),
+                _section_payload("sources"),
+            ]
+        ),
+    )
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+        report_scope=report_scope,
+    )
+
+    assert reducer_scopes == [report_scope]
+    assert report.target_branch_id == report_scope.target_branch_id
 
 
 @pytest.mark.asyncio
@@ -1071,6 +1725,131 @@ async def test_build_report_interview_failure_is_fail_soft(monkeypatch):
     )
 
 
+def test_interview_candidates_follow_exact_effective_lineage_with_true_branch_indices():
+    from tests.test_result_report_reducer import _seed_report_lineage_scope_scenario
+
+    scenario_id = _seed_report_lineage_scope_scenario()
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        max_evidence=20,
+    )
+    context = builder._load_builder_context(scenario_id, "report-leaf")
+
+    candidates = builder._load_interview_candidates(context, reducer_result)
+
+    assert [
+        (candidate.agent_name, candidate.branch_index, candidate.round_number)
+        for candidate in candidates
+    ] == [
+        ("Root Analyst", 0, 1),
+        ("Child Analyst", 1, 3),
+        ("Leaf Analyst", 2, 5),
+    ]
+    assert all(candidate.agent_name != "Noise Analyst" for candidate in candidates)
+
+
+def test_interview_candidates_for_replay_clone_use_only_clone_round_ids():
+    from tests.test_result_report_reducer import _seed_report_lineage_scope_scenario
+
+    scenario_id = _seed_report_lineage_scope_scenario()
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-clone",
+        max_evidence=20,
+    )
+    context = builder._load_builder_context(scenario_id, "report-clone")
+
+    candidates = builder._load_interview_candidates(context, reducer_result)
+
+    assert [
+        (candidate.agent_name, candidate.branch_index, candidate.round_number)
+        for candidate in candidates
+    ] == [("Clone Analyst", 4, 1)]
+
+
+def test_interview_candidates_require_exact_authority_round_triples():
+    from tests.test_result_report_reducer import _seed_report_lineage_scope_scenario
+
+    scenario_id = _seed_report_lineage_scope_scenario()
+    report_scope = builder.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+    )
+    assert report_scope is not None
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        max_evidence=20,
+        report_scope=report_scope,
+    )
+    context = builder._load_builder_context(scenario_id, "report-leaf")
+    with Session(get_engine()) as session:
+        rebound_round = session.get(Round, "report-leaf-5")
+        assert rebound_round is not None
+        rebound_round.branch_id = "report-sibling"
+        session.add(rebound_round)
+        session.add(
+            AgentMessage(
+                id="sentinel-rebound-round-message",
+                round_id=rebound_round.id,
+                agent_id="agent-lineage-noise",
+                content="SENTINEL must not enter interview candidates.",
+            )
+        )
+        session.commit()
+
+    candidates = builder._load_interview_candidates(context, reducer_result)
+
+    assert [
+        (candidate.agent_name, candidate.branch_index, candidate.round_number)
+        for candidate in candidates
+    ] == [
+        ("Root Analyst", 0, 1),
+        ("Child Analyst", 1, 3),
+    ]
+    assert all("SENTINEL" not in candidate.excerpt for candidate in candidates)
+
+
+def test_report_limitations_distinguish_native_lineage_from_self_contained_replay():
+    from tests.test_result_report_reducer import _seed_report_lineage_scope_scenario
+
+    scenario_id = _seed_report_lineage_scope_scenario()
+
+    def assemble_for(branch_id: str) -> FullReport:
+        reducer_result = builder.reduce_report(
+            get_engine(),
+            scenario_id,
+            dominant_branch_id=branch_id,
+            max_evidence=20,
+        )
+        context = builder._load_builder_context(scenario_id, branch_id)
+        outline = builder._fallback_outline(context, reducer_result)
+        return builder._assemble_report(
+            context,
+            reducer_result,
+            outline,
+            sections=[],
+            status="complete",
+            tier="static",
+        )
+
+    native_report = assemble_for("report-leaf")
+    replay_report = assemble_for("report-clone")
+
+    assert "effective root-to-leaf lineage" in native_report.limitations
+    assert "inherited pre-fork ancestor rounds" in native_report.limitations
+    assert "self-contained replay" in replay_report.limitations.lower()
+    assert "clone's own materialized rounds" in replay_report.limitations
+    assert "source or ancestor branch transcripts are not merged" in (
+        replay_report.limitations
+    )
+
+
 @pytest.mark.asyncio
 async def test_build_report_persists_generating_until_all_sections_finish(monkeypatch):
     from app.services.result_report import builder
@@ -1426,7 +2205,12 @@ def test_byte_cap_prunes_indicator_refs_when_evidence_is_truncated(monkeypatch):
     report = FullReport.model_validate(payload)
 
     expected_payload = report.model_dump(mode="json")
-    expected_payload["status"] = "partial"
+    expected_payload["status"] = "failed"
+    expected_payload["premortem_analysis"] = {
+        "status": "missing",
+        "reason": "report_generation_failed",
+        "items": [],
+    }
     expected_payload["summary"] = builder._truncate_text(expected_payload["summary"], 180)
     expected_payload["summary_i18n"] = builder._truncate_i18n(
         expected_payload["summary_i18n"],
@@ -1447,6 +2231,147 @@ def test_byte_cap_prunes_indicator_refs_when_evidence_is_truncated(monkeypatch):
     assert utf8_json_size_bytes(fitted.model_dump(mode="json")) <= max_bytes
     assert [item.id for item in fitted.evidence] == ["ev-1"]
     assert fitted.indicators_to_watch[0].evidence_refs == ["ev-1"]
+
+
+def test_byte_cap_preserves_existing_missing_premortem_reason(monkeypatch):
+    from tests.test_result_report_contract import _legal_full_report
+
+    payload = _legal_full_report()
+    payload["premortem_analysis"] = {
+        "status": "missing",
+        "reason": "no_distinct_evidence",
+        "items": [],
+    }
+    payload["status"] = "partial"
+    payload["summary"] = "summary " * 2_000
+    payload["summary_i18n"] = {
+        "zh": "摘要" * 4_000,
+        "en": "summary " * 2_000,
+    }
+    report = FullReport.model_validate(payload)
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", 4096)
+
+    fitted = builder._fit_report_to_byte_cap(report)
+
+    assert fitted.premortem_analysis is not None
+    assert fitted.premortem_analysis.status == "missing"
+    assert fitted.premortem_analysis.reason == "no_distinct_evidence"
+
+
+def test_byte_cap_complete_failure_uses_terminal_premortem_reason(monkeypatch):
+    report, _reducer_result = _assembled_report_with_partial_premortem(1)
+    report = report.model_copy(
+        deep=True,
+        update={
+            "status": "complete",
+            "summary": "summary " * 2_000,
+            "summary_i18n": I18nText(
+                zh="摘要" * 4_000,
+                en="summary " * 2_000,
+            ),
+        },
+    )
+    bounded_payload = report.model_dump(mode="json")
+    bounded_payload["status"] = "failed"
+    bounded_payload["summary"] = builder._truncate_text(
+        bounded_payload["summary"],
+        180,
+    )
+    bounded_payload["summary_i18n"] = builder._truncate_i18n(
+        bounded_payload["summary_i18n"],
+        180,
+    )
+    bounded_payload["limitations"] = (
+        "Report was truncated to fit the configured UTF-8 byte budget."
+    )
+    builder._bound_payload_premortem_text(bounded_payload)
+    max_bytes = utf8_json_size_bytes(bounded_payload) + 64
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", max_bytes)
+
+    fitted = builder._fit_report_to_byte_cap(report)
+
+    assert fitted.status == "failed"
+    assert fitted.premortem_analysis is not None
+    assert fitted.premortem_analysis.status == "missing"
+    assert fitted.premortem_analysis.reason == "report_generation_failed"
+    assert fitted.premortem_analysis.items == []
+
+
+def test_byte_cap_bounds_structured_premortem_text_before_dropping_item(monkeypatch):
+    report, _reducer_result = _assembled_report_with_partial_premortem(1)
+    assert report.premortem_analysis is not None
+    item = report.premortem_analysis.items[0]
+    item.failure_mode_i18n.zh = "失败模式" * 2_000
+    item.failure_mode_i18n.en = "failure mode " * 2_000
+    original_id = item.id
+
+    bounded_payload = report.model_dump(mode="json")
+    bounded_payload["limitations"] = (
+        "Report was truncated to fit the configured UTF-8 byte budget."
+    )
+    bounded_item = bounded_payload["premortem_analysis"]["items"][0]
+    bounded_item["failure_mode_i18n"] = {
+        "zh": builder._truncate_text(
+            bounded_item["failure_mode_i18n"]["zh"],
+            builder._PREMORTEM_TEXT_MAX_CHARS,
+        ),
+        "en": builder._truncate_text(
+            bounded_item["failure_mode_i18n"]["en"],
+            builder._PREMORTEM_TEXT_MAX_CHARS,
+        ),
+    }
+    max_bytes = utf8_json_size_bytes(bounded_payload) + 64
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", max_bytes)
+
+    fitted = builder._fit_report_to_byte_cap(report)
+
+    assert fitted.premortem_analysis is not None
+    assert [item.id for item in fitted.premortem_analysis.items] == [original_id]
+    assert len(fitted.premortem_analysis.items[0].failure_mode_i18n.zh) <= (
+        builder._PREMORTEM_TEXT_MAX_CHARS
+    )
+    assert fitted.sections, "text bounding must precede general section pruning"
+
+
+def test_byte_cap_drops_last_premortem_item_and_orphan_evidence_first(monkeypatch):
+    report, reducer_result = _assembled_report_with_partial_premortem(2)
+    assert report.premortem_analysis is not None
+    first_item = report.premortem_analysis.items[0]
+    dropped_item = report.premortem_analysis.items[1]
+    kept_ref = first_item.evidence_chain[0].evidence_ref
+    dropped_ref = dropped_item.evidence_chain[0].evidence_ref
+
+    expected_payload = report.model_dump(mode="json")
+    expected_payload["limitations"] = (
+        "Report was truncated to fit the configured UTF-8 byte budget."
+    )
+    expected_payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "byte_budget_truncated",
+        "items": [first_item.model_dump(mode="json")],
+    }
+    expected_payload["evidence"] = [
+        item
+        for item in expected_payload["evidence"]
+        if item["id"] != dropped_ref
+    ]
+    max_bytes = utf8_json_size_bytes(expected_payload) + 64
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", max_bytes)
+
+    fitted = builder._fit_report_to_byte_cap(report)
+
+    assert fitted.premortem_analysis is not None
+    assert fitted.premortem_analysis.status == "partial"
+    assert fitted.premortem_analysis.reason == "byte_budget_truncated"
+    assert [item.id for item in fitted.premortem_analysis.items] == [first_item.id]
+    evidence_ids = {item.id for item in fitted.evidence}
+    assert kept_ref in evidence_ids
+    assert dropped_ref not in evidence_ids
+    assert fitted.sections, "premortem pruning must run before general section pruning"
+    assert all(
+        set(section.evidence_refs) <= set(reducer_result.outcome_evidence_ids)
+        for section in fitted.sections
+    )
 
 
 @pytest.mark.asyncio
@@ -1956,6 +2881,220 @@ async def test_build_report_safe_retries_failed_report_until_success(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_build_report_safe_resolves_once_and_reuses_scope_across_retries(
+    monkeypatch,
+):
+    scenario_id = _seed_report_scenario()
+    real_resolver = builder.resolve_report_lineage_scope
+    resolver_calls = 0
+    build_scopes = []
+    retry_scopes = []
+    attempts = 0
+
+    class SuccessfulReport:
+        status = "complete"
+
+    successful_report = SuccessfulReport()
+
+    def capture_resolver(*args: Any, **kwargs: Any):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return real_resolver(*args, **kwargs)
+
+    async def fail_twice_then_succeed(*_args: Any, **kwargs: Any):
+        nonlocal attempts
+        attempts += 1
+        build_scopes.append(kwargs.get("report_scope"))
+        if attempts < 3:
+            raise RuntimeError("retryable report failure")
+        return successful_report
+
+    async def capture_retry(*_args: Any, **kwargs: Any) -> None:
+        retry_scopes.append(kwargs.get("report_scope"))
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", capture_resolver)
+    monkeypatch.setattr(builder, "build_report", fail_twice_then_succeed)
+    monkeypatch.setattr(builder, "_prepare_auto_report_retry", capture_retry)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 3)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert report is successful_report
+    assert resolver_calls == 1
+    assert len(build_scopes) == 3
+    assert build_scopes[0] is not None
+    assert all(report_scope is build_scopes[0] for report_scope in build_scopes)
+    assert retry_scopes == [build_scopes[0], build_scopes[0]]
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_retries_transient_resolver_then_caches_scope(
+    monkeypatch,
+):
+    scenario_id = _seed_report_scenario()
+    real_resolver = builder.resolve_report_lineage_scope
+    resolver_calls = 0
+    build_scopes = []
+    retry_markers = []
+
+    class SuccessfulReport:
+        status = "complete"
+
+    successful_report = SuccessfulReport()
+
+    def transient_resolver(*args: Any, **kwargs: Any):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        if resolver_calls == 1:
+            raise RuntimeError("transient resolver outage")
+        return real_resolver(*args, **kwargs)
+
+    async def fail_once_after_scope(*_args: Any, **kwargs: Any):
+        build_scopes.append(kwargs.get("report_scope"))
+        if len(build_scopes) == 1:
+            raise RuntimeError("builder failed after scope resolution")
+        return successful_report
+
+    async def capture_retry(*_args: Any, **kwargs: Any) -> None:
+        retry_markers.append(
+            (
+                kwargs.get("report_scope"),
+                kwargs.get("known_target_branch_id"),
+            )
+        )
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", transient_resolver)
+    monkeypatch.setattr(builder, "build_report", fail_once_after_scope)
+    monkeypatch.setattr(builder, "_prepare_auto_report_retry", capture_retry)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 3)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert report is successful_report
+    assert resolver_calls == 2
+    assert len(build_scopes) == 2
+    assert build_scopes[0] is not None
+    assert build_scopes[1] is build_scopes[0]
+    assert retry_markers == [
+        (None, "branch-a"),
+        (build_scopes[0], None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_permanent_resolver_error_returns_failed_marker(
+    monkeypatch,
+):
+    scenario_id = _seed_report_scenario()
+    resolver_calls = 0
+    secret = "ordinary resolver failure sk-secret-123456"
+
+    def permanent_resolver(*_args: Any, **_kwargs: Any):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", permanent_resolver)
+    monkeypatch.setattr(builder, "_auto_report_max_attempts", lambda: 2)
+    monkeypatch.setattr(builder, "_auto_report_retry_delay_seconds", lambda _attempt: 0.0)
+
+    report = await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert resolver_calls == 2
+    assert report is not None
+    assert report.status == "failed"
+    assert report.target_branch_id == "branch-a"
+    assert secret not in json.dumps(report.model_dump(mode="json"), ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_does_not_retry_or_swallow_branch_lineage_error(
+    monkeypatch,
+):
+    scenario_id = _seed_report_scenario()
+    build_calls = 0
+    resolver_calls = 0
+
+    def invalid_lineage(*_args: Any, **_kwargs: Any):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        raise BranchLineageError("BRANCH_LINEAGE_CYCLE", "lineage cycle")
+
+    async def unexpected_build(*_args: Any, **_kwargs: Any):
+        nonlocal build_calls
+        build_calls += 1
+        raise AssertionError("build must not start after preflight lineage failure")
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", invalid_lineage)
+    monkeypatch.setattr(builder, "build_report", unexpected_build)
+
+    with pytest.raises(BranchLineageError, match="lineage cycle"):
+        await builder.build_report_safe(scenario_id, "branch-a", overrides=None)
+
+    assert build_calls == 0
+    assert resolver_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_build_report_safe_does_not_retry_lineage_error_from_build(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    report_scope = builder.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+    )
+    assert report_scope is not None
+    build_calls = 0
+    retry_calls = 0
+
+    async def invalid_build(*_args: Any, **_kwargs: Any):
+        nonlocal build_calls
+        build_calls += 1
+        raise BranchLineageError("BRANCH_LINEAGE_CYCLE", "lineage changed")
+
+    async def unexpected_retry(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal retry_calls
+        retry_calls += 1
+
+    monkeypatch.setattr(builder, "build_report", invalid_build)
+    monkeypatch.setattr(builder, "_prepare_auto_report_retry", unexpected_retry)
+
+    with pytest.raises(BranchLineageError, match="lineage changed"):
+        await builder.build_report_safe(
+            scenario_id,
+            "branch-a",
+            overrides=None,
+            report_scope=report_scope,
+        )
+
+    assert build_calls == 1
+    assert retry_calls == 0
+
+
+def test_failure_placeholder_reuses_known_scope_without_resolving_again(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    report_scope = builder.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+    )
+    assert report_scope is not None
+
+    def fail_resolver(*_args: Any, **_kwargs: Any):
+        raise AssertionError("known placeholder scope must not resolve again")
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", fail_resolver)
+
+    failed = builder._persist_failed_report_if_absent(
+        scenario_id,
+        "branch-a",
+        report_scope=report_scope,
+    )
+
+    assert failed.target_branch_id == report_scope.target_branch_id
+
+
+@pytest.mark.asyncio
 async def test_auto_retry_preserves_and_reuses_complementary_sections(monkeypatch):
     from app.services.result_report import builder
 
@@ -2091,6 +3230,11 @@ async def test_auto_retry_terminal_markers_preserve_surviving_sections(
     payload["tier"] = tier
     payload["sections"][0]["tier"] = tier
     payload["sections"][0]["failure_reason"] = "other" if tier == "static" else None
+    payload["premortem_analysis"] = {
+        "status": "missing",
+        "reason": "no_distinct_evidence",
+        "items": [],
+    }
     builder._persist_report_payload(scenario_id, payload)
     before = validate_full_report_payload(payload)
 
@@ -2111,11 +3255,15 @@ async def test_auto_retry_terminal_markers_preserve_surviving_sections(
     assert report.tier == before.tier
     assert report.sections == before.sections
     assert report.evidence == before.evidence
+    assert report.premortem_analysis is not None
+    assert report.premortem_analysis.status == "missing"
+    assert report.premortem_analysis.reason == "report_generation_failed"
     assert "failed" in report.summary_i18n.en.lower()
     assert "failed" in report.verdict.analytic_confidence.basis.lower()
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.sections == before.sections
     assert persisted.evidence == before.evidence
+    assert persisted.premortem_analysis == report.premortem_analysis
 
 
 def test_retry_placeholder_does_not_reuse_sections_from_different_target_branch():
@@ -2673,6 +3821,44 @@ async def test_report_sse_stream_does_not_auto_retry_failed_generation(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_report_sse_stream_reuses_genuine_preflight_scope(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    report_scope = builder.resolve_report_lineage_scope(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+    )
+    assert report_scope is not None
+    observed_scopes = []
+
+    class CompleteReport:
+        status = "complete"
+
+    def fail_resolver(*_args: Any, **_kwargs: Any):
+        raise AssertionError("SSE must not resolve a genuine preflight scope again")
+
+    async def capture_build(*_args: Any, **kwargs: Any):
+        observed_scopes.append(kwargs.get("report_scope"))
+        return CompleteReport()
+
+    monkeypatch.setattr(builder, "resolve_report_lineage_scope", fail_resolver)
+    monkeypatch.setattr(builder, "build_report", capture_build)
+
+    frames = [
+        frame
+        async for frame in builder.build_report_sse_stream(
+            scenario_id,
+            "branch-a",
+            overrides=None,
+            report_scope=report_scope,
+        )
+    ]
+
+    assert observed_scopes == [report_scope]
+    assert "event: report_complete" in "".join(frames)
+
+
+@pytest.mark.asyncio
 async def test_report_sse_timeout_does_not_overwrite_live_generation_when_lock_unavailable(
     monkeypatch,
 ):
@@ -2777,12 +3963,20 @@ async def test_build_report_retry_reuses_matching_persisted_sections(monkeypatch
     from tests.test_result_report_contract import _legal_full_report
 
     scenario_id = _seed_report_scenario()
+    current_reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+    )
     existing = _legal_full_report()
     existing["status"] = "partial"
     existing["target_branch_id"] = "branch-a"
     existing["sections"][0]["intent"] = "Explain timeline."
     existing["sections"][0]["evidence_refs"] = ["ev_001"]
-    existing["evidence"][0]["id"] = "ev_001"
+    existing["evidence"] = [
+        evidence.model_dump(mode="json")
+        for evidence in current_reducer_result.evidence
+    ]
     existing["indicators_to_watch"][0]["evidence_refs"] = ["ev_001"]
     builder._persist_report_payload(scenario_id, existing)
     fake_llm = QueuedLlm(
@@ -2809,6 +4003,95 @@ async def test_build_report_retry_reuses_matching_persisted_sections(monkeypatch
     assert generated_sections == ["sources"]
 
 
+def test_reusable_sections_reject_rebound_evidence_id_after_lineage_expands():
+    from tests.test_result_report_contract import _legal_full_report
+    from tests.test_result_report_reducer import _seed_report_lineage_scope_scenario
+
+    scenario_id = _seed_report_lineage_scope_scenario()
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        max_evidence=20,
+    )
+    current_ev_001 = next(item for item in reducer_result.evidence if item.id == "ev_001")
+    old_leaf_evidence = next(
+        item for item in reducer_result.evidence if item.message_id == "legal-leaf-5"
+    ).model_copy(update={"id": "ev_001"})
+    assert old_leaf_evidence.message_id != current_ev_001.message_id
+
+    existing = _legal_full_report()
+    existing["status"] = "partial"
+    existing["target_branch_id"] = "report-leaf"
+    existing["sections"][0]["intent"] = "Explain timeline."
+    existing["sections"][0]["evidence_refs"] = ["ev_001"]
+    existing["indicators_to_watch"][0]["evidence_refs"] = ["ev_001"]
+    existing["evidence"] = [old_leaf_evidence.model_dump(mode="json")]
+    builder._persist_report_payload(scenario_id, existing)
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "标题", "en": "Title"},
+        summary_i18n={"zh": "摘要", "en": "Summary"},
+        sections=[
+            builder.SectionPlan(
+                section_id="timeline",
+                title_i18n={"zh": "关键转折", "en": "Turning points"},
+                intent="Explain timeline.",
+            )
+        ],
+    )
+
+    assert builder._reusable_existing_sections(
+        scenario_id,
+        "report-leaf",
+        outline,
+        current_evidence=reducer_result.evidence,
+    ) == ([], [])
+
+
+def test_reusable_sections_accept_stable_evidence_id_coordinate_identity():
+    from tests.test_result_report_contract import _legal_full_report
+    from tests.test_result_report_reducer import _seed_report_lineage_scope_scenario
+
+    scenario_id = _seed_report_lineage_scope_scenario()
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="report-leaf",
+        max_evidence=20,
+    )
+    existing = _legal_full_report()
+    existing["status"] = "partial"
+    existing["target_branch_id"] = "report-leaf"
+    existing["sections"][0]["intent"] = "Explain timeline."
+    existing["sections"][0]["evidence_refs"] = ["ev_001"]
+    existing["indicators_to_watch"][0]["evidence_refs"] = ["ev_001"]
+    existing["evidence"] = [
+        evidence.model_dump(mode="json") for evidence in reducer_result.evidence
+    ]
+    builder._persist_report_payload(scenario_id, existing)
+    outline = builder.ReportOutline(
+        title_i18n={"zh": "标题", "en": "Title"},
+        summary_i18n={"zh": "摘要", "en": "Summary"},
+        sections=[
+            builder.SectionPlan(
+                section_id="timeline",
+                title_i18n={"zh": "关键转折", "en": "Turning points"},
+                intent="Explain timeline.",
+            )
+        ],
+    )
+
+    reusable_sections, reusable_tiers = builder._reusable_existing_sections(
+        scenario_id,
+        "report-leaf",
+        outline,
+        current_evidence=reducer_result.evidence,
+    )
+
+    assert [section.id for section in reusable_sections] == ["timeline"]
+    assert reusable_tiers == ["generation"]
+
+
 @pytest.mark.asyncio
 async def test_build_report_reuse_does_not_propagate_stale_static_top_tier(monkeypatch):
     """Regression (W1-1 S9 follow-up): reused sections must carry their OWN tier.
@@ -2827,6 +4110,11 @@ async def test_build_report_reuse_does_not_propagate_stale_static_top_tier(monke
     from tests.test_result_report_contract import _legal_full_report
 
     scenario_id = _seed_report_scenario()
+    current_reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+    )
     existing = _legal_full_report()
     # Simulate the poisoned prior report: top-level tier was clobbered to static
     # (the bug's amplifier), but the persisted section itself is a real
@@ -2837,7 +4125,10 @@ async def test_build_report_reuse_does_not_propagate_stale_static_top_tier(monke
     existing["sections"][0]["intent"] = "Explain timeline."
     existing["sections"][0]["tier"] = "generation"
     existing["sections"][0]["evidence_refs"] = ["ev_001"]
-    existing["evidence"][0]["id"] = "ev_001"
+    existing["evidence"] = [
+        evidence.model_dump(mode="json")
+        for evidence in current_reducer_result.evidence
+    ]
     existing["indicators_to_watch"][0]["evidence_refs"] = ["ev_001"]
     builder._persist_report_payload(scenario_id, existing)
 
@@ -2858,6 +4149,7 @@ async def test_build_report_reuse_does_not_propagate_stale_static_top_tier(monke
         scenario_id,
         "branch-a",
         outline,
+        current_evidence=current_reducer_result.evidence,
     )
     assert [section.id for section in reusable_sections] == ["timeline"]
     # The crux: reused tier is the SECTION's own tier (generation), never the
@@ -3004,6 +4296,7 @@ async def test_report_failure_redacts_credentials_from_sse_and_background_logs(
     import app.api.helpers as api_helpers
     from app.services.result_report import builder
 
+    scenario_id = _seed_report_scenario()
     secret_error = (
         "upstream failed Authorization: Bearer sk-LEAKEDabcdef123456 "
         "api_key=SECRETabcdef123456 xai-LEAKEDabcdef123456 "
@@ -3022,7 +4315,7 @@ async def test_report_failure_redacts_credentials_from_sse_and_background_logs(
 
     frames = []
     async for frame in builder.build_report_sse_stream(
-        "scenario-report",
+        scenario_id,
         "branch-a",
         overrides={"api_key": "sk-request-key-123456"},
     ):
@@ -3030,7 +4323,7 @@ async def test_report_failure_redacts_credentials_from_sse_and_background_logs(
     body = "".join(frames)
 
     task = api_helpers.schedule_background_task(
-        builder.build_report("scenario-report", "branch-a", overrides=None)
+        builder.build_report(scenario_id, "branch-a", overrides=None)
     )
     await asyncio.sleep(0)
     await asyncio.sleep(0)
@@ -3056,6 +4349,8 @@ async def test_report_failure_redacts_credentials_from_sse_and_background_logs(
 async def test_report_sse_stream_uses_already_running_error_code(monkeypatch):
     from app.services.result_report import builder
 
+    scenario_id = _seed_report_scenario()
+
     async def already_running(*_args: Any, **_kwargs: Any) -> FullReport:
         raise builder.ResultReportAlreadyRunningError("already in progress")
 
@@ -3063,7 +4358,7 @@ async def test_report_sse_stream_uses_already_running_error_code(monkeypatch):
 
     frames = []
     async for frame in builder.build_report_sse_stream(
-        "scenario-report",
+        scenario_id,
         "branch-a",
         overrides=None,
     ):
@@ -3079,6 +4374,7 @@ async def test_report_sse_stream_uses_already_running_error_code(monkeypatch):
 async def test_report_sse_stream_emits_keepalive_comment_while_waiting(monkeypatch):
     from app.services.result_report import builder
 
+    scenario_id = _seed_report_scenario()
     started = asyncio.Event()
 
     async def slow_build_report(*_args: Any, **_kwargs: Any) -> FullReport:
@@ -3090,7 +4386,7 @@ async def test_report_sse_stream_emits_keepalive_comment_while_waiting(monkeypat
     monkeypatch.setattr(builder, "_SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01, raising=False)
 
     stream = builder.build_report_sse_stream(
-        "scenario-report",
+        scenario_id,
         "branch-a",
         overrides=None,
     )
@@ -3109,6 +4405,7 @@ async def test_report_generate_sse_stream_cancels_builder_on_client_disconnect(
 ):
     from app.services.result_report import builder
 
+    scenario_id = _seed_report_scenario()
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -3123,7 +4420,7 @@ async def test_report_generate_sse_stream_cancels_builder_on_client_disconnect(
     monkeypatch.setattr(builder, "build_report", slow_build_report)
 
     stream = builder.build_report_sse_stream(
-        "scenario-report",
+        scenario_id,
         "branch-a",
         overrides={"api_key": "sk-request-key-123456"},
     )
@@ -3746,12 +5043,23 @@ def _seed_split_brain_scenario() -> str:
         )
         session.add_all(
             [
+                Branch(
+                    id="branch-split-root",
+                    scenario_id=scenario.id,
+                    title="Root aggregate",
+                    probability=1.0,
+                    fork_round=0,
+                    status=BranchStatus.COMPLETED,
+                    story="",
+                    insight="",
+                ),
                 # Higher-probability dominant leaf, COMPLETED but content-less
                 # (empty story AND insight) — narration failed for this leaf.
                 # ``fork_round=1`` so it is a terminal leaf (not a prologue root).
                 Branch(
                     id="branch-empty-dominant",
                     scenario_id=scenario.id,
+                    parent_branch_id="branch-split-root",
                     title="Empty dominant leaf",
                     probability=0.70,
                     fork_round=1,
@@ -3764,6 +5072,7 @@ def _seed_split_brain_scenario() -> str:
                 Branch(
                     id="branch-rich-sibling",
                     scenario_id=scenario.id,
+                    parent_branch_id="branch-split-root",
                     title="Approval with safeguards",
                     probability=0.30,
                     fork_round=1,
@@ -3773,11 +5082,16 @@ def _seed_split_brain_scenario() -> str:
                 ),
             ],
         )
-        session.add(Round(id="sb-round-1", branch_id="branch-rich-sibling", round_number=1))
+        session.add_all(
+            [
+                Round(id="sb-root-round-1", branch_id="branch-split-root", round_number=1),
+                Round(id="sb-round-2", branch_id="branch-rich-sibling", round_number=2),
+            ]
+        )
         session.add(
             AgentMessage(
                 id="sb-msg",
-                round_id="sb-round-1",
+                round_id="sb-round-2",
                 agent_id="sb-agent",
                 content="Privacy safeguards make the approval defensible.",
                 emotion="focused",
@@ -3955,13 +5269,6 @@ async def test_interview_indicators_concurrent_citations_do_not_cross(monkeypatc
     from app.services.result_report import builder
 
     scenario_id = _seed_report_scenario()
-    _add_report_agent_with_message(
-        agent_id="agent-interviewee",
-        name="Privacy Advocate",
-        round_id="round-int-1",
-        round_number=1,
-        content="Privacy safeguards make the approval defensible enough to pass.",
-    )
 
     reducer_result = builder.reduce_report(get_engine(), scenario_id, dominant_branch_id="branch-a")
     assert reducer_result.evidence, "seed must yield evidence so the indicators LLM tier runs"

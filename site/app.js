@@ -14,11 +14,11 @@
     { id: "F50", img: "21-simulation.png", hero: false, zt: "导演玩法与因果档案", et: "Director Play and Causal Archive",
       zd: "在 live 推演里使用玩法卡、锁定一次预测押注或承诺一条世界线；结局后，因果档案把出牌、判断、关键时刻与最终落点放进同一份复盘。", ed: "During a live run, play gameplay cards, lock one prediction bet, or commit to a worldline. After the ending, the Causal Archive brings cards, calls, key moments, and the final landing point into one debrief." },
     { id: "F51", img: "21-simulation.png", hero: false, zt: "Agent 状态与分支感知记忆", et: "Agent State and Branch-Aware Memory",
-      zd: "成长事件显示场景、分支、轮次和事件类型；只有匹配当前场景与明确所选分支才标为「当前 · 所选分支片段」，其它可判定事件标为「历史」。因果/阵营旧 stance、trust、opposition 只是 emotion/diverge 情绪代理值；当前片段不合并分叉前祖先轮次。", ed: "Growth events show scenario, branch, round, and event type; “Current · selected branch segment” requires both the routed scenario and an explicit selected-branch match, while other classifiable events are “Past.” Legacy causal/faction stance, trust, and opposition are emotion/diverge affect proxies; pre-fork ancestor rounds are not merged." },
+      zd: "成长事件显示场景、分支、轮次和事件类型；只有匹配当前场景与明确所选分支才标为「当前 · 所选分支片段」，其它可判定事件标为「历史」。因果、阵营、报告与 Replay 会沿所选谱系读取祖先轮次，并隔离兄弟分支和截点后的未来。", ed: "Growth events show scenario, branch, round, and event type; “Current · selected branch segment” requires both the routed scenario and an explicit selected-branch match, while other classifiable events are “Past.” Causal, faction, report, and Replay views read ancestor rounds along the selected lineage while isolating sibling branches and post-cutoff future data." },
     { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
       zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
     { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",
-      zd: "likelihood 与分析置信度只使用已完成终局叶分支和证据数；父分叉与情绪收敛代理值不会抬高置信度。成功、重写或静态回退章节的有界工具轨迹会保存并在刷新/重开后恢复；实时当前位置仍是瞬时状态。", ed: "Likelihood and analytic confidence use completed terminal leaves and evidence counts only; fork parents and affect-convergence proxies do not raise confidence. Bounded tool traces for generated, rewritten, or static-fallback sections survive refresh/reopen; the live current-position cursor remains transient." },
+      zd: "likelihood 与分析置信度只使用已完成终局叶分支和证据数；结构化失败预演会列出失败模式、机制、早期信号、不确定性与独立证据链。章节工具轨迹会有界保存并在刷新/重开后恢复；实时当前位置仍是瞬时状态。", ed: "Likelihood and analytic confidence use completed terminal leaves and evidence counts only. A structured premortem lists failure modes, mechanisms, early warnings, uncertainty, and an independent evidence chain. Bounded section tool traces survive refresh/reopen, while the live current-position cursor remains transient." },
     { id: "F02", img: "20-debate-arena.png", hero: false, zt: "辩论竞技场", et: "Debate Arena",
       zd: "从首页直接进入辩论竞技场，创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；无可用 LLM 或启动失败时，页面会显示原因。", ed: "Jump straight into the Debate Arena, create affirmative, opposing and judge roles, and run a shorter staged adversarial debate; if no LLM is usable or launch fails, the page shows the reason." },
     { id: "F13", img: "14-roundtable.png", hero: false, zt: "世界线圆桌", et: "Worldline Roundtable",
@@ -26,13 +26,13 @@
     { id: "F10", img: "17-ending-chamber.png", hero: false, zt: "结局会客厅 / 神谕密室", et: "Ending Chamber / Oracle Chamber",
       zd: "从某条世界线进入会客厅追问当前结局的参与者；模型配置开启时，可展开高级设置为本次会客厅选择 profile。", ed: "Enter the chamber from a worldline to question that ending’s participants; when model profiles are enabled, open Advanced settings to choose a profile for this chamber." },
     { id: "F21", img: "06-causal-map.png", hero: false, zt: "因果图谱", et: "Causal Graph",
-      zd: "因果图谱把事件、分叉和结局连成有向图；旧 stance 节点/边会明确显示为低置信情绪代理值。当前只展示所选分支片段，不拼接分叉前祖先轮次。", ed: "The causal graph connects events, forks, and endings; legacy stance nodes and edges are disclosed as low-confidence affect proxies. It currently shows only the selected branch segment, without stitching pre-fork ancestor rounds." },
+      zd: "因果图谱把事件、分叉和结局连成有向图；所选分支会拼接分叉前祖先轮次并保留可用来源坐标。旧 stance 节点/边仍明确标为低置信情绪代理值，不会被写成已验证因果。", ed: "The causal graph connects events, forks, and endings. A selected branch stitches its pre-fork ancestor rounds and keeps available source coordinates. Legacy stance nodes and edges remain disclosed as low-confidence affect proxies, never verified causality." },
     { id: "F23", img: "08-kg-explorer.png", hero: false, zt: "知识图谱浏览器", et: "Knowledge Graph Explorer",
       zd: "知识图谱浏览器用实体、事件和主张组织结果数据，可筛选节点、打开详情，也可从节点继续追问。", ed: "The knowledge graph explorer organizes result data by entities, events and claims; filter nodes, open details, or keep asking from a node." },
     { id: "F25", img: "13-compare.png", hero: false, zt: "反事实对比", et: "Counterfactual Compare",
-      zd: "反事实对比横向展示原分支和改写后的分支，没有数据时显示空态；Agent 与轮次选择器在窄屏也能换行操作。", ed: "Counterfactual Compare shows original and rewritten branches side by side, uses an empty state when data is absent, and keeps Agent and round selectors usable on narrow screens." },
+      zd: "反事实对比横向展示原分支和改写后的分支，也会还原源分支继承的祖先轮次与原始发言；Agent 与轮次选择器在窄屏仍能换行操作。", ed: "Counterfactual Compare shows original and rewritten branches side by side, including inherited ancestor rounds and the original source message; Agent and round selectors remain usable on narrow screens." },
     { id: "F29", img: "04-agent-workshop.png", hero: false, zt: "自定义 Agent 工坊", et: "Custom Agent Workshop",
-      zd: "工坊可手动创建或编辑自定义 Agent，也支持从 PDF 文档生成 Agent，长文档会保留已成功生成的 Agent 并提示失败数量。", ed: "The workshop lets you hand-craft or edit custom agents, or generate them from a PDF; long documents keep the agents that succeeded and report the failure count." },
+      zd: "工坊可手动创建、编辑或从 PDF 生成 Agent；Agent Library 还能按选择顺序导出、预览并原子导入 Agent Pack。便携文件排除 owner、记忆、对话及单独存储的凭据，并脱敏常见凭据模式；分享前仍需检查自填文本。", ed: "The workshop creates, edits, or generates Agents from PDF. Agent Library can also export, preview, and atomically import an Agent Pack in selection order. The portable file excludes owner data, memory, conversations, and separately stored credentials, and scrubs common credential patterns; review custom text before sharing." },
     { id: "F33", img: "05-journal.png", hero: false, zt: "预测日志", et: "Prediction Journal",
       zd: "预测日志记录你对结果的概率判断，之后可标记是否发生并查看校准情况，绑定场景时按当前用户校验可见性。", ed: "The prediction journal records your probability calls, lets you later mark whether they happened and review calibration, checking visibility per user when bound to a scenario." },
     { id: "F35", img: "10-leaderboard.png", hero: false, zt: "排行榜", et: "Leaderboard",
@@ -40,7 +40,7 @@
     { id: "F38", img: "01-home.png", hero: false, config: true, zt: "搜索增强推演", et: "Search-Augmented Simulation",
       zd: "打开后，系统在推演前先做外部搜索，把相关片段注入角色提示词；默认用服务器已配置的搜索，也可以本轮换成自己的搜索服务。", ed: "When enabled, the system searches the web before simulating and injects relevant snippets into role prompts; it uses the server-configured search by default, or your own search provider for the round." },
     { id: "F48", img: "22-local-packs.png", hero: false, zt: "本地主题包", et: "Local Packs",
-      zd: "主题包原子替换问题、设置与有界世界背景；同 ID 刷新会重载详情，切换先清旧内容并隔离迟到响应。demo_snapshots 当前只显示标签/文件名，不能点击或直接导入。", ed: "Local Packs atomically replace the question, settings, and bounded world context. Same-ID refresh reloads detail; switching clears stale content and isolates late responses. demo_snapshots currently show label/filename metadata only and are not clickable or directly importable." },
+      zd: "主题包原子替换问题、设置与有界世界背景；demo_snapshots 可点击、校验并直接导入完整本地推演。切换会清除旧内容并隔离迟到响应，连接结果不明时会提示先查历史记录。", ed: "Local Packs atomically replace the question, settings, and bounded world context. demo_snapshots are clickable, validated, and directly import complete local runs. Switching clears stale content and isolates late responses; an unknown transport outcome tells you to check History first." },
     { id: "F44", img: "23-multi-run.png", hero: false, zt: "多次推演分布", et: "Multi-Run Distribution",
       zd: "同一个问题可运行多次；等待面板显示进度，结果页汇总各次终局分布。", ed: "Run the same question several times; the waiting panel shows progress and the result page summarizes terminal outcomes." },
     { id: "F47", img: "24-document-seed.png", hero: false, zt: "文档种子", et: "Document Seed",
@@ -52,7 +52,7 @@
     { id: "F46", img: "27-social.png", hero: false, zt: "社交动态与头条卡", et: "Social Feed & Headline Cards",
       zd: "结果页的「社交动态」把推演结果改写成几条社交平台风格的头条卡片，可一键复制文字或下载图片，方便分享。", ed: "The result page’s Social Feed rewrites your outcome into a few platform-styled headline cards you can copy as text or download as images." },
     { id: "F43", img: "26-gallery.png", hero: false, zt: "公开分享与画廊", et: "Public Sharing & Gallery",
-      zd: "分享弹窗可导出脱敏 JSON 或单文件 HTML；问题和结局仍属于公开内容。", ed: "The share dialog exports redacted JSON or a single-file HTML gallery; the question and endings remain public content." }
+      zd: "分享弹窗可导出脱敏 JSON 或单文件 HTML；离线 Gallery 可从本地文件或 hash 打开 artifact。它不是在线发布或社区索引，问题和结局仍属于公开内容。", ed: "The share dialog exports redacted JSON or a single-file HTML artifact. Offline Gallery can open it from a local file or hash. It is not hosted publishing or a community index, and the question and endings remain public content." }
   ];
 
   var MODES = [

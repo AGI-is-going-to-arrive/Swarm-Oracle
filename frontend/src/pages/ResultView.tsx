@@ -33,6 +33,7 @@ import { copyText } from '../lib/copyText';
 import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import { getReportDisclaimerText } from './result/reportDisclaimer';
+import { formatPremortemMarkdown } from './result/PremortemAnalysisBlock';
 import {
   buildOracleReplayLocalUrl,
   buildOracleReplayShareUrl,
@@ -855,6 +856,15 @@ export default function ResultView() {
           const indicators = report.indicators_to_watch.map((item) => (
             `- ${item.signal}: ${item.note}${item.rationale ? ` (${item.rationale})` : ''}`
           ));
+          const premortem = formatPremortemMarkdown(
+            report.premortem_analysis,
+            isZh ? 'zh' : 'en',
+            (key, defaultValue) => {
+              const translated = t(key, defaultValue);
+              return translated === key ? defaultValue : translated;
+            },
+            report.evidence,
+          );
           const reportMd = [
             `\n\n# ${title}`,
             `\n**${isZh ? '报告状态' : 'Report status'}**: ${statusText}`,
@@ -865,6 +875,7 @@ export default function ResultView() {
             sections.join('\n'),
             evidence.length ? `\n## ${isZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',
             indicators.length ? `\n## ${isZh ? '观察指标' : 'Indicators to Watch'}\n\n${indicators.join('\n')}` : '',
+            `\n${premortem}`,
             `\n## ${isZh ? '限制' : 'Limitations'}\n\n${report.limitations}`,
           ].join('\n');
           markdown += reportMd;

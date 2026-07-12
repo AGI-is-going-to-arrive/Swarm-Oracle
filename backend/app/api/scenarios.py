@@ -71,6 +71,7 @@ from app.models import (
 )
 from app.models.database import get_engine, get_session
 from app.services.agent_message_metadata import persisted_emotion_from_public_message
+from app.services.branch_lineage import BranchLineageError
 from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import (
     _is_chat_completions_api,
@@ -101,6 +102,7 @@ from app.services.model_profiles import (
 )
 from app.services.result_report import builder as result_report_builder
 from app.services.result_report import full_report_for_story
+from app.services.result_report.reducer import resolve_report_lineage_scope
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
 from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
@@ -2704,11 +2706,25 @@ async def generate_result_report(
         ),
     }
 
+    try:
+        report_scope = resolve_report_lineage_scope(
+            get_engine(),
+            scenario_id,
+            dominant_branch_id=dominant_branch_id,
+        )
+    except BranchLineageError as exc:
+        if exc.code == "BRANCH_LINEAGE_BRANCH_NOT_FOUND":
+            raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found") from None
+        raise api_error(409, exc.code, "Branch lineage is invalid") from None
+    if report_scope is None:
+        raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found")
+
     return StreamingResponse(
         result_report_builder.build_report_sse_stream(
             scenario_id,
             dominant_branch_id,
             overrides=overrides,
+            report_scope=report_scope,
         ),
         media_type="text/event-stream",
     )

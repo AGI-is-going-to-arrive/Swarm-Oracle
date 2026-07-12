@@ -537,7 +537,8 @@ class TestGraphEndpoints:
 
         assert resp.status_code == 404
         assert _detail_code(resp) == "BRANCH_NOT_FOUND"
-        assert "bogus-branch" in _detail_message(resp)
+        assert _detail_message(resp) == "Branch not found in scenario"
+        assert "bogus-branch" not in resp.text
 
     def test_causal_graph_branch_filter_preserves_available_branches(self, client, monkeypatch):
         monkeypatch.setattr(graphs_api.settings, "FEATURE_CAUSAL_GRAPH", True)
@@ -550,7 +551,11 @@ class TestGraphEndpoints:
             title="Child",
             parent_branch_id=parent_branch_id,
             fork_reason="forked",
+            fork_round=2,
         )
+        _seed_round(engine, parent_branch_id, 1)
+        _seed_round(engine, parent_branch_id, 2)
+        _seed_round(engine, child_branch_id, 3)
 
         append_round_nodes(
             scenario_id,

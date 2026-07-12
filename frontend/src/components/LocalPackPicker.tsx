@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
 } from 'react';
@@ -10,6 +11,7 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import {
   listLocalPacks,
   getLocalPack,
+  importLocalPackDemoSnapshot,
   refreshLocalPacks,
   getLocalPackDiagnostics,
 } from '../api/client';
@@ -20,6 +22,10 @@ import type {
   LocalizedText,
 } from '../types';
 import { copyText } from '../lib/copyText';
+import {
+  getApiErrorStatus,
+  getLocalizedApiErrorMessage,
+} from '../lib/apiErrorMessage';
 import {
   materializeLocalPackImport,
   type MaterializedLocalPackImport,
@@ -57,11 +63,19 @@ const genreColorOf = (genre: string | undefined | null): string =>
 
 export interface LocalPackPickerProps {
   onImport: (payload: MaterializedLocalPackImport) => void;
+  onDemoImported: (scenarioId: string) => void;
 }
 
-export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
+export function LocalPackPicker({ onImport, onDemoImported }: LocalPackPickerProps) {
   const { t, i18n } = useTranslation();
-  const { enabled, loading, error: capabilityError, reload: reloadCapabilities } = useCapabilityCheck('local_packs');
+  const {
+    enabled,
+    loading,
+    capabilities,
+    error: capabilityError,
+    reload: reloadCapabilities,
+  } = useCapabilityCheck('local_packs');
+  const demoSnapshotImportEnabled = capabilities?.snapshot_export?.enabled === true;
 
   const [packs, setPacks] = useState<LocalPackSummary[]>([]);
   const [diagnostics, setDiagnostics] = useState<PackDiagnostic[]>([]);
@@ -77,11 +91,32 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [importingDemoId, setImportingDemoId] = useState<string | null>(null);
+  const [demoImportError, setDemoImportError] = useState<string | null>(null);
+  const demoImportRequestRef = useRef<{
+    controller: AbortController;
+    packId: string;
+    demoId: string;
+  } | null>(null);
   const [copySuccess, setCopySuccess] = useState<{
     type: 'prompt' | 'json';
     templateId?: string;
     active: boolean;
   } | null>(null);
+
+  const invalidateDemoSnapshotImport = useCallback((resetUi: boolean) => {
+    const request = demoImportRequestRef.current;
+    demoImportRequestRef.current = null;
+    request?.controller.abort();
+    if (resetUi) {
+      setImportingDemoId(null);
+      setDemoImportError(null);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    invalidateDemoSnapshotImport(false);
+  }, [invalidateDemoSnapshotImport]);
 
   const getLocalized = useCallback((text: LocalizedText | undefined | null, currentLang: string): string => {
     if (!text) return '';
@@ -168,6 +203,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
 
   const handleRefresh = async () => {
     if (isRefreshing) return;
+    invalidateDemoSnapshotImport(true);
     setIsRefreshing(true);
     setApiError(null);
     try {
@@ -192,6 +228,51 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
       })
       .catch(() => {});
   };
+
+  const handleDemoSnapshotImport = useCallback(async (packId: string, demoId: string) => {
+    if (isRefreshing || demoImportRequestRef.current) return;
+    const request = {
+      controller: new AbortController(),
+      packId,
+      demoId,
+    };
+    demoImportRequestRef.current = request;
+    setImportingDemoId(demoId);
+    setDemoImportError(null);
+    try {
+      const result = await importLocalPackDemoSnapshot(packId, demoId, {
+        signal: request.controller.signal,
+      });
+      if (demoImportRequestRef.current !== request || request.controller.signal.aborted) return;
+      onDemoImported(result.scenario_id);
+    } catch (error) {
+      if (demoImportRequestRef.current !== request || request.controller.signal.aborted) return;
+      if (getApiErrorStatus(error) === null) {
+        setDemoImportError(t(
+          'snapshot.import_unknown_outcome',
+          'The import result is unknown. Check Simulation History before trying again.',
+        ));
+      } else {
+        setDemoImportError(getLocalizedApiErrorMessage(
+          error,
+          t,
+          t('snapshot.import_failed', 'Snapshot import failed. Please try again.'),
+        ));
+      }
+    } finally {
+      if (demoImportRequestRef.current === request) {
+        demoImportRequestRef.current = null;
+        setImportingDemoId(null);
+      }
+    }
+  }, [isRefreshing, onDemoImported, t]);
+
+  useEffect(() => {
+    const request = demoImportRequestRef.current;
+    if (request && request.packId !== selectedPackId) {
+      invalidateDemoSnapshotImport(true);
+    }
+  }, [invalidateDemoSnapshotImport, selectedPackId]);
 
   const genreCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -479,6 +560,7 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
                       type="button"
                       onClick={() => {
                         if (pack.id !== selectedPackId) {
+                          invalidateDemoSnapshotImport(true);
                           setSelectedPackDetail(null);
                           setSelectedTemplateId(null);
                         }
@@ -656,10 +738,29 @@ export function LocalPackPicker({ onImport }: LocalPackPickerProps) {
                       <ul className="local-pack-picker__snapshots-list">
                         {selectedPackDetail.demo_snapshots.map((snap) => (
                           <li key={snap.id} className="local-pack-picker__snapshot-item">
-                            {getLocalized(snap.label, i18n.language)} (<code>{snap.filename}</code>)
+                            {demoSnapshotImportEnabled ? (
+                              <button
+                                type="button"
+                                className="local-pack-picker__import-btn"
+                                disabled={isRefreshing || importingDemoId !== null}
+                                aria-busy={importingDemoId === snap.id}
+                                onClick={() => void handleDemoSnapshotImport(selectedPackDetail.id, snap.id)}
+                              >
+                                {getLocalized(snap.label, i18n.language)} (<code>{snap.filename}</code>)
+                              </button>
+                            ) : (
+                              <>
+                                {getLocalized(snap.label, i18n.language)} (<code>{snap.filename}</code>)
+                              </>
+                            )}
                           </li>
                         ))}
                       </ul>
+                      {demoImportError && (
+                        <p className="local-pack-picker__api-error" role="alert">
+                          {demoImportError}
+                        </p>
+                      )}
                     </div>
                   )}
 

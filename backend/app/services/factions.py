@@ -19,6 +19,7 @@ from app.models.checkpoint import AgentRelationEdge, FactionEvent, FactionSnapsh
 from app.models.database import get_engine
 from app.models.graph import AgentStateFrame
 from app.services.agent_message_metadata import message_metadata_failure_code
+from app.services.branch_lineage import BranchRoundSelection, select_branch_rounds
 from app.services.causal_graph import derive_stance_score
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,12 @@ _BRANCH_SCOPE_CAVEAT = (
     "This response covers the selected branch segment only; pre-fork ancestor "
     "rounds are not merged."
 )
+_LINEAGE_SCOPE_KIND = "branch_lineage"
+_LINEAGE_SCOPE_CAVEAT = (
+    "This response includes only exact materialized rounds selected from the "
+    "branch lineage; native descendants include eligible pre-fork ancestors, "
+    "while self-contained replay branches stop at the replay boundary."
+)
 
 
 def _with_affect_proxy_metadata(payload: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +56,76 @@ def _with_affect_proxy_metadata(payload: dict[str, Any]) -> dict[str, Any]:
         "scope_caveat": _BRANCH_SCOPE_CAVEAT,
         **payload,
     }
+
+
+def _with_lineage_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "metric_kind": _AFFECT_PROXY_KIND,
+        "caveat": _AFFECT_PROXY_CAVEAT,
+        "scope_kind": _LINEAGE_SCOPE_KIND,
+        "scope_caveat": _LINEAGE_SCOPE_CAVEAT,
+        **payload,
+    }
+
+
+def _decode_faction_members(payload: str) -> list[str] | None:
+    try:
+        members = json.loads(payload)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(members, list):
+        return None
+    if not all(
+        isinstance(member, str) and bool(member.strip())
+        for member in members
+    ):
+        return None
+    return members
+
+
+def _exact_materialized_round_predicate(
+    model: Any,
+    selection: BranchRoundSelection,
+) -> Any:
+    from sqlalchemy import false as sa_false
+    from sqlalchemy import tuple_ as sa_tuple
+
+    coordinates = tuple(
+        (round_.branch_id, round_.round_number)
+        for round_ in selection.rounds
+    )
+    if not coordinates:
+        return sa_false()
+    return sa_tuple(model.branch_id, model.round_number).in_(coordinates)
+
+
+def _previous_materialized_round_coordinate(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+) -> tuple[str, int] | None:
+    previous_round = int(round_number) - 1
+    if previous_round < 1:
+        return None
+    selection = select_branch_rounds(
+        session,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        requested_cutoff=previous_round,
+    )
+    owner = next(
+        (
+            round_
+            for round_ in selection.rounds
+            if round_.round_number == previous_round
+        ),
+        None,
+    )
+    if owner is None:
+        return None
+    return owner.branch_id, previous_round
 
 
 def _first_faction_by_agent(
@@ -295,43 +372,74 @@ def process_round(
 
 
 def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
-    """Return the faction evolution timeline for a branch."""
+    """Return the faction evolution timeline for an authoritative lineage."""
     with Session(get_engine()) as session:
-        # Query all faction snapshots for this branch
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+        )
+        coordinate_order = {
+            (round_.branch_id, round_.round_number): index
+            for index, round_ in enumerate(selection.rounds)
+        }
         snap_stmt = (
             select(FactionSnapshot)
             .where(
                 FactionSnapshot.scenario_id == scenario_id,
-                FactionSnapshot.branch_id == branch_id,
+                _exact_materialized_round_predicate(FactionSnapshot, selection),
             )
-            .order_by(FactionSnapshot.round_number)
+            .order_by(
+                FactionSnapshot.round_number,
+                FactionSnapshot.branch_id,
+                FactionSnapshot.faction_key,
+                FactionSnapshot.id,
+            )
         )
         snapshots = session.exec(snap_stmt).all()
 
-        # Query all faction events for this branch
         event_stmt = (
             select(FactionEvent)
             .where(
                 FactionEvent.scenario_id == scenario_id,
-                FactionEvent.branch_id == branch_id,
+                _exact_materialized_round_predicate(FactionEvent, selection),
             )
-            .order_by(FactionEvent.round_number)
+            .order_by(
+                FactionEvent.round_number,
+                FactionEvent.branch_id,
+                FactionEvent.id,
+            )
         )
         events = session.exec(event_stmt).all()
 
-        # Group by round_number
-        rounds: dict[int, dict] = {}
+        rounds: dict[tuple[str, int], dict] = {}
 
         for snap in snapshots:
-            rn = snap.round_number
-            if rn not in rounds:
-                rounds[rn] = _with_affect_proxy_metadata(
-                    {"round": rn, "factions": [], "events": []}
+            members = _decode_faction_members(snap.member_agent_ids_json)
+            if members is None:
+                logger.warning(
+                    "factions: skipped malformed faction snapshot members "
+                    "scenario=%s branch=%s round=%d snapshot=%s",
+                    scenario_id,
+                    snap.branch_id,
+                    snap.round_number,
+                    snap.id,
                 )
-            rounds[rn]["factions"].append({
+                continue
+            coordinate = (snap.branch_id, snap.round_number)
+            if coordinate not in rounds:
+                rounds[coordinate] = _with_lineage_metadata(
+                    {
+                        "branch_id": snap.branch_id,
+                        "round": snap.round_number,
+                        "factions": [],
+                        "events": [],
+                    }
+                )
+            rounds[coordinate]["factions"].append({
                 "key": snap.faction_key,
                 "label": snap.label,
-                "members": json.loads(snap.member_agent_ids_json),
+                "members": members,
                 "metric_kind": _AFFECT_PROXY_KIND,
                 "caveat": _AFFECT_PROXY_CAVEAT,
                 "affect_center": snap.stance_center,
@@ -341,10 +449,15 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
             })
 
         for evt in events:
-            rn = evt.round_number
-            if rn not in rounds:
-                rounds[rn] = _with_affect_proxy_metadata(
-                    {"round": rn, "factions": [], "events": []}
+            coordinate = (evt.branch_id, evt.round_number)
+            if coordinate not in rounds:
+                rounds[coordinate] = _with_lineage_metadata(
+                    {
+                        "branch_id": evt.branch_id,
+                        "round": evt.round_number,
+                        "factions": [],
+                        "events": [],
+                    }
                 )
             payload = None
             if evt.payload_json:
@@ -352,7 +465,7 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
                     payload = json.loads(evt.payload_json)
                 except (json.JSONDecodeError, TypeError):
                     pass
-            rounds[rn]["events"].append({
+            rounds[coordinate]["events"].append({
                 "type": evt.event_type,
                 "display_type": (
                     "affect_shift_proxy"
@@ -366,7 +479,13 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
                 "payload": payload,
             })
 
-        return sorted(rounds.values(), key=lambda r: r["round"])
+        return [
+            rounds[coordinate]
+            for coordinate in sorted(
+                rounds,
+                key=lambda item: coordinate_order[item],
+            )
+        ]
 
 
 def get_faction_relations(
@@ -387,12 +506,20 @@ def get_faction_relations(
     from sqlalchemy import select as sa_select
 
     with Session(get_engine()) as session:
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            requested_cutoff=round_max,
+        )
+        exact_rounds = _exact_materialized_round_predicate(
+            AgentRelationEdge,
+            selection,
+        )
         base_where = [
             AgentRelationEdge.scenario_id == scenario_id,
-            AgentRelationEdge.branch_id == branch_id,
+            exact_rounds,
         ]
-        if round_max is not None:
-            base_where.append(AgentRelationEdge.round_number <= round_max)
 
         total_before_filter = session.exec(
             select(sa_func.count(AgentRelationEdge.id)).where(*base_where)
@@ -413,7 +540,10 @@ def get_faction_relations(
             else_=opposition_score,
         )
         row_rank = sa_func.row_number().over(
-            partition_by=AgentRelationEdge.round_number,
+            partition_by=(
+                AgentRelationEdge.branch_id,
+                AgentRelationEdge.round_number,
+            ),
             order_by=(
                 weight.desc(),
                 AgentRelationEdge.trust_score.desc(),
@@ -424,6 +554,7 @@ def get_faction_relations(
         ranked_relations = (
             sa_select(
                 AgentRelationEdge.id.label("id"),
+                AgentRelationEdge.branch_id.label("branch_id"),
                 AgentRelationEdge.round_number.label("round_number"),
                 AgentRelationEdge.source_agent_id.label("source_agent_id"),
                 AgentRelationEdge.target_agent_id.label("target_agent_id"),
@@ -447,6 +578,7 @@ def get_faction_relations(
             .where(ranked_relations.c.row_rank <= top_k + 1)
             .order_by(
                 ranked_relations.c.round_number.asc(),
+                ranked_relations.c.branch_id.asc(),
                 ranked_relations.c.row_rank.asc(),
             )
         )
@@ -463,6 +595,7 @@ def get_faction_relations(
         opposition_value = float(relation["opposition_score"])
         response_edges.append({
             "id": relation["id"],
+            "branch_id": relation["branch_id"],
             "round": relation["round_number"],
             "source_agent_id": relation["source_agent_id"],
             "target_agent_id": relation["target_agent_id"],
@@ -487,8 +620,8 @@ def get_faction_relations(
     return {
         "metric_kind": _AFFECT_PROXY_KIND,
         "caveat": _AFFECT_PROXY_CAVEAT,
-        "scope_kind": _BRANCH_SCOPE_KIND,
-        "scope_caveat": _BRANCH_SCOPE_CAVEAT,
+        "scope_kind": _LINEAGE_SCOPE_KIND,
+        "scope_caveat": _LINEAGE_SCOPE_CAVEAT,
         "edges": response_edges,
         "truncated": truncated,
         "threshold": threshold,
@@ -513,8 +646,7 @@ def build_previous_round_relationship_contexts(
     Database columns keep their legacy relation names, but prompt copy must not
     present the derived scores as verified trust, opposition, or stance.
     """
-    previous_round = int(round_number) - 1
-    if previous_round < 1 or not agents:
+    if int(round_number) - 1 < 1 or not agents:
         return {}
 
     agent_names = {
@@ -640,12 +772,21 @@ def build_previous_round_relationship_contexts(
         ORDER BY owner_input_order ASC, row_rank ASC
     """)
     with Session(engine) as session:
+        previous_coordinate = _previous_materialized_round_coordinate(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_number,
+        )
+        if previous_coordinate is None:
+            return {}
+        previous_branch_id, previous_round = previous_coordinate
         relation_rows = session.exec(
             stmt,
             params={
                 "agent_names_json": agent_names_json,
                 "scenario_id": scenario_id,
-                "branch_id": branch_id,
+                "branch_id": previous_branch_id,
                 "previous_round": previous_round,
                 "edge_limit": edge_limit,
             },
@@ -698,14 +839,20 @@ def _get_previous_frames(
     round_number: int,
 ) -> dict[str, float]:
     """Get compatibility affect-proxy scores for legacy shift detection."""
-    prev_round = round_number - 1
-    if prev_round < 1:
+    previous_coordinate = _previous_materialized_round_coordinate(
+        session,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_number=round_number,
+    )
+    if previous_coordinate is None:
         return {}
+    previous_branch_id, previous_round = previous_coordinate
 
     stmt = select(AgentStateFrame).where(
         AgentStateFrame.scenario_id == scenario_id,
-        AgentStateFrame.branch_id == branch_id,
-        AgentStateFrame.round_number == prev_round,
+        AgentStateFrame.branch_id == previous_branch_id,
+        AgentStateFrame.round_number == previous_round,
     )
     frames = session.exec(stmt).all()
     return {f.agent_id: f.stance_score for f in frames}

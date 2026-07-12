@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.main import app
 from app.models import Branch, BranchStatus, Scenario, ScenarioStatus
@@ -159,8 +159,64 @@ def _legal_full_report() -> dict:
     }
 
 
+def _premortem_item(*evidence_refs: str, item_id: str = "pm_001") -> dict:
+    return {
+        "id": item_id,
+        "failure_mode_i18n": {
+            "zh": "隐私联盟瓦解",
+            "en": "Privacy coalition collapses",
+        },
+        "mechanism_i18n": {
+            "zh": "保障条款被削弱后，关键支持者退出。",
+            "en": "Key supporters exit after safeguards are weakened.",
+        },
+        "early_warning_i18n": {
+            "zh": "支持者停止重复隐私条件。",
+            "en": "Supporters stop repeating the privacy condition.",
+        },
+        "uncertainty_i18n": {
+            "zh": "模拟未覆盖最终修正案文本。",
+            "en": "The simulation does not cover the final amendment text.",
+        },
+        "evidence_chain": [
+            {
+                "evidence_ref": evidence_ref,
+                "role": "failure_signal" if index == 0 else "failure_mechanism",
+                "rationale_i18n": {
+                    "zh": f"证据 {evidence_ref} 提供失败链坐标。",
+                    "en": f"Evidence {evidence_ref} supplies a failure-chain coordinate.",
+                },
+            }
+            for index, evidence_ref in enumerate(evidence_refs)
+        ],
+    }
+
+
+def _add_second_premortem_evidence(payload: dict) -> None:
+    payload["evidence"].append(
+        {
+            "id": "ev-2",
+            "branch_id": "branch-1",
+            "round_id": "round-2",
+            "round_number": 4,
+            "agent_id": "agent-2",
+            "agent_name": "Privacy Skeptic",
+            "message_id": "msg-2",
+            "quote": "Removing the safeguard would dissolve the coalition.",
+            "kind": "utterance",
+        }
+    )
+
+
 def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
-    from app.services.result_report.schema import FullReport, validate_full_report_payload
+    from app.services.result_report.schema import (
+        Chart,
+        EvidenceRef,
+        FullReport,
+        IndicatorToWatch,
+        ReportSection,
+        validate_full_report_payload,
+    )
 
     report = validate_full_report_payload(_legal_full_report())
 
@@ -190,10 +246,11 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "interview_evidence",
         "interview_status",
         "premortem",
+        "premortem_analysis",
         "language_status",
         "tool_trace",
     }
-    assert set(report.sections[0].model_fields) == {
+    assert set(ReportSection.model_fields) == {
         "id",
         "title",
         "title_i18n",
@@ -204,12 +261,12 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "tier",
         "failure_reason",
     }
-    assert set(report.sections[0].charts[0].model_fields) == {
+    assert set(Chart.model_fields) == {
         "kind",
         "type",
         "data",
     }
-    assert set(report.evidence[0].model_fields) == {
+    assert set(EvidenceRef.model_fields) == {
         "id",
         "branch_id",
         "round_id",
@@ -220,7 +277,7 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "quote",
         "kind",
     }
-    assert set(report.indicators_to_watch[0].model_fields) == {
+    assert set(IndicatorToWatch.model_fields) == {
         "signal",
         "direction",
         "note",
@@ -230,6 +287,382 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "rationale",
         "evidence_refs",
     }
+
+
+def test_opaque_legacy_premortem_remains_when_structured_analysis_is_unimplemented():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    legacy_premortem = [{"legacy_shape": {"remains": ["opaque", 7]}}]
+    payload["premortem"] = legacy_premortem
+
+    report = validate_full_report_payload(payload)
+
+    assert report.premortem == legacy_premortem
+    assert report.premortem_analysis is None
+
+
+def test_premortem_analysis_coexists_with_nonempty_opaque_legacy_premortem():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    _add_second_premortem_evidence(payload)
+    legacy_premortem = [{"legacy_shape": {"remains": ["opaque", 7]}}]
+    payload["premortem"] = legacy_premortem
+    payload["premortem_analysis"] = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item("ev-1", "ev-2")],
+    }
+
+    report = validate_full_report_payload(payload)
+
+    assert report.premortem == legacy_premortem
+    assert report.premortem_analysis is not None
+    assert report.premortem_analysis.status == "available"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "no_distinct_evidence",
+        "insufficient_source_diversity",
+        "generation_failed",
+        "lineage_unavailable",
+        "report_generation_failed",
+        "byte_budget_truncated",
+    ],
+)
+def test_premortem_analysis_accepts_each_frozen_missing_reason(reason):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["premortem_analysis"] = {
+        "status": "missing",
+        "reason": reason,
+        "items": [],
+    }
+
+    assert validate_full_report_payload(payload).premortem_analysis.reason == reason
+
+
+def test_premortem_analysis_accepts_available_diverse_evidence_chain():
+    from app.services.result_report.schema import (
+        PremortemAnalysis,
+        PremortemEvidenceLink,
+        PremortemFailureMode,
+        validate_full_report_payload,
+    )
+
+    payload = _legal_full_report()
+    _add_second_premortem_evidence(payload)
+    payload["premortem_analysis"] = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item("ev-1", "ev-2")],
+    }
+
+    report = validate_full_report_payload(payload)
+
+    assert isinstance(report.premortem_analysis, PremortemAnalysis)
+    assert set(PremortemAnalysis.model_fields) == {"status", "reason", "items"}
+    assert set(PremortemFailureMode.model_fields) == {
+        "id",
+        "failure_mode_i18n",
+        "mechanism_i18n",
+        "early_warning_i18n",
+        "uncertainty_i18n",
+        "evidence_chain",
+    }
+    assert set(PremortemEvidenceLink.model_fields) == {
+        "evidence_ref",
+        "role",
+        "rationale_i18n",
+    }
+    assert report.premortem_analysis.status == "available"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda analysis: analysis.__setitem__("extra", "forbidden"),
+        lambda analysis: analysis["items"][0].__setitem__("extra", "forbidden"),
+        lambda analysis: analysis["items"][0]["evidence_chain"][0].__setitem__(
+            "extra", "forbidden"
+        ),
+        lambda analysis: analysis["items"][0]["evidence_chain"][0].__setitem__(
+            "role", "statistical_independence"
+        ),
+        lambda analysis: analysis["items"][0]["evidence_chain"][0].__setitem__(
+            "evidence_ref", "   "
+        ),
+        lambda analysis: analysis["items"][0]["evidence_chain"][0][
+            "rationale_i18n"
+        ].__setitem__("en", "   "),
+        lambda analysis: analysis.__setitem__("reason", "unbounded_free_text"),
+    ],
+)
+def test_premortem_analysis_rejects_extra_fields_and_unbounded_enums(mutation):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    _add_second_premortem_evidence(payload)
+    analysis = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item("ev-1", "ev-2")],
+    }
+    mutation(analysis)
+    payload["premortem_analysis"] = analysis
+
+    with pytest.raises((ValidationError, ValueError)):
+        validate_full_report_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "analysis",
+    [
+        {"status": "missing", "reason": None, "items": []},
+        {
+            "status": "missing",
+            "reason": "no_distinct_evidence",
+            "items": [_premortem_item()],
+        },
+        {"status": "partial", "reason": "no_distinct_evidence", "items": []},
+        {"status": "partial", "reason": None, "items": [_premortem_item("ev-1")]},
+        {"status": "available", "reason": None, "items": []},
+        {
+            "status": "available",
+            "reason": "insufficient_source_diversity",
+            "items": [_premortem_item("ev-1", "ev-2")],
+        },
+    ],
+)
+def test_premortem_analysis_rejects_invalid_status_invariants(analysis):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    _add_second_premortem_evidence(payload)
+    payload["premortem_analysis"] = analysis
+
+    with pytest.raises((ValidationError, ValueError)):
+        validate_full_report_payload(payload)
+
+
+def test_premortem_analysis_accepts_missing_and_partial_states():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    missing_payload = _legal_full_report()
+    missing_payload["premortem_analysis"] = {
+        "status": "missing",
+        "reason": "no_distinct_evidence",
+        "items": [],
+    }
+    missing = validate_full_report_payload(missing_payload)
+
+    partial_payload = _legal_full_report()
+    partial_payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "insufficient_source_diversity",
+        "items": [_premortem_item("ev-1")],
+    }
+    partial = validate_full_report_payload(partial_payload)
+
+    assert missing.premortem_analysis is not None
+    assert missing.premortem_analysis.items == []
+    assert partial.premortem_analysis is not None
+    assert partial.premortem_analysis.items[0].uncertainty_i18n.zh
+
+
+@pytest.mark.parametrize("evidence_ids", [("ev-1", "ev-1"), ("ev-1", "ev-missing")])
+def test_premortem_analysis_rejects_duplicate_or_dangling_chain_refs(evidence_ids):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    _add_second_premortem_evidence(payload)
+    payload["premortem_analysis"] = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item(*evidence_ids)],
+    }
+
+    with pytest.raises(ValueError):
+        validate_full_report_payload(payload)
+
+
+def test_premortem_available_rejects_insufficient_source_diversity():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    duplicate_coordinate = dict(payload["evidence"][0])
+    duplicate_coordinate["id"] = "ev-2"
+    payload["evidence"].append(duplicate_coordinate)
+    payload["premortem_analysis"] = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item("ev-1", "ev-2")],
+    }
+
+    with pytest.raises(ValueError, match="divers"):
+        validate_full_report_payload(payload)
+
+
+def test_premortem_available_rejects_two_coordinates_from_same_agent_and_branch():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    second_coordinate = dict(payload["evidence"][0])
+    second_coordinate.update(
+        id="ev-2",
+        round_id="round-2",
+        round_number=4,
+        message_id="msg-2",
+    )
+    payload["evidence"].append(second_coordinate)
+    payload["premortem_analysis"] = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item("ev-1", "ev-2")],
+    }
+
+    with pytest.raises(ValueError, match="divers"):
+        validate_full_report_payload(payload)
+
+
+def test_premortem_available_accepts_one_agent_across_two_branches():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    second_branch = dict(payload["evidence"][0])
+    second_branch.update(
+        id="ev-2",
+        branch_id="branch-2",
+        round_id="round-2",
+        round_number=4,
+        message_id="msg-2",
+    )
+    payload["evidence"].append(second_branch)
+    payload["premortem_analysis"] = {
+        "status": "available",
+        "reason": None,
+        "items": [_premortem_item("ev-1", "ev-2")],
+    }
+
+    assert validate_full_report_payload(payload).premortem_analysis.status == "available"
+
+
+def test_premortem_partial_rejects_dangling_evidence_ref():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "no_distinct_evidence",
+        "items": [_premortem_item("ev-missing")],
+    }
+
+    with pytest.raises(ValueError, match="reference"):
+        validate_full_report_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "failure_mode_i18n",
+        "mechanism_i18n",
+        "early_warning_i18n",
+        "uncertainty_i18n",
+    ],
+)
+def test_premortem_failure_mode_rejects_blank_bilingual_leaf(field):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    item = _premortem_item("ev-1")
+    item[field]["zh"] = "   "
+    payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "no_distinct_evidence",
+        "items": [item],
+    }
+
+    with pytest.raises(ValueError, match="nonblank"):
+        validate_full_report_payload(payload)
+
+
+@pytest.mark.parametrize("item_ids", [["pm_01"], ["pm_001", "pm_001"]])
+def test_premortem_analysis_rejects_invalid_or_duplicate_failure_mode_ids(item_ids):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "insufficient_source_diversity",
+        "items": [
+            _premortem_item("ev-1", item_id=item_id)
+            for item_id in item_ids
+        ],
+    }
+
+    with pytest.raises((ValidationError, ValueError)):
+        validate_full_report_payload(payload)
+
+
+def test_premortem_analysis_allows_cross_item_evidence_reuse():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "insufficient_source_diversity",
+        "items": [
+            _premortem_item("ev-1", item_id="pm_001"),
+            _premortem_item("ev-1", item_id="pm_002"),
+        ],
+    }
+
+    report = validate_full_report_payload(payload)
+    assert [item.id for item in report.premortem_analysis.items] == [
+        "pm_001",
+        "pm_002",
+    ]
+
+
+def test_structured_premortem_rejects_duplicate_top_level_evidence_ids_only_when_present():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    legacy_payload = _legal_full_report()
+    duplicate = dict(legacy_payload["evidence"][0])
+    duplicate["message_id"] = "legacy-duplicate-coordinate"
+    legacy_payload["evidence"].append(duplicate)
+    assert validate_full_report_payload(legacy_payload).premortem_analysis is None
+
+    structured_payload = _legal_full_report()
+    structured_payload["evidence"].append(duplicate)
+    structured_payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "insufficient_source_diversity",
+        "items": [_premortem_item("ev-1")],
+    }
+    with pytest.raises(ValueError, match="unique"):
+        validate_full_report_payload(structured_payload)
+
+
+def test_premortem_analysis_rejects_more_than_three_items():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["premortem_analysis"] = {
+        "status": "partial",
+        "reason": "no_distinct_evidence",
+        "items": [
+            _premortem_item("ev-1", item_id=f"pm_{index:03d}")
+            for index in range(1, 5)
+        ],
+    }
+
+    with pytest.raises((ValidationError, ValueError)):
+        validate_full_report_payload(payload)
 
 
 def test_full_report_schema_accepts_generating_status():
@@ -458,6 +891,7 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
         "interview_evidence",
         "interview_status",
         "premortem",
+        "premortem_analysis",
         "language_status",
         "tool_trace",
     }
@@ -584,7 +1018,7 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
         FullReport.model_validate(payload).model_dump(mode="json"),
     )
     assert raw_size == 1395
-    assert response_size == 1559
+    assert response_size == 1585
 
     with pytest.raises(ValueError, match="byte budget"):
         validate_full_report_payload(payload, max_bytes=raw_size)
@@ -927,20 +1361,38 @@ async def test_story_terminal_report_status_ignores_lease_and_grace(
 
 def test_report_generate_sse_endpoint_contract(monkeypatch):
     import app.api.scenarios as scenarios_api
+    from app.services.result_report.reducer import (
+        resolve_report_lineage_scope as real_resolve_report_lineage_scope,
+    )
     from app.services.result_report.schema import ResultReportSSEEvent, encode_sse_event
 
     sid = _seed_scenario_with_branch()
     monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    resolver_calls = []
     stream_called = False
+    streamed_scope = None
+
+    def tracked_resolver(engine, scenario_id: str, *, dominant_branch_id: str):
+        scope = real_resolve_report_lineage_scope(
+            engine,
+            scenario_id,
+            dominant_branch_id=dominant_branch_id,
+        )
+        resolver_calls.append((engine, scenario_id, dominant_branch_id, scope))
+        return scope
+
+    monkeypatch.setattr(scenarios_api, "resolve_report_lineage_scope", tracked_resolver)
 
     async def fake_report_stream(
         scenario_id: str,
         dominant_branch_id: str,
         *,
         overrides: dict,
+        report_scope,
     ):
-        nonlocal stream_called
+        nonlocal stream_called, streamed_scope
         stream_called = True
+        streamed_scope = report_scope
         assert scenario_id == sid
         assert dominant_branch_id
         assert overrides["api_key"] is None
@@ -970,7 +1422,189 @@ def test_report_generate_sse_endpoint_contract(monkeypatch):
         body = "".join(response.iter_text())
 
     assert stream_called
+    assert len(resolver_calls) == 1
+    engine, resolved_scenario_id, dominant_branch_id, resolved_scope = resolver_calls[0]
+    assert engine is get_engine()
+    assert resolved_scenario_id == sid
+    assert resolved_scope is not None
+    assert resolved_scope.scenario_id == sid
+    assert resolved_scope.target_branch_id == dominant_branch_id
+    assert streamed_scope is resolved_scope
     assert "event: report_started" in body
     assert "event: report_complete" in body
     assert "api_key" not in body
     assert "Bearer " not in body
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_code"),
+    [
+        ("missing_parent", "BRANCH_LINEAGE_MISSING_PARENT"),
+        ("cross_scenario_parent", "BRANCH_LINEAGE_CROSS_SCENARIO_PARENT"),
+        ("cycle", "BRANCH_LINEAGE_CYCLE"),
+    ],
+)
+def test_report_generate_rejects_corrupt_lineage_before_stream(
+    monkeypatch,
+    corruption: str,
+    expected_code: str,
+):
+    import app.api.scenarios as scenarios_api
+
+    engine = get_engine()
+    leaked_ids: list[str] = []
+    with Session(engine) as session:
+        scenario = Scenario(
+            question="Should this corrupt lineage generate a report?",
+            status=ScenarioStatus.DONE,
+        )
+        session.add(scenario)
+        session.flush()
+        leaf = Branch(
+            scenario_id=scenario.id,
+            title="Corrupt report leaf",
+            probability=0.9,
+            status=BranchStatus.COMPLETED,
+        )
+        if corruption == "cross_scenario_parent":
+            foreign_scenario = Scenario(
+                question="Foreign scenario",
+                status=ScenarioStatus.DONE,
+            )
+            session.add(foreign_scenario)
+            session.flush()
+            foreign_parent = Branch(
+                scenario_id=foreign_scenario.id,
+                title="Foreign parent",
+                status=BranchStatus.COMPLETED,
+            )
+            session.add(foreign_parent)
+            session.flush()
+            leaf.parent_branch_id = foreign_parent.id
+            leaf.fork_round = 1
+            leaked_ids.append(foreign_parent.id)
+        session.add(leaf)
+        session.flush()
+        if corruption == "cycle":
+            other = Branch(
+                scenario_id=scenario.id,
+                parent_branch_id=leaf.id,
+                fork_round=1,
+                title="Other cycle branch",
+                probability=0.8,
+                status=BranchStatus.COMPLETED,
+            )
+            session.add(other)
+            session.flush()
+            leaf.parent_branch_id = other.id
+            session.add(leaf)
+            leaked_ids.append(other.id)
+        session.commit()
+        scenario_id = scenario.id
+        leaf_id = leaf.id
+    leaked_ids.extend([scenario_id, leaf_id])
+
+    if corruption == "missing_parent":
+        missing_parent_id = "missing-parent-sensitive-id"
+        with engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.exec_driver_sql(
+                "UPDATE branch SET parent_branch_id = ? WHERE id = ?",
+                (missing_parent_id, leaf_id),
+            )
+            connection.commit()
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        leaked_ids.append(missing_parent_id)
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    stream_started = False
+
+    async def fake_report_stream(*_args, **_kwargs):
+        nonlocal stream_started
+        stream_started = True
+        yield b"should-not-start"
+
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "build_report_sse_stream",
+        fake_report_stream,
+    )
+
+    response = TestClient(app).post(f"/api/scenario/{scenario_id}/report:generate")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": expected_code,
+        "message": "Branch lineage is invalid",
+    }
+    assert stream_started is False
+    for leaked_id in leaked_ids:
+        assert leaked_id not in response.text
+
+
+@pytest.mark.parametrize("resolver_outcome", ["none", "branch_not_found"])
+def test_report_generate_maps_preflight_delete_race_to_safe_not_found(
+    monkeypatch,
+    resolver_outcome: str,
+):
+    import app.api.scenarios as scenarios_api
+    from app.services.branch_lineage import BranchLineageError
+    from app.services.result_report.reducer import (
+        resolve_report_lineage_scope as real_resolve_report_lineage_scope,
+    )
+
+    scenario_id = _seed_scenario_with_branch()
+    with Session(get_engine()) as session:
+        branch = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).one()
+        deleted_branch_id = branch.id
+
+    resolver_calls = 0
+
+    def delete_then_resolve(engine, requested_scenario_id, *, dominant_branch_id):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        assert dominant_branch_id == deleted_branch_id
+        with Session(engine) as session:
+            branch = session.get(Branch, dominant_branch_id)
+            assert branch is not None
+            session.delete(branch)
+            session.commit()
+        resolved_scope = real_resolve_report_lineage_scope(
+            engine,
+            requested_scenario_id,
+            dominant_branch_id=dominant_branch_id,
+        )
+        assert resolved_scope is None
+        if resolver_outcome == "branch_not_found":
+            raise BranchLineageError(
+                "BRANCH_LINEAGE_BRANCH_NOT_FOUND",
+                f"Branch {dominant_branch_id} disappeared from {requested_scenario_id}",
+            )
+        return resolved_scope
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(scenarios_api, "resolve_report_lineage_scope", delete_then_resolve)
+    stream_started = False
+
+    async def fake_report_stream(*_args, **_kwargs):
+        nonlocal stream_started
+        stream_started = True
+        yield b"should-not-start"
+
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "build_report_sse_stream",
+        fake_report_stream,
+    )
+
+    response = TestClient(app).post(f"/api/scenario/{scenario_id}/report:generate")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "BRANCH_NOT_FOUND",
+        "message": "Branch not found",
+    }
+    assert resolver_calls == 1
+    assert stream_started is False
+    assert scenario_id not in response.text
+    assert deleted_branch_id not in response.text

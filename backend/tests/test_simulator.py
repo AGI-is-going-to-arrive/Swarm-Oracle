@@ -11,6 +11,7 @@ import logging
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import event
 from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
@@ -694,6 +695,210 @@ async def test_narrate_branch_data_fail_soft_returns_completable_fallback(monkey
     assert result["story"].strip()
     assert result["insight"].strip()
     assert result["question_answer"] == ""
+
+
+@pytest.mark.asyncio
+async def test_narration_provider_error_reuses_one_preloaded_terminal_timeline(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Single-load branch")
+    agent_id = _make_agent(engine, scenario_id, name="Single-load Agent")
+    agent = _load_agent_dict(engine, agent_id)
+    terminal_messages = [
+        {
+            "round": 1,
+            "segment_index": 0,
+            "message_id": "message-1",
+            "agent_name": "Single-load Agent",
+            "content": "terminal content",
+        }
+    ]
+    branch_loads = 0
+    timeline_loads = 0
+    format_calls = 0
+    provider_raw_rounds = None
+    fallback_raw_rounds = None
+    real_get_branch = simulator_module._get_branch
+
+    def tracked_get_branch(*args, **kwargs):
+        nonlocal branch_loads
+        branch_loads += 1
+        return real_get_branch(*args, **kwargs)
+
+    def tracked_timeline_loader(*_args, **_kwargs):
+        nonlocal timeline_loads
+        timeline_loads += 1
+        return terminal_messages
+
+    def tracked_formatter(messages, **_kwargs):
+        nonlocal format_calls
+        format_calls += 1
+        assert messages is terminal_messages
+        return "[R1 Single-load Agent]: shared-terminal-timeline"
+
+    async def fail_provider(*, raw_rounds, **_kwargs):
+        nonlocal provider_raw_rounds
+        provider_raw_rounds = raw_rounds
+        raise RuntimeError("provider unavailable")
+
+    def capture_fallback(_title, _probability, raw_rounds, **_kwargs):
+        nonlocal fallback_raw_rounds
+        fallback_raw_rounds = raw_rounds
+        return {
+            "story": "local fallback story",
+            "insight": "local fallback insight",
+            "key_moments": [],
+        }
+
+    monkeypatch.setattr(simulator_module, "_get_branch", tracked_get_branch)
+    monkeypatch.setattr(
+        simulator_module,
+        "_load_terminal_narration_messages",
+        tracked_timeline_loader,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "_format_terminal_narration_rounds",
+        tracked_formatter,
+    )
+    monkeypatch.setattr(simulator_module, "narrate_branch", fail_provider)
+    monkeypatch.setattr(simulator_module, "_build_fallback_narration", capture_fallback)
+
+    result = await simulator_module._narrate_branch_data_fail_soft(
+        engine,
+        branch_id,
+        [agent],
+        language="English",
+        question="Will the same timeline reach both paths?",
+    )
+
+    assert branch_loads == 1
+    assert timeline_loads == 1
+    assert format_calls == 1
+    assert provider_raw_rounds == fallback_raw_rounds
+    assert provider_raw_rounds == "[R1 Single-load Agent]: shared-terminal-timeline"
+    assert result["story"] == "local fallback story"
+
+
+@pytest.mark.asyncio
+async def test_narration_lineage_error_is_logged_and_rethrown_without_fallback_or_save(
+    monkeypatch,
+    caplog,
+):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Corrupt lineage")
+    missing_parent_id = "missing-terminal-narration-parent"
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.exec_driver_sql(
+            "UPDATE branch SET parent_branch_id = ?, fork_round = 1 WHERE id = ?",
+            (missing_parent_id, branch_id),
+        )
+        connection.commit()
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+    provider_called = False
+    fallback_called = False
+    saved = False
+
+    async def unexpected_provider(*_args, **_kwargs):
+        nonlocal provider_called
+        provider_called = True
+        raise AssertionError("provider must not run for corrupt lineage")
+
+    def unexpected_fallback(*_args, **_kwargs):
+        nonlocal fallback_called
+        fallback_called = True
+        raise AssertionError("fallback must not fabricate corrupt lineage narration")
+
+    def unexpected_save(*_args, **_kwargs):
+        nonlocal saved
+        saved = True
+
+    monkeypatch.setattr(simulator_module, "narrate_branch", unexpected_provider)
+    monkeypatch.setattr(simulator_module, "_build_fallback_narration", unexpected_fallback)
+    monkeypatch.setattr(simulator_module, "_save_narration", unexpected_save)
+    caplog.set_level(logging.WARNING, logger="app.services.simulator")
+
+    with pytest.raises(simulator_module.BranchLineageError) as exc_info:
+        narration = await simulator_module._narrate_branch_data_fail_soft(
+            engine,
+            branch_id,
+            [],
+            language="English",
+        )
+        simulator_module._save_narration(engine, branch_id, narration)
+
+    assert exc_info.value.code == "BRANCH_LINEAGE_MISSING_PARENT"
+    assert provider_called is False
+    assert fallback_called is False
+    assert saved is False
+    lineage_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Terminal narration lineage resolution failed"
+    ]
+    assert len(lineage_records) == 1
+    assert lineage_records[0].lineage_error_code == "BRANCH_LINEAGE_MISSING_PARENT"
+
+
+@pytest.mark.asyncio
+async def test_narration_cancellation_still_bypasses_local_fallback(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Cancelled narration")
+
+    async def cancel_provider(*_args, **_kwargs):
+        raise simulator_module.SimulationCancelled("cancelled")
+
+    def unexpected_fallback(*_args, **_kwargs):
+        raise AssertionError("cancellation must not use local fallback")
+
+    monkeypatch.setattr(simulator_module, "_narrate_branch_data", cancel_provider)
+    monkeypatch.setattr(
+        simulator_module,
+        "_build_local_branch_narration_fallback",
+        unexpected_fallback,
+    )
+
+    with pytest.raises(simulator_module.SimulationCancelled):
+        await simulator_module._narrate_branch_data_fail_soft(
+            engine,
+            branch_id,
+            [],
+            language="English",
+        )
+
+
+@pytest.mark.asyncio
+async def test_narration_preloads_db_and_format_context_via_to_thread(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Threaded narration")
+    agent_id = _make_agent(engine, scenario_id, name="Thread Agent")
+    round_id = _create_round(engine, branch_id, 1)
+    _save_message(engine, round_id, agent_id, "threaded-message", "neutral", None)
+    to_thread_functions: list[str] = []
+
+    async def tracked_to_thread(function, *args, **kwargs):
+        to_thread_functions.append(function.__name__)
+        return function(*args, **kwargs)
+
+    async def fake_provider(*_args, **_kwargs):
+        return {"story": "threaded story", "insight": "threaded insight"}
+
+    monkeypatch.setattr(simulator_module.asyncio, "to_thread", tracked_to_thread)
+    monkeypatch.setattr(simulator_module, "narrate_branch", fake_provider)
+
+    await simulator_module._narrate_branch_data_fail_soft(
+        engine,
+        branch_id,
+        [],
+        language="English",
+    )
+
+    assert to_thread_functions == ["_load_terminal_narration_context"]
 
 
 def test_save_narration_fail_soft_retries_without_optional_question_answer(monkeypatch):
@@ -2697,6 +2902,9 @@ class TestRunSimulation:
             )
             session.add(root_branch)
             session.flush()
+            root_round = Round(branch_id=root_branch.id, round_number=1)
+            session.add(root_round)
+            session.flush()
 
             target_branch = Branch(
                 scenario_id=scenario_id,
@@ -2718,10 +2926,6 @@ class TestRunSimulation:
             session.add(sibling_branch)
             session.flush()
 
-            target_round = Round(branch_id=target_branch.id, round_number=1)
-            session.add(target_round)
-            session.flush()
-
             agent = Agent(
                 scenario_id=scenario_id,
                 name="Archivist",
@@ -2732,7 +2936,7 @@ class TestRunSimulation:
             session.flush()
             session.add(
                 AgentMessage(
-                    round_id=target_round.id,
+                    round_id=root_round.id,
                     agent_id=agent.id,
                     content="Existing branch history",
                     emotion="calm",
@@ -2779,7 +2983,7 @@ class TestRunSimulation:
                 .where(Round.branch_id == target_branch_id)
                 .order_by(Round.round_number)
             ).all()
-            assert target_round_numbers == [1, 2, 3]
+            assert target_round_numbers == [2, 3]
 
             sibling_pending = session.exec(
                 select(PendingIntervention).where(
@@ -2788,6 +2992,151 @@ class TestRunSimulation:
                 )
             ).all()
             assert [item.user_input for item in sibling_pending] == ["Sibling event"]
+
+    @pytest.mark.asyncio
+    async def test_resume_clone_restores_native_ancestor_checkpoint_state_and_blackboard(
+        self,
+        monkeypatch,
+    ):
+        from app.services.replay import clone_until_round
+
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "English",
+                "setting": {},
+                "simulation_rounds": 2,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "blackboard",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+
+            root = Branch(
+                scenario_id=scenario_id,
+                title="Root",
+                probability=1.0,
+                status=BranchStatus.COMPLETED,
+            )
+            session.add(root)
+            session.flush()
+            root_round = Round(
+                branch_id=root.id,
+                round_number=1,
+                compressed_summary=json.dumps(
+                    {
+                        "situation": "ANCESTOR_COMPRESSED_FALLBACK",
+                        "active_debates": [],
+                        "tension_points": [],
+                        "consensus": "",
+                    }
+                ),
+            )
+            session.add(root_round)
+
+            native_child = Branch(
+                scenario_id=scenario_id,
+                parent_branch_id=root.id,
+                fork_round=1,
+                title="Empty native child",
+                probability=1.0,
+                status=BranchStatus.COMPLETED,
+            )
+            session.add(native_child)
+
+            agent = Agent(
+                scenario_id=scenario_id,
+                name="Checkpoint Agent",
+                role="Verifier",
+                tier=AgentTier.CORE,
+                stance="INITIAL_STANCE",
+                emotion="initial-emotion",
+            )
+            session.add(agent)
+            session.flush()
+            root_id = root.id
+            native_child_id = native_child.id
+            agent_id = agent.id
+            session.commit()
+
+        checkpoint_blackboard = Blackboard()
+        checkpoint_blackboard.update_global_summary(
+            {
+                "situation": "ANCESTOR_BLACKBOARD_RESTORED",
+                "active_debates": ["ancestor-debate"],
+                "tension_points": ["ancestor-tension"],
+                "consensus": "ancestor-consensus",
+            }
+        )
+        write_checkpoint(
+            scenario_id,
+            root_id,
+            1,
+            [
+                {
+                    "id": agent_id,
+                    "stance": "ANCESTOR_STANCE_RESTORED",
+                    "emotion": "ancestor-emotion-restored",
+                }
+            ],
+            blackboard=checkpoint_blackboard.export_snapshot(),
+        )
+        resume_branch_id = clone_until_round(
+            scenario_id,
+            native_child_id,
+            1,
+            replay_kind="resume",
+        )
+
+        prompts: list[str] = []
+
+        async def _capture_llm_call(prompt, *_args, **_kwargs):
+            prompts.append(prompt)
+            return "The restored worldline continues."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "The restored worldline continues.",
+                "emotion": "focused",
+                "diverge": None,
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Restored result",
+                "story": "The ancestor checkpoint shaped the continuation.",
+                "insight": "Resume restored durable state.",
+            }
+
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr("app.services.simulator.llm_call", _capture_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr(
+            "app.services.simulator.retrieve_relevant_memories",
+            lambda *args, **kwargs: "",
+        )
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *args, **kwargs: None)
+        monkeypatch.setattr("app.services.simulator.settings.MEMORY_COMPRESS_INTERVAL", 100)
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: True)
+
+        await run_simulation(scenario_id, branch_id=resume_branch_id)
+
+        assert prompts
+        assert any("ANCESTOR_STANCE_RESTORED" in prompt for prompt in prompts)
+        assert any("ancestor-emotion-restored" in prompt for prompt in prompts)
+        assert any("ANCESTOR_BLACKBOARD_RESTORED" in prompt for prompt in prompts)
+        assert not any("INITIAL_STANCE" in prompt for prompt in prompts)
 
     @pytest.mark.asyncio
     async def test_counterfactual_branch_does_not_restore_stale_parent_checkpoint(
@@ -4508,6 +4857,351 @@ class TestSaveMessage:
             assert any(msg.diverge == "路线分歧" for msg in msgs)
 
 
+# ── terminal narration lineage ───────────────────────────────
+
+
+class TestLoadTerminalNarrationMessages:
+    def test_loads_exact_three_generation_lineage_only(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        agent_id = _make_agent(engine, scenario_id, name="Timeline Agent")
+        root_id = _create_branch(engine, scenario_id, title="root")
+        child_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_id,
+            fork_round=2,
+            title="child",
+        )
+        leaf_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=child_id,
+            fork_round=4,
+            title="leaf",
+        )
+        sibling_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_id,
+            fork_round=2,
+            title="sibling",
+        )
+
+        def add_message(branch_id: str, round_number: int, content: str) -> None:
+            round_id = _create_round(engine, branch_id, round_number)
+            _save_message(engine, round_id, agent_id, content, "neutral", None)
+
+        add_message(root_id, 1, "visible-root-1")
+        add_message(root_id, 2, "visible-root-2")
+        add_message(root_id, 3, "future-root-after-fork")
+        add_message(child_id, 2, "stale-child-before-fork")
+        add_message(child_id, 3, "visible-child-3")
+        add_message(child_id, 4, "visible-child-4")
+        add_message(leaf_id, 4, "stale-leaf-before-fork")
+        add_message(leaf_id, 5, "visible-leaf-5")
+        add_message(leaf_id, 6, "visible-leaf-6")
+        add_message(sibling_id, 3, "sibling-message")
+
+        messages = simulator_module._load_terminal_narration_messages(engine, leaf_id)
+
+        assert [message["content"] for message in messages] == [
+            "visible-root-1",
+            "visible-root-2",
+            "visible-child-3",
+            "visible-child-4",
+            "visible-leaf-5",
+            "visible-leaf-6",
+        ]
+        assert [message["round"] for message in messages] == [1, 2, 3, 4, 5, 6]
+        assert [message["branch_id"] for message in messages] == [
+            root_id,
+            root_id,
+            child_id,
+            child_id,
+            leaf_id,
+            leaf_id,
+        ]
+        assert [message["segment_index"] for message in messages] == [0, 0, 1, 1, 2, 2]
+        assert all(
+            isinstance(value, (str, int, float, bool, type(None)))
+            for message in messages
+            for value in message.values()
+        )
+
+    def test_self_contained_clone_reads_clone_rounds_only(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        agent_id = _make_agent(engine, scenario_id, name="Clone Agent")
+        root_id = _create_branch(engine, scenario_id, title="root")
+        root_round_id = _create_round(engine, root_id, 1)
+        _save_message(engine, root_round_id, agent_id, "native-parent", "neutral", None)
+        clone_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_id,
+            fork_round=1,
+            title="resume clone",
+        )
+        with Session(engine) as session:
+            clone = session.get(Branch, clone_id)
+            assert clone is not None
+            clone.replay_kind = "resume"
+            session.add(clone)
+            session.commit()
+        for round_number in (1, 2):
+            round_id = _create_round(engine, clone_id, round_number)
+            _save_message(
+                engine,
+                round_id,
+                agent_id,
+                f"clone-{round_number}",
+                "neutral",
+                None,
+            )
+
+        messages = simulator_module._load_terminal_narration_messages(engine, clone_id)
+
+        assert [message["content"] for message in messages] == ["clone-1", "clone-2"]
+        assert {message["branch_id"] for message in messages} == {clone_id}
+        assert {message["segment_index"] for message in messages} == {0}
+
+    def test_multi_agent_order_is_stable_by_durable_fields(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="stable ordering")
+        round_id = _create_round(engine, branch_id, 1)
+        second_agent_id = _make_agent(engine, scenario_id, name="Zulu")
+        first_agent_id = _make_agent(engine, scenario_id, name="Alpha")
+        inserted = [
+            (
+                _save_message(engine, round_id, second_agent_id, "zulu-first", "neutral", None),
+                "Zulu",
+                "zulu-first",
+            ),
+            (
+                _save_message(
+                    engine,
+                    round_id,
+                    first_agent_id,
+                    "alpha-message",
+                    "neutral",
+                    None,
+                ),
+                "Alpha",
+                "alpha-message",
+            ),
+            (
+                _save_message(
+                    engine,
+                    round_id,
+                    second_agent_id,
+                    "zulu-second",
+                    "neutral",
+                    None,
+                ),
+                "Zulu",
+                "zulu-second",
+            ),
+        ]
+        expected = sorted(inserted, key=lambda item: (item[1], item[0]))
+
+        messages = simulator_module._load_terminal_narration_messages(engine, branch_id)
+
+        assert [
+            (message["message_id"], message["agent_name"], message["content"])
+            for message in messages
+        ] == expected
+        assert all("sqlite_rowid" not in message for message in messages)
+
+    def test_high_volume_loader_bounds_queries_and_rows_without_rowid_sql(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="bounded loader")
+        round_id = _create_round(engine, branch_id, 1)
+        agent_id = _make_agent(engine, scenario_id, name="Volume Agent")
+        message_ids = _save_messages(
+            engine,
+            [
+                {
+                    "round_id": round_id,
+                    "agent_id": agent_id,
+                    "content": f"volume-message-{index:03d}",
+                    "emotion": "neutral",
+                }
+                for index in range(120)
+            ],
+        )
+        message_selects: list[str] = []
+
+        def capture_message_selects(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            normalized = " ".join(str(statement).split()).lower()
+            if normalized.startswith("select") and "agent_message" in normalized:
+                message_selects.append(normalized)
+
+        event.listen(engine, "before_cursor_execute", capture_message_selects)
+        try:
+            messages = simulator_module._load_terminal_narration_messages(
+                engine,
+                branch_id,
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture_message_selects)
+
+        newest_limit = 96
+        assert len(message_selects) == 3
+        assert all(" limit " in statement for statement in message_selects)
+        assert all("rowid" not in statement for statement in message_selects)
+        assert len(messages) == newest_limit + 1
+        assert len(messages) <= newest_limit + 2
+        assert [message["message_id"] for message in messages] == sorted(
+            message["message_id"] for message in messages
+        )
+        loaded_ids = {message["message_id"] for message in messages}
+        assert min(message_ids) in loaded_ids
+        assert max(message_ids) in loaded_ids
+        assert simulator_module._TERMINAL_NARRATION_NEWEST_MESSAGE_LIMIT == newest_limit
+
+    def test_missing_or_empty_target_is_safe(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="empty")
+
+        assert simulator_module._load_terminal_narration_messages(engine, branch_id) == []
+        assert simulator_module._load_terminal_narration_messages(engine, "missing-branch") == []
+
+
+class TestFormatTerminalNarrationRounds:
+    @staticmethod
+    def message(
+        round_number: int,
+        segment_index: int,
+        content: str,
+        *,
+        agent_name: str = "A",
+    ) -> dict:
+        sequence = f"{round_number}-{segment_index}-{content[:8]}"
+        return {
+            "round": round_number,
+            "segment_index": segment_index,
+            "message_id": f"message-{sequence}",
+            "agent_name": agent_name,
+            "content": content,
+        }
+
+    def test_keeps_fork_pairs_leaf_last_and_newest_ordinary_message(self):
+        messages = [
+            self.message(1, 0, "old-ordinary"),
+            self.message(2, 0, "root-last"),
+            self.message(3, 1, "child-first"),
+            self.message(4, 1, "child-last"),
+            self.message(5, 2, "leaf-first"),
+            self.message(6, 2, "newest-ordinary"),
+            self.message(7, 2, "leaf-last"),
+        ]
+
+        raw_rounds = simulator_module._format_terminal_narration_rounds(
+            messages,
+            max_chars=130,
+        )
+
+        assert len(raw_rounds) <= 130
+        assert raw_rounds.splitlines() == [
+            "[R2 A]: root-last",
+            "[R3 A]: child-first",
+            "[R4 A]: child-last",
+            "[R5 A]: leaf-first",
+            "[R6 A]: newest-ordinary",
+            "[R7 A]: leaf-last",
+        ]
+        assert "old-ordinary" not in raw_rounds
+
+    def test_overlong_anchors_receive_fair_head_tail_elision(self):
+        anchor_specs = [
+            (1, 0, "root"),
+            (2, 1, "child-first"),
+            (3, 1, "child-last"),
+            (4, 2, "leaf-first"),
+            (5, 2, "leaf-last"),
+        ]
+        messages = [
+            self.message(
+                round_number,
+                segment_index,
+                f"{label}-head-" + ("x" * 400) + f"-{label}-tail",
+            )
+            for round_number, segment_index, label in anchor_specs
+        ]
+
+        raw_rounds = simulator_module._format_terminal_narration_rounds(
+            messages,
+            max_chars=300,
+        )
+
+        lines = raw_rounds.splitlines()
+        assert len(raw_rounds) <= 300
+        assert len(lines) == len(anchor_specs)
+        assert max(map(len, lines)) - min(map(len, lines)) <= 1
+        for line, (round_number, _segment_index, label) in zip(lines, anchor_specs):
+            assert line.startswith(f"[R{round_number} A]: ")
+            assert f"{label}-head-" in line
+            assert f"-{label}-tail" in line
+            assert "…" in line
+
+    def test_empty_messages_are_safe(self):
+        assert simulator_module._format_terminal_narration_rounds([]) == ""
+
+    @pytest.mark.parametrize(
+        ("max_chars", "expected"),
+        [(0, ""), (1, "…"), (2, "…")],
+    )
+    def test_tiny_budget_returns_bounded_neutral_result(
+        self,
+        max_chars,
+        expected,
+    ):
+        messages = [
+            self.message(
+                round_number,
+                segment_index,
+                "界" * 200,
+                agent_name="超长角色名" * 20,
+            )
+            for round_number, segment_index in [(1, 0), (2, 1), (3, 1), (4, 2)]
+        ]
+
+        result = simulator_module._format_terminal_narration_rounds(
+            messages,
+            max_chars=max_chars,
+        )
+
+        assert result == expected
+        assert len(result) <= max_chars
+
+    def test_long_unicode_header_stays_within_feasible_budget(self):
+        message = self.message(
+            1,
+            0,
+            "正文" * 200,
+            agent_name="超长角色名" * 40,
+        )
+
+        result = simulator_module._format_terminal_narration_rounds(
+            [message],
+            max_chars=80,
+        )
+
+        assert len(result) <= 80
+        assert "…" in result
+
+
 # ── _get_recent_messages ─────────────────────────────────────
 
 
@@ -5198,6 +5892,12 @@ async def test_report_generate_uses_completed_leaf_branch_as_dominant(monkeypatc
             branch.story = f"story {branch_id}"
             branch.insight = f"insight {branch_id}"
             session.add(branch)
+        session.add_all(
+            [
+                Round(branch_id=parent_id, round_number=1),
+                Round(branch_id=parent_id, round_number=2),
+            ]
+        )
         session.commit()
 
     captured: dict[str, str] = {}
@@ -5361,6 +6061,66 @@ class TestSaveRoundSummary:
         result = _load_latest_compressed_briefing(engine, bid, before_round=4)
 
         assert result is None
+
+    def test_load_latest_summary_uses_native_ancestor_for_empty_leaf(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        root_id = _create_branch(engine, scenario_id, title="root")
+        _create_round(engine, root_id, 1)
+        _save_round_summary(
+            engine,
+            root_id,
+            1,
+            json.dumps(
+                {
+                    "situation": "ANCESTOR_SUMMARY_FOR_EMPTY_LEAF",
+                    "active_debates": [],
+                    "tension_points": [],
+                    "consensus": "",
+                }
+            ),
+        )
+        child_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id=root_id,
+            fork_round=1,
+            title="empty child",
+        )
+
+        result = _load_latest_compressed_briefing(
+            engine,
+            child_id,
+            before_round=2,
+        )
+
+        assert result == {
+            "situation": "ANCESTOR_SUMMARY_FOR_EMPTY_LEAF",
+            "active_debates": [],
+            "tension_points": [],
+            "consensus": "",
+        }
+
+    def test_load_latest_summary_lineage_error_is_nonblocking(self, caplog):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        orphan_id = _create_branch(
+            engine,
+            scenario_id,
+            parent_branch_id="missing-parent",
+            fork_round=1,
+            title="orphan",
+        )
+        caplog.set_level(logging.WARNING, logger="app.services.simulator")
+
+        result = _load_latest_compressed_briefing(
+            engine,
+            orphan_id,
+            before_round=2,
+        )
+
+        assert result is None
+        assert "Compressed briefing lineage resolution failed; fallback skipped" in caplog.text
 
 
 class TestCompressRoundMemory:
@@ -5573,6 +6333,73 @@ class TestNarrateBranchData:
             "temperature": 0.8,
             "model": "gpt-test",
         }
+
+    @pytest.mark.asyncio
+    async def test_direct_provider_call_uses_terminal_loader_without_optional_context(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="Direct provider")
+        agent_id = _make_agent(engine, scenario_id, name="Direct Agent")
+        round_id = _create_round(engine, branch_id, 1)
+        _save_message(engine, round_id, agent_id, "direct-message", "neutral", None)
+        captured_raw_rounds = None
+
+        def reject_live_recent_loader(*_args, **_kwargs):
+            raise AssertionError("terminal narration must not use the live recent loader")
+
+        async def capture_provider(*, raw_rounds, **_kwargs):
+            nonlocal captured_raw_rounds
+            captured_raw_rounds = raw_rounds
+            return {"story": "story", "insight": "insight", "key_moments": []}
+
+        monkeypatch.setattr(simulator_module, "_get_recent_messages", reject_live_recent_loader)
+        monkeypatch.setattr(simulator_module, "narrate_branch", capture_provider)
+
+        result = await simulator_module._narrate_branch_data(
+            engine,
+            branch_id,
+            [{"name": "Direct Agent", "role": "tester"}],
+            language="English",
+        )
+
+        assert captured_raw_rounds == "[R1 Direct Agent]: direct-message"
+        assert result["title"] == "Direct provider"
+
+    def test_direct_local_fallback_uses_terminal_loader_without_optional_context(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="Direct fallback")
+        agent_id = _make_agent(engine, scenario_id, name="Fallback Agent")
+        round_id = _create_round(engine, branch_id, 1)
+        _save_message(engine, round_id, agent_id, "fallback-message", "neutral", None)
+        captured_raw_rounds = None
+
+        def reject_live_recent_loader(*_args, **_kwargs):
+            raise AssertionError("terminal narration must not use the live recent loader")
+
+        def capture_fallback(_title, _probability, raw_rounds, **_kwargs):
+            nonlocal captured_raw_rounds
+            captured_raw_rounds = raw_rounds
+            return {"story": "fallback story", "insight": "fallback insight"}
+
+        monkeypatch.setattr(simulator_module, "_get_recent_messages", reject_live_recent_loader)
+        monkeypatch.setattr(simulator_module, "_build_fallback_narration", capture_fallback)
+
+        result = simulator_module._build_local_branch_narration_fallback(
+            engine,
+            branch_id,
+            language="English",
+            question="Can direct calls remain compatible?",
+        )
+
+        assert captured_raw_rounds == "[R1 Fallback Agent]: fallback-message"
+        assert result["title"] == "Direct fallback"
 
 
 class TestDetectFork:

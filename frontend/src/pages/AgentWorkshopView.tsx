@@ -18,15 +18,10 @@ import {
   withDecisionBiasDefaults,
 } from '../components/Controls/decisionBias';
 import { PersonaExportMenu } from '../components/AgentWorkshop/PersonaExportMenu';
+import { KNOWLEDGE_DOMAINS } from '../contracts/agentIdentity';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { AgentIdentityInfo, KnowledgeDomain } from '../types';
 import { DocumentUploader } from './AgentWorkshop/DocumentUploader';
-
-const KNOWLEDGE_DOMAINS: KnowledgeDomain[] = [
-  'economics', 'politics', 'technology', 'science', 'military',
-  'culture', 'environment', 'health', 'education', 'law',
-  'philosophy', 'history', 'psychology', 'sociology', 'religion',
-];
 
 const KNOWLEDGE_DOMAIN_KEYS: Record<KnowledgeDomain, string> = {
   economics: 'agents.domains.economics',
@@ -76,7 +71,7 @@ function normalizeDecisionBias(agent: AgentIdentityInfo): Record<DecisionBiasKey
 }
 
 function isKnowledgeDomain(value: string): value is KnowledgeDomain {
-  return (KNOWLEDGE_DOMAINS as string[]).includes(value);
+  return (KNOWLEDGE_DOMAINS as readonly string[]).includes(value);
 }
 
 function normalizeKnowledgeDomains(agent: AgentIdentityInfo): KnowledgeDomain[] {

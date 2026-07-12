@@ -40,9 +40,6 @@ vi.mock('./ReportSection', () => ({
     <section data-testid={`report-section-${section.id}`} />
   ),
 }));
-vi.mock('./ReportEvidenceDrawer', () => ({
-  ReportEvidenceDrawer: () => null,
-}));
 vi.mock('../../lib/llmProviderPolicy', () => ({
   loadLlmProviderPolicy: vi.fn(() => ({
     apiKey: 'mock-key',
@@ -106,6 +103,66 @@ function makeReport(overrides: Partial<FullReport> = {}): FullReport {
     ...overrides,
   };
 }
+
+const premortemEvidence = [
+  {
+    id: 'ev-1',
+    branch_id: 'b1',
+    round_id: 'r1',
+    round_number: 1,
+    agent_id: 'a1',
+    agent_name: 'Analyst One',
+    message_id: 'm1',
+    quote: 'Inventories fell below the operating buffer.',
+    kind: 'utterance' as const,
+  },
+  {
+    id: 'ev-2',
+    branch_id: 'b2',
+    round_id: 'r2',
+    round_number: 2,
+    agent_id: 'a2',
+    agent_name: 'Analyst Two',
+    message_id: 'm2',
+    quote: 'Replacement capacity did not arrive in time.',
+    kind: 'causal_fact' as const,
+  },
+];
+
+function makePremortemReport(
+  analysis: unknown,
+  evidence: FullReport['evidence'] = premortemEvidence,
+): FullReport {
+  const report = makeReport({ evidence });
+  (report as unknown as { premortem_analysis?: unknown }).premortem_analysis = analysis;
+  return report;
+}
+
+const availablePremortem = {
+  status: 'available',
+  reason: null,
+  items: [
+    {
+      id: 'pm_001',
+      failure_mode_i18n: { zh: '供应链停摆', en: 'Supply chain stalls' },
+      mechanism_i18n: { zh: '缓冲库存耗尽', en: 'Buffer inventory is exhausted' },
+      early_warning_i18n: { zh: '库存跌破两周', en: 'Inventory falls below two weeks' },
+      uncertainty_i18n: { zh: '替代产能到位时间未知', en: 'Replacement timing remains uncertain' },
+      evidence_chain: [
+        {
+          evidence_ref: 'ev-1',
+          role: 'failure_signal',
+          rationale_i18n: { zh: '库存提供了早期信号', en: 'Inventory provides the early signal' },
+        },
+        {
+          evidence_ref: 'ev-2',
+          role: 'failure_mechanism',
+          rationale_i18n: { zh: '产能延迟解释了失效机制', en: 'Capacity delay supports the mechanism' },
+        },
+      ],
+    },
+  ],
+};
 
 function setCtx(storyData: { full_report?: FullReport | FullReportTruncatedMarker | null } | null) {
   mockedCtx.mockReturnValue({
@@ -1207,6 +1264,357 @@ describe('ResultReportPanel — partial report rendering', () => {
     setCap({});
     const { container: standaloneContainer } = render(<ResultReportPanel variant="standalone" />);
     expect(standaloneContainer.querySelector('.report-masthead')).not.toBeNull();
+  });
+});
+
+describe('ResultReportPanel — structured premortem analysis', () => {
+  it('renders available failure modes and opens the existing evidence drawer', async () => {
+    setCtx({ full_report: makePremortemReport(availablePremortem) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByRole('heading', { name: 'Premortem analysis' })).toBeInTheDocument();
+    expect(screen.getByText('Supply chain stalls')).toBeInTheDocument();
+    expect(screen.getByText('Buffer inventory is exhausted')).toBeInTheDocument();
+    expect(screen.getByText('Inventory falls below two weeks')).toBeInTheDocument();
+    expect(screen.getByText('Replacement timing remains uncertain')).toBeInTheDocument();
+    expect(screen.getByText('Inventory provides the early signal')).toBeInTheDocument();
+    expect(screen.getByText(/simulation evidence does not establish statistical independence/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /ev-1/i }));
+
+    expect(await screen.findByRole('dialog', { name: /cited evidence/i })).toBeInTheDocument();
+    expect(screen.getByText(/Inventories fell below the operating buffer\./)).toBeInTheDocument();
+  });
+
+  it('renders partial status, its reason, and item uncertainty without overstating evidence', () => {
+    setCtx({
+      full_report: makePremortemReport({
+        ...availablePremortem,
+        status: 'partial',
+        reason: 'insufficient_source_diversity',
+      }),
+    });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Partial analysis')).toBeInTheDocument();
+    expect(screen.getByText(/source diversity was insufficient/i)).toBeInTheDocument();
+    expect(screen.getByText('Replacement timing remains uncertain')).toBeInTheDocument();
+    expect(screen.queryByText(/independent sources/i)).toBeNull();
+  });
+
+  it('renders the honest localized reason when structured premortem is missing', () => {
+    setCtx({
+      full_report: makePremortemReport({
+        status: 'missing',
+        reason: 'lineage_unavailable',
+        items: [],
+      }),
+    });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Analysis unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/branch lineage evidence was unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no risks/i)).toBeNull();
+  });
+
+  it.each([null, undefined])(
+    'treats legacy premortem_analysis=%s as unavailable rather than risk-free',
+    (analysis) => {
+      const report = analysis === undefined ? makeReport() : makePremortemReport(analysis);
+      setCtx({ full_report: report });
+      setCap({});
+
+      render(<ResultReportPanel variant="standalone" />);
+
+      expect(screen.getByRole('heading', { name: 'Premortem analysis' })).toBeInTheDocument();
+      expect(screen.getByText(/not available for this legacy or unimplemented report/i)).toBeInTheDocument();
+      expect(screen.queryByText(/no risks/i)).toBeNull();
+    },
+  );
+
+  it('uses the report language for failure-mode fields', () => {
+    setCtx({ full_report: makePremortemReport(availablePremortem) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" isZh />);
+
+    expect(screen.getByText('供应链停摆')).toBeInTheDocument();
+    expect(screen.getByText('缓冲库存耗尽')).toBeInTheDocument();
+    expect(screen.getByText('库存跌破两周')).toBeInTheDocument();
+    expect(screen.getByText('替代产能到位时间未知')).toBeInTheDocument();
+    expect(screen.queryByText('Supply chain stalls')).toBeNull();
+  });
+
+  it('does not render the detailed premortem block in inline mode', () => {
+    setCtx({ full_report: makePremortemReport(availablePremortem) });
+    setCap({});
+
+    render(<ResultReportPanel variant="inline" />);
+
+    expect(screen.queryByRole('heading', { name: 'Premortem analysis' })).toBeNull();
+    expect(screen.queryByText('Supply chain stalls')).toBeNull();
+  });
+
+  it('fails safe for malformed runtime payloads without exposing raw values', () => {
+    setCtx({
+      full_report: makePremortemReport({
+        status: 'available',
+        reason: null,
+        items: 'TOP-SECRET-RAW-JSON',
+      }),
+    });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText(/structured premortem could not be displayed/i)).toBeInTheDocument();
+    expect(screen.queryByText('TOP-SECRET-RAW-JSON')).toBeNull();
+  });
+
+  it.each([
+    [
+      'analysis',
+      'RAW-ANALYSIS-EXTRA',
+      { ...availablePremortem, unexpected: 'RAW-ANALYSIS-EXTRA' },
+    ],
+    [
+      'failure mode',
+      'RAW-ITEM-EXTRA',
+      {
+        ...availablePremortem,
+        items: [{ ...availablePremortem.items[0], unexpected: 'RAW-ITEM-EXTRA' }],
+      },
+    ],
+    [
+      'evidence link',
+      'RAW-LINK-EXTRA',
+      {
+        ...availablePremortem,
+        items: [{
+          ...availablePremortem.items[0],
+          evidence_chain: [
+            {
+              ...availablePremortem.items[0].evidence_chain[0],
+              unexpected: 'RAW-LINK-EXTRA',
+            },
+            availablePremortem.items[0].evidence_chain[1],
+          ],
+        }],
+      },
+    ],
+    [
+      'localized text',
+      'RAW-I18N-EXTRA',
+      {
+        ...availablePremortem,
+        items: [{
+          ...availablePremortem.items[0],
+          failure_mode_i18n: {
+            ...availablePremortem.items[0].failure_mode_i18n,
+            fr: 'RAW-I18N-EXTRA',
+          },
+        }],
+      },
+    ],
+  ] as const)('rejects extra keys at the %s level without exposing them', (_level, marker, payload) => {
+    setCtx({ full_report: makePremortemReport(payload) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText(/structured premortem could not be displayed/i)).toBeInTheDocument();
+    expect(screen.queryByText(marker)).toBeNull();
+    expect(screen.queryByText('Supply chain stalls')).toBeNull();
+    expect(screen.queryByText('Available')).toBeNull();
+  });
+
+  it('downgrades available analysis to missing when every evidence link is dangling', () => {
+    const availableWithOnlyDanglingEvidence = {
+      ...availablePremortem,
+      items: [
+        {
+          ...availablePremortem.items[0],
+          evidence_chain: availablePremortem.items[0].evidence_chain.map((link, index) => ({
+            ...link,
+            evidence_ref: `ev-missing-${index + 1}`,
+          })),
+        },
+      ],
+    };
+    setCtx({ full_report: makePremortemReport(availableWithOnlyDanglingEvidence) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Analysis unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/branch lineage evidence was unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Available')).toBeNull();
+    expect(screen.queryByText('Supply chain stalls')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ev-missing/i })).toBeNull();
+  });
+
+  it('downgrades available analysis when a valid item survives but another item is all dangling', async () => {
+    const mixedAnalysis = {
+      ...availablePremortem,
+      items: [
+        availablePremortem.items[0],
+        {
+          ...availablePremortem.items[0],
+          id: 'pm_002',
+          failure_mode_i18n: { zh: 'RAW-DANGLING-ITEM', en: 'RAW-DANGLING-ITEM' },
+          evidence_chain: availablePremortem.items[0].evidence_chain.map((link, index) => ({
+            ...link,
+            evidence_ref: `ev-missing-${index + 1}`,
+          })),
+        },
+      ],
+    };
+    setCtx({ full_report: makePremortemReport(mixedAnalysis) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Partial analysis')).toBeInTheDocument();
+    expect(screen.getByText(/source diversity was insufficient/i)).toBeInTheDocument();
+    expect(screen.queryByText('Available')).toBeNull();
+    expect(screen.getByText('Supply chain stalls')).toBeInTheDocument();
+    expect(screen.queryByText('RAW-DANGLING-ITEM')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ev-missing/i })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Open evidence ev-/i })).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: /ev-1/i }));
+    expect(await screen.findByRole('dialog', { name: /cited evidence/i })).toBeInTheDocument();
+    expect(screen.getByText(/Inventories fell below the operating buffer\./)).toBeInTheDocument();
+  });
+
+  it('fails safe before filtering when an all-dangling item duplicates a valid item id', () => {
+    const duplicateItemAnalysis = {
+      ...availablePremortem,
+      items: [
+        availablePremortem.items[0],
+        {
+          ...availablePremortem.items[0],
+          failure_mode_i18n: { zh: 'RAW-DUPLICATE-ITEM', en: 'RAW-DUPLICATE-ITEM' },
+          evidence_chain: availablePremortem.items[0].evidence_chain.map((link, index) => ({
+            ...link,
+            evidence_ref: `ev-missing-${index + 1}`,
+          })),
+        },
+      ],
+    };
+    setCtx({ full_report: makePremortemReport(duplicateItemAnalysis) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText(/structured premortem could not be displayed/i)).toBeInTheDocument();
+    expect(screen.queryByText('Available')).toBeNull();
+    expect(screen.queryByText('Supply chain stalls')).toBeNull();
+    expect(screen.queryByText('RAW-DUPLICATE-ITEM')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ev-missing/i })).toBeNull();
+  });
+
+  it('filters dangling links from partial analysis while keeping valid evidence clickable', async () => {
+    const partialWithMixedEvidence = {
+      ...availablePremortem,
+      status: 'partial',
+      reason: 'no_distinct_evidence',
+      items: [
+        {
+          ...availablePremortem.items[0],
+          evidence_chain: [
+            availablePremortem.items[0].evidence_chain[0],
+            {
+              evidence_ref: 'ev-missing',
+              role: 'failure_signal',
+              rationale_i18n: { zh: '引用已丢失', en: 'The cited signal is missing' },
+            },
+          ],
+        },
+      ],
+    };
+    setCtx({ full_report: makePremortemReport(partialWithMixedEvidence) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Partial analysis')).toBeInTheDocument();
+    expect(screen.getByText('Inventory provides the early signal')).toBeInTheDocument();
+    expect(screen.queryByText('The cited signal is missing')).toBeNull();
+    expect(screen.queryByText(/ev-missing/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /ev-missing/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /ev-1/i }));
+    expect(await screen.findByRole('dialog', { name: /cited evidence/i })).toBeInTheDocument();
+    expect(screen.getByText(/Inventories fell below the operating buffer\./)).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      'duplicate top-level evidence ids',
+      [
+        premortemEvidence[0],
+        {
+          ...premortemEvidence[0],
+          branch_id: 'duplicate-branch',
+          round_id: 'duplicate-round',
+          agent_id: 'duplicate-agent',
+          message_id: 'duplicate-message',
+          quote: 'A conflicting duplicate evidence record.',
+        },
+        premortemEvidence[1],
+      ],
+    ],
+    [
+      'two evidence ids with the same source coordinate',
+      [
+        premortemEvidence[0],
+        {
+          ...premortemEvidence[0],
+          id: 'ev-2',
+          quote: 'The same source coordinate under another evidence id.',
+          kind: 'causal_fact' as const,
+        },
+      ],
+    ],
+  ] as const)('downgrades available analysis for %s', (_label, evidence) => {
+    setCtx({
+      full_report: makePremortemReport(
+        availablePremortem,
+        [...evidence] as FullReport['evidence'],
+      ),
+    });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Partial analysis')).toBeInTheDocument();
+    expect(screen.getByText(/source diversity was insufficient/i)).toBeInTheDocument();
+    expect(screen.queryByText('Available')).toBeNull();
+    expect(screen.getByText('Replacement timing remains uncertain')).toBeInTheDocument();
+  });
+
+  it('keeps available status when evidence has distinct coordinates and agent diversity', () => {
+    const validEvidence = [
+      premortemEvidence[0],
+      {
+        ...premortemEvidence[1],
+        branch_id: premortemEvidence[0].branch_id,
+      },
+    ];
+    setCtx({ full_report: makePremortemReport(availablePremortem, validEvidence) });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText('Available')).toBeInTheDocument();
+    expect(screen.queryByText('Partial analysis')).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Open evidence ev-/i })).toHaveLength(2);
   });
 });
 

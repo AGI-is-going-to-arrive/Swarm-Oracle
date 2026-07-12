@@ -8,12 +8,15 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { copyText } from '../lib/copyText';
 import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX, isBrightGraphBackground } from '../lib/graphTokens';
+import { truncateCodepoints } from '../lib/textUtils';
 
 export interface NodeDetailEvidence {
   confidence_tier?: string | null;
   source_ref?: string | null;
   source_round_number?: number | null;
   detail?: unknown | null;
+  relation?: string | null;
+  direction?: string | null;
 }
 
 export interface NodeDetail {
@@ -41,6 +44,36 @@ interface NodeDetailPanelProps {
 
 const TYPE_COLORS = NODE_TYPE_COLORS_HEX;
 const STATUS_COLORS = STATUS_COLORS_HEX;
+const EVENT_ID_LIMIT = 120;
+const EVENT_SHORT_TEXT_LIMIT = 160;
+const EVENT_CONTENT_LIMIT = 500;
+const EVIDENCE_DETAIL_LIMIT = 200;
+
+function hasDisplayValue(value: unknown): boolean {
+  return value !== null
+    && value !== undefined
+    && (typeof value !== 'string' || value.trim().length > 0);
+}
+
+function boundedPrimitive(value: unknown, limit: number, unavailable: string): string {
+  if (!hasDisplayValue(value)) return unavailable;
+  if (!['string', 'number', 'boolean'].includes(typeof value)) return unavailable;
+  return truncateCodepoints(String(value), limit);
+}
+
+function boundedEvidenceDetail(value: unknown): string {
+  let raw: string;
+  if (typeof value === 'string') {
+    raw = value;
+  } else {
+    try {
+      raw = JSON.stringify(value);
+    } catch {
+      raw = String(value);
+    }
+  }
+  return truncateCodepoints(raw, EVIDENCE_DETAIL_LIMIT);
+}
 
 function useMediaQueryState(query: string) {
   const [matches, setMatches] = useState(() => (
@@ -249,7 +282,12 @@ export function NodeDetailPanel({
           ? node.evidenceList
           : node.evidence ? [node.evidence] : [];
         const nonEmpty = allEvidence.filter(
-          ev => ev.confidence_tier != null || ev.source_ref != null || ev.source_round_number != null || ev.detail != null,
+          ev => ev.confidence_tier != null
+            || ev.source_ref != null
+            || ev.source_round_number != null
+            || ev.detail != null
+            || ev.relation != null
+            || ev.direction != null,
         );
         if (nonEmpty.length === 0) return null;
         return (
@@ -260,6 +298,7 @@ export function NodeDetailPanel({
             {nonEmpty.map((ev, idx) => (
               <div
                 key={idx}
+                data-testid="node-detail-evidence-item"
                 style={{
                   fontSize: '0.8rem',
                   color: '#ccc',
@@ -270,6 +309,24 @@ export function NodeDetailPanel({
                   lineHeight: 1.5,
                 }}
               >
+                {ev.relation != null && (
+                  <div>
+                    <span style={{ color: '#aaa' }}>{t('node_detail.evidence_relation', 'Relation')}</span>:{' '}
+                    <span>{truncateCodepoints(String(ev.relation), EVENT_SHORT_TEXT_LIMIT)}</span>
+                  </div>
+                )}
+                {ev.direction != null && (
+                  <div>
+                    <span style={{ color: '#aaa' }}>{t('node_detail.evidence_direction', 'Direction')}</span>:{' '}
+                    <span>
+                      {ev.direction === 'incoming'
+                        ? t('node_detail.evidence_direction_incoming', 'Incoming')
+                        : ev.direction === 'outgoing'
+                          ? t('node_detail.evidence_direction_outgoing', 'Outgoing')
+                          : truncateCodepoints(String(ev.direction), EVENT_SHORT_TEXT_LIMIT)}
+                    </span>
+                  </div>
+                )}
                 {ev.confidence_tier != null && (
                   <div>
                     <span style={{ color: '#aaa' }}>{t('node_detail.evidence_confidence', 'Confidence')}: </span>
@@ -291,7 +348,7 @@ export function NodeDetailPanel({
                 {ev.source_ref != null && (
                   <div>
                     <span style={{ color: '#aaa' }}>{t('node_detail.evidence_source_ref', 'Source')}: </span>
-                    {String(ev.source_ref)}
+                    {truncateCodepoints(String(ev.source_ref), EVENT_ID_LIMIT)}
                   </div>
                 )}
                 {ev.source_round_number != null && (
@@ -303,11 +360,7 @@ export function NodeDetailPanel({
                 {ev.detail != null && (
                   <div>
                     <span style={{ color: '#aaa' }}>{t('node_detail.evidence_detail', 'Detail')}: </span>
-                    {(() => {
-                      const raw = typeof ev.detail === 'string' ? ev.detail : JSON.stringify(ev.detail);
-                      const cps = Array.from(raw);
-                      return cps.length > 200 ? cps.slice(0, 200).join('') + '…' : raw;
-                    })()}
+                    {boundedEvidenceDetail(ev.detail)}
                   </div>
                 )}
               </div>
@@ -319,11 +372,31 @@ export function NodeDetailPanel({
       {/* Payload — semantic fields first, raw fallback */}
       {hasPayload && (() => {
         const p = typeof node.payload === 'object' && node.payload ? node.payload as Record<string, unknown> : null;
-        const agentName = p?.agent_name ?? p?.agent_id;
+        const unavailable = t('node_detail.value_unavailable', 'Unavailable');
+        const available = t('node_detail.value_available', 'Available');
+        const isEventPayload = node.type === 'event' && p !== null;
+        const agentName = p?.agent_name;
+        const agentId = p?.agent_id;
         const emotion = p?.emotion;
+        const emotionMetadataStatus = p?.emotion_metadata_status;
+        const emotionMetadataFailure = p?.emotion_metadata_failure_code;
+        const emotionMetadataUnavailable = emotionMetadataStatus === 'unavailable';
+        const eventEmotionStatus = typeof emotionMetadataStatus === 'string' && emotionMetadataStatus.trim()
+          ? emotionMetadataStatus === 'available'
+            ? available
+            : emotionMetadataStatus === 'unavailable'
+              ? unavailable
+              : truncateCodepoints(emotionMetadataStatus, EVENT_SHORT_TEXT_LIMIT)
+          : unavailable;
+        const eventEmotion = emotionMetadataUnavailable
+          ? unavailable
+          : boundedPrimitive(emotion, EVENT_SHORT_TEXT_LIMIT, unavailable);
         const stance = p?.stance_score ?? p?.stance;
         const side = p?.side;
         const content = p?.content;
+        const branchId = p?.branch_id;
+        const messageId = p?.message_id;
+        const syntheticProvenance = p?.synthetic_provenance;
         const storyExcerpt = p?.story_excerpt;
         const insight = p?.insight;
         const probability = p?.probability;
@@ -339,19 +412,20 @@ export function NodeDetailPanel({
           ? `${(probability * 100).toFixed(1)}%`
           : probability;
         const hasSemanticFields = (
-          agentName ||
-          emotion ||
+          isEventPayload ||
+          hasDisplayValue(agentName) ||
+          hasDisplayValue(emotion) ||
           stance !== undefined ||
-          side ||
-          content ||
-          storyExcerpt ||
-          insight ||
+          hasDisplayValue(side) ||
+          hasDisplayValue(content) ||
+          hasDisplayValue(storyExcerpt) ||
+          hasDisplayValue(insight) ||
           probability !== undefined ||
-          outcomeStatus ||
-          outcomeBranchId ||
-          forkReason ||
-          forkSummary ||
-          forkSourceBranch ||
+          hasDisplayValue(outcomeStatus) ||
+          hasDisplayValue(outcomeBranchId) ||
+          hasDisplayValue(forkReason) ||
+          hasDisplayValue(forkSummary) ||
+          hasDisplayValue(forkSourceBranch) ||
           forkChildren.length > 0
         );
         return (
@@ -361,20 +435,70 @@ export function NodeDetailPanel({
             </div>
             {hasSemanticFields ? (
               <div style={{ fontSize: '0.8rem', color: '#ccc', background: '#252540', padding: '8px', borderRadius: 4, lineHeight: 1.5 }}>
-                {agentName != null && <div><span>{t('node_detail.agent', 'Agent')}</span>: <strong>{String(agentName)}</strong></div>}
-                {emotion != null && <div><span>{t('node_detail.emotion', 'Emotion')}</span>: {String(emotion)}</div>}
-                {stance != null && <div><span>{t('node_detail.stance', 'Stance')}</span>: {String(stance)}</div>}
-                {side != null && <div><span>{t('node_detail.side', 'Side')}</span>: {String(side)}</div>}
-                {content != null && <div><span>{t('node_detail.content', 'Content')}</span>: {String(content)}</div>}
-                {storyExcerpt != null && <div><span>{t('node_detail.outcome_story', 'Outcome Story')}</span>: {String(storyExcerpt)}</div>}
-                {insight != null && <div><span>{t('node_detail.insight', 'Insight')}</span>: {String(insight)}</div>}
-                {formattedProbability != null && <div><span>{t('node_detail.probability', 'Probability')}</span>: {String(formattedProbability)}</div>}
-                {outcomeStatus != null && <div><span>{t('node_detail.status', 'Status')}</span>: {String(outcomeStatus)}</div>}
-                {outcomeBranchId != null && <div><span>{t('node_detail.branch', 'Branch')}</span>: {String(outcomeBranchId)}</div>}
-                {forkReason != null && <div><span>{t('node_detail.fork_reason', 'Fork Reason')}</span>: {String(forkReason)}</div>}
-                {forkSummary != null && <div><span>{t('node_detail.fork_impact', 'Impact')}</span>: {String(forkSummary)}</div>}
-                {forkSourceBranch != null && <div><span>{t('node_detail.source_branch', 'Source Branch')}</span>: {String(forkSourceBranch)}</div>}
-                {forkChildren.length > 0 && <div><span>{t('node_detail.child_branches', 'Child Branches')}</span>: {forkChildren.join(', ')}</div>}
+                {isEventPayload ? (
+                  <>
+                    <div>
+                      <span>{t('node_detail.agent_name', 'Agent Name')}</span>:{' '}
+                      <strong>{boundedPrimitive(agentName, EVENT_SHORT_TEXT_LIMIT, unavailable)}</strong>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.agent_id', 'Agent ID')}</span>:{' '}
+                      <span data-testid="event-agent-id">{boundedPrimitive(agentId, EVENT_ID_LIMIT, unavailable)}</span>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.branch', 'Branch')}</span>:{' '}
+                      <span>{boundedPrimitive(branchId, EVENT_ID_LIMIT, unavailable)}</span>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.message_id', 'Message ID')}</span>:{' '}
+                      <span>{boundedPrimitive(messageId, EVENT_ID_LIMIT, unavailable)}</span>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.emotion', 'Emotion')}</span>: {eventEmotion}
+                    </div>
+                    <div>
+                      <span>{t('node_detail.emotion_metadata_status', 'Emotion metadata status')}</span>:{' '}
+                      <span data-testid="emotion-metadata-status">{eventEmotionStatus}</span>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.emotion_metadata_failure', 'Emotion metadata failure')}</span>:{' '}
+                      <span data-testid="emotion-metadata-failure">
+                        {boundedPrimitive(emotionMetadataFailure, EVENT_ID_LIMIT, unavailable)}
+                      </span>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.synthetic_provenance', 'Synthetic provenance')}</span>:{' '}
+                      <span data-testid="synthetic-provenance">
+                        {typeof syntheticProvenance === 'boolean'
+                          ? syntheticProvenance
+                            ? t('node_detail.value_yes', 'Yes')
+                            : t('node_detail.value_no', 'No')
+                          : boundedPrimitive(syntheticProvenance, EVENT_SHORT_TEXT_LIMIT, unavailable)}
+                      </span>
+                    </div>
+                    <div>
+                      <span>{t('node_detail.content', 'Content')}</span>:{' '}
+                      <span data-testid="event-content">{boundedPrimitive(content, EVENT_CONTENT_LIMIT, unavailable)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {agentName != null && <div><span>{t('node_detail.agent_name', 'Agent Name')}</span>: <strong>{boundedPrimitive(agentName, EVENT_SHORT_TEXT_LIMIT, unavailable)}</strong></div>}
+                    {emotion != null && <div><span>{t('node_detail.emotion', 'Emotion')}</span>: {boundedPrimitive(emotion, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                    {content != null && <div><span>{t('node_detail.content', 'Content')}</span>: {boundedPrimitive(content, EVENT_CONTENT_LIMIT, unavailable)}</div>}
+                  </>
+                )}
+                {stance != null && <div><span>{t('node_detail.stance', 'Stance')}</span>: {boundedPrimitive(stance, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                {side != null && <div><span>{t('node_detail.side', 'Side')}</span>: {boundedPrimitive(side, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                {storyExcerpt != null && <div><span>{t('node_detail.outcome_story', 'Outcome Story')}</span>: {boundedPrimitive(storyExcerpt, EVENT_CONTENT_LIMIT, unavailable)}</div>}
+                {insight != null && <div><span>{t('node_detail.insight', 'Insight')}</span>: {boundedPrimitive(insight, EVENT_CONTENT_LIMIT, unavailable)}</div>}
+                {formattedProbability != null && <div><span>{t('node_detail.probability', 'Probability')}</span>: {boundedPrimitive(formattedProbability, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                {outcomeStatus != null && <div><span>{t('node_detail.status', 'Status')}</span>: {boundedPrimitive(outcomeStatus, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                {outcomeBranchId != null && <div><span>{t('node_detail.branch', 'Branch')}</span>: {boundedPrimitive(outcomeBranchId, EVENT_ID_LIMIT, unavailable)}</div>}
+                {forkReason != null && <div><span>{t('node_detail.fork_reason', 'Fork Reason')}</span>: {boundedPrimitive(forkReason, EVENT_CONTENT_LIMIT, unavailable)}</div>}
+                {forkSummary != null && <div><span>{t('node_detail.fork_impact', 'Impact')}</span>: {boundedPrimitive(forkSummary, EVENT_CONTENT_LIMIT, unavailable)}</div>}
+                {forkSourceBranch != null && <div><span>{t('node_detail.source_branch', 'Source Branch')}</span>: {boundedPrimitive(forkSourceBranch, EVENT_ID_LIMIT, unavailable)}</div>}
+                {forkChildren.length > 0 && <div><span>{t('node_detail.child_branches', 'Child Branches')}</span>: {truncateCodepoints(forkChildren.join(', '), EVENT_CONTENT_LIMIT)}</div>}
               </div>
             ) : (
               <pre style={{

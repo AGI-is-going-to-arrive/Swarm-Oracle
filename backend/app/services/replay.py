@@ -29,6 +29,7 @@ from app.services.agent_message_metadata import (
     message_emotion_if_available,
     public_emotion_metadata,
 )
+from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,23 @@ def clone_until_round(
     def _clone(active_session: Session) -> tuple[str, int]:
         if ensure_lock is not None:
             ensure_lock()
+        source_selection = select_branch_rounds(
+            active_session,
+            scenario_id=scenario_id,
+            branch_id=source_branch_id,
+            requested_cutoff=round_number,
+        )
+        if round_number > 0 and not source_selection.contains(round_number):
+            raise BranchLineageError(
+                "BRANCH_LINEAGE_ROUND_NOT_FOUND",
+                (
+                    f"Round {round_number} is not available in branch lineage "
+                    f"for {source_branch_id}"
+                ),
+            )
+        source_rounds = source_selection.rounds
+        if ensure_lock is not None:
+            ensure_lock()
         display_title = title or _default_replay_title(
             active_session,
             scenario_id,
@@ -295,13 +313,6 @@ def clone_until_round(
         active_session.flush()  # get the id
 
         new_branch_id = new_branch.id
-
-        # Copy rounds up to round_number (inclusive)
-        source_rounds = active_session.exec(
-            select(Round)
-            .where(Round.branch_id == source_branch_id, Round.round_number <= round_number)
-            .order_by(Round.round_number)
-        ).all()
 
         for src_round in source_rounds:
             if ensure_lock is not None:
@@ -480,16 +491,25 @@ def _round_messages(session: Session, round_: Round) -> list[dict]:
 def _agent_messages_for_round(
     session: Session,
     *,
+    scenario_id: str,
     branch_id: str,
     round_number: int,
     agent_id: str,
 ) -> list[AgentMessage]:
-    round_ = session.exec(
-        select(Round).where(
-            Round.branch_id == branch_id,
-            Round.round_number == round_number,
-        )
-    ).first()
+    source_selection = select_branch_rounds(
+        session,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        requested_cutoff=round_number,
+    )
+    round_ = next(
+        (
+            visible_round
+            for visible_round in source_selection.rounds
+            if visible_round.round_number == round_number
+        ),
+        None,
+    )
     if round_ is None:
         return []
     return session.exec(
@@ -584,12 +604,14 @@ def _build_intervention(
 
     source_messages = _agent_messages_for_round(
         session,
+        scenario_id=scenario_id,
         branch_id=source_branch_id,
         round_number=round_number,
         agent_id=agent_id,
     )
     counterfactual_messages = _agent_messages_for_round(
         session,
+        scenario_id=scenario_id,
         branch_id=counterfactual.id,
         round_number=round_number,
         agent_id=agent_id,
@@ -709,18 +731,16 @@ def compare_branches(
             branch_param="branch_b",
         )
 
-        # Load rounds + messages for branch A
-        rounds_a = session.exec(
-            select(Round)
-            .where(Round.branch_id == branch_a)
-            .order_by(Round.round_number)
-        ).all()
-
-        rounds_b = session.exec(
-            select(Round)
-            .where(Round.branch_id == branch_b)
-            .order_by(Round.round_number)
-        ).all()
+        rounds_a = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_a,
+        ).rounds
+        rounds_b = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_b,
+        ).rounds
 
         # Index by round number
         a_by_round: dict[int, Round] = {r.round_number: r for r in rounds_a}
@@ -786,6 +806,37 @@ def compare_branches(
 # ── Checkpoint loaders (P1-9 resume) ───────────────────
 
 
+def _checkpoint_branch_id_for_visible_round(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+) -> str | None:
+    try:
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            requested_cutoff=round_number,
+        )
+    except BranchLineageError as exc:
+        logger.warning(
+            "Checkpoint lineage resolution failed; restore skipped",
+            extra={"lineage_error_code": exc.code},
+        )
+        return None
+    source_round = next(
+        (
+            round_
+            for round_ in selection.rounds
+            if round_.round_number == round_number
+        ),
+        None,
+    )
+    return source_round.branch_id if source_round is not None else None
+
+
 def load_checkpoint_agent_states(
     scenario_id: str, branch_id: str, round_number: int,
 ) -> list[dict] | None:
@@ -794,10 +845,18 @@ def load_checkpoint_agent_states(
     Returns list of {agent_id, stance, emotion} or None if no checkpoint.
     """
     with Session(get_engine()) as session:
+        checkpoint_branch_id = _checkpoint_branch_id_for_visible_round(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_number,
+        )
+        if checkpoint_branch_id is None:
+            return None
         cp = session.exec(
             select(ScenarioCheckpoint).where(
                 ScenarioCheckpoint.scenario_id == scenario_id,
-                ScenarioCheckpoint.branch_id == branch_id,
+                ScenarioCheckpoint.branch_id == checkpoint_branch_id,
                 ScenarioCheckpoint.round_number == round_number,
             )
         ).first()
@@ -817,10 +876,18 @@ def load_checkpoint_blackboard(
     Returns the parsed blackboard dict or None if unavailable.
     """
     with Session(get_engine()) as session:
+        checkpoint_branch_id = _checkpoint_branch_id_for_visible_round(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_number,
+        )
+        if checkpoint_branch_id is None:
+            return None
         cp = session.exec(
             select(ScenarioCheckpoint).where(
                 ScenarioCheckpoint.scenario_id == scenario_id,
-                ScenarioCheckpoint.branch_id == branch_id,
+                ScenarioCheckpoint.branch_id == checkpoint_branch_id,
                 ScenarioCheckpoint.round_number == round_number,
             )
         ).first()

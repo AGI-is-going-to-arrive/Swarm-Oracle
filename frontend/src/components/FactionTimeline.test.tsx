@@ -93,6 +93,10 @@ const localeExpectations = {
     a11yLabel: 'Faction evolution timeline',
     roundLabel: 'Round 1',
     branchScope: 'Branch scope: Archive Branch',
+    selectedSource: 'Selected branch: Archive Branch',
+    ancestorSource: 'Ancestor/source branch: ancestor…1234',
+    unknownSource: 'Source branch unavailable',
+    lineageScope: "This timeline follows the selected branch's effective lineage. Earlier rounds may come from a parent branch; replay branches may be self-contained. Sibling and unrelated source branches are excluded.",
     roundSpan: 'Round span: Round 1',
     membersSummary: '2 members',
     stanceSummary: 'Affect proxy 0.12',
@@ -112,6 +116,10 @@ const localeExpectations = {
     a11yLabel: '阵营演化时间线',
     roundLabel: '第 1 轮',
     branchScope: '分支范围: Archive Branch',
+    selectedSource: '所选分支：Archive Branch',
+    ancestorSource: '祖先/来源分支：ancestor…1234',
+    unknownSource: '来源分支不可用',
+    lineageScope: '此时间线展示所选分支的有效谱系。较早轮次可能来自父分支；回放分支也可能是自包含的。兄弟分支和无关源分支不在此范围内。',
     roundSpan: '轮次跨度: 第 1 轮',
     membersSummary: '2 名成员',
     stanceSummary: '情绪代理值 0.12',
@@ -131,6 +139,10 @@ const localeExpectations = {
   a11yLabel: string;
   roundLabel: string;
   branchScope: string;
+  selectedSource: string;
+  ancestorSource: string;
+  unknownSource: string;
+  lineageScope: string;
   roundSpan: string;
   membersSummary: string;
   stanceSummary: string;
@@ -192,6 +204,14 @@ describe('FactionTimeline', () => {
     expect(zh.translation.factions.event_labels.betrayal).toBe(localeExpectations.zh.betrayal);
     expect(en.translation.factions.event_labels.alliance_formed).toBe(localeExpectations.en.allianceFormed);
     expect(zh.translation.factions.event_labels.alliance_formed).toBe(localeExpectations.zh.allianceFormed);
+    expect(en.translation.factions.source_selected).toBe('Selected branch: {{branch}}');
+    expect(zh.translation.factions.source_selected).toBe('所选分支：{{branch}}');
+    expect(en.translation.factions.source_ancestor).toBe('Ancestor/source branch: {{branch}}');
+    expect(zh.translation.factions.source_ancestor).toBe('祖先/来源分支：{{branch}}');
+    expect(en.translation.factions.source_unknown).toBe(localeExpectations.en.unknownSource);
+    expect(zh.translation.factions.source_unknown).toBe(localeExpectations.zh.unknownSource);
+    expect(en.translation.factions.scope_branch_lineage).toBe(localeExpectations.en.lineageScope);
+    expect(zh.translation.factions.scope_branch_lineage).toBe(localeExpectations.zh.lineageScope);
   });
 
   it('returns null when not visible', async () => {
@@ -236,6 +256,9 @@ describe('FactionTimeline', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
         {
           round: 1,
+          branch_id: 'b1',
+          scope_kind: 'branch_lineage',
+          scope_caveat: 'Raw server scope prose must not be displayed.',
           factions: [
             { key: 'moderates', label: 'Moderates', members: ['a1', 'a2'], stance_center: 0.123, confidence: 0.5 },
           ],
@@ -251,7 +274,10 @@ describe('FactionTimeline', () => {
     expect(await screen.findByRole('heading', { name: expected.title })).toBeInTheDocument();
     expect(screen.getByRole('list', { name: expected.a11yLabel })).toBeInTheDocument();
     expect(screen.getByText(expected.roundLabel)).toBeInTheDocument();
-    expect(screen.getAllByText(expected.branchScope)).toHaveLength(2);
+    expect(screen.getByText(expected.branchScope)).toBeInTheDocument();
+    expect(screen.getByText(expected.selectedSource)).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(expected.lineageScope);
+    expect(screen.queryByText('Raw server scope prose must not be displayed.')).toBeNull();
     expect(screen.getByText(expected.roundSpan)).toBeInTheDocument();
     expect(screen.getByText(expected.membersSummary)).toBeInTheDocument();
     expect(screen.getByText(expected.stanceSummary)).toBeInTheDocument();
@@ -261,6 +287,129 @@ describe('FactionTimeline', () => {
     expect(screen.getByText(expected.allianceFormed)).toBeInTheDocument();
     expect(screen.getByText(expected.actor)).toBeInTheDocument();
     expect(screen.getAllByText(expected.faction)).toHaveLength(2);
+  });
+
+  it.each([
+    ['en', localeExpectations.en],
+    ['zh', localeExpectations.zh],
+  ] as const)('shows truthful selected and ancestor round sources in %s', async (language, expected) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: 'ancestor-branch-1234',
+        scope_kind: 'branch_lineage',
+        scope_caveat: 'Server-authored English must stay hidden.',
+        factions: [
+          { key: 'root-faction', label: 'Root Faction', members: ['a1'], affect_center: 0.1, member_share: 0.5 },
+        ],
+        events: [],
+      },
+      {
+        round: 3,
+        branch_id: 'b1',
+        scope_kind: 'branch_lineage',
+        scope_caveat: 'Server-authored English must stay hidden.',
+        factions: [
+          { key: 'child-faction', label: 'Child Faction', members: ['a2'], affect_center: 0.2, member_share: 0.5 },
+        ],
+        events: [],
+      },
+    ]));
+
+    await renderFactionTimeline(language);
+
+    expect(await screen.findByText(expected.ancestorSource)).toBeInTheDocument();
+    expect(screen.getByText(expected.selectedSource)).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(expected.lineageScope);
+    expect(screen.queryByText('Server-authored English must stay hidden.')).toBeNull();
+  });
+
+  it('keeps a self-contained replay timeline labeled only as the selected branch', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: 'replay-branch',
+        scope_kind: 'branch_lineage',
+        scope_caveat: 'Self-contained replay scope.',
+        factions: [
+          { key: 'replay-faction', label: 'Replay Faction', members: ['a1'], affect_center: 0.1, member_share: 1 },
+        ],
+        events: [],
+      },
+    ]));
+
+    await renderFactionTimeline('en', {
+      branchId: 'replay-branch',
+      branchLabel: 'Replay Clone',
+    });
+
+    expect(await screen.findByText('Selected branch: Replay Clone')).toBeInTheDocument();
+    expect(screen.queryByText(/Ancestor\/source branch:/)).toBeNull();
+  });
+
+  it('uses a short selected branch id when its label is unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: 'selected-branch-5678',
+        scope_kind: 'branch_lineage',
+        factions: [
+          { key: 'selected-faction', label: 'Selected Faction', members: ['a1'], affect_center: 0, member_share: 1 },
+        ],
+        events: [],
+      },
+    ]));
+
+    await renderFactionTimeline('en', {
+      branchId: 'selected-branch-5678',
+      branchLabel: null,
+    });
+
+    expect(await screen.findByText('Selected branch: selected…5678')).toBeInTheDocument();
+  });
+
+  it('renders malformed round branch metadata safely without relabeling it as selected', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: { unexpected: true },
+        scope_kind: 'branch_lineage',
+        factions: [
+          { key: 'unknown-faction', label: 'Unknown Faction', members: ['a1'], affect_center: 0, member_share: 1 },
+        ],
+        events: [],
+      },
+    ]));
+
+    await renderFactionTimeline('en');
+
+    expect(await screen.findByText(localeExpectations.en.unknownSource)).toBeInTheDocument();
+    expect(screen.queryByText(localeExpectations.en.selectedSource)).toBeNull();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['legacy', 'branch_segment_only'],
+    ['malformed', 42],
+  ])('does not claim lineage scope for %s scope metadata', async (_label, scopeKind) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: 'b1',
+        ...(scopeKind === undefined ? {} : { scope_kind: scopeKind }),
+        scope_caveat: 'Untrusted scope prose.',
+        factions: [
+          { key: 'legacy-faction', label: 'Legacy Faction', members: ['a1'], affect_center: 0, member_share: 1 },
+        ],
+        events: [],
+      },
+    ]));
+
+    await renderFactionTimeline('en');
+
+    expect(await screen.findByText('Legacy Faction')).toBeInTheDocument();
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.queryByText('Untrusted scope prose.')).toBeNull();
   });
 
   it('renders one list item per round', async () => {
@@ -406,6 +555,7 @@ describe('FactionTimeline', () => {
       secondRequest.resolve(jsonResponse([
         {
           round: 2,
+          branch_id: 'b2',
           factions: [
             { key: 'late-branch-faction', label: 'Late Branch Faction', members: ['b2-agent'], stance_center: 0.6, confidence: 0.8 },
           ],
@@ -416,12 +566,14 @@ describe('FactionTimeline', () => {
     });
 
     expect(await screen.findByText('Late Branch Faction')).toBeInTheDocument();
-    expect(screen.getAllByText('Branch scope: Late Branch')).toHaveLength(2);
+    expect(screen.getByText('Branch scope: Late Branch')).toBeInTheDocument();
+    expect(screen.getByText('Selected branch: Late Branch')).toBeInTheDocument();
 
     await act(async () => {
       firstRequest.resolve(jsonResponse([
         {
           round: 1,
+          branch_id: 'b1',
           factions: [
             { key: 'archive-faction', label: 'Archive Branch Faction', members: ['b1-agent'], stance_center: 0.1, confidence: 0.4 },
           ],
@@ -434,7 +586,8 @@ describe('FactionTimeline', () => {
 
     expect(screen.getByText('Late Branch Faction')).toBeInTheDocument();
     expect(screen.queryByText('Archive Branch Faction')).toBeNull();
-    expect(screen.getAllByText('Branch scope: Late Branch')).toHaveLength(2);
+    expect(screen.getByText('Branch scope: Late Branch')).toBeInTheDocument();
+    expect(screen.getByText('Selected branch: Late Branch')).toBeInTheDocument();
   });
 
   it('opens NodeConversationSheet when an event row is clicked (FE-3-seq wire-up)', async () => {

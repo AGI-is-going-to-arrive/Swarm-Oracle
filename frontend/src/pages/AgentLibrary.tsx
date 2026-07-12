@@ -9,6 +9,7 @@ import {
   deleteAgent,
   getAgentFavorites,
   getSessionBoundUserId,
+  listAgentIdentities,
   markAgentFavorite,
   unmarkAgentFavorite,
 } from '../api/client';
@@ -16,6 +17,10 @@ import { useAgentStore } from '../stores/agentStore';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { AgentProfileModal } from '../components/AgentProfileModal';
 import { AgentCard } from '../components/AgentCard';
+import {
+  AgentPackDialog,
+  AgentPackExportDialog,
+} from '../components/AgentPackDialog';
 import { ExportButton, ImportDialog } from '../components/PersonaExportImport';
 import type { AgentIdentityInfo } from '../types';
 
@@ -29,8 +34,12 @@ export function AgentLibrary() {
     error: capError,
     reload: reloadCapability,
   } = useCapabilityCheck('custom_agents');
-  const { enabled: exportEnabled } = useCapabilityCheck('persona_export');
-  const { identities, loading, error, fetchIdentities } = useAgentStore();
+  const {
+    loading: exportLoading,
+    enabled: exportEnabled,
+    error: exportError,
+  } = useCapabilityCheck('persona_export');
+  const { identities, loading, error, fetchIdentities, setIdentities } = useAgentStore();
   const [profileAgent, setProfileAgent] = useState<AgentIdentityInfo | null>(null);
   const [tab, setTab] = useState<LibraryTab>('all');
   const [search, setSearch] = useState('');
@@ -39,6 +48,8 @@ export function AgentLibrary() {
   const [favoritesError, setFavoritesError] = useState<string | null>(null);
   const [pendingFavoriteId, setPendingFavoriteId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [agentPackOpen, setAgentPackOpen] = useState(false);
+  const [agentPackExportOpen, setAgentPackExportOpen] = useState(false);
 
   const refreshFavorites = useCallback(async () => {
     setFavoritesLoading(true);
@@ -135,10 +146,18 @@ export function AgentLibrary() {
   const handleImported = useCallback(
     () => {
       const userId = getSessionBoundUserId();
-      fetchIdentities(userId);
+      return fetchIdentities(userId);
     },
     [fetchIdentities],
   );
+
+  const handleAgentPackImported = useCallback(async () => {
+    const userId = getSessionBoundUserId();
+    const refreshed = await listAgentIdentities<AgentIdentityInfo[]>(userId);
+    setIdentities(refreshed);
+  }, [setIdentities]);
+
+  const agentPackAvailable = exportEnabled && !exportLoading && !exportError;
 
   const normalizedSearch = search.trim().toLowerCase();
   const filtered = useMemo(() => {
@@ -254,6 +273,24 @@ export function AgentLibrary() {
           <h1>{t('agents.library_title', 'Agent Library')}</h1>
         </div>
         <div className="agent-page__header-actions">
+          {agentPackAvailable && identities.length > 0 && (
+            <button
+              type="button"
+              className="agent-button"
+              onClick={() => setAgentPackExportOpen(true)}
+            >
+              {t('agent_pack.export_action', 'Export Agent Pack')}
+            </button>
+          )}
+          {agentPackAvailable && (
+            <button
+              type="button"
+              className="agent-button"
+              onClick={() => setAgentPackOpen(true)}
+            >
+              {t('agent_pack.import_action', 'Import Agent Pack')}
+            </button>
+          )}
           {exportEnabled && (
             <button
               type="button"
@@ -403,6 +440,16 @@ export function AgentLibrary() {
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImported={handleImported}
+      />
+      <AgentPackDialog
+        open={agentPackAvailable && agentPackOpen}
+        onClose={() => setAgentPackOpen(false)}
+        onImported={handleAgentPackImported}
+      />
+      <AgentPackExportDialog
+        open={agentPackAvailable && identities.length > 0 && agentPackExportOpen}
+        identities={identities}
+        onClose={() => setAgentPackExportOpen(false)}
       />
     </div>
   );

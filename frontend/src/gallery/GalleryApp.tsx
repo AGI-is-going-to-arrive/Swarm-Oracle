@@ -1,10 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { parsePublicArtifact, MAX_ARTIFACT_BYTES } from './parseArtifact';
+import { decodePublicArtifactHash } from './artifactLink';
 import { GalleryArtifactView } from './GalleryArtifactView';
 import { type PublicArtifact } from '../types';
 import './gallery.css';
 import './galleryI18n'; // Initialize independent i18n configurations
+
+function advanceLoadEpoch(epochRef: { current: number }): number {
+  epochRef.current += 1;
+  return epochRef.current;
+}
 
 export function GalleryApp() {
   const { t, i18n } = useTranslation();
@@ -12,58 +18,67 @@ export function GalleryApp() {
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const loadEpochRef = useRef(0);
+  const translationRef = useRef(t);
+  const i18nRef = useRef(i18n);
+
+  useEffect(() => {
+    translationRef.current = t;
+  }, [t]);
+
+  useEffect(() => {
+    i18nRef.current = i18n;
+  }, [i18n]);
 
   // Load artifact from Hash on mount and on hash changes
   useEffect(() => {
     const loadFromHash = () => {
+      const loadEpoch = advanceLoadEpoch(loadEpochRef);
       const hash = window.location.hash;
-      if (hash.startsWith('#data=')) {
-        const dataStr = hash.substring(6);
-        if (dataStr.length > MAX_ARTIFACT_BYTES) {
-          setError(t('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
-          setArtifact(null);
-          return;
+      if (!hash.startsWith('#data=')) {
+        setArtifact(null);
+        setError(null);
+        return;
+      }
+
+      const decoded = decodePublicArtifactHash(hash);
+      if (!decoded.ok) {
+        if (decoded.reason === 'too_large') {
+          setError(translationRef.current('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
+        } else {
+          setError(translationRef.current('gallery.error_malformed'));
         }
-        try {
-          // Try decodeURIComponent first
-          let decoded = decodeURIComponent(dataStr);
-          let parsed = parsePublicArtifact(decoded);
-          if (parsed.ok) {
-            setArtifact(parsed.artifact);
-            setError(null);
-            if (parsed.artifact.language) {
-              i18n.changeLanguage(parsed.artifact.language);
-            }
-            return;
-          }
-          // Try base64 decoding (atob) as fallback
-          try {
-            decoded = atob(dataStr);
-            parsed = parsePublicArtifact(decoded);
-            if (parsed.ok) {
-              setArtifact(parsed.artifact);
-              setError(null);
-              if (parsed.artifact.language) {
-                i18n.changeLanguage(parsed.artifact.language);
-              }
-              return;
-            }
-          } catch {
-            // ignore
-          }
-          setError(t('gallery.error_malformed'));
-        } catch {
-          setError(t('gallery.error_malformed'));
+        setArtifact(null);
+        return;
+      }
+
+      const parsed = parsePublicArtifact(decoded.json);
+      if (loadEpoch !== loadEpochRef.current) return;
+      if (parsed.ok) {
+        setArtifact(parsed.artifact);
+        setError(null);
+        if (parsed.artifact.language) {
+          i18nRef.current.changeLanguage(parsed.artifact.language);
         }
+      } else if (parsed.reason === 'unknown_version') {
+        setError(translationRef.current('gallery.error_unknown_version'));
+        setArtifact(null);
+      } else {
+        setError(translationRef.current('gallery.error_malformed'));
+        setArtifact(null);
       }
     };
 
     loadFromHash();
     window.addEventListener('hashchange', loadFromHash);
-    return () => window.removeEventListener('hashchange', loadFromHash);
-  }, [t, i18n]);
+    return () => {
+      advanceLoadEpoch(loadEpochRef);
+      window.removeEventListener('hashchange', loadFromHash);
+    };
+  }, []);
 
   const handleFile = (file: File) => {
+    const loadEpoch = advanceLoadEpoch(loadEpochRef);
     if (file.size > MAX_ARTIFACT_BYTES) {
       setError(t('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
       setArtifact(null);
@@ -71,31 +86,42 @@ export function GalleryApp() {
     }
     const reader = new FileReader();
     reader.onload = (e) => {
+      if (loadEpoch !== loadEpochRef.current) return;
       const text = e.target?.result;
-      if (typeof text !== 'string') return;
+      if (typeof text !== 'string') {
+        setError(translationRef.current('gallery.error_malformed'));
+        setArtifact(null);
+        return;
+      }
       const parsed = parsePublicArtifact(text);
+      if (loadEpoch !== loadEpochRef.current) return;
       if (parsed.ok) {
         setArtifact(parsed.artifact);
         setError(null);
         if (parsed.artifact.language) {
-          i18n.changeLanguage(parsed.artifact.language);
+          i18nRef.current.changeLanguage(parsed.artifact.language);
         }
       } else {
         if (parsed.reason === 'unknown_version') {
-          setError(t('gallery.error_unknown_version'));
+          setError(translationRef.current('gallery.error_unknown_version'));
         } else {
-          setError(t('gallery.error_malformed'));
+          setError(translationRef.current('gallery.error_malformed'));
         }
         setArtifact(null);
       }
+    };
+    reader.onerror = () => {
+      if (loadEpoch !== loadEpochRef.current) return;
+      setError(translationRef.current('gallery.error_malformed'));
+      setArtifact(null);
     };
     reader.readAsText(file);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFile(e.target.files[0]);
-    }
+    const file = e.currentTarget.files?.[0] ?? null;
+    e.currentTarget.value = '';
+    if (file) handleFile(file);
   };
 
   const handleDragOver = (e: React.DragEvent) => {

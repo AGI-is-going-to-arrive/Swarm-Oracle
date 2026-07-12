@@ -7,6 +7,7 @@ import {
   createMultiRun,
   createReplayArtifact,
   createScenario,
+  exportAgentPack,
   exportScenario,
   exportScenarioSnapshot,
   generateReport,
@@ -16,9 +17,12 @@ import {
   getAgentProfileData,
   getIdentityMemories,
   getInterventionEffects,
+  getReplayTrace,
   getScenario,
   getSessionBoundUserId,
   identityContinuityPreflight,
+  importAgentPack,
+  importLocalPackDemoSnapshot,
   importScenarioSnapshot,
   importOfficialSample,
   normalizeScenarioAgentSource,
@@ -28,6 +32,7 @@ import {
   createModelProfile,
 } from './client';
 import type {
+  AgentPackV1,
   CreateScenarioOptions,
   InterventionEffectsResponse,
 } from './client';
@@ -362,6 +367,138 @@ describe('api client request parsing', () => {
       '/api/samples/sample%2Fa%20b/import',
       expect.objectContaining({ method: 'POST', signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it('imports a local-pack demo snapshot with encoded segments, caller signal, and no body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        scenario_id: 'scenario-1',
+        pack_id: 'pack/a b',
+        demo_snapshot_id: 'demo/c d',
+        status: 'imported',
+      })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const result = importLocalPackDemoSnapshot('pack/a b', 'demo/c d', {
+      signal: controller.signal,
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    controller.abort();
+    expect(init.signal?.aborted).toBe(true);
+
+    await expect(result).resolves.toEqual({
+      scenario_id: 'scenario-1',
+      pack_id: 'pack/a b',
+      demo_snapshot_id: 'demo/c d',
+      status: 'imported',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/packs/pack%2Fa%20b/demo-snapshots/demo%2Fc%20d/import',
+      expect.objectContaining({
+        method: 'POST',
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(init).not.toHaveProperty('body');
+  });
+});
+
+describe('agent pack client APIs', () => {
+  const pack: AgentPackV1 = {
+    format: 'swarmoracle.agent_pack',
+    schema_version: 1,
+    exported_at: '2026-07-12T01:02:03Z',
+    title: 'Research team',
+    agents: [{
+      name: 'Ada',
+      role: 'Forecaster',
+      persona_text: 'Careful and concise.',
+      decision_bias: {
+        caution: 0.8,
+        optimism: 0.4,
+        conservatism: 0.5,
+        risk_tolerance: 0.3,
+        creativity: 0.6,
+      },
+      tags: ['science'],
+    }],
+  };
+
+  afterEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('exports a pack with the exact request body and caller signal', async () => {
+    localStorage.setItem('swarmoracle_user_id', 'pack-owner');
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      text: vi.fn().mockResolvedValue(JSON.stringify(pack)),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const result = exportAgentPack(
+      { title: 'Research team', identity_ids: ['agent/1', 'agent-2'] },
+      { signal: controller.signal },
+    );
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    controller.abort();
+
+    await expect(result).resolves.toEqual(pack);
+    expect(path).toBe('/api/agents/packs/export?user_id=pack-owner');
+    expect(init).toEqual(expect.objectContaining({
+      method: 'POST',
+      signal: expect.any(AbortSignal),
+      body: JSON.stringify({ title: 'Research team', identity_ids: ['agent/1', 'agent-2'] }),
+    }));
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('imports one exact pack without adding owner or credential fields', async () => {
+    localStorage.setItem('swarmoracle_user_id', 'pack-owner');
+    const response = {
+      success: true as const,
+      title: 'Research team',
+      imported_count: 1,
+      identities: [{
+        slot_order: 0,
+        identity_id: 'identity-1',
+        display_name: 'Ada',
+        role: 'Forecaster',
+      }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      text: vi.fn().mockResolvedValue(JSON.stringify(response)),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const result = importAgentPack(pack, { signal: controller.signal });
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    controller.abort();
+
+    await expect(result).resolves.toEqual(response);
+    expect(path).toBe('/api/agents/packs/import?user_id=pack-owner');
+    expect(init).toEqual(expect.objectContaining({
+      method: 'POST',
+      signal: expect.any(AbortSignal),
+      body: JSON.stringify(pack),
+    }));
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('owner');
+    expect(body).not.toHaveProperty('user_id');
+    expect(body).not.toHaveProperty('api_key');
+    expect(init.signal?.aborted).toBe(true);
   });
 });
 
@@ -1065,5 +1202,100 @@ describe('model profile client APIs', () => {
     const init = callArgs[1] as RequestInit;
     const body = JSON.parse(init.body as string);
     expect(body.user_id).toBe('explicit-user');
+  });
+});
+
+describe('replay trace branch wire contract', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubReplayTrace(): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue('{"nodes":[],"next_cursor":null}'),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('maps a trimmed target branch to encoded branch_id and forwards cursor, limit, and signal', async () => {
+    const fetchMock = stubReplayTrace();
+    const controller = new AbortController();
+
+    const result = getReplayTrace(
+      'scenario/a b',
+      { targetBranchId: ' branch/child?2 ', cursor: ' cursor/page 2 ', limit: 25 },
+      { signal: controller.signal },
+    );
+    const [rawUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    controller.abort();
+
+    await expect(result).resolves.toEqual({ nodes: [], next_cursor: null });
+    const url = new URL(rawUrl, 'http://localhost');
+    expect(url.pathname).toBe('/api/scenario/scenario%2Fa%20b/replay-trace');
+    expect(url.searchParams.get('branch_id')).toBe('branch/child?2');
+    expect(url.searchParams.get('root_branch_id')).toBeNull();
+    expect(url.searchParams.get('after')).toBe('cursor/page 2');
+    expect(url.searchParams.get('limit')).toBe('25');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('keeps explicit rootBranchId and deprecated branch_id mapped to legacy root_branch_id', async () => {
+    const fetchMock = stubReplayTrace();
+
+    await getReplayTrace('scenario-1', { rootBranchId: ' root/one ' });
+    await getReplayTrace('scenario-1', { branch_id: ' legacy/two ' });
+
+    const explicitRoot = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost');
+    const legacyAlias = new URL(String(fetchMock.mock.calls[1][0]), 'http://localhost');
+    expect(explicitRoot.searchParams.get('root_branch_id')).toBe('root/one');
+    expect(explicitRoot.searchParams.get('branch_id')).toBeNull();
+    expect(legacyAlias.searchParams.get('root_branch_id')).toBe('legacy/two');
+    expect(legacyAlias.searchParams.get('branch_id')).toBeNull();
+  });
+
+  it('treats blank target, root, legacy, and cursor values as absent', async () => {
+    const fetchMock = stubReplayTrace();
+
+    await getReplayTrace('scenario-1', {
+      targetBranchId: '   ',
+      rootBranchId: '\t',
+      branch_id: '\n',
+      cursor: '  ',
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/scenario/scenario-1/replay-trace');
+  });
+
+  it('forwards a caller signal when loading scenario metadata for replay scope', async () => {
+    const fetchMock = stubReplayTrace();
+    const controller = new AbortController();
+
+    const result = getScenario('scenario-1', { signal: controller.signal });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    controller.abort();
+
+    await expect(result).resolves.toEqual({ nodes: [], next_cursor: null });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it.each([
+    [{ targetBranchId: 'target', rootBranchId: 'root' }],
+    [{ targetBranchId: 'target', branch_id: 'legacy-root' }],
+  ])('rejects simultaneous target and root semantics before issuing a request', async (options) => {
+    const fetchMock = stubReplayTrace();
+
+    await expect(getReplayTrace('scenario-1', options)).rejects.toThrow(
+      'targetBranchId cannot be combined with rootBranchId or branch_id',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

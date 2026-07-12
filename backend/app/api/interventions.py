@@ -36,6 +36,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 from app.services.campaign import normalize_scenario_gameplay_state
 from app.services.gameplay_contract import (
     build_server_card_prompt,
@@ -729,13 +730,15 @@ async def intervene_retrospective(
                     f"Retrospective fork depth limit is {MAX_RETROSPECTIVE_FORK_DEPTH}",
                 )
 
-            # Validate round_number exists in this branch
-            max_round = session.exec(
-                select(func.max(Round.round_number)).where(Round.branch_id == req.branch_id)
-            ).one_or_none()
-            max_round = max_round if max_round is not None else 0
+            source_selection = select_branch_rounds(
+                session,
+                scenario_id=scenario_id,
+                branch_id=req.branch_id,
+                requested_cutoff=req.round_number,
+            )
+            max_round = source_selection.max_round or 0
 
-            if req.round_number > max_round:
+            if not source_selection.contains(req.round_number):
                 raise api_error(
                     422,
                     "RETROSPECTIVE_ROUND_OUT_OF_RANGE",
@@ -816,6 +819,8 @@ async def intervene_retrospective(
                 close()
             raise
         simulation_lease = None
+    except BranchLineageError as exc:
+        raise api_error(409, exc.code, "Branch lineage is invalid") from exc
     except Exception:
         if new_branch_id is not None:
             _cleanup_retrospective_start(
