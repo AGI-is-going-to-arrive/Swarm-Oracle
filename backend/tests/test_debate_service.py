@@ -29,6 +29,7 @@ from app.services.debate_scoring import (
     _build_phase_deltas,
     _profile_dimension_bias,
 )
+from app.services.llm_client import LLMError
 from app.services.runtime_lock import (
     RuntimeLockBusyError,
     RuntimeLockLease,
@@ -93,6 +94,7 @@ async def test_run_debate_background_finishes_with_structured_result():
     assert snapshot is not None
     assert result is not None
     assert snapshot["status"] == "done"
+    assert result["result"]["adjudication_mode"] == "deterministic"
     assert snapshot["language"] == "zh"
     assert snapshot["profile_id"] == "governance"
     assert snapshot["counterplay"]["kind"] == "winner"
@@ -628,6 +630,284 @@ async def test_run_debate_background_sends_generic_error_to_clients(monkeypatch)
             "error": debate_module.GENERIC_DEBATE_ERROR,
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_marks_error_when_llm_turn_retries_are_exhausted(
+    monkeypatch,
+):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    monkeypatch.setattr(debate_module.settings, "FEATURE_ARGUMENT_MAP", False)
+    debate = create_debate_record("Should a failed debate provider still publish a verdict?")
+    pushed_events: list[dict] = []
+    attempts = 0
+
+    async def _static_cast(language, profile_id, *, question="", **_kwargs):
+        return debate_module.build_cast(language, profile_id, question=question)
+
+    async def _fail_turn_provider(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise LLMError("Provider unavailable", code="LLM_UNREACHABLE")
+
+    async def _deterministic_judge(**_kwargs):
+        return {
+            "summary": "Deterministic judge summary",
+            "winner_reason": "Deterministic winner reason",
+            "loser_gap": "Deterministic loser gap",
+            "swing_factor": "Deterministic swing factor",
+            "closing_note": "Deterministic closing note",
+            "dimension_rationales": {},
+            "counterplay_explanation": "",
+            "adjudication": None,
+        }
+
+    async def _keep_insights(_debate, insights, _turns, **_kwargs):
+        return insights
+
+    async def _no_supporting_turns(*_args, **_kwargs):
+        return []
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(debate_module, "build_cast_async", _static_cast)
+    monkeypatch.setattr(debate_module, "llm_call", _fail_turn_provider)
+    monkeypatch.setattr(debate_module, "_generate_judge_analysis", _deterministic_judge)
+    monkeypatch.setattr(debate_module, "_enhance_insights_with_llm", _keep_insights)
+    monkeypatch.setattr(debate_module, "_build_supporting_turns", _no_supporting_turns)
+
+    with pytest.raises(LLMError, match="Provider unavailable"):
+        await run_debate_background(debate.id, ws_callback=_push)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert attempts == 2
+    assert snapshot["status"] == "error"
+    assert snapshot["result_ready"] is False
+    assert load_debate_result_payload(debate.id) is None
+    assert not any(event["type"] == "debate_verdict" for event in pushed_events)
+    assert not any(
+        event["type"] == "status" and event["data"].get("status") == "done"
+        for event in pushed_events
+    )
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_turn_content_rejects_empty_output_after_retry(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    debate = create_debate_record("Should empty provider output count as a debate turn?")
+    attempts = 0
+
+    async def _empty_turn_provider(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return "   "
+
+    with Session(get_engine()) as session:
+        stored = session.get(debate_module.Debate, debate.id)
+        assert stored is not None
+        runtime_debate = debate_module._snapshot_debate_runtime(stored)
+
+    monkeypatch.setattr(debate_module, "llm_call", _empty_turn_provider)
+
+    with pytest.raises(LLMError) as exc_info:
+        await debate_module._generate_turn_content(
+            debate=runtime_debate,
+            plan=debate_module.build_debate_plan(runtime_debate.question),
+            phase=DebatePhase.OPENING,
+            side=DebateSide.PROPOSITION,
+            speaker_name=runtime_debate.proposition_name,
+            recent_turns=[],
+        )
+
+    assert attempts == 2
+    assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_marks_error_when_llm_judge_provider_fails(
+    monkeypatch,
+):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    monkeypatch.setattr(debate_module.settings, "FEATURE_ARGUMENT_MAP", False)
+    debate = create_debate_record("Should a failed judge provider still publish a verdict?")
+    pushed_events: list[dict] = []
+    judge_attempts = 0
+
+    async def _static_cast(language, profile_id, *, question="", **_kwargs):
+        return debate_module.build_cast(language, profile_id, question=question)
+
+    async def _successful_turn_provider(*_args, **_kwargs):
+        return "Provider-generated debate turn"
+
+    async def _fail_judge_provider(*_args, **_kwargs):
+        nonlocal judge_attempts
+        judge_attempts += 1
+        raise LLMError("Judge provider unavailable", code="LLM_UNREACHABLE")
+
+    async def _keep_insights(_debate, insights, _turns, **_kwargs):
+        return insights
+
+    async def _no_supporting_turns(*_args, **_kwargs):
+        return []
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    monkeypatch.setattr(debate_module, "build_cast_async", _static_cast)
+    monkeypatch.setattr(debate_module, "llm_call", _successful_turn_provider)
+    monkeypatch.setattr(
+        debate_module,
+        "llm_call_json_with_stream_fallback",
+        _fail_judge_provider,
+    )
+    monkeypatch.setattr(debate_module, "_enhance_insights_with_llm", _keep_insights)
+    monkeypatch.setattr(debate_module, "_build_supporting_turns", _no_supporting_turns)
+
+    with pytest.raises(LLMError, match="Judge provider unavailable"):
+        await run_debate_background(debate.id, ws_callback=_push)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert judge_attempts == 1
+    assert snapshot["status"] == "error"
+    assert snapshot["result_ready"] is False
+    assert len(snapshot["turns"]) == 8
+    assert load_debate_result_payload(debate.id) is None
+    assert not any(event["type"] == "debate_verdict" for event in pushed_events)
+    assert not any(
+        event["type"] == "status" and event["data"].get("status") == "done"
+        for event in pushed_events
+    )
+    assert pushed_events[-1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": debate_module.GENERIC_DEBATE_ERROR,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "judge_payload",
+    [
+        {},
+        {"summary": "   "},
+        {"unknown_field": "not a judge signal"},
+    ],
+)
+async def test_generate_judge_analysis_rejects_payload_without_usable_signals(
+    monkeypatch,
+    judge_payload,
+):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    debate = create_debate_record("Should an empty judge payload still publish a verdict?")
+
+    async def _empty_judge_provider(*_args, **_kwargs):
+        return judge_payload
+
+    monkeypatch.setattr(
+        debate_module,
+        "llm_call_json_with_stream_fallback",
+        _empty_judge_provider,
+    )
+
+    with pytest.raises(LLMError) as exc_info:
+        await debate_module._generate_judge_analysis(
+            debate_id=debate.id,
+            debate=debate,
+            plan=debate_module.build_debate_plan(debate.question),
+        )
+
+    assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+
+
+@pytest.mark.asyncio
+async def test_generate_judge_analysis_accepts_one_usable_signal(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    debate = create_debate_record("Should a partial judge payload remain recoverable?")
+
+    async def _partial_judge_provider(*_args, **_kwargs):
+        return {"winner_reason": "The provider identified the decisive argument."}
+
+    monkeypatch.setattr(
+        debate_module,
+        "llm_call_json_with_stream_fallback",
+        _partial_judge_provider,
+    )
+
+    result = await debate_module._generate_judge_analysis(
+        debate_id=debate.id,
+        debate=debate,
+        plan=debate_module.build_debate_plan(debate.question),
+    )
+
+    assert result["winner_reason"] == "The provider identified the decisive argument."
+    assert result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_allows_one_failed_turn_attempt_to_recover(
+    monkeypatch,
+):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    monkeypatch.setattr(debate_module.settings, "FEATURE_ARGUMENT_MAP", False)
+    debate = create_debate_record("Should a transient debate provider failure be retried?")
+    attempts = 0
+
+    async def _static_cast(language, profile_id, *, question="", **_kwargs):
+        return debate_module.build_cast(language, profile_id, question=question)
+
+    async def _recovering_turn_provider(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LLMError("Transient provider failure", code="LLM_UNREACHABLE")
+        return f"Recovered turn {attempts}"
+
+    async def _deterministic_judge(**_kwargs):
+        return {
+            "summary": "Recovered judge summary",
+            "winner_reason": "Recovered winner reason",
+            "loser_gap": "Recovered loser gap",
+            "swing_factor": "Recovered swing factor",
+            "closing_note": "Recovered closing note",
+            "dimension_rationales": {},
+            "counterplay_explanation": "",
+            "adjudication": None,
+        }
+
+    async def _keep_insights(_debate, insights, _turns, **_kwargs):
+        return insights
+
+    async def _no_supporting_turns(*_args, **_kwargs):
+        return []
+
+    async def _push(_debate_id: str, _event: dict) -> None:
+        return None
+
+    monkeypatch.setattr(debate_module, "build_cast_async", _static_cast)
+    monkeypatch.setattr(debate_module, "llm_call", _recovering_turn_provider)
+    monkeypatch.setattr(debate_module, "_generate_judge_analysis", _deterministic_judge)
+    monkeypatch.setattr(debate_module, "_enhance_insights_with_llm", _keep_insights)
+    monkeypatch.setattr(debate_module, "_build_supporting_turns", _no_supporting_turns)
+
+    await run_debate_background(debate.id, ws_callback=_push)
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert attempts == 10
+    assert snapshot["status"] == "done"
+    assert snapshot["result_ready"] is True
 
 
 def test_create_debate_record_uses_english_defaults_for_non_chinese_questions():

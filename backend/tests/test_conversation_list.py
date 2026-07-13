@@ -15,6 +15,7 @@ from sqlmodel import Session
 import app.api.scenarios as scenarios_api
 from app.main import app
 from app.models.agent_conversation import AgentConversationThread
+from app.models.agent_identity import AgentIdentity
 from app.models.database import Scenario, ScenarioStatus, get_engine
 
 
@@ -59,12 +60,14 @@ def _seed_thread(
     thread_id: str,
     created_at: datetime,
     owner_user_id: str = "",
+    agent_identity_id: str | None = None,
 ) -> str:
     engine = get_engine()
     thread = AgentConversationThread(
         id=thread_id,
         scenario_id=scenario_id,
         owner_user_id=owner_user_id,
+        agent_identity_id=agent_identity_id,
         origin_round_number=1,
         origin_node_id=f"node-{thread_id}",
         origin_node_type="event",
@@ -76,6 +79,37 @@ def _seed_thread(
         session.add(thread)
         session.commit()
         return thread.id
+
+
+def _seed_identity(*, user_id: str) -> str:
+    engine = get_engine()
+    identity = AgentIdentity(
+        user_id=user_id,
+        kind="custom",
+        display_name="Conversation list identity",
+        role="Analyst",
+        continuity_key=f"list-{user_id or 'ownerless'}",
+    )
+    with Session(engine) as session:
+        session.add(identity)
+        session.commit()
+        session.refresh(identity)
+        return identity.id
+
+
+def _set_dangling_identity(thread_id: str, identity_id: str) -> None:
+    connection = get_engine().raw_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        cursor.execute(
+            "UPDATE agent_conversation_thread SET agent_identity_id = ? WHERE id = ?",
+            (identity_id, thread_id),
+        )
+        connection.commit()
+        cursor.execute("PRAGMA foreign_keys = ON")
+    finally:
+        connection.close()
 
 
 def _thread_ids(body: dict) -> list[str]:
@@ -173,6 +207,123 @@ def test_list_scenario_conversations_enforces_scenario_ownership(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
+
+
+def test_list_scenario_conversations_filters_thread_owner_before_pagination(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    secret = "conversation-list-secret"
+    monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", secret)
+    scenario_id = _seed_scenario(user_id="alice")
+    base = datetime(2026, 5, 10, tzinfo=timezone.utc)
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-owned-old",
+        created_at=base,
+        owner_user_id="alice",
+    )
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-owned-new",
+        created_at=base + timedelta(minutes=1),
+        owner_user_id="alice",
+    )
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-ownerless-newest",
+        created_at=base + timedelta(minutes=2),
+    )
+    token = _make_signed_token(secret, "alice")
+
+    first = client.get(
+        f"/api/scenario/{scenario_id}/conversations",
+        params={"cursor": 0, "limit": 1},
+        headers={"X-Session-Token": token},
+    )
+    second = client.get(
+        f"/api/scenario/{scenario_id}/conversations",
+        params={"cursor": 1, "limit": 1},
+        headers={"X-Session-Token": token},
+    )
+
+    assert first.status_code == 200
+    assert _thread_ids(first.json()) == ["thread-owned-new"]
+    assert first.json()["cursor"] == 1
+    assert first.json()["has_more"] is True
+    assert second.status_code == 200
+    assert _thread_ids(second.json()) == ["thread-owned-old"]
+    assert second.json()["cursor"] == 0
+    assert second.json()["has_more"] is False
+
+
+def test_list_scenario_conversations_filters_identity_chain_before_pagination(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    secret = "conversation-list-secret"
+    monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", secret)
+    scenario_id = _seed_scenario(user_id="alice")
+    owned_identity = _seed_identity(user_id="alice")
+    ownerless_identity = _seed_identity(user_id="")
+    foreign_identity = _seed_identity(user_id="bob")
+    base = datetime(2026, 5, 10, tzinfo=timezone.utc)
+
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-valid-no-identity",
+        created_at=base,
+        owner_user_id="alice",
+    )
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-ownerless-identity",
+        created_at=base + timedelta(minutes=1),
+        owner_user_id="alice",
+        agent_identity_id=ownerless_identity,
+    )
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-valid-owned-identity",
+        created_at=base + timedelta(minutes=2),
+        owner_user_id="alice",
+        agent_identity_id=owned_identity,
+    )
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-foreign-identity",
+        created_at=base + timedelta(minutes=3),
+        owner_user_id="alice",
+        agent_identity_id=foreign_identity,
+    )
+    _seed_thread(
+        scenario_id,
+        thread_id="thread-dangling-identity",
+        created_at=base + timedelta(minutes=4),
+        owner_user_id="alice",
+    )
+    _set_dangling_identity("thread-dangling-identity", "missing-identity")
+    headers = {"X-Session-Token": _make_signed_token(secret, "alice")}
+
+    first = client.get(
+        f"/api/scenario/{scenario_id}/conversations",
+        params={"cursor": 0, "limit": 1},
+        headers=headers,
+    )
+    second = client.get(
+        f"/api/scenario/{scenario_id}/conversations",
+        params={"cursor": 1, "limit": 1},
+        headers=headers,
+    )
+
+    assert first.status_code == 200
+    assert _thread_ids(first.json()) == ["thread-valid-owned-identity"]
+    assert first.json()["cursor"] == 1
+    assert first.json()["has_more"] is True
+    assert second.status_code == 200
+    assert _thread_ids(second.json()) == ["thread-valid-no-identity"]
+    assert second.json()["cursor"] == 0
+    assert second.json()["has_more"] is False
 
 
 def test_list_scenario_conversations_empty_page(client: TestClient):

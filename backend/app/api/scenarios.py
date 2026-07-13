@@ -9,6 +9,7 @@ Extracted modules:
 
 from __future__ import annotations
 
+import hmac
 import io
 import json
 import logging
@@ -17,10 +18,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator, model_validator
+from sqlalchemy import exists as sa_exists
 from sqlalchemy import func as sa_func
+from sqlalchemy import or_ as sa_or
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
@@ -44,13 +47,14 @@ from app.api.schemas import (
     StoryBranch,
     TestLlmRequest,
 )
-from app.config import is_static_llm_configured, settings
+from app.config import is_placeholder_llm_api_key, is_static_llm_configured, settings
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentConversationThread,
     AgentGroup,
     AgentGroupMember,
+    AgentIdentity,
     AgentMessage,
     AgentTier,
     Branch,
@@ -735,10 +739,13 @@ async def _live_native_search_probe(
     model: str | None,
     supports_native_search_override: bool | None,
     native_search_upstream_override: str | None,
+    quota_key: str | None,
 ) -> dict[str, object]:
     """Make a real LLM call with native search tools to verify they work."""
     try:
         with llm_request_scope(
+            quota_key=quota_key,
+            purpose="provider_native_search_probe",
             supports_native_search_override=supports_native_search_override,
             native_search_upstream_override=native_search_upstream_override,
         ):
@@ -750,16 +757,30 @@ async def _live_native_search_probe(
                 native_search_domains=["en.wikipedia.org"],
                 timeout=30.0,
             )
+        visible_result = (result or "").strip()
+        if not visible_result:
+            return {
+                "status": "error",
+                "error": "LLM returned no visible content",
+                "error_code": "LLM_EMPTY",
+            }
         citations = get_last_native_citations()
         return {
             "status": "ok",
             "citations_found": len(citations),
-            "response_preview": (result or "")[:120],
+            "response_preview": visible_result[:120],
         }
     except Exception as exc:
+        safe_payload = safe_llm_error_payload(exc)
+        if safe_payload is not None:
+            return {
+                "status": "error",
+                "error": safe_payload["message"],
+                "error_code": safe_payload["code"],
+            }
         return {
             "status": "error",
-            "error": str(exc)[:200],
+            "error": _scrub_sensitive_text(str(exc))[:200],
         }
 
 
@@ -812,6 +833,44 @@ def _build_native_search_probe_hint(
             "inferred_upstream": decision.inferred_upstream,
         },
     }
+
+
+def _has_strict_admin_probe_authorization(x_admin_token: str | None) -> bool:
+    configured = settings.ADMIN_TOKEN.strip()
+    provided = (x_admin_token or "").strip()
+    return bool(
+        configured
+        and provided
+        and hmac.compare_digest(provided, configured)
+    )
+
+
+def _caller_controls_probe_provider(
+    req: TestLlmRequest,
+    *,
+    validated_base_url: str | None,
+) -> bool:
+    api_key = (req.llm_api_key or "").strip()
+    if api_key and not is_placeholder_llm_api_key(api_key):
+        return True
+    return bool(validated_base_url and is_local_provider_url(validated_base_url))
+
+
+def _require_paid_provider_probe_authorized(
+    req: TestLlmRequest,
+    *,
+    validated_base_url: str | None,
+    x_admin_token: str | None,
+) -> None:
+    if _caller_controls_probe_provider(req, validated_base_url=validated_base_url):
+        return
+    if _has_strict_admin_probe_authorization(x_admin_token):
+        return
+    raise api_error(
+        403,
+        "PROVIDER_PROBE_NOT_AUTHORIZED",
+        "Paid provider probes require explicit BYOK/local credentials or a configured admin token",
+    )
 
 
 def _build_native_search_probe_message(
@@ -1143,7 +1202,11 @@ async def api_health():
 
 
 @router.post("/health/test")
-async def api_health_test(req: TestLlmRequest):
+async def api_health_test(
+    req: TestLlmRequest,
+    principal: SessionPrincipal | None = Depends(get_session_principal),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+):
     """Test LLM connectivity with optional BYOK credentials.
 
     If all fields are empty, tests the server default configuration.
@@ -1151,6 +1214,13 @@ async def api_health_test(req: TestLlmRequest):
     validated_base_url = validate_llm_base_url(req.llm_base_url)
     if req.llm_base_url and validated_base_url is None:
         raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+    if req.include_probe:
+        _require_paid_provider_probe_authorized(
+            req,
+            validated_base_url=validated_base_url,
+            x_admin_token=x_admin_token,
+        )
+    quota_key = f"user:{principal.subject}" if principal is not None else None
     if req.native_probe_only:
         native_search = _build_native_search_probe_hint(
             llm_base_url=validated_base_url,
@@ -1159,12 +1229,18 @@ async def api_health_test(req: TestLlmRequest):
             model=req.llm_model,
         )
         if req.live_native_test and native_search.get("would_inject_tools"):
+            _require_paid_provider_probe_authorized(
+                req,
+                validated_base_url=validated_base_url,
+                x_admin_token=x_admin_token,
+            )
             live_result = await _live_native_search_probe(
                 api_key=req.llm_api_key or None,
                 base_url=validated_base_url,
                 model=req.llm_model or None,
                 supports_native_search_override=req.supports_native_search_override,
                 native_search_upstream_override=req.native_search_upstream_override,
+                quota_key=quota_key,
             )
             native_search["live_result"] = live_result
         return {
@@ -1182,11 +1258,15 @@ async def api_health_test(req: TestLlmRequest):
             native_search_upstream_override=req.native_search_upstream_override,
             model=req.llm_model,
         )
-    llm_status = await health_check(
-        api_key=req.llm_api_key or None,
-        base_url=validated_base_url,
-        model=req.llm_model or None,
-    )
+    with llm_request_scope(
+        quota_key=quota_key,
+        purpose="provider_health_test",
+    ):
+        llm_status = await health_check(
+            api_key=req.llm_api_key or None,
+            base_url=validated_base_url,
+            model=req.llm_model or None,
+        )
     probe = None
     if req.include_probe and llm_status.get("status") == "ok":
         probe = await measure_provider_parallelism(
@@ -2321,11 +2401,23 @@ async def list_scenario_conversations(
                 "Feature 'agent_conversation' is not enabled",
             )
 
+        stmt = select(AgentConversationThread).where(
+            AgentConversationThread.scenario_id == scenario_id
+        )
+        if principal is not None:
+            stmt = stmt.where(
+                AgentConversationThread.owner_user_id == principal.subject,
+                sa_or(
+                    AgentConversationThread.agent_identity_id.is_(None),
+                    sa_exists().where(
+                        AgentIdentity.id == AgentConversationThread.agent_identity_id,
+                        AgentIdentity.user_id == principal.subject,
+                    ),
+                ),
+            )
         rows = list(
             session.exec(
-                select(AgentConversationThread)
-                .where(AgentConversationThread.scenario_id == scenario_id)
-                .order_by(
+                stmt.order_by(
                     AgentConversationThread.created_at.desc(),
                     AgentConversationThread.id.desc(),
                 )

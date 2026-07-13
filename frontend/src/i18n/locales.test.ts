@@ -194,6 +194,27 @@ describe('i18n locale resources', () => {
     expect(zh.translation.setup.allow_unverified_label).toContain('可能无法运行');
   });
 
+  it('states the BYOK provider and lightweight preflight boundaries in both locales', () => {
+    expect(en.translation.home.byok_api_key_help).toBe(
+      'Remote providers require a real API key. Exact-local endpoints may leave it blank. Stored only in this tab session.',
+    );
+    expect(zh.translation.home.byok_api_key_help).toBe(
+      '远端模型服务必须填写真实 API key；精确本地地址可留空。仅保存在当前标签页会话中。',
+    );
+    expect(en.translation.home.byok_hint).toBe(
+      'Supports OpenAI-compatible Chat Completions and Responses APIs (leave all fields empty to use server defaults)',
+    );
+    expect(zh.translation.home.byok_hint).toBe(
+      '支持 OpenAI 兼容的 Chat Completions 与 Responses API（所有字段均留空时使用服务器默认配置）',
+    );
+    expect(en.translation.home.byok_preflight_required).toBe(
+      'With an API key, a fresh lightweight connection check runs automatically before the simulation starts; it does not run the parallelism probe.',
+    );
+    expect(zh.translation.home.byok_preflight_required).toBe(
+      '填写 API key 后，开始推演前会自动执行一次新的轻量连接检查；不会运行并发探测。',
+    );
+  });
+
   it('provides Sprint 3 snapshot, roundtable, and drift labels in both locales', () => {
     expect(en.translation.result.ending_count).toContain('{{count}}');
     expect(zh.translation.result.ending_count).toContain('{{count}}');

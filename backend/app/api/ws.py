@@ -417,9 +417,9 @@ async def websocket_endpoint(websocket: WebSocket, scenario_id: str):
 # behave identically to the scenario-scoped endpoint.  ``thread_id`` is
 # passed as the manager scope key so a WS flood against one thread cannot
 # exhaust other threads' budgets.  HC-34 owner freeze is enforced by
-# :func:`_thread_authorized_principal_sync` which requires
-# ``principal.subject == thread.owner_user_id`` (when the thread has an
-# owner; unclaimed threads are admitted).
+# :func:`_thread_authorized_principal_sync` which reuses the REST thread loader
+# and therefore requires exact thread, Scenario, and optional AgentIdentity
+# ownership for a signed principal.
 
 
 def _thread_exists_sync(thread_id: str) -> bool:
@@ -453,18 +453,15 @@ def _thread_authorized_principal_sync(
     thread_id: str,
     principal: SessionPrincipal,
 ) -> bool:
-    from app.models.agent_conversation import AgentConversationThread
+    from app.services.conversation_service import load_conversation_thread_for_owner
 
     engine = get_engine()
     with Session(engine) as session:
-        thread = session.get(AgentConversationThread, thread_id)
-        if thread is None:
+        try:
+            load_conversation_thread_for_owner(session, thread_id, principal.subject)
+        except HTTPException:
             return False
-        # HC-34 owner freeze: once a thread is owned, only that subject may
-        # subscribe.  Unclaimed threads (owner_user_id is NULL) are treated as
-        # shared / dev-mode and the session-level auth gate upstream already
-        # rejected unauthenticated requests when ``SESSION_SECRET`` is set.
-        return thread.owner_user_id is None or thread.owner_user_id == principal.subject
+        return True
 
 
 async def _thread_authorized_principal(

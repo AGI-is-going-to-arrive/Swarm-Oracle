@@ -3652,7 +3652,11 @@ export function InputView() {
                           type="button"
                           className={`mode-btn byok-test-btn ${testStatus === 'ok' ? 'byok-test-btn--ok' : testStatus === 'fail' ? 'byok-test-btn--fail' : ''}`}
                           onClick={() => void handleTestConnection()}
-                          disabled={isSubmitting || testStatus === 'testing' || !llmApiKey.trim()}
+                          disabled={
+                            isSubmitting
+                            || testStatus === 'testing'
+                            || (!llmApiKey.trim() && !isLocalLlmBaseUrl(llmBaseUrl))
+                          }
                         >
                           {testStatus === 'testing' ? t('home.byok_testing')
                             : testStatus === 'ok' ? t('home.byok_test_ok')

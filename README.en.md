@@ -52,6 +52,8 @@ Local Base URLs whose host is exactly `localhost`, `127.0.0.1`, `0.0.0.0`, `host
 
 **Advanced Settings** and **BYOK** are separate disclosures. Public defaults come from [`.env.example`](.env.example), not from any developer's local `backend/.env`.
 
+Protocol truth boundary: connection checks, provider probes, and core generation that requires text succeed only with a supported terminal signal and visible text; error envelopes, explicit non-terminal responses, and truncated streams fail. General Responses calls still accept completed native-tool or reasoning-only results without text, but that exception cannot make a connection check or provider probe pass. With LLM generation enabled, generation failure in a required Debate turn or judge output, or in the Ending Room initial core plan, is reported as an error instead of silently switching to template copy; the deterministic mode remains when the corresponding LLM feature is explicitly disabled. Ending Room follow-ups remain best-effort. With a BYOK key, the automatic pre-launch check stays lightweight and does not run parallel fanout.
+
 ## Quick Start
 
 ### Docker Compose

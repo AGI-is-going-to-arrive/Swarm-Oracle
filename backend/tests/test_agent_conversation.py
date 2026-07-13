@@ -192,6 +192,20 @@ class TestAuthAndOwnership:
         assert resp.status_code == 404
         assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
 
+    def test_ownerless_scenario_returns_404_for_signed_principal(
+        self, client, monkeypatch,
+    ):
+        secret = "s3cret-qa1"
+        _enable_session_auth(monkeypatch, secret)
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        token = _make_signed_token(secret, "owner_u")
+
+        resp = _post_start(client, _start_payload(sid), token=token)
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
+
     def test_foreign_identity_returns_404(self, client, monkeypatch):
         """Cross-owner identity must surface as 404 (ownership concealment)."""
         secret = "s3cret-qa1"
@@ -203,6 +217,25 @@ class TestAuthAndOwnership:
 
         body = _start_payload(sid, agent_identity_id=foreign_ident)
         resp = _post_start(client, body, token=token)
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "IDENTITY_NOT_FOUND"
+
+    def test_ownerless_identity_returns_404_for_signed_principal(
+        self, client, monkeypatch,
+    ):
+        secret = "s3cret-qa1"
+        _enable_session_auth(monkeypatch, secret)
+        engine = get_engine()
+        sid = _seed_scenario(engine, user_id="owner_u")
+        ownerless_ident = _seed_identity(engine, user_id="")
+        token = _make_signed_token(secret, "owner_u")
+
+        resp = _post_start(
+            client,
+            _start_payload(sid, agent_identity_id=ownerless_ident),
+            token=token,
+        )
+
         assert resp.status_code == 404
         assert resp.json()["detail"]["code"] == "IDENTITY_NOT_FOUND"
 
@@ -632,6 +665,94 @@ class TestReadThreadStatePostStart:
         )
         assert resp.status_code == 404
         assert resp.json()["detail"]["code"] == "THREAD_NOT_FOUND"
+
+    def test_get_no_auth_created_thread_surfaces_404_after_auth_enabled(
+        self, client, monkeypatch,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = _post_start(client, _start_payload(sid))
+        assert start.status_code in (200, 201)
+        thread_id = start.json()["thread_id"]
+
+        secret = "s3cret-qa1"
+        _enable_session_auth(monkeypatch, secret)
+        token = _make_signed_token(secret, "owner_u")
+        resp = client.get(
+            f"/api/conversation/{thread_id}",
+            headers={"X-Session-Token": token},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "THREAD_NOT_FOUND"
+
+    @pytest.mark.parametrize(
+        ("linked_resource", "linked_owner"),
+        [
+            ("scenario", None),
+            ("scenario", "foreign_u"),
+            ("identity", ""),
+            ("identity", "foreign_u"),
+        ],
+        ids=[
+            "ownerless-scenario",
+            "foreign-scenario",
+            "ownerless-identity",
+            "foreign-identity",
+        ],
+    )
+    def test_signed_routes_conceal_owned_thread_with_inconsistent_link(
+        self,
+        client,
+        monkeypatch,
+        linked_resource,
+        linked_owner,
+    ):
+        owner = "owner_u"
+        engine = get_engine()
+        scenario_owner = linked_owner if linked_resource == "scenario" else owner
+        sid = _seed_scenario(engine, user_id=scenario_owner)
+        identity_id = (
+            _seed_identity(engine, user_id=linked_owner)
+            if linked_resource == "identity"
+            else None
+        )
+        start = _post_start(
+            client,
+            _start_payload(sid, agent_identity_id=identity_id),
+        )
+        assert start.status_code in (200, 201)
+        thread_id = start.json()["thread_id"]
+
+        with Session(engine) as session:
+            thread = session.get(AgentConversationThread, thread_id)
+            assert thread is not None
+            thread.owner_user_id = owner
+            session.add(thread)
+            session.commit()
+
+        secret = "s3cret-qa1"
+        _enable_session_auth(monkeypatch, secret)
+        headers = {"X-Session-Token": _make_signed_token(secret, owner)}
+        responses = {
+            "GET": client.get(
+                f"/api/conversation/{thread_id}",
+                headers=headers,
+            ),
+            "POST": client.post(
+                f"/api/conversation/{thread_id}/turn",
+                json={"user_content": "follow-up"},
+                headers=headers,
+            ),
+            "DELETE": client.delete(
+                f"/api/conversation/{thread_id}/active",
+                headers=headers,
+            ),
+        }
+
+        for method, response in responses.items():
+            assert response.status_code == 404, method
+            assert response.json()["detail"]["code"] == "THREAD_NOT_FOUND", method
 
 
 # ── 9. Documented quota / cap contracts ──────────────────

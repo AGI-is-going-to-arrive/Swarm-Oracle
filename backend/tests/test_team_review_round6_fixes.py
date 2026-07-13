@@ -38,6 +38,7 @@ from app.api import conversation as conversation_module
 from app.api.conversation import router as conversation_router
 from app.main import app
 from app.models.agent_conversation import AgentConversationThread, AgentConversationTurn
+from app.models.agent_identity import AgentIdentity
 from app.models.database import Scenario, ScenarioStatus, get_engine
 from app.services import conversation_service
 
@@ -74,6 +75,21 @@ def _seed_scenario(engine, *, user_id: str | None = None) -> str:
         session.commit()
         session.refresh(s)
         return s.id
+
+
+def _seed_identity(engine, *, user_id: str) -> str:
+    identity = AgentIdentity(
+        user_id=user_id,
+        kind="custom",
+        display_name="WS linked identity",
+        role="Analyst",
+        continuity_key=f"ws-{user_id or 'ownerless'}",
+    )
+    with Session(engine) as session:
+        session.add(identity)
+        session.commit()
+        session.refresh(identity)
+        return identity.id
 
 
 def _default_start_body(scenario_id: str, *, content: str = "hello") -> dict:
@@ -162,6 +178,79 @@ class TestC1AgentConversationWsEndpoint:
             ws_module._thread_authorized_principal_sync(thread_id, stranger)
             is False
         )
+
+    @pytest.mark.parametrize(
+        ("linked_resource", "linked_owner"),
+        [
+            ("scenario", None),
+            ("scenario", "someone-else"),
+            ("identity", ""),
+            ("identity", "someone-else"),
+        ],
+        ids=[
+            "ownerless-scenario",
+            "foreign-scenario",
+            "ownerless-identity",
+            "foreign-identity",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_signed_handshake_closes_4404_for_inconsistent_thread_link(
+        self,
+        client,
+        monkeypatch,
+        linked_resource,
+        linked_owner,
+    ):
+        from unittest.mock import AsyncMock
+
+        import app.api.ws as ws_module
+
+        engine = get_engine()
+        owner = "user-c1-auth"
+        scenario_owner = linked_owner if linked_resource == "scenario" else owner
+        scenario_id = _seed_scenario(engine, user_id=scenario_owner)
+        identity_id = (
+            _seed_identity(engine, user_id=linked_owner)
+            if linked_resource == "identity"
+            else None
+        )
+        response = client.post(
+            "/api/conversation/start",
+            json={
+                **_default_start_body(scenario_id),
+                "agent_identity_id": identity_id,
+            },
+        )
+        assert response.status_code == 200
+        start = response.json()
+        thread_id = start["thread_id"]
+
+        with Session(engine) as session:
+            thread = session.get(AgentConversationThread, thread_id)
+            assert thread is not None
+            thread.owner_user_id = owner
+            session.add(thread)
+            session.commit()
+
+        secret = "agent-conversation-ws-secret"
+        monkeypatch.setattr(ws_module.settings, "SESSION_SECRET", secret)
+        token = _make_signed_token(secret, owner)
+        websocket = AsyncMock()
+        websocket.receive_text.side_effect = [
+            json.dumps({"type": "auth", "token": token})
+        ]
+
+        await ws_module.agent_conversation_ws_endpoint(websocket, thread_id)
+
+        websocket.accept.assert_awaited_once()
+        websocket.close.assert_awaited_once_with(
+            code=4404,
+            reason="conversation_thread not found",
+        )
+        sent = [call.args[0] for call in websocket.send_text.await_args_list]
+        assert not any('"auth_ok"' in message for message in sent)
+        assert websocket not in ws_module.ws_manager._connections.get(scenario_id, [])
 
     def test_endpoint_is_registered_on_the_app(self):
         """The router must expose ``/ws/agent-conversation/{thread_id}``

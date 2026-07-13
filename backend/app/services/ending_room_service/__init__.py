@@ -1018,6 +1018,7 @@ async def _enhance_room_plan_with_llm(
             scenario_question=scenario_question,
             transcript_quotes=quotes,
             factual_guardrail=str(turn.get("factual_guardrail") or "").strip() or None,
+            fail_closed=True,
             **rewrite_kwargs,
         )
         enhanced_turns.append(

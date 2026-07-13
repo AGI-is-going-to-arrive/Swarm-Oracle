@@ -6,6 +6,7 @@ import { __test__ as batchATest } from "./e2e-phase3-batch-a.mjs";
 import { __test__ as batchBTest } from "./e2e-phase3-batch-b.mjs";
 import { __test__ as batchCTest } from "./e2e-phase3-batch-c.mjs";
 import { __test__ as e2eSuiteTest } from "./e2e-suite.mjs";
+import { createFixtureStore, FIXTURE_SCENARIO_IDS } from "./e2eFixtureNet.mjs";
 import { __test__ as releaseSignoffTest } from "./release-signoff.mjs";
 import {
   assertFrontendRoutesReady,
@@ -58,12 +59,312 @@ function createResponse(status, body, contentType = "text/html; charset=utf-8") 
   };
 }
 
+function createApiResponse(status, payload) {
+  const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    async json() {
+      return JSON.parse(body);
+    },
+    async text() {
+      return body;
+    },
+  };
+}
+
+async function withMockedFetch(fetchImpl, callback) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 test("e2e suite exposes Safari teardown behind a main-module guard", () => {
   const source = readFileSync(new URL("./e2e-suite.mjs", import.meta.url), "utf8");
 
   assert.match(source, /const IS_MAIN_MODULE =/u);
   assert.match(source, /export const __test__ = \{[^}]*deleteSafariSession[^}]*\};/su);
   assert.match(source, /if \(IS_MAIN_MODULE\) \{\s*main\(\)\.catch/su);
+});
+
+test("Chromium launch candidates prefer the Playwright-managed browser", () => {
+  const candidates = e2eSuiteTest.buildLaunchCandidates(true);
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.id).slice(0, 3),
+    ["chromium-default", "chrome-channel", "chromium-swiftshader"],
+  );
+  assert.equal(candidates[0].options.channel, undefined);
+  assert.equal(candidates[1].options.channel, "chrome");
+});
+
+test("terminal director-state readback validates a persisted seed without PUT", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  const scenario = {
+    id: "scenario-done",
+    status: "done",
+    question: "What if?",
+    branches: [{ id: "branch-a", title: "Branch A", probability: 1 }],
+  };
+  const directorState = {
+    revision: 3,
+    objectives: { goals: [{ id: "goal-a" }, { id: "goal-b" }] },
+    commitment: { active: true, branch_id: "branch-a", branch_title: "Branch A" },
+  };
+
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method ?? "GET" });
+    if (init.method === "PUT") {
+      throw new Error("terminal director-state seed must not issue PUT");
+    }
+    const payload = String(url).endsWith("/director-state") ? directorState : scenario;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return payload;
+      },
+    };
+  };
+
+  try {
+    const result = await e2eSuiteTest.seedDirectorStateForReadback(
+      "http://127.0.0.1:18927",
+      scenario.id,
+    );
+    assert.equal(result.dominantBranch.id, "branch-a");
+    assert.deepEqual(calls.map(({ method }) => method), ["GET", "GET"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("terminal director-state readback rejects an invalid persisted seed", async () => {
+  const responses = [
+    createApiResponse(200, {
+      id: "scenario-done",
+      status: "done",
+      question: "What if?",
+      branches: [{ id: "branch-a", title: "Branch A", probability: 1 }],
+    }),
+    createApiResponse(200, {
+      revision: 1,
+      objectives: { goals: [] },
+      commitment: { active: false, branch_id: "branch-b" },
+    }),
+  ];
+
+  await withMockedFetch(
+    async () => responses.shift(),
+    async () => assert.rejects(
+      e2eSuiteTest.seedDirectorStateForReadback(
+        "http://127.0.0.1:18927",
+        "scenario-done",
+      ),
+      /does not contain the persisted director-state seed/u,
+    ),
+  );
+  assert.equal(responses.length, 0);
+});
+
+test("runtime fallback seeds director state before waiting for terminal status", async () => {
+  const requests = [];
+  let scenarioReads = 0;
+  let seeded = false;
+
+  const result = await withMockedFetch(
+    async (url, init = {}) => {
+      const href = String(url);
+      const method = init.method ?? "GET";
+      requests.push({ href, method });
+
+      if (href.endsWith("/api/scenario/missing-director-scenario")) {
+        return createApiResponse(404, { detail: "not found" });
+      }
+      if (href.endsWith("/api/scenario") && method === "POST") {
+        return createApiResponse(200, { id: "runtime-director-scenario" });
+      }
+      if (href.endsWith("/api/scenario/runtime-director-scenario")) {
+        scenarioReads += 1;
+        return createApiResponse(200, {
+          id: "runtime-director-scenario",
+          question: "What if?",
+          status: scenarioReads === 1 ? "simulating" : "done",
+          branches: [{ id: "branch-a", title: "Branch A", probability: 1 }],
+        });
+      }
+      if (href.endsWith("/director-state") && method === "GET") {
+        return createApiResponse(200, { revision: 0 });
+      }
+      if (href.endsWith("/director-state") && method === "PUT") {
+        assert.equal(scenarioReads, 1, "seed must be written while the scenario is active");
+        assert.equal(
+          JSON.parse(init.body).commitment.committed_at_round,
+          1,
+          "the one-round runtime fallback must use a valid commitment round",
+        );
+        seeded = true;
+        return createApiResponse(200, { revision: 1 });
+      }
+      throw new Error(`Unexpected request: ${method} ${href}`);
+    },
+    () => e2eSuiteTest.resolveMatrixScenario(
+      "http://127.0.0.1:18927",
+      {
+        theme: "governance",
+        scenario_id: "missing-director-scenario",
+        question: "What if?",
+      },
+      { seedDirectorStateBeforeTerminal: true },
+    ),
+  );
+
+  assert.equal(result.createdAtRuntime, true);
+  assert.equal(seeded, true);
+  assert.deepEqual(
+    requests.map(({ method }) => method),
+    ["GET", "POST", "GET", "GET", "PUT", "GET"],
+  );
+});
+
+test("cross-browser and Safari resolve their director seed before terminal readback", () => {
+  const source = readFileSync(new URL("./e2e-suite.mjs", import.meta.url), "utf8");
+  const crossBrowserSuite = source.match(
+    /async function runCrossBrowserDirectorStateSuite[\s\S]*?\n\}\n\nasync function wdRequest/u,
+  )?.[0] ?? "";
+  const safariSuite = source.match(
+    /async function runSafariDirectorStateSuite[\s\S]*?\n\}\n\nasync function runPredictionVariant/u,
+  )?.[0] ?? "";
+
+  assert.match(crossBrowserSuite, /seedDirectorStateBeforeTerminal:\s*true/u);
+  assert.match(safariSuite, /seedDirectorStateBeforeTerminal:\s*true/u);
+});
+
+test("corners fixture persists director state before terminal readback", () => {
+  const scenario = {
+    id: "fixture-corners-governance",
+    status: "done",
+    question: "What if?",
+    branches: [{ id: "branch-a", title: "Branch A", probability: 1 }],
+  };
+  const writes = [];
+  const store = {
+    getScenario(id) {
+      assert.equal(id, scenario.id);
+      return scenario;
+    },
+    putDirectorState(id, payload) {
+      writes.push({ id, payload });
+      return { revision: 1, ...payload };
+    },
+  };
+
+  e2eSuiteTest.prepareCornersDirectorStateFixture(store);
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].id, scenario.id);
+  assert.equal(writes[0].payload.objectives.goals.length, 2);
+  assert.equal(writes[0].payload.commitment.branch_id, "branch-a");
+  assert.equal(writes[0].payload.commitment.committed_at_round, 1);
+
+  const fixtureStore = createFixtureStore();
+  e2eSuiteTest.prepareCornersDirectorStateFixture(fixtureStore);
+  const persisted = fixtureStore.getScenario(FIXTURE_SCENARIO_IDS.governance).director_state;
+  assert.equal(persisted.revision, 1);
+  assert.equal(persisted.objectives.goals.length, 2);
+  assert.equal(persisted.commitment.active, true);
+  assert.equal(persisted.commitment.branch_id, "fx-gov-branch-a");
+});
+
+test("active director-state seed fails closed for code/status mismatches and malformed errors", async () => {
+  const cases = [
+    createApiResponse(409, { detail: { code: "DIRECTOR_STATE_INVALID" } }),
+    createApiResponse(500, { detail: { code: "DIRECTOR_STATE_CLOSED" } }),
+    createApiResponse(409, "not-json"),
+  ];
+
+  for (const failedResponse of cases) {
+    const requests = [];
+    const responses = [
+      createApiResponse(200, {
+        id: "scenario-closed",
+        status: "simulating",
+        question: "What if?",
+        branches: [{ id: "branch-a", title: "Branch A", probability: 1 }],
+      }),
+      createApiResponse(200, { revision: 1 }),
+      failedResponse,
+    ];
+    await withMockedFetch(
+      async (url, init = {}) => {
+        requests.push({ url: String(url), method: init.method ?? "GET" });
+        return responses.shift();
+      },
+      async () => assert.rejects(
+        e2eSuiteTest.seedDirectorStateForReadback(
+          "http://127.0.0.1:18927",
+          "scenario-closed",
+        ),
+        /Failed to save director state/u,
+      ),
+    );
+    assert.deepEqual(requests.map(({ method }) => method), ["GET", "GET", "PUT"]);
+    assert.equal(responses.length, 0);
+  }
+});
+
+test("director-state conflict retries once with the latest revision", async () => {
+  const requests = [];
+  const responses = [
+    createApiResponse(200, { revision: 2 }),
+    createApiResponse(409, { detail: { code: "DIRECTOR_STATE_CONFLICT" } }),
+    createApiResponse(200, { revision: 3 }),
+    createApiResponse(200, { revision: 4, scenario_id: "scenario-conflict" }),
+  ];
+
+  const result = await withMockedFetch(
+    async (_url, init = {}) => {
+      requests.push(init);
+      return responses.shift();
+    },
+    () => e2eSuiteTest.putScenarioDirectorStateViaApi(
+      "http://127.0.0.1:18927",
+      "scenario-conflict",
+      { objectives: {}, commitment: {} },
+    ),
+  );
+
+  assert.equal(result.revision, 4);
+  assert.deepEqual(requests.map((request) => request.method ?? "GET"), ["GET", "PUT", "GET", "PUT"]);
+  assert.equal(JSON.parse(requests[1].body).revision, 2);
+  assert.equal(JSON.parse(requests[3].body).revision, 3);
+  assert.equal(responses.length, 0);
+});
+
+test("director-state conflict rejects after the single retry", async () => {
+  const responses = [
+    createApiResponse(200, { revision: 2 }),
+    createApiResponse(409, { detail: { code: "DIRECTOR_STATE_CONFLICT" } }),
+    createApiResponse(200, { revision: 3 }),
+    createApiResponse(409, { detail: { code: "DIRECTOR_STATE_CONFLICT" } }),
+  ];
+
+  await withMockedFetch(
+    async () => responses.shift(),
+    async () => assert.rejects(
+      e2eSuiteTest.putScenarioDirectorStateViaApi(
+        "http://127.0.0.1:18927",
+        "scenario-conflict",
+        { objectives: {}, commitment: {} },
+      ),
+      /Failed to save director state/u,
+    ),
+  );
+  assert.equal(responses.length, 0);
 });
 
 test("Safari session deletion propagates WebDriver transport failures", async () => {

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -28,6 +29,7 @@ from app.models.database import (
     get_engine,
 )
 from app.services.replay import compare_branches, write_checkpoint
+from app.services.runtime_lock import RuntimeLockBusyError
 
 
 @pytest.fixture(autouse=True)
@@ -321,6 +323,73 @@ class TestCreateCounterfactual:
             assert new_branch is not None
             assert new_branch.replay_kind == "counterfactual"
 
+    @pytest.mark.parametrize("simulate", [False, True])
+    @pytest.mark.parametrize("release_error_type", [RuntimeLockBusyError, RuntimeError])
+    def test_counterfactual_release_failure_does_not_override_success(
+        self,
+        monkeypatch,
+        simulate,
+        release_error_type,
+    ):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        background_coro = MagicMock(name="background_coro")
+        schedule_mock = MagicMock()
+        release_mock = MagicMock(
+            side_effect=release_error_type(
+                "release-secret=do-not-log /private/runtime-lock.db"
+            )
+        )
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: replay_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: simulation_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr("app.api.graphs._stop_runtime_lock_heartbeat", lambda *_args: None)
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            release_mock,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual",
+                json={
+                    "source_branch_id": bid,
+                    "round_number": 2,
+                    "agent_id": aid,
+                    "replacement_content": "Alternative stance",
+                    "simulate": simulate,
+                },
+            )
+
+        assert response.status_code == 201
+        assert response.json()["message"] == (
+            "Counterfactual branch created, simulation started"
+            if simulate
+            else "Counterfactual branch created"
+        )
+        if simulate:
+            schedule_mock.assert_called_once_with(background_coro)
+        else:
+            schedule_mock.assert_not_called()
+        release_mock.assert_called_once_with(replay_lease)
+
     def test_simulate_true_schedule_failure_rolls_back_branch_and_status(self, monkeypatch):
         """Scheduling failure should undo the clone and restore scenario status."""
         engine = get_engine()
@@ -362,6 +431,93 @@ class TestCreateCounterfactual:
         assert resp.status_code == 500
         background_coro.close.assert_called_once()
 
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+        assert replay_branches == []
+
+    def test_counterfactual_schedule_error_survives_independent_release_failures(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        background_coro = MagicMock(name="background_coro")
+        release_calls = []
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: replay_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: simulation_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr("app.api.graphs._stop_runtime_lock_heartbeat", lambda *_args: None)
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def broken_schedule(_coro):
+            raise RuntimeError("original counterfactual schedule failure")
+
+        def flaky_release(lease):
+            release_calls.append(lease)
+            if lease is replay_lease:
+                raise RuntimeError("release-secret=do-not-log /private/runtime-lock.db")
+            return True
+
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", broken_schedule)
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", flaky_release)
+        caplog.set_level(logging.WARNING, logger="app.api.graphs")
+
+        with TestClient(app) as failing_client:
+            with pytest.raises(
+                RuntimeError,
+                match="original counterfactual schedule failure",
+            ):
+                failing_client.post(
+                    f"/api/scenario/{sid}/counterfactual",
+                    json={
+                        "source_branch_id": bid,
+                        "round_number": 2,
+                        "agent_id": aid,
+                        "replacement_content": "Alternative stance",
+                    },
+                )
+
+        assert len(release_calls) == 2
+        assert release_calls[0] is replay_lease
+        assert release_calls[1] is simulation_lease
+        release_logs = [
+            record
+            for record in caplog.records
+            if record.name == "app.api.graphs"
+            and "runtime lock release failed" in record.getMessage()
+        ]
+        assert [record.getMessage() for record in release_logs] == [
+            "counterfactual runtime lock release failed (RuntimeError)"
+        ]
+        assert all(record.exc_info is None for record in release_logs)
+        assert "release-secret" not in caplog.text
+        assert "/private/runtime-lock.db" not in caplog.text
+        assert "replay_lease" not in caplog.text
+        background_coro.close.assert_called_once()
         with Session(engine) as session:
             scenario = session.get(Scenario, sid)
             replay_branches = session.exec(
@@ -1224,6 +1380,60 @@ class TestResimulateCounterfactual:
 
         assert resp.status_code == 500
         background_coro.close.assert_called_once()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            branch = session.get(Branch, cf_bid)
+            assert scenario is not None
+            assert branch is not None
+            assert scenario.status == ScenarioStatus.DONE
+
+    def test_resimulate_schedule_error_survives_release_error(self, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+        )
+        _seed_round(engine, cf_bid, 1)
+        simulation_lease = MagicMock(name="simulation_lease")
+        background_coro = MagicMock(name="background_coro")
+        release_mock = MagicMock(side_effect=RuntimeError("release failure"))
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: simulation_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def broken_schedule(_coro):
+            raise RuntimeError("original resimulation schedule failure")
+
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", broken_schedule)
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            release_mock,
+        )
+
+        with TestClient(app) as failing_client:
+            with pytest.raises(
+                RuntimeError,
+                match="original resimulation schedule failure",
+            ):
+                failing_client.post(
+                    f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate"
+                )
+
+        background_coro.close.assert_called_once()
+        release_mock.assert_called_once_with(simulation_lease)
         with Session(engine) as session:
             scenario = session.get(Scenario, sid)
             branch = session.get(Branch, cf_bid)

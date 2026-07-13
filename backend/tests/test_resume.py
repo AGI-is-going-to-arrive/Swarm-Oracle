@@ -15,6 +15,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
@@ -751,6 +752,65 @@ class TestResumeEndpoint:
             ).all()
         assert [round_.round_number for round_ in cloned_rounds] == [1]
 
+    def test_resume_release_failure_does_not_override_success(self, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        release_mock = MagicMock(side_effect=RuntimeError("release failure"))
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: replay_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: simulation_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_stop_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "release_runtime_lock",
+            release_mock,
+        )
+
+        async def fake_run_sim_background(*_args, **_kwargs):
+            return None
+
+        def close_background_coroutine(coro):
+            coro.close()
+
+        monkeypatch.setattr(graphs_module, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(
+            graphs_module,
+            "schedule_background_task",
+            close_background_coroutine,
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                f"/api/scenario/{sid}/resume",
+                json={"source_branch_id": bid, "round_number": 1},
+            )
+
+        assert response.status_code == 201
+        assert response.json()["message"] == "Resume branch created, simulation started"
+        release_mock.assert_called_once_with(replay_lease)
+
     def test_schedule_failure_rolls_back_branch_and_status_without_unawaited_coroutine(
         self,
         monkeypatch,
@@ -810,6 +870,78 @@ class TestResumeEndpoint:
         ]
         assert never_awaited == []
 
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "resume",
+                )
+            ).all()
+        assert replay_branches == []
+
+    def test_resume_schedule_error_survives_independent_release_failures(self, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        background_coro = MagicMock(name="background_coro")
+        release_calls = []
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: replay_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: simulation_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_stop_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def broken_schedule(_coro):
+            raise RuntimeError("original resume schedule failure")
+
+        def flaky_release(lease):
+            release_calls.append(lease)
+            if lease is replay_lease:
+                raise RuntimeError("release failure")
+            return True
+
+        monkeypatch.setattr(graphs_module, "schedule_background_task", broken_schedule)
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", flaky_release)
+
+        with TestClient(app) as client:
+            with pytest.raises(RuntimeError, match="original resume schedule failure"):
+                client.post(
+                    f"/api/scenario/{sid}/resume",
+                    json={"source_branch_id": bid, "round_number": 1},
+                )
+
+        assert len(release_calls) == 2
+        assert release_calls[0] is replay_lease
+        assert release_calls[1] is simulation_lease
+        background_coro.close.assert_called_once()
         with Session(engine) as session:
             scenario = session.get(Scenario, sid)
             assert scenario is not None

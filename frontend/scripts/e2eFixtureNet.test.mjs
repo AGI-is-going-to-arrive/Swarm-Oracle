@@ -47,6 +47,29 @@ test("resolveApiFixture fail-closes wrong HTTP methods instead of returning 200"
   }
 });
 
+test("director-state fixture rejects terminal writes with the backend error contract", () => {
+  const store = createFixtureStore();
+  const terminalId = FIXTURE_SCENARIO_IDS.governance;
+  const activeId = FIXTURE_SCENARIO_IDS.governanceLive;
+
+  const terminalWrite = resolveApiFixture(store, {
+    method: "PUT",
+    pathname: `/api/campaign/scenario/${terminalId}/director-state`,
+    search: "",
+  });
+  const activeWrite = resolveApiFixture(store, {
+    method: "PUT",
+    pathname: `/api/campaign/scenario/${activeId}/director-state`,
+    search: "",
+  });
+
+  assert.equal(terminalWrite.status, 409);
+  assert.equal(terminalWrite.json.detail.code, "DIRECTOR_STATE_CLOSED");
+  assert.equal(terminalWrite.mutate, undefined);
+  assert.equal(activeWrite.status, 200);
+  assert.equal(activeWrite.mutate, "director");
+});
+
 test("FixtureWebSocket records escapes through a persistent binding across navigation", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

@@ -41,12 +41,14 @@ Deployment-level `LLM_RESPONSES_URL` is operator-controlled. Request-level BYOK 
 - `LLM_EXTRA_ALLOWED_HOSTS` accepts exact hosts only.
 - Keep `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false` for public or multi-user deployments.
 - Set `LLM_ALLOW_LOCAL_BYOK_HOSTS=false` for LAN, public, or multi-user deployments.
+- Provider fan-out and live native-search probes that would inject tools require a caller-supplied non-placeholder key, an exact-local target, or an `X-Admin-Token` that exactly matches the configured `ADMIN_TOKEN`; the normal session gate still applies. A parallelism probe is capped at width 4 and may make up to 10 additional provider requests after the health call.
 
 - 不要把 API key 放进 URL；userinfo、query、fragment 和 path params 会被拒绝。
 - 托管请求级 endpoint 必须使用 HTTPS。
 - `LLM_EXTRA_ALLOWED_HOSTS` 只接受精确 host。
 - 公网或多用户部署保持 `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`。
 - LAN、公网或多用户部署设置 `LLM_ALLOW_LOCAL_BYOK_HOSTS=false`。
+- provider fanout 与会实际注入工具的 live native-search probe 要求调用方提供非占位 key、精确本地目标，或与已配置 `ADMIN_TOKEN` 完全匹配的 `X-Admin-Token`；正常 session gate 仍然生效。并行 probe 的宽度上限为 4，在 health call 之后最多再产生 10 个 provider 请求。
 
 ## Data and Output / 数据与输出
 
@@ -54,4 +56,6 @@ Model profiles may store API keys in local SQLite for a single-user installation
 
 单用户安装的 model profile 可能把 API key 存在本地 SQLite。请保护数据库、`.env`、`.env.docker`、Snapshot、日志和备份。公开 artifact 会移除已知密钥字段，但问题和结果本身会用于分享，发布前必须检查。
 
-Client-facing LLM errors use short safe codes. Provider bodies, stack traces, Authorization headers, keys, and credential-bearing URLs must not reach clients or logs. 面向客户端的 LLM 错误只使用简短安全码；provider 正文、堆栈、Authorization header、密钥和含凭据 URL 不得进入客户端响应或日志。
+Client-facing LLM errors use short safe codes and never include raw provider bodies or stack traces. Logs may contain scrubbed provider snippets and sanitized trace data, but raw or unredacted provider bodies, Authorization headers, keys, credential-bearing URLs, and other unredacted credentials must not reach clients or logs.
+
+面向客户端的 LLM 错误只使用简短安全码，绝不包含原始 provider 正文或堆栈。日志可以包含已脱敏的 provider 片段和已清洗的 trace 数据，但原始或未脱敏的 provider 正文、Authorization header、密钥、含凭据 URL 及其它未脱敏凭据不得进入客户端响应或日志。

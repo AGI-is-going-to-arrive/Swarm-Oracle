@@ -12,8 +12,9 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.config import WEB_SEARCH_PROVIDER_CHOICES, is_placeholder_llm_api_key, settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models.database import get_engine
-from app.services.llm_client import LLMError, llm_call
+from app.services.llm_client import LLMError, is_local_provider_url, llm_call
 from app.services.vector_store import get_vector_store
 
 PreflightStatus = Literal["pass", "warn", "fail"]
@@ -49,7 +50,10 @@ def _check_chromadb() -> PreflightCheckResult:
 
 
 async def _check_llm() -> PreflightCheckResult:
-    if is_placeholder_llm_api_key(settings.LLM_API_KEY):
+    base_url = settings.LLM_RESPONSES_URL.strip() or None
+    configured_key = settings.LLM_API_KEY.strip()
+    placeholder_key = is_placeholder_llm_api_key(configured_key)
+    if placeholder_key and not is_local_provider_url(base_url):
         return PreflightCheckResult(
             "llm",
             "warn",
@@ -57,15 +61,23 @@ async def _check_llm() -> PreflightCheckResult:
         )
 
     try:
-        response = await llm_call("Respond with exactly: OK", reasoning_effort="low", timeout=8.0)
+        response = await llm_call(
+            "Respond with exactly: OK",
+            reasoning_effort="low",
+            timeout=8.0,
+            api_key=None if placeholder_key else configured_key,
+            base_url=base_url,
+        )
     except LLMError as exc:
-        return PreflightCheckResult("llm", "fail", f"LLM connectivity failed: {exc}")
+        error = _scrub_sensitive_text(str(exc))
+        return PreflightCheckResult("llm", "fail", f"LLM connectivity failed: {error}")
     except Exception as exc:
-        return PreflightCheckResult("llm", "fail", f"LLM check failed: {exc}")
+        error = _scrub_sensitive_text(str(exc))
+        return PreflightCheckResult("llm", "fail", f"LLM check failed: {error}")
 
     if response.strip():
         return PreflightCheckResult("llm", "pass", "LLM API responded successfully")
-    return PreflightCheckResult("llm", "warn", "LLM API returned an empty response")
+    return PreflightCheckResult("llm", "fail", "LLM API returned an empty response")
 
 
 def _check_web_search() -> PreflightCheckResult:

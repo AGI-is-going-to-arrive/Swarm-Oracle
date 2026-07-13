@@ -52,6 +52,8 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 
 首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。公开默认值以 [`.env.example`](.env.example) 为准，不以某台开发机的 `backend/.env` 为准。
 
+协议真值边界：连接验证、provider probe 与要求文本的核心生成只有收到受支持的终态信号和可见正文才算成功；error envelope、明确的非终态响应或截断流都会失败。通用 Responses 调用仍允许已完成的原生工具 / reasoning-only 无正文结果，但它不能让连接验证或 provider probe 通过。启用 LLM 时，辩论的必需发言与裁决、会客厅的初始核心计划若生成失败，会明确报错，不会静默改用模板；显式关闭对应 LLM 功能时仍保留确定性模式。会客厅后续追问仍按 best-effort 处理。填写 BYOK key 后，启动前自动检查保持轻量，不执行并发 fanout。
+
 ## 快速开始
 
 ### Docker Compose

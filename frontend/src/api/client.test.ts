@@ -608,6 +608,30 @@ describe('language wire-format', () => {
     resolveFetches.forEach((resolve) => resolve(response()));
     await Promise.all(requests);
   });
+
+  it('serializes an explicitly requested provider parallelism probe', async () => {
+    const fetchMock = stubJsonWrite();
+
+    await testLlmConnection(
+      'sk-user-key',
+      'https://api.openai.com/v1',
+      'gpt-test',
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/health/test',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(getRequestBody(fetchMock)).toEqual(expect.objectContaining({
+      llm_api_key: 'sk-user-key',
+      llm_base_url: 'https://api.openai.com/v1',
+      llm_model: 'gpt-test',
+      include_probe: true,
+    }));
+  });
 });
 
 describe('web search wire-format', () => {

@@ -437,7 +437,7 @@ async def test_stream_assistant_turn_rehydrates_profile_from_scenario_context(mo
         scenario = Scenario(
             question="Will node chat reuse the launch profile?",
             status=ScenarioStatus.DONE,
-            user_id=None,
+            user_id="conv-owner",
             parsed_context={
                 "model_profile_id": profile_id,
                 "llm_concurrency": 1,

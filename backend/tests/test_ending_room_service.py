@@ -66,6 +66,7 @@ from app.services.ending_room_service import (
     run_ending_room_background,
 )
 from app.services.ending_room_service._content import _roundtable_question_prefix
+from app.services.llm_client import LLMError
 from app.services.runtime_lock import release_runtime_lock
 
 
@@ -1608,6 +1609,44 @@ def test_oracle_rewrite_uses_plain_text_retry_before_template_fallback(monkeypat
     )
 
     assert content == "The front line broke before the court found words for the damage."
+
+
+def test_oracle_followup_keeps_anchor_when_all_llm_tiers_fail(monkeypatch):
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Ending Chamber",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Stilicho",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Marshal"},
+    )
+
+    async def _broken_provider(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _broken_provider)
+    monkeypatch.setattr(ending_room_service_module, "llm_call", _broken_provider)
+
+    content = asyncio.run(
+        _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=EndingRoomPhase.OPENING,
+            anchor_copy="safe follow-up anchor",
+            purpose="oracle_followup_hotseat",
+        )
+    )
+
+    assert content == "safe follow-up anchor"
 
 
 def test_oracle_generation_first_uses_llm_before_anchor_template(monkeypatch):
@@ -4591,7 +4630,7 @@ def test_run_ending_room_background_prefers_llm_verdict_copy_when_enabled(monkey
     assert payload["turns"][-1]["content"] == payload["result"]["summary"]
 
 
-def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatch):
+def test_run_ending_room_background_marks_error_when_llm_rewrite_fails(monkeypatch):
     scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
     snapshot, created = create_ending_room(
         scenario_id,
@@ -4622,11 +4661,69 @@ def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatc
         _boom,
     )
 
-    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
-    payload = load_ending_room_result_payload(snapshot["id"])
+    ws_callback = AsyncMock(side_effect=_noop_broadcast)
+    with pytest.raises(LLMError) as exc_info:
+        asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=ws_callback))
 
-    assert "别再把这一步说成命运" not in payload["result"]["summary"]
-    assert "档案官" in payload["result"]["summary"]
+    assert exc_info.value.code == "LLM_FAILED"
+    errored_snapshot = load_ending_room_snapshot(snapshot["id"])
+    assert errored_snapshot["status"] == "error"
+    error_payload = load_ending_room_result_payload(snapshot["id"])
+    assert error_payload["result"]["error"] == ending_room_service_module.ENDING_ROOM_RUNTIME_ERROR
+    assert error_payload["result"]["summary"] == ""
+    event_types = [call.args[1]["type"] for call in ws_callback.await_args_list]
+    assert "ending_room_result_ready" not in event_types
+    assert not any(
+        call.args[1]["type"] == "status"
+        and call.args[1]["data"].get("status") == "done"
+        for call in ws_callback.await_args_list
+    )
+    assert ws_callback.await_args_list[-1].args[1] == {
+        "type": "status",
+        "data": {
+            "status": "error",
+            "error": ending_room_service_module.ENDING_ROOM_RUNTIME_ERROR,
+        },
+    }
+
+
+def test_run_ending_room_background_marks_error_when_all_llm_tiers_are_empty(monkeypatch):
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    async def _empty(*_args, **_kwargs):
+        return "   "
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "llm_call_json_with_stream_fallback",
+        _empty,
+    )
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _empty)
+    monkeypatch.setattr(ending_room_service_module, "llm_call", _empty)
+
+    ws_callback = AsyncMock(side_effect=_noop_broadcast)
+    with pytest.raises(LLMError) as exc_info:
+        asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=ws_callback))
+
+    assert exc_info.value.code == "LLM_FAILED"
+    errored_snapshot = load_ending_room_snapshot(snapshot["id"])
+    assert errored_snapshot["status"] == "error"
+    event_types = [call.args[1]["type"] for call in ws_callback.await_args_list]
+    assert "ending_room_result_ready" not in event_types
+    assert not any(
+        call.args[1]["type"] == "status"
+        and call.args[1]["data"].get("status") == "done"
+        for call in ws_callback.await_args_list
+    )
 
 
 def test_run_ending_room_background_recovers_from_partial_auto_recap_progress():

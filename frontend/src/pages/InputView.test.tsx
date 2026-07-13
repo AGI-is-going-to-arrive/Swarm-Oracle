@@ -1113,10 +1113,228 @@ describe('InputView campaign progress', () => {
     });
     await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
 
-    expect(testLlmConnectionMock.mock.calls[0]?.[5]).toBeUndefined();
+    expect(testLlmConnectionMock.mock.calls[0]?.[5]).toBe(true);
     expect(await screen.findByText('Provider Preflight')).toBeInTheDocument();
     expect(screen.getByText('Estimated parallelism 6')).toBeInTheDocument();
     expect(screen.getByText('Recommended 3-24 agents and 3-8 rounds')).toBeInTheDocument();
+  });
+
+  it('allows a manual provider probe for an exact-local keyless endpoint', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValueOnce({
+      server: 'ok',
+      llm: { status: 'ok', model: 'local-model', response: 'OK' },
+      probe: null,
+    });
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: '',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'local-model',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await openAdvancedSettings(user);
+    const probeButton = await screen.findByRole('button', { name: 'home.byok_test' });
+    expect(probeButton).toBeEnabled();
+    await user.click(probeButton);
+
+    await waitFor(() => expect(testLlmConnectionMock).toHaveBeenCalledTimes(1));
+    expect(testLlmConnectionMock.mock.calls[0]?.[0]).toBeUndefined();
+    expect(testLlmConnectionMock.mock.calls[0]?.[1]).toBe('http://127.0.0.1:11434/v1');
+    expect(testLlmConnectionMock.mock.calls[0]?.[5]).toBe(true);
+  });
+
+  it('does not present a failed provider parallelism probe as a successful preflight', async () => {
+    const user = userEvent.setup();
+    testLlmConnectionMock.mockResolvedValueOnce({
+      server: 'ok',
+      llm: { status: 'ok', model: 'test-model', response: 'OK' },
+      probe: {
+        status: 'error',
+        model: 'test-model',
+        local_provider: false,
+        allow_disable_user_quota: false,
+        estimated_parallelism: 0,
+        tested_parallelism: 4,
+        recommended: {
+          agents_min: 3,
+          agents_max: 6,
+          rounds_min: 3,
+          rounds_max: 4,
+        },
+        failure: 'HTTP 401: unauthorized',
+      },
+    });
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: 'home.byok_test' }));
+
+    expect(await screen.findByText('HTTP 401: unauthorized')).toBeInTheDocument();
+    expect(screen.queryByText('Provider Preflight')).not.toBeInTheDocument();
+  });
+
+  it('invalidates an earlier successful probe when the same provider later fails', async () => {
+    const user = userEvent.setup();
+    const successfulProbe = {
+      server: 'ok',
+      llm: { status: 'ok', model: 'test-model', response: 'OK' },
+      probe: {
+        status: 'ok',
+        model: 'test-model',
+        local_provider: false,
+        allow_disable_user_quota: false,
+        estimated_parallelism: 2,
+        tested_parallelism: 4,
+        recommended: {
+          agents_min: 3,
+          agents_max: 8,
+          rounds_min: 3,
+          rounds_max: 4,
+        },
+        failure: null,
+      },
+    };
+    testLlmConnectionMock
+      .mockResolvedValueOnce(successfulProbe)
+      .mockResolvedValueOnce({
+        server: 'ok',
+        llm: { status: 'error', model: 'test-model', error: 'Provider went offline' },
+        probe: null,
+      })
+      .mockResolvedValueOnce({
+        server: 'ok',
+        llm: { status: 'error', model: 'test-model', error: 'Provider is still offline' },
+        probe: null,
+      });
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const testButton = await screen.findByRole('button', { name: 'home.byok_test' });
+    await user.click(testButton);
+    expect(await screen.findByText('Provider Preflight')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'home.byok_test_ok' }));
+      await act(async () => {});
+      expect(screen.getByText('Provider went offline')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await user.type(screen.getAllByRole('textbox')[0], 'Do not trust a stale probe');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => expect(testLlmConnectionMock).toHaveBeenCalledTimes(3));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Provider is still offline');
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('does not let an old failure timer unlock a newer in-flight probe', async () => {
+    let resolveSecondProbe: (value: {
+      server: string;
+      llm: { status: string; model: string; response: string };
+      probe: null;
+    }) => void = () => {};
+    testLlmConnectionMock
+      .mockResolvedValueOnce({
+        server: 'ok',
+        llm: { status: 'error', model: 'test-model', error: 'First probe failed' },
+        probe: null,
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecondProbe = resolve;
+      }));
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const testButton = await screen.findByRole('button', { name: 'home.byok_test' });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(testButton);
+      await act(async () => {});
+      expect(screen.getByText('First probe failed')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'home.byok_test_fail' }));
+      await act(async () => {});
+      expect(screen.getByRole('button', { name: 'home.byok_testing' })).toBeDisabled();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.getByRole('button', { name: 'home.byok_testing' })).toBeDisabled();
+
+      await act(async () => {
+        resolveSecondProbe({
+          server: 'ok',
+          llm: { status: 'ok', model: 'test-model', response: 'OK' },
+          probe: null,
+        });
+      });
+      expect(screen.getByRole('button', { name: 'home.byok_test_ok' })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows a dynamic budget reminder from typed RPM/TPM values', async () => {

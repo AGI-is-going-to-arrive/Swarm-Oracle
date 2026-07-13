@@ -801,7 +801,7 @@ export async function testLlmConnection(
       ...(model && { llm_model: model }),
       ...(requestsPerMinute != null && { llm_requests_per_minute: requestsPerMinute }),
       ...(tokensPerMinute != null && { llm_tokens_per_minute: tokensPerMinute }),
-      ...(includeProbe === false ? { include_probe: false } : {}),
+      ...(includeProbe !== undefined ? { include_probe: includeProbe } : {}),
       ...(includeNativeProbe ? { include_native_probe: true } : {}),
       ...(nativeSearchUpstream && { native_search_upstream_override: nativeSearchUpstream }),
       ...(supportsNativeSearchOverride !== undefined ? { supports_native_search_override: supportsNativeSearchOverride } : {}),

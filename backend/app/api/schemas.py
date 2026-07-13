@@ -493,7 +493,7 @@ class TestLlmRequest(BaseModel):
     llm_model: str | None = None
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
-    include_probe: bool = True
+    include_probe: bool = False
     include_native_probe: bool = False
     native_probe_only: bool = False
     supports_native_search_override: bool | None = None

@@ -18,6 +18,7 @@ import {
   resolveChallengeProgress,
 } from '../lib/dailyChallenge';
 import {
+  isLocalLlmBaseUrl,
   loadLlmProviderPolicy,
   saveLlmProviderPolicy,
 } from '../lib/llmProviderPolicy';
@@ -130,6 +131,16 @@ export function useInputByokSettings(
   const [testedConfigKey, setTestedConfigKey] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState(() => initialProviderPolicy.reasoningEffort);
   const providerPolicyHydrated = useRef(true);
+  const connectionTestRequestIdRef = useRef(0);
+  const connectionTestResetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    connectionTestRequestIdRef.current += 1;
+    if (connectionTestResetTimerRef.current !== null) {
+      window.clearTimeout(connectionTestResetTimerRef.current);
+      connectionTestResetTimerRef.current = null;
+    }
+  }, []);
 
   const currentConfigKey = useMemo(
     () => JSON.stringify({
@@ -168,10 +179,35 @@ export function useInputByokSettings(
 
   const handleTestConnection = useCallback(async (options: TestConnectionOptions = {}) => {
     const { includeProbe, signal } = options;
+    const requestId = connectionTestRequestIdRef.current + 1;
+    connectionTestRequestIdRef.current = requestId;
+    if (connectionTestResetTimerRef.current !== null) {
+      window.clearTimeout(connectionTestResetTimerRef.current);
+      connectionTestResetTimerRef.current = null;
+    }
+    const isCurrentRequest = () => connectionTestRequestIdRef.current === requestId;
+    const supersededResult = () => ({
+      ok: false as const,
+      probe: null,
+      error: t('home.launch_inflight_timeout'),
+    });
+    const scheduleIdleReset = () => {
+      connectionTestResetTimerRef.current = window.setTimeout(() => {
+        if (isCurrentRequest()) {
+          setTestStatus('idle');
+          connectionTestResetTimerRef.current = null;
+        }
+      }, 5000);
+    };
+    const shouldIncludeProbe = includeProbe ?? Boolean(
+      llmApiKey.trim() || isLocalLlmBaseUrl(llmBaseUrl),
+    );
     setTestStatus('testing');
     setTestError('');
+    setProbeResult(null);
+    setTestedConfigKey('');
     const finishAbortedProbe = () => {
-      setTestStatus('idle');
+      if (isCurrentRequest()) setTestStatus('idle');
       return { ok: false as const, probe: null, error: t('home.launch_inflight_timeout') };
     };
     try {
@@ -181,12 +217,15 @@ export function useInputByokSettings(
         llmModel || undefined,
         parseOptionalIntegerInput(llmRequestsPerMinute) ?? undefined,
         parseOptionalIntegerInput(llmTokensPerMinute) ?? undefined,
-        includeProbe,
+        shouldIncludeProbe,
         undefined,
         undefined,
         undefined,
         { signal },
       );
+      if (!isCurrentRequest()) {
+        return supersededResult();
+      }
       if (signal?.aborted) {
         return finishAbortedProbe();
       }
@@ -194,6 +233,15 @@ export function useInputByokSettings(
       onWebSearchServerHintRef.current?.(res.web_search?.server_enabled === true);
 
       if (res.llm.status === 'ok') {
+        if (res.probe && res.probe.status !== 'ok') {
+          const error = res.probe.failure || t('home.byok_preflight_failed');
+          setTestStatus('fail');
+          setTestError(error);
+          setProbeResult(null);
+          setTestedConfigKey(currentConfigKey);
+          scheduleIdleReset();
+          return { ok: false as const, probe: null, error };
+        }
         setTestStatus('ok');
         setProbeResult(res.probe ?? null);
         setTestedConfigKey(currentConfigKey);
@@ -202,10 +250,13 @@ export function useInputByokSettings(
         const error = res.llm.error || 'Unknown error';
         setTestStatus('fail');
         setTestError(error);
-        window.setTimeout(() => setTestStatus('idle'), 5000);
+        scheduleIdleReset();
         return { ok: false as const, probe: null, error };
       }
     } catch (err) {
+      if (!isCurrentRequest()) {
+        return supersededResult();
+      }
       if (signal?.aborted) {
         return finishAbortedProbe();
       }
@@ -220,7 +271,7 @@ export function useInputByokSettings(
       );
       setTestStatus('fail');
       setTestError(error);
-      window.setTimeout(() => setTestStatus('idle'), 5000);
+      scheduleIdleReset();
       return { ok: false as const, probe: null, error };
     }
   }, [currentConfigKey, llmApiKey, llmBaseUrl, llmModel, llmRequestsPerMinute, llmTokensPerMinute, t]);

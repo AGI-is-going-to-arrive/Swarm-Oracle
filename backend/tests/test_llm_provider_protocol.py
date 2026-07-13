@@ -382,6 +382,67 @@ async def test_non_stream_read_timeout_exhausts_retries_with_safe_timeout(
     assert llm_client._provider_circuit_until == {}
 
 
+async def test_repeated_non_stream_client_error_envelopes_do_not_open_circuit(
+    isolated_llm_provider,
+    monkeypatch,
+):
+    provider = isolated_llm_provider
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_THRESHOLD", 6)
+    monkeypatch.setattr(llm_client.settings, "LLM_CIRCUIT_BREAKER_RESET_SECONDS", 60)
+    for index in range(6):
+        provider.enqueue(
+            ScriptedResponse.json(
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "invalid_prompt",
+                        "message": f"client-provider-secret-{index}",
+                    }
+                }
+            )
+        )
+    provider.enqueue(ScriptedResponse.json(_chat_response("seventh ok")))
+
+    client_errors: list[llm_client.LLMError] = []
+    for index in range(6):
+        with pytest.raises(llm_client.LLMError) as exc_info:
+            await _call_chat(provider, f"client envelope request {index}")
+        client_errors.append(exc_info.value)
+
+    result = await _call_chat(provider, "completed after client envelopes")
+
+    assert result == "seventh ok"
+    assert len(provider.requests) == 7
+    assert all(error.code == "LLM_INVALID_OUTPUT" for error in client_errors)
+    provider_key = llm_client._provider_key(f"{provider.base_url}/chat/completions")
+    assert provider_key not in llm_client._provider_failures
+    assert provider_key not in llm_client._provider_circuit_until
+
+
+async def test_non_stream_server_error_envelope_counts_provider_failure(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.json(
+            {
+                "error": {
+                    "type": "server_error",
+                    "message": "provider unavailable",
+                }
+            }
+        )
+    )
+
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        await _call_chat(provider, "server envelope request")
+
+    assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+    provider_key = llm_client._provider_key(f"{provider.base_url}/chat/completions")
+    assert llm_client._provider_failures == {provider_key: 1}
+    assert llm_client._provider_circuit_until == {}
+
+
 async def test_stream_read_timeout_exhausts_retries_with_safe_timeout(
     isolated_llm_provider,
     monkeypatch,
@@ -565,7 +626,6 @@ async def test_chat_stream_finish_reason_terminal_does_not_require_done(
                 SSEEvent(
                     {
                         "choices": [
-                            {"delta": {}, "finish_reason": None},
                             {"delta": {}, "finish_reason": "stop"},
                         ]
                     }
@@ -587,6 +647,105 @@ async def test_chat_stream_finish_reason_terminal_does_not_require_done(
     ]
 
     assert chunks == ["chat complete"]
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "finish_reason",
+    [
+        "length",
+        "content_filter",
+        "tool_calls",
+        "function_call",
+        "",
+        "future_reason",
+        pytest.param(0, id="non-string"),
+    ],
+)
+async def test_chat_stream_rejects_non_success_finish_reason(
+    isolated_llm_provider,
+    monkeypatch,
+    finish_reason,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "partial"}}]}),
+                SSEEvent(
+                    {
+                        "choices": [
+                            {"delta": {}, "finish_reason": finish_reason},
+                        ]
+                    }
+                ),
+                SSEEvent("[DONE]"),
+            )
+        )
+    )
+    recorded_successes: list[str] = []
+    recorded_failures: list[str] = []
+
+    async def _record_success(provider_key: str) -> None:
+        recorded_successes.append(provider_key)
+
+    async def _record_failure(provider_key: str) -> None:
+        recorded_failures.append(provider_key)
+
+    monkeypatch.setattr(llm_client, "_record_provider_success", _record_success)
+    monkeypatch.setattr(llm_client, "_record_provider_failure", _record_failure)
+
+    chunks: list[str] = []
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        async for chunk in llm_client.llm_call_stream(
+            "reject unsuccessful stream terminal",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ["partial"]
+    assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+    assert recorded_successes == []
+    assert recorded_failures == []
+    assert len(provider.requests) == 1
+
+
+async def test_chat_stream_uses_consumed_choice_for_terminal_status(
+    isolated_llm_provider,
+):
+    provider = isolated_llm_provider
+    provider.enqueue(
+        ScriptedResponse.sse(
+            (
+                SSEEvent({"choices": [{"delta": {"content": "partial"}}]}),
+                SSEEvent(
+                    {
+                        "choices": [
+                            {"delta": {}, "finish_reason": None},
+                            {"delta": {}, "finish_reason": "stop"},
+                        ]
+                    }
+                ),
+            )
+        )
+    )
+
+    chunks: list[str] = []
+    with pytest.raises(llm_client.LLMError) as exc_info:
+        async for chunk in llm_client.llm_call_stream(
+            "ignore unconsumed choice terminal",
+            api_key="test-only-provider-key",
+            base_url=provider.base_url,
+            model="provider-harness-model",
+            timeout=2.0,
+        ):
+            chunks.append(chunk)
+
+    assert chunks == ["partial"]
+    assert exc_info.value.code == "LLM_UNREACHABLE"
     assert len(provider.requests) == 1
 
 

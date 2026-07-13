@@ -10,12 +10,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 import app.services.debate as debate_module
 import app.services.ending_room_service as ending_room_service_module
 from app.api import helpers as helpers_module
 from app.api import ws as ws_module
+from app.models import Agent, AgentGroup
 from app.models import database as database_module
 from app.models.database import Branch, BranchStatus, Scenario, ScenarioStatus, get_engine
 from app.services import runtime_lock as runtime_lock_module
@@ -30,7 +31,11 @@ from app.services.runtime_lock import (
     runtime_lock_is_active,
     simulation_lock_key,
 )
-from app.services.simulation_cancel import clear_cancel_token, get_cancel_token
+from app.services.simulation_cancel import (
+    clear_cancel_token,
+    get_cancel_token,
+    request_cancel,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -127,6 +132,1244 @@ def test_bootstrap_sqlite_engine_pragmas_continue_after_individual_failure(monke
     assert "PRAGMA busy_timeout=5000" in executed
     assert executed[-1] == "CLOSE"
     assert warnings
+
+
+def _parse_background_kwargs(question: str) -> dict[str, object]:
+    return {
+        "question": question,
+        "num_agents": 3,
+        "mode": "blackboard",
+        "hierarchical": False,
+        "rounds": 5,
+        "visualization_enabled": False,
+        "reasoning_effort": None,
+        "temperature": None,
+        "branch_sensitivity": None,
+        "fork_prompt_variant": None,
+        "fork_detector_active_branch_limit": None,
+        "user_id": None,
+        "llm_api_key": None,
+        "llm_base_url": None,
+        "llm_model": None,
+        "llm_requests_per_minute": None,
+        "llm_tokens_per_minute": None,
+        "disable_user_quota": None,
+    }
+
+
+def _seed_parse_scenario(question: str) -> tuple[str, str]:
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question=question,
+            status=ScenarioStatus.SIMULATING,
+            parsed_context={"existing": "keep"},
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        root_branch = Branch(
+            scenario_id=scenario.id,
+            title="Original Root",
+            probability=1.0,
+        )
+        session.add(root_branch)
+        session.commit()
+        session.refresh(root_branch)
+        return scenario.id, root_branch.id
+
+
+def _assert_parse_artifacts_unchanged(scenario_id: str, root_branch_id: str) -> None:
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        root_branch = session.get(Branch, root_branch_id)
+        assert scenario is not None
+        assert scenario.parsed_context == {"existing": "keep"}
+        assert root_branch is not None
+        assert root_branch.title == "Original Root"
+        assert session.exec(
+            select(Agent).where(Agent.scenario_id == scenario_id)
+        ).all() == []
+        assert session.exec(
+            select(AgentGroup).where(AgentGroup.scenario_id == scenario_id)
+        ).all() == []
+
+
+def _parsed_scenario(*, with_group: bool = False) -> dict[str, object]:
+    parsed: dict[str, object] = {
+        "agents": [
+            {
+                "name": "Analyst",
+                "role": "Analyst",
+                "persona": "Checks parse lease ownership.",
+                "tier": "CORE",
+                "stance": "neutral",
+            }
+        ],
+        "initial_title": "Parsed Root",
+        "groups": [],
+    }
+    if with_group:
+        parsed["groups"] = [
+            {
+                "name": "Analysis Group",
+                "leader": "Analyst",
+                "members": ["Analyst"],
+            }
+        ]
+    return parsed
+
+
+def _clear_parse_test_state(scenario_id: str) -> None:
+    clear_cancel_token(scenario_id)
+    helpers_module.clear_running_task(scenario_id)
+    helpers_module._running_simulations.discard(scenario_id)
+    helpers_module._parse_phase_simulations.discard(scenario_id)
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [ScenarioStatus.CANCELLED, ScenarioStatus.DONE, ScenarioStatus.ERROR],
+)
+def test_mark_scenario_error_if_active_preserves_terminal_status(terminal_status):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="terminal status stays sticky",
+            status=terminal_status,
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    assert helpers_module._mark_scenario_error_if_active(
+        get_engine(),
+        scenario_id,
+    ) is False
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert scenario.status == terminal_status
+
+
+@pytest.mark.asyncio
+async def test_parse_watcher_cancels_blocked_llm_when_lease_is_lost(
+    monkeypatch,
+):
+    scenario_id, root_branch_id = _seed_parse_scenario(
+        "parse lease lost while llm blocked",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="parse-after-llm-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    captured_holder: dict[str, list] = {}
+    released: list[object] = []
+    downstream = AsyncMock()
+    parse_started = asyncio.Event()
+    parse_cancelled = asyncio.Event()
+    background_task: asyncio.Task | None = None
+
+    def _capture_heartbeat(holder, **_kwargs):
+        captured_holder["value"] = holder
+        return None, None
+
+    async def _blocked_parse(*_args, **_kwargs):
+        parse_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            parse_cancelled.set()
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        _capture_heartbeat,
+    )
+    monkeypatch.setattr(helpers_module, "parse_question", _blocked_parse)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+    monkeypatch.setattr(
+        helpers_module,
+        "release_runtime_lock",
+        lambda lease: released.append(lease),
+    )
+
+    try:
+        background_task = asyncio.create_task(
+            helpers_module.parse_and_run_background(
+                scenario_id,
+                **_parse_background_kwargs("parse lease lost while llm blocked"),
+            )
+        )
+        await asyncio.wait_for(parse_started.wait(), timeout=1.0)
+        captured_holder["value"][0] = None
+        await asyncio.wait_for(background_task, timeout=1.0)
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.ERROR
+        _assert_parse_artifacts_unchanged(scenario_id, root_branch_id)
+        downstream.assert_not_awaited()
+        assert parse_cancelled.is_set()
+        assert released == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+    finally:
+        if background_task is not None and not background_task.done():
+            background_task.cancel()
+            await asyncio.gather(background_task, return_exceptions=True)
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loss_mode", ["none", "exception"])
+async def test_parse_rolls_back_when_lease_is_lost_before_post_parse_commit(
+    monkeypatch,
+    caplog,
+    loss_mode,
+):
+    scenario_id, root_branch_id = _seed_parse_scenario(
+        "parse lease lost before commit",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="parse-precommit-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    refreshed_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=fake_lease.lock_key,
+        owner_id=fake_lease.owner_id,
+        db_path=None,
+        expires_at=time.time() + 60,
+    )
+    refresh_calls: list[object] = []
+    released: list[object] = []
+    broadcast = AsyncMock()
+    downstream = AsyncMock()
+
+    def _refresh_then_lose(lease, *, lease_seconds):
+        assert lease_seconds >= 60
+        refresh_calls.append(lease)
+        if len(refresh_calls) == 1:
+            return refreshed_lease
+        if loss_mode == "exception":
+            raise RuntimeError("fence-secret /tmp/private/parse-fence")
+        return None
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(return_value=_parsed_scenario(with_group=True)),
+    )
+    monkeypatch.setattr(helpers_module, "refresh_runtime_lock", _refresh_then_lose)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+    monkeypatch.setattr(
+        helpers_module,
+        "release_runtime_lock",
+        lambda lease: released.append(lease),
+    )
+    kwargs = _parse_background_kwargs("parse lease lost before commit")
+    kwargs["hierarchical"] = True
+    caplog.set_level("ERROR")
+
+    try:
+        with pytest.raises(RuntimeError, match="runtime lock was lost"):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **kwargs,
+            )
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.ERROR
+        _assert_parse_artifacts_unchanged(scenario_id, root_branch_id)
+        downstream.assert_not_awaited()
+        assert refresh_calls == [fake_lease, refreshed_lease]
+        assert released == [refreshed_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        assert [
+            call.args[1].get("type") for call in broadcast.await_args_list
+        ] == ["status", "simulation_error"]
+        assert "fence-secret" not in caplog.text
+        assert "/tmp/private/parse-fence" not in caplog.text
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_rolls_back_when_file_backed_owner_fence_is_lost_before_commit(
+    monkeypatch,
+):
+    scenario_id, root_branch_id = _seed_parse_scenario(
+        "file-backed parse fence lost before commit",
+    )
+    _clear_parse_test_state(scenario_id)
+    lock_key = simulation_lock_key(scenario_id)
+    real_lease = acquire_runtime_lock(lock_key, lease_seconds=60)
+    assert real_lease is not None
+    assert real_lease.db_path is not None
+    refresh_calls: list[object] = []
+    downstream = AsyncMock()
+
+    def _refresh_then_expire_row(lease, *, lease_seconds):
+        refreshed = refresh_runtime_lock(lease, lease_seconds=lease_seconds)
+        assert refreshed is not None
+        assert refreshed.db_path is not None
+        refresh_calls.append(lease)
+        with sqlite3.connect(refreshed.db_path) as connection:
+            result = connection.execute(
+                """
+                UPDATE runtime_lock
+                SET expires_at = ?
+                WHERE lock_key = ? AND owner_id = ?
+                """,
+                (
+                    time.time() - 1,
+                    refreshed.lock_key,
+                    refreshed.owner_id,
+                ),
+            )
+            connection.commit()
+        assert result.rowcount == 1
+        return refreshed
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: real_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(return_value=_parsed_scenario(with_group=True)),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "refresh_runtime_lock",
+        _refresh_then_expire_row,
+    )
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+    kwargs = _parse_background_kwargs("file-backed parse fence lost before commit")
+    kwargs["hierarchical"] = True
+
+    try:
+        with pytest.raises(RuntimeError, match="runtime lock was lost"):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **kwargs,
+            )
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.ERROR
+        _assert_parse_artifacts_unchanged(scenario_id, root_branch_id)
+        downstream.assert_not_awaited()
+        assert refresh_calls == [real_lease]
+        assert runtime_lock_is_active(lock_key) is False
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+    finally:
+        release_runtime_lock(real_lease)
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_file_backed_precommit_fence_extends_lease_before_handoff(
+    monkeypatch,
+):
+    scenario_id, _root_branch_id = _seed_parse_scenario(
+        "file-backed precommit fence extends lease",
+    )
+    _clear_parse_test_state(scenario_id)
+    lock_key = simulation_lock_key(scenario_id)
+    real_lease = acquire_runtime_lock(lock_key, lease_seconds=60)
+    assert real_lease is not None
+    assert real_lease.db_path is not None
+    refresh_inputs: list[object] = []
+    pre_handoff_row_expiry: list[float] = []
+    pre_handoff_now: list[float] = []
+    handoff: dict[str, object] = {}
+
+    def _refresh_with_shortened_first_row(lease, *, lease_seconds):
+        refresh_inputs.append(lease)
+        if len(refresh_inputs) == 2:
+            assert lease.db_path is not None
+            with sqlite3.connect(lease.db_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT expires_at
+                    FROM runtime_lock
+                    WHERE lock_key = ? AND owner_id = ?
+                    """,
+                    (lease.lock_key, lease.owner_id),
+                ).fetchone()
+            assert row is not None
+            pre_handoff_row_expiry.append(float(row[0]))
+            pre_handoff_now.append(time.time())
+        refreshed = refresh_runtime_lock(lease, lease_seconds=lease_seconds)
+        assert refreshed is not None
+        if len(refresh_inputs) == 1:
+            assert refreshed.db_path is not None
+            with sqlite3.connect(refreshed.db_path) as connection:
+                result = connection.execute(
+                    """
+                    UPDATE runtime_lock
+                    SET expires_at = ?
+                    WHERE lock_key = ? AND owner_id = ?
+                    """,
+                    (
+                        time.time() + 5,
+                        refreshed.lock_key,
+                        refreshed.owner_id,
+                    ),
+                )
+                connection.commit()
+            assert result.rowcount == 1
+        return refreshed
+
+    async def _capture_handoff(scenario_arg, **kwargs):
+        lease = kwargs.get("pre_acquired_lock_lease")
+        handoff["scenario_id"] = scenario_arg
+        handoff["lease"] = lease
+        release_runtime_lock(lease)
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: real_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(return_value=_parsed_scenario()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "refresh_runtime_lock",
+        _refresh_with_shortened_first_row,
+    )
+    monkeypatch.setattr(helpers_module, "run_sim_background", _capture_handoff)
+
+    try:
+        await helpers_module.parse_and_run_background(
+            scenario_id,
+            **_parse_background_kwargs(
+                "file-backed precommit fence extends lease"
+            ),
+        )
+
+        assert len(refresh_inputs) == 2
+        assert pre_handoff_row_expiry[0] >= pre_handoff_now[0] + 50
+        assert refresh_inputs[1].expires_at == pytest.approx(
+            pre_handoff_row_expiry[0],
+        )
+        assert handoff["scenario_id"] == scenario_id
+        assert handoff["lease"] is not None
+        assert handoff["lease"].expires_at >= pre_handoff_row_expiry[0]
+        assert runtime_lock_is_active(lock_key) is False
+    finally:
+        release_runtime_lock(real_lease)
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_post_parse_exception_releases_lock_and_preserves_original_error(
+    monkeypatch,
+    caplog,
+):
+    scenario_id, root_branch_id = _seed_parse_scenario(
+        "post-parse exception cleanup",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="post-parse-error-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    heartbeat_stop = object()
+    heartbeat_thread = object()
+    heartbeat_stops: list[tuple[object, object]] = []
+    released: list[object] = []
+    downstream = AsyncMock()
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (heartbeat_stop, heartbeat_thread),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_stop_runtime_lock_heartbeat",
+        lambda stop, thread: heartbeat_stops.append((stop, thread)),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(return_value=_parsed_scenario()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_strip_untrusted_agent_provenance",
+        lambda _agent: (_ for _ in ()).throw(ValueError("post-parse marker")),
+    )
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+
+    def _release_raises(lease):
+        released.append(lease)
+        raise RuntimeError("post-parse-release-secret /tmp/private/post-parse")
+
+    monkeypatch.setattr(helpers_module, "release_runtime_lock", _release_raises)
+    caplog.set_level("ERROR")
+
+    try:
+        with pytest.raises(ValueError, match="post-parse marker"):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **_parse_background_kwargs("post-parse exception cleanup"),
+            )
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.ERROR
+        _assert_parse_artifacts_unchanged(scenario_id, root_branch_id)
+        downstream.assert_not_awaited()
+        assert heartbeat_stops == [(heartbeat_stop, heartbeat_thread)]
+        assert released == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        assert "post-parse background failed" in caplog.text
+        assert "ValueError" in caplog.text
+        assert "runtime lock release failed" in caplog.text
+        assert "post-parse-release-secret" not in caplog.text
+        assert "/tmp/private/post-parse" not in caplog.text
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_cleans_up_when_status_update_and_error_broadcast_fail(
+    monkeypatch,
+    caplog,
+):
+    scenario_id, _root_branch_id = _seed_parse_scenario(
+        "parse failure cleanup survives secondary errors",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="parse-secondary-error-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    heartbeat_stop = object()
+    heartbeat_thread = object()
+    heartbeat_stops: list[tuple[object, object]] = []
+    released: list[object] = []
+    broadcast_events: list[dict] = []
+    downstream = AsyncMock()
+
+    async def _broadcast(_scenario_id, event):
+        broadcast_events.append(event)
+        if event.get("type") == "simulation_error":
+            raise RuntimeError(
+                "broadcast-secret /tmp/private/parse-error-broadcast"
+            )
+
+    def _status_update_raises(*_args, **_kwargs):
+        raise RuntimeError("status-secret /tmp/private/parse-error-status")
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=_broadcast),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (heartbeat_stop, heartbeat_thread),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_stop_runtime_lock_heartbeat",
+        lambda stop, thread: heartbeat_stops.append((stop, thread)),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(side_effect=ValueError("parse root cause marker")),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_mark_scenario_error_if_active",
+        _status_update_raises,
+    )
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+    monkeypatch.setattr(
+        helpers_module,
+        "release_runtime_lock",
+        lambda lease: released.append(lease),
+    )
+    caplog.set_level("ERROR")
+
+    try:
+        result = await helpers_module.parse_and_run_background(
+            scenario_id,
+            **_parse_background_kwargs(
+                "parse failure cleanup survives secondary errors"
+            ),
+        )
+
+        assert result is None
+        assert [event.get("type") for event in broadcast_events] == [
+            "status",
+            "simulation_error",
+        ]
+        downstream.assert_not_awaited()
+        assert heartbeat_stops == [(heartbeat_stop, heartbeat_thread)]
+        assert released == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        assert "status update failed after parse failure: RuntimeError" in caplog.text
+        assert "error broadcast failed after parse failure: RuntimeError" in caplog.text
+        assert "status-secret" not in caplog.text
+        assert "/tmp/private/parse-error-status" not in caplog.text
+        assert "broadcast-secret" not in caplog.text
+        assert "/tmp/private/parse-error-broadcast" not in caplog.text
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type",
+    [runtime_lock_module.RuntimeLockBusyError, RuntimeError],
+)
+async def test_parse_and_run_background_fails_closed_when_lock_acquire_raises(
+    monkeypatch,
+    error_type,
+):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="parse lock acquire failure",
+            status=ScenarioStatus.SIMULATING,
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    helpers_module._running_simulations.discard(scenario_id)
+    helpers_module._parse_phase_simulations.discard(scenario_id)
+    helpers_module.clear_running_task(scenario_id)
+    clear_cancel_token(scenario_id)
+    parse_question = AsyncMock()
+    downstream = AsyncMock()
+    monkeypatch.setattr(helpers_module, "parse_question", parse_question)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+
+    def _acquire_raises(*_args, **_kwargs):
+        raise error_type("lock acquire failure marker")
+
+    monkeypatch.setattr(helpers_module, "acquire_runtime_lock", _acquire_raises)
+
+    try:
+        with pytest.raises(error_type, match="lock acquire failure marker"):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **_parse_background_kwargs("parse lock acquire failure"),
+            )
+
+        with Session(get_engine()) as session:
+            refreshed = session.get(Scenario, scenario_id)
+            assert refreshed is not None
+            assert refreshed.status == ScenarioStatus.ERROR
+
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        parse_question.assert_not_awaited()
+        downstream.assert_not_awaited()
+    finally:
+        clear_cancel_token(scenario_id)
+        helpers_module.clear_running_task(scenario_id)
+        helpers_module._running_simulations.discard(scenario_id)
+        helpers_module._parse_phase_simulations.discard(scenario_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["heartbeat_start", "status_update"])
+async def test_parse_and_run_background_cleans_up_when_lock_initialization_fails(
+    monkeypatch,
+    failure_stage,
+):
+    scenario_id, _root_branch_id = _seed_parse_scenario(
+        f"parse lock {failure_stage} failure",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id=f"{failure_stage}-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    heartbeat_stop = object()
+    heartbeat_thread = object()
+    heartbeat_stops: list[tuple[object, object]] = []
+    released: list[object] = []
+    parse_question = AsyncMock()
+    downstream = AsyncMock()
+
+    def _start_heartbeat(*_args, **_kwargs):
+        if failure_stage == "heartbeat_start":
+            raise RuntimeError("heartbeat_start failure marker")
+        return heartbeat_stop, heartbeat_thread
+
+    def _update_status(*_args, **_kwargs):
+        if failure_stage == "status_update":
+            raise RuntimeError("status_update failure marker")
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        _start_heartbeat,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_stop_runtime_lock_heartbeat",
+        lambda stop, thread: heartbeat_stops.append((stop, thread)),
+    )
+    monkeypatch.setattr(helpers_module, "_update_scenario_status", _update_status)
+    monkeypatch.setattr(
+        helpers_module,
+        "release_runtime_lock",
+        lambda lease: released.append(lease),
+    )
+    monkeypatch.setattr(helpers_module, "parse_question", parse_question)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+
+    try:
+        with pytest.raises(RuntimeError, match=f"{failure_stage} failure marker"):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **_parse_background_kwargs(f"parse lock {failure_stage} failure"),
+            )
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.ERROR
+
+        expected_stops = (
+            [(heartbeat_stop, heartbeat_thread)]
+            if failure_stage == "status_update"
+            else []
+        )
+        assert heartbeat_stops == expected_stops
+        assert released == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        parse_question.assert_not_awaited()
+        downstream.assert_not_awaited()
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_and_run_background_cleans_up_when_initial_broadcast_is_cancelled(
+    monkeypatch,
+):
+    scenario_id, _root_branch_id = _seed_parse_scenario(
+        "parse initial broadcast cancellation",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="initial-broadcast-cancel-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    heartbeat_stop = object()
+    heartbeat_thread = object()
+    heartbeat_stops: list[tuple[object, object]] = []
+    released: list[object] = []
+    parse_question = AsyncMock()
+    downstream = AsyncMock()
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock(side_effect=asyncio.CancelledError)),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (heartbeat_stop, heartbeat_thread),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_stop_runtime_lock_heartbeat",
+        lambda stop, thread: heartbeat_stops.append((stop, thread)),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "release_runtime_lock",
+        lambda lease: released.append(lease),
+    )
+    monkeypatch.setattr(helpers_module, "parse_question", parse_question)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **_parse_background_kwargs("parse initial broadcast cancellation"),
+            )
+
+        assert heartbeat_stops == [(heartbeat_stop, heartbeat_thread)]
+        assert released == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        parse_question.assert_not_awaited()
+        downstream.assert_not_awaited()
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_initial_broadcast_user_cancel_finalizes_cancelled(
+    monkeypatch,
+):
+    scenario_id, _root_branch_id = _seed_parse_scenario(
+        "parse initial broadcast user cancellation",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="initial-broadcast-user-cancel-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    heartbeat_stop = object()
+    heartbeat_thread = object()
+    heartbeat_stops: list[tuple[object, object]] = []
+    released: list[object] = []
+    broadcast_events: list[dict] = []
+    parse_question = AsyncMock()
+    downstream = AsyncMock()
+
+    async def _broadcast(_scenario_id, event):
+        broadcast_events.append(event)
+        if event.get("type") == "status":
+            request_cancel(scenario_id)
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=_broadcast),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (heartbeat_stop, heartbeat_thread),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_stop_runtime_lock_heartbeat",
+        lambda stop, thread: heartbeat_stops.append((stop, thread)),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "release_runtime_lock",
+        lambda lease: released.append(lease),
+    )
+    monkeypatch.setattr(helpers_module, "parse_question", parse_question)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+
+    try:
+        result = await helpers_module.parse_and_run_background(
+            scenario_id,
+            **_parse_background_kwargs("parse initial broadcast user cancellation"),
+        )
+
+        assert result is None
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.CANCELLED
+        assert [event.get("type") for event in broadcast_events] == [
+            "status",
+            "simulation_cancelled",
+        ]
+        assert heartbeat_stops == [(heartbeat_stop, heartbeat_thread)]
+        assert released == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        parse_question.assert_not_awaited()
+        downstream.assert_not_awaited()
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_and_run_background_cleans_up_when_parse_lock_release_raises(
+    monkeypatch,
+    caplog,
+):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="parse lock release failure",
+            status=ScenarioStatus.SIMULATING,
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        scenario_id = scenario.id
+
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="parse-release-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    helpers_module._running_simulations.discard(scenario_id)
+    helpers_module._parse_phase_simulations.discard(scenario_id)
+    helpers_module.clear_running_task(scenario_id)
+    clear_cancel_token(scenario_id)
+    release_calls: list[object] = []
+    downstream = AsyncMock()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(side_effect=RuntimeError("parse failure marker")),
+    )
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+
+    def _release_raises(lease):
+        release_calls.append(lease)
+        raise RuntimeError("release-secret /tmp/private/runtime-lock")
+
+    monkeypatch.setattr(helpers_module, "release_runtime_lock", _release_raises)
+    caplog.set_level("ERROR")
+
+    try:
+        await helpers_module.parse_and_run_background(
+            scenario_id,
+            **_parse_background_kwargs("parse lock release failure"),
+        )
+
+        with Session(get_engine()) as session:
+            refreshed = session.get(Scenario, scenario_id)
+            assert refreshed is not None
+            assert refreshed.status == ScenarioStatus.ERROR
+
+        assert release_calls == [fake_lease]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        downstream.assert_not_awaited()
+        assert "Parse failed" in caplog.text
+        assert "runtime lock release failed" in caplog.text
+        assert "RuntimeError" in caplog.text
+        assert "release-secret" not in caplog.text
+        assert "/tmp/private/runtime-lock" not in caplog.text
+    finally:
+        clear_cancel_token(scenario_id)
+        helpers_module.clear_running_task(scenario_id)
+        helpers_module._running_simulations.discard(scenario_id)
+        helpers_module._parse_phase_simulations.discard(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_does_not_broadcast_error_after_remote_cancel(
+    monkeypatch,
+):
+    scenario_id, _root_branch_id = _seed_parse_scenario(
+        "parse failure after remote cancellation",
+    )
+    _clear_parse_test_state(scenario_id)
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="parse-remote-cancel-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    broadcast = AsyncMock()
+    downstream = AsyncMock()
+
+    async def _parse_after_remote_cancel(*_args, **_kwargs):
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.CANCELLED
+            session.add(scenario)
+            session.commit()
+        raise RuntimeError("late parse failure after remote cancel")
+
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=broadcast),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(helpers_module, "parse_question", _parse_after_remote_cancel)
+    monkeypatch.setattr(helpers_module, "run_sim_background", downstream)
+    monkeypatch.setattr(helpers_module, "release_runtime_lock", lambda _lease: None)
+
+    try:
+        result = await helpers_module.parse_and_run_background(
+            scenario_id,
+            **_parse_background_kwargs("parse failure after remote cancellation"),
+        )
+
+        assert result is None
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.CANCELLED
+        event_types = [call.args[1].get("type") for call in broadcast.await_args_list]
+        assert event_types == ["status"]
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert scenario_id not in helpers_module._running_simulations
+        assert scenario_id not in helpers_module._parse_phase_simulations
+        downstream.assert_not_awaited()
+    finally:
+        _clear_parse_test_state(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_parse_and_run_background_outer_handoff_release_preserves_run_error(
+    monkeypatch,
+    caplog,
+):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="parse handoff release failure",
+            status=ScenarioStatus.SIMULATING,
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        session.add(
+            Branch(
+                scenario_id=scenario.id,
+                title="Initial Branch",
+                probability=1.0,
+            )
+        )
+        session.commit()
+        scenario_id = scenario.id
+
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="handoff-release-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    helpers_module._running_simulations.discard(scenario_id)
+    helpers_module._parse_phase_simulations.discard(scenario_id)
+    helpers_module.clear_running_task(scenario_id)
+    clear_cancel_token(scenario_id)
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "parse_question",
+        AsyncMock(
+            return_value={
+                "agents": [
+                    {
+                        "name": "Analyst",
+                        "role": "Analyst",
+                        "persona": "Checks handoff cleanup.",
+                        "tier": "CORE",
+                        "stance": "neutral",
+                    }
+                ],
+                "initial_title": "Parsed Root",
+                "groups": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "refresh_runtime_lock",
+        lambda lease, **_kwargs: lease,
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "run_sim_background",
+        AsyncMock(side_effect=ValueError("handoff failure marker")),
+    )
+
+    def _release_raises(_lease):
+        raise RuntimeError("handoff-release-secret /tmp/private/handoff")
+
+    monkeypatch.setattr(helpers_module, "release_runtime_lock", _release_raises)
+    caplog.set_level("ERROR")
+
+    try:
+        with pytest.raises(ValueError, match="handoff failure marker"):
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                **_parse_background_kwargs("parse handoff release failure"),
+            )
+
+        assert "runtime lock release failed" in caplog.text
+        assert "RuntimeError" in caplog.text
+        assert "handoff-release-secret" not in caplog.text
+        assert "/tmp/private/handoff" not in caplog.text
+    finally:
+        clear_cancel_token(scenario_id)
+        helpers_module.clear_running_task(scenario_id)
+        helpers_module._running_simulations.discard(scenario_id)
+        helpers_module._parse_phase_simulations.discard(scenario_id)
 
 
 @pytest.mark.asyncio
@@ -1339,7 +2582,7 @@ async def test_run_sim_background_cleans_local_registries_when_runtime_lock_rele
     )
 
     def _release_raises(_lease):
-        raise RuntimeError("release boom")
+        raise RuntimeError("inner-release-secret /tmp/private/inner-runtime-lock")
 
     monkeypatch.setattr(helpers_module, "release_runtime_lock", _release_raises)
     caplog.set_level("ERROR")
@@ -1355,6 +2598,10 @@ async def test_run_sim_background_cleans_local_registries_when_runtime_lock_rele
         assert helpers_module.get_running_task(scenario_id) is None
         assert release_error is None
         assert "runtime lock release failed" in caplog.text
+        assert "RuntimeError" in caplog.text
+        assert "inner-release-secret" not in caplog.text
+        assert "/tmp/private/inner-runtime-lock" not in caplog.text
+        assert "Traceback" not in caplog.text
     finally:
         clear_cancel_token(scenario_id)
         helpers_module.clear_running_task(scenario_id)

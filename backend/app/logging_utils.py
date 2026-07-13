@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from enum import Enum
@@ -40,6 +41,31 @@ _STANDARD_LOG_RECORD_FIELDS = {
     "threadName",
     "taskName",
 }
+_SENSITIVE_STRUCTURED_KEY_RE = re.compile(
+    r"^(?:api[-_ ]?key|authorization|access[_-]?token|refresh[_-]?token|token|"
+    r"password|passwd|client[_-]?secret|private[_-]?key|secret)$",
+    re.IGNORECASE,
+)
+
+
+def _is_sensitive_structured_key(key: object) -> bool:
+    return _SENSITIVE_STRUCTURED_KEY_RE.fullmatch(str(key).strip()) is not None
+
+
+def _normalize_json_mapping_item(key: object, item: Any) -> Any:
+    if hasattr(item, "__opaque__"):
+        return _normalize_json_value(item)
+    if _is_sensitive_structured_key(key):
+        return "[redacted-credential]"
+    return _normalize_json_value(item)
+
+
+def _normalize_json_mapping(value: dict[Any, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        safe_key = _scrub_sensitive_text(str(key))
+        normalized[safe_key] = _normalize_json_mapping_item(key, item)
+    return normalized
 
 
 def _normalize_json_value(value: Any) -> Any:
@@ -57,10 +83,7 @@ def _normalize_json_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, dict):
-        return {
-            _scrub_sensitive_text(str(key)): _normalize_json_value(item)
-            for key, item in value.items()
-        }
+        return _normalize_json_mapping(value)
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_normalize_json_value(item) for item in value]
     return _scrub_sensitive_text(repr(value))
@@ -128,11 +151,11 @@ class JsonLogFormatter(logging.Formatter):
             "line": record.lineno,
         }
 
-        extras = {
-            key: _normalize_json_value(value)
-            for key, value in record.__dict__.items()
-            if key not in _STANDARD_LOG_RECORD_FIELDS and not key.startswith("_")
-        }
+        extras = {}
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOG_RECORD_FIELDS or key.startswith("_"):
+                continue
+            extras[key] = _normalize_json_mapping_item(key, value)
         if extras:
             payload["extra"] = extras
 

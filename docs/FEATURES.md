@@ -66,7 +66,7 @@
 
 - **官方样例**：无真实 LLM 时也能一键导入 3 个内置完整推演，直接查看结果、因果档案和 replay。
 - **本地 Snapshot**：也可从首页导入自己的 `.swarm` 文件；仓库样例位于 `samples/snapshots/`。导入会在首次写库前拒绝重复的 Agent、Message、Graph Node 源 ID，以及映射到不同坐标的同一 Round 源 ID。
-- **实时生成**：新推演、辩论、会客厅和报告需要服务端默认模型、可用 model profile 或本轮 BYOK。精确本地 host 可无 key，远端仍必须提供 key。
+- **实时生成**：新推演、辩论、会客厅和报告需要服务端默认模型、可用 model profile 或本轮 BYOK。精确本地 host 可无 key，远端仍必须提供 key。启用 LLM 时，Debate 的必需发言与裁判结果在重试耗尽或无可用内容后显式失败，不会用确定性文案冒充成功；Ending Room 初始核心计划采用相同的 fail-closed 边界，但 follow-up 仍可 best-effort 使用 anchor。显式关闭对应 LLM 模式时允许确定性内容。
 - **模型管理**：`/admin/setup` 用于连接测试和建档；当前组合只有验证成功或明确接受未验证风险后，向导才能完成。`/model-profiles` 用于管理 profile。未改动的 profile 不会复制成缺 key 的 session 覆盖；修改远端端点或模型必须同时提供完整连接，并解绑旧 profile、清除其限速与能力策略。
 - **主题包刷新与演示引用**：刷新会重新读取当前同 ID 包详情；切换包时先清除旧详情、模板和操作，迟到响应不能覆盖新选择。随附主题包只列出真实存在的 Snapshot；`demo_snapshots` 可点击、按目录白名单和 Snapshot 合同校验并直接导入。明确失败可以重试；无法确认结果时会提示先检查历史记录，避免重复导入。
 - **界面边界**：首页高级设置与 BYOK 是两个独立折叠区。

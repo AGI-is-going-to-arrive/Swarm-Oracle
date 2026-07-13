@@ -218,7 +218,7 @@ async def start_conversation(
 
     outcome = create_thread_with_first_turn(
         scenario_id=body.scenario_id,
-        owner_user_id=owner or "",
+        owner_user_id=owner,
         agent_identity_id=body.agent_identity_id,
         origin_branch_id=body.origin_branch_id,
         origin_round_number=body.origin_round_number,

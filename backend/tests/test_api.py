@@ -1,6 +1,9 @@
 """Tests for app.api — REST API endpoints via FastAPI TestClient."""
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import io
 import json
 import time
@@ -63,6 +66,19 @@ def client():
 
 
 # ── Helpers ──────────────────────────────────────────────
+
+
+def _make_signed_session_token(secret: str, subject: str) -> str:
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+    ).rstrip(b"=").decode("ascii")
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        f"v1.{payload}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return f"v1.{payload}.{encoded_signature}"
 
 
 def _seed_scenario(engine, *, status=ScenarioStatus.SIMULATING, question="测试问题"):
@@ -219,8 +235,7 @@ class TestHealthEndpoint:
         assert "llm" in data
         assert data["llm"]["model"] == "gpt-5.4-mini"
 
-    @pytest.mark.parametrize("payload_extra", [{}, {"include_probe": True}])
-    def test_health_test_returns_probe_summary(self, client, monkeypatch, payload_extra):
+    def test_health_test_returns_probe_summary(self, client, monkeypatch):
         async def _fake_health_check(**kwargs):
             return {"status": "ok", "model": "test-model", "response": "OK"}
 
@@ -246,12 +261,13 @@ class TestHealthEndpoint:
 
         monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
         monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _fake_probe)
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", "strict-admin-token")
 
         resp = client.post("/api/health/test", json={
             "llm_api_key": "sk-test",
             "llm_base_url": "http://127.0.0.1:9000/v1/chat/completions",
             "llm_model": "test-model",
-            **payload_extra,
+            "include_probe": True,
         })
 
         assert resp.status_code == 200
@@ -261,6 +277,287 @@ class TestHealthEndpoint:
         assert data["probe"]["estimated_parallelism"] == 6
         assert data["probe"]["recommended"]["agents_max"] == 24
         assert len(probe_calls) == 1
+
+    def test_health_test_defaults_to_no_parallelism_probe(self, client, monkeypatch):
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "test-model", "response": "OK"}
+
+        fake_probe = AsyncMock(return_value={"status": "ok"})
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", fake_probe)
+
+        response = client.post(
+            "/api/health/test",
+            json={
+                "llm_api_key": "sk-user-key",
+                "llm_base_url": "https://api.openai.com/v1",
+                "llm_model": "test-model",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["probe"] is None
+        fake_probe.assert_not_awaited()
+
+    @pytest.mark.parametrize("configured_admin_token", ["", "strict-admin-token"])
+    def test_server_credential_probe_requires_strict_admin_before_health(
+        self,
+        client,
+        monkeypatch,
+        configured_admin_token,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("unauthorized paid probe must fail before provider health")
+
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", configured_admin_token)
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+
+        response = client.post("/api/health/test", json={"include_probe": True})
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "PROVIDER_PROBE_NOT_AUTHORIZED"
+
+    def test_placeholder_remote_key_does_not_authorize_paid_probe(
+        self,
+        client,
+        monkeypatch,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("placeholder credentials must fail before provider health")
+
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", "strict-admin-token")
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+
+        response = client.post(
+            "/api/health/test",
+            json={
+                "llm_api_key": "sk-12345678",
+                "llm_base_url": "https://api.openai.com/v1",
+                "include_probe": True,
+            },
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "PROVIDER_PROBE_NOT_AUTHORIZED"
+
+    def test_wrong_admin_token_does_not_authorize_server_probe(
+        self,
+        client,
+        monkeypatch,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("wrong admin token must fail before provider health")
+
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", "strict-admin-token")
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+
+        response = client.post(
+            "/api/health/test",
+            json={"include_probe": True},
+            headers={"X-Admin-Token": "wrong-token"},
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "PROVIDER_PROBE_NOT_AUTHORIZED"
+
+    def test_valid_strict_admin_can_probe_server_credentials(self, client, monkeypatch):
+        health_calls: list[dict] = []
+        probe_calls: list[dict] = []
+
+        async def _fake_health_check(**kwargs):
+            health_calls.append(kwargs)
+            return {"status": "ok", "model": "server-model", "response": "OK"}
+
+        async def _fake_probe(**kwargs):
+            probe_calls.append(kwargs)
+            return {"status": "ok", "estimated_parallelism": 1}
+
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", "strict-admin-token")
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _fake_probe)
+
+        response = client.post(
+            "/api/health/test",
+            json={"include_probe": True},
+            headers={"X-Admin-Token": "strict-admin-token"},
+        )
+
+        assert response.status_code == 200
+        assert len(health_calls) == 1
+        assert len(probe_calls) == 1
+        assert probe_calls[0]["api_key"] is None
+        assert probe_calls[0]["base_url"] is None
+
+    def test_explicit_keyless_local_probe_does_not_require_admin(self, client, monkeypatch):
+        probe_calls: list[dict] = []
+
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "local-model", "response": "OK"}
+
+        async def _fake_probe(**kwargs):
+            probe_calls.append(kwargs)
+            return {"status": "ok", "estimated_parallelism": 1}
+
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", "strict-admin-token")
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "measure_provider_parallelism", _fake_probe)
+
+        response = client.post(
+            "/api/health/test",
+            json={
+                "llm_base_url": "http://127.0.0.1:11434/v1",
+                "llm_model": "llama-test",
+                "include_probe": True,
+            },
+        )
+
+        assert response.status_code == 200
+        assert len(probe_calls) == 1
+        assert probe_calls[0]["api_key"] is None
+        assert probe_calls[0]["base_url"] == "http://127.0.0.1:11434/v1"
+
+    def test_live_native_server_probe_requires_strict_admin(self, client, monkeypatch):
+        async def _unexpected_live_probe(**kwargs):
+            raise AssertionError("unauthorized native probe must fail before provider call")
+
+        monkeypatch.setattr(scenarios_api.settings, "ADMIN_TOKEN", "")
+        monkeypatch.setattr(
+            scenarios_api,
+            "_build_native_search_probe_hint",
+            lambda **_kwargs: {"would_inject_tools": True},
+        )
+        monkeypatch.setattr(
+            scenarios_api,
+            "_live_native_search_probe",
+            _unexpected_live_probe,
+        )
+
+        response = client.post(
+            "/api/health/test",
+            json={"native_probe_only": True, "live_native_test": True},
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "PROVIDER_PROBE_NOT_AUTHORIZED"
+
+    def test_signed_byok_live_native_probe_uses_principal_quota(
+        self,
+        client,
+        monkeypatch,
+    ):
+        live_calls: list[dict] = []
+
+        async def _fake_live_probe(**kwargs):
+            live_calls.append(kwargs)
+            return {"status": "ok", "citations_found": 1, "response_preview": "OK"}
+
+        secret = "native-probe-session-secret"
+        monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", secret)
+        monkeypatch.setattr(
+            scenarios_api,
+            "_build_native_search_probe_hint",
+            lambda **_kwargs: {"would_inject_tools": True},
+        )
+        monkeypatch.setattr(scenarios_api, "_live_native_search_probe", _fake_live_probe)
+
+        response = client.post(
+            "/api/health/test",
+            json={
+                "llm_api_key": "sk-user-key",
+                "llm_base_url": "https://api.x.ai/v1/responses",
+                "llm_model": "grok-test",
+                "native_probe_only": True,
+                "live_native_test": True,
+            },
+            headers={
+                "X-Session-Token": _make_signed_session_token(secret, "probe-owner"),
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["native_search"]["live_result"]["status"] == "ok"
+        assert len(live_calls) == 1
+        assert live_calls[0]["quota_key"] == "user:probe-owner"
+
+    def test_live_native_probe_rejects_empty_visible_content(self, monkeypatch):
+        async def _empty_llm_call(*_args, **_kwargs):
+            return "   "
+
+        monkeypatch.setattr(scenarios_api, "llm_call", _empty_llm_call)
+
+        result = asyncio.run(
+            scenarios_api._live_native_search_probe(
+                api_key="sk-user-key",
+                base_url="https://api.x.ai/v1/responses",
+                model="grok-test",
+                supports_native_search_override=True,
+                native_search_upstream_override="xai_responses",
+                quota_key="user:probe-owner",
+            )
+        )
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "LLM_EMPTY"
+
+    def test_live_native_probe_scrubs_unlabelled_credentials_from_errors(self, monkeypatch):
+        secret = "xoxb-" + "abcdefghijklmnop"
+
+        async def _failing_llm_call(*_args, **_kwargs):
+            raise RuntimeError(f"native provider rejected {secret}")
+
+        monkeypatch.setattr(scenarios_api, "llm_call", _failing_llm_call)
+
+        result = asyncio.run(
+            scenarios_api._live_native_search_probe(
+                api_key="sk-user-key",
+                base_url="https://api.x.ai/v1/responses",
+                model="grok-test",
+                supports_native_search_override=True,
+                native_search_upstream_override="xai_responses",
+                quota_key="user:probe-owner",
+            )
+        )
+
+        assert result["status"] == "error"
+        assert secret not in str(result)
+        assert "redacted" in str(result)
+
+    def test_signed_byok_health_uses_principal_quota_scope(self, client, monkeypatch):
+        from contextlib import contextmanager
+
+        scopes: list[dict] = []
+
+        @contextmanager
+        def _capture_scope(**kwargs):
+            scopes.append(kwargs)
+            yield
+
+        async def _fake_health_check(**kwargs):
+            return {"status": "ok", "model": "test-model", "response": "OK"}
+
+        secret = "health-test-session-secret"
+        monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", secret)
+        monkeypatch.setattr(scenarios_api, "health_check", _fake_health_check)
+        monkeypatch.setattr(scenarios_api, "llm_request_scope", _capture_scope)
+
+        response = client.post(
+            "/api/health/test",
+            json={
+                "llm_api_key": "sk-user-key",
+                "llm_base_url": "https://api.openai.com/v1",
+            },
+            headers={
+                "X-Session-Token": _make_signed_session_token(secret, "probe-owner"),
+            },
+        )
+
+        assert response.status_code == 200
+        assert scopes == [
+            {
+                "quota_key": "user:probe-owner",
+                "purpose": "provider_health_test",
+            }
+        ]
 
     def test_health_test_can_skip_parallelism_probe(self, client, monkeypatch):
         async def _fake_health_check(**kwargs):

@@ -11,10 +11,12 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
+from sqlalchemy import update
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
@@ -712,6 +714,62 @@ async def _watch_runtime_lock_loss(
     raise RuntimeError("simulation runtime lock was lost during execution")
 
 
+async def _await_with_runtime_lock_guard(
+    awaitable,
+    lease_holder: list[RuntimeLockLease | None],
+):
+    guarded_task = asyncio.ensure_future(awaitable)
+    lock_watch_task = asyncio.create_task(_watch_runtime_lock_loss(lease_holder))
+    try:
+        done, _pending = await asyncio.wait(
+            {guarded_task, lock_watch_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if lock_watch_task in done:
+            if not guarded_task.done():
+                guarded_task.cancel()
+            await asyncio.gather(guarded_task, return_exceptions=True)
+            lock_watch_task.result()
+
+        result = await guarded_task
+        if not _runtime_lock_lease_alive(lease_holder):
+            raise RuntimeError("simulation runtime lock was lost during parse")
+        return result
+    finally:
+        pending_tasks = [
+            task for task in (guarded_task, lock_watch_task) if not task.done()
+        ]
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+
+def _mark_scenario_error_if_active(engine, scenario_id: str) -> bool:
+    """Atomically fail an active scenario without overwriting a terminal state."""
+
+    with Session(engine) as session:
+        result = session.exec(
+            update(Scenario)
+            .where(Scenario.id == scenario_id)
+            .where(
+                Scenario.status.in_(
+                    (
+                        ScenarioStatus.PARSING,
+                        ScenarioStatus.SIMULATING,
+                        ScenarioStatus.NARRATING,
+                    )
+                )
+            )
+            .values(status=ScenarioStatus.ERROR)
+        )
+        session.commit()
+        changed = result.rowcount == 1
+    if changed:
+        reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
+    return changed
+
+
 def _simulation_lock_lease_seconds() -> float:
     return max(60.0, float(settings.SIMULATION_LOCK_LEASE_SECONDS))
 
@@ -1235,8 +1293,12 @@ async def run_sim_background(
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
         try:
             release_runtime_lock(lock_lease_to_release)
-        except Exception:
-            logger.exception("Simulation %s runtime lock release failed", scenario_id)
+        except Exception as exc:
+            logger.error(
+                "Simulation %s runtime lock release failed: %s",
+                scenario_id,
+                type(exc).__name__,
+            )
         finally:
             clear_cancel_token(scenario_id)
             clear_running_task(scenario_id, current_task)
@@ -1371,12 +1433,8 @@ async def parse_and_run_background(
         register_running_task(scenario_id, parse_task)
 
     parse_lock_lease_seconds = _simulation_lock_lease_seconds()
-    parse_lock_lease_holder: list[RuntimeLockLease | None] = [
-        acquire_runtime_lock(
-            simulation_lock_key(scenario_id),
-            lease_seconds=parse_lock_lease_seconds,
-        )
-    ]
+    parse_lock_lease_holder: list[RuntimeLockLease | None] = [None]
+    parse_lock_release_holder: list[RuntimeLockLease | None] = [None]
     parse_heartbeat_stop: threading.Event | None = None
     parse_heartbeat_thread: threading.Thread | None = None
 
@@ -1386,15 +1444,165 @@ async def parse_and_run_background(
         _running_simulations.discard(scenario_id)
         _parse_phase_simulations.discard(scenario_id)
 
+    def _release_parse_runtime_lock_best_effort(
+        lease: RuntimeLockLease | None,
+        *,
+        phase: str,
+    ) -> None:
+        if lease is None:
+            return
+        try:
+            release_runtime_lock(lease)
+        except Exception as exc:
+            logger.error(
+                "Simulation %s runtime lock release failed during %s: %s",
+                scenario_id,
+                phase,
+                type(exc).__name__,
+            )
+
     def _stop_parse_runtime_lock(*, release: bool) -> None:
         nonlocal parse_heartbeat_stop, parse_heartbeat_thread
         if parse_heartbeat_stop is not None and parse_heartbeat_thread is not None:
-            _stop_runtime_lock_heartbeat(parse_heartbeat_stop, parse_heartbeat_thread)
-            parse_heartbeat_stop = None
-            parse_heartbeat_thread = None
+            try:
+                _stop_runtime_lock_heartbeat(
+                    parse_heartbeat_stop,
+                    parse_heartbeat_thread,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Simulation %s parse runtime lock heartbeat stop failed: %s",
+                    scenario_id,
+                    type(exc).__name__,
+                )
+            finally:
+                parse_heartbeat_stop = None
+                parse_heartbeat_thread = None
         if release:
-            release_runtime_lock(parse_lock_lease_holder[0])
+            lease = parse_lock_lease_holder[0] or parse_lock_release_holder[0]
             parse_lock_lease_holder[0] = None
+            parse_lock_release_holder[0] = None
+            _release_parse_runtime_lock_best_effort(lease, phase="parse")
+
+    def _refresh_parse_runtime_lock_or_raise() -> RuntimeLockLease:
+        current_lease = parse_lock_lease_holder[0]
+        if current_lease is None or not _runtime_lock_lease_alive(
+            parse_lock_lease_holder
+        ):
+            raise RuntimeError("simulation runtime lock was lost during parse")
+        try:
+            refreshed_lease = refresh_runtime_lock(
+                current_lease,
+                lease_seconds=parse_lock_lease_seconds,
+            )
+        except Exception as exc:
+            parse_lock_lease_holder[0] = None
+            logger.error(
+                "Simulation %s parse runtime lock ownership fence failed: %s",
+                scenario_id,
+                type(exc).__name__,
+            )
+            raise RuntimeError(
+                "simulation runtime lock was lost during parse"
+            ) from None
+        if refreshed_lease is None:
+            parse_lock_lease_holder[0] = None
+            raise RuntimeError("simulation runtime lock was lost during parse")
+        parse_lock_lease_holder[0] = refreshed_lease
+        parse_lock_release_holder[0] = refreshed_lease
+        return refreshed_lease
+
+    def _fence_parse_runtime_lock_before_commit(session: Session) -> None:
+        current_lease = parse_lock_lease_holder[0]
+        if current_lease is None or not _runtime_lock_lease_alive(
+            parse_lock_lease_holder
+        ):
+            raise RuntimeError("simulation runtime lock was lost during parse")
+        if current_lease.db_path is None:
+            _refresh_parse_runtime_lock_or_raise()
+            return
+        fence_now = time.time()
+        fenced_expires_at = fence_now + parse_lock_lease_seconds
+        result = session.connection().exec_driver_sql(
+            """
+            UPDATE runtime_lock
+            SET expires_at = ?
+            WHERE lock_key = ? AND owner_id = ? AND expires_at > ?
+            """,
+            (
+                fenced_expires_at,
+                current_lease.lock_key,
+                current_lease.owner_id,
+                fence_now,
+            ),
+        )
+        if result.rowcount != 1:
+            parse_lock_lease_holder[0] = None
+            raise RuntimeError("simulation runtime lock was lost during parse")
+        fenced_lease = RuntimeLockLease(
+            lock_key=current_lease.lock_key,
+            owner_id=current_lease.owner_id,
+            db_path=current_lease.db_path,
+            expires_at=fenced_expires_at,
+        )
+        parse_lock_lease_holder[0] = fenced_lease
+        parse_lock_release_holder[0] = fenced_lease
+
+    def _fail_post_parse(exc: BaseException) -> bool:
+        logger.error(
+            "Simulation %s post-parse background failed: %s",
+            scenario_id,
+            type(exc).__name__,
+        )
+        marked_error = False
+        try:
+            marked_error = _mark_scenario_error_if_active(engine, scenario_id)
+        except Exception as status_exc:
+            logger.error(
+                "Simulation %s status update failed after post-parse failure: %s",
+                scenario_id,
+                type(status_exc).__name__,
+            )
+        finally:
+            _stop_parse_runtime_lock(release=True)
+            _cleanup_parse_bookkeeping()
+        return marked_error
+
+    @asynccontextmanager
+    async def _post_parse_session():
+        try:
+            with Session(engine) as session:
+                yield session
+        except Exception as exc:
+            marked_error = _fail_post_parse(exc)
+            await _broadcast_post_parse_error_if_changed(marked_error)
+            raise
+
+    try:
+        acquired_lease = acquire_runtime_lock(
+            simulation_lock_key(scenario_id),
+            lease_seconds=parse_lock_lease_seconds,
+        )
+        parse_lock_lease_holder[0] = acquired_lease
+        parse_lock_release_holder[0] = acquired_lease
+    except Exception as exc:
+        logger.error(
+            "Simulation %s runtime lock acquire failed: %s",
+            scenario_id,
+            type(exc).__name__,
+        )
+        try:
+            _mark_scenario_error_if_active(engine, scenario_id)
+        except Exception as status_exc:
+            logger.error(
+                "Simulation %s status update failed after runtime lock acquire "
+                "failure: %s",
+                scenario_id,
+                type(status_exc).__name__,
+            )
+        finally:
+            _cleanup_parse_bookkeeping()
+        raise
 
     if parse_lock_lease_holder[0] is None:
         logger.warning(
@@ -1404,43 +1612,71 @@ async def parse_and_run_background(
         )
         _cleanup_parse_bookkeeping()
         return
-    parse_heartbeat_stop, parse_heartbeat_thread = _start_runtime_lock_heartbeat(
-        parse_lock_lease_holder,
-        lease_seconds=parse_lock_lease_seconds,
-        lock_label=f"simulation-parse:{scenario_id}",
-    )
-
-    _update_scenario_status(engine, scenario_id, ScenarioStatus.SIMULATING)
-
-    from app.api.ws import ws_manager
-
-    async def _finalize_cancelled_parse(log_message: str) -> None:
-        try:
-            from app.services.simulator import handle_simulation_cancelled
-
-            await handle_simulation_cancelled(
-                scenario_id, ws_callback=ws_manager.broadcast,
-            )
-        except Exception:
-            logger.exception(log_message, scenario_id)
-        finally:
-            _stop_parse_runtime_lock(release=True)
-            _cleanup_parse_bookkeeping()
-
-    # H2 fix: if cancel landed before parse started, finalize as cancelled.
-    if is_cancelled(scenario_id):
-        await _finalize_cancelled_parse(
-            "Failed to finalize early-cancelled scenario %s",
-        )
-        return
-
     try:
-        await ws_manager.broadcast(scenario_id, {
-            "type": "status",
-            "data": {"status": "simulating", "hierarchical": hierarchical},
-        })
-    except Exception:
-        pass
+        parse_heartbeat_stop, parse_heartbeat_thread = _start_runtime_lock_heartbeat(
+            parse_lock_lease_holder,
+            lease_seconds=parse_lock_lease_seconds,
+            lock_label=f"simulation-parse:{scenario_id}",
+        )
+
+        _update_scenario_status(engine, scenario_id, ScenarioStatus.SIMULATING)
+
+        from app.api.ws import ws_manager
+
+        async def _broadcast_post_parse_error_if_changed(marked_error: bool) -> None:
+            if not marked_error:
+                return
+            try:
+                await ws_manager.broadcast(scenario_id, {
+                    "type": "simulation_error",
+                    "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
+                })
+            except Exception as broadcast_exc:
+                logger.error(
+                    "Simulation %s post-parse error broadcast failed: %s",
+                    scenario_id,
+                    type(broadcast_exc).__name__,
+                )
+
+        async def _finalize_cancelled_parse(log_message: str) -> None:
+            try:
+                from app.services.simulator import handle_simulation_cancelled
+
+                await handle_simulation_cancelled(
+                    scenario_id, ws_callback=ws_manager.broadcast,
+                )
+            except Exception:
+                logger.exception(log_message, scenario_id)
+            finally:
+                _stop_parse_runtime_lock(release=True)
+                _cleanup_parse_bookkeeping()
+
+        # H2 fix: if cancel landed before parse started, finalize as cancelled.
+        if is_cancelled(scenario_id):
+            await _finalize_cancelled_parse(
+                "Failed to finalize early-cancelled scenario %s",
+            )
+            return
+
+        try:
+            await ws_manager.broadcast(scenario_id, {
+                "type": "status",
+                "data": {"status": "simulating", "hierarchical": hierarchical},
+            })
+        except Exception:
+            pass
+    except asyncio.CancelledError:
+        if is_cancelled(scenario_id):
+            await _finalize_cancelled_parse(
+                "Failed to finalize cancelled-during-initial-broadcast scenario %s",
+            )
+            return
+        _stop_parse_runtime_lock(release=True)
+        _cleanup_parse_bookkeeping()
+        raise
+    except Exception as exc:
+        _fail_post_parse(exc)
+        raise
 
     local_provider = is_local_provider_url(llm_base_url)
     quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)  # noqa: E501
@@ -1456,20 +1692,24 @@ async def parse_and_run_background(
             supports_native_search_override=supports_native_search,
             native_search_upstream_override=native_search_upstream,
         ):
-            parsed = await parse_question(
-                question,
-                max_agents=num_agents,
-                target_agents=num_agents,
-                default_rounds=rounds,
-                max_rounds=settings.MAX_ROUNDS,
-                hierarchical=hierarchical,
-                api_key=llm_api_key,
-                base_url=llm_base_url,
-                temperature=temperature,
-                model=llm_model,
-                world_context=world_context,
-                language=language,
+            parsed = await _await_with_runtime_lock_guard(
+                parse_question(
+                    question,
+                    max_agents=num_agents,
+                    target_agents=num_agents,
+                    default_rounds=rounds,
+                    max_rounds=settings.MAX_ROUNDS,
+                    hierarchical=hierarchical,
+                    api_key=llm_api_key,
+                    base_url=llm_base_url,
+                    temperature=temperature,
+                    model=llm_model,
+                    world_context=world_context,
+                    language=language,
+                ),
+                parse_lock_lease_holder,
             )
+            parse_lock_release_holder[0] = parse_lock_lease_holder[0]
     except asyncio.CancelledError:
         # H2 fix: parse-stage cancellation funnels into the cancelled terminal state.
         if is_cancelled(scenario_id):
@@ -1489,18 +1729,35 @@ async def parse_and_run_background(
             exc_type,
             scrubbed,
         )
-        _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
-        from app.api.ws import ws_manager
+        should_broadcast_error = True
         try:
-            await ws_manager.broadcast(scenario_id, {
-                "type": "simulation_error",
-                "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
-            })
-        except Exception:
-            pass
-        # H2 fix: clean bookkeeping so cancel endpoint stops 409'ing on dead runs.
-        _stop_parse_runtime_lock(release=True)
-        _cleanup_parse_bookkeeping()
+            try:
+                should_broadcast_error = _mark_scenario_error_if_active(
+                    engine,
+                    scenario_id,
+                )
+            except Exception as status_exc:
+                logger.error(
+                    "Simulation %s status update failed after parse failure: %s",
+                    scenario_id,
+                    type(status_exc).__name__,
+                )
+            if should_broadcast_error:
+                try:
+                    await ws_manager.broadcast(scenario_id, {
+                        "type": "simulation_error",
+                        "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
+                    })
+                except Exception as broadcast_exc:
+                    logger.error(
+                        "Simulation %s error broadcast failed after parse failure: %s",
+                        scenario_id,
+                        type(broadcast_exc).__name__,
+                    )
+        finally:
+            # Keep parse failures fail-soft while always releasing local lifecycle state.
+            _stop_parse_runtime_lock(release=True)
+            _cleanup_parse_bookkeeping()
         return
 
     if is_cancelled(scenario_id):
@@ -1509,59 +1766,69 @@ async def parse_and_run_background(
         )
         return
 
-    parsed["mode"] = mode
-    parsed["hierarchical"] = hierarchical
-    parsed["simulation_rounds"] = rounds
-    if branch_sensitivity is not None:
-        parsed["branch_sensitivity"] = branch_sensitivity
-    if fork_prompt_variant:
-        parsed["fork_prompt_variant"] = fork_prompt_variant
-    if fork_detector_active_branch_limit is not None:
-        parsed["fork_detector_active_branch_limit"] = fork_detector_active_branch_limit
-    if user_id:
-        parsed["user_id"] = user_id
-    if disable_user_quota and local_provider:
-        parsed["disable_user_quota"] = True
-    if web_search_families:
-        parsed["web_search_families"] = list(web_search_families)
-    if web_search_intensity:
-        parsed["web_search_intensity"] = web_search_intensity
-    if web_search_max_results is not None:
-        parsed["web_search_max_results"] = web_search_max_results
-    if web_search_snippet_limit is not None:
-        parsed["web_search_snippet_limit"] = web_search_snippet_limit
+    def _prepare_parsed_payload_for_persistence() -> None:
+        parsed["mode"] = mode
+        parsed["hierarchical"] = hierarchical
+        parsed["simulation_rounds"] = rounds
+        if branch_sensitivity is not None:
+            parsed["branch_sensitivity"] = branch_sensitivity
+        if fork_prompt_variant:
+            parsed["fork_prompt_variant"] = fork_prompt_variant
+        if fork_detector_active_branch_limit is not None:
+            parsed["fork_detector_active_branch_limit"] = (
+                fork_detector_active_branch_limit
+            )
+        if user_id:
+            parsed["user_id"] = user_id
+        if disable_user_quota and local_provider:
+            parsed["disable_user_quota"] = True
+        if web_search_families:
+            parsed["web_search_families"] = list(web_search_families)
+        if web_search_intensity:
+            parsed["web_search_intensity"] = web_search_intensity
+        if web_search_max_results is not None:
+            parsed["web_search_max_results"] = web_search_max_results
+        if web_search_snippet_limit is not None:
+            parsed["web_search_snippet_limit"] = web_search_snippet_limit
 
-    # Only persist non-sensitive display config. Model-profile provider fields are
-    # resolved fresh at replay/runtime time; the profile id is the durable pointer.
-    if model_profile_id:
-        parsed["model_profile_id"] = str(model_profile_id).strip()
-    elif llm_base_url:
-        parsed["llm_base_url"] = llm_base_url
-    if llm_model and not model_profile_id:
-        parsed["llm_model"] = llm_model
-    if temperature is not None:
-        parsed["llm_temperature"] = temperature
-    if reasoning_effort:
-        parsed["reasoning_effort"] = reasoning_effort
-    if llm_requests_per_minute is not None:
-        parsed["llm_requests_per_minute"] = llm_requests_per_minute
-    if llm_tokens_per_minute is not None:
-        parsed["llm_tokens_per_minute"] = llm_tokens_per_minute
-    if concurrency is not None:
-        parsed["llm_concurrency"] = concurrency
-    if supports_structured_outputs is not None:
-        parsed["supports_structured_outputs"] = supports_structured_outputs
-    if supports_native_search is not None:
-        parsed["supports_native_search"] = supports_native_search
-    if native_search_upstream is not None:
-        parsed["native_search_upstream"] = native_search_upstream
-    parsed["agents"] = [
-        _strip_untrusted_agent_provenance(agent_data)
-        for agent_data in parsed.get("agents", [])
-    ]
+        # Only persist non-sensitive display config. Model-profile provider fields are
+        # resolved fresh at replay/runtime time; the profile id is the durable pointer.
+        if model_profile_id:
+            parsed["model_profile_id"] = str(model_profile_id).strip()
+        elif llm_base_url:
+            parsed["llm_base_url"] = llm_base_url
+        if llm_model and not model_profile_id:
+            parsed["llm_model"] = llm_model
+        if temperature is not None:
+            parsed["llm_temperature"] = temperature
+        if reasoning_effort:
+            parsed["reasoning_effort"] = reasoning_effort
+        if llm_requests_per_minute is not None:
+            parsed["llm_requests_per_minute"] = llm_requests_per_minute
+        if llm_tokens_per_minute is not None:
+            parsed["llm_tokens_per_minute"] = llm_tokens_per_minute
+        if concurrency is not None:
+            parsed["llm_concurrency"] = concurrency
+        if supports_structured_outputs is not None:
+            parsed["supports_structured_outputs"] = supports_structured_outputs
+        if supports_native_search is not None:
+            parsed["supports_native_search"] = supports_native_search
+        if native_search_upstream is not None:
+            parsed["native_search_upstream"] = native_search_upstream
+        parsed["agents"] = [
+            _strip_untrusted_agent_provenance(agent_data)
+            for agent_data in parsed.get("agents", [])
+        ]
+
+    try:
+        _prepare_parsed_payload_for_persistence()
+    except Exception as exc:
+        marked_error = _fail_post_parse(exc)
+        await _broadcast_post_parse_error_if_changed(marked_error)
+        raise
 
     pending_identity_profiles: dict[str, tuple[str, str, str | None]] = {}
-    with Session(engine) as session:
+    async with _post_parse_session() as session:
         scenario = session.get(Scenario, scenario_id)
         if not scenario:
             logger.warning("Scenario %s disappeared before parse completion", scenario_id)
@@ -1599,6 +1866,7 @@ async def parse_and_run_background(
         if isinstance(existing_world_context, dict):
             parsed["world_context"] = existing_world_context
 
+        _refresh_parse_runtime_lock_or_raise()
         scenario.parsed_context = parsed
         scenario.status = ScenarioStatus.SIMULATING
 
@@ -1855,52 +2123,70 @@ async def parse_and_run_background(
                 group.member_count = matched_count
                 session.add(group)
 
+        _fence_parse_runtime_lock_before_commit(session)
         session.commit()
 
-    if pending_identity_profiles:
-        profile_batch = [
-            (profile_user_id, identity_id, role, persona)
-            for identity_id, (profile_user_id, role, persona)
-            in pending_identity_profiles.items()
-        ]
-        schedule_background_task(_store_identity_profiles_background(profile_batch))
+    ownership_transferred = False
 
-    if is_cancelled(scenario_id):
-        await _finalize_cancelled_parse(
-            "Failed to finalize cancelled-after-profile-schedule scenario %s",
-        )
-        return
+    async def _finish_post_parse_and_handoff() -> None:
+        nonlocal ownership_transferred
+        if pending_identity_profiles:
+            profile_batch = [
+                (profile_user_id, identity_id, role, persona)
+                for identity_id, (profile_user_id, role, persona)
+                in pending_identity_profiles.items()
+            ]
+            schedule_background_task(_store_identity_profiles_background(profile_batch))
 
-    llm_overrides: dict | None = None
-    if llm_api_key or llm_base_url or llm_model or temperature is not None:
-        llm_overrides = {
-            "api_key": _OpaqueStr(llm_api_key) if llm_api_key else None,
-            "base_url": llm_base_url,
-            "temperature": temperature,
-            "model": llm_model,
-        }
-
-    with llm_request_scope(
-        quota_key=quota_key,
-        purpose="scenario_runtime",
-        requests_per_minute=llm_requests_per_minute,
-        tokens_per_minute=llm_tokens_per_minute,
-        concurrency=concurrency,
-        supports_structured_outputs_override=supports_structured_outputs,
-        supports_native_search_override=supports_native_search,
-        native_search_upstream_override=native_search_upstream,
-    ):
-        pre_acquired_lock_lease = parse_lock_lease_holder[0]
-        _stop_parse_runtime_lock(release=False)
-        parse_lock_lease_holder[0] = None
-        try:
-            await run_sim_background(
-                scenario_id,
-                llm_overrides=llm_overrides,
-                pre_acquired_lock_lease=pre_acquired_lock_lease,
+        if is_cancelled(scenario_id):
+            await _finalize_cancelled_parse(
+                "Failed to finalize cancelled-after-profile-schedule scenario %s",
             )
-        finally:
-            release_runtime_lock(pre_acquired_lock_lease)
+            return
+
+        llm_overrides: dict | None = None
+        if llm_api_key or llm_base_url or llm_model or temperature is not None:
+            llm_overrides = {
+                "api_key": _OpaqueStr(llm_api_key) if llm_api_key else None,
+                "base_url": llm_base_url,
+                "temperature": temperature,
+                "model": llm_model,
+            }
+
+        with llm_request_scope(
+            quota_key=quota_key,
+            purpose="scenario_runtime",
+            requests_per_minute=llm_requests_per_minute,
+            tokens_per_minute=llm_tokens_per_minute,
+            concurrency=concurrency,
+            supports_structured_outputs_override=supports_structured_outputs,
+            supports_native_search_override=supports_native_search,
+            native_search_upstream_override=native_search_upstream,
+        ):
+            pre_acquired_lock_lease = _refresh_parse_runtime_lock_or_raise()
+            _stop_parse_runtime_lock(release=False)
+            parse_lock_lease_holder[0] = None
+            parse_lock_release_holder[0] = None
+            ownership_transferred = True
+            try:
+                await run_sim_background(
+                    scenario_id,
+                    llm_overrides=llm_overrides,
+                    pre_acquired_lock_lease=pre_acquired_lock_lease,
+                )
+            finally:
+                _release_parse_runtime_lock_best_effort(
+                    pre_acquired_lock_lease,
+                    phase="handoff",
+                )
+
+    try:
+        await _finish_post_parse_and_handoff()
+    except Exception as exc:
+        if not ownership_transferred:
+            marked_error = _fail_post_parse(exc)
+            await _broadcast_post_parse_error_if_changed(marked_error)
+        raise
 
 
 def _parse_web_context_json(raw: str | None) -> dict | None:

@@ -553,6 +553,17 @@ export function resolveApiFixture(store, { method, pathname, search }) {
     const id = decodeURIComponent(match[1]);
     const scenario = store.getScenario(id);
     if (!scenario) return { defer: true };
+    if (m === "PUT" && !["parsing", "simulating"].includes(scenario.status)) {
+      return {
+        status: 409,
+        json: {
+          detail: {
+            code: "DIRECTOR_STATE_CLOSED",
+            message: "Scenario no longer accepts director changes",
+          },
+        },
+      };
+    }
     if (m === "PUT") return { status: 200, json: store.makeDirectorStatePayload(scenario), mutate: "director" };
     return { status: 200, json: store.makeDirectorStatePayload(scenario) };
   }

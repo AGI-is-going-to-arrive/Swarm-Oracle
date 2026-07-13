@@ -52,6 +52,7 @@ from app.services.debate_scoring import (
     build_debate_plan,
 )
 from app.services.llm_client import (
+    LLMError,
     format_untrusted_text_block,
     llm_call,
     llm_call_json_with_stream_fallback,
@@ -1460,6 +1461,41 @@ def _coerce_judge_analysis_payload(
     }
 
 
+def _judge_analysis_has_usable_signal(
+    raw: dict[str, Any],
+    *,
+    language: str,
+    debate: Debate,
+    turns: list[DebateTurn],
+) -> bool:
+    for key in (
+        "summary",
+        "content",
+        "winner_reason",
+        "loser_gap",
+        "swing_factor",
+        "closing_note",
+    ):
+        text = str(raw.get(key) or "").strip()
+        if key in {"summary", "content"} and text:
+            text = _polish_generated_turn(text, language=language, phase=DebatePhase.VERDICT)
+        if text and not _has_quote_attribution_conflict(text, debate=debate, turns=turns):
+            return True
+
+    raw_rationales = raw.get("dimension_rationales")
+    if isinstance(raw_rationales, dict):
+        for dimension in DEBATE_DIMENSIONS:
+            text = str(raw_rationales.get(dimension) or "").strip()
+            if text and not _has_quote_attribution_conflict(
+                text,
+                debate=debate,
+                turns=turns,
+            ):
+                return True
+
+    return _coerce_llm_adjudication(raw) is not None
+
+
 async def _generate_judge_analysis(
     *,
     debate_id: str,
@@ -1648,6 +1684,16 @@ async def _generate_judge_analysis(
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),
             )
+        if not _judge_analysis_has_usable_signal(
+            result,
+            language=debate.language,
+            debate=debate,
+            turns=turns,
+        ):
+            raise LLMError(
+                "Debate judge returned no usable signals",
+                code="LLM_INVALID_OUTPUT",
+            )
         return _coerce_judge_analysis_payload(
             result,
             fallback,
@@ -1655,9 +1701,9 @@ async def _generate_judge_analysis(
             debate=debate,
             turns=turns,
         )
-    except Exception as exc:
-        logger.warning("Judge analysis fallback for debate %s: %s", debate_id, exc)
-        return fallback
+    except Exception:
+        logger.warning("Judge analysis failed for debate %s", debate_id)
+        raise
 
 
 def _build_counterplay_explanation(
@@ -1724,8 +1770,8 @@ async def _generate_turn_content(
     llm_overrides: dict[str, Any] | None = None,
     quota_key: str | None = None,
 ) -> str:
-    # Anchor copy is kept only as a deterministic fallback when the LLM is
-    # disabled or the call fails; it is *not* injected into the prompt anymore.
+    # Anchor copy is used only for the explicitly configured deterministic mode;
+    # enabled LLM generation must fail closed after its retry is exhausted.
     anchor_copy = build_turn_copy(
         language=debate.language,
         phase=phase,
@@ -1834,7 +1880,7 @@ async def _generate_turn_content(
         )
 
     # Pass-2 (retry): lower temperature + lower reasoning to reduce template
-    # echo risk before falling back to the deterministic anchor copy.
+    # echo risk before failing this required debate turn closed.
     try:
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
@@ -1874,8 +1920,12 @@ async def _generate_turn_content(
             side.value,
             exc,
         )
+        raise
 
-    return anchor_copy
+    raise LLMError(
+        "Debate turn generation returned no usable content",
+        code="LLM_INVALID_OUTPUT",
+    )
 
 
 def create_debate_record(

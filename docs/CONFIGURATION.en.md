@@ -48,6 +48,8 @@ Use `/admin/setup` to test a connection and save a model profile. Use `/model-pr
 
 **Advanced Settings** and **BYOK** are separate home-page disclosures. BYOK overrides the current request; Advanced Settings controls simulation, display, Local Packs, and search. A request-level remote Base URL must be submitted with an API key; the exact local URLs above are the only keyless exception. Credentials, endpoint, and model form one provider binding: reports, conversations, scoring, social copy, and resumes on a profile-backed scenario must either omit provider fields and recover that profile, or submit a complete remote `key + Base URL + model` tuple; partial overrides fail closed. An exact-local override still needs only `Base URL + model`. A new endpoint or model detaches the old profile and clears its RPM/TPM, concurrency, structured-output, and native-search policy; configure those explicitly for the new binding. Switching a Debate role profile likewise clears explicit model, credential, and rate overrides from the previous provider. Credentials must not appear in the URL.
 
+The home-page manual connection test explicitly requests a bounded provider probe when given a real key or an exact-local Base URL; an exact-local connection can be tested manually without a key. The probe is capped at parallel width 4, and a complete incremental run can make at most 10 additional provider requests. The automatic pre-launch check covers only paths with a key and no fresh result, and it never fans out. A successful health call does not make a failed probe successful; probe failure clears the prior recommendation.
+
 Request-level BYOK host controls:
 
 - `LLM_EXTRA_ALLOWED_HOSTS`: extra host allowlist; accepts hosts, not full URLs.
@@ -109,4 +111,4 @@ Generate and set a unique `SESSION_SECRET` and `ADMIN_TOKEN`, and set `ENV=produ
 
 ## 9. Advanced Tuning
 
-This page does not duplicate simulation limits, memory settings, runtime-lock and stall timeouts, report budgets, or `REPORT_*` variables. Read the comments in `.env.example` before tuning them, then run `make preflight`.
+This page does not duplicate simulation limits, memory settings, runtime-lock and stall timeouts, report budgets, or `REPORT_*` variables. Read the comments in `.env.example` before tuning them, then run `make preflight`. For the LLM check, an exact-local URL is tested without `Authorization` even when its key is empty or a placeholder; an empty or placeholder key for a remote URL produces a `warn` and skips the network call; a failed local request or empty response is a `fail`.

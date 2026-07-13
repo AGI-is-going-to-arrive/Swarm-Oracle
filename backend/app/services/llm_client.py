@@ -30,6 +30,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import normalize_llm_allowed_host, settings
+from app.log_sanitize import (
+    _scrub_basic_auth_credentials,
+    _scrub_labeled_credentials,
+    _scrub_unlabelled_credentials,
+)
 from app.models.database import get_engine
 
 logger = logging.getLogger(__name__)
@@ -281,6 +286,9 @@ def _sanitize_error(msg: str) -> str:
     msg = _PREFIXED_SECRET_PATTERN.sub(r"\1****", msg)
     msg = _LABELED_SECRET_PATTERN.sub(r"\1\2****\4", msg)
     msg = _BEARER_PATTERN.sub(r"\1****", msg)
+    msg = _scrub_basic_auth_credentials(msg)
+    msg = _scrub_labeled_credentials(msg)
+    msg = _scrub_unlabelled_credentials(msg)
     msg = " ".join(msg.split())
     if len(msg) > _SANITIZED_ERROR_MAX_CHARS:
         msg = msg[: _SANITIZED_ERROR_MAX_CHARS - 3].rstrip() + "..."
@@ -722,7 +730,7 @@ def _parse_provider_json(resp: Any, *, context: str) -> dict[str, Any]:
     try:
         data = resp.json()
     except ValueError as exc:
-        response_text = _sanitize_error(str(getattr(resp, "text", ""))[:500])
+        response_text = _sanitize_error(str(getattr(resp, "text", "")))
         logger.error("%s returned non-JSON success response: %s", context, response_text)
         raise LLMError("LLM returned non-JSON success response") from exc
     if not isinstance(data, dict):
@@ -921,11 +929,13 @@ def _normalize_quota_key(raw: str | None) -> str | None:
 
 
 def _coerce_optional_non_negative_int(value: Any) -> int | None:
-    if value is None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
         return None
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return parsed if parsed >= 0 else None
 
@@ -1434,6 +1444,52 @@ def _estimate_probe_recommendations(parallelism: int) -> dict[str, int]:
     }
 
 
+_PROVIDER_PROBE_MAX_PARALLELISM = 4
+_PROVIDER_CIRCUIT_ERROR_CODES: frozenset[str] = frozenset(
+    {"server_error", "vector_store_timeout"}
+)
+
+
+def _error_envelope_counts_toward_provider_circuit(data: dict[str, Any]) -> bool:
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return False
+    raw_code = error.get("code") or error.get("type")
+    code = raw_code.strip() if isinstance(raw_code, str) else None
+    return code in _PROVIDER_CIRCUIT_ERROR_CODES
+
+
+def _non_stream_completion_failure(
+    data: dict[str, Any],
+    *,
+    is_chat: bool,
+    require_explicit_success: bool = False,
+) -> str | None:
+    if data.get("error") is not None:
+        return "LLM provider returned an error envelope"
+    if is_chat:
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            choice = choices[0]
+            if (
+                (require_explicit_success or "finish_reason" in choice)
+                and choice.get("finish_reason") != "stop"
+            ):
+                return "LLM provider did not complete successfully"
+            return None
+        return (
+            "LLM provider did not complete successfully"
+            if require_explicit_success
+            else None
+        )
+    if (
+        (require_explicit_success or "status" in data)
+        and data.get("status") != "completed"
+    ):
+        return "LLM provider did not complete successfully"
+    return None
+
+
 async def _probe_provider_request(
     *,
     client: httpx.AsyncClient,
@@ -1450,7 +1506,7 @@ async def _probe_provider_request(
     if base_url and not api_key and not is_local_provider_url(base_url):
         return False, "BYOK mode requires an api_key when a custom base_url is provided"
     request_headers = _build_provider_request_headers(api_key=api_key, base_url=base_url)
-    payload, _ = _build_llm_payload(
+    payload, is_chat = _build_llm_payload(
         input_text="Respond with exactly: OK",
         model=model,
         reasoning_effort="low",
@@ -1465,9 +1521,25 @@ async def _probe_provider_request(
             timeout=timeout,
         )
         response.raise_for_status()
+        try:
+            data = _parse_provider_json(response, context="LLM provider probe")
+            completion_failure = _non_stream_completion_failure(
+                data,
+                is_chat=is_chat,
+                require_explicit_success=True,
+            )
+            if completion_failure:
+                return False, completion_failure
+            visible_text = _extract_llm_response_text(data, is_chat=is_chat).strip()
+        except LLMError as exc:
+            return False, _sanitize_error(str(exc))
+        except (KeyError, IndexError, TypeError):
+            return False, "LLM returned no visible content"
+        if not visible_text:
+            return False, "LLM returned no visible content"
         return True, None
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:200] if exc.response is not None else ""
+        body = exc.response.text if exc.response is not None else ""
         return False, f"HTTP {exc.response.status_code}: {_sanitize_error(body)}"
     except httpx.RequestError as exc:
         return False, _sanitize_error(str(exc))
@@ -1491,7 +1563,10 @@ async def measure_provider_parallelism(
     effective_model = model or settings.LLM_MODEL_NAME
     configured_rpm = _coerce_optional_non_negative_int(requests_per_minute)
     configured_tpm = _coerce_optional_non_negative_int(tokens_per_minute)
-    tested_parallelism = max(1, min(max_parallelism, 12))
+    tested_parallelism = max(
+        1,
+        min(max_parallelism, _PROVIDER_PROBE_MAX_PARALLELISM),
+    )
     local_provider = is_local_provider_url(base_url)
     provider_profile = detect_provider(base_url or settings.LLM_RESPONSES_URL)
     estimated_parallelism = 0
@@ -1532,20 +1607,32 @@ async def measure_provider_parallelism(
             },
         }
 
+    deadline = monotonic() + max(0.0, timeout)
     async with httpx.AsyncClient() as client:
         for width in range(1, tested_parallelism + 1):
-            results = await asyncio.gather(
-                *[
-                    _probe_provider_request(
-                        client=client,
-                        api_key=api_key,
-                        base_url=base_url,
-                        model=model,
-                        timeout=timeout,
-                    )
-                    for _ in range(width)
-                ]
-            )
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                failure_reason = "Provider parallelism probe timed out"
+                break
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[
+                            _probe_provider_request(
+                                client=client,
+                                api_key=api_key,
+                                base_url=base_url,
+                                model=model,
+                                timeout=remaining,
+                            )
+                            for _ in range(width)
+                        ]
+                    ),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                failure_reason = "Provider parallelism probe timed out"
+                break
             if all(ok for ok, _ in results):
                 estimated_parallelism = width
                 continue
@@ -1553,9 +1640,9 @@ async def measure_provider_parallelism(
             failure_reason = next((reason for ok, reason in results if not ok and reason), None)
             break
 
-    estimated_parallelism = max(1, estimated_parallelism)
+    probe_succeeded = estimated_parallelism > 0
     return {
-        "status": "ok",
+        "status": "ok" if probe_succeeded else "error",
         "model": effective_model,
         "local_provider": local_provider,
         "allow_disable_user_quota": local_provider,
@@ -1601,7 +1688,9 @@ async def probe_streaming_support(
     supported = False
     reason: str | None = None
     error_code: str | None = None
-    try:
+
+    async def _consume_probe_stream() -> None:
+        nonlocal supported
         async for chunk in llm_call_stream(
             "Reply with exactly OK.",
             reasoning_effort="low",
@@ -1612,13 +1701,24 @@ async def probe_streaming_support(
         ):
             if chunk.strip():
                 supported = True
-                break
+
+    try:
+        await asyncio.wait_for(
+            _consume_probe_stream(),
+            timeout=max(0.001, timeout),
+        )
         if not supported:
             reason = "No stream chunks received"
+    except TimeoutError:
+        supported = False
+        reason = _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"]
+        error_code = "LLM_TIMEOUT"
     except LLMError as exc:
+        supported = False
         reason = _sanitize_error(str(exc))
         error_code = classify_llm_error_code(exc)
     except Exception as exc:  # pragma: no cover - defensive probe fallback
+        supported = False
         reason = _sanitize_error(str(exc))
         error_code = classify_llm_error_code(exc)
 
@@ -2600,7 +2700,7 @@ async def llm_call(
                 logger.error(
                     "LLM native no-tools fallback HTTP error %s: %s",
                     status_code,
-                    _sanitize_error(exc.response.text[:500]),
+                    _sanitize_error(exc.response.text),
                 )
                 raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
@@ -2723,7 +2823,7 @@ async def llm_call(
                     await _record_provider_failure(provider_key)
                 # Non-retryable 4xx — raise immediately
                 logger.error("LLM HTTP error %s: %s", exc.response.status_code,
-                             _sanitize_error(exc.response.text[:500]))
+                             _sanitize_error(exc.response.text))
                 raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
                 last_exc = exc
@@ -2749,8 +2849,21 @@ async def llm_call(
         if _native_adapter is not None:
             body_error = _native_adapter.detect_body_error(data)
             if body_error:
-                await _record_provider_failure(provider_key)
+                if _error_envelope_counts_toward_provider_circuit(data):
+                    await _record_provider_failure(provider_key)
                 raise LLMError(f"Native search response error: {body_error}")
+        completion_failure = _non_stream_completion_failure(data, is_chat=is_chat)
+        if completion_failure:
+            if _error_envelope_counts_toward_provider_circuit(data):
+                await _record_provider_failure(provider_key)
+            logger.error(
+                "LLM provider returned an invalid completion envelope: %s",
+                _sanitize_error(json.dumps(data, ensure_ascii=False)),
+            )
+            raise LLMError(
+                _LLM_SAFE_ERROR_MESSAGES["LLM_INVALID_OUTPUT"],
+                code="LLM_INVALID_OUTPUT",
+            )
         await _reconcile_rate_limit_usage(
             provider_key=reservation_provider_key,
             reservation_id=reservation.reservation_id if reservation is not None else None,
@@ -2766,46 +2879,15 @@ async def llm_call(
     assert data is not None
 
     try:
-        if is_chat:
-            choice = data["choices"][0]
-            message = choice["message"]
-            text = _extract_chat_message_text(message)
-        else:
-            text = ""
-            outputs = data.get("output", [])
-            if not isinstance(outputs, list):
-                raise TypeError("Responses output must be a list")
-            msg = next(
-                (o for o in outputs if isinstance(o, dict) and o.get("type") == "message"),
-                None,
-            )
-            if msg is None:
-                msg = next(
-                    (o for o in outputs if isinstance(o, dict) and "content" in o),
-                    None,
-                )
-            if msg is not None:
-                parts = msg.get("content") or []
-                if not isinstance(parts, list):
-                    raise TypeError("Responses message content must be a list")
-                if parts:
-                    first = parts[0] or {}
-                    if not isinstance(first, dict):
-                        raise TypeError("Responses message content part must be an object")
-                    text = first.get("text") or first.get("output_text") or ""
-            if not text:
-                text = data.get("output_text") or ""
-            if not text and msg is None:
-                if _is_benign_empty_responses_output(data):
-                    text = ""
-                else:
-                    raise KeyError("No message block in output")
+        text = _extract_llm_response_text(data, is_chat=is_chat)
     except (KeyError, IndexError, TypeError, StopIteration) as exc:
         logger.error("Unexpected LLM response structure: %s",
-                     _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]))
+                     _sanitize_error(json.dumps(data, ensure_ascii=False)))
         raise LLMError("Unexpected response structure") from exc
 
-    usage = data.get("usage", {})
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
     tok_in = usage.get("prompt_tokens") or usage.get("input_tokens", "?")
     tok_out = usage.get("completion_tokens") or usage.get("output_tokens", "?")
     text = _strip_reasoning_blocks(text)
@@ -2818,7 +2900,7 @@ async def llm_call(
             return ""
         logger.error(
             "LLM returned empty non-stream content despite success response: %s",
-            _sanitize_error(json.dumps(data, ensure_ascii=False)[:500]),
+            _sanitize_error(json.dumps(data, ensure_ascii=False)),
         )
         raise LLMError("Empty non-stream content", code="LLM_EMPTY")
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
@@ -3017,11 +3099,40 @@ def _drop_next_optional_llm_param(payload: dict[str, Any], body: str) -> bool:
     return False
 
 
+def _extract_typed_text_content(value: object, *, context: str) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        raise TypeError(f"{context} must be text or a list of text parts")
+
+    chunks: list[str] = []
+    for part in value:
+        if not isinstance(part, dict):
+            raise TypeError(f"{context} text part must be an object")
+        part_type = part.get("type")
+        if part_type is not None and part_type not in {"text", "output_text"}:
+            continue
+        raw_text = part.get("text")
+        if raw_text is None:
+            raw_text = part.get("output_text")
+        if raw_text is None:
+            continue
+        if not isinstance(raw_text, str):
+            raise TypeError(f"{context} text part must contain a string")
+        chunks.append(raw_text)
+    return "".join(chunks)
+
+
 def _extract_chat_message_text(message: dict[str, Any]) -> str:
     if not isinstance(message, dict):
         raise TypeError("Chat message must be an object")
-    text = message.get("content") or ""
-    return _strip_reasoning_blocks(str(text))
+    text = _extract_typed_text_content(
+        message.get("content"),
+        context="Chat message content",
+    )
+    return _strip_reasoning_blocks(text)
 
 
 def _is_benign_empty_chat_completion(data: dict[str, Any]) -> bool:
@@ -3064,19 +3175,20 @@ def _extract_llm_response_text(data: dict[str, Any], *, is_chat: bool) -> str:
                 None,
             )
         if msg is not None:
-            parts = msg.get("content") or []
-            if not isinstance(parts, list):
-                raise TypeError("Responses message content must be a list")
-            if parts:
-                first = parts[0] or {}
-                if not isinstance(first, dict):
-                    raise TypeError("Responses message content part must be an object")
-                text = first.get("text") or first.get("output_text") or ""
+            text = _extract_typed_text_content(
+                msg.get("content"),
+                context="Responses message content",
+            )
         if not text:
-            text = data.get("output_text") or ""
+            output_text = data.get("output_text")
+            if output_text is not None and not isinstance(output_text, str):
+                raise TypeError("Responses output_text must be a string")
+            text = output_text or ""
         if not text and msg is None:
+            if _is_benign_empty_responses_output(data):
+                return ""
             raise KeyError("No message block in output")
-    return _strip_reasoning_blocks(str(text))
+    return _strip_reasoning_blocks(text)
 
 
 async def llm_call_json_for_family_query_reformulation(
@@ -3151,7 +3263,7 @@ async def llm_call_json_for_family_query_reformulation(
                 break
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
-                body = _sanitize_error(exc.response.text[:500])
+                body = _sanitize_error(exc.response.text)
                 if (
                     status_code not in {400, 422}
                     or _is_non_retryable_optional_param_error(status_code, body)
@@ -3393,8 +3505,8 @@ class _TruncatedSSEStreamError(Exception):
     """Raised internally when an SSE response ends without a terminal frame."""
 
 
-_RESPONSES_STREAM_ACTIONABLE_ERROR_CODES: frozenset[str] = frozenset(
-    {"server_error", "rate_limit_exceeded", "vector_store_timeout"}
+_RESPONSES_STREAM_ACTIONABLE_ERROR_CODES: frozenset[str] = (
+    _PROVIDER_CIRCUIT_ERROR_CODES | {"rate_limit_exceeded"}
 )
 
 
@@ -3443,15 +3555,20 @@ async def _iter_sse_data_events(
         data_lines.append(value)
 
 
+def _chat_stream_finish_reason(chunk: dict[str, Any]) -> object:
+    choices = chunk.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return None
+    return choice.get("finish_reason")
+
+
 def _is_stream_terminal(chunk: dict[str, Any], *, is_chat: bool) -> bool:
     if not is_chat:
         return chunk.get("type") == "response.completed"
-
-    choices = chunk.get("choices")
-    return isinstance(choices, list) and any(
-        isinstance(choice, dict) and choice.get("finish_reason") is not None
-        for choice in choices
-    )
+    return _chat_stream_finish_reason(chunk) == "stop"
 
 
 def _responses_stream_failure_type(
@@ -3460,7 +3577,7 @@ def _responses_stream_failure_type(
     is_chat: bool,
 ) -> str | None:
     if is_chat:
-        return None
+        return "error" if chunk.get("error") is not None else None
     event_type = chunk.get("type")
     if event_type in {"response.failed", "response.incomplete", "error"}:
         return str(event_type)
@@ -3473,6 +3590,9 @@ def _responses_stream_failure_code(
     event_type: str,
 ) -> object:
     if event_type == "error":
+        error = chunk.get("error")
+        if isinstance(error, dict):
+            return error.get("code") or error.get("type")
         return chunk.get("code")
     if event_type != "response.failed":
         return None
@@ -3607,6 +3727,16 @@ async def llm_call_stream(
                                         event_type=failure_type,
                                     ),
                                 )
+                            if is_chat:
+                                finish_reason = _chat_stream_finish_reason(chunk)
+                                if finish_reason is not None and finish_reason != "stop":
+                                    logger.warning(
+                                        "Chat stream ended with a non-success finish reason"
+                                    )
+                                    raise LLMError(
+                                        _LLM_SAFE_ERROR_MESSAGES["LLM_INVALID_OUTPUT"],
+                                        code="LLM_INVALID_OUTPUT",
+                                    )
                             if active_structured_output_keys:
                                 body_error = _detect_structured_output_body_error(chunk)
                                 if body_error:
@@ -3627,8 +3757,11 @@ async def llm_call_stream(
                                         str(delta.get("reasoning_content") or "")
                                     )
                             else:
-                                # Responses API streaming format
-                                content = chunk.get("delta", "")
+                                content = (
+                                    chunk.get("delta", "")
+                                    if chunk.get("type") == "response.output_text.delta"
+                                    else ""
+                                )
                             if content:
                                 emitted_content = True
                                 yield content
@@ -3639,6 +3772,11 @@ async def llm_call_stream(
                             break
                 if not terminal_received:
                     raise _TruncatedSSEStreamError
+                if not emitted_content:
+                    raise LLMError(
+                        _LLM_SAFE_ERROR_MESSAGES["LLM_EMPTY"],
+                        code="LLM_EMPTY",
+                    )
                 await _record_provider_success(provider_key)
                 break
             except _ResponsesStreamFailureError as exc:
@@ -3731,7 +3869,7 @@ async def llm_call_stream(
                 logger.error(
                     "LLM stream HTTP error %s: %s",
                     status_code,
-                    _sanitize_error(exc.response.text[:500]),
+                    _sanitize_error(exc.response.text),
                 )
                 raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
@@ -3988,6 +4126,19 @@ async def health_check(
             max_tokens=64,
             model=model,
         )
-        return {"status": "ok", "model": effective_model, "response": result.strip()}
+        visible_result = result.strip()
+        if not visible_result:
+            raise LLMError(
+                _LLM_SAFE_ERROR_MESSAGES["LLM_EMPTY"],
+                code="LLM_EMPTY",
+            )
+        return {"status": "ok", "model": effective_model, "response": visible_result}
     except LLMError as exc:
-        return {"status": "error", "model": effective_model, "error": str(exc)}
+        response = {
+            "status": "error",
+            "model": effective_model,
+            "error": exc.safe_message if exc.code else _sanitize_error(str(exc)),
+        }
+        if exc.code:
+            response["error_code"] = exc.code
+        return response

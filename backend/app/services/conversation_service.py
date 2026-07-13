@@ -18,8 +18,7 @@ Key hard constraints implemented here:
   ``UPDATE ... WHERE id=? AND status IN ('pending','streaming') RETURNING id``;
   callers MUST branch on the boolean result to gate WS broadcasts.
 * **HC-34 (owner freeze)** — ``load_conversation_thread_for_owner`` loads a
-  thread scoped to ``principal.subject == thread.owner_user_id``.  The
-  ``agent_identity_id`` is purely provenance and never consulted for ACL.
+  thread scoped to exact thread, Scenario, and optional AgentIdentity ownership.
 * **HC-36 (BYOK schema)** — ``persist_turn_model`` enforces logical model
   names (no ``://``, no ``http``).  Error messages written to the row are
   6-code mapped short phrases; raw traceback stays in :func:`_structured_log`
@@ -423,15 +422,20 @@ def load_conversation_thread_for_owner(
     thread = session.get(AgentConversationThread, thread_id)
     if thread is None:
         raise api_error(404, "THREAD_NOT_FOUND", "Conversation thread not found")
-    # When SESSION_SECRET is unset, ``owner_user_id`` may be None — in that mode
-    # ownership is not enforced (matching the existing scenario loader shape).
-    # Empty-string owner is the dev/no-auth marker and is treated as "no subject".
-    if (
-        owner_user_id
-        and thread.owner_user_id
-        and thread.owner_user_id != owner_user_id
-    ):
+    # ``None`` means auth is disabled.  Any signed subject requires exact
+    # ownership across the whole persisted chain; legacy ownerless rows are not
+    # adopted implicitly and every mismatch is concealed as THREAD_NOT_FOUND.
+    if owner_user_id is None:
+        return thread
+    if thread.owner_user_id != owner_user_id:
         raise api_error(404, "THREAD_NOT_FOUND", "Conversation thread not found")
+    scenario = session.get(Scenario, thread.scenario_id)
+    if scenario is None or scenario.user_id != owner_user_id:
+        raise api_error(404, "THREAD_NOT_FOUND", "Conversation thread not found")
+    if thread.agent_identity_id:
+        identity = session.get(AgentIdentity, thread.agent_identity_id)
+        if identity is None or identity.user_id != owner_user_id:
+            raise api_error(404, "THREAD_NOT_FOUND", "Conversation thread not found")
     return thread
 
 
@@ -443,9 +447,7 @@ def _verify_scenario_owner(
     scenario = session.get(Scenario, scenario_id)
     if scenario is None:
         raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
-    # HC-34: only enforce ownership when we have a real subject.  Empty string
-    # is treated the same as ``None`` — the dev/no-auth fallback shape.
-    if owner_user_id and scenario.user_id and scenario.user_id != owner_user_id:
+    if owner_user_id is not None and scenario.user_id != owner_user_id:
         # Ownership concealment.
         raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
     return scenario
@@ -461,7 +463,7 @@ def _verify_identity_owner(
     identity = session.get(AgentIdentity, identity_id)
     if identity is None:
         raise api_error(404, "IDENTITY_NOT_FOUND", "Agent identity not found")
-    if owner_user_id and identity.user_id and identity.user_id != owner_user_id:
+    if owner_user_id is not None and identity.user_id != owner_user_id:
         raise api_error(404, "IDENTITY_NOT_FOUND", "Agent identity not found")
 
 
@@ -769,7 +771,7 @@ def _reserve_sequence_pair(session: Session, thread_id: str) -> tuple[int, int]:
 def create_thread_with_first_turn(
     *,
     scenario_id: str,
-    owner_user_id: str,
+    owner_user_id: str | None,
     agent_identity_id: str | None,
     origin_branch_id: str | None,
     origin_round_number: int | None,
@@ -830,7 +832,7 @@ def create_thread_with_first_turn(
         thread = AgentConversationThread(
             scenario_id=scenario_id,
             agent_identity_id=agent_identity_id,
-            owner_user_id=owner_user_id,
+            owner_user_id=owner_user_id or "",
             organization_id=organization_id or None,
             origin_branch_id=origin_branch_id,
             origin_round_number=origin_round_number,

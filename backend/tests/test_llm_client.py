@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 import warnings
 from urllib.parse import urlparse
 
@@ -1500,7 +1501,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
 
-        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+        with pytest.raises(llm_client.LLMError, match="Empty non-stream content") as exc_info:
             await llm_call(
                 "Reply with one sentence.",
                 reasoning_effort="low",
@@ -1508,6 +1509,8 @@ class TestLLMCall:
                 api_key="sk-test",
                 model="gpt-test",
             )
+
+        assert exc_info.value.code == "LLM_EMPTY"
 
     @pytest.mark.asyncio
     async def test_llm_call_wraps_non_json_success_body(self, monkeypatch):
@@ -1604,10 +1607,16 @@ class TestLLMCall:
             async def post(self, _url, *, json=None, headers=None, timeout=None):
                 return _FakeResponse()
 
+        recorded_failures: list[str] = []
+
+        async def _record_failure(provider_key: str) -> None:
+            recorded_failures.append(provider_key)
+
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client, "_record_provider_failure", _record_failure)
 
-        with pytest.raises(llm_client.LLMError, match="Empty non-stream content"):
+        with pytest.raises(llm_client.LLMError) as exc_info:
             await llm_call(
                 "Reply with one sentence.",
                 reasoning_effort="low",
@@ -1615,6 +1624,9 @@ class TestLLMCall:
                 api_key="sk-test",
                 model="gpt-test",
             )
+
+        assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+        assert recorded_failures == []
 
     @pytest.mark.asyncio
     async def test_llm_call_rejects_reasoning_content_after_strip_is_empty(self, monkeypatch):
@@ -1712,7 +1724,7 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
         caplog.set_level("ERROR")
 
-        with pytest.raises(llm_client.LLMError, match="Unexpected response structure"):
+        with pytest.raises(llm_client.LLMError) as exc_info:
             await llm_call(
                 "Reply with one sentence.",
                 reasoning_effort="low",
@@ -1721,6 +1733,7 @@ class TestLLMCall:
                 model="gpt-test",
             )
 
+        assert exc_info.value.code == "LLM_INVALID_OUTPUT"
         assert "sk-raw-secret" not in caplog.text
         assert "raw-token" not in caplog.text
         assert "Bearer raw-token" not in caplog.text
@@ -1790,6 +1803,135 @@ class TestLLMCall:
         )
 
         assert result == "Top-level response text"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "usage",
+        ["n/a", [], {"total_tokens": float("inf")}],
+    )
+    async def test_llm_call_tolerates_malformed_usage_metadata(
+        self,
+        monkeypatch,
+        usage,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "output_text": "Visible answer",
+                    "usage": usage,
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        result = await llm_call(
+            "Reply with one sentence.",
+            reasoning_effort="low",
+            base_url="https://example.com/v1/responses",
+            api_key="sk-test",
+            model="gpt-test",
+        )
+
+        assert result == "Visible answer"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "response_body"),
+        [
+            (
+                "https://example.com/v1/chat/completions",
+                {
+                    "choices": [
+                        {
+                            "message": {"content": "partial"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "error": {},
+                },
+            ),
+            (
+                "https://example.com/v1/responses",
+                {"status": "incomplete", "output_text": "partial"},
+            ),
+        ],
+    )
+    async def test_llm_call_rejects_error_or_nonterminal_success_payload(
+        self,
+        monkeypatch,
+        base_url,
+        response_body,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return response_body
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError) as exc_info:
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url=base_url,
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+        assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+
+    @pytest.mark.asyncio
+    async def test_llm_call_does_not_stringify_structured_empty_chat_content(
+        self,
+        monkeypatch,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": [{"type": "text", "text": ""}],
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError) as exc_info:
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/chat/completions",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
+        assert exc_info.value.code == "LLM_EMPTY"
 
     @pytest.mark.asyncio
     async def test_llm_call_raises_on_empty_responses_output(self, monkeypatch):
@@ -2088,7 +2230,7 @@ class TestLLMCall:
         assert sleep_calls == [1.0]
 
     @pytest.mark.asyncio
-    async def test_llm_call_stream_omits_reasoning_content_by_default(self, monkeypatch):
+    async def test_llm_call_stream_rejects_reasoning_only_chat_content(self, monkeypatch):
         class _FakeResponse:
             def raise_for_status(self) -> None:
                 return None
@@ -2120,15 +2262,138 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
 
-        chunks = [
-            chunk
+        recorded_successes: list[str] = []
+
+        async def _record_success(provider_key):
+            recorded_successes.append(provider_key)
+
+        monkeypatch.setattr(llm_client, "_record_provider_success", _record_success)
+
+        chunks: list[str] = []
+        with pytest.raises(llm_client.LLMError) as exc_info:
             async for chunk in llm_client.llm_call_stream(
                 "stream me",
                 reasoning_effort="low",
-            )
-        ]
+            ):
+                chunks.append(chunk)
 
         assert chunks == []
+        assert exc_info.value.code == "LLM_EMPTY"
+        assert recorded_successes == []
+
+    @pytest.mark.asyncio
+    async def test_responses_stream_rejects_reasoning_delta_without_output_text(
+        self,
+        monkeypatch,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_lines(self):
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "type": "response.reasoning_summary_text.delta",
+                            "delta": "hidden chain of thought",
+                        }
+                    )
+                )
+                yield ""
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"type": "response.completed", "response": {"id": "resp_reasoning"}}
+                    )
+                )
+                yield ""
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeClient:
+            def stream(self, *args, **kwargs):
+                return _FakeStream()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        recorded_successes: list[str] = []
+
+        async def _record_success(provider_key):
+            recorded_successes.append(provider_key)
+
+        monkeypatch.setattr(llm_client, "_record_provider_success", _record_success)
+
+        chunks: list[str] = []
+        with pytest.raises(llm_client.LLMError) as exc_info:
+            async for chunk in llm_client.llm_call_stream(
+                "stream me",
+                reasoning_effort="low",
+                base_url="https://api.openai.com/v1/responses",
+                api_key="sk-test",
+            ):
+                chunks.append(chunk)
+
+        assert chunks == []
+        assert exc_info.value.code == "LLM_EMPTY"
+        assert recorded_successes == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_payload",
+        [{"message": "failed", "code": "server_error"}, {}],
+    )
+    async def test_chat_stream_rejects_error_frame_after_visible_delta(
+        self, monkeypatch, error_payload
+    ):
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
+                yield ""
+                yield "data: " + json.dumps({"error": error_payload})
+                yield ""
+                yield "data: [DONE]"
+                yield ""
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeClient:
+            def stream(self, *args, **kwargs):
+                return _FakeStream()
+
+        recorded_successes: list[str] = []
+
+        async def _record_success(provider_key):
+            recorded_successes.append(provider_key)
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client, "_record_provider_success", _record_success)
+
+        chunks: list[str] = []
+        with pytest.raises(llm_client.LLMError):
+            async for chunk in llm_client.llm_call_stream(
+                "stream me",
+                reasoning_effort="low",
+            ):
+                chunks.append(chunk)
+
+        assert chunks == ["partial"]
+        assert recorded_successes == []
 
     @pytest.mark.asyncio
     async def test_llm_call_stream_can_opt_into_reasoning_content_fallback(self, monkeypatch):
@@ -2192,6 +2457,25 @@ class TestLLMCallJSON:
         assert 'api_key="****"' in sanitized
         assert "token=****" in sanitized
         assert "Bearer ****" in sanitized
+
+    @pytest.mark.parametrize(
+        "raw_token",
+        [
+            "ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890abcd",
+            "github_pat_" + "11abcdefghijklmnopqrstuvwxyzABCDE12345",
+            "AKIA" + "1234567890ABCDEF",
+            "xoxb-" + "123456789012-abcdefghijklmnop",
+            "glpat-" + "abcdefghijklmnopqrst",
+            "AIza" + ("A" * 35),
+        ],
+    )
+    def test_sanitize_error_masks_unlabelled_provider_credentials(self, raw_token):
+        sanitized = llm_client._sanitize_error(
+            f"provider failed while processing {raw_token}"
+        )
+
+        assert raw_token not in sanitized
+        assert "[redacted-key]" in sanitized
 
     def test_sanitize_error_removes_html_stack_userinfo_and_truncates(self):
         sanitized = llm_client._sanitize_error(
@@ -2387,6 +2671,24 @@ class TestHealthCheck:
         assert captured["max_tokens"] == 64
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_response", ["", "  \n\t"])
+    async def test_health_check_rejects_empty_visible_content(
+        self,
+        monkeypatch,
+        empty_response,
+    ):
+        async def _fake_llm_call(*_args, **_kwargs):
+            return empty_response
+
+        monkeypatch.setattr(llm_client, "llm_call", _fake_llm_call)
+
+        result = await health_check()
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "LLM_EMPTY"
+        assert result["error"] == "LLM returned no visible content."
+
+    @pytest.mark.asyncio
     async def test_health_check_error_on_bad_url(self, monkeypatch):
         """health_check should return status=error for unreachable LLM."""
         from app import config
@@ -2427,6 +2729,32 @@ class TestStreamingSupportProbe:
         assert call_count["value"] == 1
 
     @pytest.mark.asyncio
+    async def test_probe_streaming_support_rejects_visible_but_truncated_stream(
+        self,
+        monkeypatch,
+    ):
+        async def _truncated_stream(*args, **kwargs):
+            yield "partial"
+            raise llm_client.LLMError(
+                "stream ended without a terminal frame",
+                code="LLM_UNREACHABLE",
+            )
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _truncated_stream)
+        llm_client._stream_support_cache.clear()
+
+        result = await llm_client.probe_streaming_support(
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+            force_refresh=True,
+        )
+
+        assert result["supported"] is False
+        assert result["error_code"] == "LLM_UNREACHABLE"
+        assert "terminal frame" in (result["reason"] or "")
+        assert llm_client._stream_support_cache == {}
+
+    @pytest.mark.asyncio
     async def test_probe_streaming_support_reports_fallback_reason(self, monkeypatch):
         async def _broken_stream(*args, **kwargs):
             raise llm_client.LLMError("stream unsupported")
@@ -2444,6 +2772,34 @@ class TestStreamingSupportProbe:
         assert result["supported"] is False
         assert "unsupported" in (result["reason"] or "")
         assert result["error_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_probe_streaming_support_enforces_one_overall_deadline(
+        self,
+        monkeypatch,
+    ):
+        async def _slow_stream(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            yield "late"
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _slow_stream)
+        llm_client._stream_support_cache.clear()
+
+        started = time.monotonic()
+        result = await asyncio.wait_for(
+            llm_client.probe_streaming_support(
+                base_url="https://example.com/v1/chat/completions",
+                model="test-model",
+                timeout=0.01,
+                force_refresh=True,
+            ),
+            timeout=0.1,
+        )
+
+        assert result["supported"] is False
+        assert result["error_code"] == "LLM_TIMEOUT"
+        assert time.monotonic() - started < 0.05
+        assert llm_client._stream_support_cache == {}
 
     @pytest.mark.asyncio
     async def test_probe_streaming_support_does_not_cache_credential_failure(
@@ -3247,13 +3603,14 @@ class TestLlmCallStructuredOutputs:
         monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
         caplog.set_level("WARNING")
 
-        with pytest.raises(LLMError, match="Unexpected response structure"):
+        with pytest.raises(LLMError) as exc_info:
             await llm_call_json(
                 "Return JSON.",
                 base_url="https://api.openai.com/v1/chat/completions",
                 api_key="openai-key",
             )
 
+        assert exc_info.value.code == "LLM_INVALID_OUTPUT"
         assert len(payloads) == 1
         assert "response_format" in payloads[0]
         assert "Structured output rejected by provider" not in caplog.text
@@ -3496,7 +3853,18 @@ class TestMeasureProviderParallelism:
         class FakeClient:
             async def post(self, url, **kwargs):
                 calls.append((url, kwargs["headers"]))
-                return httpx.Response(200, request=httpx.Request("POST", url))
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {"role": "assistant", "content": "OK"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                    request=httpx.Request("POST", url),
+                )
 
         ok, error = await llm_client._probe_provider_request(
             client=FakeClient(),
@@ -3530,6 +3898,364 @@ class TestMeasureProviderParallelism:
 
         assert ok is False
         assert error == "BYOK mode requires an api_key when a custom base_url is provided"
+
+    @pytest.mark.asyncio
+    async def test_probe_scrubs_unlabelled_credentials_from_http_error_body(self):
+        secret = "ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890abcd"
+
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                return httpx.Response(
+                    500,
+                    text=f"upstream leaked {secret}",
+                    request=httpx.Request("POST", url),
+                )
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is False
+        assert error is not None
+        assert error.startswith("HTTP 500:")
+        assert secret not in error
+        assert "redacted" in error
+
+    @pytest.mark.asyncio
+    async def test_probe_scrubs_credentials_crossing_error_body_cutoff(self):
+        secret = "ghp_" + "abcdefghijklmnopqrstuvwxyz1234567890abcd"
+
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                return httpx.Response(
+                    500,
+                    text=("x" * 195) + secret,
+                    request=httpx.Request("POST", url),
+                )
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is False
+        assert error is not None
+        assert "ghp_" not in error
+        assert secret not in error
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "response_body"),
+        [
+            (
+                "https://api.openai.com/v1/chat/completions",
+                {
+                    "choices": [
+                        {"message": {"content": None}, "finish_reason": "stop"}
+                    ]
+                },
+            ),
+            (
+                "https://api.openai.com/v1/chat/completions",
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": [{"type": "text", "text": ""}],
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            ),
+            (
+                "https://api.openai.com/v1/responses",
+                {
+                    "status": "completed",
+                    "output": [
+                        {"type": "reasoning", "status": "completed", "summary": []}
+                    ]
+                },
+            ),
+            (
+                "https://api.openai.com/v1/responses",
+                {
+                    "status": "completed",
+                    "output": [
+                        {"type": "message", "content": [{"text": ""}]}
+                    ],
+                },
+            ),
+        ],
+    )
+    async def test_raw_probe_rejects_200_without_visible_content(
+        self,
+        base_url,
+        response_body,
+    ):
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                return httpx.Response(
+                    200,
+                    json=response_body,
+                    request=httpx.Request("POST", url),
+                )
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key="sk-test",
+            base_url=base_url,
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is False
+        assert error == "LLM returned no visible content"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "response_body"),
+        [
+            (
+                "https://api.openai.com/v1/chat/completions",
+                {
+                    "choices": [
+                        {
+                            "message": {"content": "partial"},
+                            "finish_reason": "length",
+                        }
+                    ]
+                },
+            ),
+            (
+                "https://api.openai.com/v1/responses",
+                {"status": "incomplete", "output_text": "partial"},
+            ),
+        ],
+    )
+    async def test_raw_probe_rejects_nonterminal_visible_content(
+        self,
+        base_url,
+        response_body,
+    ):
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                return httpx.Response(
+                    200,
+                    json=response_body,
+                    request=httpx.Request("POST", url),
+                )
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key="sk-test",
+            base_url=base_url,
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is False
+        assert error == "LLM provider did not complete successfully"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "response_body"),
+        [
+            (
+                "https://api.openai.com/v1/chat/completions",
+                {
+                    "choices": [{"message": {"content": "OK"}}],
+                    "error": {},
+                },
+            ),
+            (
+                "https://api.openai.com/v1/responses",
+                {
+                    "output_text": "OK",
+                    "error": {"message": "failed"},
+                },
+            ),
+        ],
+    )
+    async def test_raw_probe_rejects_200_with_error_envelope(
+        self,
+        base_url,
+        response_body,
+    ):
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                return httpx.Response(
+                    200,
+                    json=response_body,
+                    request=httpx.Request("POST", url),
+                )
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key="sk-test",
+            base_url=base_url,
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is False
+        assert error == "LLM provider returned an error envelope"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "response_body"),
+        [
+            (
+                "https://api.openai.com/v1/chat/completions",
+                {
+                    "choices": [
+                        {"message": {"content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "error": None,
+                },
+            ),
+            (
+                "https://api.openai.com/v1/responses",
+                {
+                    "status": "completed",
+                    "error": None,
+                    "output": [
+                        {"type": "message", "content": [{"type": "output_text", "text": "OK"}]}
+                    ]
+                },
+            ),
+        ],
+    )
+    async def test_raw_probe_accepts_visible_content_for_each_api_form(
+        self,
+        base_url,
+        response_body,
+    ):
+        class FakeClient:
+            async def post(self, url, **kwargs):
+                return httpx.Response(
+                    200,
+                    json=response_body,
+                    request=httpx.Request("POST", url),
+                )
+
+        ok, error = await llm_client._probe_provider_request(
+            client=FakeClient(),
+            api_key="sk-test",
+            base_url=base_url,
+            model="gpt-test",
+            timeout=1.0,
+        )
+
+        assert ok is True
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_parallelism_probe_has_fixed_four_request_width_cap(self, monkeypatch):
+        calls: list[int] = []
+
+        async def _successful_probe(**kwargs):
+            calls.append(1)
+            return True, None
+
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _successful_probe)
+
+        result = await llm_client.measure_provider_parallelism(
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-test",
+            max_parallelism=99,
+            timeout=1.0,
+        )
+
+        assert result["tested_parallelism"] == 4
+        assert result["estimated_parallelism"] == 4
+        assert len(calls) == 10
+
+    @pytest.mark.asyncio
+    async def test_parallelism_probe_skips_fanout_for_low_declared_rpm(self, monkeypatch):
+        async def _unexpected_probe(**kwargs):
+            raise AssertionError("low declared RPM must skip provider fanout")
+
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _unexpected_probe)
+
+        result = await llm_client.measure_provider_parallelism(
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-test",
+            requests_per_minute=12,
+            tokens_per_minute=50_000,
+            max_parallelism=99,
+            timeout=1.0,
+        )
+
+        assert result["status"] == "ok"
+        assert result["tested_parallelism"] == 1
+        assert result["estimated_parallelism"] == 2
+        assert result["rate_limit_hint"] == {
+            "requests_per_minute": 12,
+            "tokens_per_minute": 50_000,
+            "mode": "configured_budget",
+        }
+
+    @pytest.mark.asyncio
+    async def test_parallelism_timeout_is_one_overall_deadline(self, monkeypatch):
+        calls: list[int] = []
+
+        async def _slow_probe(**kwargs):
+            calls.append(1)
+            await asyncio.sleep(0.03)
+            return True, None
+
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _slow_probe)
+
+        result = await asyncio.wait_for(
+            llm_client.measure_provider_parallelism(
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1/chat/completions",
+                model="gpt-test",
+                max_parallelism=4,
+                timeout=0.04,
+            ),
+            timeout=0.2,
+        )
+
+        assert result["estimated_parallelism"] == 1
+        assert result["failure"] == "Provider parallelism probe timed out"
+        assert len(calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_parallelism_probe_does_not_invent_success_when_width_one_fails(
+        self,
+        monkeypatch,
+    ):
+        calls: list[int] = []
+
+        async def _failed_probe(**kwargs):
+            calls.append(1)
+            return False, "HTTP 401: unauthorized"
+
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _failed_probe)
+
+        result = await llm_client.measure_provider_parallelism(
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-test",
+            max_parallelism=4,
+            timeout=1.0,
+        )
+
+        assert result["status"] == "error"
+        assert result["estimated_parallelism"] == 0
+        assert result["failure"] == "HTTP 401: unauthorized"
+        assert len(calls) == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -4794,13 +5520,25 @@ class TestLlmCallNativeSearch:
         ]
 
     @pytest.mark.asyncio
-    async def test_native_search_top_level_body_error_raises(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("error_payload", "expected_failure_count"),
+        [
+            ({"message": "rate_limited"}, 0),
+            ({"type": "server_error", "message": "unavailable"}, 1),
+        ],
+    )
+    async def test_native_search_top_level_body_error_raises(
+        self,
+        monkeypatch,
+        error_payload,
+        expected_failure_count,
+    ):
         """Native Responses bodies with top-level error must not be accepted as success."""
         async def mock_post(self, url, *, json=None, **kwargs):
             return httpx.Response(
                 200,
                 json={
-                    "error": {"message": "rate_limited"},
+                    "error": error_payload,
                     "output": [{"type": "message", "content": [{"text": "answer"}]}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 5},
                 },
@@ -4824,7 +5562,11 @@ class TestLlmCallNativeSearch:
                 api_key="xai-key",
                 native_search_domains=["example.com"],
             )
-        assert llm_client._provider_failures.get("https://api.x.ai/v1/responses") == 1
+        provider_key = "https://api.x.ai/v1/responses"
+        if expected_failure_count:
+            assert llm_client._provider_failures.get(provider_key) == 1
+        else:
+            assert provider_key not in llm_client._provider_failures
 
     @pytest.mark.asyncio
     async def test_no_native_search_no_citations(self, monkeypatch):

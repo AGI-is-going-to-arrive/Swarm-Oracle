@@ -168,6 +168,23 @@ def _stop_runtime_lock_heartbeat(stop_event: threading.Event, thread: threading.
     thread.join(timeout=1.0)
 
 
+def _release_runtime_locks_best_effort(
+    *leases: RuntimeLockLease | None,
+    operation: str,
+) -> None:
+    for lease in leases:
+        if lease is None:
+            continue
+        try:
+            release_runtime_lock(lease)
+        except Exception as exc:
+            logger.warning(
+                "%s runtime lock release failed (%s)",
+                operation,
+                type(exc).__name__,
+            )
+
+
 def _require_replay_branch_lock_alive(lease_holder: list[RuntimeLockLease | None]) -> None:
     if lease_holder[0] is None:
         raise api_error(
@@ -612,8 +629,11 @@ async def create_counterfactual(
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(replay_branch_lease)
-        release_runtime_lock(simulation_lease)
+        _release_runtime_locks_best_effort(
+            replay_branch_lease,
+            simulation_lease,
+            operation="counterfactual",
+        )
 
     return JSONResponse(
         status_code=201,
@@ -689,7 +709,10 @@ async def resimulate_counterfactual(
             raise
         simulation_lease = None
     finally:
-        release_runtime_lock(simulation_lease)
+        _release_runtime_locks_best_effort(
+            simulation_lease,
+            operation="counterfactual resimulation",
+        )
 
     return JSONResponse(
         status_code=200,
@@ -979,8 +1002,11 @@ async def resume_from_round(
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(replay_branch_lease)
-        release_runtime_lock(simulation_lease)
+        _release_runtime_locks_best_effort(
+            replay_branch_lease,
+            simulation_lease,
+            operation="resume",
+        )
 
     return JSONResponse(
         status_code=201,

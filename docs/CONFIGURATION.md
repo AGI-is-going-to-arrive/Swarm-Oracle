@@ -48,6 +48,8 @@
 
 首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。BYOK 只覆盖当前请求；高级设置负责推演、显示、主题包和搜索选项。请求级远端 Base URL 必须与 API key 一起提交；上述精确本地 Base URL 是唯一免 key 例外。凭据、端点和模型属于同一个 provider 绑定：profile-backed 场景的报告、对话、评分、社交文案和续跑要么不提交 provider 字段并恢复原 profile，要么提交完整的远端 `key + Base URL + model`；partial override 会 fail-closed。精确本地覆盖仍只需 `Base URL + model`。任何新端点或新模型都会解绑旧 profile，并清除旧 RPM/TPM、并发、结构化输出和原生搜索策略，必须为新绑定显式重新设置。切换 Debate 角色 profile 同样会清除旧 provider 的显式模型、凭据和速率覆盖。不能把凭据放进 URL。
 
+首页手动测试连接会在提供真实 key 或精确本地 Base URL 时显式请求有界 provider probe；精确本地连接可免 key 手动测试。probe 最大并行宽度为 4，完整递增最多产生 10 个附加 provider 请求。启动前的自动检查只覆盖提供了 key 且没有新鲜结果的路径，并固定不执行 fanout。health 成功不等于 probe 成功；probe 失败会清除旧推荐，不能显示为成功。
+
 请求级 BYOK 的 host 控制：
 
 - `LLM_EXTRA_ALLOWED_HOSTS`：额外 host 白名单，只接受 host，不接受完整 URL。
@@ -109,4 +111,4 @@ openssl rand -hex 32
 
 ## 9. 高级调优
 
-推演上限、memory、runtime lock、stall timeout、报告预算和 `REPORT_*` 参数不在这里复制。需要调优时直接阅读 `.env.example` 的注释，改动后先运行 `make preflight`。
+推演上限、memory、runtime lock、stall timeout、报告预算和 `REPORT_*` 参数不在这里复制。需要调优时直接阅读 `.env.example` 的注释，改动后先运行 `make preflight`。对于 LLM，精确本地 URL 即使 key 为空或为占位值也会在不发送 `Authorization` 的情况下实测；远端空值或占位 key 只产生 `warn` 并跳过网络请求；本地请求失败或正文为空则为 `fail`。

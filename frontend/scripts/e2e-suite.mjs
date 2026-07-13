@@ -156,12 +156,12 @@ function buildLaunchCandidates(headless) {
   const softwareArgs = ["--use-gl=angle", "--use-angle=swiftshader"];
   const candidates = [
     {
-      id: "chrome-channel",
-      options: { channel: "chrome", headless },
-    },
-    {
       id: "chromium-default",
       options: { headless },
+    },
+    {
+      id: "chrome-channel",
+      options: { channel: "chrome", headless },
     },
     {
       id: "chromium-swiftshader",
@@ -589,10 +589,19 @@ async function putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState
     }
 
     const body = await response.text();
-    if (response.status === 409 && attempt === 0) {
+    let errorCode = null;
+    try {
+      errorCode = JSON.parse(body)?.detail?.code ?? null;
+    } catch {
+      // Keep the raw response in the thrown error below.
+    }
+    if (response.status === 409 && errorCode === "DIRECTOR_STATE_CONFLICT" && attempt === 0) {
       continue;
     }
-    throw new Error(`Failed to save director state for ${scenarioId}: ${response.status} ${body}`);
+    const error = new Error(`Failed to save director state for ${scenarioId}: ${response.status} ${body}`);
+    error.status = response.status;
+    error.code = errorCode;
+    throw error;
   }
 }
 
@@ -677,7 +686,18 @@ async function extractResultArchiveCards(page) {
   });
 }
 
-async function resolveMatrixScenario(baseUrl, sample) {
+function isDirectorStateSeedOpportunity(scenario) {
+  const hasDominantBranch = (scenario?.branches ?? []).some(
+    (branch) => branch?.id && branch?.title,
+  );
+  return hasDominantBranch || ["done", "error", "cancelled"].includes(scenario?.status);
+}
+
+async function resolveMatrixScenario(
+  baseUrl,
+  sample,
+  { seedDirectorStateBeforeTerminal = false } = {},
+) {
   const requestedScenarioId = sample.scenario_id ?? null;
   const fallbackConfig = MATRIX_SCENARIO_FALLBACKS[sample.theme] ?? null;
   const fallbackQuestion = sample.question ?? fallbackConfig?.question ?? null;
@@ -703,6 +723,19 @@ async function resolveMatrixScenario(baseUrl, sample) {
     });
     scenarioId = created.id;
     createdAtRuntime = true;
+  }
+
+  if (seedDirectorStateBeforeTerminal) {
+    const seedScenario = isDirectorStateSeedOpportunity(scenario)
+      ? scenario
+      : await waitForScenarioStatus(
+        baseUrl,
+        scenarioId,
+        isDirectorStateSeedOpportunity,
+        createdAtRuntime ? 180000 : 60000,
+        "director-state seed opportunity",
+      );
+    await seedDirectorStateForReadback(baseUrl, scenarioId, seedScenario);
   }
 
   scenario = await waitForScenarioStatus(
@@ -755,26 +788,54 @@ function buildDirectorStateReadbackPayload(scenario, dominantBranch) {
       active: true,
       branch_id: dominantBranch.id,
       branch_title: dominantBranch.title,
-      committed_at_round: 2,
+      committed_at_round: 1,
       committed_at: "2026-03-19T00:02:00Z",
       outcome: "pending",
     },
   };
 }
 
-async function seedDirectorStateForReadback(baseUrl, scenarioId) {
-  const scenario = await getScenarioViaApi(baseUrl, scenarioId);
+async function seedDirectorStateForReadback(baseUrl, scenarioId, resolvedScenario = null) {
+  const scenario = resolvedScenario ?? await getScenarioViaApi(baseUrl, scenarioId);
   const dominantBranch = [...(scenario.branches ?? [])]
     .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))[0] ?? null;
   if (!dominantBranch?.id || !dominantBranch?.title) {
     throw new Error(`Scenario ${scenarioId} does not expose a dominant branch for director-state smoke`);
   }
 
-  await putScenarioDirectorStateViaApi(
-    baseUrl,
-    scenarioId,
-    buildDirectorStateReadbackPayload(scenario, dominantBranch),
-  );
+  const validatePersistedSeed = async (cause = undefined) => {
+    const persisted = await getScenarioDirectorStateViaApi(baseUrl, scenarioId);
+    const goals = persisted?.objectives?.goals ?? [];
+    const commitment = persisted?.commitment ?? {};
+    if (
+      goals.length !== 2
+      || commitment.active !== true
+      || commitment.branch_id !== dominantBranch.id
+    ) {
+      throw new Error(
+        `Terminal scenario ${scenarioId} does not contain the persisted director-state seed required for cross-browser readback`,
+        { cause },
+      );
+    }
+  };
+
+  if (!["parsing", "simulating"].includes(scenario.status)) {
+    await validatePersistedSeed();
+    return { scenario, dominantBranch };
+  }
+
+  try {
+    await putScenarioDirectorStateViaApi(
+      baseUrl,
+      scenarioId,
+      buildDirectorStateReadbackPayload(scenario, dominantBranch),
+    );
+  } catch (error) {
+    if (error?.status !== 409 || error?.code !== "DIRECTOR_STATE_CLOSED") {
+      throw error;
+    }
+    await validatePersistedSeed(error);
+  }
 
   return { scenario, dominantBranch };
 }
@@ -1268,7 +1329,11 @@ async function runCrossBrowserDirectorStateSuite(args) {
     throw new Error("cross-browser mode requires at least one of: firefox, webkit");
   }
 
-  const sample = await resolveMatrixScenario(args.baseUrl, getDirectorStateScenarioSample(args));
+  const sample = await resolveMatrixScenario(
+    args.baseUrl,
+    getDirectorStateScenarioSample(args),
+    { seedDirectorStateBeforeTerminal: true },
+  );
   const runs = {};
 
   for (const browserName of supportedBrowsers) {
@@ -1438,7 +1503,11 @@ async function waitForSafariAutomation(webdriverUrl, sessionId, predicate, timeo
 }
 
 async function runSafariDirectorStateSuite(args) {
-  const sample = await resolveMatrixScenario(args.baseUrl, getDirectorStateScenarioSample(args));
+  const sample = await resolveMatrixScenario(
+    args.baseUrl,
+    getDirectorStateScenarioSample(args),
+    { seedDirectorStateBeforeTerminal: true },
+  );
   await seedDirectorStateForReadback(args.baseUrl, sample.scenarioId);
   const created = await createSafariSession(args.webdriverUrl);
   const sessionId = created.sessionId;
@@ -2816,8 +2885,24 @@ async function runMatrixSuite(args) {
  *   a completed state for Theater/result predicates.
  * Returns a handle whose `escapes`/`unhandled` arrays the caller asserts empty.
  */
+function prepareCornersDirectorStateFixture(store) {
+  const scenario = store.getScenario(FIXTURE_SCENARIO_IDS.governance);
+  const dominantBranch = [...(scenario?.branches ?? [])]
+    .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))[0] ?? null;
+  if (!scenario || !dominantBranch?.id || !dominantBranch?.title) {
+    throw new Error("Corners fixture cannot prepare the terminal director-state seed");
+  }
+  store.putDirectorState(
+    scenario.id,
+    buildDirectorStateReadbackPayload(scenario, dominantBranch),
+  );
+}
+
 async function installCornersFixture(page) {
   const store = createFixtureStore();
+  // Completed fixture scenarios cannot accept runtime director-state writes.
+  // Persist the seed during fixture construction, before terminal readback.
+  prepareCornersDirectorStateFixture(store);
   const nodeFixture = installNodeFetchFixture(store);
   const wsEscapes = [];
   await page.exposeBinding("__recordFixtureWsEscape", (_source, entry) => {
@@ -3228,7 +3313,14 @@ async function main() {
   console.log(`artifacts: ${outputDir}`);
 }
 
-export const __test__ = { deleteSafariSession };
+export const __test__ = {
+  buildLaunchCandidates,
+  deleteSafariSession,
+  putScenarioDirectorStateViaApi,
+  prepareCornersDirectorStateFixture,
+  resolveMatrixScenario,
+  seedDirectorStateForReadback,
+};
 
 if (IS_MAIN_MODULE) {
   main().catch((error) => {

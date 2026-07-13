@@ -28,6 +28,7 @@ from app.models.database import get_engine
 from app.services.debate_prompts import get_debate_profile_style, infer_debate_profile
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
+    LLMError,
     _strip_reasoning_blocks,
     format_untrusted_text_block,
     llm_call,
@@ -2533,6 +2534,7 @@ async def _maybe_rewrite_oracle_copy(
     transcript_quotes: list[str] | None = None,
     factual_guardrail: str | None = None,
     llm_overrides: dict[str, Any] | None = None,
+    fail_closed: bool = False,
 ) -> str:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return anchor_copy
@@ -2848,6 +2850,11 @@ async def _maybe_rewrite_oracle_copy(
                     purpose=purpose,
                     reason=_oracle_failure_reason(no_effort_exc),
                 )
+                if fail_closed:
+                    raise LLMError(
+                        "Oracle Chambers generation failed before producing usable content",
+                        code="LLM_FAILED",
+                    ) from no_effort_exc
                 return anchor_copy
         else:
             logger.warning(
@@ -2862,6 +2869,11 @@ async def _maybe_rewrite_oracle_copy(
                 purpose=purpose,
                 reason=_oracle_failure_reason(plain_exc),
             )
+            if fail_closed:
+                raise LLMError(
+                    "Oracle Chambers generation failed before producing usable content",
+                    code="LLM_FAILED",
+                ) from plain_exc
             return anchor_copy
     _log_oracle_anchor_fallback(
         room=room,
@@ -2870,6 +2882,11 @@ async def _maybe_rewrite_oracle_copy(
         purpose=purpose,
         reason="empty_all_tiers",
     )
+    if fail_closed:
+        raise LLMError(
+            "Oracle Chambers generation failed before producing usable content",
+            code="LLM_FAILED",
+        )
     return anchor_copy
 
 
