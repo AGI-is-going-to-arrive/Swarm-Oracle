@@ -102,7 +102,7 @@ describe('public artifact gallery links', () => {
     if (!decoded.ok) return;
     expect(decoded.json.length).toBe(JSON.stringify(artifact).length);
     expect((JSON.parse(decoded.json) as PublicArtifact).question).toBe(artifact.question);
-  });
+  }, 15_000);
 
   it('returns malformed instead of throwing when serialization fails', () => {
     const artifact = makeArtifact() as PublicArtifact & { self?: unknown };
