@@ -2,10 +2,11 @@
    BranchDetailModal — Branch detail + real-time messages
    ═══════════════════════════════════════════════════════════ */
 
-import { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect, useMemo, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore, type ThinkingAgent } from '../stores/simulationStore';
 import type { BranchInfo, AgentMessage } from '../types';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import './BranchDetailModal.css';
 
 interface Props {
@@ -17,6 +18,25 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
   const { t } = useTranslation();
   const { messages, agents, thinkingAgents, status } = useSimulationStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+
+  useFocusTrap(dialogRef, true, true);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   /* ── Filter messages for this branch ── */
   const branchMessages = useMemo(
@@ -64,7 +84,14 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
 
   return (
     <div className="bdm-overlay" onClick={onClose}>
-      <div className="bdm-modal bdm-modal-streaming" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="bdm-modal bdm-modal-streaming"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         {/* ── Header ── */}
         <div className="bdm-header">
           <div className="bdm-header-left">
@@ -75,6 +102,7 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
             <span className="bdm-probability">{Math.round((branch.probability ?? 0.5) * 100)}%</span>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             className="bdm-close"
             onClick={onClose}
@@ -86,7 +114,7 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
 
         <div className="bdm-body">
           <div className="bdm-summary-scroll">
-            <h2 className="bdm-title">{branch.title || t('branch_detail.default_title')}</h2>
+            <h2 id={titleId} className="bdm-title">{branch.title || t('branch_detail.default_title')}</h2>
 
             {/* ── Fork reason / Description ── */}
             {(branch.fork_reason || branch.description) && (

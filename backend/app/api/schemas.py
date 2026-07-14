@@ -21,6 +21,47 @@ NativeSearchUpstreamOverride = Literal[
     "openai_responses",
 ]
 
+
+class InitialSocialFeedItem(BaseModel):
+    """Untrusted world-event seed accepted at scenario creation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_name: str = Field(min_length=1, max_length=80)
+    content: str = Field(min_length=1, max_length=1200)
+    published_at: datetime | None = None
+    credibility_hint: str | None = Field(default=None, max_length=300)
+    tags: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("source_name", "content", "credibility_hint")
+    @classmethod
+    def normalize_feed_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", value)
+        value = value.replace("```", "` ` `").strip()
+        if not value:
+            raise ValueError("initial social feed text cannot be empty")
+        secret = re.compile(
+            r"(?i)(authorization\s*:|bearer\s+[a-z0-9._-]+|api[_-]?key\s*[:=]|sk-[a-z0-9]{8,})"
+        )
+        if secret.search(value):
+            raise ValueError("initial social feed must not contain credentials")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = re.sub(r"[\x00-\x1f\x7f]", "", str(raw)).strip()[:40]
+            if not value or value.casefold() in seen:
+                continue
+            seen.add(value.casefold())
+            result.append(value)
+        return result
+
 # ── Request schemas ──────────────────────────────────────
 
 WorldContextTraitText = Annotated[str, Field(max_length=80)]
@@ -296,6 +337,9 @@ class CreateScenarioRequest(BaseModel):
     world_context: WorldContext | None = None
     # Campaign Phase 1: authoritative challenge/track context for finalize accounting
     campaign_context: CampaignContext | None = None
+    initial_social_feed: list[InitialSocialFeedItem] | None = Field(
+        default=None, max_length=20
+    )
 
     @field_validator("custom_agent_identity_ids", mode="before")
     @classmethod

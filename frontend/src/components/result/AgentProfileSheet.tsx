@@ -59,6 +59,14 @@ const DECISION_BIAS_LABELS: Record<DecisionBiasKey, [string, string]> = {
   creativity: ['agent_workshop.bias_creativity', 'Creativity'],
 };
 
+const PUBLIC_METADATA_FAILURE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+function visibleMetadataFailureCode(code: unknown): string {
+  return typeof code === 'string' && PUBLIC_METADATA_FAILURE_CODE.test(code)
+    ? code
+    : 'LLM_FAILED';
+}
+
 function visibleDecisionBias(
   value: Record<string, unknown> | null | undefined,
 ): Array<{ key: DecisionBiasKey; value: number }> {
@@ -184,6 +192,9 @@ export function AgentProfileSheet({
           defaultValue: 'Emotion metadata unavailable',
         })
       : observation?.emotion ?? agent.emotion;
+  const displayedMetadataFailureCode = observation?.emotionMetadataStatus === 'unavailable'
+    ? visibleMetadataFailureCode(observation.emotionMetadataFailureCode)
+    : null;
   const branchLabel = observation?.branchTitle
     ?? observation?.branchId
     ?? t('common.unknown', { defaultValue: 'Unknown' });
@@ -296,7 +307,10 @@ export function AgentProfileSheet({
                     },
                   )}
                 </dt>
-                <dd>{displayedEmotion}</dd>
+                <dd>
+                  {displayedEmotion}
+                  {displayedMetadataFailureCode ? ` (${displayedMetadataFailureCode})` : ''}
+                </dd>
               </div>
             </dl>
             <p

@@ -206,6 +206,12 @@ describe('ReplayView — data path', () => {
     expect(screen.getByTestId('replay-playback-control-play')).toBeInTheDocument();
     expect(screen.getByTestId('replay-playback-control-speed-2x')).toBeInTheDocument();
 
+    // Replay remains read-only; it must not route an active scenario back into live simulation.
+    expect(screen.queryByRole('link', { name: 'Open Pixel Theater' })).toBeNull();
+
+    // The visible round label is sourced through i18n rather than hard-coded English copy.
+    expect(screen.getByText('Round 0')).toBeInTheDocument();
+
     // Verify branch filter dropdown labels are name + probability (FE-M2)
     expect(screen.getByText('Branch 1 · 60.0%')).toBeInTheDocument();
     expect(screen.getByText('Branch 2 · 40.0%')).toBeInTheDocument();
@@ -299,9 +305,40 @@ describe('ReplayView — data path', () => {
 
     renderAt('/replay/metadata-unavailable?branch=b1');
 
-    expect(await screen.findByText('Emotion metadata unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Emotion metadata unavailable (LLM_RATE_LIMIT)')).toBeInTheDocument();
     expect(screen.queryByText('neutral')).not.toBeInTheDocument();
     expect(screen.getByText('The real first-pass response remains visible.')).toBeInTheDocument();
+  });
+
+  it('bounds malformed replay metadata failure details', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) return jsonResponse({ nodes: [], next_cursor: null });
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [{
+            id: 'n-unavailable', key: 'k-unavailable', type: 'stance',
+            label: 'Agent A speaks', round: 2,
+            payload: {
+              agent_id: 'a1', agent_name: 'Agent A', branch_id: 'b1',
+              content: 'Durable response.', emotion: null,
+              emotion_metadata_status: 'unavailable',
+              emotion_metadata_failure_code: 'provider said bearer secret',
+            },
+          }],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/metadata-malformed?branch=b1');
+
+    expect(await screen.findByText('Emotion metadata unavailable')).toBeInTheDocument();
+    expect(screen.queryByText(/LLM_FAILED/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/bearer secret/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Durable response.')).toBeInTheDocument();
   });
 
   it('renders empty state when fetch errors (network failure)', async () => {

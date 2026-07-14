@@ -157,6 +157,29 @@ async def test_returns_empty_list_when_no_agents():
 
 
 @pytest.mark.asyncio
+async def test_world_event_source_is_not_reported_as_personality_drift_agent():
+    scenario_id = _seed_scenario()
+    participant_id = _seed_agent(scenario_id, name="Participant")
+    with Session(get_engine()) as session:
+        session.add(
+            Agent(
+                scenario_id=scenario_id,
+                name="Initial Feed Source",
+                role="world_event_source",
+                persona="System-provided initial world event feed",
+                tier=AgentTier.CROWD,
+                source_type="world_event_source",
+            )
+        )
+        session.commit()
+
+    with Session(get_engine()) as session:
+        result = await detect_personality_drift(scenario_id, session)
+
+    assert [row["agent_id"] for row in result] == [participant_id]
+
+
+@pytest.mark.asyncio
 async def test_uses_persona_inference_when_identity_missing():
     scenario_id = _seed_scenario()
     agent_id = _seed_agent(

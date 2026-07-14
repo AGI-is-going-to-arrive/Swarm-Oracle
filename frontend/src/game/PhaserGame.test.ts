@@ -429,6 +429,30 @@ describe('PhaserGame replay speed behavior', () => {
     expect(mockGameInstances[0]?.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it('bootstraps an already-loaded replay after WorldScene becomes active even if scene-ready was missed', () => {
+    const view = render(
+      createElement(PhaserGame, {
+        playbackMode: 'skip',
+        playbackBranchId: 'branch-1',
+        playbackRound: 1,
+      }),
+    );
+
+    expect(mockSynthesizeLatestBubbles).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(mockDispatchVizEvent).toHaveBeenCalledWith(
+      'viz:scene_init',
+      expect.objectContaining({ theme: 'ancient_empire' }),
+    );
+    expect(mockSynthesizeLatestBubbles).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+  });
+
   it('clears the replay sync timer when TitleScene was already skipped', () => {
     const clearIntervalSpy = vi.spyOn(window, 'clearInterval');
     try {

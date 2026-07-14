@@ -10,6 +10,7 @@ import json
 import logging
 import unicodedata
 from collections.abc import Callable
+from typing import Any
 
 from sqlalchemy import literal_column
 from sqlmodel import Session, select
@@ -100,8 +101,7 @@ def _select_counterfactual_message(
     normalized_source = _normalize_source_message_content(source_message_content)
     if normalized_source is not None:
         matches = [
-            message for message in candidates
-            if message.content.strip() == normalized_source
+            message for message in candidates if message.content.strip() == normalized_source
         ]
         if not matches:
             raise ValueError(
@@ -160,11 +160,7 @@ def _default_replay_title(
             else f"Counterfactual from round {round_number}"
         )
     if replay_kind == "resume":
-        return (
-            f"续演：从第{round_number}轮起"
-            if has_cjk
-            else f"Resume from round {round_number}"
-        )
+        return f"续演：从第{round_number}轮起" if has_cjk else f"Resume from round {round_number}"
     return f"{replay_kind.title()} from round {round_number}"
 
 
@@ -183,15 +179,9 @@ def write_checkpoint(
     compressed_summary = json.dumps(
         [
             {
-                "agent_id": (
-                    getattr(a, "id", a.get("id", ""))
-                    if isinstance(a, dict)
-                    else a.id
-                ),
+                "agent_id": (getattr(a, "id", a.get("id", "")) if isinstance(a, dict) else a.id),
                 "stance": (
-                    getattr(a, "stance", a.get("stance", ""))
-                    if isinstance(a, dict)
-                    else a.stance
+                    getattr(a, "stance", a.get("stance", "")) if isinstance(a, dict) else a.stance
                 ),
                 "emotion": (
                     getattr(a, "emotion", a.get("emotion", "neutral"))
@@ -254,6 +244,7 @@ def clone_until_round(
     title: str | None = None,
     session: Session | None = None,
     replay_source_round: int | None = None,
+    replay_source_agent_id: str | None = None,
 ) -> str:
     """Clone a branch up to round_number (inclusive), return new branch_id.
 
@@ -269,6 +260,7 @@ def clone_until_round(
             to round_number, while callers may clone history through N-1 and
             still expose N as the selected intervention round.
     """
+
     def _clone(active_session: Session) -> tuple[str, int]:
         if ensure_lock is not None:
             ensure_lock()
@@ -281,10 +273,7 @@ def clone_until_round(
         if round_number > 0 and not source_selection.contains(round_number):
             raise BranchLineageError(
                 "BRANCH_LINEAGE_ROUND_NOT_FOUND",
-                (
-                    f"Round {round_number} is not available in branch lineage "
-                    f"for {source_branch_id}"
-                ),
+                (f"Round {round_number} is not available in branch lineage for {source_branch_id}"),
             )
         source_rounds = source_selection.rounds
         if ensure_lock is not None:
@@ -313,6 +302,7 @@ def clone_until_round(
         active_session.flush()  # get the id
 
         new_branch_id = new_branch.id
+        cloned_action_ids: dict[str, str] = {}
 
         for src_round in source_rounds:
             if ensure_lock is not None:
@@ -324,6 +314,44 @@ def clone_until_round(
             )
             active_session.add(new_round)
             active_session.flush()
+
+            # Message-less initial-feed posts are durable world state, not
+            # Agent turns. Self-contained replay branches must clone them
+            # explicitly because the message loop below cannot discover them.
+            from app.models.simulation_action import SimulationAction
+            from app.services.initial_social_feed import is_bootstrap_post
+            from app.services.simulation_actions import append_simulation_action
+
+            bootstrap_actions = active_session.exec(
+                select(SimulationAction)
+                .where(
+                    SimulationAction.round_id == src_round.id,
+                    SimulationAction.message_id.is_(None),
+                )
+                .order_by(SimulationAction.sequence, SimulationAction.id)
+            ).all()
+            for source_action in bootstrap_actions:
+                source_agent = active_session.get(Agent, source_action.agent_id)
+                if not is_bootstrap_post(source_action, source_agent):
+                    continue
+                cloned_action = append_simulation_action(
+                    active_session,
+                    scenario_id=scenario_id,
+                    branch_id=new_branch_id,
+                    round_id=new_round.id,
+                    round_number=src_round.round_number,
+                    agent_id=source_action.agent_id,
+                    message_id=None,
+                    idempotency_key=f"replay-bootstrap:{new_branch_id}:{source_action.id}",
+                    action={
+                        "action_type": "POST",
+                        "status": "verified",
+                        "content": source_action.content,
+                        "payload": json.loads(source_action.payload_json or "{}"),
+                    },
+                    _allow_bootstrap_post=True,
+                )
+                cloned_action_ids[source_action.id] = cloned_action.id
 
             # Copy all messages for this round
             messages = active_session.exec(
@@ -343,6 +371,59 @@ def clone_until_round(
                     tokens_used=msg.tokens_used,
                 )
                 active_session.add(new_msg)
+                active_session.flush()
+                source_action = active_session.exec(
+                    select(SimulationAction).where(SimulationAction.message_id == msg.id)
+                ).first()
+                cloned_payload: dict[str, Any] = {
+                    "action_type": "IDLE",
+                    "status": "unavailable",
+                    "failure_code": "REPLAY_ACTION_UNAVAILABLE",
+                }
+                replaced_counterfactual_message = (
+                    replay_kind == "counterfactual"
+                    and replay_source_agent_id == msg.agent_id
+                    and replay_source_round == src_round.round_number
+                )
+                if source_action is not None and not replaced_counterfactual_message:
+                    parent_id = cloned_action_ids.get(source_action.parent_action_id or "")
+                    target_id = source_action.target_id
+                    if source_action.target_type in {"action", "post"}:
+                        target_id = cloned_action_ids.get(source_action.target_id or "")
+                    refs_available = (
+                        not source_action.parent_action_id or parent_id is not None
+                    ) and (
+                        source_action.target_type not in {"action", "post"} or target_id is not None
+                    )
+                    if refs_available:
+                        cloned_payload = {
+                            "action_type": source_action.action_type.value,
+                            "status": source_action.status.value,
+                            "failure_code": source_action.failure_code,
+                            "content": source_action.content,
+                            "parent_action_id": parent_id,
+                            "target": (
+                                {"kind": source_action.target_type, "id": target_id}
+                                if source_action.target_type and target_id
+                                else None
+                            ),
+                            "payload": json.loads(source_action.payload_json or "{}"),
+                        }
+                elif replaced_counterfactual_message:
+                    cloned_payload["failure_code"] = "COUNTERFACTUAL_ACTION_UNAVAILABLE"
+                cloned_action = append_simulation_action(
+                    active_session,
+                    scenario_id=scenario_id,
+                    branch_id=new_branch_id,
+                    round_id=new_round.id,
+                    round_number=src_round.round_number,
+                    agent_id=msg.agent_id,
+                    message_id=new_msg.id,
+                    idempotency_key=f"replay-clone:{new_msg.id}",
+                    action=cloned_payload,
+                )
+                if source_action is not None:
+                    cloned_action_ids[source_action.id] = cloned_action.id
 
         if ensure_lock is not None:
             ensure_lock()
@@ -352,7 +433,10 @@ def clone_until_round(
         new_branch_id, copied_round_count = _clone(session)
         logger.info(
             "Cloned branch %s -> %s up to round %d (%d rounds copied)",
-            source_branch_id, new_branch_id, round_number, copied_round_count,
+            source_branch_id,
+            new_branch_id,
+            round_number,
+            copied_round_count,
         )
         return new_branch_id
 
@@ -361,13 +445,18 @@ def clone_until_round(
         owned_session.commit()
         logger.info(
             "Cloned branch %s -> %s up to round %d (%d rounds copied)",
-            source_branch_id, new_branch_id, round_number, copied_round_count,
+            source_branch_id,
+            new_branch_id,
+            round_number,
+            copied_round_count,
         )
         return new_branch_id
 
 
 def seed_counterfactual(
-    branch_id: str, agent_id: str, replacement_content: str,
+    branch_id: str,
+    agent_id: str,
+    replacement_content: str,
     *,
     ensure_lock: Callable[[], None] | None = None,
     source_message_content: str | None = None,
@@ -384,9 +473,7 @@ def seed_counterfactual(
             ensure_lock()
         # Find the last round in the cloned branch
         last_round = session.exec(
-            select(Round)
-            .where(Round.branch_id == branch_id)
-            .order_by(Round.round_number.desc())
+            select(Round).where(Round.branch_id == branch_id).order_by(Round.round_number.desc())
         ).first()
 
         if last_round is None:
@@ -404,9 +491,7 @@ def seed_counterfactual(
                 source_message_content=source_message_content,
             )
         except ValueError as exc:
-            raise ValueError(
-                f"{exc} of branch {branch_id}"
-            ) from exc
+            raise ValueError(f"{exc} of branch {branch_id}") from exc
 
         message.content = replacement_content
         session.add(message)
@@ -433,7 +518,9 @@ def seed_counterfactual(
         session.commit()
         logger.info(
             "Seeded counterfactual: branch=%s agent=%s round=%d",
-            branch_id, agent_id, last_round.round_number,
+            branch_id,
+            agent_id,
+            last_round.round_number,
         )
 
     if memory_payload is not None:
@@ -566,10 +653,9 @@ def _compares_replay_with_source(
     branch_a: Branch,
     branch_b: Branch,
 ) -> bool:
-    return (
-        _comparison_branch_for_replay(replay_branch, branch_a, branch_b).id
-        == _replay_source_branch_id(replay_branch)
-    )
+    return _comparison_branch_for_replay(
+        replay_branch, branch_a, branch_b
+    ).id == _replay_source_branch_id(replay_branch)
 
 
 def _build_intervention(
@@ -685,11 +771,7 @@ def _count_common_rounds(
         fork_round = counterfactual.replay_source_round or counterfactual.fork_round
         if not fork_round:
             return 0
-        return sum(
-            1
-            for diff in diffs
-            if diff["round"] < fork_round and diff["is_identical"]
-        )
+        return sum(1 for diff in diffs if diff["round"] < fork_round and diff["is_identical"])
 
     if retrospective is not None and _compares_replay_with_source(
         retrospective,
@@ -710,7 +792,9 @@ def _count_common_rounds(
 
 
 def compare_branches(
-    scenario_id: str, branch_a: str, branch_b: str,
+    scenario_id: str,
+    branch_a: str,
+    branch_b: str,
 ) -> dict:
     """Return a diff digest comparing two branches.
 
@@ -761,15 +845,17 @@ def compare_branches(
             b_words = _tokenize(b_summary) if b_summary.strip() else set()
             divergence_score = round(1.0 - _jaccard_similarity(a_words, b_words), 4)
 
-            diffs.append({
-                "round": rn,
-                "branch_a_summary": a_summary,
-                "branch_b_summary": b_summary,
-                "branch_a_messages": a_messages,
-                "branch_b_messages": b_messages,
-                "divergence_score": divergence_score,
-                "is_identical": is_identical,
-            })
+            diffs.append(
+                {
+                    "round": rn,
+                    "branch_a_summary": a_summary,
+                    "branch_b_summary": b_summary,
+                    "branch_a_messages": a_messages,
+                    "branch_b_messages": b_messages,
+                    "divergence_score": divergence_score,
+                    "is_identical": is_identical,
+                }
+            )
 
         counterfactual = _counterfactual_branch(branch_a_obj, branch_b_obj)
         retrospective = _retrospective_branch(branch_a_obj, branch_b_obj)
@@ -827,18 +913,16 @@ def _checkpoint_branch_id_for_visible_round(
         )
         return None
     source_round = next(
-        (
-            round_
-            for round_ in selection.rounds
-            if round_.round_number == round_number
-        ),
+        (round_ for round_ in selection.rounds if round_.round_number == round_number),
         None,
     )
     return source_round.branch_id if source_round is not None else None
 
 
 def load_checkpoint_agent_states(
-    scenario_id: str, branch_id: str, round_number: int,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
 ) -> list[dict] | None:
     """Load agent stance/emotion snapshot from a checkpoint.
 
@@ -869,7 +953,9 @@ def load_checkpoint_agent_states(
 
 
 def load_checkpoint_blackboard(
-    scenario_id: str, branch_id: str, round_number: int,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
 ) -> dict | None:
     """Load blackboard snapshot from a checkpoint.
 

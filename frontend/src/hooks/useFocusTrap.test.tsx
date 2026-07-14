@@ -119,4 +119,26 @@ describe('useFocusTrap', () => {
 
     expect(document.activeElement).toBe(first);
   });
+
+  it('optionally makes background siblings inert and restores their prior state', () => {
+    function IsolatedTrap({ active }: { active: boolean }) {
+      const ref = useRef<HTMLDivElement>(null);
+      useFocusTrap(ref, active, true);
+      return (
+        <div>
+          <main data-testid="background">Background</main>
+          <div ref={ref}><button type="button">Inside</button></div>
+        </div>
+      );
+    }
+
+    const { rerender } = render(<IsolatedTrap active />);
+    const background = screen.getByTestId('background');
+    expect(background).toHaveAttribute('inert');
+    expect(background).toHaveAttribute('aria-hidden', 'true');
+
+    rerender(<IsolatedTrap active={false} />);
+    expect(background).not.toHaveAttribute('inert');
+    expect(background).not.toHaveAttribute('aria-hidden');
+  });
 });

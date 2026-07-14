@@ -717,6 +717,115 @@ function buildFixtureRoundtablePayload({
   };
 }
 
+function createBoundedNetworkGate({ timeoutMs = 5000, schedule = setTimeout, cancel = clearTimeout } = {}) {
+  let settled = false;
+  let timer = null;
+  let resolveGate;
+  let rejectGate;
+  const pending = new Promise((resolve, reject) => {
+    resolveGate = resolve;
+    rejectGate = reject;
+  });
+  return {
+    wait() {
+      if (!timer && !settled) {
+        timer = schedule(() => {
+          if (settled) return;
+          settled = true;
+          rejectGate(new Error(`Bounded network gate timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+      return pending;
+    },
+    release() {
+      if (settled) return false;
+      settled = true;
+      if (timer) cancel(timer);
+      resolveGate();
+      return true;
+    },
+  };
+}
+
+async function exerciseSlowCreateDuplicateProtection(context, baseUrl, scenarioId, outputDir, locale) {
+  const page = await context.newPage();
+  const responseGate = createBoundedNetworkGate();
+  let markRequestStarted;
+  const requestStarted = new Promise((resolve) => { markRequestStarted = resolve; });
+  let requestCount = 0;
+  let fixturePayload = null;
+
+  await page.route("**/api/scenario/*/ending-room", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    requestCount += 1;
+    fixturePayload = buildFixtureRoundtablePayload({
+      scenarioId,
+      roomId: "fixture-roundtable-slow-create",
+      body: route.request().postDataJSON(),
+      locale,
+    });
+    markRequestStarted();
+    await responseGate.wait();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(fixturePayload),
+    });
+  });
+  await page.route("**/api/ending-room/fixture-roundtable-slow-create", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(fixturePayload),
+  }));
+
+  try {
+    await gotoWithRetry(page, `${baseUrl}/result/${scenarioId}`, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await clickActionable(page.getByRole("button", {
+      name: normalizeLocale(locale) === "en" ? /Start Roundtable/i : /Start Roundtable|开始圆桌|发起圆桌/i,
+    }).first(), "slow create roundtable entry CTA");
+    await waitForRoundtablePicker(page);
+    const launchButton = page.getByRole("button", { name: ROUNDTABLE_LAUNCH_BUTTON_PATTERN }).first();
+    const firstLaunch = launchButton.click();
+    await Promise.race([
+      requestStarted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Slow create request did not start")), 5000)),
+    ]);
+    const duplicateControlBlocked = !(await launchButton.isVisible().catch(() => false))
+      || await launchButton.isDisabled().catch(() => false);
+    if (!duplicateControlBlocked) await launchButton.click().catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const requestCountWhilePending = requestCount;
+    responseGate.release();
+    await firstLaunch;
+    const state = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "worldline_roundtable"
+        && payload.scene?.room_id === "fixture-roundtable-slow-create"
+        && Boolean(payload.page?.controls?.active_thread_id)
+        && (payload.page?.controls?.participant_count ?? 0) >= 3,
+      15000,
+      "slow create duplicate protection",
+    );
+    const contract = {
+      duplicateControlBlocked,
+      requestCountWhilePending,
+      requestCount,
+      passed: duplicateControlBlocked && requestCountWhilePending === 1 && requestCount === 1,
+    };
+    if (!contract.passed) throw new Error(`Slow create duplicate protection failed: ${JSON.stringify(contract)}`);
+    const result = { contract, state };
+    writeJson(path.join(outputDir, "desktop-roundtable-slow-create.json"), result);
+    await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-slow-create.png"));
+    return result;
+  } finally {
+    responseGate.release();
+    await page.close();
+  }
+}
+
 async function exerciseFormatSelectorFixture(context, baseUrl, scenarioId, outputDir, locale) {
   const page = await context.newPage();
   const cases = [];
@@ -1175,14 +1284,17 @@ function anchorIdsEqual(left, right) {
 
 async function waitForAutomation(page, predicate, timeout = 30000, label = "automation state") {
   const start = Date.now();
+  let lastPayload = null;
   while (Date.now() - start < timeout) {
     const payload = await readAutomation(page);
+    lastPayload = payload;
     if (payload && predicate(payload)) {
       return payload;
     }
     await page.waitForTimeout(250);
   }
-  throw new Error(`Timed out waiting for ${label}`);
+  const diagnostic = JSON.stringify(lastPayload)?.slice(0, 2000) ?? "null";
+  throw new Error(`Timed out waiting for ${label}; last automation=${diagnostic}`);
 }
 
 async function waitFor(page, predicate, label, timeout = 15000) {
@@ -1553,6 +1665,7 @@ async function captureMobileFit(page) {
     const transcriptHeader = document.querySelector(".worldline-roundtable-transcript-header");
     const transcriptList = document.querySelector(".worldline-roundtable-transcript-list");
     const composer = document.querySelector(".ending-chat-composer");
+    const backButton = document.querySelector('[data-testid="roundtable-back-to-results"]');
     const toRect = (node) => {
       if (!(node instanceof HTMLElement)) return null;
       const value = node.getBoundingClientRect();
@@ -1580,6 +1693,7 @@ async function captureMobileFit(page) {
       transcriptHeaderRect: toRect(transcriptHeader),
       transcriptListRect: toRect(transcriptList),
       composerRect: toRect(composer),
+      backButtonRect: toRect(backButton),
       languageSwitchOverlapsTopline: overlaps(toRect(languageSwitch), toRect(topline)),
       languageSwitchOverlapsComposer: overlaps(toRect(languageSwitch), toRect(composer)),
       summaryBeforeTranscript: (() => {
@@ -1602,6 +1716,12 @@ async function captureMobileFit(page) {
   }
   if (fit.composerOverlapsTranscript) {
     throw new Error("Mobile roundtable composer overlaps the transcript list");
+  }
+  if (fit.backButtonRect && (
+    fit.backButtonRect.height > 52
+    || fit.backButtonRect.width <= fit.backButtonRect.height
+  )) {
+    throw new Error("Mobile roundtable back button wrapped into an unusable vertical label");
   }
   return fit;
 }
@@ -2123,6 +2243,13 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
     outputDir,
     locale,
   );
+  const slowCreateDuplicateProtection = await exerciseSlowCreateDuplicateProtection(
+    context,
+    baseUrl,
+    scenarioId,
+    outputDir,
+    locale,
+  );
 
   const dragReseated = await dragReseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-drag-reseated.png"));
@@ -2234,25 +2361,23 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   const shareReplayUrl = await waitForCapturedClipboardUrl(page, "roundtable copied share permalink");
   const sharePage = await context.newPage();
   await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
-  const artifactReadonly = await waitForAutomation(
-    sharePage,
-    (payload) => payload.page?.kind === "worldline_roundtable"
-      && payload.page?.controls?.is_read_only === true
-      && payload.page?.controls?.can_send === false
-      && payload.page?.controls?.active_thread_id === anchoredThreadId
-      && anchorIdsEqual(payload.page?.controls?.question_anchor_ids, anchoredAnchorIds)
-      && payload.page?.controls?.anchor_kind === "quote",
-    15000,
-    "roundtable artifact replay readonly state",
-  );
+  const artifactReadonly = await waitForReadonlyRoundtableReplayVisible(sharePage, {
+    replayKind: "share",
+    expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
+    timeout: 15000,
+    label: "roundtable artifact replay readonly state",
+  });
+  const artifactThreadId = artifactReadonly.page?.controls?.active_thread_id ?? null;
+  const artifactAnchorIds = artifactReadonly.page?.controls?.question_anchor_ids ?? [];
   await assertUiLocale(sharePage, locale, "roundtable desktop artifact replay ui");
   await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact.json"), artifactReadonly);
   await sharePage.reload({ waitUntil: "domcontentloaded" });
   const artifactReloaded = await waitForReadonlyRoundtableReplayVisible(sharePage, {
     replayKind: "share",
-    expectedActiveThreadId: anchoredThreadId,
-    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedActiveThreadId: artifactThreadId,
+    expectedQuestionAnchorIds: artifactAnchorIds,
     expectedAnchorKind: "quote",
     expectedInteractionMode: "thread_followup",
     timeout: 15000,
@@ -2286,20 +2411,21 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
   const replayReadonly = await waitForReadonlyRoundtableReplayVisible(page, {
     replayKind: "local",
-    expectedActiveThreadId: anchoredThreadId,
-    expectedQuestionAnchorIds: anchoredAnchorIds,
     expectedAnchorKind: "quote",
+    expectedInteractionMode: "thread_followup",
     timeout: 15000,
     label: "roundtable replay readonly state",
   });
   await assertUiLocale(page, locale, "roundtable desktop readonly replay ui");
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-replay-readonly.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-readonly.json"), replayReadonly);
+  const localReplayThreadId = replayReadonly.page?.controls?.active_thread_id ?? null;
+  const localReplayAnchorIds = replayReadonly.page?.controls?.question_anchor_ids ?? [];
   await page.reload({ waitUntil: "domcontentloaded" });
   const replayReloaded = await waitForReadonlyRoundtableReplayVisible(page, {
     replayKind: "local",
-    expectedActiveThreadId: anchoredThreadId,
-    expectedQuestionAnchorIds: anchoredAnchorIds,
+    expectedActiveThreadId: localReplayThreadId,
+    expectedQuestionAnchorIds: localReplayAnchorIds,
     expectedAnchorKind: "quote",
     expectedInteractionMode: "thread_followup",
     timeout: 15000,
@@ -2337,6 +2463,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
     scenarioId,
     ready,
     formatSelectorCases,
+    slowCreateDuplicateProtection,
     dragReseated,
     keyboardReseated,
     reseated,
@@ -2509,8 +2636,6 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
     artifactReadonly = await waitForReadonlyRoundtableReplayVisible(sharePage, {
       replayKind: "share",
-      expectedActiveThreadId: anchoredThreadId,
-      expectedQuestionAnchorIds: anchoredAnchorIds,
       expectedAnchorKind: "quote",
       expectedInteractionMode: "thread_followup",
       timeout: 20000,
@@ -2519,11 +2644,13 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     await assertUiLocale(sharePage, locale, "roundtable mobile artifact replay ui");
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact.json"), artifactReadonly);
+    const artifactThreadId = artifactReadonly.page?.controls?.active_thread_id ?? null;
+    const artifactAnchorIds = artifactReadonly.page?.controls?.question_anchor_ids ?? [];
     await sharePage.reload({ waitUntil: "domcontentloaded" });
     artifactReloaded = await waitForReadonlyRoundtableReplayVisible(sharePage, {
       replayKind: "share",
-      expectedActiveThreadId: anchoredThreadId,
-      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedActiveThreadId: artifactThreadId,
+      expectedQuestionAnchorIds: artifactAnchorIds,
       expectedAnchorKind: "quote",
       expectedInteractionMode: "thread_followup",
       timeout: 20000,
@@ -2557,8 +2684,6 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
     replayReadonly = await waitForReadonlyRoundtableReplayVisible(page, {
       replayKind: "local",
-      expectedActiveThreadId: anchoredThreadId,
-      expectedQuestionAnchorIds: anchoredAnchorIds,
       expectedAnchorKind: "quote",
       expectedInteractionMode: "thread_followup",
       timeout: 20000,
@@ -2567,11 +2692,13 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     await assertUiLocale(page, locale, "roundtable mobile readonly replay ui");
     await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-replay-readonly.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-readonly.json"), replayReadonly);
+    const localReplayThreadId = replayReadonly.page?.controls?.active_thread_id ?? null;
+    const localReplayAnchorIds = replayReadonly.page?.controls?.question_anchor_ids ?? [];
     await page.reload({ waitUntil: "domcontentloaded" });
     replayReloaded = await waitForReadonlyRoundtableReplayVisible(page, {
       replayKind: "local",
-      expectedActiveThreadId: anchoredThreadId,
-      expectedQuestionAnchorIds: anchoredAnchorIds,
+      expectedActiveThreadId: localReplayThreadId,
+      expectedQuestionAnchorIds: localReplayAnchorIds,
       expectedAnchorKind: "quote",
       expectedInteractionMode: "thread_followup",
       timeout: 20000,
@@ -2709,6 +2836,7 @@ if (isDirectExecution()) {
 export const __test__ = {
   assertSupportedRoundtableContractPayload,
   buildRoundtableReplayFixture,
+  createBoundedNetworkGate,
   importRoundtableFixtureScenario,
   parseArgs,
   parseViewportDimension,

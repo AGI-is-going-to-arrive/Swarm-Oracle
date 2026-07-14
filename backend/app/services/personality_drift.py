@@ -22,6 +22,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
@@ -320,7 +321,7 @@ def _detect_for_agent(
     if top_emotions:
         evidence.append("dominant emotions: " + ", ".join(top_emotions))
     if volatility > 0.4:
-        evidence.append(f"stance volatility {volatility:.2f}")
+        evidence.append(f"emotion volatility proxy {volatility:.2f}")
     for event in growth_events[:5]:
         evidence.append(_summarize_growth_event(event))
 
@@ -352,7 +353,12 @@ async def detect_personality_drift(
         the neutral baseline.
     """
     agents = list(
-        session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+        session.exec(
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                or_(Agent.source_type.is_(None), Agent.source_type != "world_event_source"),
+            )
+        ).all()
     )
     if not agents:
         return []

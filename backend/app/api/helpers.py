@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
@@ -74,24 +74,30 @@ from app.services.simulator import (
 
 logger = logging.getLogger(__name__)
 _SESSION_AUTH_CACHE_KEY = "_session_auth_cache"
+_SESSION_TOKEN_CLOCK_SKEW_SECONDS = 60
+_SESSION_TOKEN_MAX_TTL_SECONDS = 24 * 60 * 60
 _SCENARIO_RESPONSE_CHECKPOINT_LIMIT = 200
-_UNTRUSTED_AGENT_PROVENANCE_KEYS = frozenset({
-    "identity_id",
-    "agent_identity_id",
-    "source_type",
-})
-_WEB_SEARCH_STATUS_REASON_CODES = frozenset({
-    "provider_no_domain_filter",
-    "provider_timeout",
-    "provider_rate_limited",
-    "provider_http_error",
-    "provider_body_error",
-    "unsupported_provider",
-    "fallback_unconstrained",
-    "search_skipped",
-    "family_search_error",
-    "provider_unexpected_error",
-})
+_UNTRUSTED_AGENT_PROVENANCE_KEYS = frozenset(
+    {
+        "identity_id",
+        "agent_identity_id",
+        "source_type",
+    }
+)
+_WEB_SEARCH_STATUS_REASON_CODES = frozenset(
+    {
+        "provider_no_domain_filter",
+        "provider_timeout",
+        "provider_rate_limited",
+        "provider_http_error",
+        "provider_body_error",
+        "unsupported_provider",
+        "fallback_unconstrained",
+        "search_skipped",
+        "family_search_error",
+        "provider_unexpected_error",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -163,22 +169,20 @@ def _build_custom_agents_to_inject(
 
         try:
             identity = session.get(AgentIdentity, cid)
-            if not (
-                identity
-                and identity.kind == "custom"
-                and identity.user_id == user_id
-            ):
+            if not (identity and identity.kind == "custom" and identity.user_id == user_id):
                 continue
-            custom_agents_to_inject.append({
-                "name": identity.display_name,
-                "role": identity.role,
-                "persona": identity.persona or "",
-                "tier": identity.preferred_tier or "IMPORTANT",
-                "identity_id": identity.id,
-                "source_type": "custom",
-                "knowledge_domains": _parse_json_list(identity.knowledge_domain_json),
-                "decision_bias": _parse_json_object(identity.decision_bias_json),
-            })
+            custom_agents_to_inject.append(
+                {
+                    "name": identity.display_name,
+                    "role": identity.role,
+                    "persona": identity.persona or "",
+                    "tier": identity.preferred_tier or "IMPORTANT",
+                    "identity_id": identity.id,
+                    "source_type": "custom",
+                    "knowledge_domains": _parse_json_list(identity.knowledge_domain_json),
+                    "decision_bias": _parse_json_object(identity.decision_bias_json),
+                }
+            )
         except Exception:
             logger.debug("custom agent injection failed for %s (non-blocking)", cid, exc_info=True)
             continue
@@ -216,9 +220,7 @@ def _inject_custom_agents(
 
     def identity_id_for(agent_data: dict) -> str:
         return str(
-            agent_data.get("identity_id")
-            or agent_data.get("agent_identity_id")
-            or ""
+            agent_data.get("identity_id") or agent_data.get("agent_identity_id") or ""
         ).strip()
 
     def is_custom_agent(agent_data: dict) -> bool:
@@ -304,22 +306,26 @@ def _inject_custom_agents(
 
         if target_index is None:
             parsed_agents.append(injected_agent)
-            replacement_metadata.append({
-                "original_index": None,
-                "original_name": "",
-                "injected_name": injected_agent["name"],
-                "injected_identity_id": identity_id,
-            })
+            replacement_metadata.append(
+                {
+                    "original_index": None,
+                    "original_name": "",
+                    "injected_name": injected_agent["name"],
+                    "injected_identity_id": identity_id,
+                }
+            )
         else:
             original_agent = parsed_agents[target_index]
             original_name = str(original_agent.get("name") or "").strip()
             parsed_agents[target_index] = injected_agent
-            replacement_metadata.append({
-                "original_index": target_index,
-                "original_name": original_name,
-                "injected_name": injected_agent["name"],
-                "injected_identity_id": identity_id,
-            })
+            replacement_metadata.append(
+                {
+                    "original_index": target_index,
+                    "original_name": original_name,
+                    "injected_name": injected_agent["name"],
+                    "injected_identity_id": identity_id,
+                }
+            )
 
         seen_identity_ids.add(identity_id)
         successful_injections += 1
@@ -412,12 +418,24 @@ def _parse_signed_session_principal(token: str) -> SessionPrincipal | None:
 
     issued_at = payload.get("iat")
     expires_at = payload.get("exp")
-    if issued_at is not None and not isinstance(issued_at, int):
+    if issued_at is not None and (not isinstance(issued_at, int) or isinstance(issued_at, bool)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     if expires_at is not None:
-        if not isinstance(expires_at, int):
+        if not isinstance(expires_at, int) or isinstance(expires_at, bool):
             raise HTTPException(status_code=401, detail="Unauthorized")
-        if expires_at < int(time.time()):
+        if expires_at <= int(time.time()):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    is_production = settings.ENV.strip().lower() in {"production", "prod"}
+    if is_production and (issued_at is None or expires_at is None):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if issued_at is not None:
+        now = int(time.time())
+        if issued_at > now + _SESSION_TOKEN_CLOCK_SKEW_SECONDS:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    if issued_at is not None and expires_at is not None:
+        ttl_seconds = expires_at - issued_at
+        if ttl_seconds <= 0 or (is_production and ttl_seconds > _SESSION_TOKEN_MAX_TTL_SECONDS):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     return SessionPrincipal(
@@ -528,10 +546,13 @@ class _OpaqueStr(str):
     The ``__opaque__`` sentinel is checked by ``_normalize_json_value``
     in ``logging_utils.py`` to mask the value in JSON log output.
     """
+
     __slots__ = ()
     __opaque__ = True
+
     def __repr__(self) -> str:
         return "***"
+
 
 GENERIC_SIMULATION_ERROR_MESSAGE = "Simulation failed unexpectedly. Please retry."
 GENERIC_SIMULATION_ERROR = {
@@ -669,10 +690,7 @@ def _start_runtime_lock_heartbeat(
                         current_lease,
                         lease_seconds=lease_seconds,
                     )
-                    if (
-                        consecutive_transient_failures
-                        >= _SIMULATION_LOCK_TRANSIENT_FAILURE_LIMIT
-                    ):
+                    if consecutive_transient_failures >= _SIMULATION_LOCK_TRANSIENT_FAILURE_LIMIT:
                         refresh_interval = min(
                             refresh_interval,
                             _SIMULATION_LOCK_LOSS_POLL_SECONDS,
@@ -736,9 +754,7 @@ async def _await_with_runtime_lock_guard(
             raise RuntimeError("simulation runtime lock was lost during parse")
         return result
     finally:
-        pending_tasks = [
-            task for task in (guarded_task, lock_watch_task) if not task.done()
-        ]
+        pending_tasks = [task for task in (guarded_task, lock_watch_task) if not task.done()]
         for task in pending_tasks:
             task.cancel()
         if pending_tasks:
@@ -903,11 +919,7 @@ async def shutdown_background_tasks(
         get_or_create_cancel_token(scenario_id)
         request_cancel(scenario_id, reason=reason)
 
-    tasks = {
-        task
-        for task in [*_background_tasks, *_task_registry.values()]
-        if task is not None
-    }
+    tasks = {task for task in [*_background_tasks, *_task_registry.values()] if task is not None}
     if not tasks:
         return
 
@@ -922,9 +934,7 @@ async def shutdown_background_tasks(
     deadline = time.monotonic() + max(0.0, timeout)
     current_loop = asyncio.get_running_loop()
     same_loop_tasks = {
-        task
-        for task in pending_tasks
-        if not task.done() and task.get_loop() is current_loop
+        task for task in pending_tasks if not task.done() and task.get_loop() is current_loop
     }
     if same_loop_tasks:
         remaining = max(0.0, deadline - time.monotonic())
@@ -932,9 +942,7 @@ async def shutdown_background_tasks(
             await asyncio.wait(same_loop_tasks, timeout=remaining)
 
     foreign_tasks = {
-        task
-        for task in pending_tasks
-        if not task.done() and task.get_loop() is not current_loop
+        task for task in pending_tasks if not task.done() and task.get_loop() is not current_loop
     }
     while foreign_tasks and time.monotonic() < deadline:
         await asyncio.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
@@ -1033,6 +1041,7 @@ async def run_sim_background(
     heartbeat_thread: threading.Thread | None = None
 
     from app.api.ws import ws_manager
+
     try:
         lock_lease_seconds = _simulation_lock_lease_seconds()
         stall_timeout_seconds = _simulation_stall_timeout_seconds()
@@ -1068,21 +1077,20 @@ async def run_sim_background(
         scope_kwargs: dict[str, object] = {"purpose": "scenario_runtime"}
         with Session(get_engine()) as session:
             scenario = session.get(Scenario, scenario_id)
-            parsed_context = scenario.parsed_context if scenario and isinstance(scenario.parsed_context, dict) else {}  # noqa: E501
+            parsed_context = (
+                scenario.parsed_context
+                if scenario and isinstance(scenario.parsed_context, dict)
+                else {}
+            )  # noqa: E501
             recovered_profile_overrides = (
-                recover_profile_provider_overrides(session, scenario)
-                if scenario
-                else None
+                recover_profile_provider_overrides(session, scenario) if scenario else None
             )
-            if (
-                scenario
-                and model_profile_provider_unresolved(
-                    scenario,
-                    recovered_profile_overrides,
-                    explicit_api_key=effective_llm_overrides.get("api_key"),
-                    explicit_base_url=effective_llm_overrides.get("base_url"),
-                    explicit_model=effective_llm_overrides.get("model"),
-                )
+            if scenario and model_profile_provider_unresolved(
+                scenario,
+                recovered_profile_overrides,
+                explicit_api_key=effective_llm_overrides.get("api_key"),
+                explicit_base_url=effective_llm_overrides.get("base_url"),
+                explicit_model=effective_llm_overrides.get("model"),
             ):
                 raise_unresolved_model_profile_provider()
             effective_llm_overrides = merge_profile_provider_overrides(
@@ -1090,13 +1098,10 @@ async def run_sim_background(
                 recovered_profile_overrides,
                 include_quota_user_id=True,
             )
-            effective_base_url = (
-                effective_llm_overrides.get("base_url")
-                or parsed_context.get("llm_base_url")
+            effective_base_url = effective_llm_overrides.get("base_url") or parsed_context.get(
+                "llm_base_url"
             )
-            user_id = effective_llm_overrides.get("quota_user_id") or parsed_context.get(
-                "user_id"
-            )
+            user_id = effective_llm_overrides.get("quota_user_id") or parsed_context.get("user_id")
             disable_user_quota = bool(parsed_context.get("disable_user_quota"))
             if disable_user_quota and is_local_provider_url(effective_base_url):
                 scope_kwargs["quota_key"] = None
@@ -1142,6 +1147,7 @@ async def run_sim_background(
             "scenario_id": scenario_id,
             "ws_callback": _broadcast_with_activity,
             "llm_overrides": effective_llm_overrides or llm_overrides,
+            "runtime_lease": lock_lease_holder[0],
         }
         if branch_id is not None:
             sim_kwargs["branch_id"] = branch_id
@@ -1223,19 +1229,25 @@ async def run_sim_background(
                     pass
             elif persisted_status == ScenarioStatus.CANCELLED:
                 try:
-                    await ws_manager.broadcast(scenario_id, {
-                        "type": "simulation_cancelled",
-                        "reason": "user_cancelled",
-                    })
+                    await ws_manager.broadcast(
+                        scenario_id,
+                        {
+                            "type": "simulation_cancelled",
+                            "reason": "user_cancelled",
+                        },
+                    )
                 except Exception:
                     pass
             else:
                 _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
                 try:
-                    await ws_manager.broadcast(scenario_id, {
-                        "type": "simulation_error",
-                        "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
-                    })
+                    await ws_manager.broadcast(
+                        scenario_id,
+                        {
+                            "type": "simulation_error",
+                            "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
+                        },
+                    )
                 except Exception:
                     pass
     except Exception as exc:
@@ -1245,7 +1257,8 @@ async def run_sim_background(
         if is_cancelled(scenario_id):
             logger.info(
                 "Simulation %s raised %s after user cancel; preserving CANCELLED",
-                scenario_id, type(exc).__name__,
+                scenario_id,
+                type(exc).__name__,
             )
         else:
             exc_type, scrubbed = _format_background_exception(exc)
@@ -1273,19 +1286,25 @@ async def run_sim_background(
                     pass
             elif persisted_status == ScenarioStatus.CANCELLED:
                 try:
-                    await ws_manager.broadcast(scenario_id, {
-                        "type": "simulation_cancelled",
-                        "reason": "user_cancelled",
-                    })
+                    await ws_manager.broadcast(
+                        scenario_id,
+                        {
+                            "type": "simulation_cancelled",
+                            "reason": "user_cancelled",
+                        },
+                    )
                 except Exception:
                     pass
             else:
                 _update_scenario_status(engine, scenario_id, ScenarioStatus.ERROR)
                 try:
-                    await ws_manager.broadcast(scenario_id, {
-                        "type": "simulation_error",
-                        "data": {"error": GENERIC_SIMULATION_ERROR},
-                    })
+                    await ws_manager.broadcast(
+                        scenario_id,
+                        {
+                            "type": "simulation_error",
+                            "data": {"error": GENERIC_SIMULATION_ERROR},
+                        },
+                    )
                 except Exception:
                     pass  # WS broadcast is best-effort
     finally:
@@ -1413,6 +1432,7 @@ async def parse_and_run_background(
     web_search_max_results: int | None = None,
     web_search_snippet_limit: int | None = None,
     world_context: dict | None = None,
+    initial_social_feed: list[dict] | None = None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -1486,9 +1506,7 @@ async def parse_and_run_background(
 
     def _refresh_parse_runtime_lock_or_raise() -> RuntimeLockLease:
         current_lease = parse_lock_lease_holder[0]
-        if current_lease is None or not _runtime_lock_lease_alive(
-            parse_lock_lease_holder
-        ):
+        if current_lease is None or not _runtime_lock_lease_alive(parse_lock_lease_holder):
             raise RuntimeError("simulation runtime lock was lost during parse")
         try:
             refreshed_lease = refresh_runtime_lock(
@@ -1502,9 +1520,7 @@ async def parse_and_run_background(
                 scenario_id,
                 type(exc).__name__,
             )
-            raise RuntimeError(
-                "simulation runtime lock was lost during parse"
-            ) from None
+            raise RuntimeError("simulation runtime lock was lost during parse") from None
         if refreshed_lease is None:
             parse_lock_lease_holder[0] = None
             raise RuntimeError("simulation runtime lock was lost during parse")
@@ -1514,9 +1530,7 @@ async def parse_and_run_background(
 
     def _fence_parse_runtime_lock_before_commit(session: Session) -> None:
         current_lease = parse_lock_lease_holder[0]
-        if current_lease is None or not _runtime_lock_lease_alive(
-            parse_lock_lease_holder
-        ):
+        if current_lease is None or not _runtime_lock_lease_alive(parse_lock_lease_holder):
             raise RuntimeError("simulation runtime lock was lost during parse")
         if current_lease.db_path is None:
             _refresh_parse_runtime_lock_or_raise()
@@ -1595,8 +1609,7 @@ async def parse_and_run_background(
             _mark_scenario_error_if_active(engine, scenario_id)
         except Exception as status_exc:
             logger.error(
-                "Simulation %s status update failed after runtime lock acquire "
-                "failure: %s",
+                "Simulation %s status update failed after runtime lock acquire failure: %s",
                 scenario_id,
                 type(status_exc).__name__,
             )
@@ -1627,10 +1640,13 @@ async def parse_and_run_background(
             if not marked_error:
                 return
             try:
-                await ws_manager.broadcast(scenario_id, {
-                    "type": "simulation_error",
-                    "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
-                })
+                await ws_manager.broadcast(
+                    scenario_id,
+                    {
+                        "type": "simulation_error",
+                        "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
+                    },
+                )
             except Exception as broadcast_exc:
                 logger.error(
                     "Simulation %s post-parse error broadcast failed: %s",
@@ -1643,7 +1659,8 @@ async def parse_and_run_background(
                 from app.services.simulator import handle_simulation_cancelled
 
                 await handle_simulation_cancelled(
-                    scenario_id, ws_callback=ws_manager.broadcast,
+                    scenario_id,
+                    ws_callback=ws_manager.broadcast,
                 )
             except Exception:
                 logger.exception(log_message, scenario_id)
@@ -1659,10 +1676,13 @@ async def parse_and_run_background(
             return
 
         try:
-            await ws_manager.broadcast(scenario_id, {
-                "type": "status",
-                "data": {"status": "simulating", "hierarchical": hierarchical},
-            })
+            await ws_manager.broadcast(
+                scenario_id,
+                {
+                    "type": "status",
+                    "data": {"status": "simulating", "hierarchical": hierarchical},
+                },
+            )
         except Exception:
             pass
     except asyncio.CancelledError:
@@ -1679,7 +1699,11 @@ async def parse_and_run_background(
         raise
 
     local_provider = is_local_provider_url(llm_base_url)
-    quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)  # noqa: E501
+    quota_key = (
+        None
+        if (disable_user_quota and local_provider)
+        else (f"user:{user_id}" if user_id else None)
+    )  # noqa: E501
 
     try:
         with llm_request_scope(
@@ -1744,10 +1768,13 @@ async def parse_and_run_background(
                 )
             if should_broadcast_error:
                 try:
-                    await ws_manager.broadcast(scenario_id, {
-                        "type": "simulation_error",
-                        "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
-                    })
+                    await ws_manager.broadcast(
+                        scenario_id,
+                        {
+                            "type": "simulation_error",
+                            "data": {"error": GENERIC_SIMULATION_PARSE_ERROR},
+                        },
+                    )
                 except Exception as broadcast_exc:
                     logger.error(
                         "Simulation %s error broadcast failed after parse failure: %s",
@@ -1775,9 +1802,7 @@ async def parse_and_run_background(
         if fork_prompt_variant:
             parsed["fork_prompt_variant"] = fork_prompt_variant
         if fork_detector_active_branch_limit is not None:
-            parsed["fork_detector_active_branch_limit"] = (
-                fork_detector_active_branch_limit
-            )
+            parsed["fork_detector_active_branch_limit"] = fork_detector_active_branch_limit
         if user_id:
             parsed["user_id"] = user_id
         if disable_user_quota and local_provider:
@@ -1816,8 +1841,7 @@ async def parse_and_run_background(
         if native_search_upstream is not None:
             parsed["native_search_upstream"] = native_search_upstream
         parsed["agents"] = [
-            _strip_untrusted_agent_provenance(agent_data)
-            for agent_data in parsed.get("agents", [])
+            _strip_untrusted_agent_provenance(agent_data) for agent_data in parsed.get("agents", [])
         ]
 
     try:
@@ -1851,9 +1875,7 @@ async def parse_and_run_background(
             return
 
         existing_context = (
-            scenario.parsed_context
-            if isinstance(scenario.parsed_context, dict)
-            else {}
+            scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
         )
         existing_campaign_context = existing_context.get("campaign_context")
         if isinstance(existing_campaign_context, dict):
@@ -1865,6 +1887,13 @@ async def parse_and_run_background(
         )
         if isinstance(existing_world_context, dict):
             parsed["world_context"] = existing_world_context
+        existing_initial_social_feed = (
+            initial_social_feed
+            if isinstance(initial_social_feed, list)
+            else existing_context.get("initial_social_feed")
+        )
+        if isinstance(existing_initial_social_feed, list) and existing_initial_social_feed:
+            parsed["initial_social_feed"] = existing_initial_social_feed
 
         _refresh_parse_runtime_lock_or_raise()
         scenario.parsed_context = parsed
@@ -1873,6 +1902,7 @@ async def parse_and_run_background(
         if visualization_enabled:
             try:
                 from app.visualization import select_scene
+
                 setting = parsed.get("setting", {})
                 scenario.scene_theme = select_scene(
                     question=scenario.question,
@@ -1952,7 +1982,8 @@ async def parse_and_run_background(
         custom_agent_name_remap = {
             item["original_name"]: item["injected_name"]
             for item in custom_agent_replacement_metadata
-            if item.get("original_name") and item.get("injected_name")
+            if item.get("original_name")
+            and item.get("injected_name")
             and original_agent_name_counts.get(str(item["original_name"]), 0) == 1
         }
         injected_custom_identity_ids = {
@@ -1991,21 +2022,18 @@ async def parse_and_run_background(
                     persona = agent_data.get("persona")
                     resolved_profile_identity_id: str | None = None
                     continuity_key = (
-                        _build_continuity_key(role, persona)
-                        if _build_continuity_key
-                        else None
+                        _build_continuity_key(role, persona) if _build_continuity_key else None
                     )
                     continuity_override = (
-                        continuity_override_map.get(continuity_key)
-                        if continuity_key
-                        else None
+                        continuity_override_map.get(continuity_key) if continuity_key else None
                     )
                     if continuity_override is None:
                         continuity_override = continuity_override_agent_map.get(
                             _normalize_continuity_agent_key(
                                 agent_data.get("name"),
                                 role,
-                            ) or "",
+                            )
+                            or "",
                         )
                     if continuity_override and continuity_override["action"] == "reuse_existing":
                         override_identity_id = continuity_override.get("identity_id")
@@ -2049,7 +2077,8 @@ async def parse_and_run_background(
                         resolved_profile_identity_id = identity_id
                     if resolved_profile_identity_id:
                         canonical_identity = session.get(
-                            AgentIdentity, resolved_profile_identity_id,
+                            AgentIdentity,
+                            resolved_profile_identity_id,
                         )
                         if canonical_identity is not None:
                             pending_identity_profiles.setdefault(
@@ -2079,10 +2108,7 @@ async def parse_and_run_background(
                     leader = g.get("leader", "")
                     if leader in custom_agent_name_remap:
                         g["leader"] = custom_agent_name_remap[leader]
-                    g["members"] = [
-                        custom_agent_name_remap.get(m, m)
-                        for m in g.get("members", [])
-                    ]
+                    g["members"] = [custom_agent_name_remap.get(m, m) for m in g.get("members", [])]
             scenario.parsed_context = parsed
             session.add(scenario)
 
@@ -2133,8 +2159,11 @@ async def parse_and_run_background(
         if pending_identity_profiles:
             profile_batch = [
                 (profile_user_id, identity_id, role, persona)
-                for identity_id, (profile_user_id, role, persona)
-                in pending_identity_profiles.items()
+                for identity_id, (
+                    profile_user_id,
+                    role,
+                    persona,
+                ) in pending_identity_profiles.items()
             ]
             schedule_background_task(_store_identity_profiles_background(profile_batch))
 
@@ -2220,10 +2249,12 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
             url = s.get("source_url")
             if not isinstance(text, str):
                 continue
-            safe_snippets.append({
-                "text": text,
-                "source_url": url if isinstance(url, str) else "",
-            })
+            safe_snippets.append(
+                {
+                    "text": text,
+                    "source_url": url if isinstance(url, str) else "",
+                }
+            )
         safe_family_context: dict[str, dict] = {}
         raw_family_context = parsed.get("family_context")
         VALID_FAMILY_STATES = {
@@ -2332,9 +2363,7 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
             "provider": parsed["provider"],
             "snippets": safe_snippets,
             "timestamp": (
-                parsed.get("timestamp", "")
-                if isinstance(parsed.get("timestamp"), str)
-                else ""
+                parsed.get("timestamp", "") if isinstance(parsed.get("timestamp"), str) else ""
             ),
             "cached": parsed.get("cached") is True,
         }
@@ -2354,10 +2383,12 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                 url = cit.get("source_url", "")
                 safe_url = _sanitize_url(url if isinstance(url, str) else "", max_chars=2000)
                 if isinstance(text, str) and safe_url:
-                    safe_citations.append({
-                        "text": str(text)[:500],
-                        "source_url": safe_url,
-                    })
+                    safe_citations.append(
+                        {
+                            "text": str(text)[:500],
+                            "source_url": safe_url,
+                        }
+                    )
             if safe_citations:
                 response["native_citations"] = safe_citations
 
@@ -2397,16 +2428,20 @@ def _load_scenario_additive_graph_fields(
 ) -> tuple[str | None, list[dict]]:
     """Load bounded, scenario-scoped graph metadata for ``ScenarioResponse``."""
     if session.connection().dialect.name == "sqlite":
-        snapshot_row = session.connection().exec_driver_sql(
-            """
+        snapshot_row = (
+            session.connection()
+            .exec_driver_sql(
+                """
             SELECT id
             FROM graph_snapshot
             WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
             ORDER BY created_at DESC, rowid DESC
             LIMIT 1
             """,
-            ("scenario", scenario_id, "causal_review"),
-        ).fetchone()
+                ("scenario", scenario_id, "causal_review"),
+            )
+            .fetchone()
+        )
         causal_graph_id = snapshot_row[0] if snapshot_row is not None else None
     else:
         causal_graph_id = session.exec(
@@ -2512,7 +2547,15 @@ def load_scenario_response(
         if not s:
             return None
 
-        agents = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+        agents = session.exec(
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                or_(
+                    Agent.source_type.is_(None),
+                    Agent.source_type != "world_event_source",
+                ),
+            )
+        ).all()
         groups = session.exec(select(AgentGroup).where(AgentGroup.scenario_id == scenario_id)).all()
 
         # C-5 fix: eager-load rounds→messages in a single query instead of N+1 loop
@@ -2530,16 +2573,18 @@ def load_scenario_response(
         for branch in branches:
             for r in sorted(branch.rounds, key=lambda r: r.round_number):
                 for msg in r.messages:
-                    all_messages.append({
-                        "agent": agent_map.get(msg.agent_id, "Unknown"),
-                        "agent_id": msg.agent_id,
-                        "message": msg.content,
-                        **public_emotion_metadata(msg),
-                        "diverge": msg.diverge,
-                        "branch": branch.id,
-                        "branch_title": branch.title,
-                        "round": r.round_number,
-                    })
+                    all_messages.append(
+                        {
+                            "agent": agent_map.get(msg.agent_id, "Unknown"),
+                            "agent_id": msg.agent_id,
+                            "message": msg.content,
+                            **public_emotion_metadata(msg),
+                            "diverge": msg.diverge,
+                            "branch": branch.id,
+                            "branch_title": branch.title,
+                            "round": r.round_number,
+                        }
+                    )
 
         diverge_messages = [msg for msg in all_messages if msg.get("diverge")]
         forked_branches = [branch for branch in branches if branch.parent_branch_id]
@@ -2574,11 +2619,19 @@ def load_scenario_response(
             "fork_events": [
                 {
                     "parent_branch_id": parent_id,
-                    "parent_branch_title": branch_by_id.get(parent_id).title if branch_by_id.get(parent_id) else "",  # noqa: E501
+                    "parent_branch_title": branch_by_id.get(parent_id).title
+                    if branch_by_id.get(parent_id)
+                    else "",  # noqa: E501
                     "fork_round": max(child.fork_round for child in children),
-                    "fork_reason": next((child.fork_reason for child in children if child.fork_reason), ""),  # noqa: E501
-                    "child_titles": [child.title for child in sorted(children, key=lambda child: child.title)],  # noqa: E501
-                    "child_branch_ids": [child.id for child in sorted(children, key=lambda child: child.title)],  # noqa: E501
+                    "fork_reason": next(
+                        (child.fork_reason for child in children if child.fork_reason), ""
+                    ),  # noqa: E501
+                    "child_titles": [
+                        child.title for child in sorted(children, key=lambda child: child.title)
+                    ],  # noqa: E501
+                    "child_branch_ids": [
+                        child.id for child in sorted(children, key=lambda child: child.title)
+                    ],  # noqa: E501
                 }
                 for parent_id, children in sorted(
                     fork_groups.items(),
@@ -2618,19 +2671,29 @@ def load_scenario_response(
                 for a in agents
             ],
             branches=[
-                {"id": b.id, "title": b.title, "description": b.description,
-                 "probability": b.probability,
-                 "status": b.status.value, "parent_branch_id": b.parent_branch_id,
-                 "fork_round": b.fork_round,
-                 "fork_reason": b.fork_reason,
-                 "story": b.story, "insight": b.insight,
-                 "replay_kind": b.replay_kind,
-                 "replay_source_branch_id": b.replay_source_branch_id}
+                {
+                    "id": b.id,
+                    "title": b.title,
+                    "description": b.description,
+                    "probability": b.probability,
+                    "status": b.status.value,
+                    "parent_branch_id": b.parent_branch_id,
+                    "fork_round": b.fork_round,
+                    "fork_reason": b.fork_reason,
+                    "story": b.story,
+                    "insight": b.insight,
+                    "replay_kind": b.replay_kind,
+                    "replay_source_branch_id": b.replay_source_branch_id,
+                }
                 for b in branches
             ],
             groups=[
-                {"id": g.id, "name": g.name, "leader_agent_id": g.leader_agent_id,
-                 "member_count": g.member_count}
+                {
+                    "id": g.id,
+                    "name": g.name,
+                    "leader_agent_id": g.leader_agent_id,
+                    "member_count": g.member_count,
+                }
                 for g in groups
             ],
             messages=all_messages,

@@ -32,42 +32,11 @@ jobs:
         working-directory: .
         run: backend/.venv/bin/python scripts/validate_samples.py
 
-      - name: Run targeted backend checks
-        run: |
-          .venv/bin/python -m pytest \
-            tests/test_campaign_api.py \
-            tests/test_campaign_service.py \
-            tests/test_debate_api.py \
-            tests/test_debate_service.py \
-            tests/test_api.py \
-            tests/test_parser.py \
-            tests/test_contract_freeze_v2.py \
-            tests/test_metrics.py \
-            tests/test_infra_config.py \
-            tests/test_config.py \
-            tests/test_simulator.py \
-            tests/test_llm_provider_protocol.py \
-            tests/test_llm_client.py \
-            tests/test_llm_resolution.py \
-            tests/test_model_profiles.py \
-            tests/test_agent_identity.py \
-            tests/test_vector_store.py \
-            tests/test_wave1_agent_state.py \
-            tests/test_scoring.py \
-            tests/test_conversation.py \
-            tests/test_ending_room_api.py \
-            tests/test_social.py \
-            tests/test_p0_wiring.py \
-            tests/test_causal_graph.py \
-            tests/test_factions.py \
-            tests/test_result_report_reducer.py \
-            tests/test_result_report_builder.py \
-            tests/test_result_report_contract.py \
-            tests/test_local_packs.py \
-            tests/test_predictions.py \
-            tests/test_card_events.py \
-            tests/test_gameplay_contract_sync.py \
-            -q
+      - name: Run backend tests
+        run: .venv/bin/python -m pytest -q
+
+      - name: Lint backend
+        run: .venv/bin/ruff check app/ tests/
 
   frontend:
     runs-on: ubuntu-latest
@@ -91,6 +60,12 @@ jobs:
       - name: Check asset provenance
         run: npm run assets:provenance:check
 
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Lint frontend
+        run: npm run lint
+
       - name: Type-check frontend project references
         run: npx tsc -b
 
@@ -99,49 +74,6 @@ jobs:
 
       - name: Check performance budgets
         run: npm run perf:budgets:check
-
-      - name: Run targeted frontend checks
-        run: |
-          npm test -- --run \
-            src/lib/scenarioMeta.test.ts \
-            src/lib/archiveSummary.test.ts \
-            src/lib/challengeShare.test.ts \
-            src/components/gameplayCards.test.ts \
-            src/components/gameplayContract.test.ts \
-            src/components/InterventionModal.test.tsx \
-            src/components/ShareModal.test.tsx \
-            src/api/client.test.ts \
-            src/i18n/config.test.ts \
-            src/stores/debateStore.test.ts \
-            src/pages/InputView.test.tsx \
-            src/pages/SimulationView.test.tsx \
-            src/pages/ResultView.test.tsx \
-            src/pages/result/ResultReportPanel.test.tsx \
-            src/pages/result/ReportSection.test.tsx \
-            src/pages/result/SocialFeedPanel.test.tsx \
-            src/pages/result/ReportConfidenceBadge.test.tsx \
-            src/lib/agentProfileObservation.test.ts \
-            src/components/result/AgentProfileSheet.test.tsx \
-            src/lib/resultReportSse.test.ts \
-            src/lib/llmProviderPolicy.test.ts \
-            src/lib/localPackImport.test.ts \
-            src/pages/SetupWizardView.test.tsx \
-            src/components/Setup/ConnectionTester.test.tsx \
-            src/components/ModelProfileManager.test.tsx \
-            src/components/DocumentSeedPanel.test.tsx \
-            src/components/LocalPackPicker.test.tsx \
-            src/components/CounterfactualPanel.test.tsx \
-            src/components/FactionTimeline.test.tsx \
-            src/components/FactionForceGraph.test.tsx \
-            src/scripts/releaseSignoff.test.ts \
-            src/components/GameplayCardsModal.test.tsx \
-            src/pages/DebateArenaView.test.tsx \
-            src/pages/DebateResultView.test.tsx \
-            src/components/DebateBetModal.test.tsx \
-            src/components/DebateShareModal.test.tsx \
-            src/hooks/useDebateWS.test.tsx \
-            src/i18n/locales.test.ts \
-            src/stores/simulationStore.test.ts
 
   cross-platform-frontend-smoke:
     runs-on: ${{ matrix.os }}

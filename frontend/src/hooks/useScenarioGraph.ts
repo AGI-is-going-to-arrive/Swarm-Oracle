@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { buildSessionHeaders } from '../api/client';
 
-interface GraphNodeData {
+export interface GraphNodeData {
   id: string;
   key: string;
   type: string;
@@ -10,14 +10,14 @@ interface GraphNodeData {
   payload: unknown;
 }
 
-interface EdgeEvidence {
+export interface EdgeEvidence {
   confidence_tier: 'low' | 'medium' | 'high' | null;
   source_ref: string | null;
   source_round_number: number | null;
   detail: string | null;
 }
 
-interface GraphEdgeData {
+export interface GraphEdgeData {
   id: string;
   source: string;
   target: string;
@@ -28,6 +28,10 @@ interface GraphEdgeData {
   metric_kind?: 'affect_proxy';
   caveat?: string;
   evidence?: EdgeEvidence | null;
+  provenance_kind?: 'runtime_projection' | 'legacy_repair' | string;
+  synthetic_provenance?: boolean;
+  evidence_status?: 'available' | 'unavailable' | string;
+  evidence_caveat?: string;
 }
 
 export interface GraphPayload {

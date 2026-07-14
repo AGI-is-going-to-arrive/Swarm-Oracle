@@ -1262,30 +1262,35 @@ describe('EndingChatModal', () => {
 
   it('cleans up the delayed room bootstrap timer on unmount', async () => {
     vi.useFakeTimers();
+    try {
+      const rendered = render(
+        <EndingChatModal
+          open
+          scenarioId="scenario-1"
+          branch={branch}
+          roomType="ending_chamber"
+          language="en"
+          readOnly={false}
+          onClose={() => {}}
+          onModeChange={vi.fn()}
+        />,
+      );
 
-    const rendered = render(
-      <EndingChatModal
-        open
-        scenarioId="scenario-1"
-        branch={branch}
-        roomType="ending_chamber"
-        language="en"
-        readOnly={false}
-        onClose={() => {}}
-        onModeChange={vi.fn()}
-      />,
-    );
+      await act(async () => {
+        await Promise.resolve();
+      });
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      rendered.unmount();
 
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
-
-    rendered.unmount();
-
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
+      // The focus-visible environment may enqueue one global timer when the
+      // dialog receives initial focus. Component-owned bootstrap timers must
+      // already be cancelled; flushing the global callback leaves no work.
+      vi.runOnlyPendingTimers();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the ending-room websocket alive and refetches once when the room is done but the result is still missing', () => {
@@ -2068,5 +2073,33 @@ describe('EndingChatModal', () => {
     await user.keyboard('{Escape}');
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves initial focus into the dialog and restores the opener on unmount', async () => {
+    buildLiveSnapshot();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+
+    const view = render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        language="en"
+        readOnly={false}
+        onClose={vi.fn()}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }));
+    });
+
+    view.unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 });

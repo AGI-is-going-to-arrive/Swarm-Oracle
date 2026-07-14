@@ -817,6 +817,109 @@ class TestMemoryEndpoint:
         )
         assert resp.status_code == 404
 
+    async def test_memory_redacts_raw_credentials_email_and_secret_metadata(
+        self, client: AsyncClient, monkeypatch,
+    ):
+        identity_id = "memory-redaction"
+        with Session(get_engine()) as session:
+            session.add(AgentIdentity(
+                id=identity_id,
+                user_id="test-user",
+                kind="generated",
+                display_name="Memory Redaction",
+                role="reviewer",
+                persona="Protects private data",
+                continuity_key="memory-redaction-key",
+            ))
+            session.commit()
+
+        raw_key = "sk-" + "A" * 32
+        monkeypatch.setattr(
+            agents_api,
+            "_load_identity_memory_entries",
+            lambda *_args, **_kwargs: ([{
+                "document": agents_api._redact_document_text(
+                    f"Contact raw.person@example.com with {raw_key} token=raw-token"
+                ),
+                "source_scenario_id": "scenario-safe",
+                "timestamp": "2026-07-14T01:00:00Z",
+                "is_compacted": False,
+                "metadata": agents_api._redact_metadata({
+                    "scenario_id": "scenario-safe",
+                    "api_key": raw_key,
+                    "email": "raw.person@example.com",
+                    "client_secret": "raw-secret",
+                }),
+            }], None),
+        )
+
+        resp = await client.get(
+            f"/api/agents/identities/{identity_id}/memory",
+            params={"user_id": "test-user"},
+        )
+
+        assert resp.status_code == 200
+        payload_text = resp.text
+        assert raw_key not in payload_text
+        assert "raw.person@example.com" not in payload_text
+        assert "raw-token" not in payload_text
+        assert "raw-secret" not in payload_text
+        memory = resp.json()["memories"][0]
+        assert memory == {
+            "summary": (
+                "Contact [REDACTED_EMAIL] with [redacted-key] [REDACTED]"
+            ),
+            "scenario_id": "scenario-safe",
+            "created_at": "2026-07-14T01:00:00Z",
+            "memory_type": "raw",
+            "is_compacted": False,
+        }
+
+    async def test_memory_distinguishes_empty_from_unavailable(
+        self, client: AsyncClient, monkeypatch,
+    ):
+        identity_id = "memory-state"
+        with Session(get_engine()) as session:
+            session.add(AgentIdentity(
+                id=identity_id,
+                user_id="test-user",
+                kind="generated",
+                display_name="Memory State",
+                role="reviewer",
+                persona="Reports storage state",
+                continuity_key="memory-state-key",
+            ))
+            session.commit()
+
+        monkeypatch.setattr(
+            agents_api,
+            "_load_identity_memory_entries",
+            lambda *_args, **_kwargs: ([], None),
+        )
+        empty = await client.get(
+            f"/api/agents/identities/{identity_id}/memory",
+            params={"user_id": "test-user"},
+        )
+        assert empty.status_code == 200
+        assert empty.json() == {"identity_id": identity_id, "memories": []}
+
+        monkeypatch.setattr(
+            agents_api,
+            "_load_identity_memory_entries",
+            lambda *_args, **_kwargs: ([], "vector_store_unavailable"),
+        )
+        unavailable = await client.get(
+            f"/api/agents/identities/{identity_id}/memory",
+            params={"user_id": "test-user"},
+        )
+        assert unavailable.status_code == 200
+        assert unavailable.json()["memories"] == []
+        assert unavailable.json()["error"] == "vector_store_unavailable"
+        assert unavailable.json()["diagnostics"] == {
+            "code": "vector_store_unavailable",
+            "message": "Memory store is temporarily unavailable.",
+        }
+
 
 class TestFullLifecycle:
     """End-to-end: create → list → update → delete → verify 404."""

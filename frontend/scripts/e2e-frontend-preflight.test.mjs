@@ -8,6 +8,7 @@ import { __test__ as batchCTest } from "./e2e-phase3-batch-c.mjs";
 import { __test__ as e2eSuiteTest } from "./e2e-suite.mjs";
 import { createFixtureStore, FIXTURE_SCENARIO_IDS } from "./e2eFixtureNet.mjs";
 import { __test__ as releaseSignoffTest } from "./release-signoff.mjs";
+import { __test__ as replaySuiteTest } from "./e2e-replay-view-live.mjs";
 import {
   assertFrontendRoutesReady,
   buildPhase3BatchAPreflightPaths,
@@ -523,6 +524,46 @@ test("roundtable parseArgs accepts an explicit scenario id", () => {
   assert.equal(args.scenarioId, "scenario-42");
 });
 
+test("roundtable bounded network gate releases once and cancels its deadline", async () => {
+  let deadline = null;
+  let cancelled = false;
+  const gate = roundtableSuiteTest.createBoundedNetworkGate({
+    timeoutMs: 25,
+    schedule(callback) {
+      deadline = callback;
+      return 7;
+    },
+    cancel(timerId) {
+      assert.equal(timerId, 7);
+      cancelled = true;
+    },
+  });
+
+  const pending = gate.wait();
+  assert.equal(typeof deadline, "function");
+  assert.equal(gate.release(), true);
+  assert.equal(gate.release(), false);
+  await pending;
+  assert.equal(cancelled, true);
+});
+
+test("roundtable bounded network gate fails closed at its deadline", async () => {
+  let deadline = null;
+  const gate = roundtableSuiteTest.createBoundedNetworkGate({
+    timeoutMs: 25,
+    schedule(callback) {
+      deadline = callback;
+      return 9;
+    },
+    cancel() {},
+  });
+
+  const pending = gate.wait();
+  deadline();
+  await assert.rejects(pending, /timed out after 25ms/);
+  assert.equal(gate.release(), false);
+});
+
 test("roundtable fixture scenario import uses fresh locale-scoped replay payloads", async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {
@@ -850,6 +891,33 @@ test("batch-b full mode expands to a multi-browser surface matrix by default", (
     ["chromium", "firefox", "webkit"],
   );
   assert.ok(runs.some((run) => run.mode === "mobile" && run.context.isMobile && run.context.hasTouch));
+});
+
+test("replay full mode keeps desktop and mobile receipts in separate directories", () => {
+  const args = {
+    mode: "full", browser: "chromium", browserExplicitlySet: false,
+    outputDir: "/tmp/replay-receipts",
+  };
+  const surfaces = replaySuiteTest.buildSurfaceRuns(args);
+  const outputDirs = surfaces.map((surface) => (
+    replaySuiteTest.resolveSurfaceOutputDir(args, surfaces, surface)
+  ));
+  assert.equal(new Set(outputDirs).size, surfaces.length);
+  assert.ok(outputDirs.some((dir) => dir.endsWith("desktop-chromium")));
+  assert.ok(outputDirs.some((dir) => dir.endsWith("mobile-chromium")));
+});
+
+test("phase3 Firefox mobile contexts omit the unsupported isMobile flag", () => {
+  for (const suite of [batchATest, batchBTest]) {
+    const [run] = suite.buildSurfaceRuns({
+      mode: "mobile",
+      browser: "firefox",
+      browserExplicitlySet: true,
+    });
+    assert.equal(run.context.isMobile, undefined);
+    assert.equal(run.context.hasTouch, true);
+    assert.ok(run.context.screen);
+  }
 });
 
 test("batch-a graph contract includes pan zoom and fit-view coverage", () => {

@@ -590,7 +590,7 @@ def test_export_includes_branches_agents_messages():
 
 def test_metadata_unavailable_message_round_trips_without_public_sentinel():
     scenario_id = _seed_scenario(api_key_in_context=False)
-    root_id, _ = _seed_branch_tree(scenario_id)
+    root_id, child_id = _seed_branch_tree(scenario_id)
     agent_id, _ = _seed_agents(scenario_id)
     with Session(get_engine()) as session:
         round_row = Round(branch_id=root_id, round_number=1)
@@ -1895,7 +1895,7 @@ def test_import_creates_new_scenario_with_remapped_ids():
 
 def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
     scenario_id = _seed_scenario(api_key_in_context=False)
-    root_id, _child_id = _seed_branch_tree(scenario_id)
+    root_id, child_id = _seed_branch_tree(scenario_id)
     agent_id, _other_agent_id = _seed_agents(scenario_id)
     original_message_id, second_message_id = _seed_messages(root_id, agent_id)
     opaque_source_ref = "external-evidence:document-42"
@@ -1922,8 +1922,14 @@ def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
                 "agent_id": agent_id,
                 "content": "第二回合发言",
                 "emotion": "excited",
+                "diverge": "split here",
             }
         ],
+        fork_event={
+            "branch_id": child_id,
+            "reason": "split here",
+            "trigger_message_ids": [second_message_id],
+        },
     )
     with Session(get_engine()) as session:
         snapshot = session.exec(
@@ -1939,8 +1945,7 @@ def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
                 GraphEdge.edge_type == "temporal",
             )
         ).one()
-        temporal_edge.source_ref = original_message_id
-        session.add(temporal_edge)
+        assert temporal_edge.source_ref == original_message_id
         session.add(
             GraphNode(
                 snapshot_id=snapshot.id,
@@ -1951,7 +1956,14 @@ def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
                 ref_model="agent_message",
                 ref_id=original_message_id,
                 payload_json=json.dumps(
-                    {"branch_id": root_id, "agent_id": agent_id}
+                    {
+                        "branch_id": root_id,
+                        "agent_id": agent_id,
+                        "context_receipt": {
+                            "recent_message_ids": [original_message_id],
+                            "source_message_ids": [second_message_id],
+                        },
+                    }
                 ),
             )
         )
@@ -2004,9 +2016,13 @@ def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
 
     imported_source_refs = {edge.source_ref for edge in imported_edges}
     assert imported_message.id != original_message_id
-    assert imported_source_refs == {imported_message.id, opaque_source_ref}
+    assert imported_source_refs == {
+        imported_message.id,
+        imported_second_message.id,
+        opaque_source_ref,
+    }
     assert original_message_id not in imported_source_refs
-    assert {node.node_key for node in imported_nodes} == {
+    assert {node.node_key for node in imported_nodes if node.node_type == "event"} == {
         f"r1_{imported_message.agent_id}_{imported_message.id}",
         f"r2_{imported_second_message.agent_id}_{imported_second_message.id}",
         "opaque-custom-event-key",
@@ -2017,11 +2033,23 @@ def test_export_import_remaps_message_source_ref_and_preserves_opaque_ref():
             "ref_ids": [node.ref_id for node in imported_nodes],
             "payloads": [node.payload_json for node in imported_nodes],
             "source_refs": [edge.source_ref for edge in imported_edges],
+            "evidence": [edge.evidence_json for edge in imported_edges],
         }
     )
     assert original_message_id not in imported_graph_text
     assert second_message_id not in imported_graph_text
     assert agent_id not in imported_graph_text
+    imported_fork = next(node for node in imported_nodes if node.node_type == "fork")
+    imported_fork_payload = json.loads(imported_fork.payload_json or "{}")
+    assert imported_fork_payload["trigger_message_ids"] == [imported_second_message.id]
+    imported_custom = next(
+        node for node in imported_nodes if node.node_key == "opaque-custom-event-key"
+    )
+    imported_receipt = json.loads(imported_custom.payload_json or "{}")[
+        "context_receipt"
+    ]
+    assert imported_receipt["recent_message_ids"] == [imported_message.id]
+    assert imported_receipt["source_message_ids"] == [imported_second_message.id]
 
 
 @pytest.mark.parametrize(
@@ -2097,6 +2125,44 @@ def test_import_remaps_or_clears_causal_graph_direct_ref_id(
         "branch": imported_branch.id,
     }.get(expected_target)
     assert imported_node.ref_id == expected_ref_id
+
+
+@pytest.mark.parametrize(
+    "edge_override",
+    [
+        {"source_ref": "x" * 161},
+        {"confidence_tier": "certain"},
+        {"evidence_json": json.dumps({"detail": "x" * 5000})},
+    ],
+    ids=("source-ref-too-long", "invalid-confidence", "evidence-too-large"),
+)
+def test_import_rejects_unbounded_graph_edge_provenance(edge_override: dict[str, Any]):
+    edge = {
+        "source_node_id": "node-a",
+        "target_node_id": "node-b",
+        "edge_type": "caused",
+        **edge_override,
+    }
+    graph_payload = {
+        "snapshot": {"graph_kind": "causal_review"},
+        "nodes": [
+            {"id": "node-a", "node_key": "a", "node_type": "event"},
+            {"id": "node-b", "node_key": "b", "node_type": "event"},
+        ],
+        "edges": [edge],
+    }
+    blob = _build_snapshot_zip_from_payloads(
+        {
+            "scenario.json": json.dumps({"question": "bounded provenance"}).encode(),
+            "branches.jsonl": b"",
+            "agents.jsonl": b"",
+            "messages.jsonl": b"",
+            "causal_graph.json": json.dumps(graph_payload).encode(),
+        }
+    )
+
+    with Session(get_engine()) as session, pytest.raises(SnapshotImportError):
+        import_snapshot_zip(blob, "importer-bounds", session)
 
 
 def test_import_restores_intervention_receipts_with_remapped_branch_ids():
@@ -2939,24 +3005,60 @@ def _seed_agent_with_identity(scenario_id: str, identity_id: str) -> str:
         return agent.id
 
 
-def test_import_clears_agent_identity_id_to_prevent_cross_user_binding():
-    """Critical #1: importer must not inherit the exporter's identity link."""
+@pytest.mark.parametrize("include_private", [False, True])
+def test_export_omits_agent_identity_id(include_private: bool):
+    """Portable snapshots never disclose an owner's persistent identity link."""
     src_scenario_id = _seed_scenario(api_key_in_context=False)
     foreign_identity_id = "owner-A-identity-xyz"
     _seed_agent_with_identity(src_scenario_id, foreign_identity_id)
 
     with Session(get_engine()) as session:
-        buffer = export_snapshot_zip(src_scenario_id, session)
+        buffer = export_snapshot_zip(
+            src_scenario_id,
+            session,
+            include_private=include_private,
+        )
     blob = buffer.getvalue()
 
-    # Sanity: the export does carry the original identity id (round-trip
-    # bytes are inspected before import strips it).
     with zipfile.ZipFile(io.BytesIO(blob)) as zf:
-        agents_dump = zf.read("agents.jsonl").decode("utf-8")
-    assert foreign_identity_id in agents_dump
+        agents = [
+            json.loads(line)
+            for line in zf.read("agents.jsonl").decode("utf-8").splitlines()
+            if line
+        ]
+
+    assert agents
+    assert all("agent_identity_id" not in agent for agent in agents)
+    assert foreign_identity_id.encode() not in blob
+
+
+def test_import_clears_legacy_agent_identity_id_to_prevent_cross_user_binding():
+    """Importer must ignore identity links carried by legacy or crafted snapshots."""
+    src_scenario_id = _seed_scenario(api_key_in_context=False)
+    foreign_identity_id = "owner-A-identity-xyz"
+    _seed_agent_with_identity(src_scenario_id, foreign_identity_id)
 
     with Session(get_engine()) as session:
-        new_id = import_snapshot_zip(blob, "importer-foreign", session)
+        blob = export_snapshot_zip(src_scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        payloads = {name: zf.read(name) for name in manifest["files"]}
+
+    agents = [
+        json.loads(line)
+        for line in payloads["agents.jsonl"].decode("utf-8").splitlines()
+        if line
+    ]
+    assert agents
+    agents[0]["agent_identity_id"] = foreign_identity_id
+    payloads["agents.jsonl"] = "\n".join(
+        json.dumps(agent) for agent in agents
+    ).encode("utf-8")
+    legacy_blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(legacy_blob, "importer-foreign", session)
 
     with Session(get_engine()) as session:
         new_agents = list(

@@ -44,15 +44,30 @@ const CAPABILITIES_FIXTURE = {
 };
 
 const REPLAY_TRACE_FIXTURE = {
-  scenario_id: FIXTURE_SCENARIO_ID,
-  frames: [
-    { frame_idx: 0, round: 1, event_kind: "scene:start", payload: {} },
-    { frame_idx: 1, round: 1, event_kind: "agent:speak", payload: { agent_id: "a-1" } },
-    { frame_idx: 2, round: 2, event_kind: "agent:speak", payload: { agent_id: "a-2" } },
-    { frame_idx: 3, round: 3, event_kind: "scene:end", payload: {} },
+  nodes: [
+    {
+      branch_id: "branch-main", parent_branch_id: null,
+      replay_source_branch_id: null, origin_round: 0,
+      replay_kind: "counterfactual", status: "COMPLETED",
+      created_at: "2026-07-14T00:00:00Z",
+    },
   ],
-  total_frames: 4,
   next_cursor: null,
+};
+
+const CAUSAL_GRAPH_FIXTURE = {
+  id: "graph-e2e-replay",
+  nodes: [0, 1, 2].map((round) => ({
+    id: `node-${round}`, key: `node-${round}`, type: "action",
+    label: `Agent ${round + 1} acts`, round,
+    payload: { agent_id: `agent-${round + 1}`, agent_name: `Agent ${round + 1}` },
+  })),
+  edges: [],
+};
+
+const SCENARIO_FIXTURE = {
+  id: FIXTURE_SCENARIO_ID, question: "Replay E2E", status: "COMPLETED",
+  branches: [{ id: "branch-main", title: "Main", probability: 1, status: "COMPLETED" }],
 };
 
 const KEYBOARD_SHORTCUTS = ["Space", "ArrowLeft", "ArrowRight"];
@@ -114,6 +129,18 @@ async function installFixtures(page) {
       body: JSON.stringify(REPLAY_TRACE_FIXTURE),
     }),
   );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph*`, (route) =>
+    route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify(CAUSAL_GRAPH_FIXTURE),
+    }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}`, (route) =>
+    route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify(SCENARIO_FIXTURE),
+    }),
+  );
 }
 
 function createTestResult() { return { steps: [], passed: false }; }
@@ -122,34 +149,63 @@ function finalize(result) {
   return result;
 }
 
-async function testRouteMount(page, baseUrl) {
+async function testReplayInteractions(page, baseUrl) {
   const result = createTestResult();
   try {
     await page.goto(`${baseUrl}/replay/${FIXTURE_SCENARIO_ID}`, {
       waitUntil: "domcontentloaded", timeout: 15000,
     });
-    const rootMounted = await page.evaluate(() => {
-      return Boolean(document.querySelector("#root")?.children?.length);
+    const root = page.getByTestId("replay-view-root");
+    const slider = page.getByTestId("replay-timeline-scrubber").getByRole("slider");
+    await slider.waitFor({ state: "visible", timeout: 15000 });
+    result.steps.push({
+      name: "replay-controls-and-agent-queue-visible",
+      passed: await root.isVisible()
+        && await page.getByTestId("replay-playback-control-play").isVisible()
+        && await page.locator('[data-testid^="replay-agent-queue-"]').count() === 3,
     });
-    result.steps.push({ name: "route-renders-spa-shell", passed: rootMounted });
+
+    await page.getByTestId("replay-playback-control-next").click();
+    result.steps.push({
+      name: "next-control-advances-frame-and-hash",
+      passed: await slider.getAttribute("aria-valuenow") === "1"
+        && (await page.evaluate(() => window.location.hash)) === "#t=turn_1",
+    });
+
+    await root.focus();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowLeft");
+    result.steps.push({
+      name: "keyboard-arrows-drive-replay-timeline",
+      passed: await slider.getAttribute("aria-valuenow") === "1",
+    });
+
+    await page.keyboard.press("Space");
+    const playing = await page.getByTestId("replay-playback-control-pause").isVisible();
+    await page.keyboard.press("Space");
+    const paused = await page.getByTestId("replay-playback-control-play").isVisible();
+    result.steps.push({ name: "space-toggles-playback-state", passed: playing && paused });
+
+    await slider.focus();
+    await slider.press("End");
+    const finalHash = await page.evaluate(() => window.location.hash);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const restored = page.getByTestId("replay-timeline-scrubber").getByRole("slider");
+    await restored.waitFor({ state: "visible", timeout: 15000 });
+    result.steps.push({
+      name: "scrubber-persists-through-reload",
+      passed: finalHash === "#t=turn_2"
+        && await restored.getAttribute("aria-valuenow") === "2",
+    });
   } catch (err) {
     result.steps.push({
-      name: "route-renders-spa-shell",
-      passed: !LIVE_MODE,
+      name: "replay-interaction-contract",
+      passed: false,
       error: err instanceof Error ? err.message : String(err),
+      url: page.url(),
+      body: (await page.locator("body").innerText().catch(() => "")).slice(0, 1000),
     });
   }
-  return finalize(result);
-}
-
-async function testKeyboardContract() {
-  const result = createTestResult();
-  const expected = new Set(KEYBOARD_SHORTCUTS);
-  result.steps.push({
-    name: "keyboard-shortcuts-declared",
-    passed: expected.has("Space") && expected.has("ArrowLeft") && expected.has("ArrowRight"),
-    shortcuts: [...expected],
-  });
   return finalize(result);
 }
 
@@ -157,34 +213,12 @@ async function testFixtureShape() {
   const result = createTestResult();
   result.steps.push({
     name: "replay-trace-frame-count",
-    passed: REPLAY_TRACE_FIXTURE.frames.length === REPLAY_TRACE_FIXTURE.total_frames,
+    passed: REPLAY_TRACE_FIXTURE.nodes.length === 1 && CAUSAL_GRAPH_FIXTURE.nodes.length === 3,
   });
   result.steps.push({
     name: "replay-trace-frames-ordered",
-    passed: REPLAY_TRACE_FIXTURE.frames.every((f, i) => f.frame_idx === i),
+    passed: CAUSAL_GRAPH_FIXTURE.nodes.every((node, i) => node.round === i),
   });
-  return finalize(result);
-}
-
-async function testHashScrubberContract(page, baseUrl) {
-  const result = createTestResult();
-  try {
-    await page.goto(`${baseUrl}/replay/${FIXTURE_SCENARIO_ID}#frame=2`, {
-      waitUntil: "domcontentloaded", timeout: 15000,
-    });
-    const hashEcho = await page.evaluate(() => window.location.hash);
-    result.steps.push({
-      name: "scrubber-hash-echoed",
-      passed: hashEcho.includes("frame=2"),
-      hash: hashEcho,
-    });
-  } catch (err) {
-    result.steps.push({
-      name: "scrubber-hash-echoed",
-      passed: !LIVE_MODE,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
   return finalize(result);
 }
 
@@ -201,9 +235,7 @@ async function runSurface(mode, viewport, args) {
     const page = await context.newPage();
     await installFixtures(page);
 
-    allResults.tests.routeMount = await testRouteMount(page, args.baseUrl);
-    allResults.tests.hashScrubber = await testHashScrubberContract(page, args.baseUrl);
-    allResults.tests.keyboardContract = await testKeyboardContract();
+    allResults.tests.interactions = await testReplayInteractions(page, args.baseUrl);
     allResults.tests.fixtureShape = await testFixtureShape();
   } finally {
     await closePlaywrightBrowser(browser, `e2e-replay-view-live:${mode}:${args.browser}`);
@@ -232,21 +264,33 @@ function buildSurfaceRuns(args) {
     ? [mk("desktop", args.browser), mk("mobile", args.browser)]
     : [mk("desktop", "chromium"), mk("mobile", "chromium")];
 }
+function resolveSurfaceOutputDir(args, surfaces, surface) {
+  if (!args.outputDir || surfaces.length <= 1) return args.outputDir;
+  return path.join(path.resolve(args.outputDir), `${surface.mode}-${surface.browser}`);
+}
 
 export const __test__ = {
-  REPLAY_TRACE_FIXTURE, KEYBOARD_SHORTCUTS, CAPABILITIES_FIXTURE, buildSurfaceRuns,
+  REPLAY_TRACE_FIXTURE, KEYBOARD_SHORTCUTS, CAPABILITIES_FIXTURE,
+  buildSurfaceRuns, resolveSurfaceOutputDir,
 };
 
 async function main() {
   const args = parseArgs(process.argv);
+  const surfaces = buildSurfaceRuns(args);
   const runs = [];
-  for (const surface of buildSurfaceRuns(args)) {
+  for (const surface of surfaces) {
+    const surfaceOutputDir = resolveSurfaceOutputDir(args, surfaces, surface);
     const r = await runSurface(surface.mode, surface.context.viewport ?? DESKTOP_VIEWPORT, {
-      ...args, browser: surface.browser,
+      ...args, browser: surface.browser, outputDir: surfaceOutputDir,
     });
     runs.push(r);
   }
   const allPassed = runs.every((r) => r.summary.allPassed);
+  if (args.outputDir && surfaces.length > 1) {
+    writeJson(path.join(path.resolve(args.outputDir), "result.json"), {
+      script: "e2e-replay-view-live", allPassed, runs,
+    });
+  }
   console.log(JSON.stringify({ script: "e2e-replay-view-live", runs: runs.length, allPassed }));
   if (!allPassed) process.exitCode = 1;
 }

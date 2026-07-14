@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import re
+import time
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
@@ -17,7 +18,7 @@ from time import monotonic
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import case, func, update
+from sqlalchemy import and_, case, func, or_, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
@@ -76,6 +77,7 @@ from app.services.narrator import (
     narrate_branch,
 )
 from app.services.runtime_lock import (
+    RuntimeLockLease,
     acquire_runtime_lock,
     release_runtime_lock,
     runtime_lock_is_active,
@@ -86,12 +88,14 @@ from app.services.simulation_cancel import clear_cancel_token, get_cancel_token,
 # Phase 3 F2: Causal graph hook (non-blocking, fire-and-forget)
 try:
     from app.services.causal_graph import append_round_nodes as _causal_append
+
     _CAUSAL_AVAILABLE = True
 except ImportError:
     _CAUSAL_AVAILABLE = False
 
 try:
     from app.services.kg_realtime import push_delta as _kg_push_delta
+
     _KG_REALTIME_AVAILABLE = True
 except ImportError:
     _KG_REALTIME_AVAILABLE = False
@@ -102,6 +106,7 @@ try:
         build_previous_round_relationship_contexts as _factions_relationship_contexts,
     )
     from app.services.factions import process_round as _factions_process
+
     _FACTIONS_AVAILABLE = True
 except ImportError:
     _FACTIONS_AVAILABLE = False
@@ -109,6 +114,7 @@ except ImportError:
 # Phase 3 F4: Checkpoint hook (non-blocking)
 try:
     from app.services.replay import write_checkpoint as _checkpoint_write
+
     _CHECKPOINT_AVAILABLE = True
 except ImportError:
     _CHECKPOINT_AVAILABLE = False
@@ -123,9 +129,11 @@ try:
         get_card_viz_event,
         select_scene,
     )
+
     _VIZ_AVAILABLE = True
 except ImportError:
     _VIZ_AVAILABLE = False
+
 
 # ── Intervention Queue ───────────────────────────────────
 # File-backed SQLite deployments use a shared DB queue so different workers
@@ -237,9 +245,7 @@ def _llm_scope_kwargs(
         "supports_structured_outputs_override": overrides.get(
             "supports_structured_outputs_override"
         ),
-        "supports_native_search_override": overrides.get(
-            "supports_native_search_override"
-        ),
+        "supports_native_search_override": overrides.get("supports_native_search_override"),
         "native_search_upstream_override": native_search_upstream_override,
     }
 
@@ -363,7 +369,7 @@ def _strip_diverge_marker(text: str) -> str:
         if not match:
             chunks.append(text[search_from:])
             break
-        chunks.append(text[search_from:match.start()])
+        chunks.append(text[search_from : match.start()])
         marker_end = _find_diverge_marker_end(text, match.start())
         if marker_end is None:
             break
@@ -425,10 +431,7 @@ def validate_and_sanitize_turn(
     cleaned = _strip_diverge_marker(str(text or "")).strip()
     if _has_prompt_leak_shape(cleaned):
         return None, "leak"
-    if (
-        not _has_meaningful_body_text(cleaned)
-        or _is_speaker_label_only(cleaned, agent_name)
-    ):
+    if not _has_meaningful_body_text(cleaned) or _is_speaker_label_only(cleaned, agent_name):
         return None, "empty"
     if len(cleaned) > _TURN_MAX_CHARS:
         cleaned = cleaned[: _TURN_MAX_CHARS - 1].rstrip() + "…"
@@ -581,9 +584,7 @@ def _sanitize_fork_debug_result(payload: Any) -> dict[str, Any]:
 
     sanitized_branches = [
         branch
-        for branch in (
-            _sanitize_fork_debug_branch(item) for item in payload.get("branches", [])
-        )
+        for branch in (_sanitize_fork_debug_branch(item) for item in payload.get("branches", []))
         if branch is not None
     ]
     return {
@@ -637,18 +638,17 @@ def _normalize_fork_detector_result(payload: Any) -> dict[str, Any]:
 async def _summarize_identity_compaction_group(
     summaries: list[str],
     *,
+    scenario_ids: list[str] | None = None,
     llm_overrides: dict | None = None,
 ) -> str:
     from app.services.vector_store import build_compaction_prompt
 
-    prompt = build_compaction_prompt(summaries)
+    prompt = build_compaction_prompt(summaries, scenario_ids)
     fallback_summary = " | ".join(summaries)[:600]
 
     try:
         _overrides = llm_overrides or {}
-        with llm_request_scope(
-            **_llm_scope_kwargs(_overrides, purpose="identity_compaction")
-        ):
+        with llm_request_scope(**_llm_scope_kwargs(_overrides, purpose="identity_compaction")):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
                 reasoning_effort="low",
@@ -721,9 +721,7 @@ def _persist_llm_attribution_context(
             if scenario is None:
                 return merged_ctx
             current_ctx = (
-                dict(scenario.parsed_context)
-                if isinstance(scenario.parsed_context, dict)
-                else {}
+                dict(scenario.parsed_context) if isinstance(scenario.parsed_context, dict) else {}
             )
             changed = False
             for key, value in updates.items():
@@ -883,9 +881,7 @@ async def _rewrite_single_branch_title_after_narration(
         language=language,
     )
     _overrides = llm_overrides or {}
-    with llm_request_scope(
-        **_llm_scope_kwargs(_overrides, purpose="scenario_fork_title_rewrite")
-    ):
+    with llm_request_scope(**_llm_scope_kwargs(_overrides, purpose="scenario_fork_title_rewrite")):
         raw_title = await asyncio.wait_for(
             llm_call(
                 prompt,
@@ -987,10 +983,7 @@ def reconcile_unfinished_branches_for_terminal_scenario(
     """Prune branches left unfinished under ERROR/CANCELLED scenarios."""
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
-        if (
-            scenario is None
-            or scenario.status not in _SCENARIO_BRANCH_RECONCILE_STATUSES
-        ):
+        if scenario is None or scenario.status not in _SCENARIO_BRANCH_RECONCILE_STATUSES:
             return 0
         updated = _reconcile_unfinished_branches_for_terminal_scenario_session(
             session,
@@ -1150,9 +1143,7 @@ def reconcile_scenario_done_if_complete(
         if not ignore_runtime_lock and runtime_lock_is_active(simulation_lock_key(scenario_id)):
             return False
 
-        branches = session.exec(
-            select(Branch).where(Branch.scenario_id == scenario_id)
-        ).all()
+        branches = session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
         if not branches:
             return False
         if any(branch.status == BranchStatus.ACTIVE for branch in branches):
@@ -1330,7 +1321,7 @@ def _pending_intervention_db_path() -> str | None:
     # "sqlite+aiosqlite:///" or "sqlite+pysqlite:///".
     for prefix in ("sqlite+aiosqlite:///", "sqlite+pysqlite:///", "sqlite:///"):
         if db_url.startswith(prefix):
-            db_path = db_url[len(prefix):]
+            db_path = db_url[len(prefix) :]
             break
     if db_path is None:
         if db_url.startswith("/") or db_url.startswith("file:"):
@@ -1431,12 +1422,15 @@ def _intervention_log_has_applied_round(
         if applied_round < 1:
             return False
 
-        return session.exec(
-            select(Round.id).where(
-                Round.branch_id == branch_id,
-                Round.round_number == applied_round,
-            )
-        ).first() is not None
+        return (
+            session.exec(
+                select(Round.id).where(
+                    Round.branch_id == branch_id,
+                    Round.round_number == applied_round,
+                )
+            ).first()
+            is not None
+        )
 
 
 def _coerce_pending_intervention_item(
@@ -2290,7 +2284,9 @@ async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
         with Session(engine) as session:
             queued = list(
                 session.exec(
-                    select(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)  # noqa: E501
+                    select(PendingIntervention).where(
+                        PendingIntervention.scenario_id == scenario_id
+                    )  # noqa: E501
                 ).all()
             )
             for item in queued:
@@ -2396,8 +2392,7 @@ def _branch_memory_round_limits(
             if (
                 branch.replay_kind == "counterfactual"
                 and normalized_agent_id
-                and str(branch.replay_source_agent_id or "").strip()
-                == normalized_agent_id
+                and str(branch.replay_source_agent_id or "").strip() == normalized_agent_id
             ):
                 fork_limit -= 1
             current_limit = min(current_limit, max(0, fork_limit))
@@ -2451,14 +2446,17 @@ def _resolve_hierarchical_agent_sets(
 
     leader_names = set(effective_group_leaders.values())
     leader_agents = [
-        agent for agent in agents
+        agent
+        for agent in agents
         if agent.get("source_type") == "custom" or agent.get("name") in leader_names
     ]
     worker_agents = [
-        agent for agent in agents
+        agent
+        for agent in agents
         if agent.get("source_type") != "custom" and agent.get("name") not in leader_names
     ]
     return leader_agents, worker_agents, effective_group_leaders
+
 
 # ── Fork Detection Prompt Templates (consolidated) ─────────────────────
 #
@@ -2484,8 +2482,7 @@ EN_BRANCH_TITLE_HINT = (
     "no abstract labels, slogan titles, insider jargon, or black-box terms)"
 )
 ZH_BRANCH_DESC_HINT = (
-    "这一分支最终世界会怎样收场？用具体、外部可见的结果回答原问题；"
-    "每条必须不同，不要复述讨论过程"
+    "这一分支最终世界会怎样收场？用具体、外部可见的结果回答原问题；每条必须不同，不要复述讨论过程"
 )
 EN_BRANCH_DESC_HINT = (
     "How does this branch world finally end up? Answer the original question with "
@@ -2508,9 +2505,9 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "postamble": (
             "描述写法要求:\n"
             "- 每条分支的 description 必须各不相同，具体描述该路线独有的发展走势\n"
-            "- 不要写笼统的\"核心分歧在于…\"这种对所有分支通用的话\n"
-            "- 好的例子: \"平台先冻结传播入口，公布证据链后再逐步恢复受影响账号\"\n"
-            "- 坏的例子: \"核心分歧在于是否扩大处理范围\""
+            '- 不要写笼统的"核心分歧在于…"这种对所有分支通用的话\n'
+            '- 好的例子: "平台先冻结传播入口，公布证据链后再逐步恢复受影响账号"\n'
+            '- 坏的例子: "核心分歧在于是否扩大处理范围"'
         ),
     },
     ("Chinese", "b"): {
@@ -2594,8 +2591,8 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "Description requirements:\n"
             "- Each branch description must be concrete and different from the others\n"
             "- Do not repeat generic language like 'the core disagreement is whether to expand outward'\n"  # noqa: E501
-            "- Good example: \"The platform freezes reposting, publishes the evidence trail, then restores affected accounts in stages\"\n"  # noqa: E501
-            "- Bad example: \"The core disagreement is whether to expand the response\""
+            '- Good example: "The platform freezes reposting, publishes the evidence trail, then restores affected accounts in stages"\n'  # noqa: E501
+            '- Bad example: "The core disagreement is whether to expand the response"'
         ),
     },
     ("English", "b"): {
@@ -2713,10 +2710,10 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
             "- 禁止官僚式抽象词、宏大标签、诗化四字口号和无法落地的黑箱术语\n"
             "- 禁止内部术语/黑话，例如 page-fault-terminal、rollback-log、gray-column、"
             "paw-print-column、灰柱、爪印列这类外人看不懂的黑话\n"
-            "- 好的例子: \"人类每天点名鞠躬，被降为附庸\"、"
-            "\"地下复辟派起诉猫议会却败诉\"\n"
-            "- 坏的例子: \"终端缺页\"、\"回滚日志\"、\"灰柱归位\"、\"爪印列优化\"、"
-            "\"全面治理\"、\"稳定推进\""
+            '- 好的例子: "人类每天点名鞠躬，被降为附庸"、'
+            '"地下复辟派起诉猫议会却败诉"\n'
+            '- 坏的例子: "终端缺页"、"回滚日志"、"灰柱归位"、"爪印列优化"、'
+            '"全面治理"、"稳定推进"'
         )
     else:
         input_section = (
@@ -2745,10 +2742,10 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
             "- Forbid bureaucratic, abstract, poetic, or slogan-like labels\n"
             "- Forbid insider terminology and internal jargon such as page-fault-terminal, "
             "rollback-log, gray-column, and paw-print-column black-speak\n"
-            "- Good examples: \"humans forced into daily bowing roll-call, demoted to "
-            "vassals\"; \"underground restoration faction sues the cat council and loses\"\n"
-            "- Bad examples: \"page-fault-terminal stabilizes\", \"rollback-log governs\", "
-            "\"gray-column transition\", \"paw-print-column alignment\""
+            '- Good examples: "humans forced into daily bowing roll-call, demoted to '
+            'vassals"; "underground restoration faction sues the cat council and loses"\n'
+            '- Bad examples: "page-fault-terminal stabilizes", "rollback-log governs", '
+            '"gray-column transition", "paw-print-column alignment"'
         )
 
     json_block = (
@@ -2786,6 +2783,7 @@ async def run_simulation(
     ws_callback: Any = None,
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
 ):
     """Execute simulation with user-cancel handling.
 
@@ -2803,6 +2801,7 @@ async def run_simulation(
             ws_callback=ws_callback,
             llm_overrides=llm_overrides,
             branch_id=branch_id,
+            runtime_lease=runtime_lease,
         )
     except SimulationCancelled:
         await handle_simulation_cancelled(scenario_id, ws_callback=ws_callback)
@@ -2818,6 +2817,7 @@ async def _run_simulation_impl(
     ws_callback: Any = None,
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
 ):
     """Execute the full simulation pipeline (Stage 2 + Stage 3).
 
@@ -2856,6 +2856,7 @@ async def _run_simulation_impl(
         web_context_block = ""
         if scenario.web_context_json:
             from app.services.web_context import WebSearchResult, format_context_block
+
             ws_result = WebSearchResult.from_json(scenario.web_context_json)
             web_context_block = format_context_block(
                 ws_result,
@@ -2918,35 +2919,32 @@ async def _run_simulation_impl(
             and ctx.get("llm_tokens_per_minute") is not None
         ):
             llm_overrides["tokens_per_minute"] = ctx.get("llm_tokens_per_minute")
-        if (
-            llm_overrides.get("concurrency") is None
-            and ctx.get("llm_concurrency") is not None
-        ):
+        if llm_overrides.get("concurrency") is None and ctx.get("llm_concurrency") is not None:
             llm_overrides["concurrency"] = ctx.get("llm_concurrency")
-        if (
-            llm_overrides.get("supports_structured_outputs_override") is None
-            and isinstance(ctx.get("supports_structured_outputs"), bool)
+        if llm_overrides.get("supports_structured_outputs_override") is None and isinstance(
+            ctx.get("supports_structured_outputs"), bool
         ):
             llm_overrides["supports_structured_outputs_override"] = ctx.get(
                 "supports_structured_outputs"
             )
-        if (
-            llm_overrides.get("supports_native_search_override") is None
-            and isinstance(ctx.get("supports_native_search"), bool)
+        if llm_overrides.get("supports_native_search_override") is None and isinstance(
+            ctx.get("supports_native_search"), bool
         ):
-            llm_overrides["supports_native_search_override"] = ctx.get(
-                "supports_native_search"
-            )
-        if (
-            llm_overrides.get("native_search_upstream_override") is None
-            and isinstance(ctx.get("native_search_upstream"), str)
+            llm_overrides["supports_native_search_override"] = ctx.get("supports_native_search")
+        if llm_overrides.get("native_search_upstream_override") is None and isinstance(
+            ctx.get("native_search_upstream"), str
         ):
-            llm_overrides["native_search_upstream_override"] = ctx.get(
-                "native_search_upstream"
-            )
+            llm_overrides["native_search_upstream_override"] = ctx.get("native_search_upstream")
 
         # Load agents
-        db_agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
+        db_agents = list(
+            session.exec(
+                select(Agent).where(
+                    Agent.scenario_id == scenario_id,
+                    or_(Agent.source_type.is_(None), Agent.source_type != "world_event_source"),
+                )
+            ).all()
+        )
         agents = [_agent_to_dict(a) for a in db_agents]
 
         if settings.FEATURE_CUSTOM_AGENTS:
@@ -2962,7 +2960,7 @@ async def _run_simulation_impl(
     native_search_domains = _native_search_domains_from_context(ctx)
 
     # Build group membership lookup
-    group_leaders: dict[str, str] = {}   # {group_name: leader_agent_name}
+    group_leaders: dict[str, str] = {}  # {group_name: leader_agent_name}
     agent_to_group: dict[str, str] = {}  # {agent_name: group_name}
     if hierarchical:
         for g in groups_data:
@@ -2971,14 +2969,17 @@ async def _run_simulation_impl(
             group_leaders[gname] = leader
             for member_name in g.get("members", []):
                 agent_to_group[member_name] = gname
-        logger.info("Hierarchical mode: %d groups, %d agents mapped",
-                    len(group_leaders), len(agent_to_group))
+        logger.info(
+            "Hierarchical mode: %d groups, %d agents mapped",
+            len(group_leaders),
+            len(agent_to_group),
+        )
 
     await push({"type": "status", "data": {"status": "simulating", "hierarchical": hierarchical}})
 
     # V2: Build visualization broadcaster
     viz_mapper = None
-    last_card_round: int | None = None          # card event cooldown tracker
+    last_card_round: int | None = None  # card event cooldown tracker
     if viz_enabled and _VIZ_AVAILABLE:
         viz_mapper = VisualizationMapper()
         # Assign sprites to all agents based on persona keywords
@@ -3000,18 +3001,24 @@ async def _run_simulation_impl(
         if not resolved_theme:
             resolved_theme = select_scene(scenario.question or "")
         # Broadcast scene init + agent sprites
-        await push({
-            "type": "viz:scene_init",
-            "data": {
-                "scene_theme": resolved_theme,
-                "agents": sprite_assignments,
-            },
-        })
+        await push(
+            {
+                "type": "viz:scene_init",
+                "data": {
+                    "scene_theme": resolved_theme,
+                    "agents": sprite_assignments,
+                },
+            }
+        )
         # V2-P2: Broadcast viz:scene_change so Phaser updates background
         viz_scene_evt = viz_mapper.map_scene_change(resolved_theme)
         await push(viz_scene_evt)
 
-        logger.info("V2 Visualization enabled: theme=%s, %d sprites", resolved_theme, len(sprite_assignments))  # noqa: E501
+        logger.info(
+            "V2 Visualization enabled: theme=%s, %d sprites",
+            resolved_theme,
+            len(sprite_assignments),
+        )  # noqa: E501
 
     async def viz_push(event: dict):
         """Broadcast viz event (no-op if visualization disabled)."""
@@ -3026,25 +3033,29 @@ async def _run_simulation_impl(
     if branch_id is None:
         root_title = ctx.get("initial_title", "问题起点")
         active_branch_id = _get_or_create_root_branch(engine, scenario_id, title=root_title)
-        all_branches = [{
-            "id": active_branch_id,
-            "parent_branch_id": None,
-            "fork_round": 0,
-            "status": "ACTIVE",
-            "probability": 1.0,
-        }]
+        all_branches = [
+            {
+                "id": active_branch_id,
+                "parent_branch_id": None,
+                "fork_round": 0,
+                "status": "ACTIVE",
+                "probability": 1.0,
+            }
+        ]
 
         # Push root branch to frontend so tree renders before agent_speak events
-        await push({
-            "type": "branch_init",
-            "data": {
-                "id": active_branch_id,
-                "title": root_title,
-                "probability": 1.0,
-                "status": "ACTIVE",
-                "parent_branch_id": None,
-            },
-        })
+        await push(
+            {
+                "type": "branch_init",
+                "data": {
+                    "id": active_branch_id,
+                    "title": root_title,
+                    "probability": 1.0,
+                    "status": "ACTIVE",
+                    "parent_branch_id": None,
+                },
+            }
+        )
     else:
         with Session(engine) as session:
             target_branch = session.get(Branch, branch_id)
@@ -3063,19 +3074,24 @@ async def _run_simulation_impl(
             active_branch_id = target_branch.id
             resume_parent_branch_id = target_branch.parent_branch_id
             _resume_replay_kind = target_branch.replay_kind  # str | None
-            all_branches = [{
-                "id": active_branch_id,
-                "parent_branch_id": target_branch.parent_branch_id,
-                "fork_round": target_branch.fork_round,
-                "status": BranchStatus.ACTIVE.value,
-                "probability": target_branch.probability,
-            }]
+            all_branches = [
+                {
+                    "id": active_branch_id,
+                    "parent_branch_id": target_branch.parent_branch_id,
+                    "fork_round": target_branch.fork_round,
+                    "status": BranchStatus.ACTIVE.value,
+                    "probability": target_branch.probability,
+                }
+            ]
 
         # Restore only the active resume branch from its parent checkpoint.
         if _resume_replay_kind == "resume" and resume_parent_branch_id:
             from app.services.replay import load_checkpoint_agent_states
+
             resume_checkpoint_agents = load_checkpoint_agent_states(
-                scenario_id, resume_parent_branch_id, start_round - 1,
+                scenario_id,
+                resume_parent_branch_id,
+                start_round - 1,
             )
 
     branch_agent_states: dict[str, list[dict[str, Any]]] = {
@@ -3107,8 +3123,11 @@ async def _run_simulation_impl(
             # checkpoint after that round is stale for the new worldline.
             if _resume_replay_kind == "resume":
                 from app.services.replay import load_checkpoint_blackboard
+
                 cp_bb = load_checkpoint_blackboard(
-                    scenario_id, resume_parent_branch_id, start_round - 1,
+                    scenario_id,
+                    resume_parent_branch_id,
+                    start_round - 1,
                 )
                 if cp_bb:
                     bb_init = Blackboard.from_snapshot(cp_bb)
@@ -3138,14 +3157,16 @@ async def _run_simulation_impl(
         active_branches = [b for b in all_branches if b["status"] == "ACTIVE"]
         if not active_branches:
             break
-        await push({
-            "type": "round_progress",
-            "data": {
-                "round": round_num,
-                "phase": "round_start",
-                "active_branches": len(active_branches),
-            },
-        })
+        await push(
+            {
+                "type": "round_progress",
+                "data": {
+                    "round": round_num,
+                    "phase": "round_start",
+                    "active_branches": len(active_branches),
+                },
+            }
+        )
 
         detector_budget_ranks: dict[str, int] = {}
         detector_budget_eligible_ids: set[str] | None = None
@@ -3158,8 +3179,7 @@ async def _run_simulation_impl(
                 ),
             )
             detector_budget_ranks = {
-                str(branch["id"]): index + 1
-                for index, branch in enumerate(ranked_active_branches)
+                str(branch["id"]): index + 1 for index, branch in enumerate(ranked_active_branches)
             }
             detector_budget_eligible_ids = {
                 str(branch["id"])
@@ -3221,20 +3241,44 @@ async def _run_simulation_impl(
                             intervention_id = str(intervention_log_id).strip()
                             if intervention_id:
                                 injected_payload["intervention_id"] = intervention_id
-                        await push({
-                            "type": "intervention_injected",
-                            "data": injected_payload,
-                        })
+                        await push(
+                            {
+                                "type": "intervention_injected",
+                                "data": injected_payload,
+                            }
+                        )
 
                         # V2-P2: Broadcast viz:event_anim for butterfly effect
                         if viz_mapper is not None:
                             viz_interv = viz_mapper.map_intervention(
-                                ws_display_text, params={"round": round_num, "branch_id": current_branch_id}  # noqa: E501
+                                ws_display_text,
+                                params={"round": round_num, "branch_id": current_branch_id},  # noqa: E501
                             )
                             await viz_push(viz_interv)
 
                 # 1) Gather agent messages — each pushed to frontend immediately
                 round_id = _create_round(engine, current_branch_id, round_num)
+                if round_num == 1:
+                    from app.services.initial_social_feed import (
+                        materialize_initial_social_feed,
+                    )
+
+                    _check_cancelled(scenario_id)
+                    _ensure_bootstrap_runtime_lease(runtime_lease, scenario_id)
+                    with Session(engine) as bootstrap_session:
+                        materialize_initial_social_feed(
+                            bootstrap_session,
+                            scenario_id=scenario_id,
+                            branch_id=current_branch_id,
+                            round_id=round_id,
+                        )
+                        _check_cancelled(scenario_id)
+                        _ensure_bootstrap_runtime_lease(
+                            runtime_lease, scenario_id, session=bootstrap_session
+                        )
+                        bootstrap_session.commit()
+                    _check_cancelled(scenario_id)
+                    _ensure_bootstrap_runtime_lease(runtime_lease, scenario_id)
                 bb = blackboards.get(current_branch_id)
                 if bb is None:
                     bb = Blackboard()  # ephemeral — discarded each round in RAW mode
@@ -3243,10 +3287,17 @@ async def _run_simulation_impl(
                     # P3-A: hierarchical mode — only Leaders call LLM
                     _check_cancelled(scenario_id)
                     messages = await _gather_hierarchical_messages(
-                        engine, scenario_id, current_branch_id, round_id, round_num,
-                        current_leaders, current_workers, agent_to_group,
+                        engine,
+                        scenario_id,
+                        current_branch_id,
+                        round_id,
+                        round_num,
+                        current_leaders,
+                        current_workers,
+                        agent_to_group,
                         effective_group_leaders,
-                        setting_bg, key_variable,
+                        setting_bg,
+                        key_variable,
                         intervention_text=intervention_text,
                         intervention_metadata=intervention_metadata,
                         push=push,
@@ -3259,13 +3310,20 @@ async def _run_simulation_impl(
                         document_reference_context=document_reference_context,
                         scenario_user_id=scenario_user_id,
                         native_search_domains=native_search_domains,
+                        runtime_lease=runtime_lease,
                     )
                     _check_cancelled(scenario_id)
                 else:
                     _check_cancelled(scenario_id)
                     messages = await _gather_agent_messages(
-                        engine, scenario_id, current_branch_id, round_id, round_num,
-                        current_agents, setting_bg, key_variable,
+                        engine,
+                        scenario_id,
+                        current_branch_id,
+                        round_id,
+                        round_num,
+                        current_agents,
+                        setting_bg,
+                        key_variable,
                         intervention_text=intervention_text,
                         intervention_metadata=intervention_metadata,
                         push=push,
@@ -3278,6 +3336,7 @@ async def _run_simulation_impl(
                         document_reference_context=document_reference_context,
                         scenario_user_id=scenario_user_id,
                         native_search_domains=native_search_domains,
+                        runtime_lease=runtime_lease,
                     )
                     _check_cancelled(scenario_id)
 
@@ -3303,11 +3362,16 @@ async def _run_simulation_impl(
                 summary_text = f"第{round_num}轮完成, {len(messages)}条发言"
             else:
                 summary_text = f"Round {round_num} complete, {len(messages)} messages"
-            await push({
-                "type": "round_summary",
-                "data": {"branch_id": current_branch_id, "round": round_num,
-                         "summary": summary_text},
-            })
+            await push(
+                {
+                    "type": "round_summary",
+                    "data": {
+                        "branch_id": current_branch_id,
+                        "round": round_num,
+                        "summary": summary_text,
+                    },
+                }
+            )
 
             # Phase 4: Persist intervention effect receipt if an intervention ran this round.
             if intervention_text is not None:
@@ -3321,9 +3385,7 @@ async def _run_simulation_impl(
                             else intervention_text
                         )
                     effect_summary = _build_intervention_effect_summary(
-                        intervention_log_id=(
-                            str(effect_log_id) if effect_log_id else None
-                        ),
+                        intervention_log_id=(str(effect_log_id) if effect_log_id else None),
                         card_id=(intervention_metadata or {}).get("card_id"),
                         round_number=round_num,
                         user_input=str(raw_user_input),
@@ -3368,28 +3430,35 @@ async def _run_simulation_impl(
                     _check_cancelled(scenario_id)
                     _faction_result = await asyncio.to_thread(
                         _factions_process,
-                        scenario_id, current_branch_id, round_num, messages,
+                        scenario_id,
+                        current_branch_id,
+                        round_num,
+                        messages,
                     )
                     _check_cancelled(scenario_id)
                     if _faction_result:
                         if _faction_result.get("factions"):
-                            await push({
-                                "type": "viz:faction_cluster",
-                                "data": {
-                                    "factions": _faction_result["factions"],
-                                    "round": round_num,
-                                    "branch_id": current_branch_id,
-                                },
-                            })
+                            await push(
+                                {
+                                    "type": "viz:faction_cluster",
+                                    "data": {
+                                        "factions": _faction_result["factions"],
+                                        "round": round_num,
+                                        "branch_id": current_branch_id,
+                                    },
+                                }
+                            )
                         if _faction_result.get("events"):
-                            await push({
-                                "type": "viz:faction_event",
-                                "data": {
-                                    "events": _faction_result["events"],
-                                    "round": round_num,
-                                    "branch_id": current_branch_id,
-                                },
-                            })
+                            await push(
+                                {
+                                    "type": "viz:faction_event",
+                                    "data": {
+                                        "events": _faction_result["events"],
+                                        "round": round_num,
+                                        "branch_id": current_branch_id,
+                                    },
+                                }
+                            )
                 except SimulationCancelled:
                     # H5 fix: cancel must not be swallowed by the non-blocking guard.
                     raise
@@ -3406,7 +3475,11 @@ async def _run_simulation_impl(
                         bb_snapshot = _cp_bb.export_snapshot()
                     await asyncio.to_thread(
                         _checkpoint_write,
-                        scenario_id, current_branch_id, round_num, current_agents, bb_snapshot,
+                        scenario_id,
+                        current_branch_id,
+                        round_num,
+                        current_agents,
+                        bb_snapshot,
                     )
                     _check_cancelled(scenario_id)
                 except SimulationCancelled:
@@ -3426,7 +3499,9 @@ async def _run_simulation_impl(
                     last_card_round = round_num
                     card_viz = get_card_viz_event(triggered_card)
                     await viz_push(card_viz)
-                    logger.info("V2 Card event triggered: %s at round %d", triggered_card, round_num)  # noqa: E501
+                    logger.info(
+                        "V2 Card event triggered: %s at round %d", triggered_card, round_num
+                    )  # noqa: E501
 
             # 3) Compress memory every N rounds
             compress_interval = _effective_compress_interval(sim_rounds)
@@ -3443,7 +3518,8 @@ async def _run_simulation_impl(
                 )
 
             # 4) Detect forking (skip on last round — children would have no messages)
-            diverge_signals = [m["diverge"] for m in messages if m.get("diverge")]
+            diverge_messages = [m for m in messages if m.get("diverge")]
+            diverge_signals = [m["diverge"] for m in diverge_messages]
             active_count = len([b for b in all_branches if b["status"] == "ACTIVE"])
             if diverge_signals:
                 detector_temperature = (llm_overrides or {}).get("temperature")
@@ -3459,7 +3535,9 @@ async def _run_simulation_impl(
                     "fork_detector_active_branch_limit": fork_detector_active_branch_limit,
                     "detector_branch_rank": detector_budget_ranks.get(current_branch_id),
                     "detector_branch_budget_eligible": (
-                        True if detector_budget_eligible_ids is None else current_branch_id in detector_budget_eligible_ids  # noqa: E501
+                        True
+                        if detector_budget_eligible_ids is None
+                        else current_branch_id in detector_budget_eligible_ids  # noqa: E501
                     ),
                     "sim_rounds": sim_rounds,
                     "sensitivity": sensitivity,
@@ -3515,7 +3593,8 @@ async def _run_simulation_impl(
                         new_branch_infos = []
                         for fb in fork_result.get("branches", []):
                             new_id = _create_branch(
-                                engine, scenario_id,
+                                engine,
+                                scenario_id,
                                 parent_branch_id=current_branch_id,
                                 fork_round=round_num,
                                 fork_reason=fork_result["reason"],
@@ -3523,25 +3602,29 @@ async def _run_simulation_impl(
                                 description=fb.get("description", ""),
                                 probability=fb["probability"],
                             )
-                            all_branches.append({
-                                "id": new_id,
-                                "parent_branch_id": current_branch_id,
-                                "fork_round": round_num,
-                                "status": "ACTIVE",
-                                "probability": fb["probability"],
-                            })
+                            all_branches.append(
+                                {
+                                    "id": new_id,
+                                    "parent_branch_id": current_branch_id,
+                                    "fork_round": round_num,
+                                    "status": "ACTIVE",
+                                    "probability": fb["probability"],
+                                }
+                            )
                             # Fork blackboard for the new branch (only in blackboard mode)
                             if current_branch_id in blackboards:
                                 blackboards[new_id] = blackboards[current_branch_id].fork()
                             branch_agent_states[new_id] = _clone_agent_states(current_agents)
                             branch_emotion_states[new_id] = dict(current_emotion_state)
-                            new_branch_infos.append({
-                                "id": new_id,
-                                "title": fb["title"],
-                                "description": fb.get("description", ""),
-                                "fork_round": round_num,
-                                "probability": fb["probability"],
-                            })
+                            new_branch_infos.append(
+                                {
+                                    "id": new_id,
+                                    "title": fb["title"],
+                                    "description": fb.get("description", ""),
+                                    "fork_round": round_num,
+                                    "probability": fb["probability"],
+                                }
+                            )
 
                         fork_debug_entry["decision"] = "fork_created"
                         fork_debug_entry["created_branch_count"] = len(new_branch_infos)
@@ -3553,14 +3636,16 @@ async def _run_simulation_impl(
                         ]
                         _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
 
-                        await push({
-                            "type": "branch_fork",
-                            "data": {
-                                "parent": current_branch_id,
-                                "children": new_branch_infos,
-                                "reason": fork_result["reason"],
+                        await push(
+                            {
+                                "type": "branch_fork",
+                                "data": {
+                                    "parent": current_branch_id,
+                                    "children": new_branch_infos,
+                                    "reason": fork_result["reason"],
+                                },
                             }
-                        })
+                        )
 
                         # Phase 3 F2: Record fork in causal graph
                         if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
@@ -3575,6 +3660,11 @@ async def _run_simulation_impl(
                                         "branch_id": current_branch_id,
                                         "reason": fork_result.get("reason", ""),
                                         "children": [b["id"] for b in new_branch_infos],
+                                        "trigger_message_ids": [
+                                            message["id"]
+                                            for message in diverge_messages
+                                            if message.get("id")
+                                        ],
                                     },
                                     language=detected_language,
                                 )
@@ -3599,13 +3689,15 @@ async def _run_simulation_impl(
                         # participates in further rounds or fork detection.
                         branch_info["status"] = "COMPLETED"
                         _update_branch_status(engine, current_branch_id, BranchStatus.COMPLETED)
-                        await push({
-                            "type": "branch_update",
-                            "data": {
-                                "branch_id": current_branch_id,
-                                "status": "COMPLETED",
-                            },
-                        })
+                        await push(
+                            {
+                                "type": "branch_update",
+                                "data": {
+                                    "branch_id": current_branch_id,
+                                    "status": "COMPLETED",
+                                },
+                            }
+                        )
                     else:
                         fork_debug_entry["decision"] = "no_fork"
                         _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
@@ -3618,10 +3710,12 @@ async def _run_simulation_impl(
             if b["status"] == "ACTIVE" and b["probability"] < settings.BRANCH_PRUNE_THRESHOLD:
                 b["status"] = "PRUNED"
                 _update_branch_status(engine, b["id"], BranchStatus.PRUNED)
-                await push({
-                    "type": "branch_prune",
-                    "data": {"branch_id": b["id"], "reason": "概率过低"},
-                })
+                await push(
+                    {
+                        "type": "branch_prune",
+                        "data": {"branch_id": b["id"], "reason": "概率过低"},
+                    }
+                )
 
         # 7) Re-normalize survivors after pruning so active branches still sum to 1.0.
         _apply_normalized_active_branch_probabilities(engine, scenario_id, all_branches)
@@ -3683,25 +3777,29 @@ async def _run_simulation_impl(
                     narration,
                     language=detected_language,
                 )
-                await push({
-                    "type": "narration",
-                    "data": {
-                        "branch_id": b["id"],
+                await push(
+                    {
+                        "type": "narration",
+                        "data": {
+                            "branch_id": b["id"],
+                            "title": narration.get("title", ""),
+                            "story": narration.get("story", ""),
+                            "insight": narration.get("insight", ""),
+                        },
+                    }
+                )
+                narrated_branch_payloads.append(
+                    {
+                        "id": b["id"],
+                        "parent_branch_id": b.get("parent_branch_id"),
+                        "status": BranchStatus.COMPLETED.value,
+                        "fork_round": b.get("fork_round"),
+                        "probability": b.get("probability", 0),
                         "title": narration.get("title", ""),
                         "story": narration.get("story", ""),
                         "insight": narration.get("insight", ""),
-                    },
-                })
-                narrated_branch_payloads.append({
-                    "id": b["id"],
-                    "parent_branch_id": b.get("parent_branch_id"),
-                    "status": BranchStatus.COMPLETED.value,
-                    "fork_round": b.get("fork_round"),
-                    "probability": b.get("probability", 0),
-                    "title": narration.get("title", ""),
-                    "story": narration.get("story", ""),
-                    "insight": narration.get("insight", ""),
-                })
+                    }
+                )
 
     await _rewrite_branch_titles_after_narration(
         engine,
@@ -3735,9 +3833,7 @@ async def _run_simulation_impl(
         try:
             chosen_report_branch = _pick_theater_ending_payload(final_branch_payloads)
             report_branch_id = (
-                str(chosen_report_branch.get("id") or "")
-                if chosen_report_branch
-                else ""
+                str(chosen_report_branch.get("id") or "") if chosen_report_branch else ""
             )
             if report_branch_id:
                 report_override_keys = {
@@ -3825,13 +3921,16 @@ async def _run_simulation_impl(
     # Phase 3 F1: Record growth events + identity memories at scenario end
     # Runs in thread pool to avoid blocking the async event loop (sync DB + ChromaDB I/O).
     if scenario_finished and settings.FEATURE_AGENT_IDENTITY:
+
         def _run_identity_lifecycle() -> list[tuple[str, str]]:
             """Returns list of (user_id, identity_id) pairs that may need compaction."""
             from app.services.agent_identity import record_growth_event
             from app.services.vector_store import (
                 check_identity_compaction_needed,
+                identity_memory_ref,
                 store_identity_memory,
             )
+
             _compaction_worklist: list[tuple[str, str]] = []
             with Session(engine) as _id_sess:
                 _sc = _id_sess.get(Scenario, scenario_id)
@@ -3845,56 +3944,139 @@ async def _run_simulation_impl(
                         Agent.agent_identity_id.isnot(None),  # type: ignore[union-attr]
                     )
                 ).all()
-                # Pick best branch for summary context
-                _best_branch = max(
-                    narrated_branch_payloads,
-                    key=lambda b: b.get("probability", 0),
-                    default=None,
-                ) if narrated_branch_payloads else None
-                _branch_summary = (
-                    _best_branch.get("story", "") or _best_branch.get("insight", "")
-                    if _best_branch else "Scenario completed."
-                )
-                _best_branch_id = _best_branch["id"] if _best_branch else ""
+                _narrated_by_id = {
+                    str(payload.get("id") or ""): payload
+                    for payload in narrated_branch_payloads
+                    if str(payload.get("id") or "").strip()
+                }
                 _failed = 0
                 for _ag in _id_agents:
                     try:
-                        # Growth event: structured record (200 char summary)
-                        record_growth_event(
-                            identity_id=_ag.agent_identity_id,
-                            scenario_id=scenario_id,
-                            branch_id=_best_branch_id,
-                            round_number=sim_rounds,
-                            event_type="scenario_complete",
-                            summary=f"{_ag.name} ({_ag.role}): {_branch_summary[:200]}",
+                        _check_cancelled(scenario_id)
+                        # Identity memory is grounded only in this Agent's own
+                        # durable messages. Never fan out a best-branch story to
+                        # identities that did not participate in that branch.
+                        _message_rows = list(
+                            _id_sess.exec(
+                                select(AgentMessage, Round.branch_id, Round.round_number)
+                                .join(Round, AgentMessage.round_id == Round.id)
+                                .where(AgentMessage.agent_id == _ag.id)
+                                .order_by(Round.round_number.asc(), AgentMessage.id.asc())
+                            ).all()
                         )
-                        # Identity memory: semantic/vector record (300 char for future prompts)
+                        _by_branch: dict[str, list[tuple[AgentMessage, int]]] = {}
+                        for _message, _message_branch_id, _message_round in _message_rows:
+                            if _message_branch_id in _narrated_by_id:
+                                _by_branch.setdefault(_message_branch_id, []).append(
+                                    (_message, _message_round)
+                                )
+                        if not _by_branch:
+                            continue
+                        _memory_branch_id = min(
+                            _by_branch,
+                            key=lambda candidate_id: (
+                                -float(_narrated_by_id[candidate_id].get("probability", 0) or 0),
+                                candidate_id,
+                            ),
+                        )
+                        _own_messages = _by_branch[_memory_branch_id]
+                        _latest_message, _latest_round = _own_messages[-1]
+                        _source_message_ids = [message.id for message, _round in _own_messages[-3:]]
+                        _branch_payload = _narrated_by_id[_memory_branch_id]
+                        _outcome = str(
+                            _branch_payload.get("story")
+                            or _branch_payload.get("insight")
+                            or _branch_payload.get("title")
+                            or "Scenario completed."
+                        ).strip()[:300]
+                        _observation = str(_latest_message.content or "").strip()[:300]
+                        if not _observation:
+                            continue
+                        _reflection = (
+                            f"{_ag.name} ({_ag.role}) said: {_observation} "
+                            f"Observed simulated outcome: {_outcome}"
+                        )[:600]
+                        _memory_idempotency_key = (
+                            f"agent_reflection:{_memory_branch_id}:"
+                            f"{_latest_round}:{':'.join(_source_message_ids)}"
+                        )
+                        _memory_ref = (
+                            identity_memory_ref(
+                                _sc_user_id,
+                                _ag.agent_identity_id,
+                                scenario_id,
+                                _memory_idempotency_key,
+                            )
+                            if _sc_user_id
+                            else ""
+                        )
+                        _provenance = {
+                            "version": 1,
+                            "memory_kind": "reflection",
+                            "action_type": "utterance",
+                            "observation": _observation,
+                            "source_message_ids": _source_message_ids,
+                            "source_event_ids": [],
+                            "confidence_tier": "high",
+                            "provenance_kind": "durable_agent_message",
+                            "outcome": _outcome,
+                            "write_reason": "scenario_completed_with_agent_participation",
+                            "memory_ref": "",
+                        }
                         if _sc_user_id:
-                            store_identity_memory(
+                            _memory_written = store_identity_memory(
                                 user_id=_sc_user_id,
                                 identity_id=_ag.agent_identity_id,
                                 scenario_id=scenario_id,
-                                summary=f"{_ag.name} ({_ag.role}): {_branch_summary[:300]}",
+                                summary=_reflection,
+                                metadata={
+                                    "branch_id": _memory_branch_id,
+                                    "round": _latest_round,
+                                    **_provenance,
+                                    "memory_ref": _memory_ref,
+                                },
+                                idempotency_key=_memory_idempotency_key,
                             )
+                            if _memory_written:
+                                _provenance["memory_ref"] = _memory_ref
+                            else:
+                                _provenance["memory_write_status"] = "unavailable"
+                        record_growth_event(
+                            identity_id=_ag.agent_identity_id,
+                            scenario_id=scenario_id,
+                            branch_id=_memory_branch_id,
+                            round_number=_latest_round,
+                            event_type="agent_reflection",
+                            summary=_reflection[:200],
+                            metrics=_provenance,
+                        )
+                        _check_cancelled(scenario_id)
+                        if _sc_user_id and _provenance["memory_ref"]:
                             # Check if compaction is needed after this write
                             if settings.FEATURE_IDENTITY_COMPACTION:
                                 if check_identity_compaction_needed(
-                                    _sc_user_id, _ag.agent_identity_id,
+                                    _sc_user_id,
+                                    _ag.agent_identity_id,
                                 ):
                                     _compaction_worklist.append(
                                         (_sc_user_id, _ag.agent_identity_id)
                                     )
+                    except SimulationCancelled:
+                        raise
                     except Exception:
                         _failed += 1
                         logger.warning(
                             "identity hook failed for agent %s in scenario %s",
-                            _ag.agent_identity_id, scenario_id,
+                            _ag.agent_identity_id,
+                            scenario_id,
                             exc_info=True,
                         )
                 if _failed:
                     logger.warning(
                         "identity lifecycle: %d/%d agents failed for scenario %s",
-                        _failed, len(_id_agents), scenario_id,
+                        _failed,
+                        len(_id_agents),
+                        scenario_id,
                     )
             # Deduplicate worklist before returning
             return list(set(_compaction_worklist))
@@ -3916,6 +4098,7 @@ async def _run_simulation_impl(
 
         # Fire-and-forget compaction with explicit exception logging
         if _compaction_pairs:
+
             async def _run_compaction(
                 pairs: list[tuple[str, str]],
             ) -> None:
@@ -3923,15 +4106,19 @@ async def _run_simulation_impl(
                     execute_compaction_group,
                     prepare_compaction_groups,
                 )
+
                 for uid, iid in pairs:
                     try:
                         groups = await asyncio.to_thread(
-                            prepare_compaction_groups, uid, iid,
+                            prepare_compaction_groups,
+                            uid,
+                            iid,
                         )
                         for grp in groups:
                             try:
                                 summary = await _summarize_identity_compaction_group(
                                     grp.summaries,
+                                    scenario_ids=grp.scenario_ids,
                                     llm_overrides=llm_overrides,
                                 )
                             except Exception as exc:
@@ -3945,13 +4132,20 @@ async def _run_simulation_impl(
                                     _scrub_sensitive_text(str(exc)),
                                 )
                             await asyncio.to_thread(
-                                execute_compaction_group, uid, iid, grp, summary,
+                                execute_compaction_group,
+                                uid,
+                                iid,
+                                grp,
+                                summary,
                             )
                     except Exception:
                         logger.warning(
                             "compaction failed for %s/%s (non-blocking)",
-                            uid, iid, exc_info=True,
+                            uid,
+                            iid,
+                            exc_info=True,
                         )
+
             from app.api.helpers import schedule_background_task
 
             schedule_background_task(_run_compaction(_compaction_pairs))
@@ -4019,7 +4213,9 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
             lines.append(f"分叉原因: {branch.fork_reason}")
         if parent:
             lines.append(f"来源世界线: {parent.title or parent.id}")
-        lines.append("本轮发言要回应这条世界线独有的标题、转折和风险，不要把其它世界线的说法直接搬过来。")
+        lines.append(
+            "本轮发言要回应这条世界线独有的标题、转折和风险，不要把其它世界线的说法直接搬过来。"
+        )
         return "\n".join(lines)
 
     lines = [
@@ -4119,8 +4315,16 @@ def _format_document_reference_context(
 
 
 async def _gather_agent_messages(
-    engine, scenario_id, branch_id, round_id, round_num, agents, setting_bg, topic,
-    *, intervention_text: str | None = None,
+    engine,
+    scenario_id,
+    branch_id,
+    round_id,
+    round_num,
+    agents,
+    setting_bg,
+    topic,
+    *,
+    intervention_text: str | None = None,
     intervention_metadata: dict[str, Any] | None = None,
     push=None,
     blackboard: Blackboard | None = None,
@@ -4136,6 +4340,7 @@ async def _gather_agent_messages(
     progress_counter: list[int] | None = None,
     progress_lock: asyncio.Lock | None = None,
     relationship_agents: list[dict[str, Any]] | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
 ) -> list[dict]:
     """Gather messages from all agents for this round.
 
@@ -4172,6 +4377,60 @@ async def _gather_agent_messages(
         logger.debug("Failed to load scenario question for agent turn prompt", exc_info=True)
         scenario_question = ""
     effective_topic = str(topic or scenario_question or "").strip()
+    from app.services.social_world import (
+        reduce_social_world_state,
+        render_social_world_context,
+    )
+
+    # Every turn in this batch sees the same prior-round replay state. Building
+    # it before concurrent tasks prevents scheduler order from leaking another
+    # agent's same-round action into Pass-1.
+    social_cutoff_round = max(0, round_num - 1)
+    agent_ids = [
+        str(agent.get("id") or "")
+        for agent in agents
+        if str(agent.get("id") or "").strip()
+    ]
+    try:
+        with Session(engine) as session:
+            social_world_state = reduce_social_world_state(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                cutoff_round=social_cutoff_round,
+            )
+        social_world_contexts = {
+            agent_id: render_social_world_context(
+                social_world_state,
+                agent_id=agent_id,
+                language=language,
+            )
+            for agent_id in agent_ids
+        }
+    except Exception:
+        logger.warning(
+            "Social world context unavailable for scenario=%s branch=%s",
+            scenario_id,
+            branch_id,
+            exc_info=True,
+        )
+        unavailable_context = json.dumps(
+            {
+                "as_of_round": social_cutoff_round,
+                "failure_code": "SOCIAL_WORLD_UNAVAILABLE",
+                "status": "unavailable",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        social_world_contexts = dict.fromkeys(agent_ids, unavailable_context)
+    action_target_catalogs = _build_action_target_catalogs(
+        engine,
+        scenario_id,
+        branch_id,
+        agent_ids=agent_ids,
+        cutoff_round=social_cutoff_round,
+    )
 
     empty_shared_briefings = {"(尚无共享信息)", "(no shared briefing yet)"}
     has_usable_shared_briefing = bool(shared_text) and shared_text not in empty_shared_briefings
@@ -4232,15 +4491,17 @@ async def _gather_agent_messages(
         async with turn_progress_lock:
             turn_progress_counter[0] += 1
             completed = turn_progress_counter[0]
-        await push_event({
-            "type": "turn_progress",
-            "data": {
-                "branch_id": branch_id,
-                "round": round_num,
-                "completed": completed,
-                "total": turn_progress_total,
-            },
-        })
+        await push_event(
+            {
+                "type": "turn_progress",
+                "data": {
+                    "branch_id": branch_id,
+                    "round": round_num,
+                    "completed": completed,
+                    "total": turn_progress_total,
+                },
+            }
+        )
 
     async def process_agent(agent: dict):
         async with semaphore:
@@ -4255,11 +4516,7 @@ async def _gather_agent_messages(
                 l2_memories = retrieve_relevant_memories(
                     scenario_id,
                     query,
-                    top_k=(
-                        _BLACKBOARD_OWN_MEMORY_TOP_K
-                        if has_usable_shared_briefing
-                        else 5
-                    ),
+                    top_k=(_BLACKBOARD_OWN_MEMORY_TOP_K if has_usable_shared_briefing else 5),
                     allowed_branch_rounds=allowed_memory_rounds_by_agent.get(
                         agent_id,
                         {branch_id: max(0, round_num - 1)},
@@ -4267,8 +4524,7 @@ async def _gather_agent_messages(
                     agent_id=agent_id,
                     agent_name=agent_name,
                     allow_legacy_name_fallback=(
-                        bool(agent_name)
-                        and memory_agent_name_counts.get(agent_name, 0) == 1
+                        bool(agent_name) and memory_agent_name_counts.get(agent_name, 0) == 1
                     ),
                 )
 
@@ -4276,6 +4532,8 @@ async def _gather_agent_messages(
 
             # Phase 4C: Cross-scenario hint from identity memories
             cross_hint = ""
+            cross_memories: list[dict[str, Any]] = []
+            identity_memory_status = "unavailable"
             if (
                 settings.FEATURE_AGENT_IDENTITY
                 and agent.get("agent_identity_id")
@@ -4286,6 +4544,7 @@ async def _gather_agent_messages(
                     # H5 fix: cancel guard around cross-scenario memory to_thread.
                     _check_cancelled(scenario_id)
                     from app.services.vector_store import retrieve_identity_memories
+
                     cross_memories = await asyncio.to_thread(
                         retrieve_identity_memories,
                         user_id=scenario_user_id,
@@ -4294,16 +4553,16 @@ async def _gather_agent_messages(
                         n_results=3,
                     )
                     _check_cancelled(scenario_id)
+                    identity_memory_status = "verified" if cross_memories else "empty"
                     if cross_memories:
                         cross_hint = "\n".join(
-                            f"- {m.get('summary', '')}"
-                            for m in cross_memories
-                            if m.get("summary")
+                            f"- {m.get('summary', '')}" for m in cross_memories if m.get("summary")
                         )
                 except SimulationCancelled:
                     # H5 fix: cancel must not be swallowed by the non-fatal guard.
                     raise
                 except Exception:
+                    identity_memory_status = "unavailable"
                     logger.debug(
                         "cross-scenario hint retrieval failed for agent %s (non-fatal)",
                         agent.get("name", "?"),
@@ -4330,6 +4589,7 @@ async def _gather_agent_messages(
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
                     relationship_context=relationship_context,
+                    social_world_context=social_world_contexts.get(agent_id, ""),
                 )
             else:
                 # Fallback: format DB messages per-tier (first round or no blackboard)
@@ -4351,6 +4611,7 @@ async def _gather_agent_messages(
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
                     relationship_context=relationship_context,
+                    social_world_context=social_world_contexts.get(agent_id, ""),
                 )
 
             ctx = _append_agent_debate_coherence_guidance(ctx, agent_tier, language)
@@ -4359,18 +4620,21 @@ async def _gather_agent_messages(
             effort = "low" if agent.get("tier") == "CROWD" else "medium"
 
             # Notify frontend: agent starts thinking
-            await push_event({
-                "type": "agent_speak_start",
-                "data": {
-                    "agent": agent["name"],
-                    "agent_id": agent["id"],
-                    "branch": branch_id,
-                    "round": round_num,
-                },
-            })
+            await push_event(
+                {
+                    "type": "agent_speak_start",
+                    "data": {
+                        "agent": agent["name"],
+                        "agent_id": agent["id"],
+                        "branch": branch_id,
+                        "round": round_num,
+                    },
+                }
+            )
 
             raw_text = ""
             clean_raw_text: str | None = None
+            extracted_action: object = None
             turn_failure_code: str | None = None
             metadata_failure_code: str | None = None
             try:
@@ -4417,9 +4681,7 @@ async def _gather_agent_messages(
                         retry=attempt > 0,
                     )
                     turn_temperature = (
-                        base_temperature
-                        if attempt == 0
-                        else min(base_temperature, 0.6)
+                        base_temperature if attempt == 0 else min(base_temperature, 0.6)
                     )
                     _check_cancelled(scenario_id)
                     remaining = _agent_turn_remaining(turn_deadline)
@@ -4466,7 +4728,12 @@ async def _gather_agent_messages(
                 else:
                     # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
                     from app.services.llm_client import format_untrusted_text_block
+
                     _is_chinese = _is_chinese_language(language)
+                    action_target_catalog = action_target_catalogs.get(
+                        agent_id,
+                        '{"agents":[],"actions":[]}',
+                    )
                     raw_text_block = format_untrusted_text_block(
                         "原文" if _is_chinese else "Original text",
                         clean_raw_text,
@@ -4476,18 +4743,36 @@ async def _gather_agent_messages(
                         extract_prompt = (
                             f"从以下角色发言中提取结构化信息。\n\n"
                             f"{raw_text_block}\n\n"
+                            f"可用动作目标（只能逐字复制其中ID；没有合适目标则选IDLE）：\n"
+                            f"{action_target_catalog}\n\n"
                             f"输出严格 JSON：\n"
                             f'{{"content": "原文内容（保留原文，不要改写）", '
                             f'"emotion": "此刻情绪（例如：激动/忧虑/冷静/愤怒/期待/释然/讽刺/无奈/'
                             f"坚定/犹豫/警觉/心寒/振奋/焦躁/沉痛/嘲弄/恳切/疲倦/隐忍/得意/不屑）"
                             f'", '
-                            f'"diverge": "如有明确分歧立场则描述，否则null"}}'
+                            f'"diverge": "如有明确分歧立场则描述，否则null", '
+                            f'"action": {{"type": "POST|COMMENT|REACTION|FOLLOW|MUTE|'
+                            f'SEARCH|TREND|REFRESH|IDLE", '
+                            f'"content": "动作内容或null", "target": '
+                            f'{{"kind": "agent|source|post|action|topic|query|world", '
+                            f'"id": "目标标识"}}或null, '
+                            f'"payload": {{"reaction": "LIKE"}}}}}}\n'
+                            f"当 type=REACTION 时 reaction 只能是 LIKE/LOVE/LAUGH/WOW/SAD/"
+                            f"ANGRY/SUPPORT/OPPOSE；其他动作的 payload 必须是空对象。"
+                            f"严格遵守动作形状：POST/COMMENT/SEARCH 的 content 必须非空；"
+                            f"REACTION/FOLLOW/MUTE/TREND/REFRESH/IDLE 的 content 必须为 null。"
+                            f"COMMENT/REACTION 只能选择目录中的 post/action；FOLLOW/MUTE 只能"
+                            f"选择目录中的其他 agent 或 source；POST/TREND/REFRESH/IDLE 的 "
+                            f"target 必须"
+                            f"为 null。"
                         )
                     else:
                         extract_prompt = (
                             f"Extract structured information from the following character "
                             f"speech.\n\n"
                             f"{raw_text_block}\n\n"
+                            f"Available action targets (copy only listed IDs verbatim; choose "
+                            f"IDLE when none fits):\n{action_target_catalog}\n\n"
                             f"Output strict JSON:\n"
                             f'{{"content": "original text (preserve as-is, do not rewrite)", '
                             f'"emotion": "current emotion (for example: excited / worried / calm / '
@@ -4496,7 +4781,22 @@ async def _gather_agent_messages(
                             f"mocking / earnest / "
                             f'weary / restraining / smug / dismissive)", '
                             f'"diverge": "if there is a clear divergence stance, describe it; '
-                            f'otherwise null"}}'
+                            f'otherwise null", "action": {{"type": '
+                            f'"POST|COMMENT|REACTION|FOLLOW|MUTE|SEARCH|TREND|REFRESH|IDLE", '
+                            f'"content": "action content or null", "target": '
+                            f'{{"kind": "agent|source|post|action|topic|query|world", '
+                            f'"id": "target identifier"}} or null, '
+                            f'"payload": {{"reaction": "LIKE"}}}}}}\n'
+                            f"For type=REACTION, reaction must be one of LIKE/LOVE/LAUGH/WOW/"
+                            f"SAD/ANGRY/SUPPORT/OPPOSE. For all other actions payload must be "
+                            f"empty."
+                            f" Enforce action shapes exactly: POST/COMMENT/SEARCH require "
+                            f"non-empty content; REACTION/FOLLOW/MUTE/TREND/REFRESH/IDLE require "
+                            f"null content. COMMENT/REACTION may only target a listed post/action; "
+                            f"FOLLOW/MUTE may "
+                            f"only target another listed agent or source; "
+                            f"POST/TREND/REFRESH/IDLE require a "
+                            f"null target."
                         )
                     _check_cancelled(scenario_id)
                     remaining = _agent_turn_remaining(turn_deadline)
@@ -4526,8 +4826,14 @@ async def _gather_agent_messages(
                     # model's JSON paraphrase replace the validated Pass-1
                     # speech that users saw and that replay evidence records.
                     content = clean_raw_text
-                    emotion = result.get("emotion", "neutral")
+                    emotion = str(result.get("emotion") or "").strip()
                     diverge = result.get("diverge")
+                    extracted_action = result.get("action")
+                    if not emotion:
+                        # Pass-1 remains durable truth, but absent Pass-2
+                        # metadata must not be promoted to a neutral reading.
+                        metadata_failure_code = "LLM_INVALID_OUTPUT"
+                        diverge = None
                     if diverge and diverge.lower() in ("null", "none", ""):
                         diverge = None
             except SimulationCancelled:
@@ -4554,6 +4860,7 @@ async def _gather_agent_messages(
                     content = clean_raw_text
                     emotion = ""
                 diverge = None
+                extracted_action = None
 
             emotion = str(emotion or "").strip()
             previous_emotion = str(
@@ -4570,6 +4877,36 @@ async def _gather_agent_messages(
                 "content": content,
                 "emotion": emotion,
                 "diverge": diverge,
+                "_action": extracted_action,
+                "_context_receipt": {
+                    "recent_messages_status": (
+                        "unavailable"
+                        if has_usable_shared_briefing
+                        else "verified"
+                        if recent_msgs
+                        else "empty"
+                    ),
+                    "recent_message_ids": (
+                        []
+                        if has_usable_shared_briefing
+                        else [
+                            str(item.get("message_id") or "")
+                            for item in (recent_msgs or [])
+                            if str(item.get("message_id") or "").strip()
+                        ][:12]
+                    ),
+                    "identity_memory_status": identity_memory_status,
+                    "identity_memory_refs": [
+                        str(item.get("memory_ref") or "")
+                        for item in cross_memories
+                        if str(item.get("memory_ref") or "").strip()
+                    ][:3],
+                    "identity_memory_source_scenario_ids": [
+                        str(item.get("scenario_id") or "")
+                        for item in cross_memories
+                        if str(item.get("scenario_id") or "").strip()
+                    ][:3],
+                },
             }
             if turn_failure_code:
                 msg["_turn_failure_code"] = turn_failure_code
@@ -4580,25 +4917,49 @@ async def _gather_agent_messages(
             if turn_failure_code:
                 return msg
 
-            saved_message_ids = _save_messages(
-                engine,
-                [
-                    {
-                        "round_id": round_id,
-                        "agent_id": msg["agent_id"],
-                        "content": msg["content"],
-                        "emotion": (
-                            encode_metadata_unavailable_emotion(metadata_failure_code)
-                            if metadata_failure_code
-                            else msg["emotion"]
-                        ),
-                        "diverge": msg.get("diverge"),
-                    }
-                ],
-            ) or []
+            _check_cancelled(scenario_id)
+            saved_message_ids = (
+                _save_messages(
+                    engine,
+                    [
+                        {
+                            "round_id": round_id,
+                            "agent_id": msg["agent_id"],
+                            "content": msg["content"],
+                            "emotion": (
+                                encode_metadata_unavailable_emotion(metadata_failure_code)
+                                if metadata_failure_code
+                                else msg["emotion"]
+                            ),
+                            "diverge": msg.get("diverge"),
+                            "scenario_id": scenario_id,
+                            "branch_id": branch_id,
+                            "round_number": round_num,
+                            "action": (
+                                {
+                                    "action_type": "IDLE",
+                                    "status": "unavailable",
+                                    "failure_code": metadata_failure_code,
+                                }
+                                if metadata_failure_code
+                                else msg.get("_action")
+                            ),
+                            "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
+                        }
+                    ],
+                    **({"runtime_lease": runtime_lease} if runtime_lease else {}),
+                )
+                or []
+            )
             if saved_message_ids:
                 msg["id"] = saved_message_ids[0]
             _check_cancelled(scenario_id)
+            action_receipt = _get_action_receipt(
+                engine, scenario_id, f"turn:{round_id}:{msg['agent_id']}"
+            )
+            if action_receipt:
+                await push_event({"type": "action_committed", "data": action_receipt})
+                _check_cancelled(scenario_id)
 
             # Push final parsed message only after it is durable.
             event_data = {
@@ -4630,9 +4991,7 @@ async def _gather_agent_messages(
                 await push_event(viz_bubble)
 
                 # V2-P2: Broadcast viz:agent_move (stance-based positioning)
-                agent_idx = next(
-                    (i for i, a in enumerate(agents) if a["id"] == agent["id"]), 0
-                )
+                agent_idx = next((i for i, a in enumerate(agents) if a["id"] == agent["id"]), 0)
                 viz_move = viz_mapper.map_stance_move(
                     agent_id=agent["id"],
                     stance_value=agent_stance,
@@ -4665,9 +5024,7 @@ async def _gather_agent_messages(
     _check_cancelled(scenario_id)
 
     fatal_turn_failures = [
-        msg
-        for msg in results
-        if str(msg.get("_turn_failure_code") or "").strip()
+        msg for msg in results if str(msg.get("_turn_failure_code") or "").strip()
     ]
     if fatal_turn_failures:
         code_counts: dict[str, int] = {}
@@ -4676,18 +5033,20 @@ async def _gather_agent_messages(
             code_counts[code] = code_counts.get(code, 0) + 1
         code = max(code_counts.items(), key=lambda item: item[1])[0]
         failed_agents = [str(msg.get("agent_name") or "") for msg in fatal_turn_failures]
-        await push_event({
-            "type": "simulation_degraded",
-            "data": {
-                "branch_id": branch_id,
-                "round": round_num,
-                "stage": "generation",
-                "code": code,
-                "failed_agents": failed_agents,
-                "failed_count": len(fatal_turn_failures),
-                "total": len(results),
-            },
-        })
+        await push_event(
+            {
+                "type": "simulation_degraded",
+                "data": {
+                    "branch_id": branch_id,
+                    "round": round_num,
+                    "stage": "generation",
+                    "code": code,
+                    "failed_agents": failed_agents,
+                    "failed_count": len(fatal_turn_failures),
+                    "total": len(results),
+                },
+            }
+        )
         # Batch-level degradation is reserved for provider-wide failure: every
         # agent turn in this round ended with a fatal provider/empty-output code.
         # A mixed batch has durable successes, so failed agents keep the normal
@@ -4696,37 +5055,59 @@ async def _gather_agent_messages(
             raise AgentTurnBatchFailure(code=code, failed_agents=failed_agents)
 
         for msg in fatal_turn_failures:
-            saved_message_ids = _save_messages(
-                engine,
-                [
-                    {
-                        "round_id": round_id,
-                        "agent_id": msg["agent_id"],
-                        "content": msg["content"],
-                        "emotion": msg["emotion"],
-                        "diverge": msg.get("diverge"),
-                    }
-                ],
-            ) or []
+            saved_message_ids = (
+                _save_messages(
+                    engine,
+                    [
+                        {
+                            "round_id": round_id,
+                            "agent_id": msg["agent_id"],
+                            "content": msg["content"],
+                            "emotion": msg["emotion"],
+                            "diverge": msg.get("diverge"),
+                            "scenario_id": scenario_id,
+                            "branch_id": branch_id,
+                            "round_number": round_num,
+                            "action": {
+                                "action_type": "IDLE",
+                                "status": "unavailable",
+                                "failure_code": str(
+                                    msg.get("_turn_failure_code") or "TURN_UNAVAILABLE"
+                                ),
+                            },
+                            "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
+                        }
+                    ],
+                    **({"runtime_lease": runtime_lease} if runtime_lease else {}),
+                )
+                or []
+            )
             if saved_message_ids:
                 msg["id"] = saved_message_ids[0]
-            await push_event({
-                "type": "agent_speak",
-                "data": {
-                    "agent": msg["agent_name"],
-                    "agent_id": msg["agent_id"],
-                    "message": msg["content"],
-                    "emotion": msg["emotion"],
-                    "branch": branch_id,
-                    "round": round_num,
-                },
-            })
+            _check_cancelled(scenario_id)
+            action_receipt = _get_action_receipt(
+                engine, scenario_id, f"turn:{round_id}:{msg['agent_id']}"
+            )
+            if action_receipt:
+                await push_event({"type": "action_committed", "data": action_receipt})
+                _check_cancelled(scenario_id)
+            await push_event(
+                {
+                    "type": "agent_speak",
+                    "data": {
+                        "agent": msg["agent_name"],
+                        "agent_id": msg["agent_id"],
+                        "message": msg["content"],
+                        "emotion": msg["emotion"],
+                        "branch": branch_id,
+                        "round": round_num,
+                    },
+                }
+            )
             await push_turn_progress()
 
     metadata_turn_failures = [
-        msg
-        for msg in results
-        if str(msg.get("_metadata_failure_code") or "").strip()
+        msg for msg in results if str(msg.get("_metadata_failure_code") or "").strip()
     ]
     if metadata_turn_failures:
         code_counts: dict[str, int] = {}
@@ -4734,22 +5115,23 @@ async def _gather_agent_messages(
             code = str(msg.get("_metadata_failure_code") or "LLM_FAILED")
             code_counts[code] = code_counts.get(code, 0) + 1
         code = max(code_counts.items(), key=lambda item: item[1])[0]
-        await push_event({
-            "type": "simulation_degraded",
-            "data": {
-                "branch_id": branch_id,
-                "round": round_num,
-                "stage": "metadata",
-                "partial": True,
-                "code": code,
-                "failed_agents": [
-                    str(msg.get("agent_name") or "")
-                    for msg in metadata_turn_failures
-                ],
-                "failed_count": len(metadata_turn_failures),
-                "total": len(results),
-            },
-        })
+        await push_event(
+            {
+                "type": "simulation_degraded",
+                "data": {
+                    "branch_id": branch_id,
+                    "round": round_num,
+                    "stage": "metadata",
+                    "partial": True,
+                    "code": code,
+                    "failed_agents": [
+                        str(msg.get("agent_name") or "") for msg in metadata_turn_failures
+                    ],
+                    "failed_count": len(metadata_turn_failures),
+                    "total": len(results),
+                },
+            }
+        )
 
     if blackboard is not None:
         for msg in results:
@@ -4833,11 +5215,7 @@ def _synthesize_worker_response(
     worker_name = worker.get("name", "?")
     is_chinese = _is_chinese_language(language)
     if not fragment:
-        return (
-            f"({worker_name}保持沉默)"
-            if is_chinese
-            else f"({worker_name} stays silent)"
-        )
+        return f"({worker_name}保持沉默)" if is_chinese else f"({worker_name} stays silent)"
     worker_role = worker.get("role", "成员" if is_chinese else "member")
     stance_hint = (worker.get("stance") or "").strip()
     seed = f"{worker_name}:{round_number}"
@@ -4845,9 +5223,7 @@ def _synthesize_worker_response(
     if is_chinese:
         # Stance-aware tail clause; falls back to neutral framing when missing.
         stance_tail = (
-            f"自己更想从「{stance_hint}」的角度补一刀。"
-            if stance_hint
-            else "想再追问一句细节。"
+            f"自己更想从「{stance_hint}」的角度补一刀。" if stance_hint else "想再追问一句细节。"
         )
         templates = [
             f"{worker_name}附和了{leader_name}的观点，补充道：{fragment}",
@@ -4871,10 +5247,19 @@ def _synthesize_worker_response(
 
 
 async def _gather_hierarchical_messages(
-    engine, scenario_id, branch_id, round_id, round_num,
-    leader_agents, worker_agents, agent_to_group, group_leaders,
-    setting_bg, topic,
-    *, intervention_text: str | None = None,
+    engine,
+    scenario_id,
+    branch_id,
+    round_id,
+    round_num,
+    leader_agents,
+    worker_agents,
+    agent_to_group,
+    group_leaders,
+    setting_bg,
+    topic,
+    *,
+    intervention_text: str | None = None,
     intervention_metadata: dict[str, Any] | None = None,
     push=None,
     blackboard: Blackboard | None = None,
@@ -4886,6 +5271,7 @@ async def _gather_hierarchical_messages(
     document_reference_context: str = "",
     scenario_user_id: str = "",
     native_search_domains: list[str] | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
 ) -> list[dict]:
     """P3-A: Hierarchical message gathering.
 
@@ -4910,8 +5296,14 @@ async def _gather_hierarchical_messages(
     # Step 1: Gather Leader messages (with LLM calls)
     _check_cancelled(scenario_id)
     leader_messages = await _gather_agent_messages(
-        engine, scenario_id, branch_id, round_id, round_num,
-        leader_agents, setting_bg, topic,
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        round_num,
+        leader_agents,
+        setting_bg,
+        topic,
         intervention_text=intervention_text,
         intervention_metadata=intervention_metadata,
         push=push,
@@ -4928,6 +5320,7 @@ async def _gather_hierarchical_messages(
         progress_counter=progress_counter,
         progress_lock=progress_lock,
         relationship_agents=[*leader_agents, *worker_agents],
+        runtime_lease=runtime_lease,
     )
     _check_cancelled(scenario_id)
 
@@ -4948,9 +5341,7 @@ async def _gather_hierarchical_messages(
         worker_group = agent_to_group.get(worker["name"], "")
         leader_name = group_leaders.get(worker_group, "")
         leader_msg = leader_msg_map.get(leader_name)
-        metadata_failure_code = (
-            message_metadata_failure_code(leader_msg) if leader_msg else None
-        )
+        metadata_failure_code = message_metadata_failure_code(leader_msg) if leader_msg else None
 
         if leader_msg:
             # Synthesize: persona-aware, sentence-aware, deterministic-but-varied
@@ -4962,15 +5353,11 @@ async def _gather_hierarchical_messages(
                 language=language,
                 round_number=round_num,
             )
-            emotion = (
-                "" if metadata_failure_code else leader_msg.get("emotion", "neutral")
-            )
+            emotion = "" if metadata_failure_code else leader_msg.get("emotion", "neutral")
         else:
             is_chinese = _is_chinese_language(language)
             synth_content = (
-                f"({worker['name']}保持沉默)"
-                if is_chinese
-                else f"({worker['name']} stays silent)"
+                f"({worker['name']}保持沉默)" if is_chinese else f"({worker['name']} stays silent)"
             )
             emotion = "neutral"
 
@@ -4997,25 +5384,36 @@ async def _gather_hierarchical_messages(
     # externally visible. This keeps broadcast and durable replay consistent
     # even when cancellation arrives after the first worker event.
     _check_cancelled(scenario_id)
-    saved_message_ids = _save_messages(
-        engine,
-        [
-            {
-                "round_id": round_id,
-                "agent_id": msg["agent_id"],
-                "content": msg["content"],
-                "emotion": (
-                    encode_metadata_unavailable_emotion(
-                        msg["_metadata_failure_code"]
-                    )
-                    if msg.get("_metadata_failure_code")
-                    else msg["emotion"]
-                ),
-                "diverge": msg.get("diverge"),
-            }
-            for msg in worker_messages
-        ],
-    ) or []
+    saved_message_ids = (
+        _save_messages(
+            engine,
+            [
+                {
+                    "round_id": round_id,
+                    "agent_id": msg["agent_id"],
+                    "content": msg["content"],
+                    "emotion": (
+                        encode_metadata_unavailable_emotion(msg["_metadata_failure_code"])
+                        if msg.get("_metadata_failure_code")
+                        else msg["emotion"]
+                    ),
+                    "diverge": msg.get("diverge"),
+                    "scenario_id": scenario_id,
+                    "branch_id": branch_id,
+                    "round_number": round_num,
+                    "action": {
+                        "action_type": "IDLE",
+                        "status": "unavailable",
+                        "failure_code": "SYNTHESIZED_ACTION_UNAVAILABLE",
+                    },
+                    "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
+                }
+                for msg in worker_messages
+            ],
+            **({"runtime_lease": runtime_lease} if runtime_lease else {}),
+        )
+        or []
+    )
     for msg, message_id in zip(worker_messages, saved_message_ids):
         if message_id:
             msg["id"] = message_id
@@ -5025,6 +5423,13 @@ async def _gather_hierarchical_messages(
     # Push to frontend (but NO agent_speak_start — instant, no "thinking")
     # only after every worker message in this batch is durable.
     for worker, msg in zip(worker_agents, worker_messages):
+        _check_cancelled(scenario_id)
+        action_receipt = _get_action_receipt(
+            engine, scenario_id, f"turn:{round_id}:{msg['agent_id']}"
+        )
+        if action_receipt:
+            await push_event({"type": "action_committed", "data": action_receipt})
+            _check_cancelled(scenario_id)
         metadata_failure_code = message_metadata_failure_code(msg)
         event_data = {
             "agent": worker["name"],
@@ -5037,24 +5442,28 @@ async def _gather_hierarchical_messages(
         }
         if metadata_failure_code:
             event_data.update(public_emotion_metadata(msg))
-        await push_event({
-            "type": "agent_speak",
-            "data": event_data,
-        })
+        await push_event(
+            {
+                "type": "agent_speak",
+                "data": event_data,
+            }
+        )
         _check_cancelled(scenario_id)
         if progress_total > 0:
             async with progress_lock:
                 progress_counter[0] += 1
                 completed = progress_counter[0]
-            await push_event({
-                "type": "turn_progress",
-                "data": {
-                    "branch_id": branch_id,
-                    "round": round_num,
-                    "completed": completed,
-                    "total": progress_total,
-                },
-            })
+            await push_event(
+                {
+                    "type": "turn_progress",
+                    "data": {
+                        "branch_id": branch_id,
+                        "round": round_num,
+                        "completed": completed,
+                        "total": progress_total,
+                    },
+                }
+            )
 
         # V2: Broadcast viz:bubble_show for worker (synthesized) agents
         if viz_mapper is not None:
@@ -5094,7 +5503,9 @@ async def _gather_hierarchical_messages(
 
     logger.info(
         "Hierarchical round %d: %d leader LLM calls, %d worker syntheses",
-        round_num, len(leader_messages), len(worker_agents),
+        round_num,
+        len(leader_messages),
+        len(worker_agents),
     )
 
     return all_messages
@@ -5147,11 +5558,10 @@ async def _detect_fork(
 
     try:
         _overrides = llm_overrides or {}
-        with llm_request_scope(
-            **_llm_scope_kwargs(_overrides, purpose="scenario_fork_detection")
-        ):
+        with llm_request_scope(**_llm_scope_kwargs(_overrides, purpose="scenario_fork_detection")):
             result = await llm_call_json_with_stream_fallback(
-                prompt, reasoning_effort="medium",
+                prompt,
+                reasoning_effort="medium",
                 model=_overrides.get("model"),
                 api_key=_overrides.get("api_key"),
                 base_url=_overrides.get("base_url"),
@@ -5211,12 +5621,14 @@ def _result_branch_summaries(branches: list) -> list[dict[str, object]]:
         except (TypeError, ValueError):
             probability = 0
         story_excerpt = str(branch.get("story") or "").strip()[:1200]
-        summaries.append({
-            "title": str(branch.get("title") or "").strip(),
-            "insight": str(branch.get("insight") or "").strip(),
-            "probability": probability,
-            "story_excerpt": story_excerpt,
-        })
+        summaries.append(
+            {
+                "title": str(branch.get("title") or "").strip(),
+                "insight": str(branch.get("insight") or "").strip(),
+                "probability": probability,
+                "story_excerpt": story_excerpt,
+            }
+        )
     return summaries
 
 
@@ -5295,9 +5707,7 @@ def _build_verdict_only_branch_payloads(
     if not branch_ids:
         return payloads
     with Session(engine) as session:
-        db_branches = list(
-            session.exec(select(Branch).where(Branch.id.in_(branch_ids))).all()
-        )
+        db_branches = list(session.exec(select(Branch).where(Branch.id.in_(branch_ids))).all())
         by_id = {branch.id: branch for branch in db_branches}
         for branch_data in all_branches:
             branch_id = str(branch_data.get("id") or "")
@@ -5460,8 +5870,8 @@ async def _generate_verdict(
                 "或没有清晰答案则 null。\n"
                 "- 不要发明分支摘要或真实世界上下文之外的确定事实；证据不足时明确保留不确定性。\n"
                 "- 只输出严格 JSON："
-                "{\"verdict\":\"...\",\"confidence\":\"medium\","
-                "\"question_answer\":\"...\",\"actual_outcome\":null}\n"
+                '{"verdict":"...","confidence":"medium",'
+                '"question_answer":"...","actual_outcome":null}\n'
                 f"{get_language_directive(language)}"
             )
         else:
@@ -5484,16 +5894,14 @@ async def _generate_verdict(
                 "- Do not invent facts outside the branch summaries or "
                 "real-world context; state uncertainty when evidence is thin.\n"
                 "- Output strict JSON only: "
-                "{\"verdict\":\"...\",\"confidence\":\"medium\","
-                "\"question_answer\":\"...\",\"actual_outcome\":null}\n"
+                '{"verdict":"...","confidence":"medium",'
+                '"question_answer":"...","actual_outcome":null}\n'
                 f"{get_language_directive(language)}"
             )
 
         _overrides = llm_overrides or {}
         request_timeout, total_timeout = _result_verdict_timeouts()
-        with llm_request_scope(
-            **_llm_scope_kwargs(_overrides, purpose="scenario_result_verdict")
-        ):
+        with llm_request_scope(**_llm_scope_kwargs(_overrides, purpose="scenario_result_verdict")):
             raw_text = await asyncio.wait_for(
                 llm_call(
                     prompt,
@@ -5687,8 +6095,7 @@ def _load_latest_compressed_briefing(engine, branch_id: str, *, before_round: in
             (
                 round_
                 for round_ in reversed(selection.rounds)
-                if round_.round_number < before_round
-                and round_.compressed_summary
+                if round_.round_number < before_round and round_.compressed_summary
             ),
             None,
         )
@@ -5735,16 +6142,13 @@ def _load_terminal_narration_messages(engine, branch_id: str) -> list[dict[str, 
             return []
 
         segment_index_by_branch: dict[str, int] = {
-            segment.branch_id: index
-            for index, segment in enumerate(selection.lineage.segments)
+            segment.branch_id: index for index, segment in enumerate(selection.lineage.segments)
         }
         round_ids_by_segment: dict[int, list[str]] = {
             index: [] for index in range(len(selection.lineage.segments))
         }
         for round_ in selection.rounds:
-            round_ids_by_segment[segment_index_by_branch[round_.branch_id]].append(
-                round_.id
-            )
+            round_ids_by_segment[segment_index_by_branch[round_.branch_id]].append(round_.id)
         selected_round_ids = tuple(round_.id for round_ in selection.rounds)
         agent_name_column = func.coalesce(Agent.name, "Unknown").label("agent_name")
 
@@ -5808,15 +6212,11 @@ def _load_terminal_narration_messages(engine, branch_id: str) -> list[dict[str, 
                 AgentMessage.id.desc(),
             )
             add_message(
-                session.exec(
-                    message_statement(round_ids).order_by(*ascending).limit(1)
-                ).first(),
+                session.exec(message_statement(round_ids).order_by(*ascending).limit(1)).first(),
                 segment_index,
             )
             add_message(
-                session.exec(
-                    message_statement(round_ids).order_by(*descending).limit(1)
-                ).first(),
+                session.exec(message_statement(round_ids).order_by(*descending).limit(1)).first(),
                 segment_index,
             )
 
@@ -6185,9 +6585,13 @@ def _agent_to_dict(agent: Agent) -> dict:
         )
         tier = "IMPORTANT"
     return {
-        "id": agent.id, "name": agent.name, "role": agent.role,
-        "persona": agent.persona, "tier": tier,
-        "stance": agent.stance, "emotion": agent.emotion,
+        "id": agent.id,
+        "name": agent.name,
+        "role": agent.role,
+        "persona": agent.persona,
+        "tier": tier,
+        "stance": agent.stance,
+        "emotion": agent.emotion,
         "group_id": agent.group_id,  # P3-A
         "agent_identity_id": agent.agent_identity_id,
         "source_type": agent.source_type,
@@ -6196,13 +6600,15 @@ def _agent_to_dict(agent: Agent) -> dict:
 
 def _enrich_custom_agent_metadata(engine, agents: list[dict]) -> None:
     identity_ids = [
-        a["agent_identity_id"] for a in agents
+        a["agent_identity_id"]
+        for a in agents
         if a.get("agent_identity_id") and a.get("source_type") == "custom"
     ]
     if not identity_ids:
         return
     try:
         from app.models.agent_identity import AgentIdentity
+
         with Session(engine) as session:
             for iid in identity_ids:
                 identity = session.get(AgentIdentity, iid)
@@ -6220,9 +6626,7 @@ def _enrich_custom_agent_metadata(engine, agents: list[dict]) -> None:
                                 agent["knowledge_domains"] = []
                         if identity.decision_bias_json:
                             try:
-                                agent["decision_bias"] = json.loads(
-                                    identity.decision_bias_json
-                                )
+                                agent["decision_bias"] = json.loads(identity.decision_bias_json)
                             except (TypeError, ValueError):
                                 agent["decision_bias"] = {}
     except Exception:
@@ -6251,12 +6655,25 @@ def _format_setting(setting: dict, *, language: str = "Chinese") -> str:
     )
 
 
-def _create_branch(engine, scenario_id, *, parent_branch_id=None,
-                    fork_round=0, fork_reason="", title="", description="", probability=1.0) -> str:
+def _create_branch(
+    engine,
+    scenario_id,
+    *,
+    parent_branch_id=None,
+    fork_round=0,
+    fork_reason="",
+    title="",
+    description="",
+    probability=1.0,
+) -> str:
     branch = Branch(
-        scenario_id=scenario_id, parent_branch_id=parent_branch_id,
-        fork_round=fork_round, fork_reason=fork_reason,
-        title=title, description=description, probability=probability,
+        scenario_id=scenario_id,
+        parent_branch_id=parent_branch_id,
+        fork_round=fork_round,
+        fork_reason=fork_reason,
+        title=title,
+        description=description,
+        probability=probability,
     )
     with Session(engine) as session:
         session.add(branch)
@@ -6286,12 +6703,53 @@ def _get_or_create_root_branch(engine, scenario_id: str, *, title: str) -> str:
 
 
 def _create_round(engine, branch_id, round_number) -> str:
-    r = Round(branch_id=branch_id, round_number=round_number)
     with Session(engine) as session:
+        existing = session.exec(
+            select(Round).where(
+                Round.branch_id == branch_id,
+                Round.round_number == round_number,
+            )
+        ).first()
+        if existing is not None:
+            return existing.id
+        r = Round(branch_id=branch_id, round_number=round_number)
         session.add(r)
         session.commit()
         session.refresh(r)
         return r.id
+
+
+def _ensure_bootstrap_runtime_lease(
+    runtime_lease: RuntimeLockLease | None,
+    scenario_id: str,
+    *,
+    session: Session | None = None,
+) -> None:
+    """Fence bootstrap writes with the same exact-owner check as action persistence."""
+    if runtime_lease is None or runtime_lease.db_path is None:
+        return
+    from sqlalchemy import text
+
+    def check(active_session: Session):
+        return active_session.execute(
+            text(
+                "SELECT 1 FROM runtime_lock "
+                "WHERE lock_key=:lock_key AND owner_id=:owner_id AND expires_at>:now"
+            ),
+            {
+                "lock_key": runtime_lease.lock_key,
+                "owner_id": runtime_lease.owner_id,
+                "now": time.time(),
+            },
+        ).first()
+
+    if session is not None:
+        held = check(session)
+    else:
+        with Session(get_engine()) as owned_session:
+            held = check(owned_session)
+    if held is None:
+        raise SimulationCancelled(scenario_id)
 
 
 def _normalized_active_branch_probabilities(
@@ -6309,8 +6767,7 @@ def _normalized_active_branch_probabilities(
 
     rounded_current = [round(weight, 4) for weight in weights]
     already_four_decimal = all(
-        abs(weight - rounded) <= 1e-9
-        for weight, rounded in zip(weights, rounded_current)
+        abs(weight - rounded) <= 1e-9 for weight, rounded in zip(weights, rounded_current)
     )
     if already_four_decimal and abs(sum(rounded_current) - 1.0) <= 1e-9:
         return None, False
@@ -6351,9 +6808,7 @@ def _apply_normalized_active_branch_probabilities(
     if include_completed:
         normalizable_statuses.add(BranchStatus.COMPLETED.value)
     active_branches = [
-        branch
-        for branch in all_branches
-        if _branch_status_value(branch) in normalizable_statuses
+        branch for branch in all_branches if _branch_status_value(branch) in normalizable_statuses
     ]
     if include_completed:
         active_branches = _terminal_branch_candidates(active_branches, all_branches)
@@ -6384,18 +6839,22 @@ def _apply_normalized_active_branch_probabilities(
 def _save_message(engine, round_id, agent_id, content, emotion, diverge) -> str | None:
     saved_message_ids = _save_messages(
         engine,
-        [{
-            "round_id": round_id,
-            "agent_id": agent_id,
-            "content": content,
-            "emotion": emotion,
-            "diverge": diverge,
-        }],
+        [
+            {
+                "round_id": round_id,
+                "agent_id": agent_id,
+                "content": content,
+                "emotion": emotion,
+                "diverge": diverge,
+            }
+        ],
     )
     return saved_message_ids[0] if saved_message_ids else None
 
 
-def _save_messages(engine, messages: list[dict[str, Any]]) -> list[str]:
+def _save_messages(
+    engine, messages: list[dict[str, Any]], *, runtime_lease: RuntimeLockLease | None = None
+) -> list[str]:
     if not messages:
         return []
 
@@ -6411,8 +6870,255 @@ def _save_messages(engine, messages: list[dict[str, Any]]) -> list[str]:
     ]
     with Session(engine) as session:
         session.add_all(rows)
+        session.flush()
+        from app.services.simulation_actions import append_simulation_action
+
+        for source, row in zip(messages, rows):
+            if not source.get("scenario_id"):
+                continue
+            try:
+                append_simulation_action(
+                    session,
+                    scenario_id=source["scenario_id"],
+                    branch_id=source["branch_id"],
+                    round_id=source["round_id"],
+                    round_number=source["round_number"],
+                    agent_id=source["agent_id"],
+                    message_id=row.id,
+                    idempotency_key=source["idempotency_key"],
+                    action=source.get("action"),
+                    require_running=True,
+                )
+            except ValueError as exc:
+                failure_code = str(exc)
+                if failure_code not in {
+                    "ACTION_INVALID_PARENT_SCOPE",
+                    "ACTION_PARENT_NOT_EARLIER",
+                    "ACTION_INVALID_TARGET_SCOPE",
+                }:
+                    raise
+                append_simulation_action(
+                    session,
+                    scenario_id=source["scenario_id"],
+                    branch_id=source["branch_id"],
+                    round_id=source["round_id"],
+                    round_number=source["round_number"],
+                    agent_id=source["agent_id"],
+                    message_id=row.id,
+                    idempotency_key=source["idempotency_key"],
+                    action={
+                        "action_type": "IDLE",
+                        "status": "unavailable",
+                        "failure_code": failure_code,
+                    },
+                    require_running=True,
+                )
+        if runtime_lease is not None and runtime_lease.db_path is not None:
+            from sqlalchemy import text
+
+            fence = session.execute(
+                text(
+                    "SELECT 1 FROM runtime_lock "
+                    "WHERE lock_key=:lock_key AND owner_id=:owner_id AND expires_at>:now"
+                ),
+                {
+                    "lock_key": runtime_lease.lock_key,
+                    "owner_id": runtime_lease.owner_id,
+                    "now": time.time(),
+                },
+            ).first()
+            if fence is None:
+                raise SimulationCancelled(messages[0].get("scenario_id", ""))
         session.commit()
         return [row.id for row in rows]
+
+
+def _get_action_receipt(
+    engine: Any, scenario_id: str, idempotency_key: str
+) -> dict[str, Any] | None:
+    from app.models.simulation_action import SimulationAction
+
+    try:
+        with Session(engine) as session:
+            row = session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.scenario_id == scenario_id,
+                    SimulationAction.idempotency_key == idempotency_key,
+                )
+            ).first()
+            if row is None:
+                return None
+            return {
+                "scenario_id": scenario_id,
+                "action_id": row.id,
+                "sequence": row.sequence,
+                "branch_id": row.branch_id,
+                "round": row.round_number,
+                "agent_id": row.agent_id,
+            }
+    except Exception:
+        logger.debug("Action receipt lookup failed", exc_info=True)
+        return None
+
+
+def _load_action_target_catalog_payload(
+    engine: Any,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    cutoff_round: int | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load one lineage-filtered action catalog for the whole concurrent batch."""
+    from app.models.simulation_action import SimulationAction, SimulationActionStatus
+    from app.services.branch_lineage import resolve_branch_lineage
+    from app.services.initial_social_feed import is_bootstrap_post
+
+    try:
+        with Session(engine) as session:
+            agents = session.exec(
+                select(Agent)
+                .where(Agent.scenario_id == scenario_id)
+                .order_by(Agent.id)
+                .limit(32)
+            ).all()
+            lineage = resolve_branch_lineage(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                requested_cutoff=cutoff_round,
+            )
+            segment_filters = []
+            for segment in lineage.segments:
+                predicates = [
+                    SimulationAction.branch_id == segment.branch_id,
+                    SimulationAction.round_number >= segment.round_min,
+                ]
+                if segment.round_max is not None:
+                    predicates.append(SimulationAction.round_number <= segment.round_max)
+                segment_filters.append(and_(*predicates))
+            lineage_branch_ids = tuple(segment.branch_id for segment in lineage.segments)
+            candidates = session.exec(
+                select(SimulationAction)
+                .where(
+                    SimulationAction.scenario_id == scenario_id,
+                    SimulationAction.status == SimulationActionStatus.VERIFIED,
+                    or_(
+                        *segment_filters,
+                        and_(
+                            SimulationAction.branch_id.in_(lineage_branch_ids),
+                            SimulationAction.message_id.is_(None),
+                            SimulationAction.action_type == "POST",
+                        ),
+                    ),
+                )
+                .order_by(SimulationAction.sequence.desc())
+                .limit(16)
+            ).all()
+            projected_actions: list[dict[str, Any]] = []
+            for row in candidates:
+                segment_visible = any(
+                    segment.branch_id == row.branch_id
+                    and row.round_number >= segment.round_min
+                    and (segment.round_max is None or row.round_number <= segment.round_max)
+                    for segment in lineage.segments
+                )
+                source_agent = session.get(Agent, row.agent_id)
+                bootstrap = is_bootstrap_post(row, source_agent)
+                if not segment_visible and not bootstrap:
+                    continue
+                content = str(row.content or "")[:120]
+                if bootstrap:
+                    try:
+                        bootstrap_payload = json.loads(row.payload_json or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        bootstrap_payload = {}
+                    source_name = str(bootstrap_payload.get("source_name") or "").strip()[:80]
+                    if source_name:
+                        content = f"[{source_name}] {content}"[:120]
+                projected_actions.append(
+                    {
+                        "id": row.id,
+                        "kind": (
+                            "post"
+                            if str(getattr(row.action_type, "value", row.action_type)) == "POST"
+                            else "action"
+                        ),
+                        "type": str(getattr(row.action_type, "value", row.action_type)),
+                        "content": content,
+                    }
+                )
+            return {
+                "agents": [
+                    {
+                        "id": row.id,
+                        "name": row.name[:80],
+                        "kind": (
+                            "source" if row.source_type == "world_event_source" else "agent"
+                        ),
+                    }
+                    for row in agents
+                ],
+                "actions": projected_actions,
+            }
+    except Exception:
+        logger.debug("Action target catalog load failed", exc_info=True)
+        return {"agents": [], "actions": []}
+
+
+def _render_action_target_catalog(
+    payload: dict[str, list[dict[str, Any]]],
+    *,
+    agent_id: str,
+) -> str:
+    projected = {
+        "agents": [row for row in payload["agents"] if row.get("id") != agent_id],
+        "actions": payload["actions"],
+    }
+    return format_untrusted_text_block(
+        "action_target_catalog",
+        json.dumps(projected, ensure_ascii=False),
+        max_chars=5000,
+    )
+
+
+def _build_action_target_catalogs(
+    engine: Any,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    agent_ids: list[str],
+    cutoff_round: int | None = None,
+) -> dict[str, str]:
+    payload = _load_action_target_catalog_payload(
+        engine,
+        scenario_id,
+        branch_id,
+        cutoff_round=cutoff_round,
+    )
+    return {
+        agent_id: _render_action_target_catalog(payload, agent_id=agent_id)
+        for agent_id in agent_ids
+    }
+
+
+def _build_action_target_catalog(
+    engine: Any,
+    scenario_id: str,
+    branch_id: str,
+    *,
+    agent_id: str = "",
+    cutoff_round: int | None = None,
+) -> str:
+    """Compatibility wrapper for focused tests and non-batched callers."""
+    return _render_action_target_catalog(
+        _load_action_target_catalog_payload(
+            engine,
+            scenario_id,
+            branch_id,
+            cutoff_round=cutoff_round,
+        ),
+        agent_id=agent_id,
+    )
 
 
 def _get_recent_messages(engine, branch_id, max_rounds=2) -> list[dict]:
@@ -6439,12 +7145,15 @@ def _get_recent_messages(engine, branch_id, max_rounds=2) -> list[dict]:
         # Sort by round_number ASC (rounds were fetched DESC)
         results = []
         for msg, agent_name in rows:
-            results.append({
-                "agent_name": agent_name or "Unknown",
-                "content": msg.content,
-                **public_emotion_metadata(msg),
-                "round": round_num_map.get(msg.round_id, 0),
-            })
+            results.append(
+                {
+                    "message_id": msg.id,
+                    "agent_name": agent_name or "Unknown",
+                    "content": msg.content,
+                    **public_emotion_metadata(msg),
+                    "round": round_num_map.get(msg.round_id, 0),
+                }
+            )
         results.sort(key=lambda x: x["round"])
         return results
 
@@ -6452,12 +7161,15 @@ def _get_recent_messages(engine, branch_id, max_rounds=2) -> list[dict]:
 def _get_messages_in_range(engine, branch_id, start, end) -> list[dict]:
     """P0-2 fix: Uses JOIN to fetch agent names in a single query (no N+1)."""
     with Session(engine) as session:
-        round_rows = list(session.exec(
-            select(Round.id, Round.round_number)
-            .where(Round.branch_id == branch_id,
-                   Round.round_number >= start,
-                   Round.round_number <= end)
-        ).all())
+        round_rows = list(
+            session.exec(
+                select(Round.id, Round.round_number).where(
+                    Round.branch_id == branch_id,
+                    Round.round_number >= start,
+                    Round.round_number <= end,
+                )
+            ).all()
+        )
         if not round_rows:
             return []
         round_ids = [row[0] for row in round_rows]
@@ -6525,8 +7237,12 @@ def _get_branch(engine, branch_id) -> dict:
         branch = session.get(Branch, branch_id)
         if not branch:
             return {}
-        return {"id": branch.id, "title": branch.title, "probability": branch.probability,
-                "status": branch.status.value}
+        return {
+            "id": branch.id,
+            "title": branch.title,
+            "probability": branch.probability,
+            "status": branch.status.value,
+        }
 
 
 def _save_narration(engine, branch_id, narration: dict):
@@ -6579,8 +7295,7 @@ def _save_narration(engine, branch_id, narration: dict):
 def _save_round_summary(engine, branch_id, round_num, summary_text):
     with Session(engine) as session:
         r = session.exec(
-            select(Round)
-            .where(Round.branch_id == branch_id, Round.round_number == round_num)
+            select(Round).where(Round.branch_id == branch_id, Round.round_number == round_num)
         ).first()
         if r:
             r.compressed_summary = summary_text

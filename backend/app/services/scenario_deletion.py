@@ -52,6 +52,8 @@ from app.models import (
     Round,
     Scenario,
     ScenarioCheckpoint,
+    SimulationAction,
+    SimulationActionSequence,
 )
 from app.models.prediction_journal import PredictionJournalEntry
 
@@ -100,14 +102,10 @@ def delete_scenario_cascade(
         schema change.
     """
 
-    exists = session.exec(
-        select(Scenario.id).where(Scenario.id == scenario_id)
-    ).first()
+    exists = session.exec(select(Scenario.id).where(Scenario.id == scenario_id)).first()
     if exists is None:
         return False
-    owner_row = session.exec(
-        select(Scenario.user_id).where(Scenario.id == scenario_id)
-    ).first()
+    owner_row = session.exec(select(Scenario.user_id).where(Scenario.id == scenario_id)).first()
     # owner_row may be a scalar or a 1-tuple depending on SQLModel version.
     owner = owner_row[0] if isinstance(owner_row, tuple) else owner_row
     # Legacy / dev-mode rows may have ``user_id IS NULL`` — those are
@@ -169,29 +167,19 @@ def delete_scenario_cascade(
     # ── Phase 4 F7 — agent conversation (dependents before parent) ──
     if thread_ids:
         session.execute(
-            sa_delete(AgentConversationTurn).where(
-                AgentConversationTurn.thread_id.in_(thread_ids)
-            )
+            sa_delete(AgentConversationTurn).where(AgentConversationTurn.thread_id.in_(thread_ids))
         )
     # Fallback — also wipe any turns that slipped in via scenario_id.
     session.execute(
-        sa_delete(AgentConversationTurn).where(
-            AgentConversationTurn.scenario_id == scenario_id
-        )
+        sa_delete(AgentConversationTurn).where(AgentConversationTurn.scenario_id == scenario_id)
     )
     session.execute(
-        sa_delete(AgentConversationThread).where(
-            AgentConversationThread.scenario_id == scenario_id
-        )
+        sa_delete(AgentConversationThread).where(AgentConversationThread.scenario_id == scenario_id)
     )
 
     # ── Phase 3 F5 — faction events / snapshots ──
-    session.execute(
-        sa_delete(FactionEvent).where(FactionEvent.scenario_id == scenario_id)
-    )
-    session.execute(
-        sa_delete(FactionSnapshot).where(FactionSnapshot.scenario_id == scenario_id)
-    )
+    session.execute(sa_delete(FactionEvent).where(FactionEvent.scenario_id == scenario_id))
+    session.execute(sa_delete(FactionSnapshot).where(FactionSnapshot.scenario_id == scenario_id))
 
     # ── Phase 3 F5 — relation edges (016 migration) ──
     session.execute(
@@ -199,21 +187,13 @@ def delete_scenario_cascade(
     )
 
     # ── Phase 3 F2 — agent state frames (per-round derived state) ──
-    session.execute(
-        sa_delete(AgentStateFrame).where(AgentStateFrame.scenario_id == scenario_id)
-    )
+    session.execute(sa_delete(AgentStateFrame).where(AgentStateFrame.scenario_id == scenario_id))
 
     # ── Phase 3 F2 / F6 — graph edges → nodes → snapshots ──
     if graph_snapshot_ids:
-        session.execute(
-            sa_delete(GraphEdge).where(GraphEdge.snapshot_id.in_(graph_snapshot_ids))
-        )
-        session.execute(
-            sa_delete(GraphNode).where(GraphNode.snapshot_id.in_(graph_snapshot_ids))
-        )
-        session.execute(
-            sa_delete(GraphSnapshot).where(GraphSnapshot.id.in_(graph_snapshot_ids))
-        )
+        session.execute(sa_delete(GraphEdge).where(GraphEdge.snapshot_id.in_(graph_snapshot_ids)))
+        session.execute(sa_delete(GraphNode).where(GraphNode.snapshot_id.in_(graph_snapshot_ids)))
+        session.execute(sa_delete(GraphSnapshot).where(GraphSnapshot.id.in_(graph_snapshot_ids)))
 
     # ── Phase 3 F4 — round-boundary checkpoints ──
     session.execute(
@@ -221,33 +201,29 @@ def delete_scenario_cascade(
     )
 
     # ── Legacy cascade (preserved ordering from original endpoint) ──
+    session.execute(sa_delete(SimulationAction).where(SimulationAction.scenario_id == scenario_id))
+    session.execute(
+        sa_delete(SimulationActionSequence).where(
+            SimulationActionSequence.scenario_id == scenario_id
+        )
+    )
     if round_ids:
         session.execute(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
     if branch_ids:
         session.execute(sa_delete(Round).where(Round.branch_id.in_(branch_ids)))
-    session.execute(
-        sa_delete(InterventionLog).where(InterventionLog.scenario_id == scenario_id)
-    )
+    session.execute(sa_delete(InterventionLog).where(InterventionLog.scenario_id == scenario_id))
     session.execute(
         sa_delete(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)
     )
     if group_ids:
-        session.execute(
-            sa_delete(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids))
-        )
+        session.execute(sa_delete(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids)))
     session.execute(sa_delete(AgentGroup).where(AgentGroup.scenario_id == scenario_id))
     if room_ids:
+        session.execute(sa_delete(EndingRoomTurn).where(EndingRoomTurn.room_id.in_(room_ids)))
         session.execute(
-            sa_delete(EndingRoomTurn).where(EndingRoomTurn.room_id.in_(room_ids))
+            sa_delete(EndingRoomParticipant).where(EndingRoomParticipant.room_id.in_(room_ids))
         )
-        session.execute(
-            sa_delete(EndingRoomParticipant).where(
-                EndingRoomParticipant.room_id.in_(room_ids)
-            )
-        )
-        session.execute(
-            sa_delete(EndingRoomThread).where(EndingRoomThread.room_id.in_(room_ids))
-        )
+        session.execute(sa_delete(EndingRoomThread).where(EndingRoomThread.room_id.in_(room_ids)))
     session.execute(sa_delete(EndingRoom).where(EndingRoom.scenario_id == scenario_id))
     session.execute(sa_delete(Prediction).where(Prediction.scenario_id == scenario_id))
     # Nullify journal FK so scenario hard-delete does not fail under FK enforcement.
@@ -259,9 +235,7 @@ def delete_scenario_cascade(
         .values(scenario_id=None)
     )
     session.execute(
-        sa_delete(ReplayArtifact).where(
-            ReplayArtifact.source_scenario_id == scenario_id
-        )
+        sa_delete(ReplayArtifact).where(ReplayArtifact.source_scenario_id == scenario_id)
     )
     if branch_ids:
         session.execute(sa_delete(Branch).where(Branch.scenario_id == scenario_id))
@@ -281,9 +255,7 @@ def delete_scenario_cascade(
     )
     if issues:
         summary = ", ".join(f"{label}={count}" for label, count in sorted(issues.items()))
-        logger.error(
-            "Scenario delete integrity failed for %s: %s", scenario_id, summary
-        )
+        logger.error("Scenario delete integrity failed for %s: %s", scenario_id, summary)
         raise ScenarioDeleteIntegrityError(summary)
 
     session.flush()
@@ -309,17 +281,24 @@ def _collect_residual_counts(
     issues: dict[str, int] = {}
 
     def _count(model, *where) -> int:
-        return int(
-            session.exec(
-                select(sa_func.count()).select_from(model).where(*where)
-            ).one()
-        )
+        return int(session.exec(select(sa_func.count()).select_from(model).where(*where)).one())
 
     def _record(label: str, count: int) -> None:
         if count > 0:
             issues[label] = count
 
     # Phase 4
+    _record(
+        "simulation_action",
+        _count(SimulationAction, SimulationAction.scenario_id == scenario_id),
+    )
+    _record(
+        "simulation_action_sequence",
+        _count(
+            SimulationActionSequence,
+            SimulationActionSequence.scenario_id == scenario_id,
+        ),
+    )
     if thread_ids:
         _record(
             "agent_conversation_turn",
@@ -399,16 +378,12 @@ def _collect_residual_counts(
     )
     _record(
         "pending_intervention",
-        _count(
-            PendingIntervention, PendingIntervention.scenario_id == scenario_id
-        ),
+        _count(PendingIntervention, PendingIntervention.scenario_id == scenario_id),
     )
     if group_ids:
         _record(
             "agent_group_member",
-            _count(
-                AgentGroupMember, AgentGroupMember.group_id.in_(group_ids)
-            ),
+            _count(AgentGroupMember, AgentGroupMember.group_id.in_(group_ids)),
         )
     _record(
         "agent_group",
@@ -428,9 +403,7 @@ def _collect_residual_counts(
         )
         _record(
             "ending_room_thread",
-            _count(
-                EndingRoomThread, EndingRoomThread.room_id.in_(room_ids)
-            ),
+            _count(EndingRoomThread, EndingRoomThread.room_id.in_(room_ids)),
         )
     _record(
         "ending_room",
@@ -442,9 +415,7 @@ def _collect_residual_counts(
     )
     _record(
         "replay_artifact",
-        _count(
-            ReplayArtifact, ReplayArtifact.source_scenario_id == scenario_id
-        ),
+        _count(ReplayArtifact, ReplayArtifact.source_scenario_id == scenario_id),
     )
     if branch_ids:
         _record("branch", _count(Branch, Branch.scenario_id == scenario_id))

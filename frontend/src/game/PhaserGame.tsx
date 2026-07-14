@@ -217,25 +217,6 @@ export function PhaserGame({
       }
     };
 
-    replaySyncTimer.current = window.setInterval(() => {
-      const game = gameRef.current;
-      if (
-        titleSkipDone.current ||
-        (game?.scene.isActive('WorldScene') && !game.scene.isActive('TitleScene'))
-      ) {
-        titleSkipDone.current = true;
-        clearReplaySyncTimer();
-        return;
-      }
-
-      const state = useSimulationStore.getState();
-      if (ensureReplayStartsInWorldScene(gameRef.current, state)) {
-        titleSkipDone.current = true;
-        clearReplaySyncTimer();
-        console.log('[PhaserGame] Replay sync timer skipped TitleScene');
-      }
-    }, 150);
-
     const clearReplayDoneTimer = () => {
       if (replayDoneTimer.current) {
         window.clearTimeout(replayDoneTimer.current);
@@ -298,6 +279,28 @@ export function PhaserGame({
       console.log(`[PhaserGame] Bootstrap scene init from ${source} — theme=${theme}, agents=${state.agents.length}`);
       return true;
     };
+
+    replaySyncTimer.current = window.setInterval(() => {
+      const game = gameRef.current;
+      const worldSceneActive = Boolean(
+        game?.scene.isActive('WorldScene') && !game.scene.isActive('TitleScene'),
+      );
+      if (titleSkipDone.current || worldSceneActive) {
+        titleSkipDone.current = true;
+        clearReplaySyncTimer();
+        if (worldSceneActive) {
+          bootstrapWorldSceneFromStore(useSimulationStore.getState(), 'world_scene_poll');
+        }
+        return;
+      }
+
+      const state = useSimulationStore.getState();
+      if (ensureReplayStartsInWorldScene(gameRef.current, state)) {
+        titleSkipDone.current = true;
+        clearReplaySyncTimer();
+        console.log('[PhaserGame] Replay sync timer skipped TitleScene');
+      }
+    }, 150);
 
     const updateReplayAutomationState = (
       next: Partial<AutomationReplayState>,

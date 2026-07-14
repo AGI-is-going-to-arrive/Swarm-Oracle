@@ -7,6 +7,7 @@ retrieves cross-scenario memory for continuity.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import Any
 
@@ -375,10 +376,22 @@ def record_growth_event(
     round_number: int,
     event_type: str,
     summary: str,
+    metrics: dict[str, Any] | None = None,
 ) -> None:
-    """Record a notable event in an agent's cross-scenario life."""
+    """Record an idempotent notable event in an agent's cross-scenario life."""
     engine = get_engine()
     with Session(engine) as session:
+        existing = session.exec(
+            select(AgentGrowthEvent).where(
+                AgentGrowthEvent.identity_id == identity_id,
+                AgentGrowthEvent.scenario_id == scenario_id,
+                AgentGrowthEvent.branch_id == branch_id,
+                AgentGrowthEvent.round_number == round_number,
+                AgentGrowthEvent.event_type == event_type,
+            )
+        ).first()
+        if existing is not None:
+            return
         event = AgentGrowthEvent(
             identity_id=identity_id,
             scenario_id=scenario_id,
@@ -386,6 +399,11 @@ def record_growth_event(
             round_number=round_number,
             event_type=event_type,
             summary=summary,
+            metrics_json=(
+                json.dumps(metrics, ensure_ascii=False, separators=(",", ":"))
+                if metrics
+                else None
+            ),
         )
         session.add(event)
         session.commit()

@@ -34,6 +34,7 @@ from app.models import (
     Round,
     Scenario,
     ScenarioStatus,
+    SimulationAction,
 )
 from app.models.database import get_engine
 from app.services.branch_lineage import BranchLineageError, select_branch_rounds
@@ -249,11 +250,7 @@ def _retrospective_branch_title(round_number: int, language: str) -> str:
 
 
 def _retrospective_fork_reason(text: str, language: str) -> str:
-    prefix = (
-        "回溯干预"
-        if _runtime_language_is_chinese(language)
-        else "Retrospective intervention"
-    )
+    prefix = "回溯干预" if _runtime_language_is_chinese(language) else "Retrospective intervention"
     return f"{prefix}: {text.strip()[:50]}"
 
 
@@ -350,10 +347,14 @@ def _cleanup_retrospective_start(
     intervention_log_id: str | None,
 ) -> None:
     with Session(get_engine()) as session:
-        round_ids = list(
-            session.exec(select(Round.id).where(Round.branch_id == branch_id)).all()
-        )
+        round_ids = list(session.exec(select(Round.id).where(Round.branch_id == branch_id)).all())
         if round_ids:
+            session.exec(
+                sa_delete(SimulationAction).where(
+                    SimulationAction.branch_id == branch_id,
+                    SimulationAction.round_id.in_(round_ids),
+                )
+            )
             session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
         session.exec(
             sa_delete(PendingIntervention).where(
@@ -385,9 +386,7 @@ INTERVENTION_TEMPLATES = [
         "description_en": "A natural disaster strikes the area",
         "description_zh": "一场自然灾害袭击了该地区",
         "template": "一场突如其来的{disaster_type}袭击了该地区，造成了大范围的{impact}",
-        "template_en": (
-            "A sudden {disaster_type} hits the area, causing widespread {impact}"
-        ),
+        "template_en": ("A sudden {disaster_type} hits the area, causing widespread {impact}"),
         "template_zh": "一场突如其来的{disaster_type}袭击了该地区，造成了大范围的{impact}",
         "variables": [
             {
@@ -547,7 +546,9 @@ async def intervene(
     if not text:
         raise api_error(400, "INTERVENTION_TEXT_EMPTY", "Intervention text cannot be empty")
     if len(text) > 2000:
-        raise api_error(400, "INTERVENTION_TEXT_TOO_LONG", "Intervention text too long (max 2000 characters)")  # noqa: E501
+        raise api_error(
+            400, "INTERVENTION_TEXT_TOO_LONG", "Intervention text too long (max 2000 characters)"
+        )  # noqa: E501
 
     engine = get_engine()
 
@@ -572,7 +573,9 @@ async def intervene(
             )
         ).first()
         if branch is None:
-            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")  # noqa: E501
+            raise api_error(
+                400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario"
+            )  # noqa: E501
         if branch.status != BranchStatus.ACTIVE:
             raise api_error(
                 400,
@@ -642,17 +645,21 @@ async def intervene(
 
     # Broadcast via WebSocket
     from app.api.ws import ws_manager
-    await ws_manager.broadcast(scenario_id, {
-        "type": "intervention_applied",
-        "data": {
-            "branch_id": req.branch_id,
-            "text": visible_text,
-            "round": current_round,
-            "intervention_id": log_id,
-            "pending_count": pending_count,
-            "queued_ahead": queued_ahead,
-        }
-    })
+
+    await ws_manager.broadcast(
+        scenario_id,
+        {
+            "type": "intervention_applied",
+            "data": {
+                "branch_id": req.branch_id,
+                "text": visible_text,
+                "round": current_round,
+                "intervention_id": log_id,
+                "pending_count": pending_count,
+                "queued_ahead": queued_ahead,
+            },
+        },
+    )
 
     return {
         "status": "applied",
@@ -836,16 +843,20 @@ async def intervene_retrospective(
 
     # Broadcast via WebSocket
     from app.api.ws import ws_manager
-    await ws_manager.broadcast(scenario_id, {
-        "type": "retrospective_start",
-        "data": {
-            "branch_id": new_branch_id,
-            "source_branch_id": req.branch_id,
-            "from_round": req.round_number,
-            "text": req.text.strip(),
-            "intervention_id": log_id,
-        }
-    })
+
+    await ws_manager.broadcast(
+        scenario_id,
+        {
+            "type": "retrospective_start",
+            "data": {
+                "branch_id": new_branch_id,
+                "source_branch_id": req.branch_id,
+                "from_round": req.round_number,
+                "text": req.text.strip(),
+                "intervention_id": log_id,
+            },
+        },
+    )
 
     return {
         "status": "created",
@@ -976,12 +987,14 @@ async def intervene_batch(
             else:
                 memory_queue_entries.append((key, pending_text, effect_metadata))
 
-            results.append({
-                "branch_id": item.branch_id,
-                "text": visible_text,
-                "round": current_round,
-                "intervention_id": log.id,
-            })
+            results.append(
+                {
+                    "branch_id": item.branch_id,
+                    "text": visible_text,
+                    "round": current_round,
+                    "intervention_id": log.id,
+                }
+            )
         session.commit()
 
     if not use_persisted_queue:
@@ -990,10 +1003,10 @@ async def intervene_batch(
 
     # Broadcast batch event
     from app.api.ws import ws_manager
-    await ws_manager.broadcast(scenario_id, {
-        "type": "batch_intervention_applied",
-        "data": {"interventions": results}
-    })
+
+    await ws_manager.broadcast(
+        scenario_id, {"type": "batch_intervention_applied", "data": {"interventions": results}}
+    )
 
     return {
         "status": "applied",

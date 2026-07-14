@@ -59,6 +59,12 @@ from .graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from .model_profile import ModelProfile
 from .prediction_journal import PredictionJournalEntry
 from .predictions import Leaderboard, Prediction
+from .simulation_action import (
+    SimulationAction,
+    SimulationActionSequence,
+    SimulationActionStatus,
+    SimulationActionType,
+)
 
 __all__ = [
     "Scenario", "Agent", "Branch", "Round", "AgentMessage", "InterventionLog", "PendingIntervention", "ReplayArtifact",  # noqa: E501
@@ -69,6 +75,8 @@ __all__ = [
     "EndingRoom", "EndingRoomInteractionMode", "EndingRoomParticipant", "EndingRoomPhase", "EndingRoomRoleSlot", "EndingRoomStatus", "EndingRoomThread", "EndingRoomThreadMode", "EndingRoomTurn", "EndingRoomTurnSource", "EndingRoomType",  # noqa: E501
     "Prediction", "Leaderboard",
     "PredictionJournalEntry",
+    "SimulationAction", "SimulationActionSequence", "SimulationActionStatus",
+    "SimulationActionType",
     # Phase 3
     "AgentIdentity", "AgentIdentityCampaign", "AgentIdentityCampaignMember", "AgentGrowthEvent",
     "GraphSnapshot", "GraphNode", "GraphEdge", "AgentStateFrame",

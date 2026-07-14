@@ -1756,8 +1756,9 @@ h3.roundtable-phase-divider {
 
   .worldline-roundtable-hero__topline > .btn {
     width: auto;
-    min-width: 0;
+    min-width: max-content;
     padding-inline: 12px;
+    white-space: nowrap;
   }
 
   .worldline-roundtable-hero__actions {

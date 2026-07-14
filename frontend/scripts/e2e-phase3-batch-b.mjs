@@ -88,11 +88,7 @@ async function launchBrowser(headless, browserName = "chromium") {
   if (browserName === "webkit") {
     return webkit.launch({ headless });
   }
-  try {
-    return await chromium.launch({ channel: "chrome", headless });
-  } catch {
-    return chromium.launch({ headless });
-  }
+  return chromium.launch({ headless });
 }
 async function saveScreenshot(page, filePath) {
   await page.screenshot({ path: filePath, fullPage: true }).catch(() => {});
@@ -285,7 +281,12 @@ async function verifyPageScrollThrough(page, containerSelector) {
     };
   }, containerSelector).catch(() => ({ scrollY: 0, top: containerBox.y }));
   await page.mouse.move(anchor.x, anchor.y);
-  await page.mouse.wheel(0, 1200);
+  try {
+    await page.mouse.wheel(0, 1200);
+  } catch (error) {
+    if (!String(error).includes("Mouse wheel is not supported in mobile WebKit")) throw error;
+    await page.evaluate(() => window.scrollBy({ top: 1200, behavior: "instant" }));
+  }
   await page.waitForTimeout(220);
   const readScrollState = async () => page.evaluate((selector) => {
     const element = document.querySelector(selector);
@@ -300,7 +301,12 @@ async function verifyPageScrollThrough(page, containerSelector) {
     return true;
   }
 
-  await page.mouse.wheel(0, -1200);
+  try {
+    await page.mouse.wheel(0, -1200);
+  } catch (error) {
+    if (!String(error).includes("Mouse wheel is not supported in mobile WebKit")) throw error;
+    await page.evaluate(() => window.scrollBy({ top: -1200, behavior: "instant" }));
+  }
   await page.waitForTimeout(220);
   const afterUpScroll = await readScrollState();
   if (afterUpScroll.scrollY < beforeScroll.scrollY - 24 || afterUpScroll.top > beforeScroll.top + 24) {
@@ -636,6 +642,8 @@ const STORY_FIXTURE = {
       insight: "Transparency reduces rumor-driven volatility.",
       key_moments: ["Ledger published"],
       parent_branch_id: null,
+      fork_round: 0,
+      replay_kind: null,
       fork_reason: "",
     },
     {
@@ -647,6 +655,8 @@ const STORY_FIXTURE = {
       insight: "Opacity compounds coalition fractures.",
       key_moments: ["Ledger hidden"],
       parent_branch_id: null,
+      fork_round: 0,
+      replay_kind: null,
       fork_reason: "",
     },
   ],
@@ -1236,11 +1246,27 @@ async function testFactionTimeline(page, baseUrl, outputDir) {
   const roundOne = page.getByText(/Round 1|第 ?1 ?轮/).first();
   results.steps.push({ name: "round-1-visible", passed: await roundOne.isVisible().catch(() => false) });
 
-  const visibleFactionMetrics = page.getByText(/members|名成员|Stance|立场|Confidence|置信度/i);
+  const visibleFactionMetrics = page.getByText(/members|名成员|Affect proxy|情绪代理值|Group share|群体占比/i);
   results.steps.push({ name: "faction-badges-visible", passed: (await visibleFactionMetrics.count().catch(() => 0)) >= 4 });
 
-  const betrayalEvent = page.locator('text=⚔️').first();
-  results.steps.push({ name: "betrayal-event-visible", passed: await betrayalEvent.isVisible().catch(() => false) });
+  const affectShiftEvent = page.getByTestId("faction-event-row-2-0");
+  const affectShiftEventVisible = await affectShiftEvent.isVisible().catch(() => false);
+  const affectShiftLabelVisible = await affectShiftEvent
+    .getByText(/Affect shift \(proxy\)|情绪变化（代理）/i)
+    .isVisible()
+    .catch(() => false);
+  results.steps.push({
+    name: "affect-proxy-event-visible",
+    passed: affectShiftEventVisible && affectShiftLabelVisible,
+  });
+
+  const proxyDisclosure = page.getByText(
+    /not verified trust, relationships, or stances|不是已验证的信任、关系或立场/i,
+  ).first();
+  results.steps.push({
+    name: "affect-proxy-disclosure-visible",
+    passed: await proxyDisclosure.isVisible().catch(() => false),
+  });
 
   const emptyMsg = page.getByText(/No faction data available|暂无阵营数据/).first();
   results.steps.push({ name: "no-faction-empty-state", passed: !(await emptyMsg.isVisible().catch(() => false)) });
@@ -1283,23 +1309,26 @@ async function testCompareDigest(page, baseUrl, outputDir) {
       const raw = window.render_game_to_text?.();
       if (!raw) return false;
       const payload = JSON.parse(raw);
-      return Number(payload?.scene?.agent_count ?? 0) > 0;
+      return Number(payload?.scene?.agent_count ?? 0) > 0
+        && Number(payload?.simulation?.messageCount ?? 0) > 0
+        && Number(payload?.scene?.displayed_bubble_count ?? 0) > 0;
     } catch {
       return false;
     }
   }, { timeout: 5000 }).then(() => true).catch(() => false);
-  results.steps.push({ name: "compare-theater-agent-count-positive", passed: compareAutomationReady });
-
-  const compareAutomation = compareAutomationReady
-    ? await page.evaluate(() => {
-        try {
-          const raw = window.render_game_to_text?.();
-          return raw ? JSON.parse(raw) : null;
-        } catch {
-          return null;
-        }
-      })
-    : null;
+  const compareAutomation = await page.evaluate(() => {
+    try {
+      const raw = window.render_game_to_text?.();
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  writeJson(path.join(stepDir, "automation-state.json"), compareAutomation);
+  results.steps.push({
+    name: "compare-theater-agent-count-positive",
+    passed: compareAutomationReady && Number(compareAutomation?.scene?.agent_count ?? 0) > 0,
+  });
   results.steps.push({
     name: "compare-theater-message-count-positive",
     passed: Number(compareAutomation?.simulation?.messageCount ?? 0) > 0,
@@ -1402,7 +1431,7 @@ function buildContextOptions(mode, browserName) {
     return { viewport: DESKTOP_VIEWPORT };
   }
 
-  return {
+  const options = {
     ...MOBILE_CONTEXT_DEFAULTS,
     isMobile: true,
     hasTouch: true,
@@ -1410,6 +1439,10 @@ function buildContextOptions(mode, browserName) {
     deviceScaleFactor: MOBILE_CONTEXT_DEFAULTS.deviceScaleFactor,
     ...(browserName === "firefox" ? { screen: MOBILE_CONTEXT_DEFAULTS.screen } : {}),
   };
+  // Playwright's Firefox backend rejects the Chromium/WebKit-only isMobile
+  // context flag while still supporting the remaining mobile emulation data.
+  if (browserName === "firefox") delete options.isMobile;
+  return options;
 }
 
 function buildSurfaceRuns(args) {

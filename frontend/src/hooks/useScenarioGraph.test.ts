@@ -32,6 +32,47 @@ describe('useScenarioGraph', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('preserves machine-readable projection and caveat metadata from the graph API', async () => {
+    const provenancePayload = {
+      ...mockPayload,
+      nodes: [{
+        ...mockPayload.nodes[0],
+        type: 'outcome',
+        payload: {
+          provenance_kind: 'runtime_projection',
+          synthetic_provenance: true,
+          evidence_status: 'unavailable',
+          evidence_caveat: 'bounded caveat',
+        },
+      }],
+      edges: [{
+        ...mockPayload.edges[0],
+        provenance_kind: 'runtime_projection',
+        synthetic_provenance: true,
+        evidence_status: 'unavailable',
+        evidence_caveat: 'bounded caveat',
+        metric_kind: 'affect_proxy',
+        caveat: 'bounded proxy caveat',
+      }],
+    };
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve(provenancePayload),
+    } as Response);
+
+    const { result } = renderHook(() => useScenarioGraph('s-provenance'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.data?.edges[0]).toMatchObject({
+      provenance_kind: 'runtime_projection',
+      synthetic_provenance: true,
+      evidence_status: 'unavailable',
+      evidence_caveat: 'bounded caveat',
+      metric_kind: 'affect_proxy',
+      caveat: 'bounded proxy caveat',
+    });
+  });
+
   it('returns error on fetch failure', async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: false,

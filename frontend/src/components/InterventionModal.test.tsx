@@ -173,6 +173,33 @@ describe('InterventionModal advanced modes', () => {
     expect(textarea).toBeInTheDocument();
   });
 
+  it('exposes a named modal dialog, traps focus, closes on Escape, and restores focus', async () => {
+    const user = userEvent.setup();
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const onClose = vi.fn();
+    const { unmount } = render(<InterventionModal {...baseProps} onClose={onClose} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'intervention.title' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAccessibleDescription('intervention.subtitle');
+    await waitFor(() => expect(document.activeElement).toBe(
+      screen.getByRole('textbox', { name: 'intervention.input_label' }),
+    ));
+
+    screen.getByRole('button', { name: 'intervention.submit' }).focus();
+    await user.tab();
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+
   it('shows submitting state with aria-busy and correct text', async () => {
     const user = userEvent.setup();
     let resolveIntervene: (val: unknown) => void = () => {};

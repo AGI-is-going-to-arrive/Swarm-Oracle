@@ -77,6 +77,14 @@ const EMOTION_COLORS: Record<string, string> = {
   surprised: '#ffeb3b',
 };
 
+const PUBLIC_METADATA_FAILURE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+function visibleMetadataFailureCode(code: unknown): string {
+  return typeof code === 'string' && PUBLIC_METADATA_FAILURE_CODE.test(code)
+    ? code
+    : 'LLM_FAILED';
+}
+
 function EmotionDot({ emotion }: { emotion: string }) {
   const { t } = useTranslation();
   const color = EMOTION_COLORS[emotion] || EMOTION_COLORS.neutral;
@@ -308,6 +316,7 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
         {msg.emotion_metadata_status === 'unavailable' ? (
           <span className="bubble-emotion-unavailable" role="status">
             {t('sim.panel.emotion_metadata_unavailable')}
+            {' ('}{visibleMetadataFailureCode(msg.emotion_metadata_failure_code)}{')'}
           </span>
         ) : (
           <EmotionDot emotion={msg.emotion} />

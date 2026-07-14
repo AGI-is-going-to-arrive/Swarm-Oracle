@@ -1,5 +1,6 @@
 """Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import is_dataclass
 from datetime import datetime, timezone
@@ -48,12 +49,52 @@ class MockMessage:
         content: str = "test",
         agent_id: str = "a1",
         id: str | None = "m1",
+        context_receipt: dict | None = None,
     ) -> None:
         self.emotion = emotion
         self.diverge = diverge
         self.content = content
         self.agent_id = agent_id
         self.id = id
+        self._context_receipt = context_receipt
+
+
+def test_context_receipt_is_bounded_without_memory_text():
+    receipt = {
+        "recent_messages_status": "verified",
+        "recent_message_ids": [f"message-{index}" for index in range(20)],
+        "identity_memory_status": "verified",
+        "identity_memory_refs": [f"{index:020d}" for index in range(8)],
+        "identity_memory_source_scenario_ids": [f"scenario-{index}" for index in range(8)],
+        "raw_memory": "must never persist",
+    }
+    message = MockMessage(context_receipt=receipt)
+
+    from app.services.causal_graph import _bounded_context_receipt
+
+    bounded = _bounded_context_receipt(message._context_receipt)
+
+    assert bounded is not None
+    assert len(bounded["recent_message_ids"]) == 12
+    assert len(bounded["identity_memory_refs"]) == 3
+    assert len(bounded["identity_memory_source_scenario_ids"]) == 3
+    assert "raw_memory" not in bounded
+
+    _seed_branch_authority("receipt-scenario", {"receipt-branch": (1,)})
+    append_round_nodes("receipt-scenario", "receipt-branch", 1, [message])
+    snapshot = build_snapshot("receipt-scenario", branch_id="receipt-branch")
+    persisted = snapshot["nodes"][0]["payload"]["context_receipt"]
+    assert persisted == bounded
+    assert "must never persist" not in json.dumps(snapshot)
+
+    append_round_nodes(
+        "receipt-scenario",
+        "receipt-branch",
+        1,
+        [MockMessage(context_receipt=None)],
+    )
+    replayed = build_snapshot("receipt-scenario", branch_id="receipt-branch")
+    assert replayed["nodes"][0]["payload"]["context_receipt"] == bounded
 
 
 def _seed_snapshot_edge(
@@ -1004,8 +1045,9 @@ class TestInterAgentEdges:
         assert nodes_by_id[responds[0]["source"]]["payload"]["agent_id"] == "a1"
         assert nodes_by_id[responds[0]["target"]]["payload"]["agent_id"] == "a2"
         assert responds[0]["evidence"]["confidence_tier"] == "low"
+        assert responds[0]["evidence"]["source_ref"] == "m1"
         assert responds[0]["evidence"]["source_round_number"] == 1
-        assert '"rule": "responds_to"' in responds[0]["evidence"]["detail"]
+        assert json.loads(responds[0]["evidence"]["detail"])["rule"] == "responds_to"
 
     def test_supports_stance_edge_for_aligned_agents(self):
         append_round_nodes(
@@ -1027,11 +1069,15 @@ class TestInterAgentEdges:
         assert "not verified" in supports[0]["caveat"].lower()
         assert supports[0]["evidence"] == {
             "confidence_tier": "low",
-            "source_ref": None,
+            "source_ref": "m1",
             "source_round_number": 1,
             "detail": supports[0]["evidence"]["detail"],
         }
-        assert '"display_type": "affect_alignment_proxy"' in supports[0]["evidence"]["detail"]
+        support_detail = json.loads(supports[0]["evidence"]["detail"])
+        assert support_detail["rule"] == "supports_stance"
+        assert support_detail["display_type"] == "affect_alignment_proxy"
+        assert support_detail["source_message_id"] == "m1"
+        assert support_detail["target_message_id"] == "m2"
 
     def test_opposes_stance_edge_for_opposing_agents(self):
         append_round_nodes(
@@ -1051,8 +1097,11 @@ class TestInterAgentEdges:
         assert opposes[0]["display_type"] == "affect_distance_proxy"
         assert opposes[0]["metric_kind"] == "affect_proxy"
         assert opposes[0]["evidence"]["confidence_tier"] == "low"
+        assert opposes[0]["evidence"]["source_ref"] == "m1"
         assert opposes[0]["evidence"]["source_round_number"] == 1
-        assert '"display_type": "affect_distance_proxy"' in opposes[0]["evidence"]["detail"]
+        oppose_detail = json.loads(opposes[0]["evidence"]["detail"])
+        assert oppose_detail["rule"] == "opposes_stance"
+        assert oppose_detail["display_type"] == "affect_distance_proxy"
 
     def test_no_self_edges_created(self):
         append_round_nodes(
@@ -3107,6 +3156,12 @@ class TestTemporalEdges:
         result = build_snapshot("sc_te1")
         temporal = [e for e in result["edges"] if e["type"] == "temporal"]
         assert len(temporal) == 1
+        assert temporal[0]["evidence"]["confidence_tier"] == "high"
+        assert temporal[0]["evidence"]["source_ref"] == "m_t1"
+        detail = json.loads(temporal[0]["evidence"]["detail"])
+        assert detail["rule"] == "same_agent_consecutive_round"
+        assert detail["source_message_id"] == "m_t1"
+        assert detail["target_message_id"] == "m_t2"
 
     def test_temporal_evidence_uses_actual_source_round_across_branches(self):
         append_round_nodes(
@@ -3182,11 +3237,14 @@ class TestTemporalEdges:
         temporal = [e for e in result["edges"] if e["type"] == "temporal"]
         assert len(temporal) == 1
         assert temporal[0]["evidence"] == {
-            "confidence_tier": None,
-            "source_ref": None,
+            "confidence_tier": "high",
+            "source_ref": "m_backfill_1",
             "source_round_number": 1,
-            "detail": None,
+            "detail": temporal[0]["evidence"]["detail"],
         }
+        assert json.loads(temporal[0]["evidence"]["detail"])["rule"] == (
+            "same_agent_consecutive_round"
+        )
 
     def test_first_round_no_temporal(self):
         """Round 1 should not create temporal edges."""
@@ -3375,6 +3433,9 @@ class TestForkEdgeFallback:
         assert event_node["payload"]["message_id"] == "msg_legacy"
         assert len(caused) == 1
         assert caused[0]["label"] == "triggered fork"
+        assert caused[0]["evidence"]["confidence_tier"] == "low"
+        assert caused[0]["provenance_kind"] == "legacy_repair"
+        assert caused[0]["evidence_status"] == "unavailable"
 
     def test_orphan_fork_provenance_cannot_read_foreign_scenario_messages(self):
         foreign_secret = "FOREIGN-SCENARIO-ORPHAN-SECRET"
@@ -3483,6 +3544,7 @@ class TestForkEdgeFallback:
 
         assert len(caused) == 1
         assert caused[0]["source"] == root_node["id"]
+        assert caused[0]["evidence"]["confidence_tier"] == "low"
 
     def test_invalid_trigger_ids_fall_back_to_same_round_provenance(self):
         """Invalid explicit trigger ids should not orphan the fork node."""
@@ -3519,6 +3581,97 @@ class TestForkEdgeFallback:
         ]
 
         assert len(caused) == 1
+        assert caused[0]["evidence"]["confidence_tier"] == "low"
+        detail = json.loads(caused[0]["evidence"]["detail"])
+        assert detail["provenance_kind"] == "legacy_repair"
+        assert detail["evidence_status"] == "unavailable"
+
+    def test_triggered_fork_uses_only_explicit_diverge_message_provenance(self):
+        append_round_nodes(
+            "sc_fef_explicit_message",
+            "br1",
+            2,
+            [
+                MockMessage(
+                    emotion="calm", agent_id="a1", id="m_plain", content="plain"
+                ),
+                MockMessage(
+                    emotion="tense",
+                    agent_id="a2",
+                    id="m_diverge",
+                    content="split",
+                    diverge="choose another route",
+                ),
+            ],
+            fork_event={
+                "branch_id": "br_child",
+                "reason": "choose another route",
+                "trigger_message_ids": ["m_diverge"],
+            },
+        )
+
+        result = build_snapshot("sc_fef_explicit_message")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        caused = [
+            edge
+            for edge in result["edges"]
+            if edge["target"] == fork_node["id"] and edge["label"] == "triggered fork"
+        ]
+
+        assert len(caused) == 1
+        assert caused[0]["evidence"]["confidence_tier"] == "high"
+        assert caused[0]["evidence"]["source_ref"] == "m_diverge"
+        assert caused[0]["evidence"]["source_round_number"] == 2
+        detail = json.loads(caused[0]["evidence"]["detail"])
+        assert detail["rule"] == "explicit_diverge_message"
+        assert detail["message_id"] == "m_diverge"
+
+    def test_non_diverge_explicit_message_id_is_low_confidence_repair(self):
+        append_round_nodes(
+            "sc_fef_non_diverge",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m_plain", content="plain")],
+            fork_event={
+                "branch_id": "br_child",
+                "reason": "unproven fork",
+                "trigger_message_ids": ["m_plain"],
+            },
+        )
+
+        edge = next(
+            edge
+            for edge in build_snapshot("sc_fef_non_diverge")["edges"]
+            if edge["label"] == "triggered fork"
+        )
+        assert edge["evidence"]["confidence_tier"] == "low"
+        assert json.loads(edge["evidence"]["detail"])["provenance_kind"] == (
+            "legacy_repair"
+        )
+
+    def test_missing_fork_proof_never_fans_out_to_the_whole_round(self):
+        append_round_nodes(
+            "sc_fef_no_proof",
+            "br1",
+            2,
+            [
+                MockMessage(emotion="calm", agent_id="a1", id="m1", content="one"),
+                MockMessage(emotion="calm", agent_id="a2", id="m2", content="two"),
+                MockMessage(emotion="calm", agent_id="a3", id="m3", content="three"),
+            ],
+            fork_event={"branch_id": "br_child", "reason": "legacy fork"},
+        )
+
+        result = build_snapshot("sc_fef_no_proof")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        caused = [
+            edge
+            for edge in result["edges"]
+            if edge["target"] == fork_node["id"] and edge["label"] == "triggered fork"
+        ]
+
+        assert len(caused) == 1
+        assert caused[0]["evidence"]["confidence_tier"] == "low"
 
     def test_replaying_round_without_fork_event_removes_stale_fork_node_and_available_branch(self):
         append_round_nodes(
@@ -3692,6 +3845,19 @@ class TestStanceShift:
             "key": "causal.node.affect_shift_proxy",
             "params": {"agent_name": "a1"},
         }
+        shift_edge = next(
+            edge
+            for edge in result["edges"]
+            if edge["target"] == shift["id"] and edge["label"] == "stance shift"
+        )
+        assert shift_edge["evidence"]["confidence_tier"] == "low"
+        assert shift_edge["evidence"]["source_ref"] == "m_ss_i18n2"
+        shift_detail = json.loads(shift_edge["evidence"]["detail"])
+        assert shift_detail["rule"] == "affect_shift_proxy"
+        assert shift_detail["message_id"] == "m_ss_i18n2"
+        assert shift_detail["previous_message_id"] == "m_ss_i18n1"
+        assert shift_detail["metric_kind"] == "affect_proxy"
+        assert "not verified" in shift_detail["caveat"].lower()
 
     def test_replaying_round_removes_stale_shift_and_refreshes_prev_frame(self):
         """Replaying the same round should drop obsolete shift nodes and refresh stored state."""

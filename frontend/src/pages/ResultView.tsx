@@ -1461,6 +1461,7 @@ export default function ResultView() {
         .then(() => createReplayArtifact(
           'scenario_result_v1',
           encodedReplaySnapshot as unknown as Record<string, unknown>,
+          replaySnapshot.scenario.id,
         ))
         .catch(() => null);
       if (!artifact && isReplayEnvelopeLikelyTooLarge('scenario_result_v1', encodedReplaySnapshot)) {
@@ -1601,6 +1602,7 @@ export default function ResultView() {
       const artifact = await createReplayArtifact(
         sanitizedReplayPayload.kind,
         sanitizedReplayPayload as unknown as Record<string, unknown>,
+        effectiveEndingRoomReplayPayload.roomSnapshot.scenario_id,
       ).catch(() => null);
       let url: string;
       let usedLocalFallback = false;

@@ -17,6 +17,12 @@ export interface NodeDetailEvidence {
   detail?: unknown | null;
   relation?: string | null;
   direction?: string | null;
+  metric_kind?: 'affect_proxy' | string | null;
+  provenance_kind?: 'runtime_projection' | 'legacy_repair' | string | null;
+  synthetic_provenance?: boolean | null;
+  evidence_status?: 'available' | 'unavailable' | string | null;
+  evidence_caveat?: string | null;
+  caveat?: string | null;
 }
 
 export interface NodeDetail {
@@ -150,6 +156,25 @@ export function NodeDetailPanel({
   const typeColor = TYPE_COLORS[node.type] ?? '#888';
   const typeTextColor = isBrightGraphBackground(typeColor) ? '#111' : '#fff';
   const hasPayload = node.payload !== null && node.payload !== undefined;
+  const payloadRecord = node.payload && typeof node.payload === 'object' && !Array.isArray(node.payload)
+    ? node.payload as Record<string, unknown>
+    : null;
+  const allNodeEvidence = node.evidenceList && node.evidenceList.length > 0
+    ? node.evidenceList
+    : node.evidence ? [node.evidence] : [];
+  const isRuntimeProjection = payloadRecord?.provenance_kind === 'runtime_projection'
+    || allNodeEvidence.some((item) => item.provenance_kind === 'runtime_projection');
+  const isLegacyRepair = !isRuntimeProjection && (
+    payloadRecord?.provenance_kind === 'legacy_repair'
+    || allNodeEvidence.some((item) => item.provenance_kind === 'legacy_repair')
+    || (
+      node.type === 'event'
+      && payloadRecord?.synthetic_provenance === true
+      && typeof payloadRecord.message_id === 'string'
+    )
+  );
+  const isAffectProxy = payloadRecord?.metric_kind === 'affect_proxy'
+    || allNodeEvidence.some((item) => item.metric_kind === 'affect_proxy');
   const copyErrorMessage = copyError?.nodeId === node.id ? copyError.message : null;
 
   return (
@@ -240,6 +265,33 @@ export function NodeDetailPanel({
         </div>
       )}
 
+      {(isRuntimeProjection || isLegacyRepair || isAffectProxy) && (
+        <div
+          role="note"
+          data-testid="node-detail-provenance-caveat"
+          style={{
+            fontSize: '0.78rem', color: '#c8d2e4', background: '#252540',
+            border: '1px solid #4a4a68', borderRadius: 6, padding: '8px',
+            marginBottom: '0.75rem', lineHeight: 1.45,
+          }}
+        >
+          {isRuntimeProjection
+            ? t(
+                'node_detail.runtime_projection_caveat',
+                'This outcome is a runtime projection from the simulated branch. It has no persisted causal evidence and is not a real-world probability.',
+              )
+            : isLegacyRepair
+              ? t(
+                  'node_detail.legacy_repair_caveat',
+                  'This event was reconstructed at read time to repair legacy graph provenance. It is not persisted causal truth.',
+                )
+              : t(
+                  'node_detail.affect_proxy_caveat',
+                  'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+                )}
+        </div>
+      )}
+
       {/* Argument unit status */}
       {node.unitStatus && (
         <div style={{ fontSize: '0.8rem', marginBottom: '0.5rem' }}>
@@ -278,9 +330,7 @@ export function NodeDetailPanel({
 
       {/* Evidence (edge-level, from causal graph) */}
       {(() => {
-        const allEvidence = node.evidenceList && node.evidenceList.length > 0
-          ? node.evidenceList
-          : node.evidence ? [node.evidence] : [];
+        const allEvidence = allNodeEvidence;
         const nonEmpty = allEvidence.filter(
           ev => ev.confidence_tier != null
             || ev.source_ref != null
@@ -397,6 +447,9 @@ export function NodeDetailPanel({
         const branchId = p?.branch_id;
         const messageId = p?.message_id;
         const syntheticProvenance = p?.synthetic_provenance;
+        const provenanceKind = p?.provenance_kind;
+        const evidenceStatus = p?.evidence_status;
+        const metricKind = p?.metric_kind;
         const storyExcerpt = p?.story_excerpt;
         const insight = p?.insight;
         const probability = p?.probability;
@@ -426,7 +479,10 @@ export function NodeDetailPanel({
           hasDisplayValue(forkReason) ||
           hasDisplayValue(forkSummary) ||
           hasDisplayValue(forkSourceBranch) ||
-          forkChildren.length > 0
+          forkChildren.length > 0 ||
+          hasDisplayValue(provenanceKind) ||
+          hasDisplayValue(evidenceStatus) ||
+          hasDisplayValue(metricKind)
         );
         return (
           <div style={{ marginBottom: '0.5rem' }}>
@@ -499,6 +555,9 @@ export function NodeDetailPanel({
                 {forkSummary != null && <div><span>{t('node_detail.fork_impact', 'Impact')}</span>: {boundedPrimitive(forkSummary, EVENT_CONTENT_LIMIT, unavailable)}</div>}
                 {forkSourceBranch != null && <div><span>{t('node_detail.source_branch', 'Source Branch')}</span>: {boundedPrimitive(forkSourceBranch, EVENT_ID_LIMIT, unavailable)}</div>}
                 {forkChildren.length > 0 && <div><span>{t('node_detail.child_branches', 'Child Branches')}</span>: {truncateCodepoints(forkChildren.join(', '), EVENT_CONTENT_LIMIT)}</div>}
+                {provenanceKind != null && <div><span>{t('node_detail.provenance_kind', 'Provenance')}</span>: {boundedPrimitive(provenanceKind, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                {evidenceStatus != null && <div><span>{t('node_detail.evidence_status', 'Evidence status')}</span>: {boundedPrimitive(evidenceStatus, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
+                {metricKind != null && <div><span>{t('node_detail.metric_kind', 'Metric kind')}</span>: {boundedPrimitive(metricKind, EVENT_SHORT_TEXT_LIMIT, unavailable)}</div>}
               </div>
             ) : (
               <pre style={{

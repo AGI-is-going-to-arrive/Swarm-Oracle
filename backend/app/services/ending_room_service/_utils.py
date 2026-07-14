@@ -328,7 +328,12 @@ def _branch_lookup(session: Session, scenario_id: str) -> dict[str, Branch]:
 def _speaker_lookup(session: Session, scenario_id: str) -> dict[str, Agent]:
     return {
         agent.id: agent
-        for agent in session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+        for agent in session.exec(
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                Agent.source_type.is_(None) | (Agent.source_type != "world_event_source"),
+            )
+        ).all()
     }
 
 

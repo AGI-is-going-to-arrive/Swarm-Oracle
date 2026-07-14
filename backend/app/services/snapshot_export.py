@@ -46,6 +46,8 @@ from app.models import (
     InterventionLog,
     Round,
     Scenario,
+    SimulationAction,
+    SimulationActionSequence,
 )
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
@@ -55,6 +57,7 @@ from app.services.agent_message_metadata import (
 )
 from app.services.causal_graph import _message_node_key
 from app.services.result_report.schema import validate_full_report_payload
+from app.services.simulation_actions import normalize_extracted_action
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,8 @@ MIN_RATIO_CHECK_MEMBER_BYTES = 1024 * 1024
 MAX_ZIP_MEMBER_COUNT = 256
 MAX_JSONL_ROWS = 100_000
 MAX_JSONL_LINE_BYTES = 1_048_576  # 1 MB per row
+MAX_GRAPH_SOURCE_REF_CHARS = 160
+MAX_GRAPH_EVIDENCE_JSON_BYTES = 4096
 _SENSITIVE_KEYS = frozenset(
     {
         # Normalized form: lowercase, separators stripped (_, -)
@@ -94,6 +99,7 @@ _DATA_FILES = (
     "branches.jsonl",
     "agents.jsonl",
     "messages.jsonl",
+    "actions.jsonl",
     "causal_graph.json",
     "intervention_receipts.jsonl",
 )
@@ -176,6 +182,222 @@ class SnapshotImportError(ValueError):
     """Raised when an imported ZIP fails validation."""
 
 
+def _validate_snapshot_actions(
+    rows: list[dict[str, Any]],
+    *,
+    branches: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> None:
+    branch_ids = {str(row.get("id") or "") for row in branches}
+    agent_ids = {str(row.get("id") or "") for row in agents if str(row.get("id") or "")}
+    if len(agent_ids) != len(agents):
+        raise SnapshotImportError("agents contain empty or duplicate ids")
+    message_coords = {
+        str(row.get("id") or ""): (
+            str(row.get("branch_id") or ""),
+            str(row.get("round_id") or ""),
+            int(row.get("round_number") or 0),
+            str(row.get("agent_id") or ""),
+        )
+        for row in messages
+    }
+    by_id: dict[str, dict[str, Any]] = {}
+    branch_by_id = {str(row.get("id") or ""): row for row in branches}
+    source_agent_ids = {
+        str(row.get("id") or "")
+        for row in agents
+        if row.get("source_type") == "world_event_source"
+    }
+    source_agent_names = {
+        str(row.get("id") or ""): str(row.get("name") or "").strip()
+        for row in agents
+        if row.get("source_type") == "world_event_source"
+    }
+    used_source_agent_ids: set[str] = set()
+
+    def visible(target: dict[str, Any], current_branch_id: str) -> bool:
+        target_branch_id = str(target.get("branch_id") or "")
+        target_round = int(target.get("round_number") or 0)
+        cursor = branch_by_id.get(current_branch_id)
+        ceiling: int | None = None
+        seen: set[str] = set()
+        while cursor is not None:
+            cursor_id = str(cursor.get("id") or "")
+            if cursor_id in seen or cursor.get("replay_kind"):
+                return cursor_id == target_branch_id and (
+                    ceiling is None or target_round <= ceiling
+                )
+            seen.add(cursor_id)
+            if cursor_id == target_branch_id:
+                return ceiling is None or target_round <= ceiling
+            ceiling = int(cursor.get("fork_round") or 0)
+            cursor = branch_by_id.get(str(cursor.get("parent_branch_id") or ""))
+        return False
+
+    sequences: set[int] = set()
+    action_message_ids: set[str] = set()
+    for raw in rows:
+        action_id = str(raw.get("id") or "").strip()
+        try:
+            sequence = int(raw.get("sequence"))
+            round_number = int(raw.get("round_number"))
+            payload = json.loads(raw.get("payload_json") or "{}")
+            _coerce_datetime_field(raw.get("created_at"), "actions.created_at")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SnapshotImportError("actions contain malformed scalar fields") from exc
+        branch_id = str(raw.get("branch_id") or "")
+        round_id = str(raw.get("round_id") or "")
+        agent_id = str(raw.get("agent_id") or "")
+        if (
+            not action_id
+            or action_id in by_id
+            or sequence < 1
+            or sequence in sequences
+            or round_number < 1
+            or branch_id not in branch_ids
+            or agent_id not in agent_ids
+        ):
+            raise SnapshotImportError("actions contain invalid identity or scope")
+        message_id = str(raw.get("message_id") or "")
+        is_bootstrap = (
+            agent_id in source_agent_ids
+            and not message_id
+            and str(raw.get("action_type") or "") == "POST"
+            and raw.get("status") == "verified"
+            and payload.get("bootstrap") is True
+            and round_number == 1
+            and branch_by_id.get(branch_id, {}).get("parent_branch_id") in {None, ""}
+        )
+        if is_bootstrap:
+            source_name = payload.get("source_name")
+            published_at = payload.get("published_at")
+            credibility_hint = payload.get("credibility_hint")
+            tags = payload.get("tags")
+            if (
+                not isinstance(source_name, str)
+                or not source_name.strip()
+                or len(source_name) > 80
+                or re.search(r"[\x00-\x1f\x7f]", source_name)
+                or "```" in source_name
+                or source_name.casefold()
+                != source_agent_names.get(agent_id, "").casefold()
+                or (
+                    published_at is not None
+                    and (
+                        not isinstance(published_at, str)
+                        or not published_at.strip()
+                    )
+                )
+                or (
+                    credibility_hint is not None
+                    and (
+                        not isinstance(credibility_hint, str)
+                        or not credibility_hint.strip()
+                        or len(credibility_hint) > 300
+                        or re.search(r"[\x00-\x1f\x7f]", credibility_hint)
+                        or "```" in credibility_hint
+                    )
+                )
+                or not isinstance(tags, list)
+                or len(tags) > 8
+                or any(
+                    not isinstance(tag, str)
+                    or not tag.strip()
+                    or len(tag) > 40
+                    or re.search(r"[\x00-\x1f\x7f]", tag)
+                    for tag in tags
+                )
+                or len({tag.strip().casefold() for tag in tags}) != len(tags)
+            ):
+                raise SnapshotImportError("bootstrap action metadata is invalid")
+            if published_at is not None:
+                _coerce_datetime_field(published_at, "actions.payload.published_at")
+        if not is_bootstrap:
+            if agent_id in source_agent_ids:
+                raise SnapshotImportError("world event source may only own bootstrap posts")
+            if (
+                not message_id
+                or message_id in action_message_ids
+                or message_coords.get(message_id)
+                != (branch_id, round_id, round_number, agent_id)
+            ):
+                raise SnapshotImportError("actions.message_id coordinate mismatch")
+            action_message_ids.add(message_id)
+        else:
+            used_source_agent_ids.add(agent_id)
+        status = str(raw.get("status") or "")
+        failure = str(raw.get("failure_code") or "") or None
+        if status not in {"verified", "unavailable", "failed"}:
+            raise SnapshotImportError("actions.status is invalid")
+        if (status == "verified") == bool(failure):
+            raise SnapshotImportError("actions status/failure_code mismatch")
+        if failure and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", failure):
+            raise SnapshotImportError("actions.failure_code is invalid")
+        normalized = normalize_extracted_action(
+            {
+                "action_type": raw.get("action_type"),
+                "status": status,
+                "failure_code": failure,
+                "content": raw.get("content"),
+                "target": (
+                    {"kind": raw.get("target_type"), "id": raw.get("target_id")}
+                    if raw.get("target_type")
+                    else None
+                ),
+                "parent_action_id": raw.get("parent_action_id"),
+                "payload": payload,
+            },
+            allow_bootstrap_post=is_bootstrap,
+        )
+        if (
+            normalized["action_type"] != str(raw.get("action_type"))
+            or normalized["status"] != status
+            or normalized.get("failure_code") != failure
+            or normalized.get("content") != (str(raw.get("content") or "").strip() or None)
+            or normalized.get("parent_action_id")
+            != (str(raw.get("parent_action_id") or "").strip() or None)
+            or normalized.get("target_type") != (str(raw.get("target_type") or "").strip() or None)
+            or normalized.get("target_id") != (str(raw.get("target_id") or "").strip() or None)
+        ):
+            raise SnapshotImportError("actions shape is invalid")
+        if normalized.get("payload") != payload:
+            raise SnapshotImportError("actions payload is oversized or contains credentials")
+        by_id[action_id] = raw
+        sequences.add(sequence)
+    if source_agent_ids != used_source_agent_ids:
+        raise SnapshotImportError("world event source must own at least one bootstrap post")
+    for raw in by_id.values():
+        sequence = int(raw["sequence"])
+        branch_id = str(raw.get("branch_id") or "")
+        parent_id = str(raw.get("parent_action_id") or "")
+        if parent_id:
+            parent = by_id.get(parent_id)
+            if (
+                parent is None
+                or not visible(parent, branch_id)
+                or int(parent.get("sequence") or 0) >= sequence
+                or int(parent.get("round_number") or 0) > int(raw.get("round_number") or 0)
+            ):
+                raise SnapshotImportError("actions parent must be same-branch and earlier")
+        target_type = str(raw.get("target_type") or "")
+        target_id = str(raw.get("target_id") or "")
+        if target_type in {"action", "post"}:
+            target = by_id.get(target_id)
+            if (
+                target is None
+                or not visible(target, branch_id)
+                or int(target.get("sequence") or 0) >= sequence
+                or int(target.get("round_number") or 0) > int(raw.get("round_number") or 0)
+                or (target_type == "post" and target.get("action_type") != "POST")
+            ):
+                raise SnapshotImportError("actions target must be same-branch and earlier")
+        elif target_type == "agent" and target_id not in agent_ids:
+            raise SnapshotImportError("actions agent target is outside snapshot")
+        elif target_type == "agent" and target_id == str(raw.get("agent_id") or ""):
+            raise SnapshotImportError("actions cannot target the acting agent")
+
+
 # ── helpers ──────────────────────────────────────────────
 
 
@@ -238,9 +460,7 @@ def _scrub_export_text(value: Any) -> Any:
         candidate = token.rstrip(".,;:!?")
         trailing_punctuation = token[len(candidate) :]
         prefix = value[max(0, match.start() - 48) : match.start()]
-        has_credential_context = bool(
-            _EXPORT_BEARER_CREDENTIAL_CONTEXT_RE.search(prefix)
-        )
+        has_credential_context = bool(_EXPORT_BEARER_CREDENTIAL_CONTEXT_RE.search(prefix))
         has_credential_shape = (
             any(char in _EXPORT_BEARER_SIGNAL_CHARS for char in candidate)
             or len(candidate) >= _EXPORT_BEARER_LONG_CANDIDATE_LENGTH
@@ -371,7 +591,6 @@ def _serialize_agent(agent: Agent) -> dict[str, Any]:
         "stance": _scrub_export_text(agent.stance),
         "emotion": _scrub_export_text(agent.emotion),
         "group_id": agent.group_id,
-        "agent_identity_id": agent.agent_identity_id,
         "source_type": agent.source_type,
     }
 
@@ -382,9 +601,7 @@ def _serialize_message(
     branch_id: str,
 ) -> dict[str, Any]:
     emotion_projection = public_emotion_metadata(message)
-    emotion_projection["emotion"] = _scrub_export_text(
-        emotion_projection.get("emotion")
-    )
+    emotion_projection["emotion"] = _scrub_export_text(emotion_projection.get("emotion"))
     return {
         "id": message.id,
         "round_id": message.round_id,
@@ -547,6 +764,35 @@ def build_snapshot_manifest(
     messages = _collect_messages(session, branches)
     graph = _collect_causal_graph(session, scenario_id)
     intervention_receipts = _collect_intervention_receipts(session, scenario_id)
+    action_rows = list(
+        session.exec(
+            select(SimulationAction)
+            .where(SimulationAction.scenario_id == scenario_id)
+            .order_by(SimulationAction.sequence, SimulationAction.id)
+        ).all()
+    )
+    actions = [
+        {
+            "id": row.id,
+            "branch_id": row.branch_id,
+            "round_id": row.round_id,
+            "round_number": row.round_number,
+            "sequence": row.sequence,
+            "agent_id": row.agent_id,
+            "message_id": row.message_id,
+            "action_type": row.action_type.value,
+            "status": row.status.value,
+            "failure_code": row.failure_code,
+            "parent_action_id": row.parent_action_id,
+            "target_type": row.target_type,
+            "target_id": row.target_id,
+            "content": _scrub_export_text(row.content),
+            "payload_json": _redact_json_string(row.payload_json),
+            "idempotency_key": row.idempotency_key,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in action_rows
+    ]
 
     scenario_payload = _serialize_scenario(scenario, include_private=include_private)
     branches_payload = [_serialize_branch(b) for b in branches]
@@ -575,6 +821,13 @@ def build_snapshot_manifest(
                 "utf-8"
             )
             if messages
+            else b""
+        ),
+        "actions.jsonl": (
+            "\n".join(json.dumps(a, ensure_ascii=False, default=str) for a in actions).encode(
+                "utf-8"
+            )
+            if actions
             else b""
         ),
         "causal_graph.json": json.dumps(graph, ensure_ascii=False, default=str).encode("utf-8"),
@@ -681,9 +934,7 @@ def _validate_snapshot_branch_graph(branch_rows: list[dict[str, Any]]) -> None:
     for index, row in enumerate(branch_rows, start=1):
         branch_id = str(row.get("id") or "").strip()
         if not branch_id:
-            raise SnapshotImportError(
-                f"branches.jsonl row {index} has no branch id"
-            )
+            raise SnapshotImportError(f"branches.jsonl row {index} has no branch id")
         if branch_id in parents:
             raise SnapshotImportError(f"Duplicate branch id: {branch_id!r}")
         parents[branch_id] = str(row.get("parent_branch_id") or "").strip()
@@ -692,9 +943,7 @@ def _validate_snapshot_branch_graph(branch_rows: list[dict[str, Any]]) -> None:
         if not parent_id:
             continue
         if parent_id == branch_id:
-            raise SnapshotImportError(
-                f"Branch {branch_id!r} cannot be its own parent"
-            )
+            raise SnapshotImportError(f"Branch {branch_id!r} cannot be its own parent")
         if parent_id not in parents:
             raise SnapshotImportError(
                 f"Branch {branch_id!r} references unknown parent branch {parent_id!r}"
@@ -711,9 +960,7 @@ def _validate_snapshot_branch_graph(branch_rows: list[dict[str, Any]]) -> None:
             path.append(current_id)
             current_id = parents[current_id]
         if current_id and states.get(current_id) == 1:
-            raise SnapshotImportError(
-                f"Branch parent graph contains a cycle at {current_id!r}"
-            )
+            raise SnapshotImportError(f"Branch parent graph contains a cycle at {current_id!r}")
         for path_id in path:
             states[path_id] = 2
 
@@ -732,9 +979,7 @@ def _validate_unique_snapshot_ids(
         if not source_id:
             continue
         if source_id in seen:
-            raise SnapshotImportError(
-                f"Duplicate {entity_name} id: {source_id!r}"
-            )
+            raise SnapshotImportError(f"Duplicate {entity_name} id: {source_id!r}")
         seen.add(source_id)
 
 
@@ -1178,9 +1423,7 @@ def _sync_snapshot_premortem_analysis(
         return set()
 
     evidence_by_id = {
-        str(item.get("id")): item
-        for item in evidence
-        if str(item.get("id") or "").strip()
+        str(item.get("id")): item for item in evidence if str(item.get("id") or "").strip()
     }
     raw_items = analysis.get("items")
     had_items = isinstance(raw_items, list) and bool(raw_items)
@@ -1194,8 +1437,7 @@ def _sync_snapshot_premortem_analysis(
             else []
         )
         if isinstance(raw_link, dict)
-        if (evidence_ref := str(raw_link.get("evidence_ref") or "").strip())
-        in evidence_by_id
+        if (evidence_ref := str(raw_link.get("evidence_ref") or "").strip()) in evidence_by_id
     }
     if report.get("status") == "failed":
         report["premortem_analysis"] = {
@@ -1243,9 +1485,7 @@ def _sync_snapshot_premortem_analysis(
             str(evidence_by_id[link["evidence_ref"]].get("branch_id") or "")
             for link in retained_chain
         }
-        if len(seen_coordinates) < 2 or (
-            len(agent_ids) < 2 and len(branch_ids) < 2
-        ):
+        if len(seen_coordinates) < 2 or (len(agent_ids) < 2 and len(branch_ids) < 2):
             diversity_complete = False
 
     if not retained_items:
@@ -1317,6 +1557,8 @@ def import_snapshot_zip(
     _validate_snapshot_branch_graph(branches_rows)
     agents_rows = _load_jsonl(contents.get("agents.jsonl", b""), "agents.jsonl")
     messages_rows = _load_jsonl(contents.get("messages.jsonl", b""), "messages.jsonl")
+    actions_rows = _load_jsonl(contents.get("actions.jsonl", b""), "actions.jsonl")
+    _validate_unique_snapshot_ids(actions_rows, entity_name="action")
     intervention_receipt_rows = _load_jsonl(
         contents.get("intervention_receipts.jsonl", b""),
         "intervention_receipts.jsonl",
@@ -1331,6 +1573,12 @@ def import_snapshot_zip(
     _validate_unique_snapshot_ids(agents_rows, entity_name="agent")
     _validate_snapshot_message_coordinates(messages_rows)
     _validate_snapshot_graph_node_ids(graph_payload)
+    _validate_snapshot_actions(
+        actions_rows,
+        branches=branches_rows,
+        agents=agents_rows,
+        messages=messages_rows,
+    )
 
     from app.models import (
         AgentTier as _AgentTier,
@@ -1561,6 +1809,113 @@ def import_snapshot_zip(
         if original_message_id:
             message_id_map[original_message_id] = message.id
 
+    action_id_map: dict[str, str] = {}
+    pending_action_links: list[tuple[SimulationAction, dict[str, Any]]] = []
+    seen_sequences: set[int] = set()
+    for raw in sorted(actions_rows, key=lambda item: int(item.get("sequence") or 0)):
+        branch_orig = str(raw.get("branch_id") or "")
+        round_orig = str(raw.get("round_id") or "")
+        agent_orig = str(raw.get("agent_id") or "")
+        sequence = _coerce_int_field(
+            raw.get("sequence"), "actions.sequence", default=None, min_value=1
+        )
+        if (
+            sequence is None
+            or sequence in seen_sequences
+            or branch_orig not in branch_id_map
+            or round_orig not in round_id_map
+            or agent_orig not in agent_id_map
+        ):
+            raise SnapshotImportError("actions contain invalid or duplicate coordinates")
+        seen_sequences.add(sequence)
+        original_id = str(raw.get("id") or "")
+        row = SimulationAction(
+            scenario_id=new_scenario_id,
+            branch_id=branch_id_map[branch_orig],
+            round_id=round_id_map[round_orig],
+            round_number=_coerce_int_field(
+                raw.get("round_number"), "actions.round_number", default=1, min_value=1
+            )
+            or 1,
+            sequence=sequence,
+            agent_id=agent_id_map[agent_orig],
+            message_id=message_id_map.get(str(raw.get("message_id") or "")),
+            action_type=str(raw.get("action_type") or "IDLE"),
+            status=str(raw.get("status") or "unavailable"),
+            failure_code=raw.get("failure_code"),
+            target_type=raw.get("target_type"),
+            content=str(raw.get("content") or "")[:2000] or None,
+            payload_json=_redact_json_string(raw.get("payload_json")),
+            idempotency_key=f"snapshot:{new_scenario_id}:{sequence}:{original_id}",
+            created_at=_coerce_datetime_field(raw.get("created_at"), "actions.created_at"),
+        )
+        session.add(row)
+        session.flush()
+        action_id_map[original_id] = row.id
+        pending_action_links.append((row, raw))
+    for row, raw in pending_action_links:
+        parent_orig = str(raw.get("parent_action_id") or "")
+        target_type = str(raw.get("target_type") or "")
+        target_orig = str(raw.get("target_id") or "")
+        if parent_orig:
+            parent_id = action_id_map.get(parent_orig)
+            if parent_id is None:
+                raise SnapshotImportError("actions.parent_action_id is outside snapshot")
+            parent = session.get(SimulationAction, parent_id)
+            if parent is None or parent.sequence >= row.sequence:
+                raise SnapshotImportError("actions parent must precede child")
+            row.parent_action_id = parent_id
+        if target_type in {"action", "post"}:
+            target_id = action_id_map.get(target_orig)
+            if target_id is None:
+                raise SnapshotImportError("actions target is outside snapshot")
+            row.target_type = target_type
+            row.target_id = target_id
+        elif target_type == "agent":
+            target_id = agent_id_map.get(target_orig)
+            if target_id is None:
+                raise SnapshotImportError("actions agent target is outside snapshot")
+            row.target_id = target_id
+        else:
+            row.target_id = target_orig[:160] or None
+        session.add(row)
+    action_message_orig_ids = {
+        str(raw.get("message_id") or "") for raw in actions_rows if raw.get("message_id")
+    }
+    next_sequence = max(seen_sequences, default=0)
+    for original_message_id, new_message_id in message_id_map.items():
+        if original_message_id in action_message_orig_ids:
+            continue
+        message = session.get(AgentMessage, new_message_id)
+        round_row = session.get(Round, message.round_id) if message else None
+        if message is None or round_row is None:
+            raise SnapshotImportError("legacy message action backfill lost coordinates")
+        next_sequence += 1
+        seen_sequences.add(next_sequence)
+        session.add(
+            SimulationAction(
+                scenario_id=new_scenario_id,
+                branch_id=round_row.branch_id,
+                round_id=round_row.id,
+                round_number=round_row.round_number,
+                sequence=next_sequence,
+                agent_id=message.agent_id,
+                message_id=message.id,
+                action_type="IDLE",
+                status="unavailable",
+                failure_code="LEGACY_ACTION_UNAVAILABLE",
+                payload_json="{}",
+                idempotency_key=f"snapshot:{new_scenario_id}:legacy:{message.id}",
+            )
+        )
+    if seen_sequences:
+        session.add(
+            SimulationActionSequence(
+                scenario_id=new_scenario_id,
+                value=max(seen_sequences),
+            )
+        )
+
     for raw in intervention_receipt_rows:
         branch_orig = str(raw.get("branch_id") or "").strip()
         new_branch_id = branch_id_map.get(branch_orig)
@@ -1732,14 +2087,10 @@ def _import_causal_graph(
                     if isinstance(original_agent_id, str)
                     else None
                 )
-                if (
-                    remapped_agent_id is not None
-                    and node_key
-                    == _message_node_key(
-                        node_round_number,
-                        source_ref_id,
-                        original_agent_id,
-                    )
+                if remapped_agent_id is not None and node_key == _message_node_key(
+                    node_round_number,
+                    source_ref_id,
+                    original_agent_id,
                 ):
                     node_key = _message_node_key(
                         node_round_number,
@@ -1774,8 +2125,28 @@ def _import_causal_graph(
             )
         weight = raw.get("weight")
         source_ref = raw.get("source_ref")
+        if source_ref is not None and not isinstance(source_ref, str):
+            raise SnapshotImportError("causal_graph.edges.source_ref must be a string")
+        if isinstance(source_ref, str) and len(source_ref) > MAX_GRAPH_SOURCE_REF_CHARS:
+            raise SnapshotImportError("causal_graph.edges.source_ref exceeds maximum length")
         if isinstance(source_ref, str) and source_ref in message_id_map:
             source_ref = message_id_map[source_ref]
+        confidence_tier = raw.get("confidence_tier")
+        if confidence_tier not in {None, "low", "medium", "high"}:
+            raise SnapshotImportError(
+                "causal_graph.edges.confidence_tier must be low, medium, or high"
+            )
+        evidence_json = _remap_payload_json(
+            raw.get("evidence_json"),
+            branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map,
+            message_id_map=message_id_map,
+        )
+        if (
+            isinstance(evidence_json, str)
+            and len(evidence_json.encode("utf-8")) > MAX_GRAPH_EVIDENCE_JSON_BYTES
+        ):
+            raise SnapshotImportError("causal_graph.edges.evidence_json exceeds maximum size")
         edge = GraphEdge(
             snapshot_id=new_snapshot_id,
             source_node_id=new_src,
@@ -1793,7 +2164,7 @@ def _import_causal_graph(
                 agent_id_map=agent_id_map,
                 message_id_map=message_id_map,
             ),
-            confidence_tier=raw.get("confidence_tier"),
+            confidence_tier=confidence_tier,
             source_ref=source_ref,
             source_round_number=_coerce_int_field(
                 raw.get("source_round_number"),
@@ -1801,12 +2172,7 @@ def _import_causal_graph(
                 default=None,
                 min_value=1,
             ),
-            evidence_json=_remap_payload_json(
-                raw.get("evidence_json"),
-                branch_id_map=branch_id_map,
-                agent_id_map=agent_id_map,
-                message_id_map=message_id_map,
-            ),
+            evidence_json=evidence_json,
         )
         session.add(edge)
 
@@ -1839,10 +2205,21 @@ def _remap_payload_json(
                         new_dict[key] = mapped_branch_id
                 elif key == "agent_id" and isinstance(sub, str):
                     new_dict[key] = agent_id_map.get(sub, sub)
-                elif key == "message_id" and isinstance(sub, str):
+                elif key.endswith("message_id") and isinstance(sub, str):
                     mapped_message_id = message_id_map.get(sub)
                     if mapped_message_id:
                         new_dict[key] = mapped_message_id
+                elif key in {
+                    "trigger_message_ids",
+                    "recent_message_ids",
+                    "source_message_ids",
+                    "retrieved_in_message_ids",
+                } and isinstance(sub, list):
+                    new_dict[key] = [
+                        message_id_map[item]
+                        for item in sub
+                        if isinstance(item, str) and item in message_id_map
+                    ]
                 elif key == "children" and isinstance(sub, list):
                     remapped_children: list[Any] = []
                     for child in sub:

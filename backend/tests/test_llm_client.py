@@ -2446,6 +2446,18 @@ class TestLLMCall:
 
 
 class TestLLMCallJSON:
+    def test_malformed_json_log_does_not_include_model_content(self, caplog):
+        raw = "totally malformed model output with sk-live-secret-123456"
+        caplog.set_level("ERROR")
+
+        with pytest.raises(llm_client.LLMError, match="Invalid JSON from LLM"):
+            llm_client._parse_json_response(raw)
+
+        assert raw not in caplog.text
+        assert "sk-live-secret-123456" not in caplog.text
+        assert "content_len=" in caplog.text
+        assert "content_sha256=" in caplog.text
+
     def test_sanitize_error_masks_generic_secret_patterns(self):
         sanitized = llm_client._sanitize_error(
             'api_key="key-abcdef123456" token=pat_secret987654 Bearer abcdefghijklmnop'
@@ -4208,28 +4220,45 @@ class TestMeasureProviderParallelism:
     @pytest.mark.asyncio
     async def test_parallelism_timeout_is_one_overall_deadline(self, monkeypatch):
         calls: list[int] = []
+        wait_budgets: list[float] = []
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
 
         async def _slow_probe(**kwargs):
+            assert isinstance(kwargs["client"], FakeAsyncClient)
             calls.append(1)
-            await asyncio.sleep(0.03)
             return True, None
 
-        monkeypatch.setattr(llm_client, "_probe_provider_request", _slow_probe)
+        async def _controlled_wait_for(awaitable, *, timeout):
+            wait_budgets.append(timeout)
+            result = await awaitable
+            if len(wait_budgets) == 2:
+                raise TimeoutError
+            return result
 
-        result = await asyncio.wait_for(
-            llm_client.measure_provider_parallelism(
-                api_key="sk-test",
-                base_url="https://api.openai.com/v1/chat/completions",
-                model="gpt-test",
-                max_parallelism=4,
-                timeout=0.04,
-            ),
-            timeout=0.2,
+        clock = iter((100.0, 100.0, 100.03))
+        monkeypatch.setattr(llm_client, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(llm_client.httpx, "AsyncClient", FakeAsyncClient)
+        monkeypatch.setattr(llm_client, "_probe_provider_request", _slow_probe)
+        monkeypatch.setattr(llm_client.asyncio, "wait_for", _controlled_wait_for)
+
+        result = await llm_client.measure_provider_parallelism(
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-test",
+            max_parallelism=4,
+            timeout=0.04,
         )
 
         assert result["estimated_parallelism"] == 1
         assert result["failure"] == "Provider parallelism probe timed out"
         assert len(calls) == 3
+        assert wait_budgets == pytest.approx([0.04, 0.01])
 
     @pytest.mark.asyncio
     async def test_parallelism_probe_does_not_invent_success_when_width_one_fails(

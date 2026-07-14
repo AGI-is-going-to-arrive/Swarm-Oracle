@@ -25,6 +25,7 @@ import {
   type ContinuityOverride,
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
+  type InitialSocialFeedItem,
   createMultiRun,
   getOfficialSamples,
   importOfficialSample,
@@ -41,6 +42,8 @@ import AgentSelectionStrip from '../components/AgentSelectionStrip';
 import { AgentDrawer } from '../components/AgentDrawer';
 import { DocumentSeedPanel } from '../components/DocumentSeedPanel';
 import { LocalPackPicker } from '../components/LocalPackPicker';
+import { InitialSocialFeedEditor } from '../components/InitialSocialFeedEditor';
+import { isInitialSocialFeedValid } from '../lib/initialSocialFeed';
 import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
 import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
@@ -386,6 +389,7 @@ export function InputView() {
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const [multiRunEnabled, setMultiRunEnabled] = useState(false);
   const [multiRunCount, setMultiRunCount] = useState(5);
+  const [initialSocialFeed, setInitialSocialFeed] = useState<InitialSocialFeedItem[]>([]);
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -1316,6 +1320,15 @@ export function InputView() {
       ...(clampedCustomAgentIds.length > 0 && { customAgentIdentityIds: clampedCustomAgentIds }),
       ...(campaignContext && { campaignContext }),
       ...(effectiveWorldContext && { worldContext: effectiveWorldContext }),
+      ...(initialSocialFeed.length > 0 && {
+        initialSocialFeed: initialSocialFeed.map((item) => ({
+          sourceName: item.sourceName.trim(),
+          content: item.content.trim(),
+          ...(item.publishedAt && { publishedAt: item.publishedAt }),
+          ...(item.credibilityHint?.trim() && { credibilityHint: item.credibilityHint.trim() }),
+          ...(item.tags?.length && { tags: item.tags }),
+        })),
+      }),
       modelProfileId: profileProviderOverrideRequested
         ? undefined
         : selectedProfileId || undefined,
@@ -1345,6 +1358,7 @@ export function InputView() {
     campaignChallengeRotation,
     getClampedCustomAgentIds,
     worldContext,
+    initialSocialFeed,
     profiles,
     profileProviderOverrideRequested,
     selectedProfileId,
@@ -1506,6 +1520,11 @@ export function InputView() {
       setLaunchError(t('home.launch_in_progress'));
       return;
     }
+    if (!isInitialSocialFeedValid(initialSocialFeed)) {
+      setAdvancedOpen(true);
+      setLaunchError(t('home.initial_feed_invalid'));
+      return;
+    }
     const overrides: ContinuityOverride[] = continuityMatches.map((match) => {
       const action = continuityChoices[match.continuity_key] ?? 'reuse_existing';
       return {
@@ -1532,6 +1551,7 @@ export function InputView() {
     continuityChoices,
     continuityMatches,
     executeSimulationLaunch,
+    initialSocialFeed,
     isSubmitting,
     markLaunchInFlight,
     pendingLaunch,
@@ -1938,6 +1958,11 @@ export function InputView() {
     }
     if (isSubmitting || launchInFlightRef.current) {
       setLaunchError(t('home.launch_in_progress'));
+      return;
+    }
+    if (!isInitialSocialFeedValid(initialSocialFeed)) {
+      setAdvancedOpen(true);
+      setLaunchError(t('home.initial_feed_invalid'));
       return;
     }
     if (isSimulationBudgetBlocked) {
@@ -3113,6 +3138,17 @@ export function InputView() {
                         <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
                       </div>
                   </div>
+
+                  <div className="iv-advanced__divider" style={{ margin: '16px 0', borderTop: '1px solid rgba(64, 48, 40, 0.08)' }} />
+
+                  <InitialSocialFeedEditor
+                    items={initialSocialFeed}
+                    onChange={(items) => {
+                      clearLaunchError();
+                      setInitialSocialFeed(items);
+                    }}
+                    disabled={isSubmitting}
+                  />
 
                   <div className="iv-advanced__divider" style={{ margin: '16px 0', borderTop: '1px solid rgba(64, 48, 40, 0.08)' }} />
 

@@ -6,13 +6,15 @@ memory retrieval. Gracefully degrades when ChromaDB is unavailable.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
@@ -31,6 +33,32 @@ _CHROMA_INIT_TIMEOUT_SECONDS = 5.0
 _CHROMA_COLLECTION_NAME_MAX = 63  # Chroma DB hard limit
 _CHROMA_IDENTITY_PROFILE_WRITE_PENDING = threading.Semaphore(1)
 IDENTITY_MEMORY_PIN_CAP = 20
+
+_IDENTITY_MEMORY_RESERVED_METADATA_KEYS = frozenset({
+    "identity_id",
+    "scenario_id",
+    "created_at",
+    "doc_type",
+})
+_IDENTITY_MEMORY_PROVENANCE_LIMITS = {
+    "branch_id": 128,
+    "round": 16,
+    "round_number": 16,
+    "memory_kind": 64,
+    "action_type": 64,
+    "observation": 1000,
+    "source_message_ids": 2000,
+    "source_event_ids": 2000,
+    "source_scenario_ids": 2000,
+    "confidence": 32,
+    "confidence_tier": 32,
+    "provenance_kind": 64,
+    "outcome": 1000,
+    "write_reason": 160,
+}
+_IDENTITY_MEMORY_SOURCE_ID_LIMIT = 32
+_IDENTITY_MEMORY_SOURCE_ID_LENGTH = 128
+_IDENTITY_MEMORY_REF_LENGTH = 20
 
 
 class IdentityMemoryPinLimitError(ValueError):
@@ -771,13 +799,88 @@ def _delete_identity_profile_docs_from_collection(collection: Any, identity_id: 
     return len(ids)
 
 
+def _normalize_identity_memory_metadata(
+    metadata: dict[str, Any] | None,
+) -> dict[str, str]:
+    """Keep only bounded provenance scalars accepted by Chroma metadata."""
+    if not metadata:
+        return {}
+
+    normalized: dict[str, str] = {}
+    for key, max_length in _IDENTITY_MEMORY_PROVENANCE_LIMITS.items():
+        if key in _IDENTITY_MEMORY_RESERVED_METADATA_KEYS or key not in metadata:
+            continue
+        value = metadata[key]
+        if value is None:
+            continue
+        if key in {"source_message_ids", "source_event_ids"}:
+            if not isinstance(value, (list, tuple, set)):
+                continue
+            source_ids = [
+                str(source_id).strip()[:_IDENTITY_MEMORY_SOURCE_ID_LENGTH]
+                for source_id in list(value)[:_IDENTITY_MEMORY_SOURCE_ID_LIMIT]
+                if str(source_id).strip()
+            ]
+            if source_ids:
+                normalized[key] = json.dumps(
+                    source_ids,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )[:max_length]
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            normalized[key] = str(value).strip()[:max_length]
+    return normalized
+
+
+def identity_memory_ref_from_id(memory_id: object) -> str:
+    """Return a bounded, non-reversible receipt coordinate for a memory row."""
+    normalized = str(memory_id or "").strip()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:_IDENTITY_MEMORY_REF_LENGTH]
+
+
+def _identity_memory_doc_id(
+    user_id: str,
+    identity_id: str,
+    scenario_id: str,
+    idempotency_key: str,
+) -> str:
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            [user_id, identity_id, scenario_id, idempotency_key],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+    ).hexdigest()
+    return f"identity-memory-{fingerprint}"
+
+
+def identity_memory_ref(
+    user_id: str,
+    identity_id: str,
+    scenario_id: str,
+    idempotency_key: str,
+) -> str:
+    """Predict the public receipt coordinate for an idempotent memory write."""
+    normalized_key = str(idempotency_key or "").strip()[:256]
+    if not normalized_key:
+        return ""
+    return identity_memory_ref_from_id(
+        _identity_memory_doc_id(user_id, identity_id, scenario_id, normalized_key)
+    )
+
+
 def store_identity_memory(
     user_id: str,
     identity_id: str,
     scenario_id: str,
     summary: str,
     metadata: dict[str, Any] | None = None,
-) -> None:
+    *,
+    idempotency_key: str | None = None,
+) -> bool:
     """Store a cross-scenario memory for an agent identity.
 
     Collection name: identity_{user_id}
@@ -788,11 +891,11 @@ def store_identity_memory(
     2. In-process ``_CHROMA_WRITE_LOCK``
     """
     if not summary or not summary.strip():
-        return
+        return False
 
     store = get_vector_store()
     if not store.available:
-        return
+        return False
 
     # Acquire cross-worker lease (identity-scoped, not scenario-scoped)
     lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
@@ -803,15 +906,21 @@ def store_identity_memory(
         )
     except Exception as exc:
         logger.warning("Identity memory lock acquisition failed for %s: %s", user_id, exc)
-        return
+        return False
     if lease is None:
         logger.warning("Identity memory skipped for %s: Chroma write lock busy", user_id)
-        return
+        return False
 
     try:
         with _CHROMA_WRITE_LOCK:
-            _store_identity_memory_inner(
-                store, user_id, identity_id, scenario_id, summary, metadata,
+            return _store_identity_memory_inner(
+                store,
+                user_id,
+                identity_id,
+                scenario_id,
+                summary,
+                metadata,
+                idempotency_key,
             )
     finally:
         try:
@@ -827,7 +936,8 @@ def _store_identity_memory_inner(
     scenario_id: str,
     summary: str,
     metadata: dict[str, Any] | None,
-) -> None:
+    idempotency_key: str | None = None,
+) -> bool:
     """Actual write logic, called inside the serialization lock."""
     col_name = _identity_collection_name(user_id)
     try:
@@ -837,19 +947,38 @@ def _store_identity_memory_inner(
         )
     except Exception as exc:
         logger.warning("Failed to get/create identity collection for %s: %s", user_id, exc)
-        return
+        return False
 
     import uuid
     from datetime import datetime, timezone
 
-    doc_id = str(uuid.uuid4())
+    normalized_key = str(idempotency_key or "").strip()[:256]
+    if normalized_key:
+        doc_id = _identity_memory_doc_id(
+            user_id, identity_id, scenario_id, normalized_key
+        )
+        fingerprint = doc_id.removeprefix("identity-memory-")
+        try:
+            existing = collection.get(ids=[doc_id])
+            if existing and existing.get("ids"):
+                return True
+        except Exception as exc:
+            logger.warning(
+                "Identity memory idempotency check failed (non-fatal): %s",
+                type(exc).__name__,
+            )
+            return False
+    else:
+        doc_id = str(uuid.uuid4())
     meta = {
         "identity_id": identity_id,
         "scenario_id": scenario_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "doc_type": "identity_memory",
     }
-    if metadata:
-        meta.update(metadata)
+    meta.update(_normalize_identity_memory_metadata(metadata))
+    if normalized_key:
+        meta["idempotency_key_hash"] = fingerprint
 
     try:
         collection.add(
@@ -859,7 +988,7 @@ def _store_identity_memory_inner(
         )
     except Exception as exc:
         logger.warning("Identity memory store failed (non-fatal): %s", exc)
-        return
+        return False
 
     # FIFO eviction: keep at most _IDENTITY_MEMORY_MAX unpinned memories per identity.
     # Pinned docs never count toward this cap and are never evicted here.
@@ -893,6 +1022,7 @@ def _store_identity_memory_inner(
                 )
     except Exception as exc:
         logger.warning("Identity memory eviction check failed (non-fatal): %s", exc)
+    return True
 
 
 def retrieve_identity_memories(
@@ -934,15 +1064,19 @@ def retrieve_identity_memories(
         memories = []
         if results and results.get("documents"):
             docs = results["documents"][0]
+            ids = results["ids"][0] if results.get("ids") else [""] * len(docs)
             metas = results["metadatas"][0] if results.get("metadatas") else [{}] * len(docs)
             distances = results["distances"][0] if results.get("distances") else [0.0] * len(docs)
-            for doc, meta, dist in zip(docs, metas, distances):
+            for memory_id, doc, meta, dist in zip(ids, docs, metas, distances):
                 if meta.get("doc_type") == "identity_profile":
                     continue
                 memories.append({
                     "summary": doc,
                     "scenario_id": meta.get("scenario_id", ""),
                     "distance": dist,
+                    "memory_ref": identity_memory_ref_from_id(memory_id),
+                    "confidence_tier": meta.get("confidence_tier"),
+                    "provenance_kind": meta.get("provenance_kind"),
                 })
         return memories[:n_results]
     except Exception as exc:
@@ -1331,6 +1465,28 @@ class CompactionGroup:
     scenario_ids: list[str]
     created_ats: list[str]
     source_ids_hash: str  # SHA-256(sorted(ids)) — idempotency fingerprint
+    source_message_ids: list[str] = field(default_factory=list)
+    source_event_ids: list[str] = field(default_factory=list)
+
+
+def _decode_bounded_source_ids(value: Any) -> list[str]:
+    """Decode stored provenance coordinates without trusting legacy metadata."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [
+        str(source_id).strip()[:_IDENTITY_MEMORY_SOURCE_ID_LENGTH]
+        for source_id in value[:_IDENTITY_MEMORY_SOURCE_ID_LIMIT]
+        if str(source_id).strip()
+    ]
+
+
+def _unique_bounded(values: list[str], *, limit: int = 32) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))[:limit]
 
 
 def _compute_source_ids_hash(ids: list[str]) -> str:
@@ -1445,12 +1601,24 @@ def _prepare_compaction_groups_inner(
     for i in range(0, len(batch), gs):
         chunk = batch[i : i + gs]
         chunk_ids = [c[0] for c in chunk]
+        source_message_ids = _unique_bounded([
+            source_id
+            for _doc_id, _doc, meta in chunk
+            for source_id in _decode_bounded_source_ids(meta.get("source_message_ids"))
+        ])
+        source_event_ids = _unique_bounded([
+            source_id
+            for _doc_id, _doc, meta in chunk
+            for source_id in _decode_bounded_source_ids(meta.get("source_event_ids"))
+        ])
         groups.append(CompactionGroup(
             ids=chunk_ids,
             summaries=[c[1] for c in chunk],
             scenario_ids=[c[2].get("scenario_id", "") for c in chunk],
             created_ats=[c[2].get("created_at", "") for c in chunk],
             source_ids_hash=_compute_source_ids_hash(chunk_ids),
+            source_message_ids=source_message_ids,
+            source_event_ids=source_event_ids,
         ))
     return groups
 
@@ -1573,15 +1741,38 @@ def _execute_compaction_group_inner(
         if sorted_ts:
             compacted_range = f"{sorted_ts[0][:10]}..{sorted_ts[-1][:10]}"
 
+    source_scenario_ids = _unique_bounded(group.scenario_ids)
     compacted_meta = {
         "identity_id": identity_id,
-        "scenario_id": group.scenario_ids[0] if group.scenario_ids else "",
+        # A multi-scenario summary must not masquerade as a fact from its first
+        # input scenario.  The full bounded coordinate set remains inspectable.
+        "scenario_id": source_scenario_ids[0] if len(source_scenario_ids) == 1 else "",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "doc_type": "identity_memory",
         "compacted": "true",
         "compacted_count": str(len(group.ids)),
         "compacted_range": compacted_range,
         "source_ids_hash": group.source_ids_hash,
+        "memory_kind": "long_term_summary",
+        "confidence_tier": "low",
+        "provenance_kind": "llm_compaction",
+        "write_reason": "identity_memory_budget_compaction",
+        "source_scenario_ids": json.dumps(
+            source_scenario_ids, ensure_ascii=True, separators=(",", ":")
+        ),
     }
+    if group.source_message_ids:
+        compacted_meta["source_message_ids"] = json.dumps(
+            _unique_bounded(group.source_message_ids),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+    if group.source_event_ids:
+        compacted_meta["source_event_ids"] = json.dumps(
+            _unique_bounded(group.source_event_ids),
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
 
     new_id = str(uuid.uuid4())
     try:
@@ -1612,7 +1803,10 @@ def _execute_compaction_group_inner(
         )
 
 
-def build_compaction_prompt(summaries: list[str]) -> str:
+def build_compaction_prompt(
+    summaries: list[str],
+    scenario_ids: list[str] | None = None,
+) -> str:
     """Build the LLM prompt for memory compaction.
 
     Each summary is wrapped via format_untrusted_text_block to prevent
@@ -1620,11 +1814,27 @@ def build_compaction_prompt(summaries: list[str]) -> str:
     """
     from app.services.llm_client import format_untrusted_text_block
 
+    coordinates = scenario_ids or []
     blocks = "\n".join(
         format_untrusted_text_block(
-            f"Memory {i + 1}", s, max_chars=400,
+            (
+                f"Memory {i + 1} from prior simulated scenario "
+                f"{coordinates[i] if i < len(coordinates) and coordinates[i] else 'unknown'}"
+            ),
+            s,
+            max_chars=400,
         )
         for i, s in enumerate(summaries)
+    )
+    epistemic_rules = (
+        "- Every input is a prior *simulated* experience, not a fact about the current "
+        "scenario or real world.\n"
+        "- Keep experiences attributable to their scenario coordinates; do not merge them "
+        "into one event.\n"
+        "- Do not invent or infer stances, alliances, relationships, decisions, or lessons "
+        "that are not explicit.\n"
+        "- Behavioral patterns are hypotheses only and must be labelled as such.\n"
+        "- Preserve explicit actions, observations, simulated outcomes, and uncertainty."
     )
     return f"""You are compacting cross-scenario agent memories into \
 a single summary.
@@ -1634,11 +1844,8 @@ across multiple scenarios:
 
 {blocks}
 
-Produce a single compacted summary that preserves:
-- Key stance changes and pivotal decisions
-- Important alliances and relationships formed
-- Major outcomes and lessons learned
-- Any recurring behavioral patterns
+Produce a single compacted summary under these strict epistemic rules:
+{epistemic_rules}
 
 Output strict JSON:
 {{"compacted_summary": "A single paragraph (max 500 chars) preserving \

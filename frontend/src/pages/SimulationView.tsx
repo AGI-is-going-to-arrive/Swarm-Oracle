@@ -1311,7 +1311,7 @@ function SimulationViewContent({
       uiState,
     });
     const artifact = await Promise.resolve()
-      .then(() => createReplayArtifact('simulation_view_v1', { ...publicReplayPayload }))
+      .then(() => createReplayArtifact('simulation_view_v1', { ...publicReplayPayload }, snapshot.id))
       .catch(() => null);
     try {
       const url = artifact

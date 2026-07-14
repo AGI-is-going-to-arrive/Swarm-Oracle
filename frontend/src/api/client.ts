@@ -235,8 +235,17 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   continuityOverrides?: ContinuityOverride[];
   campaignContext?: CampaignContext;
   worldContext?: WorldContext;
+  initialSocialFeed?: InitialSocialFeedItem[];
   modelProfileId?: string;
   language?: 'zh' | 'en';
+}
+
+export interface InitialSocialFeedItem {
+  sourceName: string;
+  content: string;
+  publishedAt?: string;
+  credibilityHint?: string;
+  tags?: string[];
 }
 
 export interface ContinuityOverride {
@@ -325,6 +334,7 @@ function buildScenarioRequestBody(
     continuityOverrides,
     campaignContext,
     worldContext,
+    initialSocialFeed,
     modelProfileId,
     language,
   } = options;
@@ -369,6 +379,15 @@ function buildScenarioRequestBody(
     }),
     ...(campaignContext && { campaign_context: campaignContext }),
     ...(worldContext && { world_context: worldContext }),
+    ...(initialSocialFeed?.length && {
+      initial_social_feed: initialSocialFeed.map((item) => ({
+        source_name: item.sourceName,
+        content: item.content,
+        ...(item.publishedAt && { published_at: item.publishedAt }),
+        ...(item.credibilityHint && { credibility_hint: item.credibilityHint }),
+        ...(item.tags?.length && { tags: item.tags }),
+      })),
+    }),
     ...(modelProfileId && { model_profile_id: modelProfileId }),
   };
 }
@@ -1106,10 +1125,15 @@ export async function importReplayScenario(scenario: Scenario): Promise<Scenario
 export async function createReplayArtifact(
   kind: string,
   payload: Record<string, unknown>,
+  sourceScenarioId?: string,
 ): Promise<{ id: string; kind: string; created_at: string }> {
   return request('/replay-artifact', {
     method: 'POST',
-    body: JSON.stringify({ kind, payload }),
+    body: JSON.stringify({
+      kind,
+      payload,
+      ...(sourceScenarioId ? { source_scenario_id: sourceScenarioId } : {}),
+    }),
   });
 }
 
@@ -1125,8 +1149,19 @@ export async function getBranches(id: string): Promise<Branch[]> {
 }
 
 /** GET /api/scenario/:id/story — get narrated stories for completed branches */
-export async function getStory(id: string): Promise<StoryData> {
-  return safeGet(`/scenario/${encodeURIComponent(id)}/story`);
+export async function getStory(id: string, options?: RequestOptions): Promise<StoryData> {
+  return safeGet(`/scenario/${encodeURIComponent(id)}/story`, options);
+}
+
+/** POST an unfinished counterfactual branch back into simulation. */
+export async function resimulateCounterfactual(
+  scenarioId: string,
+  branchId: string,
+): Promise<Record<string, unknown>> {
+  return request(
+    `/scenario/${encodeURIComponent(scenarioId)}/counterfactual/${encodeURIComponent(branchId)}/resimulate`,
+    { method: 'POST' },
+  );
 }
 
 /** POST /api/scenario/:id/report:generate — generate a detailed report (HTTP SSE) */
@@ -1614,8 +1649,19 @@ export async function getAgentProfileData(
 // ── Identity Memory Inspector ───────────────────────────
 export interface IdentityMemoryMetadata {
   scenario_id?: string | null;
+  branch_id?: string | null;
   round?: number | string | null;
+  round_number?: number | string | null;
   type?: string | null;
+  memory_kind?: string | null;
+  action_type?: string | null;
+  observation?: string | null;
+  source_message_ids?: string[] | string | null;
+  source_event_ids?: string[] | string | null;
+  confidence_tier?: string | null;
+  provenance_kind?: string | null;
+  outcome?: string | null;
+  write_reason?: string | null;
   created_at?: string | null;
   [key: string]: unknown;
 }
@@ -1917,6 +1963,63 @@ export async function getCausalGraph<T = unknown>(
   const params = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
   return safeGet(
     `/scenario/${encodeURIComponent(scenarioId)}/causal-graph${params}`,
+    options,
+  );
+}
+
+export type SocialActionType =
+  | 'POST' | 'COMMENT' | 'REACTION' | 'FOLLOW' | 'MUTE'
+  | 'SEARCH' | 'TREND' | 'REFRESH' | 'IDLE';
+
+export type SocialActionStatus = 'verified' | 'unavailable' | 'failed';
+
+export interface SocialActionEntry {
+  id: string;
+  sequence: number;
+  branch_id: string;
+  round: number;
+  agent: { id: string; name: string };
+  action_type: SocialActionType;
+  status: SocialActionStatus;
+  target: { kind: string; id: string } | null;
+  parent_action_id: string | null;
+  content: string | null;
+  payload: Record<string, unknown>;
+  failure_code: string | null;
+  created_at: string;
+}
+
+export interface SocialActionsResponse {
+  scenario_id: string;
+  items: SocialActionEntry[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface SocialActionFilters {
+  branchId?: string;
+  agentId?: string;
+  actionType?: SocialActionType;
+  round?: number;
+  status?: SocialActionStatus;
+  cursor?: string;
+}
+
+export async function getScenarioActions(
+  scenarioId: string,
+  filters: SocialActionFilters = {},
+  options?: RequestOptions,
+): Promise<SocialActionsResponse> {
+  const params = new URLSearchParams();
+  if (filters.branchId) params.set('branch_id', filters.branchId);
+  if (filters.agentId) params.set('agent_id', filters.agentId);
+  if (filters.actionType) params.set('action_type', filters.actionType);
+  if (filters.round != null && filters.round >= 1) params.set('round', String(filters.round));
+  if (filters.status) params.set('status', filters.status);
+  if (filters.cursor) params.set('cursor', filters.cursor);
+  params.set('limit', '100');
+  return safeGet(
+    `/scenario/${encodeURIComponent(scenarioId)}/actions?${params}`,
     options,
   );
 }

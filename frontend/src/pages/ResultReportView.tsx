@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getScenario, getStory } from '../api/client';
@@ -66,25 +66,42 @@ export default function ResultReportView() {
   const [storyData, setStoryData] = useState<StoryData | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const requestEpochRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
 
   // Re-fetchable so the report panel's retry can refresh the persisted /story.full_report.
   const refetch = useCallback(() => {
     if (!id || !isReportEnabled) return;
+    const requestEpoch = requestEpochRef.current + 1;
+    requestEpochRef.current = requestEpoch;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     Promise.resolve()
       .then(() => {
         setLoading(true);
         setLoadError(false);
-        return Promise.all([getScenario(id), getStory(id)]);
+        return Promise.all([
+          getScenario(id, { signal: controller.signal }),
+          getStory(id, { signal: controller.signal }),
+        ]);
       })
       .then(([scen, story]) => {
+        if (requestEpoch !== requestEpochRef.current) return;
         setScenario(scen);
         setStoryData(story);
       })
       .catch((err) => {
+        if (requestEpoch !== requestEpochRef.current || controller.signal.aborted) return;
         console.error(err);
         setLoadError(true);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (requestEpoch === requestEpochRef.current) {
+          setLoading(false);
+          requestControllerRef.current = null;
+        }
+      });
   }, [id, isReportEnabled]);
 
   useEffect(() => {
@@ -92,6 +109,11 @@ export default function ResultReportView() {
       refetch();
     }
   }, [isReportEnabled, refetch]);
+
+  useEffect(() => () => {
+    requestEpochRef.current += 1;
+    requestControllerRef.current?.abort();
+  }, []);
 
   if (capLoading) {
     return (

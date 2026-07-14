@@ -278,11 +278,12 @@ def _branch_rows(branches: list[Any]) -> tuple[list[dict[str, Any]], dict[str, i
                 -_clean_probability(branch.get("probability")),
                 int(branch.get("fork_round") or 0),
                 str(branch.get("title") or ""),
+                str(branch.get("id") or ""),
                 branch,
             )
         )
-    for index, (_neg_probability, _fork_round, _title, branch) in enumerate(
-        sorted(sortable, key=lambda item: item[:3])[:MAX_BRANCHES],
+    for index, (_neg_probability, _fork_round, _title, _branch_id, branch) in enumerate(
+        sorted(sortable, key=lambda item: item[:4])[:MAX_BRANCHES],
         start=1,
     ):
         branch_id = _clean_text(branch.get("id"), max_chars=160)
@@ -343,15 +344,11 @@ def _transcript_excerpts(
     messages: list[Any],
     branch_index_by_id: Mapping[str, int],
 ) -> list[dict[str, Any]]:
-    excerpts: list[dict[str, Any]] = []
-    for raw in sorted(
-        (_as_mapping(message) for message in messages),
-        key=lambda item: (
-            str(item.get("branch") or ""),
-            int(item.get("round") or 0),
-            str(item.get("agent") or ""),
-        ),
-    ):
+    excerpts_by_branch: dict[int, list[dict[str, Any]]] = {
+        branch_index: [] for branch_index in branch_index_by_id.values()
+    }
+    for raw_message in messages:
+        raw = _as_mapping(raw_message)
         branch_id = _clean_text(raw.get("branch"), max_chars=160)
         branch_index = branch_index_by_id.get(branch_id)
         if branch_index is None:
@@ -364,7 +361,7 @@ def _transcript_excerpts(
             round_number = max(0, int(raw.get("round") or 0))
         except (TypeError, ValueError):
             round_number = 0
-        excerpts.append(
+        excerpts_by_branch[branch_index].append(
             {
                 "branch_index": branch_index,
                 "round": round_number,
@@ -372,7 +369,27 @@ def _transcript_excerpts(
                 "excerpt": excerpt,
             }
         )
-        if len(excerpts) >= MAX_TRANSCRIPT_EXCERPTS:
+
+    for branch_excerpts in excerpts_by_branch.values():
+        branch_excerpts.sort(
+            key=lambda item: (item["round"], item["agent_name"])
+        )
+
+    excerpts: list[dict[str, Any]] = []
+    next_index_by_branch = dict.fromkeys(excerpts_by_branch, 0)
+    while len(excerpts) < MAX_TRANSCRIPT_EXCERPTS:
+        added_excerpt = False
+        for branch_index in sorted(excerpts_by_branch):
+            next_index = next_index_by_branch[branch_index]
+            branch_excerpts = excerpts_by_branch[branch_index]
+            if next_index >= len(branch_excerpts):
+                continue
+            excerpts.append(branch_excerpts[next_index])
+            next_index_by_branch[branch_index] = next_index + 1
+            added_excerpt = True
+            if len(excerpts) >= MAX_TRANSCRIPT_EXCERPTS:
+                break
+        if not added_excerpt:
             break
     return excerpts
 
@@ -421,27 +438,50 @@ def build_public_artifact_for_scenario(
 ) -> dict[str, Any]:
     """Build a public artifact from database rows without using snapshot export."""
     agents = list(
-        session.exec(select(Agent).where(Agent.scenario_id == scenario.id)).all()
-    )
-    branches = list(
         session.exec(
-            select(Branch).where(
-                Branch.scenario_id == scenario.id,
-                Branch.status == BranchStatus.COMPLETED,
+            select(Agent).where(
+                Agent.scenario_id == scenario.id,
+                Agent.source_type.is_(None) | (Agent.source_type != "world_event_source"),
             )
         ).all()
     )
+    scenario_branches = list(
+        session.exec(select(Branch).where(Branch.scenario_id == scenario.id)).all()
+    )
+    parent_branch_ids = {
+        branch.parent_branch_id
+        for branch in scenario_branches
+        if branch.parent_branch_id
+    }
+    terminal_leaves = [
+        branch
+        for branch in scenario_branches
+        if branch.status == BranchStatus.COMPLETED
+        and branch.id not in parent_branch_ids
+    ]
+    branch_candidates = [
+        {
+            "id": branch.id,
+            "title": branch.title,
+            "probability": branch.probability,
+            "insight": branch.insight,
+            "fork_round": branch.fork_round,
+        }
+        for branch in terminal_leaves
+    ]
+    selected_branches, _branch_index_by_id = _branch_rows(branch_candidates)
+    selected_branch_ids = [branch["id"] for branch in selected_branches if branch["id"]]
     agent_name_by_id = {agent.id: agent.name for agent in agents}
-    branch_ids = [branch.id for branch in branches]
-    message_rows = list(
-        session.exec(
+    message_rows: list[tuple[AgentMessage, str, int]] = []
+    for branch_id in selected_branch_ids:
+        branch_message_rows = session.exec(
             select(AgentMessage, Round.branch_id, Round.round_number)
             .join(Round, AgentMessage.round_id == Round.id)
-            .where(Round.branch_id.in_(branch_ids))
-            .order_by(Round.branch_id.asc(), Round.round_number.asc(), AgentMessage.id.asc())
+            .where(Round.branch_id == branch_id)
+            .order_by(Round.round_number.asc(), AgentMessage.id.asc())
             .limit(MAX_TRANSCRIPT_EXCERPTS)
         ).all()
-    ) if branch_ids else []
+        message_rows.extend(branch_message_rows)
     mapping = {
         "question": scenario.question,
         "parsed_context": (
@@ -450,16 +490,7 @@ def build_public_artifact_for_scenario(
             else {}
         ),
         "agents": [{"name": agent.name} for agent in agents],
-        "branches": [
-            {
-                "id": branch.id,
-                "title": branch.title,
-                "probability": branch.probability,
-                "insight": branch.insight,
-                "fork_round": branch.fork_round,
-            }
-            for branch in branches
-        ],
+        "branches": branch_candidates,
         "messages": [
             {
                 "branch": branch_id,

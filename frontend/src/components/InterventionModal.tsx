@@ -2,7 +2,7 @@
    SwarmOracle — Intervention Modal (Butterfly Effect + Templates)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   getInterventionTemplates,
@@ -14,6 +14,7 @@ import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { InterventionTemplate } from '../api/client';
 import type { BranchInfo } from '../types';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import './InterventionModal.css';
 
 type InterventionMode = 'standard' | 'retrospective' | 'batch';
@@ -86,7 +87,12 @@ export default function InterventionModal({
     value: Math.max(1, branchRoundLimits[branchId] ?? 1),
   }));
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useFocusTrap(dialogRef, true, true);
 
   const branchOptions = useMemo(
     () => buildBranchOptions(branchId, branchTitle, activeBranches),
@@ -267,10 +273,17 @@ export default function InterventionModal({
 
   return (
     <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && handleClose()}>
-      <div className="modal-content intervention-modal">
+      <div
+        ref={dialogRef}
+        className="modal-content intervention-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+      >
         <header className="modal-header">
-          <h2>{t('intervention.title')}</h2>
-          <p className="modal-subtitle">{t('intervention.subtitle')}</p>
+          <h2 id={titleId}>{t('intervention.title')}</h2>
+          <p id={descriptionId} className="modal-subtitle">{t('intervention.subtitle')}</p>
         </header>
 
         <div className="modal-body">

@@ -18,6 +18,7 @@ import {
   getIdentityMemories,
   getInterventionEffects,
   getReplayTrace,
+  getScenarioActions,
   getScenario,
   getSessionBoundUserId,
   identityContinuityPreflight,
@@ -405,6 +406,48 @@ describe('api client request parsing', () => {
       }),
     );
     expect(init).not.toHaveProperty('body');
+  });
+});
+
+describe('scenario social actions client', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('encodes the frozen filters, cursor and abort signal', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      text: vi.fn().mockResolvedValue('{"scenario_id":"scenario-1","items":[],"next_cursor":null,"has_more":false}'),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const result = getScenarioActions('scenario/a', {
+      branchId: 'branch/1', agentId: 'agent?1', actionType: 'COMMENT', round: 2,
+      status: 'unavailable', cursor: 'next/page',
+    }, { signal: controller.signal });
+    const [rawUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    controller.abort();
+
+    await expect(result).resolves.toMatchObject({ items: [], next_cursor: null });
+    const url = new URL(rawUrl, 'http://localhost');
+    expect(url.pathname).toBe('/api/scenario/scenario%2Fa/actions');
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      branch_id: 'branch/1', agent_id: 'agent?1', action_type: 'COMMENT', round: '2',
+      status: 'unavailable', cursor: 'next/page', limit: '100',
+    });
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('does not send invalid zero rounds', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      text: vi.fn().mockResolvedValue('{"scenario_id":"scenario-1","items":[],"next_cursor":null,"has_more":false}'),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await getScenarioActions('scenario-1', { round: 0 });
+    const url = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost');
+    expect(url.searchParams.has('round')).toBe(false);
   });
 });
 

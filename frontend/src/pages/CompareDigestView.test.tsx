@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { CompareDigestView } from './CompareDigestView';
 const {
   getScenarioMock,
   getCounterfactualCompareMock,
+  resimulateCounterfactualMock,
   captureElementDataUrlMock,
   captureCompositeElementDataUrlMock,
   storeState,
@@ -17,6 +18,7 @@ const {
 } = vi.hoisted(() => ({
   getScenarioMock: vi.fn(),
   getCounterfactualCompareMock: vi.fn(),
+  resimulateCounterfactualMock: vi.fn(),
   captureElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare'),
   captureCompositeElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare-composite'),
   useCapabilityCheckMock: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
@@ -128,6 +130,7 @@ vi.mock('../api/client', () => {
     buildSessionHeaders: () => ({}),
     getScenario: getScenarioMock,
     getCounterfactualCompare: getCounterfactualCompareMock,
+    resimulateCounterfactual: resimulateCounterfactualMock,
     isApiError: (err: unknown) => err instanceof MockApiError,
   };
 });
@@ -205,6 +208,7 @@ async function importMockApiError(): Promise<new (status: number, code: string, 
 beforeEach(() => {
   getScenarioMock.mockReset();
   getCounterfactualCompareMock.mockReset();
+  resimulateCounterfactualMock.mockReset();
   captureElementDataUrlMock.mockClear();
   captureCompositeElementDataUrlMock.mockClear();
   setScenarioMock.mockClear();
@@ -222,6 +226,128 @@ afterEach(() => {
 });
 
 describe('CompareDigestView', () => {
+  it('surfaces a resimulation failure instead of silently accepting it', async () => {
+    const user = userEvent.setup();
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id',
+      question: 'Can this unfinished branch continue?',
+      status: 'done',
+      total_rounds: 2,
+      agents: [],
+      branches: [
+        { id: 'a', title: 'Original', status: 'COMPLETED', story: 'done' },
+        { id: 'b', title: 'Counterfactual', status: 'ACTIVE', story: '', replay_kind: 'counterfactual' },
+      ],
+      messages: [],
+    });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id',
+      branch_a: 'a',
+      branch_b: 'b',
+      common_rounds: 0,
+      intervention: null,
+      rounds: [{
+        round: 1,
+        branch_a_summary: 'A',
+        branch_b_summary: 'B',
+        branch_a_messages: [],
+        branch_b_messages: [],
+        divergence_score: 0.5,
+        is_identical: false,
+      }],
+    });
+    resimulateCounterfactualMock.mockRejectedValue(new Error('forbidden'));
+
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+    await user.click(await screen.findByRole('button', { name: 'Simulate Remaining Rounds' }));
+
+    expect(await screen.findByText('Unable to load comparison data right now. Please retry.')).toBeInTheDocument();
+    expect(resimulateCounterfactualMock).toHaveBeenCalledWith('test-id', 'b');
+  });
+
+  it('cancels the bounded post-resimulation refresh after unmount', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id', question: 'Continue?', status: 'done', total_rounds: 2, agents: [], messages: [],
+      branches: [
+        { id: 'a', title: 'Original', status: 'COMPLETED', story: 'done' },
+        { id: 'b', title: 'Counterfactual', status: 'ACTIVE', story: '', replay_kind: 'counterfactual' },
+      ],
+    });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id', branch_a: 'a', branch_b: 'b', common_rounds: 0, intervention: null,
+      rounds: [{
+        round: 1, branch_a_summary: 'A', branch_b_summary: 'B', branch_a_messages: [],
+        branch_b_messages: [], divergence_score: 0.5, is_identical: false,
+      }],
+    });
+    resimulateCounterfactualMock.mockResolvedValue({ accepted: true });
+
+    const view = renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+    const button = await screen.findByRole('button', { name: 'Simulate Remaining Rounds' });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(button);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(resimulateCounterfactualMock).toHaveBeenCalledTimes(1);
+      expect(getCounterfactualCompareMock).toHaveBeenCalledTimes(1);
+
+      view.unmount();
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(getCounterfactualCompareMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps resimulation disabled until a slow provider reaches done', async () => {
+    getScenarioMock
+      .mockResolvedValueOnce({
+        id: 'test-id', question: 'Continue?', status: 'done', total_rounds: 2, agents: [], messages: [],
+        branches: [
+          { id: 'a', title: 'Original', status: 'COMPLETED', story: 'done' },
+          { id: 'b', title: 'Counterfactual', status: 'ACTIVE', story: '', replay_kind: 'counterfactual' },
+        ],
+      })
+      .mockResolvedValueOnce({ id: 'test-id', status: 'simulating', branches: [] })
+      .mockResolvedValueOnce({ id: 'test-id', status: 'done', branches: [] })
+      .mockResolvedValueOnce({
+        id: 'test-id', question: 'Continue?', status: 'done', total_rounds: 2, agents: [], messages: [],
+        branches: [
+          { id: 'a', title: 'Original', status: 'COMPLETED', story: 'done' },
+          { id: 'b', title: 'Counterfactual', status: 'COMPLETED', story: 'continued', replay_kind: 'counterfactual' },
+        ],
+      });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id', branch_a: 'a', branch_b: 'b', common_rounds: 0, intervention: null,
+      rounds: [{ round: 1, branch_a_summary: 'A', branch_b_summary: 'B', branch_a_messages: [], branch_b_messages: [], divergence_score: 0.5, is_identical: false }],
+    });
+    resimulateCounterfactualMock.mockResolvedValue({ accepted: true });
+
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+    const button = await screen.findByRole('button', { name: 'Simulate Remaining Rounds' });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(button);
+      await act(async () => { await Promise.resolve(); });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+      expect(resimulateCounterfactualMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(button).toBeDisabled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.queryByRole('button', { name: 'Simulate Remaining Rounds' })).not.toBeInTheDocument();
+      expect(resimulateCounterfactualMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders missing-params state', async () => {
     renderView('/result/test-id/compare');
     expect(await screen.findByRole('alert')).toHaveTextContent('Missing branch parameters');

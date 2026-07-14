@@ -505,9 +505,15 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
     if not _CORE_BOOTSTRAP_TABLES <= table_names:
         return False
 
+    pending_migration_tables = {"simulation_action", "simulation_action_sequence"}
     missing_metadata_tables = set(SQLModel.metadata.tables) - table_names
-    if missing_metadata_tables:
-        SQLModel.metadata.create_all(connection, checkfirst=True)
+    createable_missing_tables = missing_metadata_tables - pending_migration_tables
+    if createable_missing_tables:
+        SQLModel.metadata.create_all(
+            connection,
+            tables=[SQLModel.metadata.tables[name] for name in createable_missing_tables],
+            checkfirst=True,
+        )
         table_names = set(
             connection.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -521,6 +527,8 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
     _migrate_intervention_lifecycle_indexes(connection)
 
     for table_name, table in SQLModel.metadata.tables.items():
+        if table_name in pending_migration_tables and table_name not in table_names:
+            continue
         if table_name not in table_names:
             continue
         expected_columns = {column.name for column in table.columns}
@@ -543,7 +551,10 @@ def _bootstrap_alembic_revision_for_sqlite(
             current_revision = _current_alembic_revision(connection)
             if current_revision is None:
                 if _has_bootstrap_sqlmodel_schema(connection):
-                    if head_revision == "037_clean_result_report_likelihood":
+                    if head_revision in {
+                        "037_clean_result_report_likelihood",
+                        "038_simulation_action_world",
+                    }:
                         return _SQLITE_BOOTSTRAP_SCHEMA_EQUIVALENT_REVISION
                     return head_revision
                 return None

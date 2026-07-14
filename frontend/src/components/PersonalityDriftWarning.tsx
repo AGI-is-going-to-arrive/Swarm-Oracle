@@ -120,7 +120,11 @@ export default function PersonalityDriftWarning({
       </button>
 
       {!collapsed && (
-        <ul id={bodyId} className="drift-warning__list">
+        <div id={bodyId}>
+          <p className="drift-warning__evidence">
+            {t('drift_warning.proxy_caveat')}
+          </p>
+          <ul className="drift-warning__list">
           {flagged.map((result) => {
             const top = topDimension(result);
             const evidence = result.evidence?.[0] ?? '';
@@ -168,7 +172,8 @@ export default function PersonalityDriftWarning({
               </li>
             );
           })}
-        </ul>
+          </ul>
+        </div>
       )}
     </section>
   );

@@ -581,6 +581,32 @@ async function installFixtures(page) {
     const fixture = branchId ? (CAUSAL_GRAPH_FILTERED_FIXTURES[branchId] ?? CAUSAL_GRAPH_FIXTURE) : CAUSAL_GRAPH_FIXTURE;
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture) });
   });
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/action-ledger*`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        scenario_id: FIXTURE_SCENARIO_ID,
+        cursor: 0,
+        next_cursor: null,
+        has_more: false,
+        items: [{
+          action_id: "message:ledger-1",
+          message_id: "ledger-1",
+          agent: { id: "agent-ledger-1", name: "Policy Analyst" },
+          branch_id: "branch-root",
+          round: 1,
+          action: { type: "utterance", text: "Publish the verified evacuation window." },
+          observation: {
+            status: "verified", source_message_ids: ["source-1"], memory_refs: [],
+            memory_source_scenario_ids: [], recent_messages_status: "verified",
+            identity_memory_status: "empty",
+          },
+          consequences: [], reflections: [],
+        }],
+      }),
+    }),
+  );
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(SCENARIO_FIXTURE) }),
   );
@@ -715,6 +741,17 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
   const reactFlowEl = page.locator('.react-flow').first();
   const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
   results.steps.push({ name: "reactflow-container-visible", passed: hasReactFlow });
+  const ledgerPanel = page.getByTestId("action-ledger-panel");
+  const hasLedger = await ledgerPanel.isVisible().catch(() => false)
+    && await ledgerPanel.getByText("Publish the verified evacuation window.").isVisible().catch(() => false);
+  results.steps.push({ name: "action-ledger-visible-with-durable-entry", passed: hasLedger });
+  const ledgerTextContrast = await ledgerPanel.evaluate((panel) => {
+    const target = panel.querySelector('article p');
+    if (!(target instanceof HTMLElement)) return false;
+    const color = getComputedStyle(target).color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
+    return color.length === 3 && color.reduce((sum, channel) => sum + channel, 0) >= 600;
+  }).catch(() => false);
+  results.steps.push({ name: "action-ledger-text-readable-on-dark-surface", passed: ledgerTextContrast });
 
   // Check graph chrome follows the same viewport policy as the product.
   const controls = page.locator('.react-flow__controls').first();
@@ -945,7 +982,7 @@ function buildContextOptions(mode, browserName) {
     return { viewport: DESKTOP_VIEWPORT };
   }
 
-  return {
+  const options = {
     ...MOBILE_CONTEXT_DEFAULTS,
     isMobile: true,
     hasTouch: true,
@@ -953,6 +990,11 @@ function buildContextOptions(mode, browserName) {
     deviceScaleFactor: MOBILE_CONTEXT_DEFAULTS.deviceScaleFactor,
     ...(browserName === "firefox" ? { screen: MOBILE_CONTEXT_DEFAULTS.screen } : {}),
   };
+  // Playwright's Firefox backend rejects the Chromium/WebKit-only isMobile
+  // context flag. Touch, viewport, screen and user agent still provide the
+  // bounded mobile surface contract for Firefox.
+  if (browserName === "firefox") delete options.isMobile;
+  return options;
 }
 
 function buildSurfaceRuns(args) {

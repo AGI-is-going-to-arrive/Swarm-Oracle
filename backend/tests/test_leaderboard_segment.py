@@ -371,6 +371,47 @@ def test_leaderboard_agent_count_filter_excludes_oversized_and_undersized(client
     assert meta["filtered_count"] == 1
 
 
+def test_leaderboard_agent_count_filter_excludes_world_event_source(client):
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario_id = _seed_scenario(
+            session,
+            scenario_type="simulation",
+            created_at=datetime(2026, 1, 25, tzinfo=timezone.utc),
+            agent_count=5,
+        )
+        session.add(
+            Agent(
+                scenario_id=scenario_id,
+                name="Initial Feed Source",
+                role="world_event_source",
+                persona="System-provided initial world event feed",
+                tier=AgentTier.CROWD,
+                source_type="world_event_source",
+            )
+        )
+        session.commit()
+        _seed_leaderboard_user(
+            session,
+            user_id="user-initial-feed",
+            user_name="InitialFeed",
+            avg_score=80.0,
+        )
+        _link_user_to_scenario(
+            session,
+            user_id="user-initial-feed",
+            user_name="InitialFeed",
+            scenario_id=scenario_id,
+        )
+
+    resp = client.get("/api/leaderboard?min_agents=5&max_agents=5")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert {row["user_id"] for row in payload["entries"]} == {"user-initial-feed"}
+    assert payload["segment_metadata"]["filtered_count"] == 1
+
+
 def test_leaderboard_invalid_scenario_type_returns_422(client):
     resp = client.get("/api/leaderboard?scenario_type=bogus_type")
     assert resp.status_code == 422

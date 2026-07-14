@@ -26,7 +26,7 @@ from sqlmodel import Session
 
 import app.api.debate as debate_api
 import app.api.ending_rooms as ending_rooms_api
-from app.api.helpers import verify_session
+from app.api.helpers import authenticate_session_token, verify_session
 from app.api.ws import WSManager, run_websocket_session
 from app.main import app
 from app.models import (
@@ -65,8 +65,19 @@ def _make_ws_mock(**kwargs):
     return ws
 
 
-def _make_signed_session_token(secret: str, subject: str) -> str:
-    payload = json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+def _make_signed_session_token(
+    secret: str,
+    subject: str,
+    *,
+    issued_at: int | None = None,
+    expires_at: int | None = None,
+) -> str:
+    claims: dict[str, object] = {"sub": subject}
+    if issued_at is not None:
+        claims["iat"] = issued_at
+    if expires_at is not None:
+        claims["exp"] = expires_at
+    payload = json.dumps(claims, separators=(",", ":")).encode("utf-8")
     payload_segment = base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
     signing_input = f"v1.{payload_segment}".encode("utf-8")
     signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
@@ -308,6 +319,68 @@ class TestVerifySessionREST:
         with pytest.raises(HTTPException) as exc_info:
             await verify_session(request)
         assert exc_info.value.status_code == 401
+
+
+class TestSignedSessionPrincipalLifetime:
+    def test_production_accepts_bounded_current_lifetime(self, monkeypatch):
+        secret = "s3cret"
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", secret)
+        monkeypatch.setattr("app.api.helpers.settings.ENV", "production")
+        monkeypatch.setattr("app.api.helpers.time.time", lambda: 1_000_000)
+        token = _make_signed_session_token(
+            secret,
+            "owner-a",
+            issued_at=999_970,
+            expires_at=1_003_600,
+        )
+
+        principal = authenticate_session_token(token, require_principal=True)
+
+        assert principal is not None
+        assert principal.subject == "owner-a"
+
+    @pytest.mark.parametrize(
+        ("issued_at", "expires_at"),
+        [
+            (None, 1_003_600),
+            (999_970, None),
+            (1_000_061, 1_003_600),
+            (999_970, 1_000_000),
+            (900_000, 1_000_001),
+        ],
+    )
+    def test_production_rejects_missing_or_unsafe_lifetime(
+        self,
+        monkeypatch,
+        issued_at,
+        expires_at,
+    ):
+        secret = "s3cret"
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", secret)
+        monkeypatch.setattr("app.api.helpers.settings.ENV", "prod")
+        monkeypatch.setattr("app.api.helpers.time.time", lambda: 1_000_000)
+        token = _make_signed_session_token(
+            secret,
+            "owner-a",
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            authenticate_session_token(token, require_principal=True)
+
+        assert exc_info.value.status_code == 401
+
+    def test_development_keeps_subject_only_token_compatibility(self, monkeypatch):
+        secret = "s3cret"
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", secret)
+        monkeypatch.setattr("app.api.helpers.settings.ENV", "development")
+        token = _make_signed_session_token(secret, "owner-a")
+
+        principal = authenticate_session_token(token, require_principal=True)
+
+        assert principal is not None
+        assert principal.subject == "owner-a"
 
 
 @pytest.mark.asyncio

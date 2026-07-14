@@ -156,6 +156,56 @@ describe('NodeDetailPanel', () => {
     expect(screen.queryByText(/"message_id"/)).not.toBeInTheDocument();
   });
 
+  it.each([
+    {
+      name: 'runtime projection',
+      node: {
+        id: 'outcome-runtime',
+        label: 'Projected outcome',
+        type: 'outcome',
+        payload: {
+          provenance_kind: 'runtime_projection',
+          synthetic_provenance: true,
+          evidence_status: 'unavailable',
+          evidence_caveat: 'server English must not be rendered directly',
+        },
+      } satisfies NodeDetail,
+      expected: 'This outcome is a runtime projection from the simulated branch. It has no persisted causal evidence and is not a real-world probability.',
+    },
+    {
+      name: 'legacy repair',
+      node: {
+        id: 'legacy-event:message-1',
+        label: 'Recovered event',
+        type: 'event',
+        payload: {
+          message_id: 'message-1',
+          synthetic_provenance: true,
+          content: 'Recovered from an older snapshot.',
+        },
+      } satisfies NodeDetail,
+      expected: 'This event was reconstructed at read time to repair legacy graph provenance. It is not persisted causal truth.',
+    },
+    {
+      name: 'affect proxy',
+      node: {
+        id: 'affect-shift-1',
+        label: 'Affect shifted',
+        type: 'stance_shift',
+        payload: {
+          display_type: 'affect_shift_proxy',
+          metric_kind: 'affect_proxy',
+        },
+      } satisfies NodeDetail,
+      expected: 'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+    },
+  ])('shows an explicit localized caveat for $name nodes', ({ node, expected }) => {
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByRole('note')).toHaveTextContent(expected);
+    expect(screen.queryByText(/server English/)).not.toBeInTheDocument();
+  });
+
   it('marks missing or failed emotion metadata unavailable without fabricating neutral emotion', () => {
     const unavailableNode: NodeDetail = {
       id: 'event-unavailable',

@@ -294,6 +294,80 @@ describe('CausalGraphBoard', () => {
       within(screen.getByRole('list', { name: 'Causal relations list' }))
         .getByRole('listitem'),
     ).toHaveTextContent('Alpha affect aligned (proxy) Beta');
+    expect(screen.getByTestId('causal-affect-proxy-caveat')).toHaveTextContent(
+      'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+    );
+  });
+
+  it('discloses runtime projection provenance in the board, relation list, and node detail', async () => {
+    const user = userEvent.setup();
+    hoisted.mockScenarioGraphReturn.data = {
+      id: 'g-runtime-projection',
+      nodes: [
+        { id: 'n1', key: 'e1', type: 'event', label: 'Last persisted event', round: 2, payload: null },
+        {
+          id: 'outcome:b1', key: 'outcome_b1', type: 'outcome', label: 'Projected outcome', round: 2,
+          payload: { provenance_kind: 'runtime_projection', synthetic_provenance: true, evidence_status: 'unavailable' },
+        },
+      ],
+      edges: [{
+        id: 'outcome-edge:n1:b1', source: 'n1', target: 'outcome:b1', type: 'led_to', weight: 1, label: null,
+        evidence: null, provenance_kind: 'runtime_projection', synthetic_provenance: true,
+        evidence_status: 'unavailable', evidence_caveat: 'server English must stay data',
+      }],
+    };
+
+    render(<CausalGraphBoard scenarioId="s1" hideExport />);
+
+    expect(await screen.findByTestId('causal-runtime-projection-caveat')).toHaveTextContent(
+      'Runtime outcome links are read-time projections from completed simulated branches. They have no persisted causal evidence and are not real-world probabilities.',
+    );
+    expect(within(screen.getByRole('list', { name: 'Causal relations list' })).getByRole('listitem'))
+      .toHaveTextContent(/Runtime outcome links are read-time projections/);
+    await user.click(screen.getByTestId('flow-node-outcome:b1'));
+    expect(screen.getByRole('dialog')).toHaveTextContent(/This outcome is a runtime projection/);
+    expect(screen.queryByText(/server English/)).not.toBeInTheDocument();
+  });
+
+  it('discloses legacy read-time repair for reconstructed event nodes', async () => {
+    const user = userEvent.setup();
+    hoisted.mockScenarioGraphReturn.data = {
+      id: 'g-legacy-repair',
+      nodes: [{
+        id: 'legacy-event:m1', key: 'legacy_event_m1', type: 'event', label: 'Recovered event', round: 1,
+        payload: { message_id: 'm1', synthetic_provenance: true, content: 'Recovered content' },
+      }],
+      edges: [],
+    };
+
+    render(<CausalGraphBoard scenarioId="s1" hideExport />);
+
+    expect(await screen.findByTestId('causal-legacy-repair-caveat')).toHaveTextContent(
+      'Legacy graph events may be reconstructed at read time to restore provenance. They are not persisted causal truth.',
+    );
+    await user.click(screen.getByTestId('flow-node-legacy-event:m1'));
+    expect(screen.getByRole('dialog')).toHaveTextContent(/reconstructed at read time to repair legacy graph provenance/);
+  });
+
+  it('discloses an edge-only legacy repair when no synthetic legacy node exists', async () => {
+    hoisted.mockScenarioGraphReturn.data = {
+      id: 'g-legacy-repair-edge',
+      nodes: [
+        { id: 'n1', key: 'e1', type: 'event', label: 'Recovered trigger', round: 1, payload: null },
+        { id: 'n2', key: 'fork1', type: 'fork', label: 'Fork', round: 1, payload: null },
+      ],
+      edges: [{
+        id: 'legacy-edge', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null,
+        evidence: { confidence_tier: 'low' }, provenance_kind: 'legacy_repair',
+        evidence_status: 'unavailable',
+      }],
+    };
+
+    render(<CausalGraphBoard scenarioId="s1" hideExport />);
+
+    expect(await screen.findByTestId('causal-legacy-repair-caveat')).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Causal relations list' })).getByRole('listitem'))
+      .toHaveTextContent(/original trigger proof was not persisted/);
   });
 
   it('uses the localized branch-lineage baseline when the server caveat is absent', async () => {

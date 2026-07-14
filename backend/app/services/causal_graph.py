@@ -11,7 +11,7 @@ import logging
 import re
 import threading
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,6 +48,11 @@ _RUNTIME_PROJECTION_EVIDENCE_CAVEAT = (
     "Runtime projection from a completed simulated branch; no persisted causal "
     "evidence is available, and it is not a real-world probability."
 )
+_SOURCE_REF_MAX_CHARS = 160
+_EVIDENCE_VALUE_MAX_CHARS = 320
+_CONTEXT_RECEIPT_MESSAGE_LIMIT = 12
+_CONTEXT_RECEIPT_MEMORY_LIMIT = 3
+_CONTEXT_RECEIPT_STATUS_VALUES = {"verified", "empty", "unavailable"}
 _LATIN_NAME_RE = re.compile(r"[A-Za-z]")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
@@ -149,6 +154,65 @@ def _safe_parse_payload(s: str | None) -> dict[str, Any]:
         return result if isinstance(result, dict) else {}
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+def _bounded_source_ref(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text[:_SOURCE_REF_MAX_CHARS] or None
+
+
+def _bounded_evidence_json(rule: str, **values: object) -> str:
+    payload: dict[str, Any] = {"rule": rule}
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            payload[key] = value[:_EVIDENCE_VALUE_MAX_CHARS]
+        elif isinstance(value, (bool, int, float)):
+            payload[key] = value
+        else:
+            payload[key] = str(value)[:_EVIDENCE_VALUE_MAX_CHARS]
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _bounded_context_receipt(value: object) -> dict[str, Any] | None:
+    """Persist only bounded source coordinates, never prompt or memory text."""
+    if not isinstance(value, Mapping):
+        return None
+
+    def status(key: str) -> str:
+        candidate = str(value.get(key) or "").strip().lower()
+        return candidate if candidate in _CONTEXT_RECEIPT_STATUS_VALUES else "unavailable"
+
+    def identifiers(key: str, *, limit: int, max_chars: int) -> list[str]:
+        raw_items = value.get(key)
+        if not isinstance(raw_items, (list, tuple)):
+            return []
+        return list(dict.fromkeys(
+            str(item).strip()[:max_chars]
+            for item in raw_items[:limit]
+            if str(item).strip()
+        ))
+
+    return {
+        "recent_messages_status": status("recent_messages_status"),
+        "recent_message_ids": identifiers(
+            "recent_message_ids",
+            limit=_CONTEXT_RECEIPT_MESSAGE_LIMIT,
+            max_chars=_SOURCE_REF_MAX_CHARS,
+        ),
+        "identity_memory_status": status("identity_memory_status"),
+        "identity_memory_refs": identifiers(
+            "identity_memory_refs",
+            limit=_CONTEXT_RECEIPT_MEMORY_LIMIT,
+            max_chars=20,
+        ),
+        "identity_memory_source_scenario_ids": identifiers(
+            "identity_memory_source_scenario_ids",
+            limit=_CONTEXT_RECEIPT_MEMORY_LIMIT,
+            max_chars=128,
+        ),
+    }
 
 
 def _collect_available_branches(nodes: Sequence[GraphNode]) -> list[str]:
@@ -367,15 +431,16 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
     affect_metadata = _affect_proxy_edge_metadata(edge)
     confidence_tier = "low" if affect_metadata is not None else edge.confidence_tier
     detail = edge.evidence_json
+    detail_payload = _safe_parse_payload(detail)
     if affect_metadata is not None:
-        detail = json.dumps(
-            {
-                "metric_kind": "affect_proxy",
-                "display_type": affect_metadata["display_type"],
-                "legacy_type": edge.edge_type,
-                "caveat": affect_metadata["caveat"],
-            }
-        )
+        detail_payload = {
+            **detail_payload,
+            "metric_kind": "affect_proxy",
+            "display_type": affect_metadata["display_type"],
+            "legacy_type": edge.edge_type,
+            "caveat": affect_metadata["caveat"],
+        }
+        detail = json.dumps(detail_payload, ensure_ascii=False, separators=(",", ":"))
     evidence = {
         "confidence_tier": confidence_tier,
         "source_ref": edge.source_ref,
@@ -404,6 +469,10 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
     }
     if affect_metadata is not None:
         record.update(affect_metadata)
+    for key in ("provenance_kind", "evidence_status", "evidence_caveat"):
+        value = detail_payload.get(key)
+        if isinstance(value, str) and value:
+            record[key] = value
     return record
 
 
@@ -502,10 +571,14 @@ def _load_orphan_fork_provenance(
             .join(Agent)
             .where(AgentMessage.round_id == source_round.id)
             .where(Agent.scenario_id == scenario_id)
+            .where(Agent.source_type.is_(None) | (Agent.source_type != "world_event_source"))
             .order_by(AgentMessage.id.asc())
         ).all()
         if not messages:
             continue
+
+        diverge_messages = [message for message in messages if str(message.diverge or "").strip()]
+        messages = diverge_messages[:1] or messages[:1]
 
         message_records = [
             {"agent_id": message.agent_id, "agent_name": None}
@@ -557,11 +630,26 @@ def _load_orphan_fork_provenance(
                     "weight": 1.0,
                     "label": "triggered fork",
                     "evidence": {
-                        "confidence_tier": "medium",
+                        "confidence_tier": "low",
                         "source_ref": message.id,
                         "source_round_number": fork_node.round_number,
-                        "detail": json.dumps({"source": "round_message_legacy_repair"}),
+                        "detail": _bounded_evidence_json(
+                            "legacy_fork_repair",
+                            message_id=message.id,
+                            provenance_kind="legacy_repair",
+                            evidence_status="unavailable",
+                            evidence_caveat=(
+                                "Read-time repair for a legacy fork; the original trigger proof "
+                                "was not persisted."
+                            ),
+                        ),
                     },
+                    "provenance_kind": "legacy_repair",
+                    "evidence_status": "unavailable",
+                    "evidence_caveat": (
+                        "Read-time repair for a legacy fork; the original trigger proof "
+                        "was not persisted."
+                    ),
                 }
             )
 
@@ -954,8 +1042,19 @@ def _build_agent_name_map(
     return names_by_agent_id
 
 
-def _inter_agent_edge_evidence(rule: str, reason: str) -> str:
-    return json.dumps({"rule": rule, "reason": reason})
+def _inter_agent_edge_evidence(
+    rule: str,
+    reason: str,
+    *,
+    source_message_id: str | None,
+    target_message_id: str | None,
+) -> str:
+    return _bounded_evidence_json(
+        rule,
+        reason=reason,
+        source_message_id=source_message_id,
+        target_message_id=target_message_id,
+    )
 
 
 def _add_inter_agent_edge(
@@ -969,6 +1068,8 @@ def _add_inter_agent_edge(
     round_number: int,
     confidence_tier: str,
     reason: str,
+    source_ref: str | None,
+    target_ref: str | None,
     added_records: list[dict[str, Any]] | None = None,
     updated_records: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -983,8 +1084,14 @@ def _add_inter_agent_edge(
         edge_type=edge_type,
         weight=0.4,
         confidence_tier=confidence_tier,
+        source_ref=source_ref,
         source_round_number=round_number,
-        evidence_json=_inter_agent_edge_evidence(edge_type, reason),
+        evidence_json=_inter_agent_edge_evidence(
+            edge_type,
+            reason,
+            source_message_id=source_ref,
+            target_message_id=target_ref,
+        ),
         added_records=added_records,
         updated_records=updated_records,
     )
@@ -1036,6 +1143,8 @@ def _extract_inter_agent_edges(
                     f"message mentions display name for agent {target_agent_id} "
                     f"on branch {branch_id}"
                 ),
+                source_ref=record.get("message_id"),
+                target_ref=target_record.get("message_id"),
                 added_records=added_records,
                 updated_records=updated_records,
             )
@@ -1082,6 +1191,8 @@ def _extract_inter_agent_edges(
                     f"{left_agent_id}={left_stance:.2f}, "
                     f"{right_agent_id}={right_stance:.2f}"
                 ),
+                source_ref=left_record.get("message_id"),
+                target_ref=right_record.get("message_id"),
                 added_records=added_records,
                 updated_records=updated_records,
             )
@@ -1131,8 +1242,9 @@ def _add_edge_if_missing(
             before = _serialize_graph_edge(existing_edge)
             if existing_edge.confidence_tier is None and confidence_tier is not None:
                 existing_edge.confidence_tier = confidence_tier
-            if existing_edge.source_ref is None and source_ref is not None:
-                existing_edge.source_ref = source_ref
+            bounded_source_ref = _bounded_source_ref(source_ref)
+            if existing_edge.source_ref is None and bounded_source_ref is not None:
+                existing_edge.source_ref = bounded_source_ref
             if source_round_number is not None and (
                 existing_edge.source_round_number is None
                 or (
@@ -1157,7 +1269,7 @@ def _add_edge_if_missing(
         weight=weight,
         label=label,
         confidence_tier=confidence_tier,
-        source_ref=source_ref,
+        source_ref=_bounded_source_ref(source_ref),
         source_round_number=source_round_number,
         evidence_json=evidence_json,
     )
@@ -1380,7 +1492,7 @@ def append_round_nodes(
                 content = _getfield(msg, "content", "") or ""
                 msg_id = _getfield(msg, "id", None)
                 agent_name = _getfield(msg, "agent_name", None)
-                payload_json = json.dumps({
+                payload = {
                     "agent_id": agent_id,
                     "agent_name": agent_name,
                     "emotion": emotion,
@@ -1395,7 +1507,17 @@ def append_round_nodes(
                     "stance_score": stance,
                     "branch_id": branch_id,
                     "content": content,
-                })
+                    "diverge": _getfield(msg, "diverge", None),
+                    **(
+                        {"context_receipt": context_receipt}
+                        if (
+                            context_receipt := _bounded_context_receipt(
+                                _getfield(msg, "_context_receipt", None)
+                            )
+                        )
+                        else {}
+                    ),
+                }
                 node_key = _message_node_key(
                     round_number,
                     msg_id,
@@ -1418,7 +1540,7 @@ def append_round_nodes(
                         round_number=round_number,
                         ref_model="agent_message",
                         ref_id=msg_id,
-                        payload_json=payload_json,
+                        payload_json=json.dumps(payload),
                     )
                     session.add(node)
                     session.flush()
@@ -1426,11 +1548,19 @@ def append_round_nodes(
                     added_records.append(_serialize_graph_node_delta(node))
                 else:
                     before = _serialize_graph_node_delta(node)
+                    if "context_receipt" not in payload:
+                        existing_receipt = _safe_parse_payload(node.payload_json).get(
+                            "context_receipt"
+                        )
+                        if isinstance(existing_receipt, dict):
+                            # DB-only replay rows do not carry prompt receipts;
+                            # never erase a receipt that was captured live.
+                            payload["context_receipt"] = existing_receipt
                     node.label = event_label
                     node.round_number = round_number
                     node.ref_model = "agent_message"
                     node.ref_id = msg_id
-                    node.payload_json = payload_json
+                    node.payload_json = json.dumps(payload)
                     after = _serialize_graph_node_delta(node)
                     if after != before:
                         updated_records.append(after)
@@ -1442,6 +1572,7 @@ def append_round_nodes(
                     "emotion": emotion,
                     "emotion_metadata_available": metadata_failure_code is None,
                     "content": content,
+                    "message_id": msg_id,
                     "node_id": node.id,
                     "round_number": node.round_number,
                 })
@@ -1470,6 +1601,7 @@ def append_round_nodes(
 
             desired_shift_records: dict[tuple[str, str], dict[str, Any]] = {}
             prev_frames_by_agent: dict[str, AgentStateFrame] = {}
+            prev_event_by_agent: dict[str, GraphNode] = {}
             if round_number > 1 and latest_record_by_agent:
                 prev_frames_stmt = select(AgentStateFrame).where(
                     AgentStateFrame.scenario_id == scenario_id,
@@ -1480,6 +1612,17 @@ def append_round_nodes(
                     frame.agent_id: frame
                     for frame in session.exec(prev_frames_stmt).all()
                 }
+                prev_nodes = session.exec(
+                    select(GraphNode).where(
+                        GraphNode.snapshot_id == snapshot.id,
+                        GraphNode.node_type == "event",
+                        GraphNode.round_number == round_number - 1,
+                    )
+                ).all()
+                for prev_node in prev_nodes:
+                    payload = _safe_parse_payload(prev_node.payload_json)
+                    if payload.get("branch_id") == branch_id:
+                        prev_event_by_agent[payload.get("agent_id", "")] = prev_node
                 for aid, record in latest_record_by_agent.items():
                     prev_frame = prev_frames_by_agent.get(aid)
                     if prev_frame is None:
@@ -1492,6 +1635,13 @@ def append_round_nodes(
                     shift_agent_name = record.get("agent_name") or aid[:8]
                     desired_shift_records[(branch_id, shift_key)] = {
                         "record": record,
+                        "previous_score": prev_frame.stance_score,
+                        "previous_message_id": (
+                            prev_event_by_agent.get(aid).ref_id
+                            if prev_event_by_agent.get(aid) is not None
+                            else None
+                        ),
+                        "delta": delta,
                         "label": f"{shift_agent_name} stance shifted",
                         "payload_json": json.dumps({
                             "agent_id": aid,
@@ -1636,22 +1786,10 @@ def append_round_nodes(
                 frames_by_agent[agent_id] = frame
 
             if round_number > 1 and message_records:
-                prev_stmt = select(GraphNode).where(
-                    GraphNode.snapshot_id == snapshot.id,
-                    GraphNode.node_type == "event",
-                    GraphNode.round_number == round_number - 1,
-                )
-                prev_nodes = session.exec(prev_stmt).all()
-                prev_by_agent: dict[str, GraphNode] = {}
-                for prev_node in prev_nodes:
-                    payload = _safe_parse_payload(prev_node.payload_json)
-                    if payload.get("branch_id") == branch_id:
-                        prev_by_agent[payload.get("agent_id", "")] = prev_node
-
                 for record in message_records:
                     aid = record["agent_id"]
-                    if aid in prev_by_agent:
-                        source_node = prev_by_agent[aid]
+                    if aid in prev_event_by_agent:
+                        source_node = prev_event_by_agent[aid]
                         _add_edge_if_missing(
                             session,
                             existing_edge_signatures,
@@ -1660,7 +1798,14 @@ def append_round_nodes(
                             target_node_id=record["node_id"],
                             edge_type="temporal",
                             weight=0.5,
+                            confidence_tier="high",
+                            source_ref=source_node.ref_id,
                             source_round_number=source_node.round_number,
+                            evidence_json=_bounded_evidence_json(
+                                "same_agent_consecutive_round",
+                                source_message_id=source_node.ref_id,
+                                target_message_id=record.get("message_id"),
+                            ),
                             added_records=added_records,
                             updated_records=updated_records,
                         )
@@ -1686,25 +1831,32 @@ def append_round_nodes(
                     GraphNode.round_number == round_number + 1,
                 )
                 next_nodes = session.exec(next_stmt).all()
-                next_by_agent: dict[str, str] = {}
+                next_by_agent: dict[str, GraphNode] = {}
                 for next_node in next_nodes:
                     payload = _safe_parse_payload(next_node.payload_json)
                     if payload.get("branch_id") == branch_id:
-                        next_by_agent[payload.get("agent_id", "")] = next_node.id
+                        next_by_agent[payload.get("agent_id", "")] = next_node
 
                 for aid, record in latest_event_record_by_agent.items():
-                    next_node_id = next_by_agent.get(aid)
-                    if next_node_id is None:
+                    next_node = next_by_agent.get(aid)
+                    if next_node is None:
                         continue
                     _add_edge_if_missing(
                         session,
                         existing_edge_signatures,
                         snapshot_id=snapshot.id,
                         source_node_id=record["node_id"],
-                        target_node_id=next_node_id,
+                        target_node_id=next_node.id,
                         edge_type="temporal",
                         weight=0.5,
+                        confidence_tier="high",
+                        source_ref=record.get("message_id"),
                         source_round_number=record["round_number"],
+                        evidence_json=_bounded_evidence_json(
+                            "same_agent_consecutive_round",
+                            source_message_id=record.get("message_id"),
+                            target_message_id=next_node.ref_id,
+                        ),
                         added_records=added_records,
                         updated_records=updated_records,
                     )
@@ -1743,7 +1895,16 @@ def append_round_nodes(
                     weight=0.8,
                     label="stance shift",
                     confidence_tier="medium",
+                    source_ref=shift_record["record"].get("message_id"),
                     source_round_number=round_number,
+                    evidence_json=_bounded_evidence_json(
+                        "affect_shift_proxy",
+                        message_id=shift_record["record"].get("message_id"),
+                        previous_message_id=shift_record.get("previous_message_id"),
+                        previous_score=shift_record["previous_score"],
+                        current_score=shift_record["record"]["stance"],
+                        delta=shift_record["delta"],
+                    ),
                     added_records=added_records,
                     updated_records=updated_records,
                 )
@@ -1808,25 +1969,44 @@ def append_round_nodes(
                     _record_deleted(deleted_records, edge.id)
                     session.delete(edge)
 
-                trigger_ids = list(fork_event.get("trigger_node_ids") or [])
-                if trigger_ids:
+                legacy_trigger_ids = list(fork_event.get("trigger_node_ids") or [])
+                explicit_message_ids = [
+                    str(message_id)
+                    for message_id in (fork_event.get("trigger_message_ids") or [])
+                    if str(message_id).strip()
+                ]
+                explicit_trigger_ids: set[str] = set()
+                if explicit_message_ids:
+                    message_trigger_nodes = session.exec(
+                        select(GraphNode).where(
+                            GraphNode.snapshot_id == snapshot.id,
+                            GraphNode.node_type == "event",
+                            GraphNode.round_number == round_number,
+                            col(GraphNode.ref_id).in_(explicit_message_ids),
+                        )
+                    ).all()
+                    explicit_trigger_ids = {
+                        node.id
+                        for node in message_trigger_nodes
+                        if _node_branch_id(node) == branch_id
+                        and str(
+                            _safe_parse_payload(node.payload_json).get("diverge") or ""
+                        ).strip()
+                    }
+                trigger_ids = sorted(explicit_trigger_ids)
+                if not trigger_ids and legacy_trigger_ids:
                     valid_trigger_nodes = session.exec(
                         select(GraphNode).where(
                             GraphNode.snapshot_id == snapshot.id,
-                            col(GraphNode.id).in_(trigger_ids),
+                            col(GraphNode.id).in_(legacy_trigger_ids),
                         )
                     ).all()
-                    valid_trigger_id_set = {
+                    valid_legacy_ids = sorted(
                         node.id
                         for node in valid_trigger_nodes
                         if _node_branch_id(node) == branch_id
-                    }
-                    trigger_ids = [
-                        node_id
-                        for node_id in trigger_ids
-                        if node_id in valid_trigger_id_set
-                    ]
-
+                    )
+                    trigger_ids = valid_legacy_ids[:1]
                 if not trigger_ids:
                     same_round_stmt = select(GraphNode).where(
                         GraphNode.snapshot_id == snapshot.id,
@@ -1834,12 +2014,26 @@ def append_round_nodes(
                         GraphNode.round_number == round_number,
                     )
                     same_round_nodes = session.exec(same_round_stmt).all()
-                    trigger_ids = [
-                        node.id for node in same_round_nodes
+                    candidates = [
+                        node
+                        for node in same_round_nodes
                         if _safe_parse_payload(node.payload_json).get("branch_id") == branch_id
                     ]
+                    diverge_candidates = [
+                        node
+                        for node in candidates
+                        if str(_safe_parse_payload(node.payload_json).get("diverge") or "").strip()
+                    ]
+                    selected = sorted(
+                        diverge_candidates or candidates,
+                        key=lambda node: node.id,
+                    )[:1]
+                    trigger_ids = [node.id for node in selected]
 
                 for src_id in trigger_ids:
+                    source_node = session.get(GraphNode, src_id)
+                    source_ref = source_node.ref_id if source_node is not None else None
+                    has_explicit_proof = src_id in explicit_trigger_ids
                     _add_edge_if_missing(
                         session,
                         existing_edge_signatures,
@@ -1849,8 +2043,27 @@ def append_round_nodes(
                         edge_type="caused",
                         weight=1.0,
                         label="triggered fork",
-                        confidence_tier="high",
+                        confidence_tier="high" if has_explicit_proof else "low",
+                        source_ref=source_ref,
                         source_round_number=round_number,
+                        evidence_json=(
+                            _bounded_evidence_json(
+                                "explicit_diverge_message",
+                                message_id=source_ref,
+                                fork_reason=str(fork_event.get("reason") or ""),
+                            )
+                            if has_explicit_proof
+                            else _bounded_evidence_json(
+                                "legacy_fork_repair",
+                                message_id=source_ref,
+                                provenance_kind="legacy_repair",
+                                evidence_status="unavailable",
+                                evidence_caveat=(
+                                    "No persisted fork trigger proof; one deterministic same-round "
+                                    "message is shown as a low-confidence repair."
+                                ),
+                            )
+                        ),
                         added_records=added_records,
                         updated_records=updated_records,
                     )

@@ -1,5 +1,6 @@
 """Tests for app.services.agent_identity — cross-scenario identity & memory."""
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
@@ -494,6 +495,38 @@ class TestRecordGrowthEvent:
             assert ev.round_number == 3
             assert ev.event_type == "stance_shift"
             assert "hawkish" in ev.summary
+
+    def test_same_source_event_is_idempotent_and_keeps_provenance(self):
+        identity_id = resolve_identity(
+            user_id="user-idempotent",
+            name="Idempotent Agent",
+            role="Observer",
+            persona="Careful",
+        )
+        kwargs = {
+            "identity_id": identity_id,
+            "scenario_id": "scenario-once",
+            "branch_id": "branch-once",
+            "round_number": 2,
+            "event_type": "agent_reflection",
+            "summary": "Observed a consequence once.",
+            "metrics": {"version": 1, "source_message_ids": ["message-1"]},
+        }
+
+        record_growth_event(**kwargs)
+        record_growth_event(**kwargs)
+
+        with Session(get_engine()) as session:
+            events = session.exec(
+                select(AgentGrowthEvent).where(
+                    AgentGrowthEvent.identity_id == identity_id,
+                )
+            ).all()
+        assert len(events) == 1
+        assert json.loads(events[0].metrics_json or "{}") == {
+            "version": 1,
+            "source_message_ids": ["message-1"],
+        }
 
     def test_multiple_events_for_same_identity(self):
         """Multiple events should all be stored."""

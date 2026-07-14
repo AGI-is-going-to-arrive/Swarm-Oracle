@@ -144,7 +144,7 @@ async def test_endpoint_returns_200_with_memories_when_owned(client: AsyncClient
     assert entry["memory_id"]
     assert entry["document"] == "kept faith with the council"
     assert entry["source_scenario_id"] == "scenario-alpha"
-    assert entry["timestamp"] == "2026-05-10T10:00:00Z"
+    assert entry["timestamp"]
     assert entry["is_compacted"] is False
     assert entry["pinned"] is False
     assert entry["remembered"] is False
@@ -167,25 +167,25 @@ async def test_endpoint_returns_empty_list_when_no_memories(client: AsyncClient)
 
 async def test_endpoint_sorts_by_timestamp_descending(client: AsyncClient):
     _create_identity("inspector-sort")
-    _store_memory(
+    _store_raw_memory(
         "inspector-sort",
-        summary="oldest event",
+        document="oldest event",
         metadata={
             "scenario_id": "scenario-old",
             "created_at": "2026-01-01T00:00:00Z",
         },
     )
-    _store_memory(
+    _store_raw_memory(
         "inspector-sort",
-        summary="newest event",
+        document="newest event",
         metadata={
             "scenario_id": "scenario-new",
             "created_at": "2026-05-01T00:00:00Z",
         },
     )
-    _store_memory(
+    _store_raw_memory(
         "inspector-sort",
-        summary="middle event",
+        document="middle event",
         metadata={
             "scenario_id": "scenario-mid",
             "created_at": "2026-03-01T00:00:00Z",
@@ -472,6 +472,7 @@ async def test_endpoint_surfaces_compaction_status(client: AsyncClient):
             "created_at": "2026-05-10T11:00:00Z",
             "compacted": "true",
             "confidence_tier": "medium",
+            "source_scenario_ids": '["scenario-a","scenario-b"]',
         },
     )
 
@@ -485,6 +486,9 @@ async def test_endpoint_surfaces_compaction_status(client: AsyncClient):
     assert by_doc["raw memory"]["is_compacted"] is False
     assert by_doc["compacted summary"]["is_compacted"] is True
     assert by_doc["compacted summary"]["confidence"] == "medium"
+    assert by_doc["compacted summary"]["metadata"]["source_scenario_ids"] == (
+        '["scenario-a","scenario-b"]'
+    )
 
 
 async def test_endpoint_projects_unknown_confidence_tier_to_unknown(

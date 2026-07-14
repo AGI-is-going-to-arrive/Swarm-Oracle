@@ -6,7 +6,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.api.helpers import load_scenario_response
 from app.models.checkpoint import ScenarioCheckpoint
-from app.models.database import Branch, Round, Scenario, ScenarioStatus, get_engine
+from app.models.database import Agent, Branch, Round, Scenario, ScenarioStatus, get_engine
 from app.models.graph import GraphSnapshot
 
 
@@ -69,6 +69,34 @@ def test_load_scenario_response_uses_none_when_no_round_count_is_available():
     assert response is not None
     assert response.total_rounds is None
     assert response.model_dump()["total_rounds"] is None
+
+
+def test_load_scenario_response_excludes_internal_world_event_source_agent():
+    engine = get_engine()
+    scenario_id = _create_scenario(parsed_context={})
+    with Session(engine) as session:
+        session.add_all([
+            Agent(
+                scenario_id=scenario_id,
+                name="Analyst",
+                role="Analyst",
+                persona="Assesses events.",
+                source_type="generated",
+            ),
+            Agent(
+                scenario_id=scenario_id,
+                name="World Event Feed",
+                role="System source",
+                persona="Internal bootstrap source.",
+                source_type="world_event_source",
+            ),
+        ])
+        session.commit()
+
+    response = load_scenario_response(engine, scenario_id)
+
+    assert response is not None
+    assert [agent["name"] for agent in response.agents] == ["Analyst"]
 
 
 def test_load_scenario_response_scopes_and_sorts_additive_graph_fields():

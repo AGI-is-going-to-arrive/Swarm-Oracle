@@ -447,6 +447,63 @@ def test_analyst_dispatches_causal_graph_tool(client, monkeypatch):
     assert "Hinge event" in frames[1][1]["summary"]
 
 
+@pytest.mark.asyncio
+async def test_causal_graph_tool_surfaces_provenance_and_excludes_runtime_projection(
+    monkeypatch,
+):
+    from app.services.roundtable_analyst import _tool_query_causal_graph
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.build_snapshot",
+        lambda scenario_id, branch_id=None: {
+            "available_branches": ["br-main"],
+            "nodes": [
+                {"id": "n1", "type": "event", "label": "Persisted event"},
+                {
+                    "id": "runtime-outcome",
+                    "type": "outcome",
+                    "label": "Projected outcome",
+                    "payload": {"provenance_kind": "runtime_projection"},
+                },
+            ],
+            "edges": [
+                {
+                    "id": "e1",
+                    "source": "n1",
+                    "target": "n1",
+                    "type": "supports_stance",
+                    "label": "affect aligned (proxy)",
+                    "evidence": {
+                        "confidence_tier": "low",
+                        "source_ref": "m1",
+                        "source_round_number": 2,
+                        "detail": '{"rule":"affect_compare"}',
+                    },
+                    "caveat": "Affect proxy; not verified stance.",
+                },
+                {
+                    "id": "runtime-edge",
+                    "source": "n1",
+                    "target": "runtime-outcome",
+                    "type": "led_to",
+                    "provenance_kind": "runtime_projection",
+                    "evidence_status": "unavailable",
+                },
+            ],
+        },
+    )
+
+    result = await _tool_query_causal_graph("scenario", {})
+
+    assert "confidence=low" in result
+    assert "source_ref=m1" in result
+    assert "source_round=2" in result
+    assert "affect_compare" in result
+    assert "Affect proxy; not verified stance." in result
+    assert "runtime-outcome" not in result
+    assert "runtime-edge" not in result
+
+
 def test_analyst_dispatches_identity_memory_tool(client, monkeypatch):
     fixture = _seed_analyst_scenario(identity_id="identity-7")
     decisions = iter(

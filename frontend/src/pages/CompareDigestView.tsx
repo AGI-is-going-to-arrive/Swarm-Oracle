@@ -6,6 +6,7 @@ import {
   getCounterfactualCompare,
   getScenario,
   isApiError,
+  resimulateCounterfactual,
 } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useSimulationStore } from '../stores/simulationStore';
@@ -131,9 +132,12 @@ export function CompareDigestView() {
     b: null,
   });
   const [resimulating, setResimulating] = useState(false);
+  const [resimulateError, setResimulateError] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const loadRequestIdRef = useRef(0);
+  const resimulateRefreshTimerRef = useRef<number | null>(null);
+  const resimulateEpochRef = useRef(0);
   const tabARef = useRef<HTMLButtonElement>(null);
   const tabBRef = useRef<HTMLButtonElement>(null);
 
@@ -242,16 +246,59 @@ export function CompareDigestView() {
 
   const handleResimulate = useCallback(async () => {
     if (!id || !branchB || resimulating) return;
-    setResimulating(true);
-    try {
-      await fetch(`/api/scenario/${id}/counterfactual/${branchB}/resimulate`, { method: 'POST' });
-      setTimeout(() => void loadCompare(), 2000);
-    } catch {
-      // silent
-    } finally {
-      setResimulating(false);
+    const resimulateEpoch = resimulateEpochRef.current + 1;
+    resimulateEpochRef.current = resimulateEpoch;
+    if (resimulateRefreshTimerRef.current !== null) {
+      window.clearTimeout(resimulateRefreshTimerRef.current);
+      resimulateRefreshTimerRef.current = null;
     }
-  }, [id, branchB, resimulating, loadCompare]);
+    setResimulating(true);
+    setResimulateError(false);
+    try {
+      await resimulateCounterfactual(id, branchB);
+      if (resimulateEpoch !== resimulateEpochRef.current) return;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await new Promise<void>((resolve) => {
+          resimulateRefreshTimerRef.current = window.setTimeout(() => {
+            resimulateRefreshTimerRef.current = null;
+            resolve();
+          }, 2000);
+        });
+        if (resimulateEpoch !== resimulateEpochRef.current) return;
+        try {
+          const scenarioPayload = await getScenario(id);
+          if (resimulateEpoch !== resimulateEpochRef.current) return;
+          setScenario(scenarioPayload);
+          if (scenarioPayload.status === 'done') {
+            await loadCompare();
+            return;
+          }
+          if (scenarioPayload.status === 'error' || scenarioPayload.status === 'cancelled') {
+            setResimulateError(true);
+            return;
+          }
+        } catch {
+          // A transient read failure should not permit a duplicate resimulation.
+        }
+      }
+      if (resimulateEpoch === resimulateEpochRef.current) setResimulateError(true);
+    } catch {
+      if (resimulateEpoch !== resimulateEpochRef.current) return;
+      setResimulateError(true);
+    } finally {
+      if (resimulateEpoch === resimulateEpochRef.current) {
+        setResimulating(false);
+      }
+    }
+  }, [id, branchB, resimulating, loadCompare, setScenario]);
+
+  useEffect(() => () => {
+    resimulateEpochRef.current += 1;
+    if (resimulateRefreshTimerRef.current !== null) {
+      window.clearTimeout(resimulateRefreshTimerRef.current);
+      resimulateRefreshTimerRef.current = null;
+    }
+  }, [id, branchB]);
 
   useEffect(() => {
     if (availableRounds.length === 0) return;
@@ -533,6 +580,9 @@ export function CompareDigestView() {
               ? t('compare.resimulating', 'Simulating...')
               : t('compare.resimulate', 'Simulate Remaining Rounds')}
           </button>
+          {resimulateError && (
+            <p>{t('compare.error_fetch', 'Unable to load comparison data right now. Please retry.')}</p>
+          )}
         </div>
       )}
 

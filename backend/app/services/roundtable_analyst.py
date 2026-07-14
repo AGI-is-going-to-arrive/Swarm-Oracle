@@ -348,6 +348,20 @@ async def _tool_query_causal_graph(
     snapshot = await asyncio.to_thread(build_snapshot, scenario_id, branch_id=branch_id)
     nodes = list(snapshot.get("nodes") or [])
     edges = list(snapshot.get("edges") or [])
+    runtime_node_ids = {
+        str(node.get("id"))
+        for node in nodes
+        if isinstance(node.get("payload"), dict)
+        and node["payload"].get("provenance_kind") == "runtime_projection"
+    }
+    nodes = [node for node in nodes if str(node.get("id")) not in runtime_node_ids]
+    edges = [
+        edge
+        for edge in edges
+        if edge.get("provenance_kind") != "runtime_projection"
+        and str(edge.get("source")) not in runtime_node_ids
+        and str(edge.get("target")) not in runtime_node_ids
+    ]
     if node_type:
         nodes = [node for node in nodes if str(node.get("type") or "") == node_type]
 
@@ -376,6 +390,12 @@ async def _tool_query_causal_graph(
     edge_lines = [
         f"- edge={edge.get('id')} {edge.get('source')} -> {edge.get('target')}"
         f" type={edge.get('type')} label={edge.get('label')}"
+        f" confidence={(edge.get('evidence') or {}).get('confidence_tier')}"
+        f" source_ref={(edge.get('evidence') or {}).get('source_ref')}"
+        f" source_round={(edge.get('evidence') or {}).get('source_round_number')}"
+        f" detail={(edge.get('evidence') or {}).get('detail')}"
+        f" caveat={edge.get('caveat') or edge.get('evidence_caveat')}"
+        f" provenance={edge.get('provenance_kind')}"
         for edge in edges[:max_items]
     ]
     parts = [

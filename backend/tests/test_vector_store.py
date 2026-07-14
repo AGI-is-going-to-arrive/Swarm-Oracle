@@ -1,10 +1,12 @@
 """Tests for app.services.vector_store — ChromaDB vector memory L2."""
 
+import json
 import shutil
 import tempfile
 import threading
 import time
 from collections import OrderedDict
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +18,7 @@ from app.services.vector_store import (
     _store_ready,
     collection_name_for_scenario,
     delete_identity_profile,
+    identity_memory_ref,
     purge_identity_memories,
     reset_vector_store,
     retrieve_identity_memories,
@@ -830,6 +833,20 @@ class TestIdentityMemory:
         assert all("summary" in r for r in results)
         assert all("scenario_id" in r for r in results)
         assert all("distance" in r for r in results)
+        assert all(len(r["memory_ref"]) == 20 for r in results)
+        assert all("identity-memory-" not in r["memory_ref"] for r in results)
+
+    def test_idempotent_memory_ref_is_stable_and_non_reversible(self):
+        first = identity_memory_ref("user-1", "identity-1", "scenario-1", "turn-1")
+        second = identity_memory_ref("user-1", "identity-1", "scenario-1", "turn-1")
+        different = identity_memory_ref(
+            "user-1", "identity-1", "scenario-1", "turn-2"
+        )
+
+        assert first == second
+        assert len(first) == 20
+        assert first != different
+        assert "user-1" not in first
 
     def test_retrieve_returns_empty_for_missing_collection(self, temp_dir, monkeypatch):
         """Retrieve should return [] when identity collection doesn't exist."""
@@ -913,13 +930,13 @@ class TestIdentityMemory:
         vs = VectorStore(persist_dir=temp_dir)
         monkeypatch.setattr(vector_store_module, "_vector_store", vs)
 
-        store_identity_memory(
+        first_write = store_identity_memory(
             user_id="user-3",
             identity_id="id-gamma",
             scenario_id="s-3",
             summary="",
         )
-        store_identity_memory(
+        second_write = store_identity_memory(
             user_id="user-3",
             identity_id="id-gamma",
             scenario_id="s-4",
@@ -932,6 +949,79 @@ class TestIdentityMemory:
             query_text="anything",
         )
         assert results == []
+        assert first_write is False
+        assert second_write is False
+
+    def test_store_reports_unavailable_vector_store(self, temp_dir, monkeypatch):
+        monkeypatch.setattr(
+            vector_store_module,
+            "get_vector_store",
+            lambda: SimpleNamespace(available=False),
+        )
+
+        assert store_identity_memory(
+            user_id="user-unavailable",
+            identity_id="identity-unavailable",
+            scenario_id="scenario-unavailable",
+            summary="This write cannot be persisted",
+        ) is False
+
+    def test_idempotency_key_deduplicates_retry(self, temp_dir, monkeypatch):
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        for _ in range(2):
+            store_identity_memory(
+                user_id="user-retry",
+                identity_id="identity-retry",
+                scenario_id="scenario-retry",
+                summary="Observed a private branch outcome",
+                idempotency_key="round-4:reflection",
+            )
+
+        collection = vs._client.get_collection(
+            name=_identity_collection_name("user-retry"),
+        )
+        stored = collection.get(where={"identity_id": "identity-retry"})
+        assert len(stored["ids"]) == 1
+        assert stored["ids"][0].startswith("identity-memory-")
+        assert stored["metadatas"][0]["idempotency_key_hash"]
+
+    def test_metadata_cannot_override_reserved_keys_and_is_bounded(
+        self, temp_dir, monkeypatch,
+    ):
+        vs = VectorStore(persist_dir=temp_dir)
+        monkeypatch.setattr(vector_store_module, "_vector_store", vs)
+
+        store_identity_memory(
+            user_id="user-metadata",
+            identity_id="identity-real",
+            scenario_id="scenario-real",
+            summary="Agent-specific observation",
+            metadata={
+                "identity_id": "identity-foreign",
+                "scenario_id": "scenario-foreign",
+                "created_at": "1900-01-01T00:00:00Z",
+                "doc_type": "identity_profile",
+                "observation": "x" * 2000,
+                "source_message_ids": [f"message-{index}" for index in range(40)],
+                "provider_error": "secret upstream detail",
+            },
+        )
+
+        collection = vs._client.get_collection(
+            name=_identity_collection_name("user-metadata"),
+        )
+        stored = collection.get(where={"identity_id": "identity-real"})
+        assert len(stored["ids"]) == 1
+        meta = stored["metadatas"][0]
+        assert meta["identity_id"] == "identity-real"
+        assert meta["scenario_id"] == "scenario-real"
+        assert meta["created_at"] != "1900-01-01T00:00:00Z"
+        assert meta["doc_type"] == "identity_memory"
+        assert len(meta["observation"]) == 1000
+        assert len(json.loads(meta["source_message_ids"])) == 32
+        assert "provider_error" not in meta
 
     def test_profiles_live_in_dedicated_collection(self, temp_dir, monkeypatch):
         """Identity profiles should not be stored in the memory collection."""

@@ -616,6 +616,12 @@ async def get_leaderboard(
                     Agent.scenario_id.label("scenario_id"),
                     func.count(Agent.id).label("agent_count"),
                 )
+                .where(
+                    or_(
+                        Agent.source_type.is_(None),
+                        Agent.source_type != "world_event_source",
+                    )
+                )
                 .group_by(Agent.scenario_id)
                 .subquery()
             )

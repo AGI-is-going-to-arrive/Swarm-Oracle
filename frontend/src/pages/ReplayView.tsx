@@ -52,6 +52,14 @@ function readPayload(node: CausalGraphNode): Record<string, unknown> {
     : {};
 }
 
+const PUBLIC_METADATA_FAILURE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+function visibleMetadataFailureCode(code: unknown): string | null {
+  return typeof code === 'string' && PUBLIC_METADATA_FAILURE_CODE.test(code)
+    ? code
+    : null;
+}
+
 function extractAgentsFromGraph(graph: CausalGraphResponse | null): ReplayAgentInfo[] {
   if (!graph) return [];
   const agentMap = new Map<string, ReplayAgentInfo>();
@@ -583,17 +591,6 @@ export function ReplayView() {
             </span>
           )}
         </div>
-        <div className="replay-header__right">
-          {!showEmpty && id && (
-            <Link to={`/sim/${encodeURIComponent(id)}`} className="replay-header__theater-btn">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <rect x="1.5" y="3" width="13" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-                <path d="M6.5 6.5L10.5 8.5L6.5 10.5V6.5Z" fill="currentColor" />
-              </svg>
-              {t('replay.open_pixel_theater', 'Open Pixel Theater')}
-            </Link>
-          )}
-        </div>
       </header>
 
       {showEmpty ? (
@@ -677,7 +674,9 @@ export function ReplayView() {
               {t('replay.trace.frame_count_label', 'Frame')} {frameIndex + 1} / {totalFrames}
             </span>
             {currentRound != null && (
-              <span className="replay-meta__round">Round {currentRound}</span>
+              <span className="replay-meta__round">
+                {t('game.round_label', 'Round')} {currentRound}
+              </span>
             )}
             <span className="replay-meta__branches">
               {t('replay.trace.branches_label', 'Branches')}: {branchOptions.length}
@@ -765,6 +764,9 @@ export function ReplayView() {
                             {t(
                               'sim.panel.emotion_metadata_unavailable',
                               'Emotion metadata unavailable',
+                            )}
+                            {visibleMetadataFailureCode(p.emotion_metadata_failure_code) && (
+                              <> {'('}{visibleMetadataFailureCode(p.emotion_metadata_failure_code)}{')'}</>
                             )}
                           </span>
                         ) : emotion && (

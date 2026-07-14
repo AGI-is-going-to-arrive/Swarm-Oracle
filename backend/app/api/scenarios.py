@@ -20,7 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import exists as sa_exists
 from sqlalchemy import func as sa_func
 from sqlalchemy import or_ as sa_or
@@ -161,9 +161,7 @@ def _terminal_completed_branches(
     if not completed:
         return []
     parent_ids = {
-        branch.parent_branch_id
-        for branch in (all_branches or branches)
-        if branch.parent_branch_id
+        branch.parent_branch_id for branch in (all_branches or branches) if branch.parent_branch_id
     }
     terminal = [branch for branch in completed if branch.id not in parent_ids]
     return terminal or completed
@@ -200,6 +198,8 @@ async def _run_scenario_background_with_llm_error_taxonomy(
                     exc_info=True,
                 )
         raise
+
+
 _REPLAY_SENSITIVE_NORMALIZED_KEYS = frozenset(
     {
         "agentidentityid",
@@ -299,9 +299,7 @@ def _sanitize_replay_text(value: Any) -> str:
     def _protect_natural_bearer_candidate(match: re.Match[str]) -> str:
         candidate = match.group("candidate")
         prefix = text[max(0, match.start() - 48) : match.start()]
-        has_credential_context = bool(
-            _REPLAY_BEARER_CREDENTIAL_CONTEXT_RE.search(prefix)
-        )
+        has_credential_context = bool(_REPLAY_BEARER_CREDENTIAL_CONTEXT_RE.search(prefix))
         has_credential_shape = (
             any(char in _REPLAY_BEARER_SIGNAL_CHARS for char in candidate)
             or len(candidate) >= _REPLAY_BEARER_LONG_CANDIDATE_LENGTH
@@ -371,8 +369,7 @@ class ImportReplayScenarioRequest(BaseModel):
             raise ValueError("Replay scenario payload must be JSON-serializable") from exc
         if len(encoded.encode("utf-8")) > MAX_IMPORT_REPLAY_SCENARIO_BYTES:
             raise ValueError(
-                "Replay scenario payload too large "
-                f"(max {MAX_IMPORT_REPLAY_SCENARIO_BYTES} bytes)"
+                f"Replay scenario payload too large (max {MAX_IMPORT_REPLAY_SCENARIO_BYTES} bytes)"
             )
         return self
 
@@ -380,6 +377,7 @@ class ImportReplayScenarioRequest(BaseModel):
 class CreateReplayArtifactRequest(BaseModel):
     kind: str
     payload: dict[str, Any]
+    source_scenario_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("kind")
     @classmethod
@@ -679,9 +677,7 @@ def _collect_scenario_delete_integrity_issues(
         "branch",
         int(
             session.exec(
-                select(sa_func.count())
-                .select_from(Branch)
-                .where(Branch.scenario_id == scenario_id)
+                select(sa_func.count()).select_from(Branch).where(Branch.scenario_id == scenario_id)
             ).one()
         ),
     )
@@ -689,9 +685,7 @@ def _collect_scenario_delete_integrity_issues(
         "agent",
         int(
             session.exec(
-                select(sa_func.count())
-                .select_from(Agent)
-                .where(Agent.scenario_id == scenario_id)
+                select(sa_func.count()).select_from(Agent).where(Agent.scenario_id == scenario_id)
             ).one()
         ),
     )
@@ -699,9 +693,7 @@ def _collect_scenario_delete_integrity_issues(
         "scenario",
         int(
             session.exec(
-                select(sa_func.count())
-                .select_from(Scenario)
-                .where(Scenario.id == scenario_id)
+                select(sa_func.count()).select_from(Scenario).where(Scenario.id == scenario_id)
             ).one()
         ),
     )
@@ -716,6 +708,7 @@ def _build_web_search_server_hint() -> dict:
     """Build the web_search server-level config hint (shared by all health endpoints)."""
     from app.config import settings as _cfg
     from app.services.web_context import _PROVIDER_MAP
+
     info: dict = {"scope": "server", "server_enabled": False, "method": "none", "provider": None}
     if not _cfg.ENABLE_WEB_SEARCH:
         return info
@@ -838,11 +831,7 @@ def _build_native_search_probe_hint(
 def _has_strict_admin_probe_authorization(x_admin_token: str | None) -> bool:
     configured = settings.ADMIN_TOKEN.strip()
     provided = (x_admin_token or "").strip()
-    return bool(
-        configured
-        and provided
-        and hmac.compare_digest(provided, configured)
-    )
+    return bool(configured and provided and hmac.compare_digest(provided, configured))
 
 
 def _caller_controls_probe_provider(
@@ -1095,11 +1084,7 @@ async def api_capabilities(
         ),
         "counterfactual_replay": _capability_entry(
             enabled=settings.FEATURE_COUNTERFACTUAL_REPLAY,
-            version=(
-                "1.0"
-                if settings.FEATURE_COUNTERFACTUAL_REPLAY
-                else "0.0"
-            ),
+            version=("1.0" if settings.FEATURE_COUNTERFACTUAL_REPLAY else "0.0"),
         ),
         "factions": _capability_entry(
             enabled=settings.FEATURE_FACTIONS,
@@ -1125,9 +1110,7 @@ async def api_capabilities(
         "kg_explorer": _capability_entry(
             enabled=settings.FEATURE_KG_EXPLORER and settings.FEATURE_CAUSAL_GRAPH,
             version=(
-                "1.0"
-                if (settings.FEATURE_KG_EXPLORER and settings.FEATURE_CAUSAL_GRAPH)
-                else "0.0"
+                "1.0" if (settings.FEATURE_KG_EXPLORER and settings.FEATURE_CAUSAL_GRAPH) else "0.0"
             ),
         ),
         "replay_trace": _capability_entry(
@@ -1213,7 +1196,11 @@ async def api_health_test(
     """
     validated_base_url = validate_llm_base_url(req.llm_base_url)
     if req.llm_base_url and validated_base_url is None:
-        raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+        raise api_error(
+            400,
+            "LLM_BASE_URL_NOT_ALLOWED",
+            "Provided llm_base_url is not in the allowed provider list",
+        )  # noqa: E501
     if req.include_probe:
         _require_paid_provider_probe_authorized(
             req,
@@ -1327,9 +1314,17 @@ async def create_multi_run_scenarios(
     if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
-            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+            raise api_error(
+                400,
+                "LLM_BASE_URL_NOT_ALLOWED",
+                "Provided llm_base_url is not in the allowed provider list",
+            )  # noqa: E501
         if not req.llm_api_key and not is_local_provider_url(validated_url):
-            raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
+            raise api_error(
+                400,
+                "BYOK_API_KEY_REQUIRED",
+                "An API key is required when using a custom LLM base URL",
+            )  # noqa: E501
         req.llm_base_url = validated_url
 
     if not req.web_search_enabled:
@@ -1384,9 +1379,7 @@ async def create_multi_run_scenarios(
         resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
         resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
         resolved_concurrency = model_profile_policy.concurrency
-        resolved_supports_structured_outputs = (
-            model_profile_policy.supports_structured_outputs
-        )
+        resolved_supports_structured_outputs = model_profile_policy.supports_structured_outputs
         resolved_supports_native_search = model_profile_policy.supports_native_search
         resolved_native_search_upstream = model_profile_policy.native_search_upstream
         effective_model_profile_id = model_profile_policy.model_profile_id
@@ -1426,11 +1419,15 @@ async def create_multi_run_scenarios(
                 "hierarchical": use_hierarchical,
                 "simulation_rounds": sim_rounds,
                 "multi_run": metadata,
-                **({
-                    "web_search_intensity": web_search_intensity_config.intensity,
-                    "web_search_max_results": web_search_intensity_config.max_results,
-                    "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
-                } if web_search_intensity_config else {}),
+                **(
+                    {
+                        "web_search_intensity": web_search_intensity_config.intensity,
+                        "web_search_max_results": web_search_intensity_config.max_results,
+                        "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
+                    }
+                    if web_search_intensity_config
+                    else {}
+                ),
             }
             if effective_user_id:
                 scenario_parsed_context["user_id"] = effective_user_id
@@ -1438,6 +1435,10 @@ async def create_multi_run_scenarios(
                 scenario_parsed_context["model_profile_id"] = effective_model_profile_id
             if req.world_context is not None:
                 scenario_parsed_context["world_context"] = req.world_context.model_dump()
+            if req.initial_social_feed:
+                scenario_parsed_context["initial_social_feed"] = [
+                    item.model_dump(mode="json") for item in req.initial_social_feed
+                ]
             scenario = Scenario(
                 question=question,
                 status=ScenarioStatus.SIMULATING,
@@ -1497,9 +1498,9 @@ async def create_multi_run_scenarios(
                     disable_user_quota=req.disable_user_quota,
                     custom_agent_identity_ids=req.custom_agent_identity_ids,
                     continuity_overrides=[
-                        override.model_dump()
-                        for override in (req.continuity_overrides or [])
-                    ] or None,
+                        override.model_dump() for override in (req.continuity_overrides or [])
+                    ]
+                    or None,
                     web_search_families=(
                         req.web_search_families if req.web_search_enabled else None
                     ),
@@ -1519,8 +1520,11 @@ async def create_multi_run_scenarios(
                         else None
                     ),
                     world_context=(
-                        req.world_context.model_dump()
-                        if req.world_context is not None
+                        req.world_context.model_dump() if req.world_context is not None else None
+                    ),
+                    initial_social_feed=(
+                        [item.model_dump(mode="json") for item in req.initial_social_feed]
+                        if req.initial_social_feed
                         else None
                     ),
                 )
@@ -1570,9 +1574,7 @@ async def get_run_group_distribution(
         )
         if principal is not None:
             scenarios = [
-                scenario
-                for scenario in scenarios
-                if scenario.user_id == principal.subject
+                scenario for scenario in scenarios if scenario.user_id == principal.subject
             ]
         if not scenarios:
             raise api_error(404, "RUN_GROUP_NOT_FOUND", "Run group not found")
@@ -1610,9 +1612,7 @@ async def get_run_group_distribution(
                 ).first()
             outcome = str(branch.title if branch is not None else "").strip()
             is_terminal_distribution_row = (
-                scenario.status == ScenarioStatus.DONE
-                and bool(verdict)
-                and branch is not None
+                scenario.status == ScenarioStatus.DONE and bool(verdict) and branch is not None
             )
             if is_terminal_distribution_row:
                 terminal_count += 1
@@ -1620,11 +1620,7 @@ async def get_run_group_distribution(
                 outcome_key = outcome or "unknown"
                 outcome_counts[outcome_key] = outcome_counts.get(outcome_key, 0) + 1
 
-            run_verdict = (
-                verdict
-                if scenario.status == ScenarioStatus.DONE and verdict
-                else None
-            )
+            run_verdict = verdict if scenario.status == ScenarioStatus.DONE and verdict else None
             run_outcome = (
                 (outcome or "unknown")
                 if scenario.status == ScenarioStatus.DONE and branch is not None
@@ -1680,9 +1676,17 @@ async def create_scenario(
     if req.llm_base_url and not req.model_profile_id:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
-            raise api_error(400, "LLM_BASE_URL_NOT_ALLOWED", "Provided llm_base_url is not in the allowed provider list")  # noqa: E501
+            raise api_error(
+                400,
+                "LLM_BASE_URL_NOT_ALLOWED",
+                "Provided llm_base_url is not in the allowed provider list",
+            )  # noqa: E501
         if not req.llm_api_key and not is_local_provider_url(validated_url):
-            raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
+            raise api_error(
+                400,
+                "BYOK_API_KEY_REQUIRED",
+                "An API key is required when using a custom LLM base URL",
+            )  # noqa: E501
         req.llm_base_url = validated_url
 
     if not req.web_search_enabled:
@@ -1737,9 +1741,7 @@ async def create_scenario(
         resolved_llm_requests_per_minute = model_profile_policy.requests_per_minute
         resolved_llm_tokens_per_minute = model_profile_policy.tokens_per_minute
         resolved_concurrency = model_profile_policy.concurrency
-        resolved_supports_structured_outputs = (
-            model_profile_policy.supports_structured_outputs
-        )
+        resolved_supports_structured_outputs = model_profile_policy.supports_structured_outputs
         resolved_supports_native_search = model_profile_policy.supports_native_search
         resolved_native_search_upstream = model_profile_policy.native_search_upstream
         effective_model_profile_id = model_profile_policy.model_profile_id
@@ -1753,6 +1755,7 @@ async def create_scenario(
 
     if req.continuity_overrides and effective_user_id:
         from app.models.agent_identity import AgentIdentity
+
         with Session(get_engine()) as session:
             for override in req.continuity_overrides:
                 if override.action != "reuse_existing" or not override.identity_id:
@@ -1790,6 +1793,7 @@ async def create_scenario(
     if viz_enabled:
         try:
             from app.visualization import select_scene
+
             initial_scene_theme = select_scene(question)
         except Exception:
             initial_scene_theme = "medieval_village"
@@ -1799,16 +1803,24 @@ async def create_scenario(
         "mode": mode,
         "hierarchical": use_hierarchical,
         "simulation_rounds": sim_rounds,
-        **({
-            "web_search_intensity": web_search_intensity_config.intensity,
-            "web_search_max_results": web_search_intensity_config.max_results,
-            "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
-        } if web_search_intensity_config else {}),
+        **(
+            {
+                "web_search_intensity": web_search_intensity_config.intensity,
+                "web_search_max_results": web_search_intensity_config.max_results,
+                "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
+            }
+            if web_search_intensity_config
+            else {}
+        ),
     }
     if effective_model_profile_id:
         scenario_parsed_context["model_profile_id"] = effective_model_profile_id
     if req.world_context is not None:
         scenario_parsed_context["world_context"] = req.world_context.model_dump()
+    if req.initial_social_feed:
+        scenario_parsed_context["initial_social_feed"] = [
+            item.model_dump(mode="json") for item in req.initial_social_feed
+        ]
     # Campaign Phase 1: persist authoritative challenge/track context so that
     # finalize_scenario_campaign can score against durable provenance rather
     # than the legacy `completed_daily_challenge` boolean. The body of this
@@ -1894,12 +1906,14 @@ async def create_scenario(
     # timeout settings. Failure never blocks scenario creation.
     web_context_json: str | None = None
     from app.services.web_context import WebSearchResult as _WSR
+
     web_result: _WSR | None = None
 
     if req.web_search_enabled:
         # --- Base search (independent) ---
         try:
             from app.services.web_context import fetch_web_context
+
             web_result = await fetch_web_context(
                 question,
                 provider_override=req.web_search_provider,
@@ -1909,7 +1923,8 @@ async def create_scenario(
             )
         except Exception as exc:
             logger.warning(
-                "Web search failed for scenario (non-blocking): %s", exc,
+                "Web search failed for scenario (non-blocking): %s",
+                exc,
             )
 
         # --- Family search (independent) ---
@@ -1945,7 +1960,8 @@ async def create_scenario(
                     )
             except Exception:
                 logger.warning(
-                    "Family context fetch failed (non-blocking)", exc_info=True,
+                    "Family context fetch failed (non-blocking)",
+                    exc_info=True,
                 )
 
         if web_result is not None:
@@ -1961,7 +1977,11 @@ async def create_scenario(
 
         # Create a provisional root branch so Theater can expose an active worldline
         # before the LLM-backed parse finishes.
-        session.add(Branch(scenario_id=scenario_id, title=_placeholder_root_title(question), probability=1.0))  # noqa: E501
+        session.add(
+            Branch(
+                scenario_id=scenario_id, title=_placeholder_root_title(question), probability=1.0
+            )
+        )  # noqa: E501
         session.commit()
 
     # 2) Parse + simulate in the background. This keeps the request responsive
@@ -1994,9 +2014,9 @@ async def create_scenario(
         disable_user_quota=req.disable_user_quota,
         custom_agent_identity_ids=req.custom_agent_identity_ids,
         continuity_overrides=[
-            override.model_dump()
-            for override in (req.continuity_overrides or [])
-        ] or None,
+            override.model_dump() for override in (req.continuity_overrides or [])
+        ]
+        or None,
         web_search_families=req.web_search_families if req.web_search_enabled else None,
         web_search_intensity=(
             web_search_intensity_config.intensity if web_search_intensity_config else None
@@ -2007,8 +2027,11 @@ async def create_scenario(
         web_search_snippet_limit=(
             web_search_intensity_config.snippet_limit if web_search_intensity_config else None
         ),
-        world_context=(
-            req.world_context.model_dump() if req.world_context is not None else None
+        world_context=(req.world_context.model_dump() if req.world_context is not None else None),
+        initial_social_feed=(
+            [item.model_dump(mode="json") for item in req.initial_social_feed]
+            if req.initial_social_feed
+            else None
         ),
     )
     schedule_background_task(
@@ -2022,7 +2045,9 @@ async def create_scenario(
     # this flag the brand-new SIMULATING scenario would be wrongly marked ERROR.
     result = load_scenario_response(engine, scenario_id, fail_forward_stale=False)
     if not result:
-        raise api_error(500, "SCENARIO_CREATE_RESPONSE_MISSING", "Failed to load newly created scenario")  # noqa: E501
+        raise api_error(
+            500, "SCENARIO_CREATE_RESPONSE_MISSING", "Failed to load newly created scenario"
+        )  # noqa: E501
     result.mode = mode
     result.hierarchical = use_hierarchical
     result.visualization_enabled = viz_enabled
@@ -2038,9 +2063,13 @@ async def import_replay_scenario(
     snapshot = req.scenario if isinstance(req.scenario, dict) else {}
     question = _sanitize_replay_text(snapshot.get("question", "")).strip()
     if not question:
-        raise api_error(422, "REPLAY_SCENARIO_QUESTION_MISSING", "Replay snapshot is missing question")  # noqa: E501
+        raise api_error(
+            422, "REPLAY_SCENARIO_QUESTION_MISSING", "Replay snapshot is missing question"
+        )  # noqa: E501
     if len(question) > 500:
-        raise api_error(422, "REPLAY_SCENARIO_QUESTION_TOO_LONG", "Replay snapshot question too long")  # noqa: E501
+        raise api_error(
+            422, "REPLAY_SCENARIO_QUESTION_TOO_LONG", "Replay snapshot question too long"
+        )  # noqa: E501
 
     engine = get_engine()
     parsed_context = _sanitize_replay_parsed_context(snapshot.get("parsed_context"))
@@ -2051,15 +2080,30 @@ async def import_replay_scenario(
     branches = snapshot.get("branches") if isinstance(snapshot.get("branches"), list) else []
     messages = snapshot.get("messages") if isinstance(snapshot.get("messages"), list) else []
     if len(groups) > MAX_IMPORT_REPLAY_SCENARIO_GROUPS:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_GROUPS", "Replay scenario has too many groups")  # noqa: E501
+        raise api_error(
+            413, "REPLAY_SCENARIO_TOO_MANY_GROUPS", "Replay scenario has too many groups"
+        )  # noqa: E501
     if len(agents) > MAX_IMPORT_REPLAY_SCENARIO_AGENTS:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_AGENTS", "Replay scenario has too many agents")  # noqa: E501
+        raise api_error(
+            413, "REPLAY_SCENARIO_TOO_MANY_AGENTS", "Replay scenario has too many agents"
+        )  # noqa: E501
     if len(branches) > MAX_IMPORT_REPLAY_SCENARIO_BRANCHES:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_BRANCHES", "Replay scenario has too many branches")  # noqa: E501
+        raise api_error(
+            413, "REPLAY_SCENARIO_TOO_MANY_BRANCHES", "Replay scenario has too many branches"
+        )  # noqa: E501
     if len(messages) > MAX_IMPORT_REPLAY_SCENARIO_MESSAGES:
-        raise api_error(413, "REPLAY_SCENARIO_TOO_MANY_MESSAGES", "Replay scenario has too many messages")  # noqa: E501
+        raise api_error(
+            413, "REPLAY_SCENARIO_TOO_MANY_MESSAGES", "Replay scenario has too many messages"
+        )  # noqa: E501
     if not parsed_context.get("simulation_rounds"):
-        max_round = max((_coerce_int(message.get("round"), 0, minimum=0) for message in messages if isinstance(message, dict)), default=0)  # noqa: E501
+        max_round = max(
+            (
+                _coerce_int(message.get("round"), 0, minimum=0)
+                for message in messages
+                if isinstance(message, dict)
+            ),
+            default=0,
+        )  # noqa: E501
         if max_round > 0:
             parsed_context = {
                 **parsed_context,
@@ -2084,8 +2128,7 @@ async def import_replay_scenario(
             status=_coerce_scenario_status(snapshot.get("status")),
             user_id=effective_user_id,
             visualization_enabled=bool(snapshot.get("visualization_enabled")),
-            scene_theme=_sanitize_replay_text(snapshot.get("scene_theme", "")).strip()
-            or None,
+            scene_theme=_sanitize_replay_text(snapshot.get("scene_theme", "")).strip() or None,
         )
         session.add(scenario)
         session.flush()
@@ -2098,8 +2141,7 @@ async def import_replay_scenario(
             original_group_id = str(raw_group.get("id", "")).strip()
             group = AgentGroup(
                 scenario_id=scenario.id,
-                name=_sanitize_replay_text(raw_group.get("name", "")).strip()
-                or "Imported Group",
+                name=_sanitize_replay_text(raw_group.get("name", "")).strip() or "Imported Group",
                 parent_group_id=None,
                 leader_agent_id=None,
                 member_count=_coerce_int(raw_group.get("member_count"), 0, minimum=0),
@@ -2119,14 +2161,12 @@ async def import_replay_scenario(
             group_id = str(raw_agent.get("group_id", "")).strip()
             agent = Agent(
                 scenario_id=scenario.id,
-                name=_sanitize_replay_text(raw_agent.get("name", "")).strip()
-                or "Imported Agent",
+                name=_sanitize_replay_text(raw_agent.get("name", "")).strip() or "Imported Agent",
                 role=_sanitize_replay_text(raw_agent.get("role", "")).strip(),
                 persona="",
                 tier=_coerce_agent_tier(raw_agent.get("tier")),
                 stance=_sanitize_replay_text(raw_agent.get("stance", "")).strip(),
-                emotion=_sanitize_replay_text(raw_agent.get("emotion", "")).strip()
-                or "neutral",
+                emotion=_sanitize_replay_text(raw_agent.get("emotion", "")).strip() or "neutral",
                 group_id=group_id_map.get(group_id) if group_id else None,
             )
             session.add(agent)
@@ -2218,13 +2258,30 @@ async def import_replay_scenario(
             if not mapped_agent_id:
                 continue
 
-            session.add(
-                AgentMessage(
-                    round_id=round_id,
-                    agent_id=mapped_agent_id,
-                    content=_sanitize_replay_text(raw_message.get("message", "")).strip(),
-                    emotion=persisted_emotion_from_public_message(raw_message),
-                )
+            imported_message = AgentMessage(
+                round_id=round_id,
+                agent_id=mapped_agent_id,
+                content=_sanitize_replay_text(raw_message.get("message", "")).strip(),
+                emotion=persisted_emotion_from_public_message(raw_message),
+            )
+            session.add(imported_message)
+            session.flush()
+            from app.services.simulation_actions import append_simulation_action
+
+            append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=mapped_branch_id,
+                round_id=round_id,
+                round_number=round_number,
+                agent_id=mapped_agent_id,
+                message_id=imported_message.id,
+                idempotency_key=f"replay-import:{imported_message.id}",
+                action={
+                    "action_type": "IDLE",
+                    "status": "unavailable",
+                    "failure_code": "REPLAY_ACTION_UNAVAILABLE",
+                },
             )
 
         session.commit()
@@ -2233,7 +2290,9 @@ async def import_replay_scenario(
     # awaiting an in-flight task, so it must never be coerced to ERROR here.
     result = load_scenario_response(engine, scenario_id, fail_forward_stale=False)
     if not result:
-        raise api_error(500, "REPLAY_SCENARIO_RESPONSE_MISSING", "Failed to load imported replay scenario")  # noqa: E501
+        raise api_error(
+            500, "REPLAY_SCENARIO_RESPONSE_MISSING", "Failed to load imported replay scenario"
+        )  # noqa: E501
     return result
 
 
@@ -2258,11 +2317,12 @@ async def create_replay_artifact(
 
     payload_size = len(encoded_payload.encode("utf-8"))
     if payload_size > MAX_REPLAY_ARTIFACT_BYTES:
-        raise api_error(413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large")  # noqa: E501
+        raise api_error(
+            413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large"
+        )  # noqa: E501
 
-    source_scenario_id = _resolve_replay_artifact_source_scenario_id(
-        kind,
-        sanitized_payload,
+    source_scenario_id = req.source_scenario_id or _resolve_replay_artifact_source_scenario_id(
+        kind, sanitized_payload
     )
     if not source_scenario_id:
         raise api_error(
@@ -2554,13 +2614,19 @@ async def get_story(
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
 
-        all_branches = list(session.exec(
-            select(Branch).where(
-                Branch.scenario_id == scenario_id,
-            ).order_by(
-                Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc(),
-            )
-        ).all())
+        all_branches = list(
+            session.exec(
+                select(Branch)
+                .where(
+                    Branch.scenario_id == scenario_id,
+                )
+                .order_by(
+                    Branch.probability.desc(),
+                    Branch.fork_round.asc(),
+                    Branch.id.asc(),
+                )
+            ).all()
+        )
         branches = _terminal_completed_branches(all_branches, all_branches)
         using_fallback_branches = False
 
@@ -2569,9 +2635,7 @@ async def get_story(
             branches = all_branches
 
         parsed_context = (
-            scenario.parsed_context
-            if isinstance(scenario.parsed_context, dict)
-            else {}
+            scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
         )
         raw_result_quality = parsed_context.get("result_quality")
         result_quality = (
@@ -2590,9 +2654,7 @@ async def get_story(
         if isinstance(full_report, dict):
             full_report = _normalize_story_full_report_status(scenario_id, full_report)
         raw_branch_answers = result_quality.get("branch_question_answers")
-        branch_question_answers = (
-            raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
-        )
+        branch_question_answers = raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
         verdict_text = str(result_quality.get("verdict") or "").strip() or None
 
         return {
@@ -2602,7 +2664,9 @@ async def get_story(
             "verdict": verdict_text,
             "verdict_confidence": _normalize_result_verdict_confidence(
                 result_quality.get("confidence"),
-            ) if verdict_text else None,
+            )
+            if verdict_text
+            else None,
             "full_report": full_report,
             "branches": [
                 StoryBranch(
@@ -2688,24 +2752,22 @@ async def generate_result_report(
                 "REPORT_SCENARIO_NOT_COMPLETE",
                 "Scenario must be completed before report generation",
             )
-        all_branches = list(session.exec(
-            select(Branch)
-            .where(
-                Branch.scenario_id == scenario_id,
-            )
-            .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
-        ).all())
+        all_branches = list(
+            session.exec(
+                select(Branch)
+                .where(
+                    Branch.scenario_id == scenario_id,
+                )
+                .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
+            ).all()
+        )
         terminal_branches = _terminal_completed_branches(all_branches, all_branches)
         dominant_branch = terminal_branches[0] if terminal_branches else None
         dominant_branch_id = dominant_branch.id if dominant_branch is not None else None
         parsed_context = (
-            scenario.parsed_context
-            if isinstance(scenario.parsed_context, dict)
-            else {}
+            scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
         )
-        has_model_profile_pointer = bool(
-            str(parsed_context.get("model_profile_id") or "").strip()
-        )
+        has_model_profile_pointer = bool(str(parsed_context.get("model_profile_id") or "").strip())
         recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
 
     request_body = req or ResultReportGenerateRequest()
@@ -2765,12 +2827,8 @@ async def generate_result_report(
         request_supports_structured_outputs_override=overrides.get(
             "supports_structured_outputs_override"
         ),
-        request_supports_native_search_override=overrides.get(
-            "supports_native_search_override"
-        ),
-        request_native_search_upstream_override=overrides.get(
-            "native_search_upstream_override"
-        ),
+        request_supports_native_search_override=overrides.get("supports_native_search_override"),
+        request_native_search_upstream_override=overrides.get("native_search_upstream_override"),
     )
     overrides = {
         "api_key": resolved_llm.api_key,
@@ -2780,9 +2838,7 @@ async def generate_result_report(
         "tokens_per_minute": resolved_llm.tokens_per_minute,
         "temperature": request_body.temperature,
         "concurrency": resolved_llm.concurrency,
-        "supports_structured_outputs_override": (
-            resolved_llm.supports_structured_outputs_override
-        ),
+        "supports_structured_outputs_override": (resolved_llm.supports_structured_outputs_override),
         "supports_native_search_override": resolved_llm.supports_native_search_override,
         "native_search_upstream_override": resolved_llm.native_search_upstream_override,
         "inherit_context_policy": resolved_llm.inherit_context_policy,
@@ -2791,11 +2847,7 @@ async def generate_result_report(
             if overrides.get("model_profile_id")
             else {}
         ),
-        **(
-            {"quota_user_id": overrides["quota_user_id"]}
-            if overrides.get("quota_user_id")
-            else {}
-        ),
+        **({"quota_user_id": overrides["quota_user_id"]} if overrides.get("quota_user_id") else {}),
     }
 
     try:
@@ -2832,7 +2884,12 @@ async def get_agents(
     with Session(engine) as session:
         require_owned_scenario(session, scenario_id, principal)
 
-        agents = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+        agents = session.exec(
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                sa_or(Agent.source_type.is_(None), Agent.source_type != "world_event_source"),
+            )
+        ).all()
 
         # P3-A: Enrich with group info
         group_lookup: dict[str, dict] = {}
@@ -2852,7 +2909,9 @@ async def get_agents(
                 "group_id": a.group_id,
                 "agent_identity_id": getattr(a, "agent_identity_id", None),
                 "source_type": getattr(a, "source_type", None),
-                "group_name": group_lookup.get(a.group_id, {}).get("group_name") if a.group_id else None,  # noqa: E501
+                "group_name": group_lookup.get(a.group_id, {}).get("group_name")
+                if a.group_id
+                else None,  # noqa: E501
             }
             for a in agents
         ]
@@ -2876,11 +2935,10 @@ async def get_groups(
         memberships = session.exec(
             select(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids))
         ).all()
-        memberships_by_group: dict[str, list[AgentGroupMember]] = {group_id: [] for group_id in group_ids}  # noqa: E501
-        agent_ids = {
-            membership.agent_id
-            for membership in memberships
-        }
+        memberships_by_group: dict[str, list[AgentGroupMember]] = {
+            group_id: [] for group_id in group_ids
+        }  # noqa: E501
+        agent_ids = {membership.agent_id for membership in memberships}
         agent_ids.update(group.leader_agent_id for group in groups if group.leader_agent_id)
         for membership in memberships:
             memberships_by_group.setdefault(membership.group_id, []).append(membership)
@@ -2899,21 +2957,27 @@ async def get_groups(
             for m in memberships_by_group.get(g.id, []):
                 agent = agent_lookup.get(m.agent_id)
                 if agent:
-                    members.append({
-                        "id": agent.id,
-                        "name": agent.name,
-                        "role": agent.role,
-                        "is_leader": m.is_leader,
-                    })
+                    members.append(
+                        {
+                            "id": agent.id,
+                            "name": agent.name,
+                            "role": agent.role,
+                            "is_leader": m.is_leader,
+                        }
+                    )
 
-            result.append({
-                "id": g.id,
-                "name": g.name,
-                "parent_group_id": g.parent_group_id,
-                "leader": {"id": leader.id, "name": leader.name, "role": leader.role} if leader else None,  # noqa: E501
-                "members": members,
-                "member_count": g.member_count,
-            })
+            result.append(
+                {
+                    "id": g.id,
+                    "name": g.name,
+                    "parent_group_id": g.parent_group_id,
+                    "leader": {"id": leader.id, "name": leader.name, "role": leader.role}
+                    if leader
+                    else None,  # noqa: E501
+                    "members": members,
+                    "member_count": g.member_count,
+                }
+            )
 
         return result
 
@@ -2942,6 +3006,9 @@ async def list_scenarios(
             select(
                 Agent.scenario_id,
                 sa_func.count(Agent.id).label("agent_count"),
+            )
+            .where(
+                sa_or(Agent.source_type.is_(None), Agent.source_type != "world_event_source")
             )
             .group_by(Agent.scenario_id)
             .subquery()
@@ -3041,9 +3108,7 @@ async def delete_scenario(
         # Capture the owner user_id before campaign cleanup / expunge so the
         # service's ownership check stays deterministic in dev mode (where
         # ``principal`` may be ``None`` because SESSION_SECRET is unset).
-        effective_user_id = (
-            principal.subject if principal is not None else (scenario.user_id or "")
-        )
+        effective_user_id = principal.subject if principal is not None else (scenario.user_id or "")
 
         # Campaign artifact cleanup depends on the scenario row still being
         # present, so run it before the service DELETEs it.
@@ -3077,9 +3142,7 @@ async def delete_scenario(
             summary = ", ".join(
                 f"{label}={count}" for label, count in sorted(integrity_issues.items())
             )
-            logger.error(
-                "Scenario delete integrity failed for %s: %s", scenario_id, summary
-            )
+            logger.error("Scenario delete integrity failed for %s: %s", scenario_id, summary)
             session.rollback()
             raise api_error(
                 500,
@@ -3161,14 +3224,14 @@ async def export_scenario_snapshot(
     with Session(engine) as session:
         require_owned_scenario(session, scenario_id, principal)
         buffer = export_snapshot_zip(
-            scenario_id, session, include_private=include_private,
+            scenario_id,
+            session,
+            include_private=include_private,
         )
 
     payload = buffer.getvalue()
     headers = {
-        "Content-Disposition": (
-            f'attachment; filename="scenario-{scenario_id}.zip"'
-        ),
+        "Content-Disposition": (f'attachment; filename="scenario-{scenario_id}.zip"'),
         "Content-Length": str(len(payload)),
     }
     return StreamingResponse(

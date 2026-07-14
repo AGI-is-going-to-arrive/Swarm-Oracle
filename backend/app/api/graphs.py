@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import and_, or_
 from sqlalchemy import delete as sa_delete
 from sqlmodel import Session, select
 
@@ -26,8 +27,25 @@ from app.api.helpers import (
 from app.api.schemas import ResumeRequest
 from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
-from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioStatus, get_engine
-from app.services.branch_lineage import BranchLineageError, select_branch_rounds
+from app.models.database import (
+    Agent,
+    AgentMessage,
+    Branch,
+    Round,
+    Scenario,
+    ScenarioStatus,
+    get_engine,
+)
+from app.models.simulation_action import (
+    SimulationAction,
+    SimulationActionStatus,
+    SimulationActionType,
+)
+from app.services.action_ledger import build_action_ledger
+from app.services.branch_lineage import (
+    BranchLineageError,
+    select_branch_rounds,
+)
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_relations, get_faction_timeline
 from app.services.graph_analysis import analyze_graph
@@ -45,6 +63,7 @@ from app.services.runtime_lock import (
     release_runtime_lock,
     simulation_lock_key,
 )
+from app.services.simulation_actions import serialize_action
 from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
 
 logger = logging.getLogger(__name__)
@@ -204,10 +223,14 @@ def _acquire_simulation_lock_for_resume(scenario_id: str) -> RuntimeLockLease | 
 
 def _cleanup_replay_branch(branch_id: str) -> None:
     with Session(get_engine()) as session:
-        round_ids = list(
-            session.exec(select(Round.id).where(Round.branch_id == branch_id)).all()
-        )
+        round_ids = list(session.exec(select(Round.id).where(Round.branch_id == branch_id)).all())
         if round_ids:
+            session.exec(
+                sa_delete(SimulationAction).where(
+                    SimulationAction.branch_id == branch_id,
+                    SimulationAction.round_id.in_(round_ids),
+                )
+            )
             session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
         session.exec(sa_delete(Round).where(Round.branch_id == branch_id))
         session.exec(sa_delete(Branch).where(Branch.id == branch_id))
@@ -261,8 +284,7 @@ def _load_resimulatable_counterfactual(
             "Branch is not a counterfactual branch",
         )
     simulated_round = session.exec(
-        select(Round.id)
-        .where(
+        select(Round.id).where(
             Round.branch_id == branch.id,
             Round.round_number > branch.fork_round,
         )
@@ -295,11 +317,7 @@ def _validate_counterfactual_target_message(
     except BranchLineageError as exc:
         raise _branch_lineage_api_error(exc) from exc
     source_round = next(
-        (
-            round_
-            for round_ in source_selection.rounds
-            if round_.round_number == round_number
-        ),
+        (round_ for round_ in source_selection.rounds if round_.round_number == round_number),
         None,
     )
     if source_round is None:
@@ -310,8 +328,7 @@ def _validate_counterfactual_target_message(
         )
 
     candidate_messages = session.exec(
-        select(AgentMessage.content)
-        .where(
+        select(AgentMessage.content).where(
             AgentMessage.round_id == source_round.id,
             AgentMessage.agent_id == agent_id,
         )
@@ -444,6 +461,129 @@ async def get_causal_graph(
         raise _branch_lineage_api_error(exc) from exc
 
 
+@router.get("/scenario/{scenario_id}/action-ledger")
+async def get_action_ledger(
+    scenario_id: str,
+    branch_id: Optional[str] = Query(default=None),
+    agent_id: Optional[str] = Query(default=None),
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return an owner-scoped evidence ledger over durable Agent actions."""
+    normalized_branch_id = branch_id.strip() or None if branch_id is not None else None
+    normalized_agent_id = agent_id.strip() or None if agent_id is not None else None
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        if normalized_branch_id is not None:
+            branch_exists = session.exec(
+                select(Branch.id).where(
+                    Branch.id == normalized_branch_id,
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch_exists is None:
+                raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found in scenario")
+        if normalized_agent_id is not None:
+            agent_exists = session.exec(
+                select(Agent.id).where(
+                    Agent.id == normalized_agent_id,
+                    Agent.scenario_id == scenario_id,
+                )
+            ).first()
+            if agent_exists is None:
+                raise api_error(404, "AGENT_NOT_FOUND", "Agent not found in scenario")
+    return await asyncio.to_thread(
+        build_action_ledger,
+        scenario_id,
+        branch_id=normalized_branch_id,
+        agent_id=normalized_agent_id,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get("/scenario/{scenario_id}/actions")
+async def get_simulation_actions(
+    scenario_id: str,
+    branch_id: Optional[str] = Query(default=None),
+    agent_id: Optional[str] = Query(default=None),
+    action_type: Optional[SimulationActionType] = Query(default=None),
+    round: Optional[int] = Query(default=None, ge=1),
+    status: Optional[SimulationActionStatus] = Query(default=None),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return owner-only durable actions using stable keyset pagination."""
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        statement = (
+            select(SimulationAction, Agent)
+            .join(Agent, SimulationAction.agent_id == Agent.id)
+            .where(SimulationAction.scenario_id == scenario_id)
+        )
+        if branch_id:
+            branch = session.get(Branch, branch_id)
+            if branch is None or branch.scenario_id != scenario_id:
+                raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found in scenario")
+            try:
+                lineage = select_branch_rounds(
+                    session, scenario_id=scenario_id, branch_id=branch_id
+                ).lineage
+            except BranchLineageError as exc:
+                raise api_error(409, exc.code, str(exc)) from exc
+            segment_filters = []
+            for segment in lineage.segments:
+                bounds = [
+                    SimulationAction.branch_id == segment.branch_id,
+                    SimulationAction.round_number >= segment.round_min,
+                ]
+                if segment.round_max is not None:
+                    bounds.append(SimulationAction.round_number <= segment.round_max)
+                segment_filters.append(and_(*bounds))
+            statement = statement.where(or_(*segment_filters))
+        if agent_id:
+            agent = session.get(Agent, agent_id)
+            if agent is None or agent.scenario_id != scenario_id:
+                raise api_error(404, "AGENT_NOT_FOUND", "Agent not found in scenario")
+            statement = statement.where(SimulationAction.agent_id == agent_id)
+        if action_type is not None:
+            statement = statement.where(SimulationAction.action_type == action_type)
+        if round is not None:
+            statement = statement.where(SimulationAction.round_number == round)
+        if status is not None:
+            statement = statement.where(SimulationAction.status == status)
+        if cursor:
+            try:
+                cursor_sequence_text, cursor_id = cursor.split(":", 1)
+                cursor_sequence = int(cursor_sequence_text)
+            except (TypeError, ValueError):
+                raise api_error(422, "INVALID_ACTION_CURSOR", "Invalid action cursor") from None
+            statement = statement.where(
+                (SimulationAction.sequence > cursor_sequence)
+                | (
+                    (SimulationAction.sequence == cursor_sequence)
+                    & (SimulationAction.id > cursor_id)
+                )
+            )
+        rows = list(
+            session.exec(
+                statement.order_by(SimulationAction.sequence, SimulationAction.id).limit(limit + 1)
+            ).all()
+        )
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        items = [serialize_action(action, agent) for action, agent in page]
+        next_cursor = f"{page[-1][0].sequence}:{page[-1][0].id}" if has_more and page else None
+        return {
+            "scenario_id": scenario_id,
+            "items": items,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
+
+
 @router.get("/scenario/{scenario_id}/graph-analysis")
 async def get_graph_analysis(
     scenario_id: str,
@@ -565,6 +705,8 @@ async def create_counterfactual(
                 body.source_branch_id,
                 body.round_number,
                 ensure_lock=ensure_replay_branch_lock,
+                replay_source_round=body.round_number,
+                replay_source_agent_id=body.agent_id,
             )
         except BranchLineageError as exc:
             raise _branch_lineage_api_error(exc) from exc
@@ -838,9 +980,7 @@ async def list_checkpoints(
         raise _feature_disabled("counterfactual_replay")
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
-        stmt = select(ScenarioCheckpoint).where(
-            ScenarioCheckpoint.scenario_id == scenario_id
-        )
+        stmt = select(ScenarioCheckpoint).where(ScenarioCheckpoint.scenario_id == scenario_id)
         if branch_id:
             branch_exists = session.exec(
                 select(Branch.id).where(

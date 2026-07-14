@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import ipaddress
 import json
@@ -3461,7 +3462,13 @@ def _parse_json_response(cleaned: str, *, fallback_mode: str | None = None) -> d
             logger.warning("LLM JSON recovered via agent-message fallback")
             return recovered
 
-    logger.error("Failed to parse LLM JSON after all recovery attempts:\n%s", cleaned[:500])
+    content_digest = hashlib.sha256(cleaned.encode("utf-8", errors="replace")).hexdigest()[:12]
+    logger.error(
+        "Failed to parse LLM JSON after all recovery attempts "
+        "(content_len=%d, content_sha256=%s)",
+        len(cleaned),
+        content_digest,
+    )
     raise LLMError("Invalid JSON from LLM after recovery attempts")
 
 

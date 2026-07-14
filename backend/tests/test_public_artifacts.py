@@ -29,6 +29,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.public_artifacts import (
     MAX_AGENT_NAME_CHARS,
+    MAX_BRANCHES,
     MAX_EXCERPT_CHARS,
     MAX_QUESTION_CHARS,
     MAX_TITLE_CHARS,
@@ -449,6 +450,69 @@ def test_database_transcript_query_is_bounded() -> None:
     assert any(" limit " in f" {statement.lower()} " for statement in statements), statements
 
 
+def test_database_transcript_sampling_is_fair_across_selected_branches() -> None:
+    scenario_id = _seed_public_scenario()
+    engine = get_engine()
+    with Session(engine) as session:
+        agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).one()
+        dense_branch = Branch(
+            id="000-dense-branch",
+            scenario_id=scenario_id,
+            title="Dense branch",
+            probability=0.95,
+            status=BranchStatus.COMPLETED,
+        )
+        sparse_branch = Branch(
+            id="zzz-sparse-branch",
+            scenario_id=scenario_id,
+            title="Sparse branch",
+            probability=0.85,
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(dense_branch)
+        session.add(sparse_branch)
+        session.commit()
+
+        dense_round = Round(branch_id=dense_branch.id, round_number=1)
+        sparse_round = Round(branch_id=sparse_branch.id, round_number=1)
+        session.add(dense_round)
+        session.add(sparse_round)
+        session.commit()
+        session.refresh(dense_round)
+        session.refresh(sparse_round)
+        for index in range(MAX_TRANSCRIPT_EXCERPTS):
+            session.add(
+                AgentMessage(
+                    round_id=dense_round.id,
+                    agent_id=agent.id,
+                    content=f"Dense transcript {index}",
+                )
+            )
+        session.add(
+            AgentMessage(
+                round_id=sparse_round.id,
+                agent_id=agent.id,
+                content="Sparse transcript must remain represented.",
+            )
+        )
+        session.commit()
+
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    assert len(artifact["transcript_excerpts"]) == MAX_TRANSCRIPT_EXCERPTS
+    assert {excerpt["branch_index"] for excerpt in artifact["transcript_excerpts"]} == {
+        1,
+        2,
+        3,
+    }
+    assert any(
+        excerpt["excerpt"] == "Sparse transcript must remain represented."
+        for excerpt in artifact["transcript_excerpts"]
+    )
+
+
 def test_database_public_artifact_excludes_unfinished_pruned_branches() -> None:
     scenario_id = _seed_public_scenario()
     engine = get_engine()
@@ -488,6 +552,136 @@ def test_database_public_artifact_excludes_unfinished_pruned_branches() -> None:
     assert "Interrupted branch transcript" not in payload
     assert len(artifact["branch_verdicts"]) == 1
     assert len(artifact["probability_bars"]) == 1
+
+
+def test_database_public_artifact_uses_only_completed_terminal_leaves() -> None:
+    scenario_id = _seed_public_scenario()
+    engine = get_engine()
+    with Session(engine) as session:
+        parent = session.exec(
+            select(Branch).where(Branch.scenario_id == scenario_id)
+        ).one()
+        agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).one()
+        child = Branch(
+            scenario_id=scenario_id,
+            parent_branch_id=parent.id,
+            fork_round=2,
+            title="Completed child",
+            probability=0.28,
+            status=BranchStatus.COMPLETED,
+            insight="Only the terminal child is an outcome.",
+        )
+        session.add(child)
+        session.commit()
+        session.refresh(child)
+        child_round = Round(branch_id=child.id, round_number=3)
+        session.add(child_round)
+        session.commit()
+        session.refresh(child_round)
+        session.add(
+            AgentMessage(
+                round_id=child_round.id,
+                agent_id=agent.id,
+                content="Terminal child transcript.",
+            )
+        )
+        session.commit()
+
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    payload = _serialized(artifact)
+    assert [item["title"] for item in artifact["branch_verdicts"]] == [
+        "Completed child"
+    ]
+    assert "Publicly safe transcript excerpt" not in payload
+    assert "Terminal child transcript" in payload
+
+
+def test_database_transcript_is_loaded_after_final_branch_selection() -> None:
+    scenario_id = _seed_public_scenario()
+    engine = get_engine()
+    with Session(engine) as session:
+        original = session.exec(
+            select(Branch).where(Branch.scenario_id == scenario_id)
+        ).one()
+        original.probability = 1.0
+        agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).one()
+
+        excluded_branch = Branch(
+            id="000-excluded-low-probability",
+            scenario_id=scenario_id,
+            title="Excluded branch",
+            probability=0.0,
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(excluded_branch)
+        for index in range(MAX_BRANCHES - 1):
+            session.add(
+                Branch(
+                    id=f"selected-{index}",
+                    scenario_id=scenario_id,
+                    title=f"Selected {index}",
+                    probability=0.9 - (index / 100),
+                    status=BranchStatus.COMPLETED,
+                )
+            )
+        session.commit()
+        excluded_round = Round(branch_id=excluded_branch.id, round_number=1)
+        session.add(excluded_round)
+        session.commit()
+        session.refresh(excluded_round)
+        for index in range(MAX_TRANSCRIPT_EXCERPTS):
+            session.add(
+                AgentMessage(
+                    round_id=excluded_round.id,
+                    agent_id=agent.id,
+                    content=f"Excluded transcript {index}",
+                )
+            )
+        session.commit()
+
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        artifact = build_public_artifact_for_scenario(session, scenario)
+
+    payload = _serialized(artifact)
+    assert len(artifact["branch_verdicts"]) == MAX_BRANCHES
+    assert "Excluded branch" not in payload
+    assert "Excluded transcript" not in payload
+    assert "Publicly safe transcript excerpt" in payload
+
+
+def test_equal_probability_branch_order_uses_stable_branch_id_tiebreak() -> None:
+    mapping = _dirty_mapping()
+    mapping["branches"] = [
+        {
+            "id": "branch-z",
+            "title": "Same title",
+            "probability": 0.5,
+            "fork_round": 1,
+        },
+        {
+            "id": "branch-a",
+            "title": "Same title",
+            "probability": 0.5,
+            "fork_round": 1,
+        },
+    ]
+    mapping["messages"] = []
+
+    artifact = build_public_artifact_from_mapping(mapping)
+
+    assert [item["branch_index"] for item in artifact["branch_verdicts"]] == [1, 2]
+    answers = mapping["parsed_context"]["result_quality"]["branch_question_answers"]
+    answers["branch-a"] = "A wins the deterministic tie."
+    answers["branch-z"] = "Z follows."
+    artifact = build_public_artifact_from_mapping(mapping)
+    assert [item["verdict"] for item in artifact["branch_verdicts"]] == [
+        "A wins the deterministic tie.",
+        "Z follows.",
+    ]
 
 
 def test_secret_scan_rejects_secret_shaped_allowed_text() -> None:

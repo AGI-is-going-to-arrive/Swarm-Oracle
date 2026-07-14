@@ -1281,6 +1281,7 @@ export default function WorldlineRoundtableView() {
       const artifact = await createReplayArtifact(
         sanitizedReplayPayload.kind,
         buildRoundtableReplayArtifactPayload(sanitizedReplayPayload),
+        effectiveSnapshot?.scenario_id,
       ).catch(() => null);
       let permalink: string;
       let usedLocalFallback = false;
@@ -1302,7 +1303,7 @@ export default function WorldlineRoundtableView() {
       await copyText(buildOracleReplayLocalUrl(window.location.origin, effectiveReplayPayload, localId));
       finalizeCopyState(true);
     }
-  }, [effectiveReplayPayload]);
+  }, [effectiveReplayPayload, effectiveSnapshot?.scenario_id]);
 
   const automationInteractionMode = replayPayload
     ? (activeThread?.mode === 'followup'
@@ -1760,7 +1761,7 @@ export default function WorldlineRoundtableView() {
     >
       <header className="worldline-roundtable-hero">
         <div className="worldline-roundtable-hero__topline">
-          <button type="button" className="btn btn-ghost" onClick={handleBack}>
+          <button type="button" className="btn btn-ghost" data-testid="roundtable-back-to-results" onClick={handleBack}>
             {t('roundtable.back_to_results')}
           </button>
           <div

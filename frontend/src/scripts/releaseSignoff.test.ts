@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { __test__ } from '../../scripts/release-signoff.mjs';
 
 describe('release-signoff round7 checks', () => {
-  it('runs every W2 truthfulness and provider regression in the release gate', () => {
+  it('keeps focused W2 truthfulness and provider regressions in the release gate', () => {
     expect(__test__.graphFocusedVitestTests).toEqual(expect.arrayContaining([
       'src/components/Setup/ConnectionTester.test.tsx',
       'src/components/ModelProfileManager.test.tsx',
@@ -19,19 +19,14 @@ describe('release-signoff round7 checks', () => {
       'src/components/FactionForceGraph.test.tsx',
       'src/pages/result/SocialFeedPanel.test.tsx',
     ]));
-    expect(__test__.backendSignoffTests).toEqual(expect.arrayContaining([
-      'tests/test_agent_identity.py',
-      'tests/test_vector_store.py',
-      'tests/test_wave1_agent_state.py',
-      'tests/test_scoring.py',
-      'tests/test_causal_graph.py',
-      'tests/test_factions.py',
-      'tests/test_result_report_reducer.py',
-      'tests/test_result_report_builder.py',
-      'tests/test_result_report_contract.py',
-      'tests/test_simulator.py',
-      'tests/test_local_packs.py',
-    ]));
+  });
+
+  it('uses full backend and frontend release gates', () => {
+    expect(__test__.backendPytestArgs).toEqual(['-m', 'pytest', '-q']);
+    expect(__test__.backendRuffArgs).toEqual([
+      '-m', 'ruff', 'check', 'app/', 'tests/',
+    ]);
+    expect(__test__.frontendTestArgs).toEqual(['test']);
   });
 
   it('records unexecuted dry-run work as planned', async () => {

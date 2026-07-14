@@ -216,6 +216,40 @@ class TestCompactionGroups:
     @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
     @patch("app.services.vector_store.settings")
     @patch("app.services.vector_store.get_vector_store")
+    def test_preserves_bounded_deduplicated_source_coordinates(
+        self, mock_gvs, mock_settings, _acq, _rel,
+    ):
+        mock_settings.IDENTITY_COMPACT_THRESHOLD = 2
+        mock_settings.IDENTITY_COMPACT_BATCH_SIZE = 2
+        mock_settings.IDENTITY_COMPACT_GROUP_SIZE = 2
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+        docs = [
+            _raw_doc("d1", "id1", "sc1", "2026-04-01"),
+            _raw_doc("d2", "id1", "sc2", "2026-04-02"),
+        ]
+        docs[0]["metadata"].update({
+            "source_message_ids": '["m1","m2"]',
+            "source_event_ids": '["e1"]',
+        })
+        docs[1]["metadata"].update({
+            "source_message_ids": '["m2","m3"]',
+            "source_event_ids": "malformed",
+        })
+        store._client.get_or_create_collection.return_value = _make_collection(docs)
+
+        from app.services.vector_store import prepare_compaction_groups
+
+        group = prepare_compaction_groups("u1", "id1")[0]
+        assert group.scenario_ids == ["sc1", "sc2"]
+        assert group.source_message_ids == ["m1", "m2", "m3"]
+        assert group.source_event_ids == ["e1"]
+
+    @patch("app.services.vector_store.release_runtime_lock")
+    @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
+    @patch("app.services.vector_store.settings")
+    @patch("app.services.vector_store.get_vector_store")
     def test_correct_group_sizes(self, mock_gvs, mock_settings, _acq, _rel):
         mock_settings.IDENTITY_COMPACT_THRESHOLD = 50
         mock_settings.IDENTITY_COMPACT_BATCH_SIZE = 30
@@ -505,6 +539,48 @@ class TestCompactionExecution:
         assert len(meta["source_ids_hash"]) == 64
         assert "scenario_id" in meta
         assert "created_at" in meta
+        assert meta["doc_type"] == "identity_memory"
+        assert meta["memory_kind"] == "long_term_summary"
+        assert meta["confidence_tier"] == "low"
+        assert meta["provenance_kind"] == "llm_compaction"
+        assert meta["source_scenario_ids"] == '["sc1"]'
+
+    @patch("app.services.vector_store.release_runtime_lock")
+    @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
+    @patch("app.services.vector_store.get_vector_store")
+    def test_multi_scenario_summary_is_not_attributed_to_first_scenario(
+        self, mock_gvs, _acq, _rel,
+    ):
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+        docs = [
+            _raw_doc("d1", "id1", "sc1", "2026-04-01"),
+            _raw_doc("d2", "id1", "sc2", "2026-04-02"),
+        ]
+        col = _make_collection(docs)
+        store._client.get_or_create_collection.return_value = col
+
+        from app.services.vector_store import (
+            CompactionGroup,
+            _compute_source_ids_hash,
+            execute_compaction_group,
+        )
+
+        group = CompactionGroup(
+            ids=["d1", "d2"],
+            summaries=["m1", "m2"],
+            scenario_ids=["sc1", "sc2"],
+            created_ats=["2026-04-01", "2026-04-02"],
+            source_ids_hash=_compute_source_ids_hash(["d1", "d2"]),
+            source_message_ids=["msg1", "msg2"],
+        )
+        execute_compaction_group("u1", "id1", group, "bounded summary")
+
+        meta = col.add.call_args.kwargs["metadatas"][0]
+        assert meta["scenario_id"] == ""
+        assert meta["source_scenario_ids"] == '["sc1","sc2"]'
+        assert meta["source_message_ids"] == '["msg1","msg2"]'
 
     @patch("app.services.vector_store.release_runtime_lock")
     @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
@@ -665,7 +741,7 @@ class TestCompactionPrompt:
             "Shifted stance on tariffs",
             "Allied with reform bloc",
         ]
-        prompt = build_compaction_prompt(summaries)
+        prompt = build_compaction_prompt(summaries, ["sc1", "sc2", "sc3"])
 
         assert "3 memories" in prompt
         # Summaries are wrapped via format_untrusted_text_block
@@ -677,3 +753,6 @@ class TestCompactionPrompt:
         assert "Memory 1" in prompt
         assert "Memory 2" in prompt
         assert "Memory 3" in prompt
+        assert "prior simulated scenario sc1" in prompt
+        assert "do not merge them into one event" in prompt
+        assert "Do not invent or infer stances, alliances, relationships" in prompt

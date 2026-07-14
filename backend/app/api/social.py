@@ -764,7 +764,10 @@ async def _generate_social_copy(
             select(Branch).where(Branch.scenario_id == scenario_id)
         ).all())
         agents = list(session.exec(
-            select(Agent).where(Agent.scenario_id == scenario_id)
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                Agent.source_type.is_(None) | (Agent.source_type != "world_event_source"),
+            )
         ).all())
 
     social_language = _resolve_social_language(scenario)
@@ -951,7 +954,14 @@ async def export_scenario(
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
 
-        agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
+        agents = list(
+            session.exec(
+                select(Agent).where(
+                    Agent.scenario_id == scenario_id,
+                    Agent.source_type.is_(None) | (Agent.source_type != "world_event_source"),
+                )
+            ).all()
+        )
         branches = list(session.exec(
             select(Branch).where(
                 Branch.scenario_id == scenario_id,

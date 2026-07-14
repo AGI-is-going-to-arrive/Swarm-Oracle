@@ -48,10 +48,18 @@ def message_metadata_failure_code(message: object) -> str | None:
         _field(message, "emotion_metadata_status", "") or ""
     ).strip().lower()
     public_code = _field(message, "emotion_metadata_failure_code")
-    if public_status == "unavailable" and str(public_code or "").strip():
+    if public_status == "unavailable":
+        # Older/public payloads can carry the status without a code.  Preserve
+        # the unavailable truth with a bounded generic code instead of
+        # silently importing the message as a real neutral observation.
         return normalize_metadata_failure_code(public_code)
 
-    return metadata_failure_code_from_emotion(_field(message, "emotion", ""))
+    emotion = _field(message, "emotion", "")
+    marker_code = metadata_failure_code_from_emotion(emotion)
+    if marker_code is not None:
+        return marker_code
+    # A blank/missing metadata value is not evidence of a neutral affect.
+    return None if str(emotion or "").strip() else "LLM_FAILED"
 
 
 def message_emotion_if_available(message: object) -> str | None:

@@ -22,6 +22,8 @@ import type { AgentIdentityInfo } from '../types';
 import './IdentityInspectorView.css';
 
 const DOCUMENT_PREVIEW_CHARS = 200;
+const SOURCE_ID_DISPLAY_LIMIT = 6;
+const SOURCE_ID_PREVIEW_CHARS = 32;
 
 type ConfidenceBucket = 'high' | 'medium' | 'low' | 'unknown';
 
@@ -60,6 +62,26 @@ function truncatePreview(text: string, max: number): { preview: string; truncate
   return { preview: `${chars.slice(0, max).join('')}…`, truncated: true };
 }
 
+function nonBlankMetadataText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function boundedSourceIds(value: unknown): string[] {
+  let sourceIds: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      sourceIds = JSON.parse(value) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(sourceIds)) return [];
+  return sourceIds
+    .filter((sourceId): sourceId is string => typeof sourceId === 'string' && !!sourceId.trim())
+    .slice(0, SOURCE_ID_DISPLAY_LIMIT)
+    .map((sourceId) => sourceId.trim());
+}
+
 function formatTimestamp(iso: string | null, locale: string): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -95,12 +117,25 @@ function MemoryRow({ entry, index, expanded, onToggle, onTogglePin, pinCount, pi
   const { t, i18n } = useTranslation();
   const document = typeof entry.document === 'string' ? entry.document : '';
   const { preview, truncated } = truncatePreview(document, DOCUMENT_PREVIEW_CHARS);
-  const bucket = bucketConfidence(entry.confidence);
-  const confidenceLabel = confidenceValueLabel(entry.confidence);
   const meta = entry.metadata ?? {};
   const scenarioId = typeof meta.scenario_id === 'string' ? meta.scenario_id : null;
-  const round = parseRound(meta.round);
-  const memoryType = typeof meta.type === 'string' && meta.type.trim() ? meta.type : null;
+  const branchId = nonBlankMetadataText(meta.branch_id);
+  const round = parseRound(meta.round ?? meta.round_number);
+  const memoryType = nonBlankMetadataText(meta.memory_kind) ?? nonBlankMetadataText(meta.type);
+  const actionType = nonBlankMetadataText(meta.action_type);
+  const observation = nonBlankMetadataText(meta.observation);
+  const provenanceKind = nonBlankMetadataText(meta.provenance_kind);
+  const outcome = nonBlankMetadataText(meta.outcome);
+  const writeReason = nonBlankMetadataText(meta.write_reason);
+  const confidence = nonBlankMetadataText(meta.confidence_tier) ?? entry.confidence;
+  const bucket = bucketConfidence(confidence);
+  const confidenceLabel = confidenceValueLabel(confidence);
+  const sourceMessageIds = boundedSourceIds(meta.source_message_ids);
+  const sourceEventIds = boundedSourceIds(meta.source_event_ids);
+  const hasMemoryExplanation = Boolean(
+    actionType || observation || provenanceKind || outcome || writeReason
+      || branchId || sourceMessageIds.length || sourceEventIds.length,
+  );
   const timestampLabel = formatTimestamp(entry.timestamp, i18n.language);
   const rowId = `identity-memory-row-${index}`;
   const bodyId = `identity-memory-row-${index}-body`;
@@ -157,9 +192,12 @@ function MemoryRow({ entry, index, expanded, onToggle, onTogglePin, pinCount, pi
           {entry.remembered && (
             <span
               className="identity-inspector__chip identity-inspector__chip--remembered"
-              aria-label={t('identity_inspector.remembered_aria')}
+              aria-label={t(
+                'identity_inspector.query_match_aria',
+                'Matched the current memory search query',
+              )}
             >
-              {t('identity_inspector.remembered_label')}
+              {t('identity_inspector.query_match_label', 'Query match')}
             </span>
           )}
           {scenarioId && (
@@ -229,6 +267,76 @@ function MemoryRow({ entry, index, expanded, onToggle, onTogglePin, pinCount, pi
               ? t('identity_inspector.collapse', 'Show less')
               : t('identity_inspector.expand', 'Show more')}
           </button>
+        )}
+
+        {hasMemoryExplanation && (
+          <details className="identity-inspector__memory-explanation">
+            <summary className="identity-inspector__expand-btn">
+              {t('identity_inspector.why_remembered', 'Why this was remembered')}
+            </summary>
+            <dl className="identity-inspector__memory-explanation-list">
+              {actionType && (
+                <div>
+                  <dt>{t('identity_inspector.action_type', 'Action')}</dt>
+                  <dd>{actionType}</dd>
+                </div>
+              )}
+              {observation && (
+                <div>
+                  <dt>{t('identity_inspector.observation', 'Observation')}</dt>
+                  <dd>{observation}</dd>
+                </div>
+              )}
+              {outcome && (
+                <div>
+                  <dt>{t('identity_inspector.outcome', 'Outcome')}</dt>
+                  <dd>{outcome}</dd>
+                </div>
+              )}
+              {writeReason && (
+                <div>
+                  <dt>{t('identity_inspector.write_reason', 'Write reason')}</dt>
+                  <dd>{writeReason}</dd>
+                </div>
+              )}
+              {provenanceKind && (
+                <div>
+                  <dt>{t('identity_inspector.provenance', 'Provenance')}</dt>
+                  <dd>{provenanceKind}</dd>
+                </div>
+              )}
+              {branchId && (
+                <div>
+                  <dt>{t('identity_inspector.branch', 'Branch')}</dt>
+                  <dd title={branchId}>{truncatePreview(branchId, SOURCE_ID_PREVIEW_CHARS).preview}</dd>
+                </div>
+              )}
+              {sourceMessageIds.length > 0 && (
+                <div>
+                  <dt>{t('identity_inspector.source_messages', 'Source messages')}</dt>
+                  <dd>
+                    {sourceMessageIds.map((sourceId, sourceIndex) => (
+                      <code key={`${sourceId}-${sourceIndex}`} title={sourceId}>
+                        {truncatePreview(sourceId, SOURCE_ID_PREVIEW_CHARS).preview}
+                      </code>
+                    ))}
+                  </dd>
+                </div>
+              )}
+              {sourceEventIds.length > 0 && (
+                <div>
+                  <dt>{t('identity_inspector.source_events', 'Source events')}</dt>
+                  <dd>
+                    {sourceEventIds.map((sourceId, sourceIndex) => (
+                      <code key={`${sourceId}-${sourceIndex}`} title={sourceId}>
+                        {truncatePreview(sourceId, SOURCE_ID_PREVIEW_CHARS).preview}
+                      </code>
+                    ))}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </details>
         )}
       </article>
     </li>

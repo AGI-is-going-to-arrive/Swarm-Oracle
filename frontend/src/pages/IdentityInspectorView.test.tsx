@@ -235,7 +235,7 @@ describe('IdentityInspectorView', () => {
     debugSpy.mockRestore();
   });
 
-  it('renders remembered chip when entry.remembered is true', async () => {
+  it('labels retrieval hits as query matches rather than durable remembered writes', async () => {
     getIdentityMemoriesMock.mockResolvedValue({
       memories: [
         {
@@ -252,7 +252,53 @@ describe('IdentityInspectorView', () => {
 
     renderInspector();
     expect(await screen.findByText('Mem remembered')).toBeInTheDocument();
-    expect(screen.getByText('identity_inspector.remembered_label')).toBeInTheDocument();
+    expect(screen.getByText('Query match')).toBeInTheDocument();
+    expect(screen.queryByText('identity_inspector.remembered_label')).not.toBeInTheDocument();
+  });
+
+  it('prioritizes memory_kind and explains bounded per-agent memory provenance', async () => {
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories: [
+        {
+          document: 'Agent-specific memory',
+          timestamp: '2026-05-11T03:04:05.000Z',
+          confidence: 0.12,
+          is_compacted: false,
+          metadata: {
+            type: 'legacy-type',
+            memory_kind: 'reflection',
+            action_type: 'challenge_claim',
+            observation: 'The cited number was contradicted.',
+            outcome: 'The agent revised its recommendation.',
+            write_reason: 'Changed the next-round decision.',
+            provenance_kind: 'agent_observation',
+            confidence_tier: 'high',
+            branch_id: 'branch-private',
+            source_message_ids: Array.from({ length: 8 }, (_, index) => `message-${index}`),
+            source_event_ids: '["event-1"]',
+          },
+        },
+      ],
+      total: 1,
+    });
+
+    const user = userEvent.setup();
+    renderInspector();
+
+    expect(await screen.findAllByText('reflection')).toHaveLength(2);
+    expect(screen.queryByText('legacy-type')).not.toBeInTheDocument();
+    expect(screen.getByText('high')).toBeInTheDocument();
+
+    await user.click(screen.getByText('Why this was remembered'));
+    expect(screen.getByText('challenge_claim')).toBeInTheDocument();
+    expect(screen.getByText('The cited number was contradicted.')).toBeInTheDocument();
+    expect(screen.getByText('The agent revised its recommendation.')).toBeInTheDocument();
+    expect(screen.getByText('Changed the next-round decision.')).toBeInTheDocument();
+    expect(screen.getByText('agent_observation')).toBeInTheDocument();
+    expect(screen.getByText('branch-private')).toBeInTheDocument();
+    expect(screen.getByText('event-1')).toBeInTheDocument();
+    expect(screen.getByText('message-5')).toBeInTheDocument();
+    expect(screen.queryByText('message-6')).not.toBeInTheDocument();
   });
 
   it('toggles pin status and calls pin/unpin APIs', async () => {

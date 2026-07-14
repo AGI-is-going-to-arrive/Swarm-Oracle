@@ -2333,6 +2333,28 @@ class TestByokValidation:
 
 
 class TestReplayArtifactEndpoints:
+    def test_explicit_source_coordinate_is_not_stored_in_public_payload(self, client):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+        create_resp = client.post(
+            "/api/replay-artifact",
+            json={
+                "kind": "worldline_roundtable_v1",
+                "source_scenario_id": scenario_id,
+                "payload": {
+                    "scenarioId": None,
+                    "roomSnapshot": {"scenario_id": "sanitized-replay-id"},
+                },
+            },
+        )
+
+        assert create_resp.status_code == 200, create_resp.text
+        read_resp = client.get(f"/api/replay-artifact/{create_resp.json()['id']}")
+        assert read_resp.status_code == 200
+        assert read_resp.json()["payload"]["roomSnapshot"]["scenario_id"] == (
+            "sanitized-replay-id"
+        )
+        assert scenario_id not in json.dumps(read_resp.json()["payload"])
+
     def test_create_replay_artifact_returns_structured_payload_too_large_error(self, client):
         scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
         resp = client.post(
@@ -2744,6 +2766,116 @@ class TestReplayArtifactEndpoints:
             assert refreshed is not None
             assert refreshed.parsed_context["world_context"] == world_context
             assert refreshed.parsed_context["mode"] == "blackboard"
+
+    def test_create_parse_path_preserves_initial_social_feed(self, client, monkeypatch):
+        from app.api import helpers as helpers_module
+
+        scheduled: list[object] = []
+        initial_feed = [
+            {
+                "source_name": "City Emergency Office",
+                "content": "River levels are rising; avoid underpasses.",
+                "published_at": "2026-07-14T00:00:00Z",
+                "credibility_hint": "Official preliminary notice",
+                "tags": ["flood", "warning"],
+            }
+        ]
+
+        async def fake_parse_question(*_args, **_kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Analyst",
+                        "role": "Analyst",
+                        "persona": "Tracks emergency information.",
+                        "tier": "CORE",
+                        "stance": "neutral",
+                    }
+                ],
+                "initial_title": "Parsed Root",
+                "groups": [],
+            }
+
+        async def fake_run_simulation(**_kwargs):
+            return None
+
+        monkeypatch.setattr(helpers_module, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        response = client.post(
+            "/api/scenario",
+            json={"question": "How should the city respond?", "initial_social_feed": initial_feed},
+        )
+        assert response.status_code == 200
+        assert len(scheduled) == 1
+        asyncio.run(scheduled[0])
+
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, response.json()["id"])
+            assert scenario is not None
+            assert scenario.parsed_context["initial_social_feed"] == initial_feed
+
+    def test_multi_run_create_parse_path_preserves_initial_social_feed(
+        self, client, monkeypatch
+    ):
+        from app.api import helpers as helpers_module
+
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        scheduled: list[object] = []
+        initial_feed = [
+            {
+                "source_name": "Transit Authority",
+                "content": "Metro service is suspended on the river line.",
+                "published_at": None,
+                "credibility_hint": "Confirmed service bulletin",
+                "tags": ["transit"],
+            }
+        ]
+
+        async def fake_parse_question(*_args, **_kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Planner",
+                        "role": "Planner",
+                        "persona": "Plans transport contingencies.",
+                        "tier": "CORE",
+                        "stance": "neutral",
+                    }
+                ],
+                "initial_title": "Parsed Root",
+                "groups": [],
+            }
+
+        async def fake_run_simulation(**_kwargs):
+            return None
+
+        monkeypatch.setattr(helpers_module, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+
+        response = client.post(
+            "/api/scenario/multi-run",
+            json={
+                "question": "How should commuters adapt?",
+                "run_count": 2,
+                "num_agents": 3,
+                "rounds": 1,
+                "initial_social_feed": initial_feed,
+            },
+        )
+        assert response.status_code == 200
+        assert len(scheduled) == 2
+        for coroutine in scheduled:
+            asyncio.run(coroutine)
+
+        with Session(get_engine()) as session:
+            for run in response.json()["runs"]:
+                scenario = session.get(Scenario, run["scenario_id"])
+                assert scenario is not None
+                assert scenario.parsed_context["initial_social_feed"] == initial_feed
 
     def test_create_scenario_forwards_llm_rate_limits(self, client, monkeypatch):
         scheduled = {"count": 0}

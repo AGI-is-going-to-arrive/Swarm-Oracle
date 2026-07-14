@@ -56,6 +56,7 @@ import { SafeMarkdown } from './SafeMarkdown';
 import { ConversationHistoryPicker } from './ConversationHistoryPicker';
 import { type ConversationDetail, listModelProfiles } from '../api/client';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from './ui/sheet';
 import './EndingChatModal.css';
 
@@ -175,8 +176,17 @@ export default function EndingChatModal({
   const threadRailId = useId();
   const threadPanelId = useId();
   const threadTabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const pendingThreadFocusIdRef = useRef<string | null>(null);
   const isZh = language === 'zh';
+  useFocusTrap(modalRef, open && !sidebarSheetOpen, true);
+
+  useEffect(() => {
+    if (open && !sidebarSheetOpen) {
+      closeButtonRef.current?.focus({ preventScroll: true });
+    }
+  }, [open, sidebarSheetOpen]);
+
   const profileFrameSrc = profileId ? getGameplayProfileFrameSrc(profileId) : null;
   const syncTranscriptScrollSnapshot = (nextSnapshot: TranscriptScrollSnapshot | null) => {
     transcriptScrollSnapshotRef.current = nextSnapshot;
@@ -1196,7 +1206,7 @@ export default function EndingChatModal({
             >
               {t('ending_room.sidebar_mobile_label')}
             </button>
-            <button type="button" className="ending-chat-close" onClick={onClose} aria-label={t('common.close')}>
+            <button ref={closeButtonRef} type="button" className="ending-chat-close" onClick={onClose} aria-label={t('common.close')}>
               ×
             </button>
           </div>

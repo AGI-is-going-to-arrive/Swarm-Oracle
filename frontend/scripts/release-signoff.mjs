@@ -94,36 +94,9 @@ const SCRIPT_CONTRACT_TESTS = [
   "scripts/e2e-result-report-suite.test.mjs",
   "scripts/playwrightTeardown.test.mjs",
 ];
-const BACKEND_SIGNOFF_TESTS = [
-  "tests/test_campaign_api.py",
-  "tests/test_campaign_service.py",
-  "tests/test_debate_api.py",
-  "tests/test_debate_service.py",
-  "tests/test_config.py",
-  "tests/test_predictions.py",
-  "tests/test_card_events.py",
-  "tests/test_gameplay_contract_sync.py",
-  "tests/test_metrics.py",
-  "tests/test_llm_provider_protocol.py",
-  "tests/test_llm_client.py",
-  "tests/test_llm_resolution.py",
-  "tests/test_model_profiles.py",
-  "tests/test_agent_identity.py",
-  "tests/test_vector_store.py",
-  "tests/test_wave1_agent_state.py",
-  "tests/test_scoring.py",
-  "tests/test_conversation.py",
-  "tests/test_ending_room_api.py",
-  "tests/test_social.py",
-  "tests/test_infra_config.py",
-  "tests/test_causal_graph.py",
-  "tests/test_factions.py",
-  "tests/test_result_report_reducer.py",
-  "tests/test_result_report_builder.py",
-  "tests/test_result_report_contract.py",
-  "tests/test_simulator.py",
-  "tests/test_local_packs.py",
-];
+const BACKEND_PYTEST_ARGS = ["-m", "pytest", "-q"];
+const BACKEND_RUFF_ARGS = ["-m", "ruff", "check", "app/", "tests/"];
+const FRONTEND_TEST_ARGS = ["test"];
 const PYTHON_HTTP_CHECK_SCRIPT = [
   "import sys, urllib.request",
   "url = sys.argv[1]",
@@ -726,7 +699,9 @@ export const __test__ = {
   successfulSummaryStatus,
   graphE2EStepIds: GRAPH_E2E_STEP_IDS,
   graphFocusedVitestTests: GRAPH_FOCUSED_VITEST_TESTS,
-  backendSignoffTests: BACKEND_SIGNOFF_TESTS,
+  backendPytestArgs: BACKEND_PYTEST_ARGS,
+  backendRuffArgs: BACKEND_RUFF_ARGS,
+  frontendTestArgs: FRONTEND_TEST_ARGS,
   predictionFocusedStepIds: PREDICTION_FOCUSED_STEP_IDS,
   fixtureBlackholeBackendUrl: FIXTURE_BLACKHOLE_BACKEND_URL,
   commandTimeoutMs: COMMAND_TIMEOUT_MS,
@@ -826,7 +801,15 @@ async function main() {
         args,
         "backend_checks",
         args.backendPython,
-        ["-m", "pytest", ...BACKEND_SIGNOFF_TESTS, "-q"],
+        BACKEND_PYTEST_ARGS,
+        { cwd: BACKEND_ROOT },
+      );
+      runStep(
+        summary,
+        args,
+        "backend_ruff",
+        args.backendPython,
+        BACKEND_RUFF_ARGS,
         { cwd: BACKEND_ROOT },
       );
       runStep(
@@ -838,9 +821,9 @@ async function main() {
         { cwd: BACKEND_ROOT },
       );
     }
-    runStep(summary, args, "typecheck", npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"]);
+    runStep(summary, args, "typecheck", npxCommand, ["tsc", "-b"]);
     runStep(summary, args, "lint", npmCommand, ["run", "lint"]);
-    runStep(summary, args, "graph_focused_vitest", npmCommand, buildGraphFocusedVitestArgs());
+    runStep(summary, args, "frontend_tests", npmCommand, FRONTEND_TEST_ARGS);
     runStep(summary, args, "build", npmCommand, ["run", "build"]);
     runStep(summary, args, "perf_budgets", npmCommand, ["run", "perf:budgets:check"]);
     runStep(
@@ -957,7 +940,7 @@ async function main() {
       nodeCommand,
       [
         "scripts/e2e-phase3-batch-a.mjs",
-        "desktop",
+        "mobile",
         "--browser",
         "firefox",
         "--output-dir",
@@ -979,7 +962,7 @@ async function main() {
       nodeCommand,
       [
         "scripts/e2e-phase3-batch-b.mjs",
-        "desktop",
+        "mobile",
         "--browser",
         "firefox",
         "--output-dir",
@@ -1001,7 +984,7 @@ async function main() {
       nodeCommand,
       [
         "scripts/e2e-phase3-batch-a.mjs",
-        "desktop",
+        "mobile",
         "--browser",
         "webkit",
         "--output-dir",
@@ -1023,7 +1006,7 @@ async function main() {
       nodeCommand,
       [
         "scripts/e2e-phase3-batch-b.mjs",
-        "desktop",
+        "mobile",
         "--browser",
         "webkit",
         "--output-dir",

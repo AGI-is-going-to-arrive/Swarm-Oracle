@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BranchInfo } from '../types';
 
@@ -70,5 +71,29 @@ describe('BranchDetailModal', () => {
 
     expect(screen.getByText('PRUNED')).toBeInTheDocument();
     expect(screen.queryByText('sim.tree.status_interrupted')).not.toBeInTheDocument();
+  });
+
+  it('provides a named modal keyboard contract and restores focus', async () => {
+    const user = userEvent.setup();
+    const trigger = document.createElement('button');
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const onClose = vi.fn();
+
+    const { unmount } = render(<BranchDetailModal branch={makeBranch('ACTIVE')} onClose={onClose} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'Branch 1' });
+    const close = screen.getByRole('button', { name: 'common.close' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(document.activeElement).toBe(close);
+
+    await user.tab();
+    expect(document.activeElement).toBe(close);
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
   });
 });

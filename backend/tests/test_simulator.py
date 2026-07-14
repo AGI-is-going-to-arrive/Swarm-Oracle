@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.models.model_profile import ModelProfile
+from app.services.agent_message_metadata import public_emotion_metadata
 from app.services.blackboard import Blackboard
 from app.services.llm_client import LLMError, llm_request_scope
 from app.services.replay import write_checkpoint
@@ -94,6 +95,25 @@ def test_llm_scope_kwargs_drops_invalid_native_search_upstream_override():
 
 async def _fake_llm_call(*_args, **_kwargs):
     return "This is a simulated agent response for testing."
+
+
+def test_blank_or_codeless_metadata_is_publicly_unavailable():
+    assert public_emotion_metadata({"emotion": ""}) == {
+        "emotion": "",
+        "emotion_metadata_status": "unavailable",
+        "emotion_metadata_failure_code": "LLM_FAILED",
+    }
+    assert public_emotion_metadata({
+        "emotion": "",
+        "emotion_metadata_status": "unavailable",
+    }) == {
+        "emotion": "",
+        "emotion_metadata_status": "unavailable",
+        "emotion_metadata_failure_code": "LLM_FAILED",
+    }
+    assert public_emotion_metadata({
+        "emotion": "__swarmoracle_metadata_unavailable__:not bounded!",
+    })["emotion_metadata_failure_code"] == "LLM_FAILED"
 
 
 # ── Fixtures / Helpers ────────────────────────────────────────
@@ -2594,10 +2614,16 @@ class TestRunSimulation:
             session.commit()
 
         pushed_events: list[dict] = []
+        causal_calls: list[dict] = []
 
         async def _fake_ws_callback(current_scenario_id: str, event: dict):
             assert current_scenario_id == scenario_id
             pushed_events.append(event)
+
+        async def _capture_causal_delta(
+            _scenario_id, _branch_id, _round_number, _messages, *, fork_event=None, **_kwargs
+        ):
+            causal_calls.append({"messages": _messages, "fork_event": fork_event})
 
         async def _fake_llm_call_json(prompt, *_args, **_kwargs):
             if isinstance(prompt, str) and "should_fork" in prompt:
@@ -2643,6 +2669,10 @@ class TestRunSimulation:
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "app.services.simulator._append_causal_graph_delta",
+            _capture_causal_delta,
+        )
 
         await run_simulation(scenario_id, ws_callback=_fake_ws_callback)
 
@@ -2669,6 +2699,16 @@ class TestRunSimulation:
         assert sum(branch.probability for branch in terminal_branches) == 1.0
         assert [branch.probability for branch in parent_branches] == [1.0]
         assert {child["fork_round"] for child in branch_fork_event["data"]["children"]} == {1}
+        fork_call = next(call for call in causal_calls if call["fork_event"] is not None)
+        fork_call_index = causal_calls.index(fork_call)
+        round_call = causal_calls[fork_call_index - 1]
+        diverge_message_ids = [
+            message["id"]
+            for message in round_call["messages"]
+            if message.get("diverge")
+        ]
+        assert diverge_message_ids
+        assert fork_call["fork_event"]["trigger_message_ids"] == diverge_message_ids
 
     @pytest.mark.asyncio
     async def test_detector_branch_budget_skips_lower_ranked_active_branch(self, monkeypatch):
@@ -4254,6 +4294,76 @@ class TestGatherAgentMessages:
         assert stored.content == "稳住阵线  等候信号"
 
     @pytest.mark.asyncio
+    async def test_blank_metadata_is_disclosed_without_overwriting_speech(
+        self, monkeypatch
+    ):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+        agent_id = _make_agent(engine, sid, name="谋士", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_row = session.get(Agent, agent_id)
+            assert agent_row is not None
+            agent_row.emotion = "alert"
+            session.add(agent_row)
+            session.commit()
+            session.refresh(agent_row)
+            agent_dict = _agent_to_dict(agent_row)
+
+        async def _fake_raw_llm_call(*_args, **_kwargs):
+            return "保留这段真实发言。"
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {"content": "", "emotion": "   ", "diverge": "invented"}
+
+        pushed_events: list[dict] = []
+
+        async def _push(event: dict) -> None:
+            pushed_events.append(event)
+
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_raw_llm_call)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json", _fake_llm_call_json
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.retrieve_relevant_memories", lambda *a, **k: ""
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.store_memory", lambda *a, **k: None
+        )
+
+        results = await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "背景",
+            "是否推进",
+            push=_push,
+            language="Chinese",
+        )
+
+        assert results[0]["content"] == "保留这段真实发言。"
+        assert results[0]["emotion"] == ""
+        assert results[0]["diverge"] is None
+        assert results[0]["emotion_metadata_status"] == "unavailable"
+        assert results[0]["emotion_metadata_failure_code"] == "LLM_INVALID_OUTPUT"
+        assert agent_dict["emotion"] == "alert"
+        with Session(engine) as session:
+            stored = session.exec(select(AgentMessage)).one()
+        assert stored.content == "保留这段真实发言。"
+        assert stored.emotion == (
+            "__swarmoracle_metadata_unavailable__:LLM_INVALID_OUTPUT"
+        )
+        degraded = [
+            event for event in pushed_events if event["type"] == "simulation_degraded"
+        ]
+        assert degraded[0]["data"]["stage"] == "metadata"
+
+    @pytest.mark.asyncio
     async def test_strips_diverge_marker_from_raw_fallback_content(self, monkeypatch):
         engine = get_engine()
         sid = _make_scenario(engine)
@@ -4435,6 +4545,13 @@ class TestGatherAgentMessages:
 
         assert len(results) == 1
         assert results[0]["content"] == "保持阵线。"
+        assert results[0]["_context_receipt"] == {
+            "recent_messages_status": "unavailable",
+            "recent_message_ids": [],
+            "identity_memory_status": "unavailable",
+            "identity_memory_refs": [],
+            "identity_memory_source_scenario_ids": [],
+        }
         assert memory_calls == [
             {
                 "top_k": 3,
@@ -4574,6 +4691,147 @@ class TestGatherAgentMessages:
         assert "不要复用" in prompt
         assert "点名回应其他参与者的具体观点" in prompt
         assert "承接、反驳、追问或补强" in prompt
+
+    @pytest.mark.asyncio
+    async def test_prior_social_world_is_in_pass1_without_extra_llm_call(self, monkeypatch):
+        from app.services.simulation_actions import append_simulation_action
+
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        first_round_id = _create_round(engine, bid, 1)
+        current_round_id = _create_round(engine, bid, 2)
+        author_id = _make_agent(engine, sid, name="先行者", tier=AgentTier.IMPORTANT)
+        speaker_id = _make_agent(engine, sid, name="观察者", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            prior_message = AgentMessage(
+                round_id=first_round_id,
+                agent_id=author_id,
+                content="alpha-prior-social-post",
+            )
+            session.add(prior_message)
+            session.flush()
+            append_simulation_action(
+                session,
+                scenario_id=sid,
+                branch_id=bid,
+                round_id=first_round_id,
+                round_number=1,
+                agent_id=author_id,
+                message_id=prior_message.id,
+                idempotency_key="prior-social-post",
+                action={"type": "POST", "content": "alpha-prior-social-post"},
+            )
+            session.commit()
+            speaker = _agent_to_dict(session.get(Agent, speaker_id))
+
+        raw_prompts: list[str] = []
+        metadata_prompts: list[str] = []
+
+        async def _capture_raw(prompt, *_args, **_kwargs):
+            raw_prompts.append(prompt)
+            return "我会根据上一轮动态继续判断。"
+
+        async def _capture_metadata(prompt, *_args, **_kwargs):
+            metadata_prompts.append(prompt)
+            return {
+                "content": "我会根据上一轮动态继续判断。",
+                "emotion": "calm",
+                "diverge": None,
+                "action": {"type": "IDLE", "payload": {}},
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call", _capture_raw)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _capture_metadata)
+        monkeypatch.setattr(
+            "app.services.simulator.retrieve_relevant_memories", lambda *args, **kwargs: ""
+        )
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *args, **kwargs: None)
+
+        await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            current_round_id,
+            2,
+            [speaker],
+            "时代: 测试",
+            "社交世界验证",
+            language="Chinese",
+        )
+
+        assert len(raw_prompts) == 1
+        assert len(metadata_prompts) == 1
+        assert "上一轮社交世界状态" in raw_prompts[0]
+        assert '"as_of_round":1' in raw_prompts[0]
+        assert '"visible_posts":1' in raw_prompts[0]
+        assert "alpha-prior-social-post" in raw_prompts[0]
+        assert "先选择一个此刻真正有用的平台动作" in raw_prompts[0]
+        assert "不要为了覆盖动作类型而机械轮换" in raw_prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_social_world_failure_is_explicit_and_turn_continues(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+        agent_id = _make_agent(engine, sid, name="观察者", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent = _agent_to_dict(session.get(Agent, agent_id))
+
+        def _fail_social_world(*_args, **_kwargs):
+            raise RuntimeError("broken reducer")
+
+        raw_prompts: list[str] = []
+        metadata_prompts: list[str] = []
+
+        async def _capture_raw(prompt, *_args, **_kwargs):
+            raw_prompts.append(prompt)
+            return "我会在社交状态不可用时继续判断。"
+
+        async def _capture_metadata(prompt, *_args, **_kwargs):
+            metadata_prompts.append(prompt)
+            return {
+                "content": "我会在社交状态不可用时继续判断。",
+                "emotion": "calm",
+                "diverge": None,
+                "action": {"type": "IDLE", "payload": {}},
+            }
+
+        monkeypatch.setattr(
+            "app.services.social_world.reduce_social_world_state",
+            _fail_social_world,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _capture_raw)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _capture_metadata)
+        monkeypatch.setattr(
+            "app.services.simulator.retrieve_relevant_memories", lambda *args, **kwargs: ""
+        )
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *args, **kwargs: None)
+
+        with caplog.at_level(logging.WARNING):
+            results = await _gather_agent_messages(
+                engine,
+                sid,
+                bid,
+                rid,
+                1,
+                [agent],
+                "时代: 测试",
+                "降级验证",
+                language="Chinese",
+            )
+
+        assert results[0]["content"] == "我会在社交状态不可用时继续判断。"
+        assert len(raw_prompts) == 1
+        assert len(metadata_prompts) == 1
+        assert '"failure_code":"SOCIAL_WORLD_UNAVAILABLE"' in raw_prompts[0]
+        assert '"status":"unavailable"' in raw_prompts[0]
+        assert "Social world context unavailable" in caplog.text
 
     @pytest.mark.asyncio
     async def test_respects_request_scoped_parallelism_limit(self, monkeypatch):
@@ -5219,12 +5477,13 @@ class TestGetRecentMessages:
         bid = _create_branch(engine, sid)
         rid = _create_round(engine, bid, 1)
         aid = _make_agent(engine, sid, name="A1")
-        _save_message(engine, rid, aid, "第一轮发言", "neutral", None)
+        message_id = _save_message(engine, rid, aid, "第一轮发言", "neutral", None)
 
         result = _get_recent_messages(engine, bid, max_rounds=2)
         assert len(result) == 1
         assert result[0]["agent_name"] == "A1"
         assert result[0]["content"] == "第一轮发言"
+        assert result[0]["message_id"] == message_id
 
     def test_multiple_rounds_limit(self):
         engine = get_engine()
@@ -6588,6 +6847,13 @@ class TestDetectFork:
 class TestIdentityCompactionSummary:
     @pytest.mark.asyncio
     async def test_returns_summary_from_streaming_first_helper(self, monkeypatch):
+        captured_prompt = {}
+
+        def _fake_prompt(summaries, scenario_ids=None):
+            captured_prompt["summaries"] = summaries
+            captured_prompt["scenario_ids"] = scenario_ids
+            return "bounded prompt"
+
         async def _fake_call(*args, **kwargs):
             return {"compacted_summary": "streamed summary"}
 
@@ -6595,10 +6861,21 @@ class TestIdentityCompactionSummary:
             "app.services.simulator.llm_call_json_with_stream_fallback",
             _fake_call,
         )
+        monkeypatch.setattr(
+            "app.services.vector_store.build_compaction_prompt",
+            _fake_prompt,
+        )
 
-        summary = await _summarize_identity_compaction_group(["memory a", "memory b"])
+        summary = await _summarize_identity_compaction_group(
+            ["memory a", "memory b"],
+            scenario_ids=["scenario-a", "scenario-b"],
+        )
 
         assert summary == "streamed summary"
+        assert captured_prompt == {
+            "summaries": ["memory a", "memory b"],
+            "scenario_ids": ["scenario-a", "scenario-b"],
+        }
 
     @pytest.mark.asyncio
     async def test_falls_back_to_concatenation_when_helper_returns_empty_summary(self, monkeypatch):
@@ -6716,7 +6993,7 @@ class TestIdentityCompactionTaskRegistration:
         )
         monkeypatch.setattr(
             "app.services.vector_store.store_identity_memory",
-            lambda **_kwargs: None,
+            lambda **_kwargs: True,
         )
         monkeypatch.setattr(
             "app.services.vector_store.check_identity_compaction_needed",

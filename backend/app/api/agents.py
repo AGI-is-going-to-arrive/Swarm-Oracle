@@ -857,9 +857,34 @@ async def get_identity_memory(
             identity = session.get(AgentIdentity, identity_id)
             if not identity or identity.user_id != effective_user_id:
                 raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
-        from app.services.agent_identity import get_identity_memories
-        memories = get_identity_memories(identity_id)
-        return {"identity_id": identity_id, "memories": memories}
+        entries, error_code = _load_identity_memory_entries(
+            identity_id,
+            effective_user_id,
+        )
+        # Keep the legacy timeline response shape while sharing the inspector's
+        # bounded, allow-listed, credential-safe read projection.  Compacted
+        # summaries retain their historical priority over raw memories.
+        entries.sort(key=lambda entry: 0 if entry.get("is_compacted") else 1)
+        memories = [
+            {
+                "summary": entry["document"],
+                "scenario_id": entry.get("source_scenario_id") or "",
+                "created_at": entry.get("timestamp") or "",
+                "memory_type": (
+                    "long_term_summary" if entry.get("is_compacted") else "raw"
+                ),
+                "is_compacted": bool(entry.get("is_compacted")),
+            }
+            for entry in entries[:10]
+        ]
+        response: dict[str, object] = {
+            "identity_id": identity_id,
+            "memories": memories,
+        }
+        if error_code is not None:
+            response["error"] = error_code
+            response["diagnostics"] = _memory_diagnostic(error_code)
+        return response
     except Exception as exc:
         if getattr(exc, "status_code", None) is not None:
             raise
@@ -909,6 +934,16 @@ _SAFE_METADATA_KEYS = frozenset({
     "round_number",
     "type",
     "event_type",
+    "memory_kind",
+    "action_type",
+    "observation",
+    "source_message_ids",
+    "source_event_ids",
+    "source_scenario_ids",
+    "confidence_tier",
+    "provenance_kind",
+    "outcome",
+    "write_reason",
     "doc_type",
     "source",
     "language",

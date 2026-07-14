@@ -106,9 +106,28 @@ describe('AgentPanel', () => {
 
     render(<AgentPanel />);
 
-    const unavailable = screen.getByText('情绪元数据不可用');
+    const unavailable = screen.getByText('情绪元数据不可用 (LLM_TIMEOUT)');
     expect(unavailable).toBeInTheDocument();
     expect(unavailable.closest('.bubble-header')?.querySelector('.emotion-dot')).toBeNull();
+    expect(screen.getByText('真实发言仍然保留。')).toBeInTheDocument();
+  });
+
+  it('does not render malformed or provider error details as a failure code', () => {
+    mockState.messages = [{
+      agent: '周鸿祎',
+      agent_id: 'zhou',
+      branch: 'alpha',
+      round: 6,
+      emotion: '',
+      emotion_metadata_status: 'unavailable',
+      emotion_metadata_failure_code: '__swarmoracle_metadata_unavailable__:upstream said secret',
+      message: '正文不受第二阶段失败影响。',
+    } as AgentMessage];
+
+    render(<AgentPanel />);
+
+    expect(screen.getByText('情绪元数据不可用 (LLM_FAILED)')).toBeInTheDocument();
+    expect(screen.queryByText(/upstream said secret/i)).not.toBeInTheDocument();
   });
 
   it('opens an explicit profile action without changing the message filter', async () => {

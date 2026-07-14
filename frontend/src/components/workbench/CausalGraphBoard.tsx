@@ -65,6 +65,10 @@ interface GraphEdgeData {
   metric_kind?: 'affect_proxy';
   caveat?: string;
   evidence?: EdgeEvidence | null;
+  provenance_kind?: 'runtime_projection' | 'legacy_repair' | string;
+  synthetic_provenance?: boolean;
+  evidence_status?: 'available' | 'unavailable' | string;
+  evidence_caveat?: string;
 }
 
 type CausalGraphErrorState = GraphErrorState;
@@ -184,6 +188,59 @@ function getCausalEdgeRelationLabel(edge: GraphEdgeData, t: CausalTranslate): st
   return base;
 }
 
+function isRuntimeProjectionEdge(edge: GraphEdgeData): boolean {
+  return edge.provenance_kind === 'runtime_projection';
+}
+
+function isLegacyRepairEdge(edge: GraphEdgeData): boolean {
+  return edge.provenance_kind === 'legacy_repair';
+}
+
+function isAffectProxyEdge(edge: GraphEdgeData): boolean {
+  return edge.metric_kind === 'affect_proxy'
+    || edge.display_type === 'affect_alignment_proxy'
+    || edge.display_type === 'affect_distance_proxy'
+    || edge.display_type === 'affect_proxy_observation';
+}
+
+function isRuntimeProjectionNode(node: GraphNodeData): boolean {
+  return Boolean(
+    node.payload
+    && typeof node.payload === 'object'
+    && !Array.isArray(node.payload)
+    && (node.payload as Record<string, unknown>).provenance_kind === 'runtime_projection',
+  );
+}
+
+function isLegacyRepairNode(node: GraphNodeData): boolean {
+  if (!node.payload || typeof node.payload !== 'object' || Array.isArray(node.payload)) return false;
+  const payload = node.payload as Record<string, unknown>;
+  return payload.provenance_kind === 'legacy_repair'
+    || (node.type === 'event' && payload.synthetic_provenance === true && typeof payload.message_id === 'string');
+}
+
+function getGraphEdgeCaveat(edge: GraphEdgeData, t: CausalTranslate): string | null {
+  if (isRuntimeProjectionEdge(edge)) {
+    return t(
+      'causal.runtime_projection_caveat',
+      'Runtime outcome links are read-time projections from completed simulated branches. They have no persisted causal evidence and are not real-world probabilities.',
+    );
+  }
+  if (isLegacyRepairEdge(edge)) {
+    return t(
+      'causal.legacy_repair_caveat',
+      'Legacy repair: the original trigger proof was not persisted; this low-confidence link is reconstructed at read time.',
+    );
+  }
+  if (isAffectProxyEdge(edge)) {
+    return t(
+      'causal.affect_proxy_caveat',
+      'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+    );
+  }
+  return null;
+}
+
 function buildAdjacentEvidence(
   nodeId: string,
   edges: GraphEdgeData[],
@@ -195,20 +252,30 @@ function buildAdjacentEvidence(
   for (const edge of edges) {
     if (edge.source !== nodeId && edge.target !== nodeId) continue;
     const evidence = edge.evidence;
-    if (!evidence || (
+    const hasProvenanceMetadata = edge.provenance_kind != null
+      || edge.evidence_status != null
+      || edge.metric_kind != null
+      || edge.synthetic_provenance != null;
+    if ((!evidence || (
       evidence.confidence_tier == null
       && evidence.source_ref == null
       && evidence.source_round_number == null
       && evidence.detail == null
-    )) continue;
+    )) && !hasProvenanceMetadata) continue;
 
     const entry: NodeDetailEvidence = {
-      confidence_tier: evidence.confidence_tier,
-      source_ref: evidence.source_ref,
-      source_round_number: evidence.source_round_number,
-      detail: evidence.detail,
+      confidence_tier: evidence?.confidence_tier,
+      source_ref: evidence?.source_ref,
+      source_round_number: evidence?.source_round_number,
+      detail: evidence?.detail,
       relation: getCausalEdgeBaseRelationLabel(edge, t),
       direction: edge.source === nodeId ? 'outgoing' : 'incoming',
+      metric_kind: edge.metric_kind,
+      provenance_kind: edge.provenance_kind,
+      synthetic_provenance: edge.synthetic_provenance,
+      evidence_status: edge.evidence_status,
+      evidence_caveat: edge.evidence_caveat,
+      caveat: edge.caveat,
     };
     const dedupeKey = JSON.stringify([
       entry.direction,
@@ -217,6 +284,9 @@ function buildAdjacentEvidence(
       entry.source_ref,
       entry.source_round_number,
       entry.detail,
+      entry.metric_kind,
+      entry.provenance_kind,
+      entry.evidence_status,
     ]);
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -541,6 +611,8 @@ export default function CausalGraphBoard({
       if (!source || !target) return null;
       let line = `${source.label || source.key} ${getCausalEdgeRelationLabel(edge, t)} ${target.label || target.key}`;
       if (edge.evidence?.confidence_tier) line += ` [${t(`causal.evidence_${edge.evidence.confidence_tier}`, edge.evidence.confidence_tier)}]`;
+      const caveat = getGraphEdgeCaveat(edge, t);
+      if (caveat) line += `. ${caveat}`;
       return line;
     }).filter(Boolean) as string[]
   ), [filteredData?.edges, rawNodeMap, t]);
@@ -600,6 +672,15 @@ export default function CausalGraphBoard({
         'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
       )
     : null;
+  const hasRuntimeProjection = Boolean(
+    graphData?.nodes.some(isRuntimeProjectionNode)
+    || graphData?.edges.some(isRuntimeProjectionEdge),
+  );
+  const hasLegacyRepair = Boolean(
+    graphData?.nodes.some(isLegacyRepairNode)
+    || graphData?.edges.some(isLegacyRepairEdge),
+  );
+  const hasAffectProxy = Boolean(graphData?.edges.some(isAffectProxyEdge));
 
   if (loading) {
     return (
@@ -652,6 +733,30 @@ export default function CausalGraphBoard({
       {branchLineageScopeMessage && (
         <p role="note" style={{ margin: '0.5rem 0.5rem 0', color: COLORS.textMuted, fontSize: '0.78rem' }}>
           {branchLineageScopeMessage}
+        </p>
+      )}
+      {hasRuntimeProjection && (
+        <p data-testid="causal-runtime-projection-caveat" style={{ margin: '0.5rem 0.5rem 0', color: COLORS.textMuted, fontSize: '0.78rem' }}>
+          {t(
+            'causal.runtime_projection_caveat',
+            'Runtime outcome links are read-time projections from completed simulated branches. They have no persisted causal evidence and are not real-world probabilities.',
+          )}
+        </p>
+      )}
+      {hasLegacyRepair && (
+        <p data-testid="causal-legacy-repair-caveat" style={{ margin: '0.5rem 0.5rem 0', color: COLORS.textMuted, fontSize: '0.78rem' }}>
+          {t(
+            'causal.legacy_repair_caveat',
+            'Legacy graph events may be reconstructed at read time to restore provenance. They are not persisted causal truth.',
+          )}
+        </p>
+      )}
+      {hasAffectProxy && (
+        <p data-testid="causal-affect-proxy-caveat" style={{ margin: '0.5rem 0.5rem 0', color: COLORS.textMuted, fontSize: '0.78rem' }}>
+          {t(
+            'causal.affect_proxy_caveat',
+            'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+          )}
         </p>
       )}
       {/* Search bar */}

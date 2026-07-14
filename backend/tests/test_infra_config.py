@@ -427,43 +427,17 @@ def test_ci_executes_wave20_release_regressions_in_one_process_per_stack():
     workflow = read_repo_file(".github/workflows/ci.yml")
     release_signoff = read_repo_file("frontend/scripts/release-signoff.mjs")
 
-    for test_path in (
-        "tests/test_llm_client.py",
-        "tests/test_llm_resolution.py",
-        "tests/test_model_profiles.py",
-        "tests/test_conversation.py",
-        "tests/test_ending_room_api.py",
-        "tests/test_social.py",
-    ):
-        assert test_path in workflow
-        assert test_path in release_signoff
-
-    for test_path in (
-        "tests/test_infra_config.py",
-        "tests/test_llm_provider_protocol.py",
-        "tests/test_p0_wiring.py",
-        "tests/test_causal_graph.py",
-        "tests/test_factions.py",
-        "tests/test_result_report_reducer.py",
-        "tests/test_result_report_builder.py",
-        "tests/test_result_report_contract.py",
-        "tests/test_local_packs.py",
-    ):
-        assert test_path in workflow
-    for test_path in (
-        "src/pages/result/ResultReportPanel.test.tsx",
-        "src/pages/result/ReportSection.test.tsx",
-        "src/pages/result/ReportConfidenceBadge.test.tsx",
-        "src/lib/agentProfileObservation.test.ts",
-        "src/lib/localPackImport.test.ts",
-        "src/pages/SetupWizardView.test.tsx",
-        "src/components/LocalPackPicker.test.tsx",
-        "src/components/CounterfactualPanel.test.tsx",
-        "src/scripts/releaseSignoff.test.ts",
-    ):
-        assert test_path in workflow
+    assert ".venv/bin/python -m pytest -q" in workflow
+    assert ".venv/bin/ruff check app/ tests/" in workflow
+    assert "run: npm test" in workflow
+    assert "run: npm run lint" in workflow
     assert "npx tsc -b" in workflow
     assert "scripts/playwrightTeardown.test.mjs" in workflow
+
+    assert 'const BACKEND_PYTEST_ARGS = ["-m", "pytest", "-q"]' in release_signoff
+    assert 'const BACKEND_RUFF_ARGS = ["-m", "ruff", "check", "app/", "tests/"]' in release_signoff
+    assert 'const FRONTEND_TEST_ARGS = ["test"]' in release_signoff
+    assert '["tsc", "-b"]' in release_signoff
 
 
 def test_release_scripts_do_not_force_success_exit():

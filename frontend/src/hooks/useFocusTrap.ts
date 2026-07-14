@@ -30,6 +30,7 @@ const activeTrapsStack: HTMLElement[] = [];
 export function useFocusTrap<T extends HTMLElement = HTMLElement>(
   containerRef: RefObject<T | null>,
   active: boolean,
+  isolateBackground = false,
 ): void {
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -42,6 +43,40 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
       (container.ownerDocument?.activeElement as HTMLElement | null) ?? null;
 
     const doc = container.ownerDocument || document;
+    const isolatedSiblings: Array<{
+      element: HTMLElement;
+      inert: boolean;
+      ariaHidden: string | null;
+    }> = [];
+
+    if (isolateBackground) {
+      let current: HTMLElement | null = container;
+      while (current?.parentElement && current.parentElement !== doc.body) {
+        for (const sibling of Array.from(current.parentElement.children)) {
+          if (sibling === current || !(sibling instanceof HTMLElement)) continue;
+          isolatedSiblings.push({
+            element: sibling,
+            inert: sibling.hasAttribute('inert'),
+            ariaHidden: sibling.getAttribute('aria-hidden'),
+          });
+          sibling.setAttribute('inert', '');
+          sibling.setAttribute('aria-hidden', 'true');
+        }
+        current = current.parentElement;
+      }
+      if (current?.parentElement === doc.body) {
+        for (const sibling of Array.from(doc.body.children)) {
+          if (sibling === current || !(sibling instanceof HTMLElement)) continue;
+          isolatedSiblings.push({
+            element: sibling,
+            inert: sibling.hasAttribute('inert'),
+            ariaHidden: sibling.getAttribute('aria-hidden'),
+          });
+          sibling.setAttribute('inert', '');
+          sibling.setAttribute('aria-hidden', 'true');
+        }
+      }
+    }
 
     activeTrapsStack.push(container);
 
@@ -91,9 +126,21 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
       if (previous && typeof previous.focus === 'function') {
         previous.focus();
       }
+      for (const { element, inert, ariaHidden } of isolatedSiblings) {
+        if (inert) {
+          element.setAttribute('inert', '');
+        } else {
+          element.removeAttribute('inert');
+        }
+        if (ariaHidden === null) {
+          element.removeAttribute('aria-hidden');
+        } else {
+          element.setAttribute('aria-hidden', ariaHidden);
+        }
+      }
       previouslyFocusedRef.current = null;
     };
-  }, [active, containerRef]);
+  }, [active, containerRef, isolateBackground]);
 }
 
 export default useFocusTrap;

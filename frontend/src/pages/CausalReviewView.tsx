@@ -15,6 +15,7 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import useReducedMotion from '../hooks/useReducedMotion';
 import useMediaQueryState from '../hooks/useMediaQueryState';
 import { ExportPanel } from '../components/ExportPanel';
+import ActionLedgerPanel from '../components/workbench/ActionLedgerPanel';
 import type { NodeDetail } from '../components/NodeDetailPanel';
 import GraphNodeCard from '../components/GraphNodeCard';
 import AnimatedEdge from '../components/AnimatedEdge';
@@ -182,6 +183,10 @@ interface GraphEdgeData {
   metric_kind?: 'affect_proxy';
   caveat?: string;
   evidence?: EdgeEvidence | null;
+  provenance_kind?: 'runtime_projection' | 'legacy_repair' | string;
+  synthetic_provenance?: boolean;
+  evidence_status?: 'available' | 'unavailable' | string;
+  evidence_caveat?: string;
 }
 
 interface CausalGraphData {
@@ -475,6 +480,59 @@ function getCausalEdgeRelationLabel(
   return getCausalEdgeBaseRelationLabel(edge, t);
 }
 
+function isRuntimeProjectionEdge(edge: GraphEdgeData): boolean {
+  return edge.provenance_kind === 'runtime_projection';
+}
+
+function isLegacyRepairEdge(edge: GraphEdgeData): boolean {
+  return edge.provenance_kind === 'legacy_repair';
+}
+
+function isAffectProxyEdge(edge: GraphEdgeData): boolean {
+  return edge.metric_kind === 'affect_proxy'
+    || edge.display_type === 'affect_alignment_proxy'
+    || edge.display_type === 'affect_distance_proxy'
+    || edge.display_type === 'affect_proxy_observation';
+}
+
+function isRuntimeProjectionNode(node: GraphNodeData): boolean {
+  return Boolean(
+    node.payload
+    && typeof node.payload === 'object'
+    && !Array.isArray(node.payload)
+    && (node.payload as Record<string, unknown>).provenance_kind === 'runtime_projection',
+  );
+}
+
+function isLegacyRepairNode(node: GraphNodeData): boolean {
+  if (!node.payload || typeof node.payload !== 'object' || Array.isArray(node.payload)) return false;
+  const payload = node.payload as Record<string, unknown>;
+  return payload.provenance_kind === 'legacy_repair'
+    || (node.type === 'event' && payload.synthetic_provenance === true && typeof payload.message_id === 'string');
+}
+
+function getGraphEdgeCaveat(edge: GraphEdgeData, t: CausalTranslate): string | null {
+  if (isRuntimeProjectionEdge(edge)) {
+    return t(
+      'causal.runtime_projection_caveat',
+      'Runtime outcome links are read-time projections from completed simulated branches. They have no persisted causal evidence and are not real-world probabilities.',
+    );
+  }
+  if (isLegacyRepairEdge(edge)) {
+    return t(
+      'causal.legacy_repair_caveat',
+      'Legacy repair: the original trigger proof was not persisted; this low-confidence link is reconstructed at read time.',
+    );
+  }
+  if (isAffectProxyEdge(edge)) {
+    return t(
+      'causal.affect_proxy_caveat',
+      'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+    );
+  }
+  return null;
+}
+
 // Backend-generated causal node labels carry an optional structured `label_i18n`
 // payload ({ key, params }) so the frontend can localize them. Fall back to the
 // raw backend `label` when absent or malformed (backward compatible).
@@ -705,6 +763,13 @@ function buildNodeCausalMeaning(
       continue;
     }
     if (edge.type === 'led_to') {
+      if (isRuntimeProjectionEdge(edge)) {
+        relationContext.push(t(
+          'node_context_banner.relation_runtime_projection',
+          'This link is a read-time outcome projection with no persisted causal evidence.',
+        ));
+        continue;
+      }
       if (outgoing) {
         effectContext.push(t('node_context_banner.effect_led_to', {
           defaultValue: 'This card pushes the story toward {{node}}.',
@@ -1141,8 +1206,10 @@ export function CausalReviewView() {
       return {
         godNodes,
         typeCounts,
-        totalNodes: serverAnalysis.summary.total_nodes,
-        totalEdges: serverAnalysis.summary.total_edges,
+        // The guide describes everything currently visible, including read-time
+        // outcome projections. Server analysis metrics below remain persisted-only.
+        totalNodes: graphData?.nodes.length ?? serverAnalysis.summary.total_nodes,
+        totalEdges: graphData?.edges.length ?? serverAnalysis.summary.total_edges,
         forkCount: typeCounts.fork ?? 0,
         eventCount: typeCounts.event ?? 0,
         outcomeCount: (typeCounts.outcome ?? 0) + (typeCounts.verdict ?? 0),
@@ -1355,9 +1422,21 @@ export function CausalReviewView() {
           defaultValue: '({{context}})',
         })}`;
       }
+      const caveat = getGraphEdgeCaveat(edge, t);
+      if (caveat) line += `. ${caveat}`;
       return line;
     }).filter(Boolean) as string[]
   ), [filteredData?.edges, rawNodeMap, t]);
+
+  const hasRuntimeProjection = Boolean(
+    graphData?.nodes.some(isRuntimeProjectionNode)
+    || graphData?.edges.some(isRuntimeProjectionEdge),
+  );
+  const hasLegacyRepair = Boolean(
+    graphData?.nodes.some(isLegacyRepairNode)
+    || graphData?.edges.some(isLegacyRepairEdge),
+  );
+  const hasAffectProxy = Boolean(graphData?.edges.some(isAffectProxyEdge));
 
   const availableBranches = useMemo(() => {
     if (!branchId) return branches;
@@ -1604,6 +1683,38 @@ export function CausalReviewView() {
                   )}
                 </p>
               )}
+              {hasRuntimeProjection && (
+                <p data-testid="causal-runtime-projection-caveat" style={{ margin: 0, color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem' }}>
+                  {t(
+                    'causal.runtime_projection_caveat',
+                    'Runtime outcome links are read-time projections from completed simulated branches. They have no persisted causal evidence and are not real-world probabilities.',
+                  )}
+                </p>
+              )}
+              {hasLegacyRepair && (
+                <p data-testid="causal-legacy-repair-caveat" style={{ margin: 0, color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem' }}>
+                  {t(
+                    'causal.legacy_repair_caveat',
+                    'Legacy graph events may be reconstructed at read time to restore provenance. They are not persisted causal truth.',
+                  )}
+                </p>
+              )}
+              {hasAffectProxy && (
+                <p data-testid="causal-affect-proxy-caveat" style={{ margin: 0, color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem' }}>
+                  {t(
+                    'causal.affect_proxy_caveat',
+                    'This relation is derived from model-generated emotion or divergence fields. It is not verified stance, relationship, or causal evidence.',
+                  )}
+                </p>
+              )}
+              {serverAnalysis && hasRuntimeProjection && (
+                <p data-testid="causal-analysis-scope-caveat" style={{ margin: 0, color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem' }}>
+                  {t(
+                    'causal.analysis_persisted_scope_caveat',
+                    'Graph analysis excludes runtime outcome projections and measures persisted graph structure only.',
+                  )}
+                </p>
+              )}
             </div>
             {agentSearch.trim() ? (
               <div style={{ fontSize: '0.78rem', color: CAUSAL_COLORS.textMuted, maxWidth: 360 }}>
@@ -1760,6 +1871,7 @@ export function CausalReviewView() {
             </span>
           ) : null}
         </div>
+        {id && <ActionLedgerPanel scenarioId={id} branchId={branchId} />}
         {/* B6: Collapsible Legend */}
         {legendOpen && (
           <div id={legendPanelId} style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: CAUSAL_COLORS.textMuted, borderBottom: `1px solid ${CAUSAL_COLORS.borderSubtle}` }}>

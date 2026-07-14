@@ -587,8 +587,31 @@ describe('AgentProfileSheet', () => {
     );
 
     const state = await screen.findByTestId('agent-profile-sheet-current-state');
-    expect(state).toHaveTextContent('Emotion metadata unavailable');
+    expect(state).toHaveTextContent('Emotion metadata unavailable (LLM_TIMEOUT)');
     expect(state).not.toHaveTextContent('stale-neutral');
+  });
+
+  it('replaces malformed metadata failure details with a bounded public code', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+
+    renderSheet(
+      makeAgent({ emotion: 'stale-neutral' }),
+      vi.fn(),
+      undefined,
+      {
+        emotion: null,
+        source: 'live',
+        branchId: 'root',
+        branchTitle: 'Shared history',
+        round: 4,
+        emotionMetadataStatus: 'unavailable',
+        emotionMetadataFailureCode: 'provider said api_key=secret',
+      },
+    );
+
+    const state = await screen.findByTestId('agent-profile-sheet-current-state');
+    expect(state).toHaveTextContent('Emotion metadata unavailable (LLM_FAILED)');
+    expect(state).not.toHaveTextContent('api_key=secret');
   });
 
   it('does not fall back to a cross-branch agent emotion when replay has no matching observation', async () => {

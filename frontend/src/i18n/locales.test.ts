@@ -151,6 +151,34 @@ describe('i18n locale resources', () => {
     expect(zh.translation.compare.round).toBe('第 {{round}} 轮');
   });
 
+  it('provides graph provenance caveats in both locales', () => {
+    const causalKeys = [
+      'runtime_projection_caveat',
+      'legacy_repair_caveat',
+      'affect_proxy_caveat',
+      'analysis_persisted_scope_caveat',
+    ] as const;
+    const nodeDetailKeys = [
+      'runtime_projection_caveat',
+      'legacy_repair_caveat',
+      'affect_proxy_caveat',
+      'provenance_kind',
+      'evidence_status',
+      'metric_kind',
+    ] as const;
+
+    for (const key of causalKeys) {
+      expect(en.translation.causal[key]).toBeTruthy();
+      expect(zh.translation.causal[key]).toBeTruthy();
+    }
+    for (const key of nodeDetailKeys) {
+      expect(en.translation.node_detail[key]).toBeTruthy();
+      expect(zh.translation.node_detail[key]).toBeTruthy();
+    }
+    expect(en.translation.node_context_banner.relation_runtime_projection).toBeTruthy();
+    expect(zh.translation.node_context_banner.relation_runtime_projection).toBeTruthy();
+  });
+
   it('provides localized labels for ResultView Phase C action links', () => {
     expect(en.translation.result.causal_graph_link).toBeTruthy();
     expect(zh.translation.result.causal_graph_link).toBeTruthy();
@@ -535,6 +563,28 @@ describe('i18n locale resources', () => {
     expect(onlyZh).toEqual([]);
   });
 
+  it('localizes the per-agent memory explanation contract in both languages', () => {
+    const keys = [
+      'query_match_label',
+      'query_match_aria',
+      'why_remembered',
+      'action_type',
+      'observation',
+      'outcome',
+      'write_reason',
+      'provenance',
+      'branch',
+      'source_messages',
+      'source_events',
+    ] as const;
+
+    for (const key of keys) {
+      expect(en.translation.identity_inspector[key]).toBeTruthy();
+      expect(zh.translation.identity_inspector[key]).toBeTruthy();
+      expect(zh.translation.identity_inspector[key]).not.toBe(en.translation.identity_inspector[key]);
+    }
+  });
+
   it('keeps en.json and zh.json placeholder variables in parity', () => {
     const enEntries = flatEntries(en);
     const zhEntries = flatEntries(zh);
@@ -644,5 +694,21 @@ describe('i18n locale resources', () => {
     expect(zh.translation.causal.error.server).toBe('服务器暂时无法加载因果图谱。');
     expect(en.translation.causal.error.load_failed).toBe('Unable to load the causal graph right now. Please retry.');
     expect(zh.translation.causal.error.load_failed).toBe('因果图谱暂时无法加载，请稍后重试。');
+  });
+
+  it('provides truthful Action Ledger states and caveats in both locales', () => {
+    const keys = [
+      'title', 'readonly_caveat', 'loading', 'error', 'empty',
+      'legacy_unavailable', 'derived_caveat', 'agent_filter', 'all_agents',
+      'list_aria', 'entry_aria', 'round', 'observation_verified',
+      'observation_empty', 'observation_unavailable',
+      'details', 'observation_sources', 'consequences', 'reflections',
+      'retrieved_in', 'none', 'unknown',
+    ] as const;
+    for (const key of keys) {
+      expect(en.translation.action_ledger[key]).toBeTruthy();
+      expect(zh.translation.action_ledger[key]).toBeTruthy();
+      expect(zh.translation.action_ledger[key]).not.toBe(en.translation.action_ledger[key]);
+    }
   });
 });

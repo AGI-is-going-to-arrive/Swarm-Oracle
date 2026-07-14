@@ -287,6 +287,12 @@ vi.mock('../api/client', () => ({
   getGraphAnalysis: graphAnalysisApiMock.getGraphAnalysis,
 }));
 
+vi.mock('../components/workbench/ActionLedgerPanel', () => ({
+  default: ({ scenarioId, branchId }: { scenarioId: string; branchId?: string }) => (
+    <section data-testid="action-ledger-panel" data-scenario-id={scenarioId} data-branch-id={branchId ?? ''} />
+  ),
+}));
+
 vi.mock('react-i18next', async () => {
   const React = await import('react');
   return {
@@ -522,6 +528,17 @@ const changeUiLanguage = async (locale: TestLocale) => {
 };
 
 describe('CausalReviewView', () => {
+  it('passes the current scenario and branch scope to the read-only action ledger', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'graph-1', nodes: [], edges: [], available_branches: ['branch-a'] }),
+    } as Response);
+    renderView('/sim/scenario-42/causal-map?branch_id=branch-a');
+    const ledger = await screen.findByTestId('action-ledger-panel');
+    expect(ledger).toHaveAttribute('data-scenario-id', 'scenario-42');
+    expect(ledger).toHaveAttribute('data-branch-id', 'branch-a');
+  });
+
   it('uses affect-proxy display types and the truthful localized scope baseline', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce({
@@ -573,6 +590,79 @@ describe('CausalReviewView', () => {
       'Showing the selected branch’s effective scope only; parent post-fork rounds, sibling rounds, and unrelated source-branch coordinates are excluded.',
     );
     expect(scopeNote).not.toHaveTextContent(/ancestor/i);
+  });
+
+  it('discloses runtime projections and the persisted-only graph-analysis scope', async () => {
+    setMockCapabilityEnabled('graph_analysis', true);
+    graphAnalysisApiMock.getGraphAnalysis.mockResolvedValue({
+      god_nodes: [],
+      degree_distribution: {},
+      cross_branch_edges: [],
+      summary: { total_nodes: 1, total_edges: 0, avg_degree: 0, max_degree: 0, connected_components: 1, density: 0 },
+    });
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-runtime-review',
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Persisted event', round: 2, payload: null },
+            {
+              id: 'outcome:b1', key: 'outcome_b1', type: 'outcome', label: 'Projected outcome', round: 2,
+              payload: { provenance_kind: 'runtime_projection', synthetic_provenance: true, evidence_status: 'unavailable' },
+            },
+          ],
+          edges: [{
+            id: 'outcome-edge:n1:b1', source: 'n1', target: 'outcome:b1', type: 'led_to', weight: 1, label: null,
+            evidence: null, provenance_kind: 'runtime_projection', synthetic_provenance: true, evidence_status: 'unavailable',
+          }],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView();
+
+    expect(await screen.findByTestId('causal-runtime-projection-caveat')).toHaveTextContent(
+      'Runtime outcome links are read-time projections from completed simulated branches. They have no persisted causal evidence and are not real-world probabilities.',
+    );
+    expect(screen.getByTestId('causal-analysis-scope-caveat')).toHaveTextContent(
+      'Graph analysis excludes runtime outcome projections and measures persisted graph structure only.',
+    );
+    expect(within(screen.getByRole('list', { name: 'Causal relations list' })).getByRole('listitem'))
+      .toHaveTextContent(/Runtime outcome links are read-time projections/);
+    expect(screen.getByText(/Graph size/)).toHaveTextContent(/2 nodes.*1 edges/);
+  });
+
+  it('discloses an edge-only legacy repair when no synthetic legacy node exists', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-legacy-edge-review',
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Recovered trigger', round: 1, payload: null },
+            { id: 'n2', key: 'fork1', type: 'fork', label: 'Fork', round: 1, payload: null },
+          ],
+          edges: [{
+            id: 'legacy-edge', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null,
+            evidence: { confidence_tier: 'low' }, provenance_kind: 'legacy_repair',
+            evidence_status: 'unavailable',
+          }],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'scenario-1', branches: [], agents: [] }),
+      } as Response);
+
+    renderView();
+
+    expect(await screen.findByTestId('causal-legacy-repair-caveat')).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Causal relations list' })).getByRole('listitem'))
+      .toHaveTextContent(/original trigger proof was not persisted/);
   });
 
   it.each([
