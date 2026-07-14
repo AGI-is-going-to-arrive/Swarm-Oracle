@@ -122,6 +122,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
     setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
 
     if (!visible || !scenarioId || !branchId) {
+      setTimeline([]);
       setLoading(false);
       setErrorStatus(null);
       return;

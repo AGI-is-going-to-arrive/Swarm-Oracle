@@ -3,7 +3,7 @@
    Displays timeline events and headline cards.
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { getSocialFeed } from '../../api/client';
@@ -27,22 +27,24 @@ export default function SocialFeedPanel({ scenarioId }: SocialFeedPanelProps) {
   const [feed, setFeed] = useState<SocialFeedResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+  const fetchRequestIdRef = useRef(0);
 
-  const fetchData = useCallback(async (activeSignal: { active: boolean }) => {
+  const fetchData = useCallback(async () => {
     if (!scenarioId) return;
+    const requestId = ++fetchRequestIdRef.current;
     setLoading(true);
     setFetchError(false);
     try {
       const res = await getSocialFeed(scenarioId);
-      if (!activeSignal.active) return;
+      if (requestId !== fetchRequestIdRef.current) return;
       setFeed(res);
     } catch {
-      if (!activeSignal.active) return;
+      if (requestId !== fetchRequestIdRef.current) return;
       // RED LINE: SHORT message only, no secrets / token / URLs
       console.error('[SocialFeedPanel] Failed to fetch social feed');
       setFetchError(true);
     } finally {
-      if (activeSignal.active) {
+      if (requestId === fetchRequestIdRef.current) {
         setLoading(false);
       }
     }
@@ -53,11 +55,10 @@ export default function SocialFeedPanel({ scenarioId }: SocialFeedPanelProps) {
       return;
     }
 
-    const activeSignal = { active: true };
-    void fetchData(activeSignal);
+    void fetchData();
 
     return () => {
-      activeSignal.active = false;
+      fetchRequestIdRef.current += 1;
     };
   }, [enabled, capLoading, capError, fetchData]);
 
@@ -107,10 +108,7 @@ export default function SocialFeedPanel({ scenarioId }: SocialFeedPanelProps) {
         <button
           type="button"
           className="btn btn-ghost social-feed-panel__retry-btn"
-          onClick={() => {
-            const activeSignal = { active: true };
-            void fetchData(activeSignal);
-          }}
+          onClick={() => void fetchData()}
           aria-label={t('social_feed.retry')}
         >
           {t('social_feed.retry')}

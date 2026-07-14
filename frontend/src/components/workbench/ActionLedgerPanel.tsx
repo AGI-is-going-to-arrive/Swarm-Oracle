@@ -30,6 +30,42 @@ interface ActionLedgerPanelProps {
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error' | 'unsupported';
 
+interface ActionPayloadDetails {
+  sourceName?: string;
+  publishedAt?: string;
+  credibilityHint?: string;
+  tags?: string[];
+  reaction?: string;
+}
+
+function readPayloadText(payload: Record<string, unknown>, key: string, maxLength: number): string | undefined {
+  const value = payload[key];
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized ? normalized.slice(0, maxLength) : undefined;
+}
+
+function getActionPayloadDetails(item: SocialActionEntry): ActionPayloadDetails {
+  const details: ActionPayloadDetails = {};
+  if (item.action_type === 'POST' && item.payload.bootstrap === true) {
+    details.sourceName = readPayloadText(item.payload, 'source_name', 80);
+    details.publishedAt = readPayloadText(item.payload, 'published_at', 64);
+    details.credibilityHint = readPayloadText(item.payload, 'credibility_hint', 300);
+    if (Array.isArray(item.payload.tags)) {
+      const tags = item.payload.tags
+        .filter((tag): tag is string => typeof tag === 'string')
+        .map((tag) => tag.trim().slice(0, 40))
+        .filter(Boolean)
+        .slice(0, 12);
+      if (tags.length > 0) details.tags = tags;
+    }
+  }
+  if (item.action_type === 'REACTION') {
+    details.reaction = readPayloadText(item.payload, 'reaction', 40);
+  }
+  return details;
+}
+
 function mergeActions(current: SocialActionEntry[], incoming: SocialActionEntry[]): SocialActionEntry[] {
   const byId = new Map(current.map((item) => [item.id, item]));
   incoming.forEach((item) => byId.set(item.id, item));
@@ -48,6 +84,7 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
+  const [expandedActionIds, setExpandedActionIds] = useState<Set<string>>(new Set());
   const requestEpoch = useRef(0);
   const pageController = useRef<AbortController | null>(null);
   const pollController = useRef<AbortController | null>(null);
@@ -80,6 +117,7 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
     pollController.current = null;
     setLoadingMore(false);
     setLoadMoreError(false);
+    setExpandedActionIds(new Set());
     if (!expanded) {
       setState('idle');
       setItems([]);
@@ -158,6 +196,14 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
   const setFilter = <Key extends keyof SocialActionFilters>(key: Key, value: SocialActionFilters[Key]): void => {
     setFilters((current) => ({ ...current, [key]: value, cursor: undefined }));
   };
+  const toggleActionDetails = (actionId: string): void => {
+    setExpandedActionIds((current) => {
+      const next = new Set(current);
+      if (next.has(actionId)) next.delete(actionId);
+      else next.add(actionId);
+      return next;
+    });
+  };
 
   return (
     <section className="action-ledger" data-testid="action-ledger-panel">
@@ -209,24 +255,63 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
           {state === 'ready' && items.length > 0 && (
             <>
               <ol className="action-ledger__list" aria-label={t('action_ledger.list_aria')}>
-                {items.map((item) => (
+                {items.map((item) => {
+                  const details = getActionPayloadDetails(item);
+                  const hasDetails = Boolean(
+                    item.parent_action_id
+                    || details.sourceName
+                    || details.publishedAt
+                    || details.credibilityHint
+                    || details.tags?.length
+                    || details.reaction,
+                  );
+                  const detailsExpanded = expandedActionIds.has(item.id);
+                  const detailsId = `${contentId}-${item.id}-details`;
+                  return (
                   <li key={item.id}>
-                    <button
-                      type="button"
-                      className={`action-ledger__card action-ledger__card--${item.action_type.toLowerCase()}`}
-                      onClick={() => onSelectAction?.({ branchId: item.branch_id, round: item.round, agent: item.agent, actionId: item.id })}
-                      disabled={!onSelectAction}
-                      aria-label={t('action_ledger.entry_aria', { type: item.action_type, agent: item.agent.name, round: item.round })}
-                    >
+                    <article className={`action-ledger__card action-ledger__card--${item.action_type.toLowerCase()}`}>
                       <span className="action-ledger__meta"><strong>{t(`action_ledger.type_${item.action_type.toLowerCase()}`)}</strong><span>#{item.sequence}</span><span>{item.agent.name}</span><span>{t('action_ledger.round', { round: item.round })}</span></span>
                       <span className={`action-ledger__status action-ledger__status--${item.status}`}>{t(`action_ledger.status_${item.status}`)}</span>
                       {item.content && <span className="action-ledger__body">{item.content}</span>}
                       {item.target && <span className="action-ledger__target">{t('action_ledger.target', { target: `${item.target.kind}:${item.target.id}` })}</span>}
                       {item.failure_code && <span className="action-ledger__failure">{t('action_ledger.failure_code', { code: item.failure_code })}</span>}
                       <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
-                    </button>
+                      <span className="action-ledger__actions">
+                        <button
+                          type="button"
+                          className="action-ledger__details-toggle"
+                          aria-expanded={detailsExpanded}
+                          aria-controls={detailsId}
+                          onClick={() => toggleActionDetails(item.id)}
+                        >
+                          {t('action_ledger.details')}
+                        </button>
+                        {onSelectAction && (
+                          <button
+                            type="button"
+                            className="action-ledger__select"
+                            onClick={() => onSelectAction({ branchId: item.branch_id, round: item.round, agent: item.agent, actionId: item.id })}
+                            aria-label={t('action_ledger.entry_aria', { type: item.action_type, agent: item.agent.name, round: item.round })}
+                          >
+                            {t('action_ledger.open_context', 'Open context')}
+                          </button>
+                        )}
+                      </span>
+                      {detailsExpanded && (
+                        <dl id={detailsId} className="action-ledger__details">
+                          {item.parent_action_id && <><dt>{t('action_ledger.parent_action', 'Parent action')}</dt><dd>{item.parent_action_id}</dd></>}
+                          {details.sourceName && <><dt>{t('action_ledger.source_name', 'Source')}</dt><dd>{details.sourceName}</dd></>}
+                          {details.publishedAt && <><dt>{t('action_ledger.published_at', 'Published at')}</dt><dd>{details.publishedAt}</dd></>}
+                          {details.credibilityHint && <><dt>{t('action_ledger.credibility_hint', 'Credibility')}</dt><dd>{details.credibilityHint}</dd></>}
+                          {details.tags && <><dt>{t('action_ledger.tags', 'Tags')}</dt><dd>{details.tags.join(', ')}</dd></>}
+                          {details.reaction && <><dt>{t('action_ledger.reaction', 'Reaction')}</dt><dd>{details.reaction}</dd></>}
+                          {!hasDetails && <><dt>{t('action_ledger.details')}</dt><dd>{t('action_ledger.none')}</dd></>}
+                        </dl>
+                      )}
+                    </article>
                   </li>
-                ))}
+                  );
+                })}
               </ol>
               {loadMoreError && <p role="alert">{t('action_ledger.load_more_error')}</p>}
               {nextCursor && <button type="button" onClick={() => void loadMore()} disabled={loadingMore}>{loadingMore ? t('action_ledger.loading_more') : t('action_ledger.load_more')}</button>}

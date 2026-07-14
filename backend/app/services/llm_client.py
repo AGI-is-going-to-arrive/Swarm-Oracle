@@ -37,6 +37,7 @@ from app.log_sanitize import (
     _scrub_unlabelled_credentials,
 )
 from app.models.database import get_engine
+from app.services import provider_telemetry
 
 logger = logging.getLogger(__name__)
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
@@ -1491,7 +1492,7 @@ def _non_stream_completion_failure(
     return None
 
 
-async def _probe_provider_request(
+async def _probe_provider_request_impl(
     *,
     client: httpx.AsyncClient,
     api_key: str | None,
@@ -1515,6 +1516,7 @@ async def _probe_provider_request(
     )
 
     try:
+        telemetry_request_id, telemetry_attempt = provider_telemetry.next_attempt()
         response = await client.post(
             target_url,
             json=payload,
@@ -1522,6 +1524,10 @@ async def _probe_provider_request(
             timeout=timeout,
         )
         response.raise_for_status()
+        if telemetry_request_id is not None:
+            provider_telemetry.finish_attempt(
+                telemetry_request_id, telemetry_attempt, status="succeeded"
+            )
         try:
             data = _parse_provider_json(response, context="LLM provider probe")
             completion_failure = _non_stream_completion_failure(
@@ -1540,10 +1546,64 @@ async def _probe_provider_request(
             return False, "LLM returned no visible content"
         return True, None
     except httpx.HTTPStatusError as exc:
+        if telemetry_request_id is not None:
+            provider_telemetry.finish_attempt(
+                telemetry_request_id,
+                telemetry_attempt,
+                status="failed",
+                error_code="LLM_HTTP_ERROR",
+            )
         body = exc.response.text if exc.response is not None else ""
         return False, f"HTTP {exc.response.status_code}: {_sanitize_error(body)}"
     except httpx.RequestError as exc:
+        if telemetry_request_id is not None:
+            provider_telemetry.finish_attempt(
+                telemetry_request_id,
+                telemetry_attempt,
+                status="failed",
+                error_code=provider_telemetry.safe_error_code(exc),
+            )
         return False, _sanitize_error(str(exc))
+
+
+async def _probe_provider_request(
+    *,
+    client: httpx.AsyncClient,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+    timeout: float,
+) -> tuple[bool, str | None]:
+    target_url = _resolve_llm_api_url(base_url)
+    request_id = provider_telemetry.start_request(
+        provider=provider_telemetry.safe_provider_name(target_url),
+        model=model or settings.LLM_MODEL_NAME,
+        purpose="provider_probe",
+    )
+    tokens = provider_telemetry.bind_request(request_id)
+    try:
+        result = await _probe_provider_request_impl(
+            client=client,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            timeout=timeout,
+        )
+        provider_telemetry.finish_request(
+            request_id,
+            status="succeeded" if result[0] else "failed",
+            error_code=None if result[0] else "LLM_FAILED",
+        )
+        return result
+    except BaseException as exc:
+        provider_telemetry.finish_request(
+            request_id,
+            status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+            error_code=provider_telemetry.safe_error_code(exc),
+        )
+        raise
+    finally:
+        provider_telemetry.unbind_request(tokens)
 
 
 async def measure_provider_parallelism(
@@ -2469,6 +2529,55 @@ def _extract_total_usage_tokens(data: dict[str, Any]) -> int | None:
     return max(1, (prompt_tokens or 0) + (completion_tokens or 0))
 
 
+def _extract_stream_usage_tokens(chunk: dict[str, Any], *, is_chat: bool) -> int | None:
+    if is_chat:
+        return _extract_total_usage_tokens(chunk)
+    response = chunk.get("response")
+    if not isinstance(response, dict):
+        return None
+    return _extract_total_usage_tokens(response)
+
+
+def _extract_provider_usage_fields(data: dict[str, Any]) -> dict[str, int | float | str | None]:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    fields: dict[str, int | float | str | None] = {
+        "input_tokens": _coerce_optional_non_negative_int(
+            usage.get("prompt_tokens", usage.get("input_tokens"))
+        ),
+        "output_tokens": _coerce_optional_non_negative_int(
+            usage.get("completion_tokens", usage.get("output_tokens"))
+        ),
+        "total_tokens": _extract_total_usage_tokens(data),
+        "reported_cost_value": None,
+        "reported_cost_unit": None,
+        "cost_source": None,
+    }
+    raw_cost = usage.get("cost_in_usd_ticks")
+    if (
+        not isinstance(raw_cost, bool)
+        and isinstance(raw_cost, (int, float))
+        and math.isfinite(float(raw_cost))
+        and float(raw_cost) >= 0
+    ):
+        fields.update(
+            reported_cost_value=float(raw_cost),
+            reported_cost_unit="usd_ticks",
+            cost_source="provider_reported",
+        )
+    return fields
+
+
+def _extract_stream_usage_fields(
+    chunk: dict[str, Any], *, is_chat: bool
+) -> dict[str, int | float | str | None] | None:
+    data = chunk if is_chat else chunk.get("response")
+    if not isinstance(data, dict) or not isinstance(data.get("usage"), dict):
+        return None
+    return _extract_provider_usage_fields(data)
+
+
 async def _reconcile_rate_limit_usage(
     *,
     provider_key: str,
@@ -2512,7 +2621,7 @@ def get_last_native_citations() -> list[Any]:
     return list(_last_native_citations.get() or [])
 
 
-async def llm_call(
+async def _llm_call_impl(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
@@ -2659,6 +2768,29 @@ async def llm_call(
         active_native_search_keys = {"tools"} if "tools" in payload else set()
         native_fallback_used = False
 
+        async def _post_with_telemetry(url: str, **kwargs: Any) -> httpx.Response:
+            telemetry_request_id, telemetry_attempt = provider_telemetry.next_attempt()
+            try:
+                response = await client.post(url, **kwargs)
+            except BaseException as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                        error_code=provider_telemetry.safe_error_code(exc),
+                    )
+                raise
+            if telemetry_request_id is not None:
+                failed = getattr(response, "status_code", 200) >= 400
+                provider_telemetry.finish_attempt(
+                    telemetry_request_id,
+                    telemetry_attempt,
+                    status="failed" if failed else "succeeded",
+                    error_code="LLM_HTTP_ERROR" if failed else None,
+                )
+            return response
+
         def _build_original_chat_fallback_payload() -> dict[str, Any]:
             fallback_payload = _build_call_payload(chat_api=original_is_chat)
             if structured_output_schema is not None:
@@ -2684,7 +2816,7 @@ async def llm_call(
             request_url = fallback_url or target_url
             request_payload = fallback_payload if fallback_payload is not None else attempt_payload
             try:
-                fallback_resp = await client.post(
+                fallback_resp = await _post_with_telemetry(
                     request_url,
                     json=request_payload,
                     headers=request_headers,
@@ -2714,7 +2846,7 @@ async def llm_call(
 
         for attempt in range(max_retries + 1):
             try:
-                resp = await client.post(
+                resp = await _post_with_telemetry(
                     target_url,
                     json=attempt_payload,
                     headers=request_headers,
@@ -2871,6 +3003,14 @@ async def llm_call(
             estimated_tokens=estimated_tokens,
             actual_tokens=_extract_total_usage_tokens(data),
         )
+        telemetry_request_id, telemetry_attempt = provider_telemetry.current_attempt()
+        if telemetry_request_id is not None:
+            provider_telemetry.finish_attempt(
+                telemetry_request_id,
+                telemetry_attempt,
+                status="succeeded",
+                usage=_extract_provider_usage_fields(data),
+            )
     finally:
         await _release_runtime_slot(
             quota_key=quota_key,
@@ -2938,6 +3078,36 @@ async def llm_call(
 
     await _record_provider_success(provider_key)
     return text
+
+
+async def llm_call(
+    input_text: str,
+    **kwargs: Any,
+) -> str:
+    """Record one durable logical lifecycle around the core LLM call."""
+    model = str(kwargs.get("model") or settings.LLM_MODEL_NAME)
+    target_url = str(kwargs.get("base_url") or settings.LLM_RESPONSES_URL)
+    purpose = _REQUEST_CONTEXT.get().purpose
+    request_id = provider_telemetry.start_request(
+        provider=provider_telemetry.safe_provider_name(target_url),
+        model=model,
+        purpose=purpose,
+    )
+    tokens = provider_telemetry.bind_request(request_id)
+    try:
+        result = await _llm_call_impl(input_text, **kwargs)
+    except BaseException as exc:
+        provider_telemetry.finish_request(
+            request_id,
+            status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+            error_code=provider_telemetry.safe_error_code(exc),
+        )
+        raise
+    else:
+        provider_telemetry.finish_request(request_id, status="succeeded")
+        return result
+    finally:
+        provider_telemetry.unbind_request(tokens)
 
 
 def _clean_json_text(raw: str) -> str:
@@ -3192,7 +3362,7 @@ def _extract_llm_response_text(data: dict[str, Any], *, is_chat: bool) -> str:
     return _strip_reasoning_blocks(text)
 
 
-async def llm_call_json_for_family_query_reformulation(
+async def _llm_call_json_for_family_query_reformulation_impl(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
@@ -3252,6 +3422,7 @@ async def llm_call_json_for_family_query_reformulation(
         client = _get_shared_async_client()
         attempt_payload = dict(payload)
         while True:
+            telemetry_request_id, telemetry_attempt = provider_telemetry.next_attempt()
             try:
                 resp = await client.post(
                     target_url,
@@ -3261,8 +3432,22 @@ async def llm_call_json_for_family_query_reformulation(
                 )
                 resp.raise_for_status()
                 data = _parse_provider_json(resp, context="Family query reformulation LLM")
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="succeeded",
+                        usage=_extract_provider_usage_fields(data),
+                    )
                 break
             except httpx.HTTPStatusError as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="failed",
+                        error_code="LLM_HTTP_ERROR",
+                    )
                 status_code = exc.response.status_code
                 body = _sanitize_error(exc.response.text)
                 if (
@@ -3277,6 +3462,13 @@ async def llm_call_json_for_family_query_reformulation(
                     )
                     raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="failed",
+                        error_code=provider_telemetry.safe_error_code(exc),
+                    )
                 raise _llm_error_from_request(exc) from exc
 
         await _reconcile_rate_limit_usage(
@@ -3302,6 +3494,35 @@ async def llm_call_json_for_family_query_reformulation(
         raise LLMError("Empty non-stream content", code="LLM_EMPTY")
     cleaned = _clean_json_text(text)
     return _parse_json_response(cleaned)
+
+
+async def llm_call_json_for_family_query_reformulation(
+    input_text: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    target_url = str(kwargs.get("base_url") or settings.LLM_RESPONSES_URL)
+    request_id = provider_telemetry.start_request(
+        provider=provider_telemetry.safe_provider_name(target_url),
+        model=str(kwargs.get("model") or settings.LLM_MODEL_NAME),
+        purpose=_REQUEST_CONTEXT.get().purpose or "family_query_reformulation",
+    )
+    tokens = provider_telemetry.bind_request(request_id)
+    try:
+        result = await _llm_call_json_for_family_query_reformulation_impl(
+            input_text, **kwargs
+        )
+    except BaseException as exc:
+        provider_telemetry.finish_request(
+            request_id,
+            status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+            error_code=provider_telemetry.safe_error_code(exc),
+        )
+        raise
+    else:
+        provider_telemetry.finish_request(request_id, status="succeeded")
+        return result
+    finally:
+        provider_telemetry.unbind_request(tokens)
 
 
 def _recover_keyed_json_like_response(cleaned: str) -> dict[str, Any] | None:
@@ -3610,7 +3831,7 @@ def _responses_stream_failure_code(
     return error.get("code") if isinstance(error, dict) else None
 
 
-async def llm_call_stream(
+async def _llm_call_stream_impl(
     input_text: str,
     *,
     reasoning_effort: str | None = None,
@@ -3699,8 +3920,11 @@ async def llm_call_stream(
         active_structured_output_keys = set(structured_output_keys)
 
         for attempt in range(max_retries + 1):
+            telemetry_request_id, telemetry_attempt = provider_telemetry.next_attempt()
             emitted_content = False
             terminal_received = False
+            actual_tokens: int | None = None
+            actual_usage: dict[str, int | float | str | None] | None = None
             try:
                 async with client.stream(
                     "POST",
@@ -3734,6 +3958,12 @@ async def llm_call_stream(
                                         event_type=failure_type,
                                     ),
                                 )
+                            chunk_usage = _extract_stream_usage_tokens(chunk, is_chat=is_chat)
+                            if chunk_usage is not None:
+                                actual_tokens = chunk_usage
+                            stream_usage = _extract_stream_usage_fields(chunk, is_chat=is_chat)
+                            if stream_usage is not None:
+                                actual_usage = stream_usage
                             if is_chat:
                                 finish_reason = _chat_stream_finish_reason(chunk)
                                 if finish_reason is not None and finish_reason != "stop":
@@ -3784,9 +4014,36 @@ async def llm_call_stream(
                         _LLM_SAFE_ERROR_MESSAGES["LLM_EMPTY"],
                         code="LLM_EMPTY",
                     )
+                await _reconcile_rate_limit_usage(
+                    provider_key=provider_key,
+                    reservation_id=(
+                        reservation.reservation_id if reservation is not None else None
+                    ),
+                    estimated_tokens=estimated_tokens,
+                    actual_tokens=actual_tokens,
+                )
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="succeeded",
+                        usage=actual_usage
+                        or {
+                            "input_tokens": None,
+                            "output_tokens": None,
+                            "total_tokens": actual_tokens,
+                        },
+                    )
                 await _record_provider_success(provider_key)
                 break
             except _ResponsesStreamFailureError as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="failed",
+                        error_code="LLM_INVALID_OUTPUT",
+                    )
                 if exc.event_type == "response.incomplete":
                     logger.warning("Responses stream ended incomplete")
                     raise LLMError("LLM response ended incomplete.") from exc
@@ -3819,6 +4076,13 @@ async def llm_call_stream(
                     code="LLM_UNREACHABLE",
                 ) from exc
             except _TruncatedSSEStreamError as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="failed",
+                        error_code="LLM_UNREACHABLE",
+                    )
                 last_exc = exc
                 if not emitted_content and attempt < max_retries:
                     wait = retry_delay * (2 ** attempt)
@@ -3838,6 +4102,13 @@ async def llm_call_stream(
                     code="LLM_UNREACHABLE",
                 ) from exc
             except httpx.HTTPStatusError as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="failed",
+                        error_code="LLM_HTTP_ERROR",
+                    )
                 last_exc = exc
                 status_code = exc.response.status_code
                 if active_structured_output_keys and _is_structured_output_rejection(
@@ -3880,6 +4151,13 @@ async def llm_call_stream(
                 )
                 raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
+                if telemetry_request_id is not None:
+                    provider_telemetry.finish_attempt(
+                        telemetry_request_id,
+                        telemetry_attempt,
+                        status="failed",
+                        error_code=provider_telemetry.safe_error_code(exc),
+                    )
                 last_exc = exc
                 if not emitted_content and attempt < max_retries:
                     wait = retry_delay * (2 ** attempt)
@@ -3905,6 +4183,43 @@ async def llm_call_stream(
             purpose=purpose,
             reservation_id=reservation,
         )
+
+
+async def llm_call_stream(input_text: str, **kwargs: Any):
+    """Stream content while recording one logical provider lifecycle."""
+    model = str(kwargs.get("model") or settings.LLM_MODEL_NAME)
+    target_url = str(kwargs.get("base_url") or settings.LLM_RESPONSES_URL)
+    request_id = provider_telemetry.start_request(
+        provider=provider_telemetry.safe_provider_name(target_url),
+        model=model,
+        purpose=_REQUEST_CONTEXT.get().purpose,
+    )
+    tokens = provider_telemetry.bind_request(request_id)
+    try:
+        async for chunk in _llm_call_stream_impl(input_text, **kwargs):
+            yield chunk
+    except BaseException as exc:
+        cancelled = isinstance(exc, (asyncio.CancelledError, GeneratorExit))
+        telemetry_request_id, telemetry_attempt = provider_telemetry.current_attempt()
+        if telemetry_request_id is not None and telemetry_attempt > 0:
+            provider_telemetry.finish_attempt(
+                telemetry_request_id,
+                telemetry_attempt,
+                status="cancelled" if cancelled else "failed",
+                error_code=(
+                    "LLM_CANCELLED" if cancelled else provider_telemetry.safe_error_code(exc)
+                ),
+            )
+        provider_telemetry.finish_request(
+            request_id,
+            status="cancelled" if cancelled else "failed",
+            error_code="LLM_CANCELLED" if cancelled else provider_telemetry.safe_error_code(exc),
+        )
+        raise
+    else:
+        provider_telemetry.finish_request(request_id, status="succeeded")
+    finally:
+        provider_telemetry.unbind_request(tokens)
 
 
 async def llm_call_json_stream(

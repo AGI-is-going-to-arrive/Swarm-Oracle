@@ -590,6 +590,35 @@ describe('FactionTimeline', () => {
     expect(screen.getByText('Selected branch: Late Branch')).toBeInTheDocument();
   });
 
+  it('clears the previous timeline when the selected branch becomes unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: 'b1',
+        factions: [
+          { key: 'old-faction', label: 'Old Faction', members: ['agent-1'], stance_center: 0.2, confidence: 0.8 },
+        ],
+        events: [],
+      },
+    ]));
+    const i18n = await createTestI18n('en');
+    const view = render(
+      <I18nextProvider i18n={i18n}>
+        <FactionTimeline scenarioId="sc1" branchId="b1" branchLabel="Archive Branch" visible={true} />
+      </I18nextProvider>,
+    );
+    expect(await screen.findByText('Old Faction')).toBeInTheDocument();
+
+    view.rerender(
+      <I18nextProvider i18n={i18n}>
+        <FactionTimeline scenarioId="sc1" branchId="" branchLabel="Unavailable Branch" visible={true} />
+      </I18nextProvider>,
+    );
+
+    await waitFor(() => expect(screen.queryByText('Old Faction')).not.toBeInTheDocument());
+    expect(screen.getByText(localeExpectations.en.empty)).toBeInTheDocument();
+  });
+
   it('opens NodeConversationSheet when an event row is clicked (FE-3-seq wire-up)', async () => {
     class NoopWS {
       static OPEN = 1;

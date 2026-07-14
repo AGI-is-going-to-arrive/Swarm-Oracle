@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
 import { __test__ as batchATest } from "./e2e-phase3-batch-a.mjs";
@@ -1005,8 +1006,11 @@ test("release signoff propagates headless mode to round 7 graph live suites", ()
       spec.commandArgs.includes("--output-dir"),
       `${spec.id} should write artifacts under the release signoff output root`,
     );
-    assert.equal(spec.artifactDir, `output/e2e/release-check/${spec.id}`);
-    assert.equal(spec.resultFile, `output/e2e/release-check/${spec.id}/result.json`);
+    assert.equal(spec.artifactDir, path.join("output/e2e/release-check", spec.id));
+    assert.equal(
+      spec.resultFile,
+      path.join("output/e2e/release-check", spec.id, "result.json"),
+    );
   }
 });
 

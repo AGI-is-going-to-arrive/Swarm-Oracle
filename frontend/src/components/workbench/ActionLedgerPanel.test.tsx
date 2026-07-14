@@ -52,6 +52,8 @@ describe('ActionLedgerPanel', () => {
     expect(await screen.findByText('Published update')).toBeVisible();
     expect(mockedGetActions).toHaveBeenCalledWith('scenario-1', expect.objectContaining({ branchId: 'branch-1' }), expect.anything());
     expect(screen.getByText('Target: topic:launch')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'action_ledger.details' }));
+    expect(screen.getByText('action_ledger.none')).toBeVisible();
   });
 
   it('sends action, agent, round and status filters to the API', async () => {
@@ -82,6 +84,54 @@ describe('ActionLedgerPanel', () => {
     expect(mockedGetActions.mock.calls[1][1]).toMatchObject({ cursor: 'cursor-2' });
     await userEvent.click(screen.getAllByRole('button', { name: 'Ada POST round 2' })[0]);
     expect(onSelectAction).toHaveBeenCalledWith({ branchId: 'branch-1', round: 2, agent: { id: 'agent-1', name: 'Ada' }, actionId: 'action:First' });
+  });
+
+  it('expands safe bootstrap details without requiring a selection callback', async () => {
+    const bootstrap = response('World event');
+    bootstrap.items[0].parent_action_id = 'parent-action-1';
+    bootstrap.items[0].payload = {
+      bootstrap: true,
+      source_name: 'Flood Office',
+      published_at: '2026-07-14T08:10:00+10:00',
+      credibility_hint: 'Official bulletin',
+      tags: ['storm', 'traffic', 42],
+      secret: '<b>must not render</b>',
+    };
+    mockedGetActions.mockResolvedValue(bootstrap);
+    render(<ActionLedgerPanel scenarioId="scenario-1" />);
+    await expand();
+    await screen.findByText('World event');
+
+    const detailsToggle = screen.getByRole('button', { name: 'action_ledger.details' });
+    expect(detailsToggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(detailsToggle);
+
+    expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('parent-action-1')).toBeVisible();
+    expect(screen.getByText('Flood Office')).toBeVisible();
+    expect(screen.getByText('2026-07-14T08:10:00+10:00')).toBeVisible();
+    expect(screen.getByText('Official bulletin')).toBeVisible();
+    expect(screen.getByText('storm, traffic')).toBeVisible();
+    expect(screen.queryByText(/must not render/)).not.toBeInTheDocument();
+  });
+
+  it('shows only the whitelisted reaction field and keeps disclosure separate from selection', async () => {
+    const reaction = response('Reacted');
+    reaction.items[0].action_type = 'REACTION';
+    reaction.items[0].payload = { reaction: 'support', unknown: 'hidden value' };
+    const onSelectAction = vi.fn();
+    mockedGetActions.mockResolvedValue(reaction);
+    render(<ActionLedgerPanel scenarioId="scenario-1" onSelectAction={onSelectAction} />);
+    await expand();
+    await screen.findByText('Reacted');
+
+    await userEvent.click(screen.getByRole('button', { name: 'action_ledger.details' }));
+    expect(screen.getByText('support')).toBeVisible();
+    expect(screen.queryByText('hidden value')).not.toBeInTheDocument();
+    expect(onSelectAction).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ada REACTION round 2' }));
+    expect(onSelectAction).toHaveBeenCalledTimes(1);
   });
 
   it('aborts an in-flight page when scope changes and ignores its late result', async () => {

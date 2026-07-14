@@ -100,6 +100,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install Chromium for script smoke
+        run: npx playwright install chromium
+
       - name: Exercise cross-platform release signoff dry run
         run: |
           node scripts/release-signoff.mjs --dry-run --skip-backend-checks --skip-assets-check --headless --output-root output/e2e/cross-platform-release-smoke

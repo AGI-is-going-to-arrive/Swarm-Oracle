@@ -2230,6 +2230,84 @@ class TestLLMCall:
         assert sleep_calls == [1.0]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "events", "expected_tokens"),
+        [
+            (
+                "https://example.com/v1/chat/completions",
+                [
+                    {"choices": [{"delta": {"content": "OK"}}]},
+                    {
+                        "choices": [{"delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 7, "completion_tokens": 5},
+                    },
+                ],
+                12,
+            ),
+            (
+                "https://example.com/v1/responses",
+                [
+                    {"type": "response.output_text.delta", "delta": "OK"},
+                    {
+                        "type": "response.completed",
+                        "response": {"usage": {"input_tokens": 8, "output_tokens": 6}},
+                    },
+                ],
+                14,
+            ),
+            (
+                "https://example.com/v1/responses",
+                [
+                    {"type": "response.output_text.delta", "delta": "OK"},
+                    {"type": "response.completed", "response": {"usage": "unknown"}},
+                ],
+                None,
+            ),
+        ],
+    )
+    async def test_llm_call_stream_reconciles_terminal_usage(
+        self, monkeypatch, base_url, events, expected_tokens
+    ):
+        class _FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_lines(self):
+                for event in events:
+                    yield f"data: {json.dumps(event)}"
+                    yield ""
+
+        class _FakeStream:
+            async def __aenter__(self):
+                return _FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeClient:
+            def stream(self, *args, **kwargs):
+                return _FakeStream()
+
+        reconciled: list[int | None] = []
+
+        async def _reconcile(**kwargs):
+            reconciled.append(kwargs["actual_tokens"])
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client, "_reconcile_rate_limit_usage", _reconcile)
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        chunks = [
+            chunk
+            async for chunk in llm_client.llm_call_stream(
+                "stream me", base_url=base_url, api_key="sk-test"
+            )
+        ]
+
+        assert chunks == ["OK"]
+        assert reconciled == [expected_tokens]
+
+    @pytest.mark.asyncio
     async def test_llm_call_stream_rejects_reasoning_only_chat_content(self, monkeypatch):
         class _FakeResponse:
             def raise_for_status(self) -> None:

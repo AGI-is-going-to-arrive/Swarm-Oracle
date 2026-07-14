@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nextProvider } from 'react-i18next';
 import i18n from 'i18next';
 import SocialFeedPanel from './SocialFeedPanel';
@@ -258,5 +258,51 @@ describe('SocialFeedPanel', () => {
     expect(content).not.toContain('secret-base-url');
     expect(content).not.toContain('secret-token');
     expect(content).not.toContain('secret-auth');
+  });
+
+  it('ignores a retry response after the scenario changes', async () => {
+    useCapabilityCheckMock.mockReturnValue({
+      loading: false,
+      enabled: true,
+      capabilities: null,
+      error: null,
+    });
+    let resolveRetry!: (value: SocialFeedResponse) => void;
+    const retryResponse = new Promise<SocialFeedResponse>((resolve) => {
+      resolveRetry = resolve;
+    });
+    vi.mocked(getSocialFeed)
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockReturnValueOnce(retryResponse)
+      .mockResolvedValueOnce({
+        ...wellFormedFixture,
+        scenario_id: 'scenario-456',
+        headline_cards: [{
+          ...wellFormedFixture.headline_cards[0],
+          card_id: 'card-new',
+          headline: 'NEW SCENARIO',
+        }],
+      });
+
+    const view = render(
+      <I18nextProvider i18n={i18n}>
+        <SocialFeedPanel scenarioId="scenario-123" />
+      </I18nextProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    view.rerender(
+      <I18nextProvider i18n={i18n}>
+        <SocialFeedPanel scenarioId="scenario-456" />
+      </I18nextProvider>,
+    );
+    expect(await screen.findByText('NEW SCENARIO')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveRetry(wellFormedFixture);
+      await retryResponse;
+    });
+    expect(screen.getByText('NEW SCENARIO')).toBeInTheDocument();
+    expect(screen.queryByText('PORTS BLOCKED!')).not.toBeInTheDocument();
   });
 });

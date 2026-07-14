@@ -539,8 +539,6 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
 
 def _bootstrap_alembic_revision_for_sqlite(
     database_url: str,
-    *,
-    head_revision: str,
 ) -> str | None:
     if not database_url.startswith("sqlite"):
         return None
@@ -551,12 +549,11 @@ def _bootstrap_alembic_revision_for_sqlite(
             current_revision = _current_alembic_revision(connection)
             if current_revision is None:
                 if _has_bootstrap_sqlmodel_schema(connection):
-                    if head_revision in {
-                        "037_clean_result_report_likelihood",
-                        "038_simulation_action_world",
-                    }:
-                        return _SQLITE_BOOTSTRAP_SCHEMA_EQUIVALENT_REVISION
-                    return head_revision
+                    # ``create_all`` provides the schema represented by 036, but it
+                    # cannot apply later data migrations.  Always resume from that
+                    # known equivalence point so new heads do not silently skip 037+
+                    # cleanup or backfill work.
+                    return _SQLITE_BOOTSTRAP_SCHEMA_EQUIVALENT_REVISION
                 return None
             if (
                 current_revision == _ENDING_ROOM_PREVIOUS_REVISION
@@ -760,18 +757,15 @@ def init_db():
         _init_db_lightweight()
         return
 
-    Config, command, ScriptDirectory = alembic_runtime
+    Config, command, _ScriptDirectory = alembic_runtime
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
     config.set_main_option("script_location", str(backend_root / "alembic"))
     config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
     config.attributes["configure_logging"] = False
-    head_revision = ScriptDirectory.from_config(config).get_current_head()
-
     dispose_engine()
     bootstrap_revision = _bootstrap_alembic_revision_for_sqlite(
         settings.DATABASE_URL,
-        head_revision=head_revision,
     )
     if bootstrap_revision is not None:
         logger.info(

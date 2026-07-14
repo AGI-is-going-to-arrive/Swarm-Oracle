@@ -59,6 +59,7 @@ from .graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from .model_profile import ModelProfile
 from .prediction_journal import PredictionJournalEntry
 from .predictions import Leaderboard, Prediction
+from .provider_telemetry import ProviderAttemptTelemetry, ProviderRequestTelemetry
 from .simulation_action import (
     SimulationAction,
     SimulationActionSequence,
@@ -86,5 +87,6 @@ __all__ = [
     "AgentConversationThread", "AgentConversationTurn", "AgentConversationQuotaLedger",
     # Batch F / F9
     "ModelProfile",
+    "ProviderRequestTelemetry", "ProviderAttemptTelemetry",
     "init_db",
 ]
