@@ -6,6 +6,8 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
 ### Added
 
+- A configurable initial world-event Feed with up to 20 untrusted, bounded entries, replayable source accounts, and nine native social actions: `POST`, `COMMENT`, `REACTION`, `FOLLOW`, `MUTE`, `SEARCH`, `TREND`, `REFRESH`, and `IDLE`.
+- An owner-scoped Action Ledger panel in Causal Review for native actions, targets, and states, plus a separate evidence-ledger projection for persisted utterances, context observations, derived consequences, and hashed memory references without memory text.
 - Three bundled official samples that open as complete local runs without an API key, file picker, or model call; local `*.swarm` import remains available.
 - A durable Director play loop spanning Gameplay Cards, prediction bets, worldline commitments, and the post-run Causal Archive.
 - In-run Agent profiles that distinguish configured stance from observed emotion and show the matching worldline and round.
@@ -22,6 +24,7 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
 ### Changed
 
+- Source accounts from the initial Feed can be followed or muted; muted sources are excluded from that Agent's subsequent Feed, search, and trend projections. Snapshots preserve and remap the Feed, source accounts, and native actions, while Replay respects effective lineage and cutoff.
 - Agent turns now carry branch-scoped personal memory, inherited-but-isolated fork state, and bounded previous-round relationship signals.
 - Campaign settlement now derives bets, objectives, commitments, archive grades, and rewards from persisted server state and completed terminal leaf worldlines.
 - Official sample bundles are reproducibly generated and validated for complete results, replay coordinates, graph references, reports, and Agent state.
@@ -42,6 +45,7 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
 ### Fixed
 
+- Kept legacy runs truthful by reporting missing context receipts as `unavailable` instead of inferring history, and kept memory receipts bounded to hashed references and source-scenario coordinates.
 - Preserved successful Agent speech when second-pass emotion/stance parsing fails, propagated an explicit unavailable status through live, Replay, Snapshot, import/export, reports, and Pixel Theater, and stopped missing observations from being presented as neutral.
 - Prevented stale scenarios, WebSocket events, replay payloads, and automation state from crossing route or replay boundaries.
 - Corrected Agent memory and emotion continuity across forks, nested replay, counterfactual replacement, resume, duplicate names, and branch round cutoffs.

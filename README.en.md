@@ -16,6 +16,7 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 ## What It Does
 
 - Multi-branch simulation, Classic branch tree, and Pixel Theater
+- A configurable initial world-event Feed and nine native social actions: `POST`, `COMMENT`, `REACTION`, `FOLLOW`, `MUTE`, `SEARCH`, `TREND`, `REFRESH`, and `IDLE`
 - Gameplay Cards, prediction bets, worldline commitments, and a post-run Causal Archive
 - Debate Arena, Ending Chambers, and Worldline Roundtable
 - Counterfactual reruns, branch comparison, and Replay Trace
@@ -31,6 +32,7 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 - Report likelihood and analytic confidence count only completed terminal leaves as branch samples and use persisted evidence-item counts; fork parents do not count, and signed affect-convergence proxies do not raise analytic confidence. Bounded per-section tool traces remain available after generated, rewritten, or static-fallback sections and survive refresh/reopen. Structured premortem analysis keeps a separate evidence chain and uncertainty for each failure mode; the live “current section” cursor remains transient.
 - Local Pack refresh reloads details even when the selected pack keeps the same ID, clears old details and actions before switching, and isolates late responses. Pack `demo_snapshots` are clickable, catalog-whitelisted, validated against the Snapshot contract, and directly importable. Definite failures are retryable; when the outcome cannot be confirmed, the UI asks you to check History before another attempt.
 - Agent Packs atomically import or export Agents in library selection order without identity IDs, owner data, memories, growth history, conversations, or separately stored credentials, and redact common credential patterns. Public Artifacts can be exported as redacted JSON, single-file HTML, or an offline Gallery hash link, while `gallery.html` can open a local file. This is not a hosted registry, community index, or marketplace.
+- The initial Feed accepts at most 20 world events with a source, content, optional publication time, credibility hint, and tags. These fields remain untrusted data, never system instructions. Agents can follow or mute source accounts, and muting affects later Feed, search, and trend projections. The Action Ledger panel in Causal Review shows branch-scoped native actions, targets, and states; a separate evidence-ledger API projects Agent utterances, context observations, and derived consequences, with hashed memory references and source-scenario coordinates rather than memory text. Older runs without the corresponding evidence are explicitly `unavailable` instead of receiving invented history.
 
 See the [feature index](docs/FEATURES.en.md) for capability groups and routes, and the [usage guide](docs/USAGE.en.md) for operation.
 

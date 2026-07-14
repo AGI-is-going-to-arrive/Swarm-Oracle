@@ -16,6 +16,7 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 ## 能做什么
 
 - 多分支推演、Classic 分支树与 Pixel Theater
+- 可配置的初始世界事件 Feed，以及 `POST`、`COMMENT`、`REACTION`、`FOLLOW`、`MUTE`、`SEARCH`、`TREND`、`REFRESH`、`IDLE` 九种原生社交动作
 - 玩法卡、预测押注、世界线承诺和赛后因果档案
 - 辩论竞技场、结局会客厅和世界线圆桌
 - 反事实续跑、分支对比、Replay Trace
@@ -31,6 +32,7 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 - 报告的 likelihood 与分析置信度只把已完成的终局叶分支当作分支样本，并结合实际证据条目数；分叉父节点不计数，带符号的情绪收敛代理值也不会抬高分析置信度。已执行的章节工具轨迹有界保存，生成、重写或静态回退后刷新/重开仍可查看；结构化 premortem 为每个失败模式保留独立证据链与不确定性，实时“当前章节”位置仍是瞬时状态。
 - Local Pack 刷新会重新读取当前同 ID 包的详情，切换包时先清除旧详情与操作，并隔离迟到响应。包内 `demo_snapshots` 可点击、按目录白名单和 Snapshot 合同校验并直接导入；明确失败可重试，无法确认结果时会提示先检查历史记录，避免重复导入。
 - Agent Pack 按资料库选择顺序原子导入或导出，不携带身份 ID、owner、记忆、成长历史、对话或单独存储的凭据，并脱敏常见凭据模式。Public Artifact 可导出脱敏 JSON、单文件 HTML 或离线 Gallery hash 链接，也可由 `gallery.html` 打开本地文件；它不是 hosted registry、社区索引或 marketplace。
+- 初始 Feed 最多接受 20 条带来源、正文、可选发布时间、可信度提示和标签的世界事件；这些字段始终是不可信数据，不是系统指令。来源账户可被 Agent 关注或静音，静音会影响后续 Feed、搜索与趋势投影。Causal Review 中的 Action Ledger 面板按分支展示已持久化的原生动作、目标与状态；独立证据回执接口投影 Agent 发言、上下文观察与派生后果，记忆只携带哈希引用和来源场景坐标，不公开正文。旧推演缺少对应证据时会明确显示 `unavailable`，不会补造历史。
 
 类别级能力与路由见 [功能索引](docs/FEATURES.md)，操作步骤见 [使用指南](docs/USAGE.md)。
 
