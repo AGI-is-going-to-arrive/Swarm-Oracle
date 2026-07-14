@@ -289,14 +289,21 @@ const createDeferredResponse = () => {
 // across a tick, then return that settled baseline.
 async function settleFitViewBaseline(): Promise<number> {
   let stable = fitViewMock.mock.calls.length;
-  await waitFor(() => {
+  let quietIntervals = 0;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     const current = fitViewMock.mock.calls.length;
-    if (current !== stable) {
+    if (current === stable) {
+      quietIntervals += 1;
+      if (quietIntervals >= 3) return current;
+    } else {
       stable = current;
-      throw new Error('fitView calls still settling');
+      quietIntervals = 0;
     }
-  });
-  return stable;
+  }
+  throw new Error('fitView calls did not settle');
 }
 
 // ── ArgumentMap main component ──────────────────────────────
