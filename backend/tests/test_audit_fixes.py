@@ -50,6 +50,17 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
     # this contextmanager exits.
     original_settings = config_module.settings
     original_app = main_module.app
+    route_snapshots: list[tuple[object, list[object]]] = []
+    pending = [original_app.router]
+    seen: set[int] = set()
+    while pending:
+        container = pending.pop()
+        if id(container) in seen:
+            continue
+        seen.add(id(container))
+        routes = list(getattr(container, "routes", ()))
+        route_snapshots.append((container, routes))
+        pending.extend(route for route in routes if hasattr(route, "routes"))
 
     monkeypatch.setenv("LOG_LEVEL", log_level)
     monkeypatch.setenv("EXPOSE_API_DOCS", expose_api_docs)
@@ -72,6 +83,9 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
         # reloading main can consume/rebind those router objects and leave
         # later tests observing an app with only root/metrics routes.
         main_module.app = original_app
+        main_module.settings = original_settings
+        for container, routes in route_snapshots:
+            container.routes = routes
         # Re-bind settings in all modules that cache it via
         # ``from app.config import settings`` at import time.
         import app.api.agents as _agt
