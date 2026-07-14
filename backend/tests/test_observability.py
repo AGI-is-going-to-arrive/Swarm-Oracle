@@ -246,7 +246,14 @@ def test_redact_byok_in_log_output(log_capture: pytest.LogCaptureFixture) -> Non
 
 
 def _route_paths(app) -> list[str]:
-    return [getattr(r, "path", "") for r in app.routes]
+    paths: list[str] = []
+    pending = list(app.routes)
+    while pending:
+        route = pending.pop()
+        if path := getattr(route, "path", ""):
+            paths.append(path)
+        pending.extend(getattr(route, "routes", ()))
+    return paths
 
 
 def test_conversation_router_registered() -> None:

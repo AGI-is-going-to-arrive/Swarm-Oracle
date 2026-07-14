@@ -7272,6 +7272,17 @@ def _save_narration(engine, branch_id, narration: dict):
                 _strip_round_markers(str(narration.get("question_answer") or "")),
             )
             if question_answer and settings.FEATURE_RESULT_VERDICT:
+                branch_answers_expr = func.coalesce(
+                    func.json_extract(
+                        _json_result_quality_object_expr(),
+                        _json_path("result_quality", "branch_question_answers"),
+                    ),
+                    func.json("{}"),
+                )
+                merged_answers_expr = func.json_patch(
+                    branch_answers_expr,
+                    func.json_object(branch.id, question_answer),
+                )
                 session.exec(
                     update(Scenario)
                     .where(Scenario.id == branch.scenario_id)
@@ -7280,9 +7291,8 @@ def _save_narration(engine, branch_id, narration: dict):
                             _json_path(
                                 "result_quality",
                                 "branch_question_answers",
-                                branch.id,
                             ),
-                            _json_value(question_answer),
+                            merged_answers_expr,
                             base_expr=_json_result_quality_object_expr(),
                         )
                     )

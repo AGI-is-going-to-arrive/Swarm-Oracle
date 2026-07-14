@@ -2509,8 +2509,13 @@ class TestReplayArtifactEndpoints:
         assert resp.status_code == 422
 
     def test_create_scenario_num_agents_above_max(self, client):
-        """num_agents=101 should be rejected (above maximum)."""
-        resp = client.post("/api/scenario", json={"question": "ok?", "num_agents": 101})
+        """A configured-max-plus-one agent count should be rejected."""
+        from app.config import settings
+
+        resp = client.post(
+            "/api/scenario",
+            json={"question": "ok?", "num_agents": settings.MAX_AGENTS + 1},
+        )
         assert resp.status_code == 422
 
     def test_create_scenario_num_agents_zero(self, client):

@@ -38,7 +38,6 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.api.conversation import router as conversation_router
 from app.main import app
 from app.models.agent_conversation import (
     AgentConversationThread,
@@ -47,18 +46,6 @@ from app.models.agent_conversation import (
 from app.models.agent_identity import AgentIdentity
 from app.models.database import Scenario, ScenarioStatus, get_engine
 from app.services import conversation_service as conversation_service_module
-
-# ── Router / feature-flag setup ───────────────────────────
-
-
-def _ensure_router_registered() -> None:
-    for route in app.routes:
-        if getattr(route, "path", "") == "/api/conversation/start":
-            return
-    app.include_router(conversation_router)
-
-
-_ensure_router_registered()
 
 
 @pytest.fixture(autouse=True)

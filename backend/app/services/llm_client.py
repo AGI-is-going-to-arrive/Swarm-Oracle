@@ -884,7 +884,8 @@ def llm_request_scope(
     """Attach request-scoped quota metadata to downstream LLM calls."""
     current = _REQUEST_CONTEXT.get()
     scoped_concurrency = _resolve_scoped_concurrency(current, concurrency)
-    token = _REQUEST_CONTEXT.set(
+    previous = current
+    _REQUEST_CONTEXT.set(
         LLMRequestContext(
             quota_key=current.quota_key if quota_key is _REQUEST_SCOPE_UNSET else quota_key,
             purpose=current.purpose if purpose is _REQUEST_SCOPE_UNSET else purpose,
@@ -920,7 +921,11 @@ def llm_request_scope(
     try:
         yield
     finally:
-        _REQUEST_CONTEXT.reset(token)
+        # A scope may span an async-generator yield and be finalized by a
+        # different task/context (notably asyncio.wait_for on Python 3.11).
+        # Restoring the value is context-portable; resetting the original
+        # token is not.
+        _REQUEST_CONTEXT.set(previous)
 
 
 def _normalize_quota_key(raw: str | None) -> str | None:
@@ -3843,6 +3848,8 @@ async def _llm_call_stream_impl(
     structured_output_schema: dict[str, Any] | None = None,
     structured_output_name: str = "swarmoracle_json_response",
     include_reasoning_content: bool = False,
+    _telemetry_request_id: str | None = None,
+    _telemetry_attempt_state: list[int] | None = None,
 ):
     """Stream LLM response token by token (async generator).
 
@@ -3920,7 +3927,13 @@ async def _llm_call_stream_impl(
         active_structured_output_keys = set(structured_output_keys)
 
         for attempt in range(max_retries + 1):
-            telemetry_request_id, telemetry_attempt = provider_telemetry.next_attempt()
+            if _telemetry_request_id is not None and _telemetry_attempt_state is not None:
+                _telemetry_attempt_state[0] += 1
+                telemetry_request_id = _telemetry_request_id
+                telemetry_attempt = _telemetry_attempt_state[0]
+                provider_telemetry.start_attempt(telemetry_request_id, telemetry_attempt)
+            else:
+                telemetry_request_id, telemetry_attempt = provider_telemetry.next_attempt()
             emitted_content = False
             terminal_received = False
             actual_tokens: int | None = None
@@ -4194,17 +4207,21 @@ async def llm_call_stream(input_text: str, **kwargs: Any):
         model=model,
         purpose=_REQUEST_CONTEXT.get().purpose,
     )
-    tokens = provider_telemetry.bind_request(request_id)
+    attempt_state = [0]
     try:
-        async for chunk in _llm_call_stream_impl(input_text, **kwargs):
+        async for chunk in _llm_call_stream_impl(
+            input_text,
+            _telemetry_request_id=request_id,
+            _telemetry_attempt_state=attempt_state,
+            **kwargs,
+        ):
             yield chunk
     except BaseException as exc:
         cancelled = isinstance(exc, (asyncio.CancelledError, GeneratorExit))
-        telemetry_request_id, telemetry_attempt = provider_telemetry.current_attempt()
-        if telemetry_request_id is not None and telemetry_attempt > 0:
+        if attempt_state[0] > 0:
             provider_telemetry.finish_attempt(
-                telemetry_request_id,
-                telemetry_attempt,
+                request_id,
+                attempt_state[0],
                 status="cancelled" if cancelled else "failed",
                 error_code=(
                     "LLM_CANCELLED" if cancelled else provider_telemetry.safe_error_code(exc)
@@ -4218,8 +4235,6 @@ async def llm_call_stream(input_text: str, **kwargs: Any):
         raise
     else:
         provider_telemetry.finish_request(request_id, status="succeeded")
-    finally:
-        provider_telemetry.unbind_request(tokens)
 
 
 async def llm_call_json_stream(

@@ -30,7 +30,6 @@ from sqlalchemy import event
 from sqlmodel import Session, select
 
 from app.api import replay_trace as replay_trace_module
-from app.api.replay_trace import router as replay_trace_router
 from app.main import app
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import (
@@ -46,22 +45,6 @@ from app.models.database import (
 from app.services.branch_lineage import BranchLineageError
 
 # ── Fixtures ─────────────────────────────────────────────
-
-
-def _ensure_router_registered() -> None:
-    """Attach the replay-trace router without touching main.py.
-
-    BE-4 owner contract forbids modifying ``backend/app/main.py``; the
-    orchestrator Agent will merge the include_router snippet upstream.  For
-    the local pytest process we include it here idempotently.
-    """
-    for route in app.routes:
-        if getattr(route, "path", "") == "/api/scenario/{scenario_id}/replay-trace":
-            return
-    app.include_router(replay_trace_router)
-
-
-_ensure_router_registered()
 
 
 @pytest.fixture(autouse=True)

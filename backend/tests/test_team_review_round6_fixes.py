@@ -256,7 +256,13 @@ class TestC1AgentConversationWsEndpoint:
         """The router must expose ``/ws/agent-conversation/{thread_id}``
         so the frontend's hardcoded URL resolves against a real route.
         """
-        routes = {getattr(r, "path", "") for r in app.routes}
+        routes: set[str] = set()
+        pending = list(app.routes)
+        while pending:
+            route = pending.pop()
+            if path := getattr(route, "path", ""):
+                routes.add(path)
+            pending.extend(getattr(route, "routes", ()))
         assert "/ws/agent-conversation/{thread_id}" in routes
 
     @pytest.mark.asyncio

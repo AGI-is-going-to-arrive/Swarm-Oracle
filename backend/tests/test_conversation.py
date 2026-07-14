@@ -39,7 +39,6 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.api import conversation as conversation_module
-from app.api.conversation import router as conversation_router
 from app.main import app
 from app.models.agent_conversation import AgentConversationThread, AgentConversationTurn
 from app.models.database import (
@@ -58,18 +57,6 @@ from app.services.conversation_service import (
     finalize_turn_cas,
     redact_byok,
 )
-
-# ── Router attachment (main.py owner contract forbids modifying it) ─────
-
-
-def _ensure_router_registered() -> None:
-    for route in app.routes:
-        if getattr(route, "path", "") == "/api/conversation/start":
-            return
-    app.include_router(conversation_router)
-
-
-_ensure_router_registered()
 
 
 @pytest.fixture(autouse=True)
