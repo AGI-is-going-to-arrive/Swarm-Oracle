@@ -49,6 +49,7 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
     # continues to share the same object the rest of the app references after
     # this contextmanager exits.
     original_settings = config_module.settings
+    original_app = main_module.app
 
     monkeypatch.setenv("LOG_LEVEL", log_level)
     monkeypatch.setenv("EXPOSE_API_DOCS", expose_api_docs)
@@ -66,7 +67,11 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
         # fresh instance and silently desynchronize callers that captured the
         # original via ``from app.config import settings``.
         config_module.settings = original_settings
-        importlib.reload(main_module)
+        # Restore the process-wide application object instead of constructing
+        # another one. FastAPI 0.139 keeps included routers nested; repeatedly
+        # reloading main can consume/rebind those router objects and leave
+        # later tests observing an app with only root/metrics routes.
+        main_module.app = original_app
         # Re-bind settings in all modules that cache it via
         # ``from app.config import settings`` at import time.
         import app.api.agents as _agt
@@ -294,12 +299,15 @@ class TestOpenAPIDocsVisibility:
         """
         import app.api.graphs as graphs_module
         import app.config as config_module
+        import app.main as main_module
 
         original = config_module.settings
+        original_app = main_module.app
         original_graphs_settings = graphs_module.settings
         with _reloaded_main_module(monkeypatch, expose_api_docs="false"):
             pass
         assert config_module.settings is original
+        assert main_module.app is original_app
         assert graphs_module.settings is original
         # Sanity: the cross-module identity that endpoint code relies on must
         # also match the binding test modules see.
