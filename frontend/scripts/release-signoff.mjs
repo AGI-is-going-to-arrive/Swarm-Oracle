@@ -89,6 +89,7 @@ const SCRIPT_CONTRACT_TESTS = [
   "scripts/e2e-new-source-ingestion-live.test.mjs",
   "scripts/e2e-capability-matrix.test.mjs",
   "scripts/e2e-native-search-suite.test.mjs",
+  "scripts/e2e-ws-contract-suite.test.mjs",
   "scripts/e2eFixtureNet.test.mjs",
   "scripts/e2e-prediction-modal.test.mjs",
   "scripts/e2e-result-report-suite.test.mjs",

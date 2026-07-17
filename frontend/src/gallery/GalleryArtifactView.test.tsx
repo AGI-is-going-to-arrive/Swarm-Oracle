@@ -124,4 +124,40 @@ describe('GalleryArtifactView rendering', () => {
     expect(progressbar).toHaveAttribute('aria-valuemin', '0');
     expect(progressbar).toHaveAttribute('aria-valuemax', '100');
   });
+
+  it('keeps the verdict visible but omits the confidence badge when confidence is null', () => {
+    const nullConfidenceArtifact: PublicArtifact = {
+      ...artifact,
+      branch_verdicts: [{
+        ...artifact.branch_verdicts[0],
+        verdict: 'The branch verdict remains available without a model rating.',
+        confidence: null,
+      }],
+    };
+
+    const { container } = render(<GalleryArtifactView artifact={nullConfidenceArtifact} />);
+
+    expect(screen.getByText('The branch verdict remains available without a model rating.')).toBeInTheDocument();
+    expect(container.querySelector('.confidence-badge')).toBeNull();
+    expect(screen.queryByText('Low Confidence')).not.toBeInTheDocument();
+    expect(screen.queryByText('Medium Confidence')).not.toBeInTheDocument();
+    expect(screen.queryByText('High Confidence')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['high', 'High Confidence'],
+    ['medium', 'Medium Confidence'],
+    ['low', 'Low Confidence'],
+  ] as const)('renders the existing %s confidence tier', (confidence, label) => {
+    render(
+      <GalleryArtifactView
+        artifact={{
+          ...artifact,
+          branch_verdicts: [{ ...artifact.branch_verdicts[0], confidence }],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
 });

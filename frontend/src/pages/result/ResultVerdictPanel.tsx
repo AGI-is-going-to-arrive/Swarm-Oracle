@@ -17,6 +17,7 @@ export type VerdictConfidence = 'high' | 'medium' | 'low';
 export interface ResultVerdictPanelProps {
   verdict: string | null | undefined;
   confidence: VerdictConfidence | null | undefined;
+  confidenceKind?: 'model_self_rating' | null;
   question: string;
 }
 
@@ -27,6 +28,7 @@ function isValidConfidence(value: unknown): value is VerdictConfidence {
 export default function ResultVerdictPanel({
   verdict,
   confidence,
+  confidenceKind,
   question,
 }: ResultVerdictPanelProps) {
   const { t } = useTranslation();
@@ -83,7 +85,7 @@ export default function ResultVerdictPanel({
 
   const safeConfidence = isValidConfidence(confidence) ? confidence : null;
 
-  const confidenceLabel = safeConfidence
+  const confidenceLevelLabel = safeConfidence
     ? t(`result.verdict_confidence_${safeConfidence}`, {
         defaultValue:
           safeConfidence === 'high'
@@ -92,6 +94,16 @@ export default function ResultVerdictPanel({
               ? 'Medium Confidence'
               : 'Low Confidence',
       })
+    : null;
+  const safeConfidenceKind = confidenceKind === 'model_self_rating'
+    ? confidenceKind
+    : null;
+  const confidenceLabel = confidenceLevelLabel
+    ? safeConfidenceKind
+      ? `${t('result.verdict_confidence_kind_model_self_rating', {
+          defaultValue: 'Model self-rating',
+        })}: ${confidenceLevelLabel}`
+      : confidenceLevelLabel
     : null;
 
   return (
@@ -109,6 +121,7 @@ export default function ResultVerdictPanel({
           <span
             className={`result-verdict-panel__badge result-verdict-panel__badge--${safeConfidence}`}
             data-testid="result-verdict-confidence-badge"
+            data-confidence-kind={safeConfidenceKind ?? undefined}
           >
             <span className="result-verdict-panel__badge-dot" aria-hidden="true" />
             {confidenceLabel}

@@ -2023,6 +2023,65 @@ describe('SimulationView replay automation output', () => {
     warnSpy.mockRestore();
   });
 
+  it('does not retry director authority backfill when a terminal scenario rejects writes', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockStore.scenario = {
+      ...baseScenario,
+      status: 'done',
+      director_state: null,
+    };
+    window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
+      version: 1,
+      scenarios: {
+        'scenario-1': {
+          director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+          cooldowns: {},
+          cards: { usageLog: [] },
+          betting: { bets: [] },
+          commitment: {
+            active: true,
+            branchId: 'b1',
+            branchTitle: '永世帝国',
+            committedAtRound: 2,
+            committedAt: '2026-03-19T03:00:00Z',
+            outcome: 'pending',
+          },
+          objectives: {
+            generatedForQuestion: null,
+            generatedForProfile: null,
+            goals: [],
+          },
+          archive: {
+            branchSnapshots: [],
+            keyMoments: [],
+          },
+        },
+      },
+    }));
+    upsertScenarioDirectorStateMock.mockRejectedValueOnce(
+      new ApiError(409, 'DIRECTOR_STATE_CLOSED', 'scenario no longer accepts director changes'),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[DirectorState] Failed to persist backend state',
+        expect.objectContaining({ code: 'DIRECTOR_STATE_CLOSED' }),
+      );
+    });
+
+    expect(upsertScenarioDirectorStateMock).toHaveBeenCalledTimes(1);
+    expect(getScenarioDirectorStateMock).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('stops backfilling stale local gameplay meta once backend gameplay has meaningful authority', async () => {
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
       version: 1,

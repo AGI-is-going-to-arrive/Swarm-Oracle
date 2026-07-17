@@ -863,8 +863,16 @@ _shared_async_client: httpx.AsyncClient | None = None
 _shared_async_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_async_client_lock = threading.Lock()
 _STREAM_SUPPORT_CACHE_TTL_SECONDS = 300.0
+_STREAM_TIMEOUT_CACHE_TTL_SECONDS = 30.0
+_STREAM_PROBE_MIN_TIMEOUT_SECONDS = 0.001
+_STREAM_PROBE_CREDENTIAL_FINGERPRINT_KEY = os.urandom(32)
 _stream_support_cache: dict[str, tuple[float, bool, str | None, str | None]] = {}
 _stream_support_cache_lock = threading.Lock()
+_stream_support_inflight: dict[
+    tuple[asyncio.AbstractEventLoop, str],
+    asyncio.Task[dict[str, Any]],
+] = {}
+_stream_support_inflight_lock = threading.Lock()
 _rate_limit_requests: dict[str, dict[int, int]] = defaultdict(dict)
 _rate_limit_tokens: dict[str, dict[int, int]] = defaultdict(dict)
 
@@ -997,6 +1005,53 @@ def _normalize_provider_api_key(api_key: str | None) -> str | None:
     return normalized or None
 
 
+def _effective_provider_api_key(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+) -> str | None:
+    target_key = _normalize_provider_api_key(api_key)
+    if not target_key and not (base_url and is_local_provider_url(base_url)):
+        target_key = settings.LLM_API_KEY
+    return target_key
+
+
+def _stream_support_inflight_key(
+    *,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+    timeout_policy: str,
+) -> str:
+    """Return a credential-safe single-flight scope for one stream probe."""
+    target_key = _effective_provider_api_key(api_key=api_key, base_url=base_url)
+    credential_material = (
+        b"present\0" + target_key.encode("utf-8", errors="replace")
+        if target_key is not None
+        else b"absent"
+    )
+    fingerprint = hashlib.blake2b(
+        credential_material,
+        key=_STREAM_PROBE_CREDENTIAL_FINGERPRINT_KEY,
+        digest_size=16,
+    ).hexdigest()
+    return (
+        f"{_stream_support_cache_key(base_url=base_url, model=model)}"
+        f"::credential:{fingerprint}"
+        f"::timeout-policy:{timeout_policy}"
+    )
+
+
+def _normalize_stream_probe_timeout(timeout: float) -> tuple[float, str]:
+    """Return the effective timeout and an exact, stable policy identifier."""
+    effective_timeout = max(_STREAM_PROBE_MIN_TIMEOUT_SECONDS, float(timeout))
+    return effective_timeout, effective_timeout.hex()
+
+
+def _stream_support_timeout_cache_key(scope_key: str) -> str:
+    return f"timeout-result::{scope_key}"
+
+
 def _build_provider_request_headers(
     *,
     api_key: str | None,
@@ -1004,9 +1059,7 @@ def _build_provider_request_headers(
 ) -> dict[str, str]:
     """Build provider headers without leaking the server key to local BYOK URLs."""
     headers = {"Content-Type": "application/json"}
-    target_key = _normalize_provider_api_key(api_key)
-    if not target_key and not (base_url and is_local_provider_url(base_url)):
-        target_key = settings.LLM_API_KEY
+    target_key = _effective_provider_api_key(api_key=api_key, base_url=base_url)
     if target_key:
         headers["Authorization"] = f"Bearer {target_key}"
     return headers
@@ -1719,38 +1772,16 @@ async def measure_provider_parallelism(
     }
 
 
-async def probe_streaming_support(
+async def _probe_streaming_support_uncached(
     *,
-    api_key: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    timeout: float = 8.0,
-    force_refresh: bool = False,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+    effective_model: str,
+    capability_cache_key: str,
+    timeout_cache_key: str,
+    timeout: float,
 ) -> dict[str, Any]:
-    """Probe whether the effective provider/model pair supports SSE streaming.
-
-    The result is cached briefly because Oracle follow-up may call this often.
-    Stream incompatibility is treated as unsupported. Stable provider failures
-    are returned separately so callers do not replay the same failed request.
-    """
-    effective_model = model or settings.LLM_MODEL_NAME
-    cache_key = _stream_support_cache_key(base_url=base_url, model=effective_model)
-    now = monotonic()
-    if not force_refresh:
-        with _stream_support_cache_lock:
-            cached = _stream_support_cache.get(cache_key)
-        if cached is not None and now - cached[0] < _STREAM_SUPPORT_CACHE_TTL_SECONDS:
-            checked_at, supported, reason, error_code = cached
-            return {
-                "status": "ok",
-                "model": effective_model,
-                "supported": supported,
-                "reason": reason,
-                "error_code": error_code,
-                "cached": True,
-                "checked_at": checked_at,
-            }
-
     supported = False
     reason: str | None = None
     error_code: str | None = None
@@ -1771,7 +1802,7 @@ async def probe_streaming_support(
     try:
         await asyncio.wait_for(
             _consume_probe_stream(),
-            timeout=max(0.001, timeout),
+            timeout=timeout,
         )
         if not supported:
             reason = "No stream chunks received"
@@ -1789,12 +1820,17 @@ async def probe_streaming_support(
         error_code = classify_llm_error_code(exc)
 
     checked_at = monotonic()
-    # Credentials are intentionally absent from the capability cache key.
-    # Therefore cache only capability outcomes, never auth/rate/provider
-    # failures that could poison another profile using the same endpoint/model.
-    if error_code is None:
+    # A completed capability result is safe to reuse across probe timeouts and
+    # credentials. A timeout only describes one credential + timeout policy,
+    # so keep that negative result in its narrower, short-lived cache scope.
+    result_cache_key = (
+        capability_cache_key
+        if error_code is None
+        else timeout_cache_key if error_code == "LLM_TIMEOUT" else None
+    )
+    if result_cache_key is not None:
         with _stream_support_cache_lock:
-            _stream_support_cache[cache_key] = (
+            _stream_support_cache[result_cache_key] = (
                 checked_at,
                 supported,
                 reason,
@@ -1809,6 +1845,103 @@ async def probe_streaming_support(
         "cached": False,
         "checked_at": checked_at,
     }
+
+
+def _clear_stream_support_inflight(
+    inflight_key: tuple[asyncio.AbstractEventLoop, str],
+    completed: asyncio.Task[dict[str, Any]],
+) -> None:
+    # Retrieve unexpected task failures even when every waiter was cancelled.
+    if not completed.cancelled():
+        completed.exception()
+    with _stream_support_inflight_lock:
+        if _stream_support_inflight.get(inflight_key) is completed:
+            _stream_support_inflight.pop(inflight_key, None)
+
+
+async def probe_streaming_support(
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    timeout: float = 8.0,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    """Probe whether the effective provider/model pair supports SSE streaming.
+
+    The result is cached briefly because Oracle follow-up may call this often.
+    Concurrent cold-cache calls within one event loop with the same endpoint,
+    model, credential, and timeout policy share one paid probe. Completed
+    capability results are reusable across timeout policies; timeout negatives
+    remain policy- and credential-scoped. Stable provider failures are returned
+    separately so callers do not replay the same failed request.
+    """
+    effective_model = model or settings.LLM_MODEL_NAME
+    effective_timeout, timeout_policy = _normalize_stream_probe_timeout(timeout)
+    capability_cache_key = _stream_support_cache_key(
+        base_url=base_url,
+        model=effective_model,
+    )
+    scope_key = _stream_support_inflight_key(
+        api_key=api_key,
+        base_url=base_url,
+        model=effective_model,
+        timeout_policy=timeout_policy,
+    )
+    timeout_cache_key = _stream_support_timeout_cache_key(scope_key)
+    now = monotonic()
+    if not force_refresh:
+        with _stream_support_cache_lock:
+            capability_cached = _stream_support_cache.get(capability_cache_key)
+            timeout_cached = _stream_support_cache.get(timeout_cache_key)
+        cached = None
+        if (
+            capability_cached is not None
+            and now - capability_cached[0] < _STREAM_SUPPORT_CACHE_TTL_SECONDS
+        ):
+            cached = capability_cached
+        elif (
+            timeout_cached is not None
+            and now - timeout_cached[0] < _STREAM_TIMEOUT_CACHE_TTL_SECONDS
+        ):
+            cached = timeout_cached
+        if cached is not None:
+            checked_at, supported, reason, error_code = cached
+            return {
+                "status": "ok",
+                "model": effective_model,
+                "supported": supported,
+                "reason": reason,
+                "error_code": error_code,
+                "cached": True,
+                "checked_at": checked_at,
+            }
+
+    inflight_key = (asyncio.get_running_loop(), scope_key)
+    with _stream_support_inflight_lock:
+        task = _stream_support_inflight.get(inflight_key)
+        if task is None:
+            task = asyncio.create_task(
+                _probe_streaming_support_uncached(
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    effective_model=effective_model,
+                    capability_cache_key=capability_cache_key,
+                    timeout_cache_key=timeout_cache_key,
+                    timeout=effective_timeout,
+                )
+            )
+            _stream_support_inflight[inflight_key] = task
+            task.add_done_callback(
+                lambda completed, key=inflight_key: _clear_stream_support_inflight(
+                    key,
+                    completed,
+                )
+            )
+
+    # A cancelled waiter must not cancel the shared provider request for peers.
+    return await asyncio.shield(task)
 
 
 def _runtime_guard_db_path() -> str | None:
@@ -4358,13 +4491,23 @@ async def llm_call_json_with_stream_fallback(
             ),
             timeout=remaining,
         )
-    except TimeoutError as exc:
-        raise LLMError(
-            _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
-            code="LLM_TIMEOUT",
-        ) from exc
+    except TimeoutError:
+        probe = {
+            "supported": False,
+            "reason": _LLM_SAFE_ERROR_MESSAGES["LLM_TIMEOUT"],
+            "error_code": "LLM_TIMEOUT",
+        }
     probe_error_code = probe.get("error_code")
-    if (
+    if probe_error_code == "LLM_TIMEOUT":
+        # The capability probe has a deliberately short deadline. Its timeout
+        # only proves that streaming was not established in time; the actual
+        # non-stream request still has the remainder of the shared budget.
+        probe["supported"] = False
+        logger.warning(
+            "Streaming capability probe timed out; falling back once to "
+            "non-stream JSON"
+        )
+    elif (
         isinstance(probe_error_code, str)
         and probe_error_code in _LLM_SAFE_ERROR_MESSAGES
     ):

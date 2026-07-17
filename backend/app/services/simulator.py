@@ -12,6 +12,7 @@ import re
 import time
 import unicodedata
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from time import monotonic
@@ -56,6 +57,7 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
     normalize_native_search_upstream,
+    sanitize_untrusted_text,
 )
 from app.services.llm_resolution import (
     merge_profile_provider_overrides,
@@ -76,6 +78,7 @@ from app.services.narrator import (
     _strip_round_markers,
     narrate_branch,
 )
+from app.services.result_report.claims import compile_branch_narrative_claims
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
@@ -189,6 +192,8 @@ _FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
 _FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
 _IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS = 5.0
 _RESULT_VERDICT_TIMEOUT_SECONDS = 10.0
+_RESULT_VERDICT_CONFIDENCE_KIND = "model_self_rating"
+_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY = "confidence_terminal_branch_ids"
 _FORK_TITLE_REWRITE_TIMEOUT_SECONDS = 8.0
 _FORK_TITLE_REWRITE_MAX_CONCURRENCY = 4
 _TURN_MAX_CHARS = 3000
@@ -438,10 +443,106 @@ def validate_and_sanitize_turn(
     return cleaned, None
 
 
+def _ground_extracted_action_content(action: object, pass_one_content: str) -> object:
+    """Fail closed when a content-bearing action is not quoted from Pass-1."""
+    if not isinstance(action, dict):
+        return action
+    action_type = (
+        str(action.get("type") or action.get("action_type") or "").upper().strip()
+    )
+    if action_type not in {"POST", "COMMENT", "SEARCH"}:
+        return action
+
+    def normalized_with_spans(value: object) -> tuple[str, list[tuple[int, int]]]:
+        source = str(value or "")
+        characters: list[str] = []
+        spans: list[tuple[int, int]] = []
+        clusters: list[tuple[int, int, str]] = []
+        cluster_start = 0
+        cluster = ""
+        normalized_cluster = ""
+        for index, original in enumerate(source):
+            normalized_original = unicodedata.normalize("NFKC", original)
+            if not cluster:
+                cluster_start = index
+                cluster = original
+                normalized_cluster = normalized_original
+                continue
+            combined = unicodedata.normalize("NFKC", cluster + original)
+            if combined == normalized_cluster + normalized_original:
+                clusters.append((cluster_start, index, normalized_cluster))
+                cluster_start = index
+                cluster = original
+                normalized_cluster = normalized_original
+            else:
+                cluster += original
+                normalized_cluster = combined
+        if cluster:
+            clusters.append((cluster_start, len(source), normalized_cluster))
+
+        for start, end, normalized in clusters:
+            for character in normalized:
+                if character.isspace():
+                    if characters and characters[-1] == " ":
+                        spans[-1] = (spans[-1][0], end)
+                    else:
+                        characters.append(" ")
+                        spans.append((start, end))
+                    continue
+                characters.append(character)
+                spans.append((start, end))
+        while characters and characters[0] == " ":
+            characters.pop(0)
+            spans.pop(0)
+        while characters and characters[-1] == " ":
+            characters.pop()
+            spans.pop()
+        return "".join(characters), spans
+
+    content, _ = normalized_with_spans(action.get("content"))
+    meaningful = [character for character in content if character.isalnum()]
+    minimum = 2 if any(not character.isascii() for character in meaningful) else 3
+    source, source_spans = normalized_with_spans(pass_one_content)
+    visible_search_content = any(
+        character.isalnum() or unicodedata.category(character).startswith("S")
+        for character in content
+    )
+    meets_minimum = (
+        visible_search_content if action_type == "SEARCH" else len(meaningful) >= minimum
+    )
+    start = source.find(content) if meets_minimum else -1
+    while start >= 0:
+        end = start + len(content) - 1
+        grounded = str(pass_one_content)[source_spans[start][0] : source_spans[end][1]].strip()
+        grounded_content, _ = normalized_with_spans(grounded)
+        if grounded_content == content:
+            if grounded == action.get("content"):
+                return action
+            grounded_action = dict(action)
+            grounded_action["content"] = grounded
+            return grounded_action
+        start = source.find(content, start + 1)
+    return {
+        "action_type": "IDLE",
+        "status": "unavailable",
+        "failure_code": "ACTION_UNGROUNDED_CONTENT",
+    }
+
+
 def _silent_turn_placeholder(agent_name: str, language: str) -> str:
     if _is_chinese_language(language):
         return f"（{agent_name} 沉默了）"
     return f"({agent_name} stays silent)"
+
+
+def _repetitive_turn_placeholder(
+    agent_name: str,
+    language: str,
+    round_number: int,
+) -> str:
+    if _is_chinese_language(language):
+        return f"（第 {round_number} 轮：{agent_name} 的重复输出未发布。）"
+    return f"(Round {round_number}: {agent_name}'s repetitive output was not published.)"
 
 
 def _coerce_turn_temperature(value: Any, default: float) -> float:
@@ -3434,6 +3535,7 @@ async def _run_simulation_impl(
                         current_branch_id,
                         round_num,
                         messages,
+                        language=detected_language,
                     )
                     _check_cancelled(scenario_id)
                     if _faction_result:
@@ -4299,6 +4401,680 @@ def _append_agent_debate_coherence_guidance(
     return f"{prompt}\n\n{guidance}"
 
 
+def _derive_action_affordances(
+    *,
+    agent_id: str,
+    social_state: object | None,
+    prior_transition: object,
+    projected_action_targets: Sequence[object],
+    projected_agent_targets: Sequence[object],
+    prior_constraints: Sequence[object] = (),
+) -> dict[str, Any]:
+    """Derive factual action affordances without choosing or ranking an action."""
+
+    def text_items(value: object) -> list[str]:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return [cleaned] if cleaned else []
+        if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+            return []
+        return [
+            cleaned
+            for item in value
+            if (cleaned := str(item or "").strip())
+        ][:16]
+
+    def projected_ids(
+        values: Sequence[object],
+        *,
+        allowed_kinds: frozenset[str],
+    ) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            if not isinstance(value, Mapping):
+                continue
+            kind = str(value.get("kind") or value.get("type") or "").lower().strip()
+            target_id = str(value.get("id") or "").strip()[:160]
+            if target_id and kind in allowed_kinds and target_id not in result:
+                result.append(target_id)
+        return result
+
+    normalized_agent_id = str(agent_id or "").strip()
+    transition = prior_transition if isinstance(prior_transition, Mapping) else {}
+    state_available = social_state is not None
+    muted_map = getattr(social_state, "muted", {}) if state_available else {}
+    following_map = getattr(social_state, "following", {}) if state_available else {}
+    muted = {
+        str(value)
+        for value in (
+            muted_map.get(normalized_agent_id, ()) if isinstance(muted_map, Mapping) else ()
+        )
+        if str(value)
+    }
+    following = {
+        str(value)
+        for value in (
+            following_map.get(normalized_agent_id, ())
+            if isinstance(following_map, Mapping)
+            else ()
+        )
+        if str(value)
+    }
+    posts = tuple(getattr(social_state, "posts", ()) or ()) if state_available else ()
+    visible_posts = tuple(
+        post
+        for post in posts
+        if str(getattr(post, "author_id", "") or "") not in muted
+    )
+    last_seen_map = getattr(social_state, "last_seen", {}) if state_available else {}
+    try:
+        last_seen_sequence = int(
+            last_seen_map.get(normalized_agent_id, 0)
+            if isinstance(last_seen_map, Mapping)
+            else 0
+        )
+    except (TypeError, ValueError):
+        last_seen_sequence = 0
+    latest_refreshes = (
+        getattr(social_state, "refresh_receipts", {}).get(normalized_agent_id, ())
+        if state_available
+        else ()
+    )
+
+    def latest_visible_activity(post: object) -> int:
+        return max(
+            (
+                int(sequence)
+                for sequence, actor_id in tuple(
+                    getattr(post, "activity_events", ()) or ()
+                )
+                if str(actor_id) not in muted
+            ),
+            default=int(getattr(post, "sequence", 0) or 0),
+        )
+
+    if latest_refreshes:
+        visible_post_ids = {
+            str(getattr(post, "action_id", "") or "") for post in visible_posts
+        }
+        current_feed_ids = {
+            str(post_id)
+            for post_id in latest_refreshes[-1].post_ids[:4]
+            if str(post_id) in visible_post_ids
+        }
+    else:
+        current_feed_ids = {
+            str(getattr(post, "action_id", "") or "")
+            for post in sorted(
+                visible_posts,
+                key=lambda post: (
+                    str(getattr(post, "author_id", "") or "") in following,
+                    latest_visible_activity(post),
+                    int(getattr(post, "sequence", 0) or 0),
+                    str(getattr(post, "action_id", "") or ""),
+                ),
+                reverse=True,
+            )[:4]
+        }
+    unseen_post_count = sum(
+        int(getattr(post, "sequence", 0) or 0) > last_seen_sequence
+        and str(getattr(post, "action_id", "") or "") not in current_feed_ids
+        for post in visible_posts
+    )
+    visible_activity_count = sum(
+        max(1, len(tuple(getattr(post, "activity_events", ()) or ())))
+        for post in visible_posts
+    )
+
+    visible_author_ids = {
+        author_id
+        for post in visible_posts
+        if (author_id := str(getattr(post, "author_id", "") or ""))
+        and author_id != normalized_agent_id
+    }
+    visible_action_authors: dict[str, str] = {}
+    for post in visible_posts:
+        post_author = str(getattr(post, "author_id", "") or "")
+        post_id = str(getattr(post, "action_id", "") or "")
+        if post_id and post_author and post_author != normalized_agent_id:
+            visible_action_authors[post_id] = post_author
+        for collection_name in ("comments", "reactions"):
+            for item in tuple(getattr(post, collection_name, ()) or ()):
+                item_author = str(getattr(item, "author_id", "") or "")
+                item_id = str(getattr(item, "action_id", "") or "")
+                if (
+                    item_id
+                    and item_author
+                    and item_author != normalized_agent_id
+                    and item_author not in muted
+                ):
+                    visible_action_authors[item_id] = item_author
+
+    catalog_action_ids = projected_ids(
+        projected_action_targets,
+        allowed_kinds=frozenset({"action", "post"}),
+    )
+    catalog_agent_ids = projected_ids(
+        projected_agent_targets,
+        allowed_kinds=frozenset({"agent", "source"}),
+    )
+    eligible_action_ids = [
+        target_id
+        for target_id in catalog_action_ids
+        if target_id in visible_action_authors
+    ]
+    visible_catalog_agents = [
+        target_id
+        for target_id in catalog_agent_ids
+        if target_id in visible_author_ids
+        and target_id != normalized_agent_id
+        and target_id not in muted
+    ]
+    eligible_follow_ids = [
+        target_id for target_id in visible_catalog_agents if target_id not in following
+    ]
+    eligible_mute_ids = list(visible_catalog_agents)
+
+    unresolved_questions = text_items(transition.get("unresolved_questions"))
+    new_obstacles = text_items(transition.get("new_obstacles"))
+    information_gaps = [*unresolved_questions, *new_obstacles]
+    raw_prior_outcomes = transition.get("previous_action_outcomes")
+    prior_outcomes = (
+        raw_prior_outcomes
+        if isinstance(raw_prior_outcomes, Sequence)
+        and not isinstance(raw_prior_outcomes, (str, bytes, bytearray))
+        else ()
+    )
+    prior_failed_or_unobserved_action = any(
+        isinstance(outcome, Mapping)
+        and (
+            str(outcome.get("status") or "").lower() != "verified"
+            or (
+                str(outcome.get("action_type") or "").upper() != "IDLE"
+                and str(outcome.get("effect_status") or "").lower() != "verified"
+            )
+        )
+        for outcome in prior_outcomes
+    )
+    evidence_text = " ".join(
+        [
+            *text_items(transition.get("new_information")),
+            *new_obstacles,
+            *text_items(transition.get("world_state_changes")),
+        ]
+    ).casefold()
+    constraint_text = " ".join(text_items(prior_constraints)).casefold()
+    reliability_markers = (
+        "noise",
+        "spam",
+        "junk",
+        "unreliable",
+        "reliability",
+        "misinformation",
+        "disinformation",
+        "harassment",
+        "credibility",
+        "untrustworthy",
+        "噪声",
+        "垃圾",
+        "刷屏",
+        "不可靠",
+        "可靠性",
+        "失实",
+        "谣言",
+        "骚扰",
+        "可信度",
+        "低可信",
+    )
+    has_reliability_evidence = any(marker in evidence_text for marker in reliability_markers)
+    has_reliability_constraint = any(
+        marker in constraint_text for marker in reliability_markers
+    )
+    mute_grounded = bool(
+        eligible_mute_ids and has_reliability_evidence and has_reliability_constraint
+    )
+    waiting_text = " ".join(
+        [
+            str(transition.get("next_round_pressure") or ""),
+            *text_items(transition.get("commitments")),
+        ]
+    ).casefold()
+    waiting_markers = (
+        "wait",
+        "await",
+        "new information",
+        "new update",
+        "new post",
+        "等待",
+        "新信息",
+        "新消息",
+        "新动态",
+        "更新",
+    )
+    waiting_for_new_information = any(marker in waiting_text for marker in waiting_markers)
+    search_available = bool(state_available and visible_posts and information_gaps)
+    trend_available = bool(
+        state_available
+        and (len(visible_posts) >= 2 or visible_activity_count > len(visible_posts))
+    )
+    refresh_available = bool(
+        state_available and (unseen_post_count > 0 or waiting_for_new_information)
+    )
+
+    return {
+        "facts": {
+            "social_state_available": state_available,
+            "visible_post_count": len(visible_posts),
+            "visible_activity_count": visible_activity_count,
+            "unseen_post_count": unseen_post_count,
+            "presented_feed_post_count": len(current_feed_ids),
+            "last_seen_sequence": last_seen_sequence,
+            "information_gap_count": len(information_gaps),
+            "prior_failed_or_unobserved_action": prior_failed_or_unobserved_action,
+            "waiting_for_new_information": waiting_for_new_information,
+            "reliability_evidence_observed": has_reliability_evidence,
+            "reliability_constraint_present": has_reliability_constraint,
+        },
+        "actions": {
+            "IDLE": {
+                "available": True,
+                "grounded": True,
+                "eligible_target_ids": [],
+                "expected_effect": "No external world change is claimed.",
+            },
+            "POST": {
+                "available": True,
+                "grounded": True,
+                "eligible_target_ids": [],
+                "expected_effect": "Publish a new public proposal, fact, warning, or question.",
+            },
+            "COMMENT": {
+                "available": bool(eligible_action_ids),
+                "grounded": bool(eligible_action_ids),
+                "eligible_target_ids": eligible_action_ids,
+                "expected_effect": "Add a substantive reply to one visible target.",
+            },
+            "REACTION": {
+                "available": bool(eligible_action_ids),
+                "grounded": bool(eligible_action_ids),
+                "eligible_target_ids": eligible_action_ids,
+                "expected_effect": "Attach a lightweight stance signal to one visible target.",
+            },
+            "FOLLOW": {
+                "available": bool(eligible_follow_ids),
+                "grounded": bool(eligible_follow_ids),
+                "eligible_target_ids": eligible_follow_ids,
+                "expected_effect": "Prioritize future updates from one visible author.",
+            },
+            "MUTE": {
+                "available": mute_grounded,
+                "grounded": mute_grounded,
+                "eligible_target_ids": eligible_mute_ids,
+                "expected_effect": (
+                    "Filter a source grounded in observed reliability or noise evidence."
+                ),
+            },
+            "SEARCH": {
+                "available": search_available,
+                "grounded": search_available,
+                "eligible_target_ids": [],
+                "expected_effect": (
+                    "Query visible evidence for a specific unresolved information gap."
+                ),
+            },
+            "TREND": {
+                "available": trend_available,
+                "grounded": trend_available,
+                "eligible_target_ids": [],
+                "expected_effect": "Compare replay-visible activity and relative salience.",
+            },
+            "REFRESH": {
+                "available": refresh_available,
+                "grounded": refresh_available,
+                "eligible_target_ids": [],
+                "expected_effect": "Record a refresh for unseen posts or awaited new information.",
+            },
+        },
+    }
+
+
+def _build_decision_envelope_prompt(
+    context: str,
+    *,
+    agent_name: str,
+    fallback_goal: str,
+    action_target_catalog: str,
+    action_affordances: object | None = None,
+    prior_transition_context: str,
+    language: str,
+    replan_reason: str = "",
+) -> str:
+    """Ask for an auditable decision record, never hidden chain-of-thought."""
+    is_chinese = _is_chinese_language(language)
+    heading = (
+        "在生成角色发言前，先给出可审计的结构化决策。"
+        if is_chinese
+        else "Produce an auditable structured decision before generating speech."
+    )
+    constraints = (
+        "只写事实依据和决策字段；不得输出思维链、逐步推理、thought、reasoning、"
+        "analysis 或 chain_of_thought。IDLE 是合法选择，但必须说明 idle_reason。"
+        "不得为动作覆盖率而轮换、随机或强制选择动作。非 IDLE 动作必须是角色本轮"
+        "确实要执行、并可由随后发言逐字落实的具体动作。"
+        if is_chinese
+        else (
+            "Write only factual bases and decision fields. Do not output chain-of-thought, "
+            "step-by-step reasoning, thought, reasoning, analysis, or chain_of_thought. "
+            "IDLE is valid but requires idle_reason. Never rotate, randomize, or force actions "
+            "for coverage. A non-IDLE action must be a concrete act the character will really "
+            "perform this turn and the later speech can realize verbatim."
+        )
+    )
+    action_guidance = (
+        "按当前事实证据和计划发言分类，按原文证据分类，不设动作配额或默认类型。"
+        "绝不能复制目标目录正文或其他角色内容作为 content 或 realization_phrase，"
+        "不能只返回一个无意义单字。POST/SEARCH/TREND/REFRESH/IDLE 不因目录无匹配项而失效；"
+        "需要目标的动作只能复制目录中上一轮可见的合法 ID。POST/COMMENT/SEARCH 的 content "
+        "必须是随后发言会逐字包含的具体内容；REACTION/FOLLOW/MUTE/TREND/REFRESH 的 content "
+        "必须为空，并用 realization_phrase 给出随后发言会逐字包含的行动短语。COMMENT/REACTION "
+        "只能指向目录中上一轮可见的 post/action；target_agent_or_object 是唯一目标字段："
+        "COMMENT/REACTION 必须复制 actions 中的 action/post UUID，绝不能填人物姓名或 agent ID；"
+        "系统会把该 UUID 同时作为 parent_action_id。FOLLOW/MUTE 只能复制其他 agent/source ID；"
+        "POST/TREND/REFRESH/IDLE 不得带 target。自然点名回应本身不等于平台 COMMENT；"
+        "只有确实要向一个可见 action/post 写入公开回复才是 COMMENT。“刷新认知”不属于 "
+        "REFRESH。不要求原文使用特定平台术语，但必须表达此刻真实执行。"
+        "正例：“咱们现在就刷屏把这补贴削减逼停，让免费公交顶多试半年就回滚”。"
+        "以下都不是已执行动作：“孙伟说咱们现在就刷屏，但我不同意”、"
+        "“如果失败我就发帖”、“希望大家发帖”、“昨天已经发布”以及名词“发布会”。"
+        if is_chinese
+        else (
+            "Classify from current factual evidence and the planned utterance, with no action "
+            "quota or default type; never copy target-catalog, another character's text into "
+            "content or realization_phrase, and never return a meaningless single character. "
+            "POST/SEARCH/TREND/REFRESH/IDLE remain valid without a catalog match; actions that "
+            "require targets may copy only prior-round visible listed post/action or agent/source "
+            "IDs. POST/COMMENT/SEARCH content must be concrete text that the later speech includes "
+            "verbatim. REACTION/FOLLOW/MUTE/TREND/REFRESH require null content and a "
+            "realization_phrase that the later speech includes verbatim. COMMENT/REACTION may "
+            "target only a prior-round visible listed post/action; FOLLOW/MUTE may target only "
+            "another agent/source. target_agent_or_object is the only target field. For "
+            "COMMENT/REACTION, target_agent_or_object must copy an action/post UUID from actions, "
+            "never a person name or agent ID; that UUID also becomes parent_action_id. "
+            "POST/TREND/REFRESH/IDLE require a null target. A natural name-cited reply in speech "
+            "is not, by itself, a platform COMMENT; COMMENT requires actually writing a public "
+            "reply to one visible action/post. \"refresh my understanding\" is not "
+            "REFRESH. The utterance need not use any special platform phrase, but it must express "
+            "an action performed now. Positive example: \"Let us post everywhere now to stop "
+            "these subsidy cuts\". These are not performed actions: \"Sun says we should post "
+            "everywhere now, but I disagree\", \"If this fails I will post\", \"I hope everyone "
+            "posts\", \"We published it yesterday\", and the noun phrase \"the product launch\"."
+        )
+    )
+    reaction_contract = (
+        "REACTION 的 reaction 只能是 LIKE、LOVE、LAUGH、WOW、SAD、ANGRY、SUPPORT、"
+        "OPPOSE 之一。"
+        if is_chinese
+        else (
+            "REACTION reaction must be exactly one of LIKE, LOVE, LAUGH, WOW, SAD, "
+            "ANGRY, SUPPORT, or OPPOSE."
+        )
+    )
+    affordance_guidance = (
+        "动作可供性只描述上一轮可重放事实，不是动作命令，也不是待覆盖清单。candidate_actions "
+        "只允许 IDLE、POST、COMMENT、REACTION、FOLLOW、MUTE、SEARCH、TREND、REFRESH；"
+        "JSON schema 中的 [\"IDLE\",\"SEARCH\"] 只是独立字符串元素和有依据子集的格式示例，"
+        "不要求包含 SEARCH。除始终合法的 IDLE 外，只有对应动作的 available 和 grounded 都为 "
+        "true，并且 decision_basis 同时关联 current_goal、一个可见观察事实或具体未决问题/"
+        "障碍、以及 expected_effect 时，才把动作列入 candidate_actions；available 或 grounded "
+        "都不代表必须选择。REACTION "
+        "只表达对合法可见目标的轻量立场；FOLLOW 只在该可见"
+        "作者的后续更新能推进目标时使用；MUTE 必须同时有已观察到的噪声、垃圾信息或可靠性"
+        "问题以及匹配约束，意见不同本身不成立；SEARCH 必须对应具体信息缺口；TREND 必须"
+        "需要比较可见活动；REFRESH 必须有当前 feed 尚未展示的未读帖子或明确等待新信息。"
+        "选择能推进 current_goal 且具有最小、独特、可观察世界状态变化的有依据动作；"
+        "如果发言本身已足够且不需要新增外部状态，选择 IDLE。IDLE 始终合法。"
+        if is_chinese
+        else (
+            "Action affordances describe prior-round replayable facts only; they are not commands "
+            "or a coverage checklist. Allowed candidate action types are IDLE, POST, COMMENT, "
+            "REACTION, FOLLOW, MUTE, SEARCH, TREND, and REFRESH. The JSON schema's "
+            '["IDLE","SEARCH"] is only a format example of independent strings and a grounded '
+            "subset; it does not require SEARCH. Except for always-valid IDLE, include an action "
+            "in "
+            "candidate_actions only when its available and grounded values are both true and its "
+            "decision_basis links the current_goal, one visible observation or specific unresolved "
+            "question/obstacle, and the expected_effect. available or grounded never means the "
+            "action must be selected. REACTION is only a lightweight stance on a listed visible "
+            "target; FOLLOW requires future updates from a visible author to serve the goal; MUTE "
+            "requires both observed noise, spam, or reliability evidence and a matching "
+            "constraint, "
+            "while disagreement alone is insufficient; SEARCH needs a specific information gap; "
+            "TREND needs a comparison of visible activity; REFRESH needs unread posts not already "
+            "presented in the current feed or an explicit wait for new information. Select the "
+            "grounded action with the smallest distinct observable world-state effect that "
+            "advances current_goal; choose IDLE when the utterance itself is sufficient and no "
+            "external state change is needed. IDLE always remains valid."
+        )
+    )
+    affordance_section = ""
+    if action_affordances is not None:
+        try:
+            serialized_affordances = json.dumps(
+                action_affordances if isinstance(action_affordances, Mapping) else {},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError):
+            serialized_affordances = "{}"
+        affordance_section = format_untrusted_text_block(
+            "行动可供性事实" if is_chinese else "Action affordances",
+            serialized_affordances,
+            max_chars=4_800,
+        )
+    replan = ""
+    if replan_reason:
+        replan = (
+            f"\n重规划触发：{replan_reason}\n改变目标推进策略或表达；仍可选择 IDLE，"
+            "但不得重复上一轮措辞，也不得被迫制造动作。"
+            if is_chinese
+            else (
+                f"\nReplan trigger: {replan_reason}\nChange the goal-progress strategy or "
+                "wording. IDLE remains valid; do not repeat the prior utterance or fabricate "
+                "an action."
+            )
+        )
+    schema = (
+        '{"current_goal":"...","goal_progress":"...",'
+        '"recalled_memory_refs":[],"observed_world_changes":[],"unresolved_questions":[],'
+        '"candidate_actions":["IDLE","SEARCH"],'
+        '"selected_action":"...","action_parameters":{"content":"... or null",'
+        '"realization_phrase":"... or null","reaction":"... or null"},'
+        '"target_agent_or_object":null,"expected_effect":"...","constraints":[],'
+        '"decision_basis":[],"idle_reason":"... or null","emotion":"...",'
+        '"diverge":"... or null"}'
+    )
+    target_schema_note = (
+        "需要目标的动作把 null 替换为且仅替换为一个目录对象："
+        '{"kind":"action|post|agent|source|query","id":"catalog ID"}。'
+        if is_chinese
+        else (
+            "For a target-required action, replace null with exactly one catalog object: "
+            '{"kind":"action|post|agent|source|query","id":"catalog ID"}.'
+        )
+    )
+    rendered_affordances = f"{affordance_section}\n\n" if affordance_section else ""
+    rendered_context = str(context or "")
+    if prior_transition_context:
+        rendered_context = rendered_context.replace(prior_transition_context, "").strip()
+    return (
+        f"{heading}\n{constraints}\n{action_guidance}\n{reaction_contract}\n"
+        f"{affordance_guidance}{replan}\n\n"
+        f"Character: {agent_name}\nFallback goal: {fallback_goal}\n\n"
+        f"Prior verified transition:\n{prior_transition_context or '(none)'}\n\n"
+        f"{rendered_affordances}"
+        f"Available action targets (copy IDs exactly when a target is required):\n"
+        f"{action_target_catalog}\n\n"
+        f"Character and world context:\n{rendered_context}\n\n"
+        f"Return strict JSON with exactly these public audit fields (emotion/diverge are "
+        f"companion metadata, not private reasoning):\n{schema}\n{target_schema_note}"
+    )
+
+
+def _append_decision_to_speech_prompt(
+    prompt: str,
+    decision: dict[str, Any],
+    *,
+    language: str,
+) -> str:
+    """Bind natural speech to the already-selected auditable decision."""
+    public_decision = {
+        key: decision.get(key)
+        for key in (
+            "current_goal",
+            "goal_progress",
+            "observed_world_changes",
+            "selected_action",
+            "action_parameters",
+            "target_agent_or_object",
+            "expected_effect",
+            "constraints",
+            "decision_basis",
+            "idle_reason",
+            "unresolved_questions",
+            "diverge",
+        )
+    }
+    payload = json.dumps(public_decision, ensure_ascii=False, sort_keys=True)
+    if _is_chinese_language(language):
+        instruction = (
+            "以下 Decision Envelope 已经确定。以角色第一人称自然发言推进同一目标。"
+            "如果 selected_action 是 POST/COMMENT/SEARCH，发言必须逐字包含 "
+            "action_parameters.content；其他非 IDLE 动作必须逐字包含 "
+            "action_parameters.realization_phrase；"
+            "如果无法自然且真实地落实，不得暗中改成另一动作。不要复述 JSON，也不要"
+            "输出动作标签或思维链。如果 diverge 非空，发言必须逐字包含该片段；否则该"
+            "分歧信号会被丢弃。"
+        )
+    else:
+        instruction = (
+            "The Decision Envelope below is already fixed. Speak naturally in first person and "
+            "advance the same goal. For POST/COMMENT/SEARCH, the speech must contain "
+            "action_parameters.content verbatim; for every other non-IDLE action, it must contain "
+            "action_parameters.realization_phrase verbatim. If it cannot be realized truthfully, "
+            "do not silently substitute another action. Do not repeat the JSON, action labels, "
+            "or any chain-of-thought. If diverge is non-null, the speech must include that exact "
+            "fragment; otherwise the divergence signal will be discarded."
+        )
+    return f"{prompt}\n\n{instruction}\nDecision Envelope:\n{payload}"
+
+
+def _bind_authoritative_goal_progress(
+    decision: dict[str, Any],
+    prior_transition: object,
+) -> dict[str, Any]:
+    """Bind progress only from a durable-derived verified post-action transition."""
+
+    if not isinstance(prior_transition, Mapping):
+        return decision
+    if str(prior_transition.get("transition_status") or "").lower() != "verified":
+        return decision
+    if (
+        str(prior_transition.get("transition_semantics") or "").lower()
+        != "post_action_v1"
+    ):
+        return decision
+    if (
+        str(prior_transition.get("transition_origin") or "").lower()
+        != "derived_from_durable_actions"
+    ):
+        return decision
+    progress_delta = str(prior_transition.get("goal_progress_delta") or "").strip()
+    if not progress_delta:
+        return decision
+    bound = dict(decision)
+    bound["goal_progress"] = progress_delta[:500]
+    return bound
+
+
+def _decision_payload_with_legacy_compat(
+    payload: object,
+    *,
+    fallback_goal: str,
+) -> object:
+    """Accept former structured outputs only as safe pre-speech decisions.
+
+    The historical agent-message schema carried ``content``/``emotion``/``diverge``
+    but no action.  It remains a valid, explicitly IDLE decision so older provider
+    fallbacks do not make otherwise usable emotion metadata unavailable.  Speech is
+    still generated separately and no action is inferred from the legacy content.
+    """
+    if not isinstance(payload, dict) or "selected_action" in payload:
+        return payload
+    legacy_action = payload.get("action")
+    if not isinstance(legacy_action, dict):
+        if not any(key in payload for key in ("content", "emotion", "diverge")):
+            return payload
+        return {
+            "current_goal": fallback_goal,
+            "goal_progress": "not_yet_observed",
+            "recalled_memory_refs": [],
+            "observed_world_changes": [],
+            "unresolved_questions": [],
+            "candidate_actions": ["IDLE"],
+            "selected_action": "IDLE",
+            "action_parameters": {},
+            "target_agent_or_object": None,
+            "expected_effect": "No external effect was selected",
+            "constraints": ["Do not infer an action from legacy speech content"],
+            "decision_basis": ["Legacy structured message selected no action"],
+            "idle_reason": "Legacy structured message selected no external action",
+        }
+    selected = str(
+        legacy_action.get("type") or legacy_action.get("action_type") or "IDLE"
+    ).upper().strip()
+    if selected not in {
+        "IDLE",
+        "POST",
+        "COMMENT",
+        "REACTION",
+        "FOLLOW",
+        "MUTE",
+        "SEARCH",
+        "TREND",
+        "REFRESH",
+    }:
+        selected = "IDLE"
+    parameters: dict[str, Any] = {}
+    for key in (
+        "content",
+        "realization_phrase",
+        "target",
+        "payload",
+        "parent_action_id",
+    ):
+        value = legacy_action.get(key)
+        if value not in (None, "", {}):
+            parameters[key] = value
+    return {
+        "current_goal": fallback_goal,
+        "goal_progress": "not_yet_observed",
+        "recalled_memory_refs": [],
+        "observed_world_changes": [],
+        "unresolved_questions": [],
+        "candidate_actions": list(dict.fromkeys(["IDLE", selected])),
+        "selected_action": selected,
+        "action_parameters": parameters,
+        "target_agent_or_object": legacy_action.get("target"),
+        "expected_effect": "Advance the current goal with an auditable action",
+        "constraints": ["Do not claim an unverified result"],
+        "decision_basis": ["Pre-speech structured decision output"],
+        "idle_reason": (
+            "No concrete external action was selected" if selected == "IDLE" else None
+        ),
+    }
+
+
 def _format_document_reference_context(
     world_context: object,
     language: str = "Chinese",
@@ -4391,6 +5167,7 @@ async def _gather_agent_messages(
         for agent in agents
         if str(agent.get("id") or "").strip()
     ]
+    social_world_state = None
     try:
         with Session(engine) as session:
             social_world_state = reduce_social_world_state(
@@ -4424,13 +5201,83 @@ async def _gather_agent_messages(
             separators=(",", ":"),
         )
         social_world_contexts = dict.fromkeys(agent_ids, unavailable_context)
+    action_target_catalog_payload = _load_action_target_catalog_payload(
+        engine,
+        scenario_id,
+        branch_id,
+        cutoff_round=social_cutoff_round,
+    )
     action_target_catalogs = _build_action_target_catalogs(
         engine,
         scenario_id,
         branch_id,
         agent_ids=agent_ids,
         cutoff_round=social_cutoff_round,
+        payload=action_target_catalog_payload,
     )
+    from app.services.agent_runtime import (
+        load_prior_agent_decision,
+        load_prior_agent_transition,
+        render_agent_transition_context,
+    )
+
+    # Load the previous durable transition and same-agent utterance before any
+    # concurrent turn starts. This prevents same-round scheduler leakage.
+    prior_transitions: dict[str, dict[str, Any]] = {}
+    prior_transition_contexts: dict[str, str] = {}
+    prior_decisions: dict[str, dict[str, Any]] = {}
+    for agent_id in agent_ids:
+        prior = load_prior_agent_transition(
+            engine,
+            scenario_id,
+            branch_id,
+            agent_id,
+            before_round=round_num,
+        )
+        if prior:
+            prior_transitions[agent_id] = prior
+            prior_transition_contexts[agent_id] = render_agent_transition_context(
+                prior,
+                language,
+            )
+        prior_decision = load_prior_agent_decision(
+            engine,
+            scenario_id,
+            branch_id,
+            agent_id,
+            before_round=round_num,
+        )
+        if prior_decision.get("decision_status") == "verified":
+            prior_decisions[agent_id] = prior_decision
+    prior_utterances: dict[str, str] = {}
+    if agent_ids and round_num > 1:
+        with Session(engine) as session:
+            try:
+                visible_rounds = select_branch_rounds(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    requested_cutoff=round_num - 1,
+                ).rounds
+                visible_round_ids = [round_row.id for round_row in visible_rounds]
+            except Exception:
+                visible_round_ids = []
+            rows = session.exec(
+                select(AgentMessage, Round.round_number)
+                .join(Round, AgentMessage.round_id == Round.id)
+                .where(
+                    (
+                        Round.id.in_(visible_round_ids)
+                        if visible_round_ids
+                        else Round.branch_id == branch_id
+                    ),
+                    Round.round_number < round_num,
+                    AgentMessage.agent_id.in_(agent_ids),
+                )
+                .order_by(Round.round_number.desc(), AgentMessage.id.desc())
+            ).all()
+        for message, _prior_round in rows:
+            prior_utterances.setdefault(message.agent_id, message.content)
 
     empty_shared_briefings = {"(尚无共享信息)", "(no shared briefing yet)"}
     has_usable_shared_briefing = bool(shared_text) and shared_text not in empty_shared_briefings
@@ -4615,6 +5462,7 @@ async def _gather_agent_messages(
                 )
 
             ctx = _append_agent_debate_coherence_guidance(ctx, agent_tier, language)
+            prior_transition_context = prior_transition_contexts.get(agent_id, "")
 
             # Choose reasoning effort based on tier
             effort = "low" if agent.get("tier") == "CROWD" else "medium"
@@ -4635,6 +5483,7 @@ async def _gather_agent_messages(
             raw_text = ""
             clean_raw_text: str | None = None
             extracted_action: object = None
+            decision_envelope: dict[str, Any] | None = None
             turn_failure_code: str | None = None
             metadata_failure_code: str | None = None
             try:
@@ -4666,10 +5515,168 @@ async def _gather_agent_messages(
                         )
 
                 turn_deadline = _agent_turn_monotonic() + agent_turn_total_timeout
-                # H5 fix: per-agent cancel guard before each LLM call.
-                _check_cancelled(scenario_id)
-                # Pass-1: natural language generation (no JSON constraint)
-                for attempt in range(2):
+                prior_goal = str(
+                    prior_decisions.get(agent_id, {}).get("current_goal") or ""
+                ).strip()
+                fallback_goal = str(
+                    prior_goal
+                    or agent.get("current_goal")
+                    or agent.get("goal")
+                    or agent.get("role")
+                    or effective_topic
+                    or "Advance the scenario"
+                ).strip()
+                allowed_memory_refs = [
+                    str(item.get("memory_ref") or "").strip()
+                    for item in cross_memories
+                    if str(item.get("memory_ref") or "").strip()
+                ]
+                prior_transition = prior_transitions.get(agent_id, {})
+                allowed_world_changes = [
+                    str(item).strip()
+                    for item in prior_transition.get("world_state_changes", [])
+                    if str(item).strip()
+                ]
+                action_target_catalog = action_target_catalogs.get(
+                    agent_id,
+                    '{"agents":[],"actions":[]}',
+                )
+                projected_action_targets = _project_action_target_catalog(
+                    action_target_catalog_payload,
+                    agent_id=agent_id,
+                )
+                action_affordances = _derive_action_affordances(
+                    agent_id=agent_id,
+                    social_state=social_world_state,
+                    prior_transition=prior_transition,
+                    projected_action_targets=tuple(
+                        projected_action_targets.get("actions", [])
+                    ),
+                    projected_agent_targets=tuple(
+                        projected_action_targets.get("agents", [])
+                    ),
+                    prior_constraints=(
+                        prior_decisions.get(agent_id, {}).get("constraints") or ()
+                    ),
+                )
+                from app.services.agent_runtime import (
+                    decision_to_action,
+                    normalize_decision_envelope,
+                    utterance_similarity,
+                )
+
+                async def request_decision(
+                    *, replan_reason: str = ""
+                ) -> tuple[dict[str, Any], dict[str, Any]]:
+                    decision_prompt = _build_decision_envelope_prompt(
+                        ctx,
+                        agent_name=agent["name"],
+                        fallback_goal=fallback_goal,
+                        action_target_catalog=action_target_catalog,
+                        action_affordances=action_affordances,
+                        prior_transition_context=prior_transition_context,
+                        language=language,
+                        replan_reason=replan_reason,
+                    )
+                    _check_cancelled(scenario_id)
+                    remaining = _agent_turn_remaining(turn_deadline)
+                    with llm_request_scope(
+                        **_llm_scope_kwargs(
+                            _overrides,
+                            purpose="scenario_turn_generation",
+                        )
+                    ):
+                        raw_decision = await asyncio.wait_for(
+                            llm_call_json(
+                                decision_prompt,
+                                reasoning_effort="low",
+                                model=_overrides.get("model"),
+                                api_key=_overrides.get("api_key"),
+                                base_url=_overrides.get("base_url"),
+                                temperature=0.2,
+                                fallback_mode="agent_message",
+                                timeout=min(metadata_request_timeout, remaining),
+                            ),
+                            timeout=remaining,
+                        )
+                    _check_cancelled(scenario_id)
+                    companion = raw_decision if isinstance(raw_decision, dict) else {}
+                    normalized = normalize_decision_envelope(
+                        _decision_payload_with_legacy_compat(
+                            raw_decision,
+                            fallback_goal=fallback_goal,
+                        ),
+                        agent_id=agent_id,
+                        branch_id=branch_id,
+                        round_number=round_num,
+                        fallback_goal=fallback_goal,
+                        allowed_memory_refs=allowed_memory_refs,
+                        allowed_world_changes=allowed_world_changes,
+                        allowed_action_target_ids=[
+                            str(item.get("id") or "").strip()
+                            for item in projected_action_targets.get("actions", [])
+                            if str(item.get("id") or "").strip()
+                        ],
+                        allowed_agent_target_ids=[
+                            str(item.get("id") or "").strip()
+                            for item in projected_action_targets.get("agents", [])
+                            if str(item.get("id") or "").strip()
+                        ],
+                    )
+                    normalized = _bind_authoritative_goal_progress(
+                        normalized,
+                        prior_transition,
+                    )
+                    raw_diverge_text = str(companion.get("diverge") or "").strip()
+                    normalized["diverge"] = (
+                        raw_diverge_text[:500]
+                        if raw_diverge_text.casefold() not in {"", "null", "none"}
+                        else None
+                    )
+                    if replan_reason:
+                        normalized["replan_required"] = True
+                        normalized["replan_reason"] = replan_reason
+                    return companion, normalized
+
+                decision_payload: dict[str, Any] = {}
+                try:
+                    decision_payload, decision_envelope = await request_decision()
+                except SimulationCancelled:
+                    raise
+                except Exception as exc:
+                    decision_failure_code = classify_llm_error_code(exc) or "LLM_FAILED"
+                    logger.warning(
+                        "Agent %s decision envelope failed: %s: %s",
+                        agent["name"],
+                        type(exc).__name__,
+                        _scrub_sensitive_text(str(exc)),
+                    )
+                    decision_envelope = normalize_decision_envelope(
+                        None,
+                        agent_id=agent_id,
+                        branch_id=branch_id,
+                        round_number=round_num,
+                        fallback_goal=fallback_goal,
+                    )
+                    decision_envelope["decision_status"] = "unavailable"
+                    decision_envelope["failure_code"] = decision_failure_code
+                    metadata_failure_code = decision_failure_code
+
+                emotion = str(decision_payload.get("emotion") or "").strip()
+                diverge = decision_envelope.get("diverge")
+                if not emotion:
+                    metadata_failure_code = metadata_failure_code or "LLM_INVALID_OUTPUT"
+                    diverge = None
+                if decision_envelope.get("decision_status") != "verified":
+                    emotion = ""
+                    diverge = None
+
+                async def generate_bound_speech(
+                    envelope: dict[str, Any],
+                    *,
+                    retry_prefix: bool = False,
+                ) -> tuple[str | None, str | None]:
+                    nonlocal raw_text
                     turn_prompt = _prepend_agent_turn_prompt_prefix(
                         ctx,
                         agent_name=agent["name"],
@@ -4678,10 +5685,12 @@ async def _gather_agent_messages(
                         branch_question=effective_topic,
                         worldline_context=worldline_context,
                         language=language,
-                        retry=attempt > 0,
+                        retry=retry_prefix,
                     )
-                    turn_temperature = (
-                        base_temperature if attempt == 0 else min(base_temperature, 0.6)
+                    turn_prompt = _append_decision_to_speech_prompt(
+                        turn_prompt,
+                        envelope,
+                        language=language,
                     )
                     _check_cancelled(scenario_id)
                     remaining = _agent_turn_remaining(turn_deadline)
@@ -4698,7 +5707,11 @@ async def _gather_agent_messages(
                                 model=_overrides.get("model"),
                                 api_key=_overrides.get("api_key"),
                                 base_url=_overrides.get("base_url"),
-                                temperature=turn_temperature,
+                                temperature=(
+                                    min(base_temperature, 0.6)
+                                    if retry_prefix
+                                    else base_temperature
+                                ),
                                 timeout=min(generation_request_timeout, remaining),
                                 native_search_domains=native_search_domains,
                             ),
@@ -4706,16 +5719,22 @@ async def _gather_agent_messages(
                         )
                     _check_cancelled(scenario_id)
                     await persist_native_citations_if_any()
-                    clean_raw_text, reject_reason = validate_and_sanitize_turn(
+                    return validate_and_sanitize_turn(
                         raw_text,
                         agent["name"],
                         language,
                     )
+
+                reject_reason: str | None = None
+                for attempt in range(2):
+                    clean_raw_text, reject_reason = await generate_bound_speech(
+                        decision_envelope,
+                        retry_prefix=attempt > 0,
+                    )
                     if clean_raw_text is not None:
                         break
                     logger.warning(
-                        "Rejected agent turn output before metadata extraction "
-                        "agent=%s reason=%s attempt=%d",
+                        "Rejected decision-bound agent turn agent=%s reason=%s attempt=%d",
                         agent["name"],
                         reject_reason,
                         attempt + 1,
@@ -4726,116 +5745,79 @@ async def _gather_agent_messages(
                     emotion = "neutral"
                     diverge = None
                 else:
-                    # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
-                    from app.services.llm_client import format_untrusted_text_block
-
-                    _is_chinese = _is_chinese_language(language)
-                    action_target_catalog = action_target_catalogs.get(
-                        agent_id,
-                        '{"agents":[],"actions":[]}',
-                    )
-                    raw_text_block = format_untrusted_text_block(
-                        "原文" if _is_chinese else "Original text",
-                        clean_raw_text,
-                        max_chars=3000,
-                    )
-                    if _is_chinese:
-                        extract_prompt = (
-                            f"从以下角色发言中提取结构化信息。\n\n"
-                            f"{raw_text_block}\n\n"
-                            f"可用动作目标（只能逐字复制其中ID；没有合适目标则选IDLE）：\n"
-                            f"{action_target_catalog}\n\n"
-                            f"输出严格 JSON：\n"
-                            f'{{"content": "原文内容（保留原文，不要改写）", '
-                            f'"emotion": "此刻情绪（例如：激动/忧虑/冷静/愤怒/期待/释然/讽刺/无奈/'
-                            f"坚定/犹豫/警觉/心寒/振奋/焦躁/沉痛/嘲弄/恳切/疲倦/隐忍/得意/不屑）"
-                            f'", '
-                            f'"diverge": "如有明确分歧立场则描述，否则null", '
-                            f'"action": {{"type": "POST|COMMENT|REACTION|FOLLOW|MUTE|'
-                            f'SEARCH|TREND|REFRESH|IDLE", '
-                            f'"content": "动作内容或null", "target": '
-                            f'{{"kind": "agent|source|post|action|topic|query|world", '
-                            f'"id": "目标标识"}}或null, '
-                            f'"payload": {{"reaction": "LIKE"}}}}}}\n'
-                            f"当 type=REACTION 时 reaction 只能是 LIKE/LOVE/LAUGH/WOW/SAD/"
-                            f"ANGRY/SUPPORT/OPPOSE；其他动作的 payload 必须是空对象。"
-                            f"严格遵守动作形状：POST/COMMENT/SEARCH 的 content 必须非空；"
-                            f"REACTION/FOLLOW/MUTE/TREND/REFRESH/IDLE 的 content 必须为 null。"
-                            f"COMMENT/REACTION 只能选择目录中的 post/action；FOLLOW/MUTE 只能"
-                            f"选择目录中的其他 agent 或 source；POST/TREND/REFRESH/IDLE 的 "
-                            f"target 必须"
-                            f"为 null。"
+                    previous_utterance = prior_utterances.get(agent_id, "")
+                    similarity = utterance_similarity(previous_utterance, clean_raw_text)
+                    repetition_failure_code: str | None = None
+                    if previous_utterance and similarity >= 0.8:
+                        replan_reason = (
+                            f"adjacent_utterance_similarity={similarity:.3f}"
                         )
-                    else:
-                        extract_prompt = (
-                            f"Extract structured information from the following character "
-                            f"speech.\n\n"
-                            f"{raw_text_block}\n\n"
-                            f"Available action targets (copy only listed IDs verbatim; choose "
-                            f"IDLE when none fits):\n{action_target_catalog}\n\n"
-                            f"Output strict JSON:\n"
-                            f'{{"content": "original text (preserve as-is, do not rewrite)", '
-                            f'"emotion": "current emotion (for example: excited / worried / calm / '
-                            f"angry / hopeful / relieved / sardonic / resigned / resolute / "
-                            f"hesitant / alert / chilled / energized / restless / grieving / "
-                            f"mocking / earnest / "
-                            f'weary / restraining / smug / dismissive)", '
-                            f'"diverge": "if there is a clear divergence stance, describe it; '
-                            f'otherwise null", "action": {{"type": '
-                            f'"POST|COMMENT|REACTION|FOLLOW|MUTE|SEARCH|TREND|REFRESH|IDLE", '
-                            f'"content": "action content or null", "target": '
-                            f'{{"kind": "agent|source|post|action|topic|query|world", '
-                            f'"id": "target identifier"}} or null, '
-                            f'"payload": {{"reaction": "LIKE"}}}}}}\n'
-                            f"For type=REACTION, reaction must be one of LIKE/LOVE/LAUGH/WOW/"
-                            f"SAD/ANGRY/SUPPORT/OPPOSE. For all other actions payload must be "
-                            f"empty."
-                            f" Enforce action shapes exactly: POST/COMMENT/SEARCH require "
-                            f"non-empty content; REACTION/FOLLOW/MUTE/TREND/REFRESH/IDLE require "
-                            f"null content. COMMENT/REACTION may only target a listed post/action; "
-                            f"FOLLOW/MUTE may "
-                            f"only target another listed agent or source; "
-                            f"POST/TREND/REFRESH/IDLE require a "
-                            f"null target."
+                        try:
+                            replan_payload, replanned = await request_decision(
+                                replan_reason=replan_reason
+                            )
+                            replanned_text, replanned_reject = await generate_bound_speech(
+                                replanned,
+                                retry_prefix=True,
+                            )
+                            if replanned_text is not None:
+                                decision_payload = replan_payload
+                                decision_envelope = replanned
+                                clean_raw_text = replanned_text
+                                emotion = str(
+                                    replan_payload.get("emotion") or emotion
+                                ).strip()
+                                diverge = replanned.get("diverge")
+                                replanned_similarity = utterance_similarity(
+                                    previous_utterance,
+                                    replanned_text,
+                                )
+                                if replanned_similarity >= 0.8:
+                                    repetition_failure_code = "LLM_REPETITIVE_OUTPUT"
+                            else:
+                                repetition_failure_code = (
+                                    replanned_reject or "LLM_INVALID_OUTPUT"
+                                )
+                        except SimulationCancelled:
+                            raise
+                        except Exception as exc:
+                            repetition_failure_code = (
+                                classify_llm_error_code(exc) or "LLM_FAILED"
+                            )
+                    if repetition_failure_code:
+                        unavailable_decision = normalize_decision_envelope(
+                            None,
+                            agent_id=agent_id,
+                            branch_id=branch_id,
+                            round_number=round_num,
+                            fallback_goal=fallback_goal,
                         )
-                    _check_cancelled(scenario_id)
-                    remaining = _agent_turn_remaining(turn_deadline)
-                    with llm_request_scope(
-                        **_llm_scope_kwargs(
-                            _overrides,
-                            purpose="scenario_turn_generation",
-                        )
-                    ):
-                        result = await asyncio.wait_for(
-                            llm_call_json(
-                                extract_prompt,
-                                reasoning_effort="low",
-                                model=_overrides.get("model"),
-                                api_key=_overrides.get("api_key"),
-                                base_url=_overrides.get("base_url"),
-                                temperature=0.2,
-                                fallback_mode="agent_message",
-                                timeout=min(metadata_request_timeout, remaining),
+                        unavailable_decision.update({
+                            "decision_status": "unavailable",
+                            "failure_code": repetition_failure_code,
+                            "replan_required": True,
+                            "replan_reason": (
+                                f"adjacent_utterance_similarity={similarity:.3f}"
                             ),
-                            timeout=remaining,
+                            "replan_failure_code": repetition_failure_code,
+                        })
+                        decision_envelope = unavailable_decision
+                        clean_raw_text = _repetitive_turn_placeholder(
+                            agent["name"],
+                            language,
+                            round_num,
                         )
-                    # H5 fix: cancel guard after Pass-2 metadata extraction.
-                    _check_cancelled(scenario_id)
-
-                    # Pass-2 is metadata-only.  Never let a compatibility
-                    # model's JSON paraphrase replace the validated Pass-1
-                    # speech that users saw and that replay evidence records.
+                        metadata_failure_code = repetition_failure_code
+                        emotion = "neutral"
+                        diverge = None
                     content = clean_raw_text
-                    emotion = str(result.get("emotion") or "").strip()
-                    diverge = result.get("diverge")
-                    extracted_action = result.get("action")
-                    if not emotion:
-                        # Pass-1 remains durable truth, but absent Pass-2
-                        # metadata must not be promoted to a neutral reading.
-                        metadata_failure_code = "LLM_INVALID_OUTPUT"
-                        diverge = None
-                    if diverge and diverge.lower() in ("null", "none", ""):
-                        diverge = None
+                    extracted_action = decision_to_action(decision_envelope, content)
+                    diverge_text = str(diverge or "").strip()
+                    diverge = (
+                        diverge_text
+                        if diverge_text and diverge_text in content
+                        else None
+                    )
             except SimulationCancelled:
                 raise
             except Exception as exc:
@@ -4860,7 +5842,11 @@ async def _gather_agent_messages(
                     content = clean_raw_text
                     emotion = ""
                 diverge = None
-                extracted_action = None
+                extracted_action = {
+                    "action_type": "IDLE",
+                    "status": "unavailable",
+                    "failure_code": failure_code,
+                }
 
             emotion = str(emotion or "").strip()
             previous_emotion = str(
@@ -4878,6 +5864,24 @@ async def _gather_agent_messages(
                 "emotion": emotion,
                 "diverge": diverge,
                 "_action": extracted_action,
+                "_decision": decision_envelope or {
+                    "current_goal": str(agent.get("role") or effective_topic),
+                    "goal_progress": "unavailable",
+                    "recalled_memory_refs": [],
+                    "observed_world_changes": [],
+                    "candidate_actions": ["IDLE"],
+                    "selected_action": "IDLE",
+                    "action_parameters": {},
+                    "target_agent_or_object": None,
+                    "expected_effect": "No effect because the decision was unavailable",
+                    "constraints": [],
+                    "decision_basis": [],
+                    "idle_reason": "Decision generation was unavailable",
+                    "decision_status": "unavailable",
+                    "failure_code": str(
+                        turn_failure_code or metadata_failure_code or "DECISION_UNAVAILABLE"
+                    ),
+                },
                 "_context_receipt": {
                     "recent_messages_status": (
                         "unavailable"
@@ -4935,15 +5939,10 @@ async def _gather_agent_messages(
                             "scenario_id": scenario_id,
                             "branch_id": branch_id,
                             "round_number": round_num,
-                            "action": (
-                                {
-                                    "action_type": "IDLE",
-                                    "status": "unavailable",
-                                    "failure_code": metadata_failure_code,
-                                }
-                                if metadata_failure_code
-                                else msg.get("_action")
-                            ),
+                            "action": msg.get("_action"),
+                            "decision_envelope": msg.get("_decision") or {},
+                            "fallback_goal": fallback_goal,
+                            "context_receipt": msg.get("_context_receipt") or {},
                             "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
                         }
                     ],
@@ -4958,6 +5957,7 @@ async def _gather_agent_messages(
                 engine, scenario_id, f"turn:{round_id}:{msg['agent_id']}"
             )
             if action_receipt:
+                msg["_action_receipt"] = action_receipt
                 await push_event({"type": "action_committed", "data": action_receipt})
                 _check_cancelled(scenario_id)
 
@@ -5075,6 +6075,12 @@ async def _gather_agent_messages(
                                     msg.get("_turn_failure_code") or "TURN_UNAVAILABLE"
                                 ),
                             },
+                            "decision_envelope": msg.get("_decision") or {},
+                            "fallback_goal": str(
+                                msg.get("_decision", {}).get("current_goal")
+                                or effective_topic
+                            ),
+                            "context_receipt": msg.get("_context_receipt") or {},
                             "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
                         }
                     ],
@@ -5089,6 +6095,7 @@ async def _gather_agent_messages(
                 engine, scenario_id, f"turn:{round_id}:{msg['agent_id']}"
             )
             if action_receipt:
+                msg["_action_receipt"] = action_receipt
                 await push_event({"type": "action_committed", "data": action_receipt})
                 _check_cancelled(scenario_id)
             await push_event(
@@ -5373,6 +6380,23 @@ async def _gather_hierarchical_messages(
             "emotion": emotion,
             "diverge": None,
             "synthesized": True,  # Mark as non-LLM
+            "_decision": {
+                "current_goal": str(worker.get("role") or topic),
+                "goal_progress": "delegated",
+                "recalled_memory_refs": [],
+                "observed_world_changes": [],
+                "candidate_actions": ["IDLE"],
+                "selected_action": "IDLE",
+                "action_parameters": {},
+                "target_agent_or_object": leader_name or None,
+                "expected_effect": "Represent the group leader's public position",
+                "constraints": ["No independent external action was executed"],
+                "decision_basis": ["Hierarchical worker speech was synthesized"],
+                "idle_reason": "Worker turns do not independently execute platform actions",
+                "decision_status": "unavailable",
+                "failure_code": "SYNTHESIZED_DECISION_UNAVAILABLE",
+                "decision_origin": "synthesized",
+            },
         }
         if metadata_failure_code:
             msg["_metadata_failure_code"] = metadata_failure_code
@@ -5406,6 +6430,10 @@ async def _gather_hierarchical_messages(
                         "status": "unavailable",
                         "failure_code": "SYNTHESIZED_ACTION_UNAVAILABLE",
                     },
+                    "decision_envelope": msg.get("_decision") or {},
+                    "fallback_goal": str(
+                        msg.get("_decision", {}).get("current_goal") or topic
+                    ),
                     "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
                 }
                 for msg in worker_messages
@@ -5428,6 +6456,7 @@ async def _gather_hierarchical_messages(
             engine, scenario_id, f"turn:{round_id}:{msg['agent_id']}"
         )
         if action_receipt:
+            msg["_action_receipt"] = action_receipt
             await push_event({"type": "action_committed", "data": action_receipt})
             _check_cancelled(scenario_id)
         metadata_failure_code = message_metadata_failure_code(msg)
@@ -5594,9 +6623,43 @@ def _parse_result_verdict_json(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
-def _normalize_result_verdict_confidence(value: object) -> str:
+def _normalize_result_verdict_confidence(value: object) -> str | None:
     confidence = str(value or "").strip().lower()
-    return confidence if confidence in {"high", "medium", "low"} else "medium"
+    return confidence if confidence in {"high", "medium", "low"} else None
+
+
+def _normalize_result_verdict_confidence_branch_ids(
+    value: object,
+) -> list[str] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    branch_ids: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item or item != item.strip():
+            return None
+        branch_ids.append(item)
+    if len(set(branch_ids)) != len(branch_ids) or branch_ids != sorted(branch_ids):
+        return None
+    return branch_ids
+
+
+def _result_verdict_confidence_branch_ids(
+    branches: list[dict[str, Any]],
+) -> list[str] | None:
+    """Bind a self-rating to the exact terminal outcomes shown to the model."""
+
+    selected = branches[:8]
+    if not selected:
+        return None
+    branch_ids: list[str] = []
+    for branch in selected:
+        if not isinstance(branch, dict):
+            return None
+        branch_id = _branch_id_value(branch)
+        if not branch_id:
+            return None
+        branch_ids.append(branch_id)
+    return _normalize_result_verdict_confidence_branch_ids(sorted(branch_ids))
 
 
 def _normalize_result_actual_outcome(value: object) -> bool | None:
@@ -5926,16 +6989,20 @@ async def _generate_verdict(
         question_answer = str(parsed.get("question_answer") or "").strip()
         if not question_answer:
             question_answer = _one_line_answer(verdict_text)
-        return {
+        confidence = _normalize_result_verdict_confidence(parsed.get("confidence"))
+        confidence_branch_ids = _result_verdict_confidence_branch_ids(branches)
+        result: dict[str, object] = {
             "verdict": verdict_text,
-            "confidence": _normalize_result_verdict_confidence(
-                parsed.get("confidence"),
-            ),
             "question_answer": _one_line_answer(question_answer),
             "actual_outcome": _normalize_result_actual_outcome(
                 parsed.get("actual_outcome"),
             ),
         }
+        if confidence is not None and confidence_branch_ids is not None:
+            result["confidence"] = confidence
+            result["confidence_kind"] = _RESULT_VERDICT_CONFIDENCE_KIND
+            result[_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY] = confidence_branch_ids
+        return result
     except Exception as exc:
         payload = _result_verdict_failure_payload(exc)
         logger.warning(
@@ -5956,33 +7023,64 @@ def _persist_result_quality_verdict(
         verdict_text = str(verdict.get("verdict") or "").strip()
         if not verdict_text:
             return
+        confidence = _normalize_result_verdict_confidence(verdict.get("confidence"))
+        confidence_branch_ids = _normalize_result_verdict_confidence_branch_ids(
+            verdict.get(_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY)
+        )
+        has_model_self_rating = (
+            confidence is not None
+            and verdict.get("confidence_kind") == _RESULT_VERDICT_CONFIDENCE_KIND
+            and confidence_branch_ids is not None
+        )
+        result_quality_expr = _json_result_quality_object_expr()
+        path_value_pairs: list[object] = [
+            _json_path("result_quality", "verdict"),
+            _json_value(verdict_text),
+            _json_path("result_quality", "question_answer"),
+            _json_value(
+                _one_line_answer(
+                    str(verdict.get("question_answer") or verdict_text),
+                )
+            ),
+            _json_path("result_quality", "actual_outcome"),
+            _json_value(
+                _normalize_result_actual_outcome(
+                    verdict.get("actual_outcome"),
+                )
+            ),
+        ]
+        if has_model_self_rating:
+            path_value_pairs.extend(
+                [
+                    _json_path("result_quality", "confidence"),
+                    _json_value(confidence),
+                    _json_path("result_quality", "confidence_kind"),
+                    _json_value(_RESULT_VERDICT_CONFIDENCE_KIND),
+                    _json_path(
+                        "result_quality",
+                        _RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY,
+                    ),
+                    _json_value(confidence_branch_ids),
+                ]
+            )
+        else:
+            result_quality_expr = func.json_remove(
+                result_quality_expr,
+                _json_path("result_quality", "confidence"),
+                _json_path("result_quality", "confidence_kind"),
+                _json_path(
+                    "result_quality",
+                    _RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY,
+                ),
+            )
         with Session(engine) as session:
             session.exec(
                 update(Scenario)
                 .where(Scenario.id == scenario_id)
                 .values(
                     parsed_context=_json_set_parsed_context_expr(
-                        _json_path("result_quality", "verdict"),
-                        _json_value(verdict_text),
-                        _json_path("result_quality", "confidence"),
-                        _json_value(
-                            _normalize_result_verdict_confidence(
-                                verdict.get("confidence"),
-                            )
-                        ),
-                        _json_path("result_quality", "question_answer"),
-                        _json_value(
-                            _one_line_answer(
-                                str(verdict.get("question_answer") or verdict_text),
-                            )
-                        ),
-                        _json_path("result_quality", "actual_outcome"),
-                        _json_value(
-                            _normalize_result_actual_outcome(
-                                verdict.get("actual_outcome"),
-                            )
-                        ),
-                        base_expr=_json_result_quality_object_expr(),
+                        *path_value_pairs,
+                        base_expr=result_quality_expr,
                     )
                 )
             )
@@ -6456,6 +7554,82 @@ def _ensure_completable_narration(narration: dict, *, language: str) -> dict:
     return result
 
 
+_BRANCH_NARRATIVE_COMPILATION_KEY = "_branch_narrative_claim_compilation"
+
+
+def _branch_narrative_compilation_failure(*, language: str) -> dict[str, object]:
+    if _is_chinese_language(language):
+        unavailable = "证据校验不可用；未发布模型生成的分支叙事。"
+        answer = "证据校验不可用，无法形成可信答案。"
+        basis = "分支叙事 Claim 编译失败，原始模型文本已被阻断。"
+    else:
+        unavailable = (
+            "Evidence validation is unavailable; the model-generated branch "
+            "narrative was not published."
+        )
+        answer = "Evidence validation is unavailable, so no reliable answer was published."
+        basis = (
+            "Branch narrative claim compilation failed; raw model prose was blocked."
+        )
+    return {
+        "story": unavailable,
+        "insight": unavailable,
+        "key_moments": [],
+        "question_answer": answer,
+        _BRANCH_NARRATIVE_COMPILATION_KEY: {
+            "schema_version": 1,
+            "status": "failed",
+            "claims": [],
+            "claim_ids_by_field": {},
+            "analytic_confidence": {
+                "level": "low",
+                "basis": basis,
+            },
+            "evidence_coverage": {
+                "max_round": 0,
+                "covered_rounds": [],
+                "missing_rounds": [],
+                "covered_phases": [],
+                "missing_phases": [],
+            },
+        },
+    }
+
+
+def _compile_durable_branch_narration(
+    engine,
+    branch_id: str,
+    narration: dict,
+    *,
+    language: str,
+) -> dict:
+    """Replace free narrator prose with claim-validated legacy wire fields."""
+
+    with Session(engine) as session:
+        branch = session.get(Branch, branch_id)
+        if branch is None:
+            raise ValueError("branch not found for narrative claim compilation")
+        scenario_id = branch.scenario_id
+    compiled = compile_branch_narrative_claims(
+        engine,
+        scenario_id,
+        branch_id,
+        narration,
+        language=language,
+    )
+    result = dict(narration)
+    result.update(compiled.narration)
+    result[_BRANCH_NARRATIVE_COMPILATION_KEY] = {
+        "schema_version": 1,
+        "status": "validated",
+        "claims": [claim.model_dump(mode="json") for claim in compiled.claims],
+        "claim_ids_by_field": compiled.claim_ids_by_field,
+        "analytic_confidence": compiled.analytic_confidence.model_dump(mode="json"),
+        "evidence_coverage": compiled.evidence_coverage.model_dump(mode="json"),
+    }
+    return result
+
+
 def _build_local_branch_narration_fallback(
     engine,
     branch_id,
@@ -6558,8 +7732,34 @@ async def _narrate_branch_data_fail_soft(
 def _save_narration_fail_soft(engine, branch_id, narration: dict, *, language: str) -> dict:
     durable_narration = _ensure_completable_narration(narration, language=language)
     try:
+        durable_narration = _compile_durable_branch_narration(
+            engine,
+            branch_id,
+            durable_narration,
+            language=language,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Branch narrative claim compilation failed for %s; blocking raw prose: %s: %s",
+            branch_id,
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
+        )
+        durable_narration = {
+            **{
+                key: value
+                for key, value in durable_narration.items()
+                if key not in {"story", "insight", "key_moments", "question_answer"}
+            },
+            **_branch_narrative_compilation_failure(language=language),
+        }
+    try:
         _save_narration(engine, branch_id, durable_narration)
-        return durable_narration
+        return {
+            key: value
+            for key, value in durable_narration.items()
+            if key != _BRANCH_NARRATIVE_COMPILATION_KEY
+        }
     except Exception as exc:
         logger.warning(
             "Narration persistence failed for %s; retrying without optional answer: %s: %s",
@@ -6570,7 +7770,11 @@ def _save_narration_fail_soft(engine, branch_id, narration: dict, *, language: s
         retry_narration = dict(durable_narration)
         retry_narration["question_answer"] = ""
         _save_narration(engine, branch_id, retry_narration)
-        return retry_narration
+        return {
+            key: value
+            for key, value in retry_narration.items()
+            if key != _BRANCH_NARRATIVE_COMPILATION_KEY
+        }
 
 
 # ── Database helpers ─────────────────────────────────────
@@ -6873,11 +8077,12 @@ def _save_messages(
         session.flush()
         from app.services.simulation_actions import append_simulation_action
 
+        runtime_sources: list[dict[str, Any]] = []
         for source, row in zip(messages, rows):
             if not source.get("scenario_id"):
                 continue
             try:
-                append_simulation_action(
+                action_row = append_simulation_action(
                     session,
                     scenario_id=source["scenario_id"],
                     branch_id=source["branch_id"],
@@ -6886,7 +8091,9 @@ def _save_messages(
                     agent_id=source["agent_id"],
                     message_id=row.id,
                     idempotency_key=source["idempotency_key"],
-                    action=source.get("action"),
+                    action=_ground_extracted_action_content(
+                        source.get("action"), source["content"]
+                    ),
                     require_running=True,
                 )
             except ValueError as exc:
@@ -6895,9 +8102,10 @@ def _save_messages(
                     "ACTION_INVALID_PARENT_SCOPE",
                     "ACTION_PARENT_NOT_EARLIER",
                     "ACTION_INVALID_TARGET_SCOPE",
+                    "ACTION_INVALID_SOURCE_TARGET",
                 }:
                     raise
-                append_simulation_action(
+                action_row = append_simulation_action(
                     session,
                     scenario_id=source["scenario_id"],
                     branch_id=source["branch_id"],
@@ -6913,6 +8121,51 @@ def _save_messages(
                     },
                     require_running=True,
                 )
+            runtime_sources.append({
+                "scenario_id": source["scenario_id"],
+                "branch_id": source["branch_id"],
+                "round_number": source["round_number"],
+                "agent_id": source["agent_id"],
+                "message_id": row.id,
+                "action_id": action_row.id,
+                "content": source["content"],
+                "decision_envelope": source.get("decision_envelope") or {},
+                "fallback_goal": source.get("fallback_goal") or "",
+                "context_receipt": source.get("context_receipt") or {},
+                **(
+                    {"world_state_transition": source["world_state_transition"]}
+                    if source.get("world_state_transition") is not None
+                    else {}
+                ),
+            })
+
+        if runtime_sources:
+            from app.services.agent_runtime import persist_round_runtime_in_session
+
+            grouped_runtime_sources: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+            for runtime_source in runtime_sources:
+                coordinate = (
+                    str(runtime_source["scenario_id"]),
+                    str(runtime_source["branch_id"]),
+                    int(runtime_source["round_number"]),
+                )
+                grouped_runtime_sources.setdefault(coordinate, []).append(runtime_source)
+            for (scenario_id, branch_id, round_number), runtime_rows in (
+                grouped_runtime_sources.items()
+            ):
+                try:
+                    persist_round_runtime_in_session(
+                        session,
+                        scenario_id,
+                        branch_id,
+                        round_number,
+                        runtime_rows,
+                        runtime_lease=runtime_lease,
+                    )
+                except ValueError as exc:
+                    if str(exc) == "AGENT_RUNTIME_LEASE_LOST":
+                        raise SimulationCancelled(scenario_id) from exc
+                    raise
         if runtime_lease is not None and runtime_lease.db_path is not None:
             from sqlalchemy import text
 
@@ -6955,6 +8208,10 @@ def _get_action_receipt(
                 "branch_id": row.branch_id,
                 "round": row.round_number,
                 "agent_id": row.agent_id,
+                "message_id": row.message_id,
+                "action_type": getattr(row.action_type, "value", row.action_type),
+                "status": getattr(row.status, "value", row.status),
+                "failure_code": row.failure_code,
             }
     except Exception:
         logger.debug("Action receipt lookup failed", exc_info=True)
@@ -6969,7 +8226,11 @@ def _load_action_target_catalog_payload(
     cutoff_round: int | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Load one lineage-filtered action catalog for the whole concurrent batch."""
-    from app.models.simulation_action import SimulationAction, SimulationActionStatus
+    from app.models.simulation_action import (
+        SimulationAction,
+        SimulationActionStatus,
+        SimulationActionType,
+    )
     from app.services.branch_lineage import resolve_branch_lineage
     from app.services.initial_social_feed import is_bootstrap_post
 
@@ -7002,12 +8263,19 @@ def _load_action_target_catalog_payload(
                 .where(
                     SimulationAction.scenario_id == scenario_id,
                     SimulationAction.status == SimulationActionStatus.VERIFIED,
+                    SimulationAction.action_type.in_(
+                        (
+                            SimulationActionType.POST,
+                            SimulationActionType.COMMENT,
+                            SimulationActionType.REACTION,
+                        )
+                    ),
                     or_(
                         *segment_filters,
                         and_(
                             SimulationAction.branch_id.in_(lineage_branch_ids),
                             SimulationAction.message_id.is_(None),
-                            SimulationAction.action_type == "POST",
+                            SimulationAction.action_type == SimulationActionType.POST,
                         ),
                     ),
                 )
@@ -7044,6 +8312,7 @@ def _load_action_target_catalog_payload(
                             else "action"
                         ),
                         "type": str(getattr(row.action_type, "value", row.action_type)),
+                        "agent_name": source_agent.name[:80] if source_agent is not None else "",
                         "content": content,
                     }
                 )
@@ -7065,19 +8334,56 @@ def _load_action_target_catalog_payload(
         return {"agents": [], "actions": []}
 
 
+_ACTION_TARGET_CATALOG_MAX_CHARS = 5000
+
+
+def _project_action_target_catalog(
+    payload: dict[str, list[dict[str, Any]]],
+    *,
+    agent_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Keep rendered JSON valid and prioritize actionable targets over optional agents."""
+    projected: dict[str, list[dict[str, Any]]] = {"actions": [], "agents": []}
+
+    def fits(candidate: dict[str, list[dict[str, Any]]]) -> bool:
+        encoded = json.dumps(candidate, ensure_ascii=False)
+        sanitized = sanitize_untrusted_text(
+            encoded,
+            max_chars=max(
+                _ACTION_TARGET_CATALOG_MAX_CHARS + 1,
+                len(encoded) * 2 + 1,
+            ),
+        )
+        return len(sanitized) <= _ACTION_TARGET_CATALOG_MAX_CHARS
+
+    for row in payload.get("actions", []):
+        candidate = {"actions": [*projected["actions"], row], "agents": []}
+        if not fits(candidate):
+            break
+        projected["actions"].append(row)
+    for row in payload.get("agents", []):
+        if row.get("id") == agent_id:
+            continue
+        candidate = {
+            "actions": projected["actions"],
+            "agents": [*projected["agents"], row],
+        }
+        if not fits(candidate):
+            break
+        projected["agents"].append(row)
+    return projected
+
+
 def _render_action_target_catalog(
     payload: dict[str, list[dict[str, Any]]],
     *,
     agent_id: str,
 ) -> str:
-    projected = {
-        "agents": [row for row in payload["agents"] if row.get("id") != agent_id],
-        "actions": payload["actions"],
-    }
+    projected = _project_action_target_catalog(payload, agent_id=agent_id)
     return format_untrusted_text_block(
         "action_target_catalog",
         json.dumps(projected, ensure_ascii=False),
-        max_chars=5000,
+        max_chars=_ACTION_TARGET_CATALOG_MAX_CHARS,
     )
 
 
@@ -7088,13 +8394,15 @@ def _build_action_target_catalogs(
     *,
     agent_ids: list[str],
     cutoff_round: int | None = None,
+    payload: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, str]:
-    payload = _load_action_target_catalog_payload(
-        engine,
-        scenario_id,
-        branch_id,
-        cutoff_round=cutoff_round,
-    )
+    if payload is None:
+        payload = _load_action_target_catalog_payload(
+            engine,
+            scenario_id,
+            branch_id,
+            cutoff_round=cutoff_round,
+        )
     return {
         agent_id: _render_action_target_catalog(payload, agent_id=agent_id)
         for agent_id in agent_ids
@@ -7271,6 +8579,30 @@ def _save_narration(engine, branch_id, narration: dict):
             question_answer = _one_line_answer(
                 _strip_round_markers(str(narration.get("question_answer") or "")),
             )
+            parsed_context_updates: list[object] = []
+            claim_compilation = narration.get(_BRANCH_NARRATIVE_COMPILATION_KEY)
+            if isinstance(claim_compilation, dict):
+                compilation_path = _json_path(
+                    "result_quality",
+                    "branch_narrative_claims_v1",
+                )
+                existing_compilations = func.coalesce(
+                    func.json_extract(
+                        _json_result_quality_object_expr(),
+                        compilation_path,
+                    ),
+                    func.json("{}"),
+                )
+                merged_compilations = func.json_patch(
+                    existing_compilations,
+                    func.json_object(
+                        branch.id,
+                        _json_value(claim_compilation),
+                    ),
+                )
+                parsed_context_updates.extend(
+                    [compilation_path, merged_compilations]
+                )
             if question_answer and settings.FEATURE_RESULT_VERDICT:
                 branch_answers_expr = func.coalesce(
                     func.json_extract(
@@ -7283,16 +8615,22 @@ def _save_narration(engine, branch_id, narration: dict):
                     branch_answers_expr,
                     func.json_object(branch.id, question_answer),
                 )
+                parsed_context_updates.extend(
+                    [
+                        _json_path(
+                            "result_quality",
+                            "branch_question_answers",
+                        ),
+                        merged_answers_expr,
+                    ]
+                )
+            if parsed_context_updates:
                 session.exec(
                     update(Scenario)
                     .where(Scenario.id == branch.scenario_id)
                     .values(
                         parsed_context=_json_set_parsed_context_expr(
-                            _json_path(
-                                "result_quality",
-                                "branch_question_answers",
-                            ),
-                            merged_answers_expr,
+                            *parsed_context_updates,
                             base_expr=_json_result_quality_object_expr(),
                         )
                     )

@@ -64,6 +64,54 @@ def test_reset_vector_store_closes_existing_store(monkeypatch):
 
 
 class TestVectorStore:
+    def test_delete_branch_memories_does_not_create_missing_collection(self):
+        class _FakeClient:
+            def __init__(self):
+                self.get_collection_calls = 0
+
+            def list_collections(self):
+                return []
+
+            def get_collection(self, *, name: str):
+                self.get_collection_calls += 1
+                raise AssertionError(f"unexpected collection lookup: {name}")
+
+        client = _FakeClient()
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = client
+        vs._persist_dir = "/nonexistent"
+        vs._collection_cache_size = 2
+        vs._collections = OrderedDict()
+        vs._run_serialized_write = (
+            lambda _scenario_id, _operation, write_call: write_call()
+        )
+
+        assert vs.delete_branch_memories("scenario-a", "branch-a") is True
+        assert client.get_collection_calls == 0
+        assert vs._collections == OrderedDict()
+
+    def test_delete_branch_memories_reports_deferred_when_store_unavailable(self):
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = None
+        vs._persist_dir = "/nonexistent"
+        vs._collections = OrderedDict()
+
+        assert vs.delete_branch_memories("scenario-a", "branch-a") is False
+
+    def test_delete_branch_memories_reports_deferred_if_client_drops_before_lookup(self):
+        vs = VectorStore.__new__(VectorStore)
+        vs._client = object()
+        vs._persist_dir = "/nonexistent"
+        vs._collections = OrderedDict()
+
+        def _invalidate_then_write(_scenario_id, _operation, write_call):
+            vs._client = None
+            write_call()
+
+        vs._run_serialized_write = _invalidate_then_write
+
+        assert vs.delete_branch_memories("scenario-a", "branch-a") is False
+
     def test_store_and_retrieve(self, temp_dir):
         """Store → retrieve should return semantically similar content."""
         vs = VectorStore(persist_dir=temp_dir)

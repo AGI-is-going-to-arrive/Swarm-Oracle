@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { act, cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -440,11 +441,21 @@ describe('CompareDigestView', () => {
     expect(standbyPane.getByText('Comparison branch pending')).toBeInTheDocument();
     expect(standbyPane.getByText('Round 1')).toBeInTheDocument();
     expect(standbyPane.getByText('Divergence: 33%')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('compare-pane-b').querySelector('.compare-theater-pane__veil'),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'R2' }));
     await waitFor(() => {
       expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('a:2');
     });
+
+    const activeCanvas = document.createElement('canvas');
+    vi.spyOn(activeCanvas, 'toDataURL').mockReturnValue('data:image/png;base64,branch-a');
+    const phaserContainer = document.createElement('div');
+    phaserContainer.className = 'phaser-game-container';
+    phaserContainer.append(activeCanvas);
+    screen.getByTestId('compare-pane-a').querySelector('.compare-theater-pane__live')?.append(phaserContainer);
 
     await user.click(screen.getByRole('tab', { name: 'Archive B' }));
     await waitFor(() => {
@@ -453,6 +464,12 @@ describe('CompareDigestView', () => {
     await waitFor(() => {
       expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('b:2');
     });
+    expect(
+      screen.getByTestId('compare-pane-a').querySelector('.compare-theater-pane__snapshot'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('compare-pane-a').querySelector('.compare-theater-pane__veil'),
+    ).toBeInTheDocument();
 
     const payload = JSON.parse((window as Window & { render_game_to_text?: () => string }).render_game_to_text?.() ?? '{}');
     expect(payload.page.kind).toBe('compare');
@@ -462,6 +479,15 @@ describe('CompareDigestView', () => {
     expect(payload.page.compare.selected_round).toBe(2);
     expect(payload.simulation.agentCount).toBe(2);
     expect(payload.simulation.messageCount).toBe(4);
+
+    await user.click(screen.getByRole('button', { name: 'R1' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('b:1');
+    });
+    expect(
+      screen.getByTestId('compare-pane-a').querySelector('.compare-theater-pane__snapshot'),
+    ).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('compare-pane-a-standby')).getByText('Round 1')).toBeInTheDocument();
   });
 
   it('routes panel screenshot capture to a compare composite first', async () => {
@@ -642,5 +668,20 @@ describe('CompareDigestView', () => {
       expect(tabA).toHaveAttribute('aria-selected', 'true');
       expect(tabB).toHaveAttribute('aria-selected', 'false');
     });
+  });
+});
+
+describe('CompareDigestView mobile layout contract', () => {
+  it('lets the 5:4 theater surface shrink within a 320px viewport', () => {
+    const css = readFileSync('src/pages/CompareDigestView.css', 'utf8');
+    const mobileStart = css.indexOf('@media (max-width: 640px)');
+    const forcedColorsStart = css.indexOf('@media (forced-colors: active)');
+    const mobileCss = css.slice(mobileStart, forcedColorsStart);
+
+    expect(mobileStart).toBeGreaterThanOrEqual(0);
+    expect(forcedColorsStart).toBeGreaterThan(mobileStart);
+    expect(mobileCss).toMatch(
+      /\.compare-theater-pane__surface\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?aspect-ratio:\s*5\s*\/\s*4;/,
+    );
   });
 });

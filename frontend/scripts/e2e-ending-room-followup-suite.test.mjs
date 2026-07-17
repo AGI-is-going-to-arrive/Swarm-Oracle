@@ -114,6 +114,95 @@ function loadFunction(name, injected = {}) {
 const POLL_ONCE = async (_page, probe) => probe();
 const FRONTEND_URL = "http://127.0.0.1:18928";
 
+test("ending-room fixture validator accepts only exact endpoint contracts", () => {
+  const validate = loadFunction("isValidEndingRoomFixtureRequest");
+
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/faction-timeline?branch_id=branch-1`,
+    "GET",
+    "scenario-1",
+    "faction-timeline",
+  ), true);
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/faction-timeline?branch_id=branch-1&extra=1`,
+    "GET",
+    "scenario-1",
+    "faction-timeline",
+  ), false);
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/faction-timeline?branch_id=`,
+    "GET",
+    "scenario-1",
+    "faction-timeline",
+  ), false);
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/social-feed`,
+    "GET",
+    "scenario-1",
+    "social-feed",
+  ), true);
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/social-feed?unexpected=1`,
+    "GET",
+    "scenario-1",
+    "social-feed",
+  ), false);
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/social-feed`,
+    "POST",
+    "scenario-1",
+    "social-feed",
+  ), false);
+  assert.equal(validate(
+    `${FRONTEND_URL}/api/scenario/scenario-1/social-feed-shadow`,
+    "GET",
+    "scenario-1",
+    "social-feed",
+  ), false);
+});
+
+test("ending-room fixture mismatches abort instead of reaching the live backend", () => {
+  const installSource = extractAsyncFunction("installEndingRoomFixtureRoutes");
+
+  assert.match(installSource, /route\.abort\("blockedbyclient"\)/u);
+  assert.doesNotMatch(installSource, /route\.fallback\(\)/u);
+});
+
+test("expected HTTP failures are bounded instead of becoming unlimited exemptions", () => {
+  const expectations = new Map();
+  const observedHttpKey = loadFunction("observedHttpKey");
+  const expectHttpFailure = loadFunction("expectHttpFailure", {
+    EXPECTED_HTTP_FAILURES: expectations,
+    observedHttpKey,
+  });
+  expectHttpFailure({
+    method: "GET",
+    status: 404,
+    pathname: "/api/example",
+    reason: "documented empty lookup",
+  });
+
+  assert.deepEqual(expectations.get("GET 404 /api/example"), {
+    reason: "documented empty lookup",
+    min_count: 0,
+    max_count: 1,
+  });
+
+  const buildObservedDiagnosticsFrom = loadFunction("buildObservedDiagnosticsFrom", {
+    observedHttpKey,
+  });
+  const diagnostics = buildObservedDiagnosticsFrom(
+    [
+      { kind: "http_error", method: "GET", status: 404, pathname: "/api/example" },
+      { kind: "http_error", method: "GET", status: 404, pathname: "/api/example" },
+    ],
+    expectations,
+  );
+  assert.equal(diagnostics.expected_count, 1);
+  assert.equal(diagnostics.unexpected_count, 1);
+  assert.match(diagnostics.issues[1].expected_reason, /budget.*1/u);
+});
+
 test("parseArgs accepts an explicit locale override", () => {
   const normalizeLocale = loadFunction("normalizeLocale");
   const parseArgs = loadFunction("parseArgs", {

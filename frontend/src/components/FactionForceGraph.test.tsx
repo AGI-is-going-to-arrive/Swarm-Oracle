@@ -178,6 +178,84 @@ describe('FactionForceGraph', () => {
     }
   });
 
+  it('resets the selected round and relation request when the branch scope changes', async () => {
+    const i18nInstance = createTestI18n();
+    const baseProps: FactionForceGraphProps = {
+      scenarioId: 'sc1',
+      branchId: 'b1',
+      factions: DEFAULT_FACTIONS,
+      totalRounds: 5,
+    };
+    const view = render(
+      <I18nextProvider i18n={i18nInstance}>
+        <FactionForceGraph {...baseProps} />
+      </I18nextProvider>,
+    );
+    await waitFor(() => {
+      expect(mockGetFactionRelations).toHaveBeenCalledWith('sc1', 'b1', { roundMax: 5 });
+    });
+
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '2' } });
+    expect(screen.getByRole('slider')).toHaveValue('2');
+
+    mockGetFactionRelations.mockClear();
+
+    view.rerender(
+      <I18nextProvider i18n={i18nInstance}>
+        <FactionForceGraph {...baseProps} branchId="b2" totalRounds={3} />
+      </I18nextProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('slider')).toHaveValue('3');
+      expect(mockGetFactionRelations).toHaveBeenCalledWith('sc1', 'b2', { roundMax: 3 });
+    });
+    expect(mockGetFactionRelations).toHaveBeenCalledTimes(1);
+    expect(mockGetFactionRelations).not.toHaveBeenCalledWith('sc1', 'b2', { roundMax: 2 });
+    expect(mockGetFactionRelations).not.toHaveBeenCalledWith('sc1', 'b2', { roundMax: 5 });
+  });
+
+  it('colors agent nodes from the membership snapshot for the selected round', async () => {
+    renderGraph({
+      totalRounds: 2,
+      factions: [
+        { key: 'round_2_alpha', members: ['a1', 'a3'] },
+        { key: 'round_2_beta', members: ['a2', 'a4'] },
+      ],
+      factionsByRound: [
+        {
+          round: 1,
+          factions: [
+            { key: 'round_1_alpha', members: ['a1', 'a2'] },
+            { key: 'round_1_beta', members: ['a3', 'a4'] },
+          ],
+        },
+        {
+          round: 2,
+          factions: [
+            { key: 'round_2_alpha', members: ['a1', 'a3'] },
+            { key: 'round_2_beta', members: ['a2', 'a4'] },
+          ],
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      const options = mockUseG6Graph.mock.calls.at(-1)?.[0].options as {
+        data?: { nodes?: Array<{ id: string; data: { combo: string } }> };
+      };
+      expect(options.data?.nodes?.find((node) => node.id === 'a2')?.data.combo).toBe('round_2_beta');
+    });
+
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '1' } });
+    await waitFor(() => {
+      const options = mockUseG6Graph.mock.calls.at(-1)?.[0].options as {
+        data?: { nodes?: Array<{ id: string; data: { combo: string } }> };
+      };
+      expect(options.data?.nodes?.find((node) => node.id === 'a2')?.data.combo).toBe('round_1_alpha');
+    });
+  });
+
   it('prefers-reduced-motion passes animate:false layout', async () => {
     const originalMatchMedia = window.matchMedia;
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({

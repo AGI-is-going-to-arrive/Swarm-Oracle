@@ -1441,6 +1441,164 @@ def test_collect_evidence_pool_uses_bounded_candidate_window(monkeypatch):
     }
 
 
+def test_evidence_query_and_pool_cover_early_middle_late_rounds():
+    scenario_id = _seed_scenario()
+    with Session(get_engine()) as session:
+        for round_number in range(3, 11):
+            round_id = f"temporal-round-{round_number}"
+            session.add(
+                Round(
+                    id=round_id,
+                    branch_id="branch-a",
+                    round_number=round_number,
+                )
+            )
+            session.add(
+                AgentMessage(
+                    id=f"temporal-message-{round_number}",
+                    round_id=round_id,
+                    agent_id="agent-finance",
+                    content=f"Round {round_number} fiscal update.",
+                    emotion="neutral",
+                )
+            )
+        session.commit()
+
+    scope = report_queries._create_report_lineage_scope(
+        scenario_id=scenario_id,
+        target_branch_id="branch-a",
+        rounds=tuple(
+            ReportRoundRef(
+                round_id=(
+                    f"round-{round_number}"
+                    if round_number <= 2
+                    else f"temporal-round-{round_number}"
+                ),
+                branch_id="branch-a",
+                round_number=round_number,
+            )
+            for round_number in range(1, 11)
+        ),
+    )
+
+    candidates = load_evidence_message_coords(
+        get_engine(),
+        scope,
+        key_moments=["privacy compromise"],
+        limit=6,
+    )
+    evidence = collect_evidence_pool(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        max_evidence=3,
+        report_scope=scope,
+    )
+
+    assert len(candidates) <= 6
+    assert {
+        min(2, (int(row["round_number"]) - 1) * 3 // 10) for row in candidates
+    } == {0, 1, 2}
+    assert [item.round_number for item in evidence] == sorted(
+        item.round_number for item in evidence
+    )
+    assert {
+        min(2, (item.round_number - 1) * 3 // 10) for item in evidence
+    } == {0, 1, 2}
+
+
+def test_evidence_budget_covers_agents_and_phases_in_stable_temporal_order():
+    scenario_id = _seed_scenario()
+    with Session(get_engine()) as session:
+        for round_number in range(3, 10):
+            session.add(
+                Round(
+                    id=f"diversity-round-{round_number}",
+                    branch_id="branch-a",
+                    round_number=round_number,
+                )
+            )
+        session.add_all(
+            [
+                AgentMessage(
+                    id="diversity-privacy-middle",
+                    round_id="diversity-round-4",
+                    agent_id="agent-privacy",
+                    content="Privacy safeguards remain decisive in the middle phase.",
+                    emotion="focused",
+                ),
+                AgentMessage(
+                    id="diversity-planner-middle",
+                    round_id="diversity-round-4",
+                    agent_id="agent-planner",
+                    content="The planner updates the implementation path.",
+                    emotion="neutral",
+                ),
+                AgentMessage(
+                    id="diversity-privacy-late",
+                    round_id="diversity-round-7",
+                    agent_id="agent-privacy",
+                    content="Privacy safeguards remain decisive in the late phase.",
+                    emotion="focused",
+                ),
+                AgentMessage(
+                    id="diversity-finance-late",
+                    round_id="diversity-round-7",
+                    agent_id="agent-finance",
+                    content="The finance office records the late budget position.",
+                    emotion="neutral",
+                ),
+            ]
+        )
+        session.commit()
+
+    scope = report_queries._create_report_lineage_scope(
+        scenario_id=scenario_id,
+        target_branch_id="branch-a",
+        rounds=tuple(
+            ReportRoundRef(
+                round_id=(
+                    f"round-{round_number}"
+                    if round_number <= 2
+                    else f"diversity-round-{round_number}"
+                ),
+                branch_id="branch-a",
+                round_number=round_number,
+            )
+            for round_number in range(1, 10)
+        ),
+    )
+
+    first = collect_evidence_pool(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        max_evidence=3,
+        report_scope=scope,
+    )
+    second = collect_evidence_pool(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        max_evidence=3,
+        report_scope=scope,
+    )
+
+    assert {item.agent_id for item in first} == {
+        "agent-planner",
+        "agent-privacy",
+        "agent-finance",
+    }
+    assert {
+        min(2, (item.round_number - 1) * 3 // 9) for item in first
+    } == {0, 1, 2}
+    first_coordinates = [(item.round_number, item.message_id) for item in first]
+    assert first_coordinates == sorted(first_coordinates)
+    assert first_coordinates == [
+        (item.round_number, item.message_id) for item in second
+    ]
+
+
 def test_collect_evidence_pool_max_evidence_zero_skips_message_query(monkeypatch):
     scenario_id = _seed_scenario()
 
@@ -1966,6 +2124,9 @@ def test_reduce_path_makes_zero_llm_calls(monkeypatch):
 def _seed_split_brain_scenario(
     *,
     result_quality_confidence: str | None = "medium",
+    result_quality_confidence_kind: str | None = None,
+    result_quality_confidence_branch_ids: list[str] | None = None,
+    with_evidence: bool = False,
 ) -> str:
     """Seed a scenario reproducing the split-brain layout (S1/S5 regression).
 
@@ -1978,6 +2139,14 @@ def _seed_split_brain_scenario(
     parsed_context: dict[str, Any] = {}
     if result_quality_confidence is not None:
         parsed_context["result_quality"] = {"confidence": result_quality_confidence}
+        if result_quality_confidence_kind is not None:
+            parsed_context["result_quality"]["confidence_kind"] = (
+                result_quality_confidence_kind
+            )
+        if result_quality_confidence_branch_ids is not None:
+            parsed_context["result_quality"]["confidence_terminal_branch_ids"] = (
+                result_quality_confidence_branch_ids
+            )
     with Session(engine) as session:
         scenario = Scenario(
             id="scenario-split-brain",
@@ -2038,6 +2207,19 @@ def _seed_split_brain_scenario(
             )
             for round_number in range(1, 5)
         ])
+        if with_evidence:
+            session.add_all(
+                [
+                    AgentMessage(
+                        id=f"split-brain-message-{round_number}",
+                        round_id=f"split-brain-root-{round_number}",
+                        agent_id="agent-analyst",
+                        content=f"Evidence checkpoint {round_number} supports the release window.",
+                        emotion="measured",
+                    )
+                    for round_number in range(1, 4)
+                ]
+            )
         session.commit()
     return "scenario-split-brain"
 
@@ -2268,39 +2450,132 @@ def test_reduce_answer_branch_fallback_prefers_later_terminal_quality_match():
     assert result.branch_distribution[0]["dominant"] is False
 
 
-def test_reduce_clamps_confidence_to_result_quality_ceiling():
+def test_reduce_clamps_confidence_to_provenance_marked_result_quality_ceiling(
+    monkeypatch,
+):
     """S5/AC-2: analytic confidence never exceeds the LLM self-rating."""
 
-    scenario_id = _seed_split_brain_scenario(result_quality_confidence="medium")
+    scenario_id = _seed_split_brain_scenario(
+        result_quality_confidence="low",
+        result_quality_confidence_kind="model_self_rating",
+        result_quality_confidence_branch_ids=["branch-leaf", "branch-leaf-2"],
+        with_evidence=True,
+    )
+    observed: dict[str, str | None] = {}
+    original = reducer_module.derive_confidence
+
+    def capture_ceiling(**kwargs):
+        observed["confidence_ceiling"] = kwargs.get("confidence_ceiling")
+        return original(**kwargs)
+
+    monkeypatch.setattr(reducer_module, "derive_confidence", capture_ceiling)
 
     result = reduce(get_engine(), scenario_id, dominant_branch_id="branch-leaf")
 
-    assert result.analytic_confidence.level in {"low", "medium"}
-    # Without the ceiling the same countable signals (>=2 branches, >=3 evidence
-    # would have pushed high); the ceiling caps it at the model's medium.
+    assert observed["confidence_ceiling"] == "low"
+    assert result.analytic_confidence.level == "low"
+    assert "model_self_rating_ceiling=low" in result.analytic_confidence.basis
+    assert "模型自评置信度上限" in result.analytic_confidence.basis_i18n.zh
+    assert "model self-rating ceiling" in result.analytic_confidence.basis_i18n.en
 
 
-def test_derive_confidence_ceiling_preserves_count_based_medium():
-    """Affect proxy does not create a synthetic high score before clamping."""
+@pytest.mark.parametrize(
+    ("confidence", "confidence_kind", "confidence_branch_ids"),
+    [
+        ("medium", None, ["branch-leaf", "branch-leaf-2"]),
+        ("medium", "legacy_unverified", ["branch-leaf", "branch-leaf-2"]),
+        ("certain", "model_self_rating", ["branch-leaf", "branch-leaf-2"]),
+        ("medium", "model_self_rating", None),
+    ],
+)
+def test_reduce_does_not_use_legacy_or_invalid_confidence_as_ceiling(
+    monkeypatch,
+    confidence,
+    confidence_kind,
+    confidence_branch_ids,
+):
+    scenario_id = _seed_split_brain_scenario(
+        result_quality_confidence=confidence,
+        result_quality_confidence_kind=confidence_kind,
+        result_quality_confidence_branch_ids=confidence_branch_ids,
+    )
+    observed: dict[str, str | None] = {}
+    original = reducer_module.derive_confidence
 
-    capped = derive_confidence(
+    def capture_ceiling(**kwargs):
+        observed["confidence_ceiling"] = kwargs.get("confidence_ceiling")
+        return original(**kwargs)
+
+    monkeypatch.setattr(reducer_module, "derive_confidence", capture_ceiling)
+
+    reduce(get_engine(), scenario_id, dominant_branch_id="branch-leaf")
+
+    assert observed["confidence_ceiling"] is None
+
+
+def test_reduce_marks_self_rating_stale_after_resume_branch_changes_scope(monkeypatch):
+    scenario_id = _seed_split_brain_scenario(
+        result_quality_confidence="low",
+        result_quality_confidence_kind="model_self_rating",
+        result_quality_confidence_branch_ids=["branch-leaf", "branch-leaf-2"],
+    )
+    with Session(get_engine()) as session:
+        session.add(
+            Branch(
+                id="branch-resume-child",
+                scenario_id=scenario_id,
+                parent_branch_id="branch-leaf",
+                title="Resumed outcome",
+                story="The resumed worldline produces a different terminal outcome.",
+                insight="The old self-rating did not assess this branch.",
+                probability=0.5,
+                fork_round=5,
+                status=BranchStatus.COMPLETED,
+                replay_kind="resume",
+            )
+        )
+        session.commit()
+    observed: dict[str, str | None] = {}
+    original = reducer_module.derive_confidence
+
+    def capture_ceiling(**kwargs):
+        observed["confidence_ceiling"] = kwargs.get("confidence_ceiling")
+        return original(**kwargs)
+
+    monkeypatch.setattr(reducer_module, "derive_confidence", capture_ceiling)
+
+    result = reduce(get_engine(), scenario_id, dominant_branch_id="branch-leaf-2")
+
+    assert observed["confidence_ceiling"] is None
+    assert "model_self_rating_ceiling" not in result.analytic_confidence.basis
+
+
+def test_derive_confidence_discloses_only_an_actual_model_self_rating_clamp():
+    """A same-level ceiling is silent; a medium-to-low clamp is explicit."""
+
+    same_level = derive_confidence(
         evidence_count=4,
         branch_count=3,
         agent_consensus_status="available",
         agent_consensus=0.75,
         confidence_ceiling="medium",
     )
-    assert capped.level == "medium"
+    assert same_level.level == "medium"
+    assert same_level.basis == "branch_count=3; evidence_count=4"
+    assert "模型自评" not in same_level.basis_i18n.zh
+    assert "model self-rating" not in same_level.basis_i18n.en
 
-    # A None/invalid ceiling leaves the derived level untouched.
-    uncapped = derive_confidence(
+    clamped = derive_confidence(
         evidence_count=4,
         branch_count=3,
         agent_consensus_status="available",
         agent_consensus=0.75,
-        confidence_ceiling=None,
+        confidence_ceiling="low",
     )
-    assert uncapped.level == "medium"
+    assert clamped.level == "low"
+    assert clamped.basis.endswith("model_self_rating_ceiling=low")
+    assert "模型自评置信度上限" in clamped.basis_i18n.zh
+    assert "model self-rating ceiling" in clamped.basis_i18n.en
 
     # A ceiling at/above the derived level does not raise it.
     not_raised = derive_confidence(

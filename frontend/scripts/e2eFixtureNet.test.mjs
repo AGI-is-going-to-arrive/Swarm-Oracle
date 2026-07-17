@@ -165,9 +165,13 @@ test("release-signoff fixture suite specs use a blackhole backend URL", () => {
   }
 });
 
-test("release-signoff executes its own focused contract tests", () => {
+test("release-signoff executes its focused and WS contract tests", () => {
   assert.equal(
     releaseSignoffTest.graphFocusedVitestTests.includes("src/scripts/releaseSignoff.test.ts"),
+    true,
+  );
+  assert.equal(
+    releaseSignoffTest.scriptContractTests.includes("scripts/e2e-ws-contract-suite.test.mjs"),
     true,
   );
 });

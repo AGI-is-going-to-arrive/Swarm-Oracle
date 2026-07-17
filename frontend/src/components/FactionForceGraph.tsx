@@ -15,6 +15,10 @@ export interface FactionForceGraphProps {
   scenarioId: string;
   branchId: string;
   factions: Array<{ key: string; members: string[]; label?: string }>;
+  factionsByRound?: Array<{
+    round: number;
+    factions: Array<{ key: string; members: string[]; label?: string }>;
+  }>;
   totalRounds: number;
   agentNames?: Record<string, string>;
 }
@@ -127,6 +131,7 @@ export function FactionForceGraph({
   scenarioId,
   branchId,
   factions,
+  factionsByRound,
   totalRounds,
   agentNames,
 }: FactionForceGraphProps) {
@@ -134,45 +139,88 @@ export function FactionForceGraph({
   const containerRef = useRef<HTMLDivElement>(null);
   const prefersReducedMotion = useReducedMotion();
 
-  const [currentRound, setCurrentRound] = useState(totalRounds);
-  const [debouncedRound, setDebouncedRound] = useState(totalRounds);
+  const scopeKey = JSON.stringify([scenarioId, branchId, totalRounds]);
+  const [roundState, setRoundState] = useState(() => ({
+    scopeKey,
+    currentRound: totalRounds,
+    debouncedRound: totalRounds,
+  }));
+  const currentRound = roundState.scopeKey === scopeKey
+    ? roundState.currentRound
+    : totalRounds;
+  const debouncedRound = roundState.scopeKey === scopeKey
+    ? roundState.debouncedRound
+    : totalRounds;
   const [relationsData, setRelationsData] = useState<FactionRelationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fetchIdRef = useRef(0);
+  const activeScopeRef = useRef(scopeKey);
+  activeScopeRef.current = scopeKey;
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedRound(currentRound), 200);
+    fetchIdRef.current += 1;
+    setRoundState({
+      scopeKey,
+      currentRound: totalRounds,
+      debouncedRound: totalRounds,
+    });
+    setRelationsData(null);
+    setLoading(false);
+    setError(null);
+  }, [scopeKey, totalRounds]);
+
+  useEffect(() => {
+    if (roundState.scopeKey !== scopeKey) return;
+    const timer = setTimeout(() => {
+      setRoundState((current) => {
+        if (current.scopeKey !== scopeKey || current.debouncedRound === current.currentRound) {
+          return current;
+        }
+        return { ...current, debouncedRound: current.currentRound };
+      });
+    }, 200);
     return () => clearTimeout(timer);
-  }, [currentRound]);
+  }, [currentRound, roundState.scopeKey, scopeKey]);
 
   const allAgentIds = useMemo(() => {
     const ids = new Set<string>();
     factions.forEach((f) => f.members.forEach((m) => ids.add(m)));
+    factionsByRound?.forEach((snapshot) => {
+      snapshot.factions.forEach((faction) => {
+        faction.members.forEach((member) => ids.add(member));
+      });
+    });
     return ids;
-  }, [factions]);
+  }, [factions, factionsByRound]);
 
-  const isEmpty = totalRounds < 1 || factions.length === 0 || allAgentIds.size < MIN_AGENTS_FOR_GRAPH;
+  const currentFactions = useMemo(() => {
+    if (!factionsByRound) return factions;
+    return factionsByRound.find((snapshot) => snapshot.round === currentRound)?.factions ?? [];
+  }, [currentRound, factions, factionsByRound]);
+
+  const isEmpty = totalRounds < 1 || allAgentIds.size < MIN_AGENTS_FOR_GRAPH;
 
   const fetchRelations = useCallback(async (round: number) => {
     fetchIdRef.current += 1;
     const requestId = fetchIdRef.current;
+    const requestScope = scopeKey;
     setLoading(true);
     setError(null);
     try {
       const data = await getFactionRelations(scenarioId, branchId, { roundMax: round });
-      if (requestId !== fetchIdRef.current) return;
+      if (requestId !== fetchIdRef.current || activeScopeRef.current !== requestScope) return;
       setRelationsData(data);
     } catch (err) {
-      if (requestId !== fetchIdRef.current) return;
+      if (requestId !== fetchIdRef.current || activeScopeRef.current !== requestScope) return;
       const message = isApiError(err) ? (err as Error).message : 'fetch_error';
       setError(message);
     } finally {
-      if (requestId === fetchIdRef.current) {
+      if (requestId === fetchIdRef.current && activeScopeRef.current === requestScope) {
         setLoading(false);
       }
     }
-  }, [scenarioId, branchId]);
+  }, [scenarioId, branchId, scopeKey]);
 
   useEffect(() => {
     if (!isEmpty) {
@@ -182,8 +230,8 @@ export function FactionForceGraph({
 
   const g6Data = useMemo(() => {
     if (!relationsData) return { nodes: [], edges: [], combos: [] };
-    return transformToG6Data(relationsData.edges, factions, currentRound, agentNames);
-  }, [relationsData, factions, currentRound, agentNames]);
+    return transformToG6Data(relationsData.edges, currentFactions, currentRound, agentNames);
+  }, [relationsData, currentFactions, currentRound, agentNames]);
 
   type D = { data?: Record<string, unknown> };
   const g6Options = useMemo(() => ({
@@ -229,8 +277,17 @@ export function FactionForceGraph({
   useG6Graph({ containerRef, options: g6Options });
 
   const handleSliderChange = useCallback((value: number[]) => {
-    setCurrentRound(value[0]);
-  }, []);
+    const requestedRound = value[0];
+    if (!Number.isFinite(requestedRound)) return;
+    const nextRound = Math.min(totalRounds, Math.max(1, requestedRound));
+    setRoundState((current) => ({
+      scopeKey,
+      currentRound: nextRound,
+      debouncedRound: current.scopeKey === scopeKey
+        ? current.debouncedRound
+        : totalRounds,
+    }));
+  }, [scopeKey, totalRounds]);
 
   if (isEmpty) {
     const message = allAgentIds.size < MIN_AGENTS_FOR_GRAPH

@@ -482,6 +482,7 @@ class TestResumeEndpoint:
             return result
 
         mock_session.exec = MagicMock(side_effect=exec_side_effect)
+        mock_session.get.return_value = scenario
         mock_session.__enter__ = lambda s: s
         mock_session.__exit__ = MagicMock(return_value=False)
         with patch(
@@ -745,12 +746,165 @@ class TestResumeEndpoint:
         assert response.status_code == 201
         clone_id = response.json()["branch_id"]
         with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
             cloned_rounds = session.exec(
                 select(Round)
                 .where(Round.branch_id == clone_id)
                 .order_by(Round.round_number)
             ).all()
         assert [round_.round_number for round_ in cloned_rounds] == [1]
+
+    def test_status_commit_failure_rolls_back_resume_branch_and_releases_locks(
+        self,
+        monkeypatch,
+    ):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        release_mock = MagicMock(return_value=True)
+
+        class FailSimulatingCommitSession(Session):
+            failure_count = 0
+
+            def commit(self) -> None:
+                should_fail = any(
+                    isinstance(value, Scenario)
+                    and value.status == ScenarioStatus.SIMULATING
+                    for value in self.dirty
+                )
+                if should_fail and type(self).failure_count == 0:
+                    type(self).failure_count += 1
+                    raise sqlite3.OperationalError("scenario status commit failed")
+                super().commit()
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(graphs_module, "Session", FailSimulatingCommitSession)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: replay_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: simulation_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_stop_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", release_mock)
+        run_mock = MagicMock()
+        schedule_mock = MagicMock()
+        monkeypatch.setattr(graphs_module, "run_sim_background", run_mock)
+        monkeypatch.setattr(graphs_module, "schedule_background_task", schedule_mock)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                f"/api/scenario/{sid}/resume",
+                json={"source_branch_id": bid, "round_number": 1},
+            )
+
+        assert response.status_code == 500
+        assert FailSimulatingCommitSession.failure_count == 1
+        run_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        assert release_mock.call_count == 2
+        release_mock.assert_any_call(replay_lease)
+        release_mock.assert_any_call(simulation_lease)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "resume",
+                )
+            ).all()
+        assert replay_branches == []
+
+    def test_resume_does_not_overwrite_cancellation_that_wins_during_clone(
+        self,
+        monkeypatch,
+    ):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid = _seed_resume_scenario(engine)
+        original_clone = graphs_module.clone_until_round
+        run_mock = MagicMock()
+        schedule_mock = MagicMock()
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args, **_kwargs: MagicMock(),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_stop_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", lambda *_args: True)
+        monkeypatch.setattr(graphs_module, "run_sim_background", run_mock)
+        monkeypatch.setattr(graphs_module, "schedule_background_task", schedule_mock)
+
+        def clone_then_cancel(*args, **kwargs):
+            clone_id = original_clone(*args, **kwargs)
+            with Session(engine) as session:
+                scenario = session.get(Scenario, sid)
+                assert scenario is not None
+                scenario.status = ScenarioStatus.CANCELLED
+                session.add(scenario)
+                session.commit()
+            return clone_id
+
+        monkeypatch.setattr(graphs_module, "clone_until_round", clone_then_cancel)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post(
+                f"/api/scenario/{sid}/resume",
+                json={"source_branch_id": bid, "round_number": 1},
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "RESUME_SCENARIO_STATUS_INVALID"
+        run_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.CANCELLED
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "resume",
+                )
+            ).all()
+        assert replay_branches == []
 
     def test_resume_release_failure_does_not_override_success(self, monkeypatch):
         from app.api import graphs as graphs_module

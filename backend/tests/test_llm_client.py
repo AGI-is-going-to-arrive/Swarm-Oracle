@@ -2810,6 +2810,7 @@ class TestStreamingSupportProbe:
         second = await llm_client.probe_streaming_support(
             base_url="https://example.com/v1/chat/completions",
             model="test-model",
+            timeout=0.01,
         )
 
         assert first["supported"] is True
@@ -2889,12 +2890,109 @@ class TestStreamingSupportProbe:
         assert result["supported"] is False
         assert result["error_code"] == "LLM_TIMEOUT"
         assert time.monotonic() - started < 0.05
-        assert llm_client._stream_support_cache == {}
+        assert len(llm_client._stream_support_cache) == 1
 
     @pytest.mark.asyncio
-    async def test_probe_streaming_support_does_not_cache_credential_failure(
+    async def test_probe_streaming_support_timeout_cache_is_scoped_and_short_lived(
         self,
         monkeypatch,
+    ):
+        calls: list[tuple[str | None, str | None, str | None, float | None]] = []
+        clock = {"value": 100.0}
+
+        async def _timeout_stream(*args, **kwargs):
+            calls.append(
+                (
+                    kwargs.get("base_url"),
+                    kwargs.get("model"),
+                    kwargs.get("api_key"),
+                    kwargs.get("timeout"),
+                )
+            )
+            raise TimeoutError
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _timeout_stream)
+        monkeypatch.setattr(llm_client, "monotonic", lambda: clock["value"])
+        monkeypatch.setattr(llm_client, "_STREAM_TIMEOUT_CACHE_TTL_SECONDS", 5.0)
+        llm_client._stream_support_cache.clear()
+
+        first = await llm_client.probe_streaming_support(
+            api_key="key-a",
+            base_url="https://one.example/v1/chat/completions",
+            model="model-a",
+            timeout=8.0,
+            force_refresh=True,
+        )
+        cached = await llm_client.probe_streaming_support(
+            api_key="key-a",
+            base_url="https://one.example/v1/chat/completions",
+            model="model-a",
+            timeout=8,
+        )
+        different_timeout = await llm_client.probe_streaming_support(
+            api_key="key-a",
+            base_url="https://one.example/v1/chat/completions",
+            model="model-a",
+            timeout=6.0,
+        )
+        different_credential = await llm_client.probe_streaming_support(
+            api_key="key-b",
+            base_url="https://one.example/v1/chat/completions",
+            model="model-a",
+            timeout=8.0,
+        )
+        await llm_client.probe_streaming_support(
+            api_key="key-a",
+            base_url="https://one.example/v1/chat/completions",
+            model="model-b",
+            timeout=8.0,
+        )
+        await llm_client.probe_streaming_support(
+            api_key="key-a",
+            base_url="https://two.example/v1/chat/completions",
+            model="model-a",
+            timeout=8.0,
+        )
+        clock["value"] += 5.01
+        expired = await llm_client.probe_streaming_support(
+            api_key="key-a",
+            base_url="https://one.example/v1/chat/completions",
+            model="model-a",
+            timeout=8.0,
+        )
+
+        assert first["error_code"] == "LLM_TIMEOUT"
+        assert first["cached"] is False
+        assert cached["error_code"] == "LLM_TIMEOUT"
+        assert cached["supported"] is False
+        assert cached["cached"] is True
+        assert different_timeout["cached"] is False
+        assert different_credential["cached"] is False
+        assert expired["cached"] is False
+        assert calls == [
+            ("https://one.example/v1/chat/completions", "model-a", "key-a", 8.0),
+            ("https://one.example/v1/chat/completions", "model-a", "key-a", 6.0),
+            ("https://one.example/v1/chat/completions", "model-a", "key-b", 8.0),
+            ("https://one.example/v1/chat/completions", "model-b", "key-a", 8.0),
+            ("https://two.example/v1/chat/completions", "model-a", "key-a", 8.0),
+            ("https://one.example/v1/chat/completions", "model-a", "key-a", 8.0),
+        ]
+        assert all(
+            secret not in cache_key
+            for cache_key in llm_client._stream_support_cache
+            for secret in ("key-a", "key-b")
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_code",
+        ["LLM_AUTH_FAILED", "LLM_RATE_LIMITED", "LLM_MODEL_NOT_FOUND"],
+    )
+    async def test_probe_streaming_support_does_not_cache_stable_provider_failure(
+        self,
+        monkeypatch,
+        error_code,
     ):
         calls = 0
 
@@ -2902,7 +3000,7 @@ class TestStreamingSupportProbe:
             nonlocal calls
             calls += 1
             if kwargs.get("api_key") == "bad-key":
-                raise llm_client.LLMError("bad key", code="LLM_AUTH_FAILED")
+                raise llm_client.LLMError("stable provider failure", code=error_code)
             yield "OK"
 
         monkeypatch.setattr(llm_client, "llm_call_stream", _key_sensitive_stream)
@@ -2920,11 +3018,339 @@ class TestStreamingSupportProbe:
             model="test-model",
         )
 
-        assert first["error_code"] == "LLM_AUTH_FAILED"
+        assert first["error_code"] == error_code
         assert second["supported"] is True
         assert second["error_code"] is None
         assert second["cached"] is False
         assert calls == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_same_scope_uses_one_stream_probe(self, monkeypatch):
+        calls = 0
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _blocked_stream(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            started.set()
+            await release.wait()
+            yield "OK"
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _blocked_stream)
+        llm_client._stream_support_cache.clear()
+        llm_client._stream_support_inflight.clear()
+
+        equivalent_timeouts = [8, 8.0, 8, 8.0, 8]
+        tasks = [
+            asyncio.create_task(
+                llm_client.probe_streaming_support(
+                    api_key="same-secret",
+                    base_url="https://example.com/v1/chat/completions",
+                    model="test-model",
+                    timeout=probe_timeout,
+                )
+            )
+            for probe_timeout in equivalent_timeouts
+        ]
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        assert calls == 1
+        assert len(llm_client._stream_support_inflight) == 1
+        _, scope_key = next(iter(llm_client._stream_support_inflight))
+        assert "same-secret" not in scope_key
+
+        release.set()
+        results = await asyncio.gather(*tasks)
+        await asyncio.sleep(0)
+
+        assert all(result is results[0] for result in results)
+        assert all(result["supported"] is True for result in results)
+        assert llm_client._stream_support_inflight == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("first_timeout", "second_timeout"),
+        [(0.01, 0.05), (0.05, 0.01)],
+    )
+    async def test_concurrent_different_timeout_policies_do_not_share_probe(
+        self,
+        monkeypatch,
+        first_timeout,
+        second_timeout,
+    ):
+        calls: list[float] = []
+        first_started = asyncio.Event()
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _policy_sensitive_probe(**kwargs):
+            probe_timeout = kwargs["timeout"]
+            calls.append(probe_timeout)
+            if len(calls) == 1:
+                first_started.set()
+            if len(calls) == 2:
+                both_started.set()
+            await release.wait()
+            timed_out = probe_timeout == 0.01
+            return {
+                "status": "ok",
+                "model": kwargs["effective_model"],
+                "supported": not timed_out,
+                "reason": "timed out" if timed_out else None,
+                "error_code": "LLM_TIMEOUT" if timed_out else None,
+                "cached": False,
+                "checked_at": 1.0,
+            }
+
+        monkeypatch.setattr(
+            llm_client,
+            "_probe_streaming_support_uncached",
+            _policy_sensitive_probe,
+        )
+        llm_client._stream_support_cache.clear()
+        llm_client._stream_support_inflight.clear()
+
+        first_task = asyncio.create_task(
+            llm_client.probe_streaming_support(
+                api_key="same-secret",
+                base_url="https://example.com/v1/chat/completions",
+                model="test-model",
+                timeout=first_timeout,
+                force_refresh=True,
+            )
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1.0)
+        second_task = asyncio.create_task(
+            llm_client.probe_streaming_support(
+                api_key="same-secret",
+                base_url="https://example.com/v1/chat/completions",
+                model="test-model",
+                timeout=second_timeout,
+                force_refresh=True,
+            )
+        )
+        await asyncio.wait_for(both_started.wait(), timeout=1.0)
+
+        assert len(llm_client._stream_support_inflight) == 2
+        scope_keys = {
+            scope_key for _, scope_key in llm_client._stream_support_inflight
+        }
+        assert len(scope_keys) == 2
+        assert all("same-secret" not in scope_key for scope_key in scope_keys)
+
+        release.set()
+        first, second = await asyncio.gather(first_task, second_task)
+        await asyncio.sleep(0)
+
+        assert calls == [first_timeout, second_timeout]
+        for probe_timeout, result in (
+            (first_timeout, first),
+            (second_timeout, second),
+        ):
+            assert result["supported"] is (probe_timeout == 0.05)
+            assert result["error_code"] == (
+                None if probe_timeout == 0.05 else "LLM_TIMEOUT"
+            )
+        assert llm_client._stream_support_inflight == {}
+
+    @pytest.mark.asyncio
+    async def test_concurrent_different_credentials_do_not_share_probe(self, monkeypatch):
+        calls: list[str | None] = []
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _key_sensitive_stream(*args, **kwargs):
+            api_key = kwargs.get("api_key")
+            calls.append(api_key)
+            if len(calls) == 2:
+                both_started.set()
+            await release.wait()
+            if api_key == "bad-secret":
+                raise llm_client.LLMError("invalid credentials", code="LLM_AUTH_FAILED")
+            yield "OK"
+
+        monkeypatch.setattr(llm_client, "llm_call_stream", _key_sensitive_stream)
+        llm_client._stream_support_cache.clear()
+        llm_client._stream_support_inflight.clear()
+
+        bad_task = asyncio.create_task(
+            llm_client.probe_streaming_support(
+                api_key="bad-secret",
+                base_url="https://example.com/v1/chat/completions",
+                model="test-model",
+            )
+        )
+        good_task = asyncio.create_task(
+            llm_client.probe_streaming_support(
+                api_key="good-secret",
+                base_url="https://example.com/v1/chat/completions",
+                model="test-model",
+            )
+        )
+        await asyncio.wait_for(both_started.wait(), timeout=1.0)
+
+        assert len(llm_client._stream_support_inflight) == 2
+        assert all(
+            secret not in scope_key
+            for _, scope_key in llm_client._stream_support_inflight
+            for secret in ("bad-secret", "good-secret")
+        )
+
+        release.set()
+        bad, good = await asyncio.gather(bad_task, good_task)
+        await asyncio.sleep(0)
+
+        assert sorted(calls) == ["bad-secret", "good-secret"]
+        assert bad["error_code"] == "LLM_AUTH_FAILED"
+        assert good["supported"] is True
+        assert llm_client._stream_support_inflight == {}
+
+    def test_same_scope_is_partitioned_by_event_loop(self, monkeypatch):
+        calls_by_loop: dict[int, int] = {}
+        results: dict[int, list[dict]] = {}
+        failures: list[Exception] = []
+        state_lock = threading.Lock()
+        both_loops_started = threading.Event()
+        release = threading.Event()
+
+        async def _blocked_probe(**kwargs):
+            loop_id = id(asyncio.get_running_loop())
+            with state_lock:
+                calls_by_loop[loop_id] = calls_by_loop.get(loop_id, 0) + 1
+                if len(calls_by_loop) == 2:
+                    both_loops_started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.001)
+            return {
+                "status": "ok",
+                "model": kwargs["effective_model"],
+                "supported": True,
+                "reason": None,
+                "error_code": None,
+                "cached": False,
+                "checked_at": 1.0,
+            }
+
+        monkeypatch.setattr(
+            llm_client,
+            "_probe_streaming_support_uncached",
+            _blocked_probe,
+        )
+        llm_client._stream_support_cache.clear()
+        llm_client._stream_support_inflight.clear()
+
+        def _run_worker(worker_id: int) -> None:
+            async def _run_probes() -> list[dict]:
+                tasks = [
+                    asyncio.create_task(
+                        llm_client.probe_streaming_support(
+                            api_key="same-secret",
+                            base_url="https://example.com/v1/chat/completions",
+                            model="test-model",
+                            force_refresh=True,
+                        )
+                    )
+                    for _ in range(3)
+                ]
+                grouped_results = await asyncio.gather(*tasks)
+                await asyncio.sleep(0)
+                return grouped_results
+
+            try:
+                results[worker_id] = asyncio.run(_run_probes())
+            except Exception as exc:
+                with state_lock:
+                    failures.append(exc)
+
+        threads = [
+            threading.Thread(target=_run_worker, args=(worker_id,))
+            for worker_id in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+
+        started_in_both_loops = both_loops_started.wait(timeout=2.0)
+        with llm_client._stream_support_inflight_lock:
+            inflight_keys = list(llm_client._stream_support_inflight)
+        release.set()
+        for thread in threads:
+            thread.join(timeout=2.0)
+
+        assert started_in_both_loops is True
+        assert all(not thread.is_alive() for thread in threads)
+        assert failures == []
+        assert len(calls_by_loop) == 2
+        assert set(calls_by_loop.values()) == {1}
+        assert len(inflight_keys) == 2
+        assert len({id(loop) for loop, _ in inflight_keys}) == 2
+        assert len({scope_key for _, scope_key in inflight_keys}) == 1
+        assert all("same-secret" not in scope_key for _, scope_key in inflight_keys)
+        assert set(results) == {0, 1}
+        assert all(
+            all(result is grouped_results[0] for result in grouped_results)
+            for grouped_results in results.values()
+        )
+        assert llm_client._stream_support_inflight == {}
+
+    @pytest.mark.asyncio
+    async def test_failed_single_flight_is_shared_then_retryable(self, monkeypatch):
+        calls = 0
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _probe_once(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                started.set()
+                await release.wait()
+                raise RuntimeError("probe task failed")
+            return {
+                "status": "ok",
+                "model": kwargs["effective_model"],
+                "supported": True,
+                "reason": None,
+                "error_code": None,
+                "cached": False,
+                "checked_at": 1.0,
+            }
+
+        monkeypatch.setattr(llm_client, "_probe_streaming_support_uncached", _probe_once)
+        llm_client._stream_support_cache.clear()
+        llm_client._stream_support_inflight.clear()
+
+        tasks = [
+            asyncio.create_task(
+                llm_client.probe_streaming_support(
+                    api_key="same-secret",
+                    base_url="https://example.com/v1/chat/completions",
+                    model="test-model",
+                )
+            )
+            for _ in range(3)
+        ]
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+        release.set()
+        failures = await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert calls == 1
+        assert all(isinstance(failure, RuntimeError) for failure in failures)
+        assert all(failure is failures[0] for failure in failures)
+        assert llm_client._stream_support_inflight == {}
+
+        retry = await llm_client.probe_streaming_support(
+            api_key="same-secret",
+            base_url="https://example.com/v1/chat/completions",
+            model="test-model",
+        )
+
+        assert calls == 2
+        assert retry["supported"] is True
+        assert llm_client._stream_support_inflight == {}
 
 
 class TestJSONStreamFallbackHelper:
@@ -2967,15 +3393,90 @@ class TestJSONStreamFallbackHelper:
         assert result == {"answer": "from-non-stream"}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("probe_timeout_mode", ["reported", "raised"])
+    async def test_falls_back_to_non_stream_when_capability_probe_times_out(
+        self,
+        monkeypatch,
+        probe_timeout_mode,
+    ):
+        async def _timeout_probe(**kwargs):
+            if probe_timeout_mode == "raised":
+                raise TimeoutError
+            return {
+                "supported": False,
+                "reason": "capability probe timed out",
+                "error_code": "LLM_TIMEOUT",
+            }
+
+        async def _fake_non_stream(*args, **kwargs):
+            return {"answer": "from-non-stream"}
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("stream path should not run after probe timeout")
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _timeout_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _should_not_run)
+        monkeypatch.setattr(llm_client, "llm_call_json", _fake_non_stream)
+
+        result = await llm_call_json_with_stream_fallback(
+            "ignored",
+            probe_timeout=0.01,
+            timeout=1.0,
+        )
+
+        assert result == {"answer": "from-non-stream"}
+
+    @pytest.mark.asyncio
+    async def test_non_stream_timeout_after_probe_timeout_remains_fail_closed(
+        self,
+        monkeypatch,
+    ):
+        non_stream_started = False
+
+        async def _timeout_probe(**kwargs):
+            return {
+                "supported": False,
+                "reason": "capability probe timed out",
+                "error_code": "LLM_TIMEOUT",
+            }
+
+        async def _hanging_non_stream(*args, **kwargs):
+            nonlocal non_stream_started
+            non_stream_started = True
+            await asyncio.Event().wait()
+            return {"answer": "too-late"}
+
+        async def _should_not_run(*args, **kwargs):
+            raise AssertionError("stream path should not run after probe timeout")
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _timeout_probe)
+        monkeypatch.setattr(llm_client, "llm_call_json_stream", _should_not_run)
+        monkeypatch.setattr(llm_client, "llm_call_json", _hanging_non_stream)
+
+        with pytest.raises(llm_client.LLMError) as raised:
+            await asyncio.wait_for(
+                llm_call_json_with_stream_fallback("ignored", timeout=0.02),
+                timeout=0.2,
+            )
+
+        assert non_stream_started is True
+        assert raised.value.code == "LLM_TIMEOUT"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_code",
+        ["LLM_AUTH_FAILED", "LLM_RATE_LIMITED", "LLM_MODEL_NOT_FOUND"],
+    )
     async def test_does_not_replay_stable_provider_failure_from_stream_probe(
         self,
         monkeypatch,
+        error_code,
     ):
         async def _fake_probe(**kwargs):
             return {
                 "supported": False,
-                "reason": "invalid credentials",
-                "error_code": "LLM_AUTH_FAILED",
+                "reason": "stable provider failure",
+                "error_code": error_code,
             }
 
         async def _should_not_run(*args, **kwargs):
@@ -2988,7 +3489,7 @@ class TestJSONStreamFallbackHelper:
         with pytest.raises(llm_client.LLMError) as raised:
             await llm_call_json_with_stream_fallback("ignored", probe_timeout=1.0)
 
-        assert raised.value.code == "LLM_AUTH_FAILED"
+        assert raised.value.code == error_code
 
     @pytest.mark.asyncio
     async def test_falls_back_to_non_stream_when_stream_call_errors(self, monkeypatch):

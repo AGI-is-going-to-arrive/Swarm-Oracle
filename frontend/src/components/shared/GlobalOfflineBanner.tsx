@@ -6,7 +6,14 @@
    is the orchestrator's responsibility (see plan §FE-5).
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface GlobalOfflineBannerProps {
@@ -25,6 +32,30 @@ export interface GlobalOfflineBannerProps {
 
 const DEFAULT_GRACE_MS = 10_000;
 const useIsomorphicLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
+const OFFLINE_RETRY_EVENT = 'swarmoracle:offline-retry';
+const visibleRecoveryInstances = new Set<symbol>();
+const recoveryVisibilitySubscribers = new Set<() => void>();
+
+function subscribeToRecoveryVisibility(callback: () => void): () => void {
+  recoveryVisibilitySubscribers.add(callback);
+  return () => recoveryVisibilitySubscribers.delete(callback);
+}
+
+function getRecoveryVisibility(): boolean {
+  return visibleRecoveryInstances.size > 0;
+}
+
+function updateRecoveryVisibility(instanceId: symbol, visible: boolean): void {
+  const wasVisible = getRecoveryVisibility();
+  if (visible) {
+    visibleRecoveryInstances.add(instanceId);
+  } else {
+    visibleRecoveryInstances.delete(instanceId);
+  }
+  if (wasVisible !== getRecoveryVisibility()) {
+    recoveryVisibilitySubscribers.forEach((subscriber) => subscriber());
+  }
+}
 
 function hasWsGraceElapsed(
   wsDisconnectedAt: number | null | undefined,
@@ -51,6 +82,8 @@ export function GlobalOfflineBanner({
     hasWsGraceElapsed(wsDisconnectedAt, wsDisconnectedGraceMs),
   );
   const timerRef = useRef<number | null>(null);
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const recoveryInstanceIdRef = useRef(Symbol('global-offline-recovery'));
 
   // Track navigator.onLine transitions.
   useEffect(() => {
@@ -104,14 +137,51 @@ export function GlobalOfflineBanner({
     onRetry?.();
   }, [onRetry]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleRecoveryRetry = () => handleRetry();
+    window.addEventListener(OFFLINE_RETRY_EVENT, handleRecoveryRetry);
+    return () => window.removeEventListener(OFFLINE_RETRY_EVENT, handleRecoveryRetry);
+  }, [handleRetry]);
+
+  useEffect(() => {
+    const instanceId = recoveryInstanceIdRef.current;
+    updateRecoveryVisibility(instanceId, visible);
+    return () => updateRecoveryVisibility(instanceId, false);
+  }, [visible]);
+
+  // This recovery control must remain reachable above modal focus traps. Some
+  // dialogs isolate pre-existing root siblings with inert/aria-hidden; remove
+  // those attributes if they are applied to the global connectivity banner.
+  useEffect(() => {
+    const banner = bannerRef.current;
+    if (!visible || !banner || typeof MutationObserver === 'undefined') return;
+
+    const keepRecoveryControlInteractive = () => {
+      banner.removeAttribute('inert');
+      if (banner.getAttribute('aria-hidden') === 'true') {
+        banner.removeAttribute('aria-hidden');
+      }
+    };
+    keepRecoveryControlInteractive();
+
+    const observer = new MutationObserver(keepRecoveryControlInteractive);
+    observer.observe(banner, {
+      attributes: true,
+      attributeFilter: ['inert', 'aria-hidden'],
+    });
+    return () => observer.disconnect();
+  }, [visible]);
+
   if (!visible) return null;
 
   return (
     <div
+      ref={bannerRef}
       data-testid="global-offline-banner"
       role="alert"
       aria-live="assertive"
-      className="fixed left-0 right-0 top-0 z-50 flex items-center justify-between gap-3 bg-rose-600 px-4 py-2 text-sm text-white shadow-md"
+      className="pointer-events-auto fixed left-0 right-0 top-0 z-[10000] flex items-center justify-between gap-3 bg-rose-600 px-4 py-2 text-sm text-white shadow-md"
     >
       <div className="flex flex-col">
         <strong>
@@ -125,7 +195,48 @@ export function GlobalOfflineBanner({
       </div>
       <button
         type="button"
+        data-focus-trap-exempt="true"
         onClick={handleRetry}
+        className="pointer-events-auto rounded-md bg-white/10 px-3 py-1 text-xs font-medium hover:bg-white/20"
+      >
+        {t('offline_banner.retry_cta', { defaultValue: 'Retry' })}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * A compact recovery control rendered inside Radix modal focus scopes.
+ * Radix intentionally hides and traps focus away from root siblings, so the
+ * fixed global banner alone cannot provide a keyboard-reachable Retry action.
+ */
+export function GlobalOfflineRecoveryAction() {
+  const { t } = useTranslation();
+  const visible = useSyncExternalStore(
+    subscribeToRecoveryVisibility,
+    getRecoveryVisibility,
+    () => false,
+  );
+
+  if (!visible) return null;
+
+  return (
+    <div
+      data-testid="global-offline-recovery-action"
+      role="group"
+      aria-label={t('offline_banner.title', { defaultValue: 'You are offline' })}
+      className="flex items-center justify-between gap-3 rounded-md border border-rose-300/50 bg-rose-600 px-3 py-2 text-sm text-white shadow-md"
+    >
+      <strong>
+        {t('offline_banner.title', { defaultValue: 'You are offline' })}
+      </strong>
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event(OFFLINE_RETRY_EVENT));
+          }
+        }}
         className="rounded-md bg-white/10 px-3 py-1 text-xs font-medium hover:bg-white/20"
       >
         {t('offline_banner.retry_cta', { defaultValue: 'Retry' })}

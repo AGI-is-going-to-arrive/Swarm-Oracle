@@ -1830,6 +1830,7 @@ export interface FactionTimelineEvent {
 
 export interface FactionTimelineEntry {
   round: number;
+  degraded?: 'all_neutral' | string | null;
   /** Optional only for legacy payloads emitted before branch-lineage attribution. */
   branch_id?: string | null;
   /** Legacy payloads may omit this or report the former segment-only scope. */

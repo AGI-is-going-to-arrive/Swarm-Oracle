@@ -126,7 +126,10 @@ import SocialFeedPanel from './result/SocialFeedPanel';
 import { MultiRunDistributionPanel } from '../components/result/MultiRunDistributionPanel';
 import { MultiRunWaitingPanel } from '../components/result/MultiRunWaitingPanel';
 import ResultVerdictPanel from './result/ResultVerdictPanel';
-import { ResultReportPanel } from './result/ResultReportPanel';
+import {
+  ResultReportPanel,
+  resolveReportContentLanguage,
+} from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
 import ExploreDeeperBridge from './result/ExploreDeeperBridge';
 import UnifiedSourceFeed from '../components/result/UnifiedSourceFeed';
@@ -227,6 +230,8 @@ export default function ResultView() {
   // FE-5: mobile source sheet visibility (R1 FM5)
   const [mobileSourceSheetOpen, setMobileSourceSheetOpen] = useState(false);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
+  const replayUrlPromiseRef = useRef<Promise<string | null> | null>(null);
+  const replayUrlGenerationRef = useRef({ epoch: 0, scenarioId: null as string | null });
   const [replayPayload, setReplayPayload] = useState<ScenarioResultReplayPayload | null>(null);
   const [replayEndingRoomPayload, setReplayEndingRoomPayload] = useState<OracleReplayPayload | null>(null);
   const [shareAutomation, setShareAutomation] = useState<Record<string, unknown> | null>(null);
@@ -830,9 +835,25 @@ export default function ResultView() {
           || report.status === 'partial'
           || ((report.status === 'failed' || report.status === 'cancelled') && hasSavedSections);
         if (isExportableTerminal) {
-          const title = isZh ? report.title_i18n?.zh || report.title : report.title_i18n?.en || report.title;
-          const summary = isZh ? report.summary_i18n?.zh || report.summary : report.summary_i18n?.en || report.summary;
-          const statusText = isZh
+          const reportContentLanguage = resolveReportContentLanguage(report, isZh ? 'zh' : 'en');
+          const reportContentIsZh = reportContentLanguage === 'zh';
+          const usesPrimaryReportLanguage = reportContentLanguage === report.language;
+          const fixedReportT = i18n.getFixedT(reportContentLanguage);
+          const translateReportCopy = (key: string, defaultValue: string): string => {
+            const translated = fixedReportT(key, { defaultValue });
+            return typeof translated === 'string' && translated !== key ? translated : defaultValue;
+          };
+          const title = report.title_i18n?.[reportContentLanguage]
+            || (usesPrimaryReportLanguage ? report.title : translateReportCopy('result.report.title', 'Full report'));
+          const summary = report.summary_i18n?.[reportContentLanguage]
+            || (usesPrimaryReportLanguage ? report.summary : '');
+          const confidenceBasis = report.verdict.analytic_confidence.basis_i18n?.[reportContentLanguage]
+            || (usesPrimaryReportLanguage ? report.verdict.analytic_confidence.basis : '');
+          const confidenceLevel = translateReportCopy(
+            `result.report.confidence_level.${report.verdict.analytic_confidence.level}`,
+            report.verdict.analytic_confidence.level,
+          );
+          const statusText = reportContentIsZh
               ? ({
                 complete: '已完成',
                 partial: '部分完成（旧版报告，已保存内容可能不完整）',
@@ -845,38 +866,48 @@ export default function ResultView() {
                 failed: 'failed (saved sections only)',
                 cancelled: 'cancelled (saved sections only)',
               } as const)[report.status as 'complete' | 'partial' | 'failed' | 'cancelled'];
-          const sections = report.sections.map((section) => {
-            const sectionTitle = isZh ? section.title_i18n?.zh || section.title : section.title_i18n?.en || section.title;
-            const body = isZh ? section.body_md_i18n?.zh || '' : section.body_md_i18n?.en || '';
+          const sections = report.sections.map((section, index) => {
+            const sectionTitle = section.title_i18n?.[reportContentLanguage]
+              || (usesPrimaryReportLanguage
+                ? section.title
+                : `${reportContentIsZh ? '章节' : 'Section'} ${index + 1}`);
+            const body = section.body_md_i18n?.[reportContentLanguage] || '';
             return `\n## ${sectionTitle}\n\n${body}`;
           });
           const evidence = report.evidence.map((ev) => (
-            `- [${ev.id}] ${ev.agent_name}, ${isZh ? '第' : 'round '} ${ev.round_number}: “${ev.quote}”`
+            `- [${ev.id}] ${ev.agent_name}, ${reportContentIsZh ? '第' : 'round '} ${ev.round_number}: “${ev.quote}”`
           ));
-          const indicators = report.indicators_to_watch.map((item) => (
-            `- ${item.signal}: ${item.note}${item.rationale ? ` (${item.rationale})` : ''}`
-          ));
+          const indicators = usesPrimaryReportLanguage
+            ? report.indicators_to_watch.map((item) => (
+                `- ${item.signal}: ${item.note}${item.rationale ? ` (${item.rationale})` : ''}`
+              ))
+            : [];
           const premortem = formatPremortemMarkdown(
             report.premortem_analysis,
-            isZh ? 'zh' : 'en',
-            (key, defaultValue) => {
-              const translated = t(key, defaultValue);
-              return translated === key ? defaultValue : translated;
-            },
+            reportContentLanguage,
+            translateReportCopy,
             report.evidence,
+          );
+          const disclaimerText = getReportDisclaimerText(
+            usesPrimaryReportLanguage ? report.verdict.disclaimer : null,
+            translateReportCopy,
           );
           const reportMd = [
             `\n\n# ${title}`,
-            `\n**${isZh ? '报告状态' : 'Report status'}**: ${statusText}`,
-            `\n**${isZh ? '摘要' : 'Summary'}**: ${summary}`,
-            `\n**${isZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`,
-            `\n**${isZh ? '置信度' : 'Confidence'}**: ${report.verdict.analytic_confidence.level} — ${report.verdict.analytic_confidence.basis}`,
-            `\n**${isZh ? '免责声明' : 'Disclaimer'}**: ${getReportDisclaimerText(report.verdict.disclaimer, t)}`,
+            `\n**${reportContentIsZh ? '报告状态' : 'Report status'}**: ${statusText}`,
+            summary ? `\n**${reportContentIsZh ? '摘要' : 'Summary'}**: ${summary}` : '',
+            usesPrimaryReportLanguage
+              ? `\n**${reportContentIsZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`
+              : '',
+            `\n**${reportContentIsZh ? '置信度' : 'Confidence'}**: ${confidenceLevel}${confidenceBasis ? ` — ${confidenceBasis}` : ''}`,
+            `\n**${reportContentIsZh ? '免责声明' : 'Disclaimer'}**: ${disclaimerText}`,
             sections.join('\n'),
-            evidence.length ? `\n## ${isZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',
-            indicators.length ? `\n## ${isZh ? '观察指标' : 'Indicators to Watch'}\n\n${indicators.join('\n')}` : '',
+            evidence.length ? `\n## ${reportContentIsZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',
+            indicators.length ? `\n## ${reportContentIsZh ? '观察指标' : 'Indicators to Watch'}\n\n${indicators.join('\n')}` : '',
             `\n${premortem}`,
-            `\n## ${isZh ? '限制' : 'Limitations'}\n\n${report.limitations}`,
+            usesPrimaryReportLanguage && report.limitations.trim()
+              ? `\n## ${reportContentIsZh ? '限制' : 'Limitations'}\n\n${report.limitations}`
+              : '',
           ].join('\n');
           markdown += reportMd;
         }
@@ -955,17 +986,6 @@ export default function ResultView() {
     resetCopiedStateAfter(
       challengeLinkCopiedTimerRef,
       () => setChallengeLinkCopied(false),
-      2000,
-    );
-  };
-
-  const handleCopyPermalink = async () => {
-    if (!replayUrl) return;
-    await copyText(replayUrl);
-    setPermalinkCopied(true);
-    resetCopiedStateAfter(
-      permalinkCopiedTimerRef,
-      () => setPermalinkCopied(false),
       2000,
     );
   };
@@ -1424,26 +1444,41 @@ export default function ResultView() {
       isDailyChallenge,
     };
   }, [agents, campaignScenarioSummary, campaignSummary, isDailyChallenge, predictions, scenario, scenarioMeta, storyData]);
+  const replayIdentityScenarioId = isReplayMode
+    ? replaySnapshot?.scenario.id ?? null
+    : id ?? replaySnapshot?.scenario.id ?? null;
 
   useEffect(() => {
-    let cancelled = false;
-
-    const buildReplay = async () => {
-      const routeFallbackUrl = id
+    replayUrlGenerationRef.current = {
+      epoch: replayUrlGenerationRef.current.epoch + 1,
+      scenarioId: replayIdentityScenarioId,
+    };
+    replayUrlPromiseRef.current = null;
+    setShowShare(false);
+    setShareAutomation(null);
+    setReplayUrl(isReplayMode
+      ? window.location.href
+      : id
         ? `${window.location.origin.replace(/\/$/, '')}/result/${id}`
-        : null;
-      if (isReplayMode) {
-        setReplayUrl(window.location.href);
-        return;
-      }
-      if (!replaySnapshot) {
-        setReplayUrl(routeFallbackUrl);
-        return;
-      }
+        : null);
+  }, [id, isReplayMode, replayIdentityScenarioId]);
+
+  const ensureReplayUrl = useCallback((): Promise<string | null> => {
+    const routeFallbackUrl = id
+      ? `${window.location.origin.replace(/\/$/, '')}/result/${id}`
+      : null;
+    if (isReplayMode) return Promise.resolve(window.location.href);
+    if (!replaySnapshot) return Promise.resolve(routeFallbackUrl);
+    if (replayUrlPromiseRef.current) return replayUrlPromiseRef.current;
+    const requestGeneration = replayUrlGenerationRef.current;
+    const requestScenarioId = replaySnapshot.scenario.id;
+    const isCurrentRequest = () => (
+      replayUrlGenerationRef.current.epoch === requestGeneration.epoch
+      && replayUrlGenerationRef.current.scenarioId === requestScenarioId
+    );
+
+    replayUrlPromiseRef.current = (async () => {
       const fallbackUrl = `${window.location.origin.replace(/\/$/, '')}/result/${replaySnapshot.scenario.id}`;
-      if (!cancelled) {
-        setReplayUrl(fallbackUrl);
-      }
       const {
         buildScenarioReplayUrl,
         compactScenarioMetaForReplay,
@@ -1465,25 +1500,44 @@ export default function ResultView() {
         ))
         .catch(() => null);
       if (!artifact && isReplayEnvelopeLikelyTooLarge('scenario_result_v1', encodedReplaySnapshot)) {
-        return;
+        return isCurrentRequest() ? fallbackUrl : null;
       }
       try {
         const url = artifact
           ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
           : await buildScenarioReplayUrl(window.location.origin, encodedReplaySnapshot);
-        if (!cancelled) {
-          setReplayUrl(url);
-        }
+        if (!isCurrentRequest()) return null;
+        setReplayUrl(url);
+        return url;
       } catch (error) {
+        if (!isCurrentRequest()) return null;
         console.warn('[ResultView] Failed to build replay URL', error);
+        return fallbackUrl;
       }
-    };
-
-    void buildReplay();
-    return () => {
-      cancelled = true;
-    };
+    })().catch((error) => {
+      if (!isCurrentRequest()) return null;
+      console.warn('[ResultView] Failed to prepare replay URL', error);
+      return routeFallbackUrl;
+    });
+    return replayUrlPromiseRef.current;
   }, [id, isReplayMode, replaySnapshot]);
+
+  const handleCopyPermalink = async () => {
+    const url = await ensureReplayUrl();
+    if (!url) return;
+    await copyText(url);
+    setPermalinkCopied(true);
+    resetCopiedStateAfter(permalinkCopiedTimerRef, () => setPermalinkCopied(false), 2000);
+  };
+
+  const handleSetShowShare = useCallback((next: boolean) => {
+    if (!next) {
+      setShowShare(false);
+      return;
+    }
+    setShowShare(true);
+    void ensureReplayUrl();
+  }, [ensureReplayUrl]);
 
   const shareFlavorContext = useMemo<ShareFlavorContext>(() => ({
     question: storyData?.question ?? null,
@@ -2001,7 +2055,7 @@ export default function ResultView() {
     challengeLinkCopied,
     handleShareChallenge,
     showShare,
-    setShowShare,
+    setShowShare: handleSetShowShare,
     showSnapshotExport,
     setShowSnapshotExport,
     handleOpenEndingRoom,
@@ -2050,6 +2104,7 @@ export default function ResultView() {
         <ResultVerdictPanel
           verdict={storyData?.verdict ?? null}
           confidence={storyData?.verdict_confidence ?? null}
+          confidenceKind={storyData?.verdict_confidence_kind}
           question={storyData?.question ?? ''}
         />
       )}

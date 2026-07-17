@@ -47,9 +47,226 @@ const NEW_THREAD_BUTTON_PATTERN = /Start anchored thread|New topic|另开线程|
 const CURRENT_ANCHOR_THREAD_BUTTON_PATTERN = /Start thread from current anchor|New topic from here|从当前锚点开始线程|从当前锚点发起线程|按当前锚点另开线程|就这个点新开话题/i;
 const SUPPORTED_DISCUSSION_FORMATS = new Set(["deep_dive", "quick_review", "clash_mode"]);
 const SUPPORTED_CAST_MODES = new Set(["smart_pick", "custom"]);
+const OBSERVED_CONTEXTS = new WeakSet();
+const OBSERVED_ISSUES = [];
+const EXPECTED_HTTP_FAILURES = new Map();
+
+function observedHttpKey({ method, status, pathname }) {
+  return `${String(method ?? "").toUpperCase()} ${Number(status)} ${pathname ?? ""}`;
+}
+
+function expectHttpFailure({ method, status, pathname, reason, minCount = 0, maxCount = 1 }) {
+  const key = observedHttpKey({ method, status, pathname });
+  const existing = EXPECTED_HTTP_FAILURES.get(key);
+  EXPECTED_HTTP_FAILURES.set(key, {
+    reason: existing?.reason ?? reason,
+    min_count: (existing?.min_count ?? 0) + minCount,
+    max_count: (existing?.max_count ?? 0) + maxCount,
+  });
+}
+
+function registerReplayImportDirectorConflict(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const match = /^\/sim\/([^/]+)$/u.exec(url.pathname);
+    if (!match) return;
+    const importedScenarioId = decodeURIComponent(match[1]);
+    expectHttpFailure({
+      method: "PUT",
+      status: 409,
+      pathname: `/api/campaign/scenario/${importedScenarioId}/director-state`,
+      reason: "This exact scenario was created by the suite's replay import; the director-state contract handles its initial optimistic-concurrency conflict by reading and merging the server revision.",
+    });
+  } catch {
+    // An invalid import URL must not create an expected-failure entry.
+  }
+}
+
+function observedRequestLocation(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return { origin: url.origin, pathname: url.pathname };
+  } catch {
+    return { origin: null, pathname: String(rawUrl ?? "") };
+  }
+}
+
+function recordObservedIssue(issue) {
+  OBSERVED_ISSUES.push(issue);
+  const location = issue.pathname ? ` ${issue.pathname}` : "";
+  const status = issue.status ? ` ${issue.status}` : "";
+  const detail = issue.message ?? issue.error_text ?? "unknown";
+  console.warn(`[${issue.label}:${issue.kind}]${status}${location} ${detail}`);
+}
+
+function buildObservedDiagnosticsFrom(observedIssues, expectedFailures) {
+  const occurrenceCounts = new Map();
+  const issues = observedIssues.map((issue) => {
+    if (issue.kind !== "http_error") return { ...issue };
+    const key = observedHttpKey(issue);
+    const expectation = expectedFailures.get(key);
+    if (!expectation) return { ...issue };
+    const occurrence = (occurrenceCounts.get(key) ?? 0) + 1;
+    occurrenceCounts.set(key, occurrence);
+    if (occurrence > expectation.max_count) {
+      return {
+        ...issue,
+        expected: false,
+        expected_reason: `Expected HTTP failure budget exceeded (max ${expectation.max_count}): ${expectation.reason}`,
+      };
+    }
+    return {
+      ...issue,
+      expected: true,
+      expected_reason: expectation.reason,
+    };
+  });
+  const missing = [];
+  for (const [key, expectation] of expectedFailures) {
+    const observedCount = occurrenceCounts.get(key) ?? 0;
+    if (observedCount < expectation.min_count) {
+      missing.push({
+        kind: "expected_http_error_missing",
+        expected: false,
+        expected_reason: `Expected HTTP failure minimum was not met (${observedCount}/${expectation.min_count}): ${expectation.reason}`,
+        expected_http_key: key,
+      });
+    }
+  }
+  const allIssues = [...issues, ...missing];
+  const unexpected = allIssues.filter((issue) => issue.expected !== true);
+  return {
+    total: allIssues.length,
+    expected_count: allIssues.length - unexpected.length,
+    unexpected_count: unexpected.length,
+    issues: allIssues,
+  };
+}
+
+function buildObservedDiagnostics() {
+  return buildObservedDiagnosticsFrom(OBSERVED_ISSUES, EXPECTED_HTTP_FAILURES);
+}
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function observeContextIssues(context, label) {
+  if (OBSERVED_CONTEXTS.has(context)) return;
+  OBSERVED_CONTEXTS.add(context);
+  const observePage = (page) => {
+    page.on("console", (message) => {
+      if (message.type() !== "error") return;
+      const text = message.text();
+      const mirroredHttpFailure = /^Failed to load resource: the server responded with a status of \d+/u.test(text);
+      recordObservedIssue({
+        kind: "console_error",
+        label,
+        message: text,
+        expected: mirroredHttpFailure,
+        expected_reason: mirroredHttpFailure
+          ? "Mirrored browser console message; the exact HTTP response is evaluated separately by method, pathname, and status."
+          : null,
+      });
+    });
+    page.on("pageerror", (error) => recordObservedIssue({
+      kind: "pageerror",
+      label,
+      message: error.message,
+      expected: false,
+      expected_reason: null,
+    }));
+    page.on("requestfailed", (request) => {
+      const location = observedRequestLocation(request.url());
+      recordObservedIssue({
+        kind: "requestfailed",
+        label,
+        method: request.method(),
+        ...location,
+        error_text: request.failure()?.errorText ?? "unknown",
+        expected: false,
+        expected_reason: null,
+      });
+    });
+    page.on("response", (response) => {
+      if (response.status() < 400) return;
+      const request = response.request();
+      const location = observedRequestLocation(response.url());
+      recordObservedIssue({
+        kind: "http_error",
+        label,
+        method: request.method(),
+        status: response.status(),
+        ...location,
+        message: response.statusText(),
+        expected: false,
+        expected_reason: null,
+      });
+    });
+  };
+  context.on("page", observePage);
+  context.pages().forEach(observePage);
+}
+
+function isValidReplayFixtureRequest(rawUrl, method, endpoint) {
+  if (String(method ?? "").toUpperCase() !== "GET") return false;
+  try {
+    const url = new URL(rawUrl);
+    const expectedPath = `/api/scenario/oracle-replay-scenario/${endpoint}`;
+    if (url.pathname !== expectedPath) return false;
+    if (endpoint === "faction-timeline") {
+      const entries = [...url.searchParams.entries()];
+      return entries.length === 1
+        && entries[0][0] === "branch_id"
+        && entries[0][1].trim().length > 0;
+    }
+    if (endpoint === "social-feed") {
+      return [...url.searchParams].length === 0;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function installRoundtableFixtureRoutes(context) {
+  if (process.env.SWARM_E2E_FIXTURE_MODE !== "1") return;
+  await context.route("**/api/scenario/oracle-replay-scenario/faction-timeline*", async (route) => {
+    if (!isValidReplayFixtureRequest(
+      route.request().url(),
+      route.request().method(),
+      "faction-timeline",
+    )) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "[]",
+    });
+  });
+  await context.route("**/api/scenario/oracle-replay-scenario/social-feed*", async (route) => {
+    if (!isValidReplayFixtureRequest(
+      route.request().url(),
+      route.request().method(),
+      "social-feed",
+    )) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        scenario_id: "oracle-replay-scenario",
+        question: "Roundtable replay fixture",
+        generation_mode: "deterministic",
+        events: [],
+        headline_cards: [],
+      }),
+    });
+  });
 }
 
 function writeJson(filePath, data) {
@@ -81,7 +298,16 @@ async function configureLocaleContext(context, locale) {
       } catch {
         // Ignore automation bootstrap storage failures.
       }
-      document.documentElement.lang = documentLanguage;
+      const applyDocumentLanguage = () => {
+        if (document.documentElement) {
+          document.documentElement.lang = documentLanguage;
+        }
+      };
+      if (document.documentElement) {
+        applyDocumentLanguage();
+      } else {
+        document.addEventListener("DOMContentLoaded", applyDocumentLanguage, { once: true });
+      }
     },
     {
       storageKey: LANGUAGE_STORAGE_KEY,
@@ -749,6 +975,7 @@ function createBoundedNetworkGate({ timeoutMs = 5000, schedule = setTimeout, can
 
 async function exerciseSlowCreateDuplicateProtection(context, baseUrl, scenarioId, outputDir, locale) {
   const page = await context.newPage();
+  await page.routeWebSocket("**/ws/ending-room/fixture-roundtable-*", () => {});
   const responseGate = createBoundedNetworkGate();
   let markRequestStarted;
   const requestStarted = new Promise((resolve) => { markRequestStarted = resolve; });
@@ -776,6 +1003,11 @@ async function exerciseSlowCreateDuplicateProtection(context, baseUrl, scenarioI
     });
   });
   await page.route("**/api/ending-room/fixture-roundtable-slow-create", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(fixturePayload),
+  }));
+  await page.route("**/api/ending-room/fixture-roundtable-slow-create/result", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify(fixturePayload),
@@ -828,6 +1060,7 @@ async function exerciseSlowCreateDuplicateProtection(context, baseUrl, scenarioI
 
 async function exerciseFormatSelectorFixture(context, baseUrl, scenarioId, outputDir, locale) {
   const page = await context.newPage();
+  await page.routeWebSocket("**/ws/ending-room/fixture-roundtable-*", () => {});
   const cases = [];
   let latestPayload = null;
   let latestRequestBody = null;
@@ -1093,11 +1326,10 @@ async function launchBrowser(headless, browserName = "chromium") {
   if (browserName === "webkit") {
     return webkit.launch({ headless });
   }
-  try {
-    return await chromium.launch({ channel: "chrome", headless });
-  } catch {
-    return await chromium.launch({ headless });
-  }
+  return chromium.launch({
+    headless,
+    args: ["--use-gl=angle", "--use-angle=swiftshader"],
+  });
 }
 
 async function saveScreenshot(page, filePath) {
@@ -1723,6 +1955,26 @@ async function captureMobileFit(page) {
   )) {
     throw new Error("Mobile roundtable back button wrapped into an unusable vertical label");
   }
+  const horizontalTargets = [
+    ["transcript_header", fit.transcriptHeaderRect],
+    ["transcript_list", fit.transcriptListRect],
+    ["composer", fit.composerRect],
+  ];
+  fit.horizontalFit = Object.fromEntries(horizontalTargets.map(([name, targetRect]) => [
+    name,
+    targetRect
+      ? targetRect.x >= 0 && targetRect.x + targetRect.width <= fit.viewport.width
+      : null,
+  ]));
+  fit.knownProductFailures = horizontalTargets.flatMap(([name, targetRect]) => {
+    if (!targetRect || fit.horizontalFit[name] !== false) return [];
+    return [{
+      code: "ROUNDTABLE_MOBILE_HORIZONTAL_OVERFLOW",
+      target: name,
+      viewport_width: fit.viewport.width,
+      rect: targetRect,
+    }];
+  });
   return fit;
 }
 
@@ -2213,6 +2465,16 @@ async function reopenWithSelectionMode(page, {
 }
 
 async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, locale) {
+  observeContextIssues(context, "roundtable-desktop");
+  await installRoundtableFixtureRoutes(context);
+  if (process.env.SWARM_E2E_FIXTURE_MODE === "1") {
+    expectHttpFailure({
+      method: "GET",
+      status: 404,
+      pathname: `/api/scenario/${scenarioId}/ending-room/active`,
+      reason: "The freshly imported fixture has no active ending room; this exact GET uses the documented 404-as-empty lookup contract before the suite creates one.",
+    });
+  }
   const page = await context.newPage();
   const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable desktop ui");
@@ -2393,6 +2655,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   }), "desktop roundtable artifact import");
   await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
   const artifactImportedUrl = sharePage.url();
+  registerReplayImportDirectorConflict(artifactImportedUrl);
 
   await waitForLiveRoundtableReady(page, {
     expectedRoomId: anchoredRoomId,
@@ -2494,6 +2757,16 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     contextOptions.isMobile = true;
   }
   const context = await browser.newContext(contextOptions);
+  observeContextIssues(context, "roundtable-mobile");
+  await installRoundtableFixtureRoutes(context);
+  if (process.env.SWARM_E2E_FIXTURE_MODE === "1") {
+    expectHttpFailure({
+      method: "GET",
+      status: 404,
+      pathname: `/api/scenario/${scenarioId}/ending-room/active`,
+      reason: "The freshly imported fixture has no active ending room; this exact GET uses the documented 404-as-empty lookup contract before the suite creates one.",
+    });
+  }
   await configureLocaleContext(context, locale);
   const page = await context.newPage();
   const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
@@ -2666,6 +2939,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     }), "mobile roundtable artifact import");
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
+    registerReplayImportDirectorConflict(artifactImportedUrl);
 
     await waitForLiveRoundtableReady(page, {
       expectedRoomId: anchoredRoomId,
@@ -2817,8 +3091,20 @@ async function main() {
     }
   }
 
+  summary.diagnostics = buildObservedDiagnostics();
+  summary.knownProductFailures = summary.mobile?.fit?.knownProductFailures ?? [];
+  writeJson(path.join(outputDir, "diagnostics.json"), {
+    diagnostics: summary.diagnostics,
+    knownProductFailures: summary.knownProductFailures,
+  });
   writeJson(path.join(outputDir, "summary.json"), summary);
   console.log(JSON.stringify(summary, null, 2));
+  if (summary.diagnostics.unexpected_count > 0 || summary.knownProductFailures.length > 0) {
+    throw new Error(
+      `Roundtable E2E failed closed: unexpected_issues=${summary.diagnostics.unexpected_count}, `
+      + `known_product_failures=${summary.knownProductFailures.length}`,
+    );
+  }
 }
 
 function isDirectExecution() {
@@ -2836,8 +3122,10 @@ if (isDirectExecution()) {
 export const __test__ = {
   assertSupportedRoundtableContractPayload,
   buildRoundtableReplayFixture,
+  buildObservedDiagnosticsFrom,
   createBoundedNetworkGate,
   importRoundtableFixtureScenario,
+  isValidReplayFixtureRequest,
   parseArgs,
   parseViewportDimension,
   resolveRoundtableScenarioIds,

@@ -4164,6 +4164,12 @@ describe('WorldlineRoundtableView synthesis section', () => {
 });
 
 describe('WorldlineRoundtableView phase nav', () => {
+  it('keeps mobile phase and thread rails from collapsing into overlapping hit targets', () => {
+    expect(roundtableCssContract).toMatch(
+      /\.worldline-roundtable-view\.is-live-room \.roundtable-phase-nav,\s*\.worldline-roundtable-view\.is-live-room \.ending-chat-thread-rail\s*\{[^}]*flex:\s*0 0 auto;/,
+    );
+  });
+
   it('renders phase pills when transcript has multiple phases and scrolls on click', async () => {
     const baseState = createBaseStoreState();
     storeState.snapshot = {
@@ -4785,6 +4791,13 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
 
     // Trigger aria-expanded="true" while open
     expect(trigger!.getAttribute('aria-expanded')).toBe('true');
+
+    // A modal roster must keep keyboard focus inside its only actionable control.
+    const closeButton = within(modal as HTMLElement).getByRole('button', { name: 'Close' });
+    await user.tab();
+    expect(closeButton).toHaveFocus();
+    await user.tab();
+    expect(closeButton).toHaveFocus();
 
     // Escape closes modal
     await user.keyboard('{Escape}');

@@ -8,17 +8,30 @@ const FOCUSABLE_SELECTOR = [
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
+const FOCUS_TRAP_EXEMPT_SELECTOR = '[data-focus-trap-exempt="true"]';
 
-function getFocusable(container: HTMLElement): HTMLElement[] {
-  const nodes = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-  return nodes.filter((node) => {
+function isFocusable(node: HTMLElement): boolean {
     if (node.hasAttribute('disabled')) return false;
     if (node.getAttribute('aria-hidden') === 'true') return false;
     if (node.closest('[aria-hidden="true"], [inert]')) return false;
     const style = node.ownerDocument?.defaultView?.getComputedStyle(node);
     if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
     return true;
-  });
+}
+
+function getFocusable(container: HTMLElement, doc: Document): HTMLElement[] {
+  const localNodes = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    .filter(isFocusable);
+  const exemptNodes = Array.from(doc.querySelectorAll<HTMLElement>(FOCUS_TRAP_EXEMPT_SELECTOR))
+    .filter((node) => !container.contains(node))
+    .filter((node) => node.matches(FOCUSABLE_SELECTOR))
+    .filter(isFocusable);
+  return [...localNodes, ...exemptNodes];
+}
+
+function containsFocusTrapExemption(element: HTMLElement): boolean {
+  return element.matches(FOCUS_TRAP_EXEMPT_SELECTOR)
+    || element.querySelector(FOCUS_TRAP_EXEMPT_SELECTOR) !== null;
 }
 
 const activeTrapsStack: HTMLElement[] = [];
@@ -54,6 +67,7 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
       while (current?.parentElement && current.parentElement !== doc.body) {
         for (const sibling of Array.from(current.parentElement.children)) {
           if (sibling === current || !(sibling instanceof HTMLElement)) continue;
+          if (containsFocusTrapExemption(sibling)) continue;
           isolatedSiblings.push({
             element: sibling,
             inert: sibling.hasAttribute('inert'),
@@ -67,6 +81,7 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
       if (current?.parentElement === doc.body) {
         for (const sibling of Array.from(doc.body.children)) {
           if (sibling === current || !(sibling instanceof HTMLElement)) continue;
+          if (containsFocusTrapExemption(sibling)) continue;
           isolatedSiblings.push({
             element: sibling,
             inert: sibling.hasAttribute('inert'),
@@ -83,36 +98,24 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
     const handleKeyDown = (event: KeyboardEvent) => {
       if (activeTrapsStack[activeTrapsStack.length - 1] !== container) return;
       if (event.key !== 'Tab') return;
-      const focusable = getFocusable(container);
+      const focusable = getFocusable(container, doc);
       if (focusable.length === 0) {
         event.preventDefault();
         return;
       }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
       const activeElement = doc.activeElement as HTMLElement | null;
+      const activeIndex = activeElement ? focusable.indexOf(activeElement) : -1;
 
-      if (!activeElement || !container.contains(activeElement)) {
-        event.preventDefault();
-        if (event.shiftKey) {
-          last.focus();
-        } else {
-          first.focus();
-        }
+      event.preventDefault();
+      if (activeIndex === -1) {
+        const target = event.shiftKey ? focusable[focusable.length - 1] : focusable[0];
+        target.focus();
         return;
       }
 
-      if (event.shiftKey) {
-        if (activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
+      const direction = event.shiftKey ? -1 : 1;
+      const nextIndex = (activeIndex + direction + focusable.length) % focusable.length;
+      focusable[nextIndex].focus();
     };
 
     doc.addEventListener('keydown', handleKeyDown);

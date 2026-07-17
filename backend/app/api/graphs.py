@@ -11,8 +11,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import update as sa_update
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
@@ -65,6 +66,7 @@ from app.services.runtime_lock import (
 )
 from app.services.simulation_actions import serialize_action
 from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
+from app.services.vector_store import delete_branch_memories
 
 logger = logging.getLogger(__name__)
 MAX_REPLAY_BRANCHES = 3
@@ -72,6 +74,7 @@ _REPLAY_BRANCH_LOCK_LEASE_SECONDS = 15.0
 _REPLAY_BRANCH_LOCK_WAIT_SECONDS = 2.0
 _REPLAY_BRANCH_LOCK_POLL_SECONDS = 0.05
 _REPLAY_BRANCH_LOCK_REFRESH_FRACTION = 0.33
+_PENDING_BRANCH_MEMORY_CLEANUP_KEY = "_pending_branch_memory_cleanup"
 
 
 def _replay_branch_lock_refresh_interval(
@@ -221,41 +224,235 @@ def _acquire_simulation_lock_for_resume(scenario_id: str) -> RuntimeLockLease | 
     )
 
 
-def _cleanup_replay_branch(branch_id: str) -> None:
-    with Session(get_engine()) as session:
-        round_ids = list(session.exec(select(Round.id).where(Round.branch_id == branch_id)).all())
-        if round_ids:
-            session.exec(
-                sa_delete(SimulationAction).where(
-                    SimulationAction.branch_id == branch_id,
-                    SimulationAction.round_id.in_(round_ids),
-                )
+def _delete_replay_branch_rows(session: Session, branch_id: str) -> None:
+    round_ids = list(session.exec(select(Round.id).where(Round.branch_id == branch_id)).all())
+    if round_ids:
+        session.exec(
+            sa_delete(SimulationAction).where(
+                SimulationAction.branch_id == branch_id,
+                SimulationAction.round_id.in_(round_ids),
             )
-            session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
-        session.exec(sa_delete(Round).where(Round.branch_id == branch_id))
-        session.exec(sa_delete(Branch).where(Branch.id == branch_id))
+        )
+        session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
+    session.exec(sa_delete(Round).where(Round.branch_id == branch_id))
+    session.exec(sa_delete(Branch).where(Branch.id == branch_id))
+
+
+def _remove_replay_branch_runtime(
+    session: Session,
+    scenario_id: str,
+    branch_id: str,
+) -> None:
+    """Remove a rolled-back replay branch from the durable Agent runtime."""
+    scenario = session.get(Scenario, scenario_id)
+    if scenario is None or not isinstance(scenario.parsed_context, dict):
+        return
+    parsed_context = dict(scenario.parsed_context)
+    runtime = parsed_context.get("agent_runtime_v1")
+    if not isinstance(runtime, dict):
+        return
+    branches = runtime.get("branches")
+    if not isinstance(branches, dict) or branch_id not in branches:
+        return
+    runtime_copy = dict(runtime)
+    branch_copy = dict(branches)
+    branch_copy.pop(branch_id, None)
+    runtime_copy["branches"] = branch_copy
+    parsed_context["agent_runtime_v1"] = runtime_copy
+    scenario.parsed_context = parsed_context
+    session.add(scenario)
+    # The following JSON update must observe this value in the same transaction.
+    session.flush()
+
+
+def _mark_replay_branch_memory_cleanup_pending(
+    session: Session,
+    scenario_id: str,
+    branch_id: str,
+) -> None:
+    base = _parsed_context_json_object_expr()
+    path = f"$.{_PENDING_BRANCH_MEMORY_CLEANUP_KEY}"
+    pending_array = case(
+        (func.json_type(base, path) == "array", func.json_extract(base, path)),
+        else_=func.json("[]"),
+    )
+    base_with_array = func.json_set(base, path, func.json(pending_array))
+    session.exec(
+        sa_update(Scenario)
+        .where(Scenario.id == scenario_id)
+        .values(
+            parsed_context=func.json_insert(
+                base_with_array,
+                f"{path}[#]",
+                branch_id,
+            )
+        )
+    )
+
+
+def _parsed_context_json_object_expr():
+    return case(
+        (
+            func.json_valid(Scenario.parsed_context) == 1,
+            case(
+                (func.json_type(Scenario.parsed_context) == "object", Scenario.parsed_context),
+                else_=func.json("{}"),
+            ),
+        ),
+        else_=func.json("{}"),
+    )
+
+
+def _clear_replay_branch_memory_cleanup_pending(scenario_id: str, branch_id: str) -> None:
+    with Session(get_engine()) as session:
+        base = _parsed_context_json_object_expr()
+        path = f"$.{_PENDING_BRANCH_MEMORY_CLEANUP_KEY}"
+        pending_array = case(
+            (func.json_type(base, path) == "array", func.json_extract(base, path)),
+            else_=func.json("[]"),
+        )
+        pending_items = func.json_each(pending_array).table_valued("value").alias(
+            "pending_branch_cleanup"
+        )
+        remaining = (
+            select(func.coalesce(func.json_group_array(pending_items.c.value), "[]"))
+            .where(pending_items.c.value != branch_id)
+            .scalar_subquery()
+        )
+        remaining_json = func.json(remaining)
+        updated_context = case(
+            (
+                func.json_array_length(remaining_json) > 0,
+                func.json_set(base, path, remaining_json),
+            ),
+            else_=func.json_remove(base, path),
+        )
+        session.exec(
+            sa_update(Scenario)
+            .where(Scenario.id == scenario_id)
+            .values(parsed_context=updated_context)
+        )
         session.commit()
 
 
-def _rollback_resume_start(scenario_id: str, branch_id: str) -> None:
-    _cleanup_replay_branch(branch_id)
+def _cleanup_replay_branch_memories(scenario_id: str, branch_id: str) -> bool:
+    try:
+        deleted = bool(delete_branch_memories(scenario_id, branch_id))
+    except Exception as exc:
+        logger.warning(
+            "Replay branch vector cleanup failed (%s)",
+            type(exc).__name__,
+        )
+        return False
+    if not deleted:
+        logger.warning(
+            "Replay branch vector cleanup deferred for scenario=%s branch=%s",
+            scenario_id,
+            branch_id,
+        )
+        return False
+    try:
+        _clear_replay_branch_memory_cleanup_pending(scenario_id, branch_id)
+    except Exception as exc:
+        logger.warning(
+            "Replay branch cleanup intent clear deferred for scenario=%s branch=%s (%s)",
+            scenario_id,
+            branch_id,
+            type(exc).__name__,
+        )
+        return False
+    return True
+
+
+def _pending_replay_branch_memory_cleanups() -> list[tuple[str, str]]:
+    pending: list[tuple[str, str]] = []
     with Session(get_engine()) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if scenario is not None:
-            scenario.status = ScenarioStatus.DONE
-            session.add(scenario)
-            session.commit()
+        for scenario in session.exec(select(Scenario)).all():
+            parsed_context = scenario.parsed_context or {}
+            if not isinstance(parsed_context, dict):
+                continue
+            branch_ids = parsed_context.get(_PENDING_BRANCH_MEMORY_CLEANUP_KEY, [])
+            if not isinstance(branch_ids, list):
+                continue
+            pending.extend(
+                (scenario.id, item.strip())
+                for item in branch_ids
+                if isinstance(item, str) and item.strip()
+            )
+    return sorted(set(pending))
+
+
+def pending_replay_branch_memory_cleanup_count() -> int:
+    """Return the number of durable replay-memory cleanup intents."""
+    return len(_pending_replay_branch_memory_cleanups())
+
+
+def reconcile_pending_replay_branch_memory_cleanups() -> int:
+    """Retry durable replay-branch Chroma cleanup intents after restart."""
+    return sum(
+        1
+        for scenario_id, branch_id in _pending_replay_branch_memory_cleanups()
+        if _cleanup_replay_branch_memories(scenario_id, branch_id)
+    )
+
+
+def _cleanup_replay_branch(scenario_id: str, branch_id: str) -> None:
+    with Session(get_engine()) as session:
+        _remove_replay_branch_runtime(session, scenario_id, branch_id)
+        _mark_replay_branch_memory_cleanup_pending(session, scenario_id, branch_id)
+        _delete_replay_branch_rows(session, branch_id)
+        session.commit()
+    _cleanup_replay_branch_memories(scenario_id, branch_id)
+
+
+def _restore_scenario_status_if_simulating(
+    session: Session,
+    scenario_id: str,
+    previous_status: ScenarioStatus,
+) -> bool:
+    result = session.exec(
+        sa_update(Scenario)
+        .where(
+            Scenario.id == scenario_id,
+            Scenario.status == ScenarioStatus.SIMULATING,
+        )
+        .values(status=previous_status)
+    )
+    return bool(getattr(result, "rowcount", 0) == 1)
+
+
+def _rollback_resume_start(
+    scenario_id: str,
+    branch_id: str,
+    *,
+    status_transition_attempted: bool = True,
+    previous_status: ScenarioStatus = ScenarioStatus.DONE,
+) -> None:
+    engine = get_engine()
+    restored = False
+    with Session(engine) as session:
+        _remove_replay_branch_runtime(session, scenario_id, branch_id)
+        _mark_replay_branch_memory_cleanup_pending(session, scenario_id, branch_id)
+        _delete_replay_branch_rows(session, branch_id)
+        if status_transition_attempted:
+            restored = _restore_scenario_status_if_simulating(
+                session,
+                scenario_id,
+                previous_status,
+            )
+        session.commit()
+    _cleanup_replay_branch_memories(scenario_id, branch_id)
+    if restored and previous_status in {ScenarioStatus.CANCELLED, ScenarioStatus.ERROR}:
+        reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
 
 
 def _rollback_resimulation_start(scenario_id: str, previous_status: ScenarioStatus) -> None:
     engine = get_engine()
+    restored = False
     with Session(engine) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if scenario is not None:
-            scenario.status = previous_status
-            session.add(scenario)
-            session.commit()
-    if previous_status in {ScenarioStatus.CANCELLED, ScenarioStatus.ERROR}:
+        restored = _restore_scenario_status_if_simulating(session, scenario_id, previous_status)
+        session.commit()
+    if restored and previous_status in {ScenarioStatus.CANCELLED, ScenarioStatus.ERROR}:
         reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
 
 
@@ -682,6 +879,7 @@ async def create_counterfactual(
                 _raise_if_replay_limit_reached(session, scenario_id)
         _require_replay_branch_lock_alive(lease_holder)
 
+    status_transition_attempted = False
     try:
         with Session(get_engine()) as session:
             scenario = require_owned_scenario(session, scenario_id, principal)
@@ -720,47 +918,75 @@ async def create_counterfactual(
                 source_message_content=body.source_message_content,
             )
         except ValueError as exc:
-            _cleanup_replay_branch(new_branch_id)
+            _cleanup_replay_branch(scenario_id, new_branch_id)
             raise api_error(400, "COUNTERFACTUAL_SEED_FAILED", str(exc)) from exc
         except Exception:
-            _cleanup_replay_branch(new_branch_id)
+            _cleanup_replay_branch(scenario_id, new_branch_id)
             raise
 
         if body.simulate:
-            simulation_lease = _acquire_simulation_lock_for_resume(scenario_id)
-            if simulation_lease is None:
-                _rollback_resume_start(scenario_id, new_branch_id)
-                raise api_error(
-                    409,
-                    "SIMULATION_ALREADY_RUNNING",
-                    "Scenario already has a running simulation",
-                )
-            with Session(get_engine()) as session:
-                scenario = session.get(Scenario, scenario_id)
-                if scenario is None:
-                    _rollback_resume_start(scenario_id, new_branch_id)
-                    raise api_error(
-                        404,
-                        "SCENARIO_NOT_FOUND",
-                        f"Scenario {scenario_id} not found",
-                    )
-                scenario.status = ScenarioStatus.SIMULATING
-                session.add(scenario)
-                session.commit()
-
-            background_coro = run_sim_background(
-                scenario_id,
-                branch_id=new_branch_id,
-                pre_acquired_lock_lease=simulation_lease,
-            )
             try:
-                ensure_replay_branch_lock()
-                schedule_background_task(background_coro)
+                simulation_lease = _acquire_simulation_lock_for_resume(scenario_id)
+                if simulation_lease is None:
+                    raise api_error(
+                        409,
+                        "SIMULATION_ALREADY_RUNNING",
+                        "Scenario already has a running simulation",
+                    )
+                with Session(get_engine()) as session:
+                    scenario = session.get(Scenario, scenario_id)
+                    if scenario is None:
+                        raise api_error(
+                            404,
+                            "SCENARIO_NOT_FOUND",
+                            f"Scenario {scenario_id} not found",
+                        )
+                    if scenario.status != ScenarioStatus.DONE:
+                        raise api_error(
+                            409,
+                            "COUNTERFACTUAL_SCENARIO_STATUS_INVALID",
+                            (
+                                "Scenario must be in 'done' status to create "
+                                "a counterfactual branch"
+                            ),
+                        )
+                    status_transition_attempted = True
+                    scenario.status = ScenarioStatus.SIMULATING
+                    session.add(scenario)
+                    session.commit()
+
+                background_coro = run_sim_background(
+                    scenario_id,
+                    branch_id=new_branch_id,
+                    pre_acquired_lock_lease=simulation_lease,
+                )
+                try:
+                    ensure_replay_branch_lock()
+                    schedule_background_task(background_coro)
+                except Exception:
+                    try:
+                        background_coro.close()
+                    except Exception as close_exc:
+                        logger.warning(
+                            "Counterfactual background coroutine close failed (%s)",
+                            type(close_exc).__name__,
+                        )
+                    raise
+                simulation_lease = None
             except Exception:
-                background_coro.close()
-                _rollback_resume_start(scenario_id, new_branch_id)
+                try:
+                    _rollback_resume_start(
+                        scenario_id,
+                        new_branch_id,
+                        status_transition_attempted=status_transition_attempted,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to roll back counterfactual startup for scenario %s branch %s",
+                        scenario_id,
+                        new_branch_id,
+                    )
                 raise
-            simulation_lease = None
             return JSONResponse(
                 status_code=201,
                 content={
@@ -819,6 +1045,7 @@ async def resimulate_counterfactual(
             "Scenario already has a running simulation",
         )
 
+    status_transition_attempted = False
     try:
         with Session(get_engine()) as session:
             scenario = require_owned_scenario(session, scenario_id, principal)
@@ -834,6 +1061,7 @@ async def resimulate_counterfactual(
                 scenario_id=scenario_id,
                 branch_id=branch_id,
             )
+            status_transition_attempted = True
             scenario.status = ScenarioStatus.SIMULATING
             session.add(scenario)
             session.commit()
@@ -846,10 +1074,25 @@ async def resimulate_counterfactual(
         try:
             schedule_background_task(background_coro)
         except Exception:
-            background_coro.close()
-            _rollback_resimulation_start(scenario_id, previous_status)
+            try:
+                background_coro.close()
+            except Exception as close_exc:
+                logger.warning(
+                    "Counterfactual resimulation coroutine close failed (%s)",
+                    type(close_exc).__name__,
+                )
             raise
         simulation_lease = None
+    except Exception:
+        if status_transition_attempted:
+            try:
+                _rollback_resimulation_start(scenario_id, previous_status)
+            except Exception:
+                logger.exception(
+                    "Failed to roll back counterfactual resimulation startup for scenario %s",
+                    scenario_id,
+                )
+        raise
     finally:
         _release_runtime_locks_best_effort(
             simulation_lease,
@@ -1118,27 +1361,58 @@ async def resume_from_round(
             lease_seconds=_REPLAY_BRANCH_LOCK_LEASE_SECONDS,
             lock_label=f"replay-branch:{scenario_id}",
         )
-        # Clone branch up to round_number, then schedule background simulation
-        new_branch_id = clone_until_round(
-            scenario_id,
-            body.source_branch_id,
-            body.round_number,
-            ensure_lock=ensure_replay_branch_lock,
-            replay_kind="resume",
-        )
-        background_coro = run_sim_background(
-            scenario_id,
-            branch_id=new_branch_id,
-            pre_acquired_lock_lease=simulation_lease,
-        )
         try:
-            ensure_replay_branch_lock()
-            schedule_background_task(background_coro)
+            # Clone branch up to round_number, then schedule background simulation.
+            # The clone commits in its own transaction, so every failure after it
+            # returns must compensate that durable write.
+            new_branch_id = clone_until_round(
+                scenario_id,
+                body.source_branch_id,
+                body.round_number,
+                ensure_lock=ensure_replay_branch_lock,
+                replay_kind="resume",
+            )
+            with Session(get_engine()) as session:
+                scenario = session.get(Scenario, scenario_id)
+                if scenario is None:
+                    raise api_error(
+                        404,
+                        "SCENARIO_NOT_FOUND",
+                        f"Scenario {scenario_id} not found",
+                    )
+                if scenario.status != ScenarioStatus.DONE:
+                    raise api_error(
+                        400,
+                        "RESUME_SCENARIO_STATUS_INVALID",
+                        "Scenario must be in 'done' status to resume",
+                    )
+                scenario.status = ScenarioStatus.SIMULATING
+                session.add(scenario)
+                session.commit()
+
+            background_coro = run_sim_background(
+                scenario_id,
+                branch_id=new_branch_id,
+                pre_acquired_lock_lease=simulation_lease,
+            )
+            try:
+                ensure_replay_branch_lock()
+                schedule_background_task(background_coro)
+            except Exception:
+                background_coro.close()
+                raise
+            simulation_lease = None
         except Exception:
-            background_coro.close()
-            _rollback_resume_start(scenario_id, new_branch_id)
+            if new_branch_id is not None:
+                try:
+                    _rollback_resume_start(scenario_id, new_branch_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to roll back resume startup for scenario %s branch %s",
+                        scenario_id,
+                        new_branch_id,
+                    )
             raise
-        simulation_lease = None
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)

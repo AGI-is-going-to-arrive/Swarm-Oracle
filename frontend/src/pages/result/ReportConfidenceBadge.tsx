@@ -5,6 +5,7 @@ import { getReportDisclaimerText } from './reportDisclaimer';
 
 interface Props {
   verdict: ReportVerdict;
+  language?: 'zh' | 'en';
 }
 
 const CONFIDENCE_LEVEL_KEY: Record<ReportVerdict['analytic_confidence']['level'], string> = {
@@ -80,7 +81,7 @@ function isRenderableInterval(interval: unknown): interval is [number, number] {
   return true;
 }
 
-export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({ verdict }: Props) {
+export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({ verdict, language }: Props) {
   const { t, i18n } = useTranslation();
   const { likelihood, analytic_confidence, disclaimer } = verdict;
 
@@ -135,14 +136,19 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
   // §F: recompose the consensus / basis line WITH a denominator (N branches, N evidence,
   // agents-aligned). Parsed out of the machine basis string; falls back to localized
   // basis_i18n / raw basis when the structured form is absent.
-  const currentLang = i18n.language?.startsWith('zh') ? 'zh' : 'en';
+  const currentLang = language ?? (i18n.language?.startsWith('zh') ? 'zh' : 'en');
   let displayBasis = '';
   let consensusPct: number | null = null;
   // Raw 0..1 consensus fraction for threshold checks (decoupled from the rounded display %).
   let consensusFraction: number | null = null;
   const basisI18n = analytic_confidence.basis_i18n;
   if (basisI18n) {
-    if (currentLang === 'zh') {
+    if (language) {
+      // An explicit language has already been checked against report availability.
+      // Never bypass that decision by falling through to the unavailable locale;
+      // the raw basis below is the bounded primary-language fallback.
+      displayBasis = basisI18n[language] || '';
+    } else if (currentLang === 'zh') {
       displayBasis = basisI18n.zh || basisI18n.en || '';
     } else {
       displayBasis = basisI18n.en || basisI18n.zh || '';

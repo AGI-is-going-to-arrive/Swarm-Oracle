@@ -45,6 +45,166 @@ class TestNarrateBranch:
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_narration_downgrades_paraphrases_that_look_like_direct_quotes(
+        self,
+        mock_extract,
+        mock_pass1,
+    ):
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "孙伟喊道：“师傅们已经没饭吃了。”",
+            "insight": "孙伟称“司机已经无法生存”。",
+            "question_answer": "结局取决于“司机全面退出”。",
+            "key_moments": ["“车队已经停运”成为转折点。"],
+        }
+
+        result = await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="孙伟(司机)",
+            raw_rounds="[R1 孙伟]: 师傅们要吃饭啊。",
+        )
+
+        assert result["story"] == "孙伟喊道：师傅们已经没饭吃了。"
+        assert result["insight"] == "孙伟称司机已经无法生存。"
+        assert result["question_answer"] == "结局取决于司机全面退出。"
+        assert result["key_moments"] == ["车队已经停运成为转折点。"]
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_narration_preserves_verbatim_transcript_quotes(
+        self,
+        mock_extract,
+        mock_pass1,
+    ):
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "孙伟喊道：“师傅们要吃饭啊。”",
+            "insight": "记录保留了“师傅们要吃饭啊”。",
+            "key_moments": [],
+        }
+
+        result = await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="孙伟(司机)",
+            raw_rounds="[R1 孙伟]: 师傅们要吃饭啊。",
+        )
+
+        assert result["story"] == "孙伟喊道：“师傅们要吃饭啊。”"
+        assert result["insight"] == "记录保留了“师傅们要吃饭啊”。"
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_narration_rejects_verbatim_words_attributed_to_wrong_speaker(
+        self,
+        mock_extract,
+        mock_pass1,
+    ):
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "孙伟说道：“数字不会说谎。”",
+            "insight": "孙伟强调‘数字不会说谎。’",
+            "key_moments": ["孙伟写道：「数字不会说谎。」"],
+        }
+
+        result = await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="孙伟(司机), 李雪梅(财政)",
+            raw_rounds=(
+                "[R1 孙伟]: 师傅们要吃饭啊。\n"
+                "[R1 李雪梅]: 数字不会说谎。"
+            ),
+        )
+
+        assert result["story"] == "孙伟说道：数字不会说谎。"
+        assert result["insight"] == "孙伟强调数字不会说谎。"
+        assert result["key_moments"] == ["孙伟写道：数字不会说谎。"]
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_narration_rejects_wrong_speaker_across_attribution_forms(
+        self,
+        mock_extract,
+        mock_pass1,
+    ):
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "孙伟认为：『数字不会说谎。』",
+            "insight": "孙伟直言：«数字不会说谎。»",
+            "question_answer": "孙伟：„数字不会说谎。“",
+            "key_moments": [
+                "孙伟断定：“数字不会说谎。”",
+                "孙伟称：“外层“数字不会说谎。”结束”",
+            ],
+        }
+
+        result = await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="孙伟(司机), 李雪梅(财政)",
+            raw_rounds=(
+                "[R1 孙伟]: 师傅们要吃饭啊。\n"
+                "[R1 李雪梅]: 数字不会说谎。"
+            ),
+        )
+
+        assert result["story"] == "孙伟认为：数字不会说谎。"
+        assert result["insight"] == "孙伟直言：数字不会说谎。"
+        assert result["question_answer"] == "孙伟：数字不会说谎。"
+        assert result["key_moments"] == [
+            "孙伟断定：数字不会说谎。",
+            "孙伟称：外层数字不会说谎。结束",
+        ]
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_narration_rejects_cross_turn_and_ambiguous_attribution(
+        self,
+        mock_extract,
+        mock_pass1,
+    ):
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        long_suffix = "补充背景" * 20
+        mock_extract.return_value = {
+            "story": "孙伟说：“撤离计划 今晚启动”",
+            "insight": f"孙伟{long_suffix}总结说：“数字不会说谎。”",
+            "question_answer": 'The mayor noted: “Only May said this.”',
+            "key_moments": [
+                'The mayor: “Only May said this.”',
+                'May said: “Only MAY said this.”',
+            ],
+        }
+
+        result = await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="孙伟, 李雪梅, May, MAY",
+            raw_rounds=(
+                "[R1 孙伟]: 撤离计划\n"
+                "[R2 李雪梅]: 数字不会说谎。\n"
+                "[R3 孙伟]: 今晚启动\n"
+                "[R4 May]: Only May said this.\n"
+                "[R5 MAY]: Only MAY said this."
+            ),
+        )
+
+        assert result["story"] == "孙伟说：撤离计划 今晚启动"
+        assert result["insight"] == f"孙伟{long_suffix}总结说：数字不会说谎。"
+        assert result["question_answer"] == "The mayor noted: Only May said this."
+        assert result["key_moments"] == [
+            "The mayor: Only May said this.",
+            "May said: Only MAY said this.",
+        ]
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_narration_uses_configured_request_and_probe_timeouts(
         self,
         mock_extract,
@@ -322,7 +482,7 @@ class TestNarrateBranch:
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_probability_formatting(self, mock_extract, mock_pass1):
-        """Probability should be formatted as percentage in prompt."""
+        """The simulated branch share should be formatted as a percentage."""
         mock_pass1.return_value = _FAKE_PASS1_TEXT
         mock_extract.return_value = {"story": "s", "insight": "i", "key_moments": []}
 
@@ -335,6 +495,9 @@ class TestNarrateBranch:
 
         call_args = mock_pass1.call_args[0][0]
         assert "75%" in call_args
+        assert "【本次模拟分支占比】" in call_args
+        assert "【最终概率】" not in call_args
+        assert "不代表现实发生概率" in call_args
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
@@ -606,6 +769,51 @@ class TestBuildNarrationPromptQuestionAnchoring:
         # Prompt still functional: branch title section present
         assert "[Branch Title]" in prompt
 
+    @pytest.mark.parametrize(
+        ("language", "share_label", "boundary", "legacy_label", "forbidden_claim"),
+        [
+            (
+                "Chinese",
+                "【本次模拟分支占比】100%",
+                "若本次仅生成并纳入一条路径",
+                "【最终概率】",
+                "本次只有一条路径",
+            ),
+            (
+                "English",
+                "[Simulated Branch Share] 100%",
+                "If this run generated and included only one path",
+                "[Final Probability]",
+                "this run has only one path",
+            ),
+        ],
+    )
+    def test_prompt_labels_full_share_as_simulation_weight_not_real_probability(
+        self,
+        language,
+        share_label,
+        boundary,
+        legacy_label,
+        forbidden_claim,
+    ):
+        prompt = _build_narration_prompt(
+            branch_title_block="Only Path",
+            probability=1.0,
+            agents_summary_block="A(role1)",
+            raw_rounds_block="[R1 A]: one path",
+            language=language,
+        )
+
+        assert share_label in prompt
+        assert boundary in prompt
+        assert legacy_label not in prompt
+        assert forbidden_claim not in prompt
+        assert (
+            "不能估计现实不确定性" in prompt
+            if language == "Chinese"
+            else "cannot estimate real-world uncertainty" in prompt
+        )
+
 
 class TestBuildFallbackNarrationQuestionAnchoring:
     """Deterministic structural assertions on `_build_fallback_narration` (no LLM)."""
@@ -646,7 +854,8 @@ class TestBuildFallbackNarrationQuestionAnchoring:
         )
 
         assert "关于「" not in result["story"]
-        assert "《供应链线》以" in result["story"]
+        assert "《供应链线》在本次模拟中的分支占比为 80%" in result["story"]
+        assert "不代表现实发生概率" in result["story"]
 
     def test_english_fallback_without_question_uses_generic_opener(self):
         result = _build_fallback_narration(
@@ -658,7 +867,40 @@ class TestBuildFallbackNarrationQuestionAnchoring:
         )
 
         assert "For the question '" not in result["story"]
-        assert '"Supply Chain Line" becomes the ending' in result["story"]
+        assert '"Supply Chain Line" has a 80% simulated branch share' in result["story"]
+        assert "not a real-world probability" in result["story"]
+
+    @pytest.mark.parametrize(
+        ("language", "expected", "forbidden_claim"),
+        [
+            ("Chinese", "若本次仅生成并纳入一条路径", "本次只有一条路径"),
+            (
+                "English",
+                "If this run generated and included only one path",
+                "this run has only one path",
+            ),
+        ],
+    )
+    def test_full_share_fallback_explains_single_path_boundary(
+        self,
+        language,
+        expected,
+        forbidden_claim,
+    ):
+        result = _build_fallback_narration(
+            "Only Path",
+            1.0,
+            "",
+            language=language,
+        )
+
+        assert expected in result["story"]
+        assert forbidden_claim not in result["story"]
+        assert (
+            "不能估计现实不确定性" in result["story"]
+            if language == "Chinese"
+            else "cannot estimate real-world uncertainty" in result["story"]
+        )
 
     def test_chinese_fallback_truncates_very_long_question_to_300_chars(self):
         very_long_question = "X" * 1500

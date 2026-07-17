@@ -11,12 +11,372 @@ from app.services.llm_client import LLMError, format_untrusted_text_block
 from app.services.parser import _fallback_initial_title, parse_question
 
 
+@pytest.fixture(autouse=True)
+def _forbid_unmocked_parser_provider_calls(monkeypatch):
+    async def _unexpected_provider_call(*args, **kwargs):
+        raise AssertionError("parser unit tests must mock the Provider call")
+
+    monkeypatch.setattr(
+        parser_module,
+        "llm_call_json_with_stream_fallback",
+        _unexpected_provider_call,
+    )
+
+
+def _valid_parse_payload(agent_count: int, *, initial_title: str) -> dict:
+    agents = []
+    for index in range(agent_count):
+        tier = "CORE" if index == 0 else "IMPORTANT" if index < 5 else "CROWD"
+        agents.append({
+            "name": f"测试角色{index + 1}",
+            "role": f"角色{index + 1}",
+            "persona": "谨慎、务实，并会清楚说明自己的判断依据。",
+            "stance": "观望",
+            "tier": tier,
+        })
+    return {
+        "setting": {
+            "time_period": "测试时代",
+            "location": "测试地点",
+            "background": "多方将围绕关键变化展开推演。",
+        },
+        "key_variable": "关键变化",
+        "initial_title": initial_title,
+        "agents": agents,
+        "simulation_rounds": 8,
+        "branch_sensitivity": 0.7,
+    }
+
+
+def _drifted_parse_payload(agent_count: int, *, hierarchical: bool = False) -> dict:
+    payload = _valid_parse_payload(agent_count, initial_title="公交免票那十周")
+    payload["setting"] = {
+        "time_period": "未来十周",
+        "location": "广州",
+        "background": "公交免票试点将在十周内持续推进。",
+    }
+    payload["key_variable"] = "十周公交免票试点"
+    payload["agents"][0]["persona"] = "十年前开始研究公交政策，始终重视可核验数据。"
+    if hierarchical:
+        member_names = [agent["name"] for agent in payload["agents"]]
+        payload["groups"] = [
+            {
+                "name": "观察组",
+                "leader": member_names[0],
+                "members": member_names,
+                "stance": "观望",
+            }
+        ]
+        for agent in payload["agents"]:
+            agent["group"] = "观察组"
+    return payload
+
+
+_TIME_UNIT_CONSTRAINT_FRAGMENTS = (
+    "严格保持题面时间单位和范围",
+    "“推演轮次”仅表示模拟顺序",
+    "不得改写为日/周/月/年",
+    "除非题面明确给出日历周期",
+    "Strictly preserve the question's time units and ranges",
+    '"simulation rounds" indicate simulation order only',
+    "must not be rewritten as days, weeks, months, or years",
+    "unless the question explicitly provides a calendar period",
+)
+
+
+def _assert_time_unit_preservation_contract(prompt: str) -> None:
+    for fragment in _TIME_UNIT_CONSTRAINT_FRAGMENTS:
+        assert fragment in prompt
+    assert "十轮政策推演" in prompt
+    assert "十周政策推演" not in prompt
+
+
 class TestParseQuestion:
     @pytest.mark.asyncio
-    async def test_parse_historical(self):
+    @pytest.mark.parametrize("hierarchical", [False, True])
+    async def test_initial_prompts_preserve_question_time_units(
+        self,
+        monkeypatch,
+        hierarchical,
+    ):
+        """Both initial parser paths must keep rounds distinct from calendar time."""
+        llm_mock = AsyncMock(
+            return_value=_valid_parse_payload(2, initial_title="十轮政策推演")
+        )
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        await parse_question(
+            "请围绕公交免票政策进行十轮政策推演。",
+            max_agents=2,
+            target_agents=2,
+            hierarchical=hierarchical,
+        )
+
+        assert llm_mock.await_count == 1
+        _assert_time_unit_preservation_contract(llm_mock.await_args.args[0])
+
+    @pytest.mark.asyncio
+    async def test_underfill_retry_prompt_preserves_question_time_units(self, monkeypatch):
+        """The reachable underfill retry must not reinterpret ten rounds as ten weeks."""
+        llm_mock = AsyncMock(
+            side_effect=[
+                _valid_parse_payload(1, initial_title="十轮政策推演"),
+                _valid_parse_payload(2, initial_title="十轮政策推演"),
+            ]
+        )
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        await parse_question(
+            "请围绕公交免票政策进行十轮政策推演。",
+            max_agents=2,
+            target_agents=2,
+        )
+
+        assert llm_mock.await_count == 2
+        _assert_time_unit_preservation_contract(llm_mock.await_args_list[1].args[0])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hierarchical", [False, True])
+    async def test_time_drift_guard_repairs_initial_paths_without_touching_personas(
+        self,
+        monkeypatch,
+        caplog,
+        hierarchical,
+    ):
+        """Initial parser paths repair invented periods but never inspect personas."""
+        caplog.set_level("WARNING")
+        payload = _drifted_parse_payload(2, hierarchical=hierarchical)
+        expected_agents = deepcopy(payload["agents"])
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "请比较工作日和周末客流，并进行十轮政策推演。",
+            max_agents=2,
+            target_agents=2,
+            hierarchical=hierarchical,
+        )
+
+        guarded_values = (
+            result["setting"]["time_period"],
+            result["setting"]["background"],
+            result["key_variable"],
+            result["initial_title"],
+        )
+        assert all("十周" not in value for value in guarded_values)
+        assert result["setting"]["location"] == "广州"
+        assert result["agents"] == expected_agents
+        assert result["agents"][0]["persona"].startswith("十年前")
+        assert "公交免票试点将在十周内持续推进" not in caplog.text
+        assert "十年前开始研究公交政策" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_retry_time_drift_is_repaired_before_quality_comparison(self, monkeypatch):
+        """A larger retry may win only after its invented calendar period is repaired."""
+        first_payload = _valid_parse_payload(1, initial_title="公交免票推演")
+        retry_payload = _drifted_parse_payload(2)
+        llm_mock = AsyncMock(side_effect=[first_payload, retry_payload])
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "请比较工作日和周末客流，并进行十轮政策推演。",
+            max_agents=2,
+            target_agents=2,
+        )
+
+        assert llm_mock.await_count == 2
+        assert len(result["agents"]) == 2
+        assert "十周" not in result["setting"]["time_period"]
+        assert "十周" not in result["setting"]["background"]
+        assert "十周" not in result["key_variable"]
+        assert "十周" not in result["initial_title"]
+
+    @pytest.mark.asyncio
+    async def test_explicit_calendar_period_is_preserved_with_simulation_rounds(
+        self,
+        monkeypatch,
+    ):
+        """Question-authored calendar periods remain valid alongside round counts."""
+        payload = _drifted_parse_payload(2)
+        expected_setting = deepcopy(payload["setting"])
+        expected_key_variable = payload["key_variable"]
+        expected_title = payload["initial_title"]
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "未来十周实施公交免票，并进行十轮政策推演。",
+            max_agents=2,
+            target_agents=2,
+        )
+
+        assert result["setting"] == expected_setting
+        assert result["key_variable"] == expected_key_variable
+        assert result["initial_title"] == expected_title
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("negation", ["不是", "并非"])
+    async def test_negated_calendar_period_is_not_authorized(
+        self,
+        monkeypatch,
+        negation,
+    ):
+        """A period mentioned only as a correction must still be repaired."""
+        payload = _drifted_parse_payload(2)
+        expected_agents = deepcopy(payload["agents"])
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            f"请进行十轮政策推演，注意{negation}十周。",
+            max_agents=2,
+            target_agents=2,
+        )
+
+        guarded_values = (
+            result["setting"]["time_period"],
+            result["setting"]["background"],
+            result["key_variable"],
+            result["initial_title"],
+        )
+        assert all("十周" not in value for value in guarded_values)
+        assert result["agents"] == expected_agents
+        assert result["agents"][0]["persona"].startswith("十年前")
+
+    @pytest.mark.asyncio
+    async def test_negated_english_calendar_period_is_not_authorized(self, monkeypatch):
+        """English negation must not turn a prohibited period into an allowlist entry."""
+        payload = _valid_parse_payload(2, initial_title="The ten-week trial")
+        payload["setting"] = {
+            "time_period": "the next ten weeks",
+            "location": "Melbourne",
+            "background": "The trial runs for ten weeks.",
+        }
+        payload["key_variable"] = "a ten-week fare-free trial"
+        payload["agents"][0]["persona"] = "Ten years ago, I began auditing transit policy."
+        expected_agents = deepcopy(payload["agents"])
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "Run ten simulation rounds, not ten weeks.",
+            max_agents=2,
+            target_agents=2,
+            language="en",
+        )
+
+        guarded_values = (
+            result["setting"]["time_period"],
+            result["setting"]["background"],
+            result["key_variable"],
+            result["initial_title"],
+        )
+        assert all("ten week" not in value.lower() for value in guarded_values)
+        assert result["agents"] == expected_agents
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("language", "question_range", "output_range"),
+        [
+            ("zh", "2025—2030年", "2025年至2030年"),
+            ("zh", "三到五周", "三—五周"),
+            ("en", "2025 to 2030 years", "2025-2030 years"),
+            ("en", "three to five weeks", "three–five weeks"),
+        ],
+    )
+    async def test_calendar_ranges_preserve_equivalent_connectors_atomically(
+        self,
+        monkeypatch,
+        language,
+        question_range,
+        output_range,
+    ):
+        """A range's left endpoint must not be mistaken for an invented period."""
+        payload = _valid_parse_payload(2, initial_title=output_range)
+        payload["setting"] = {
+            "time_period": output_range,
+            "location": "test location",
+            "background": f"The policy applies during {output_range}.",
+        }
+        payload["key_variable"] = f"policy during {output_range}"
+        expected_payload = deepcopy(payload)
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+        question = (
+            f"请对{question_range}的政策进行十轮推演。"
+            if language == "zh"
+            else f"Simulate policy during {question_range} for ten rounds."
+        )
+
+        result = await parse_question(
+            question,
+            max_agents=2,
+            target_agents=2,
+            language=language,
+        )
+
+        assert result["setting"] == expected_payload["setting"]
+        assert result["key_variable"] == expected_payload["key_variable"]
+        assert result["initial_title"] == expected_payload["initial_title"]
+        assert result["agents"] == expected_payload["agents"]
+
+    @pytest.mark.asyncio
+    async def test_time_drift_guard_only_activates_for_simulation_rounds(self, monkeypatch):
+        """Calendar periods are not rewritten when the question does not specify rounds."""
+        payload = _drifted_parse_payload(2)
+        expected_setting = deepcopy(payload["setting"])
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "广州公交免票试点会怎样？",
+            max_agents=2,
+            target_agents=2,
+        )
+
+        assert result["setting"] == expected_setting
+        assert result["key_variable"] == "十周公交免票试点"
+        assert result["initial_title"] == "公交免票那十周"
+
+    @pytest.mark.asyncio
+    async def test_time_drift_guard_repairs_english_number_periods(self, monkeypatch):
+        """English number words and calendar units use the same deterministic gate."""
+        payload = _valid_parse_payload(2, initial_title="The ten-week trial")
+        payload["setting"] = {
+            "time_period": "the next ten weeks",
+            "location": "Melbourne",
+            "background": "The trial runs for ten weeks.",
+        }
+        payload["key_variable"] = "a ten-week fare-free trial"
+        llm_mock = AsyncMock(return_value=payload)
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "Compare weekday and weekend demand over ten simulation rounds.",
+            max_agents=2,
+            target_agents=2,
+            language="en",
+        )
+
+        guarded_values = (
+            result["setting"]["time_period"],
+            result["setting"]["background"],
+            result["key_variable"],
+            result["initial_title"],
+        )
+        assert all("ten week" not in value.lower() for value in guarded_values)
+
+    @pytest.mark.asyncio
+    async def test_parse_historical(self, monkeypatch):
         """Should parse a historical what-if question."""
+        llm_mock = AsyncMock(
+            return_value=_valid_parse_payload(10, initial_title="诸葛亮多活十年")
+        )
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
         result = await parse_question("如果诸葛亮多活十年？", max_agents=10, max_rounds=8)
 
+        assert llm_mock.await_count == 1
         assert "setting" in result
         assert "agents" in result
         assert "simulation_rounds" in result
@@ -39,10 +399,16 @@ class TestParseQuestion:
             assert agent["tier"] in ("CORE", "IMPORTANT", "CROWD")
 
     @pytest.mark.asyncio
-    async def test_parse_modern(self):
+    async def test_parse_modern(self, monkeypatch):
         """Should parse a modern what-if question."""
+        llm_mock = AsyncMock(
+            return_value=_valid_parse_payload(15, initial_title="iOS 开源")
+        )
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
         result = await parse_question("如果苹果明天开源iOS？", max_agents=15)
 
+        assert llm_mock.await_count == 1
         agents = result["agents"]
         assert len(agents) > 0
 

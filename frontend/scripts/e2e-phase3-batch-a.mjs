@@ -547,7 +547,45 @@ const CAUSAL_GRAPH_FILTERED_FIXTURES = {
 
 // ── Route Interceptor Setup ──────────────────────────────
 
+const ACTION_FIXTURE_QUERY_KEYS = new Set([
+  "branch_id",
+  "agent_id",
+  "action_type",
+  "round",
+  "status",
+  "cursor",
+  "limit",
+]);
+
+function isValidActionFixtureRequest(rawUrl, method) {
+  if (String(method ?? "").toUpperCase() !== "GET") return false;
+  try {
+    const url = new URL(rawUrl);
+    if (url.pathname !== `/api/scenario/${FIXTURE_SCENARIO_ID}/actions`) return false;
+    if (url.searchParams.getAll("limit").length !== 1 || url.searchParams.get("limit") !== "100") {
+      return false;
+    }
+    for (const key of url.searchParams.keys()) {
+      if (!ACTION_FIXTURE_QUERY_KEYS.has(key)) return false;
+      if (url.searchParams.getAll(key).length !== 1) return false;
+    }
+    for (const key of ["branch_id", "agent_id", "action_type", "status", "cursor"]) {
+      if (url.searchParams.has(key) && !url.searchParams.get(key)?.trim()) return false;
+    }
+    if (url.searchParams.has("round") && !/^[1-9]\d*$/u.test(url.searchParams.get("round") ?? "")) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function installFixtures(page) {
+  // Playwright evaluates the most recently registered matching route first.
+  // Register this guard before the specific fixtures so any unmatched API call
+  // falls through to an explicit abort instead of silently hitting live state.
+  await page.route("**/api/**", (route) => route.abort("blockedbyclient"));
   await page.route("**/api/capabilities", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAPABILITIES_FIXTURE) }),
   );
@@ -573,7 +611,7 @@ async function installFixtures(page) {
     if (route.request().method() === "DELETE") {
       return route.fulfill({ status: 204, body: "" });
     }
-    return route.continue();
+    return route.fallback();
   });
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph*`, (route) => {
     const url = new URL(route.request().url());
@@ -581,32 +619,35 @@ async function installFixtures(page) {
     const fixture = branchId ? (CAUSAL_GRAPH_FILTERED_FIXTURES[branchId] ?? CAUSAL_GRAPH_FIXTURE) : CAUSAL_GRAPH_FIXTURE;
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture) });
   });
-  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/action-ledger*`, (route) =>
-    route.fulfill({
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/actions*`, (route) => {
+    if (!isValidActionFixtureRequest(route.request().url(), route.request().method())) {
+      return route.abort("blockedbyclient");
+    }
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         scenario_id: FIXTURE_SCENARIO_ID,
-        cursor: 0,
         next_cursor: null,
         has_more: false,
         items: [{
-          action_id: "message:ledger-1",
-          message_id: "ledger-1",
-          agent: { id: "agent-ledger-1", name: "Policy Analyst" },
+          id: "action:ledger-1",
+          sequence: 1,
           branch_id: "branch-root",
           round: 1,
-          action: { type: "utterance", text: "Publish the verified evacuation window." },
-          observation: {
-            status: "verified", source_message_ids: ["source-1"], memory_refs: [],
-            memory_source_scenario_ids: [], recent_messages_status: "verified",
-            identity_memory_status: "empty",
-          },
-          consequences: [], reflections: [],
+          agent: { id: "agent-ledger-1", name: "Policy Analyst" },
+          action_type: "POST",
+          status: "verified",
+          target: { kind: "topic", id: "evacuation-window" },
+          parent_action_id: null,
+          content: "Publish the verified evacuation window.",
+          payload: {},
+          failure_code: null,
+          created_at: "2026-07-14T01:02:03Z",
         }],
       }),
-    }),
-  );
+    });
+  });
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(SCENARIO_FIXTURE) }),
   );
@@ -742,12 +783,16 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
   const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
   results.steps.push({ name: "reactflow-container-visible", passed: hasReactFlow });
   const ledgerPanel = page.getByTestId("action-ledger-panel");
+  const ledgerToggle = ledgerPanel.locator(".action-ledger__toggle");
+  if (await ledgerToggle.getAttribute("aria-expanded") !== "true") {
+    await ledgerToggle.click();
+  }
+  const ledgerBody = ledgerPanel.locator(".action-ledger__body").first();
+  await ledgerBody.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   const hasLedger = await ledgerPanel.isVisible().catch(() => false)
     && await ledgerPanel.getByText("Publish the verified evacuation window.").isVisible().catch(() => false);
   results.steps.push({ name: "action-ledger-visible-with-durable-entry", passed: hasLedger });
-  const ledgerTextContrast = await ledgerPanel.evaluate((panel) => {
-    const target = panel.querySelector('article p');
-    if (!(target instanceof HTMLElement)) return false;
+  const ledgerTextContrast = await ledgerBody.evaluate((target) => {
     const color = getComputedStyle(target).color.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
     return color.length === 3 && color.reduce((sum, channel) => sum + channel, 0) >= 600;
   }).catch(() => false);
@@ -1032,6 +1077,8 @@ export const __test__ = {
   parseViewportTransform,
   requiredGraphInteractionSteps: REQUIRED_GRAPH_INTERACTION_STEPS,
   srFallbackListTestId: SR_FALLBACK_LIST_TEST_ID,
+  isValidActionFixtureRequest,
+  installFixtures,
   runNamedTest,
   summarizeRun,
 };

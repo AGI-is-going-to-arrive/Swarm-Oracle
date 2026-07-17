@@ -15,15 +15,18 @@ describe('ResultVerdictPanel', () => {
       <ResultVerdictPanel
         verdict="AI changes the job more than it removes it."
         confidence="medium"
+        confidenceKind="model_self_rating"
         question="Will AI replace programmers?"
       />,
     );
 
     const region = screen.getByRole('region', { name: 'Prediction Verdict' });
     expect(region).toHaveAttribute('aria-live', 'polite');
-    expect(screen.getByTestId('result-verdict-confidence-badge')).toHaveTextContent(
-      'Medium Confidence',
+    const confidenceBadge = screen.getByTestId('result-verdict-confidence-badge');
+    expect(confidenceBadge).toHaveTextContent(
+      'Model self-rating: Medium Confidence',
     );
+    expect(confidenceBadge).toHaveAttribute('data-confidence-kind', 'model_self_rating');
     expect(screen.getByTestId('result-verdict-question')).toHaveTextContent(
       'Will AI replace programmers?',
     );
@@ -33,6 +36,39 @@ describe('ResultVerdictPanel', () => {
     expect(screen.getByTestId('result-verdict-text')).toHaveTextContent(
       'AI changes the job more than it removes it.',
     );
+  });
+
+  it.each([undefined, null] as const)(
+    'does not infer model self-rating when confidence kind is %s',
+    (confidenceKind) => {
+      render(
+        <ResultVerdictPanel
+          verdict="The model selects the audited branch."
+          confidence="high"
+          confidenceKind={confidenceKind}
+          question="Which branch holds?"
+        />,
+      );
+
+      const confidenceBadge = screen.getByTestId('result-verdict-confidence-badge');
+      expect(confidenceBadge).toHaveTextContent('High Confidence');
+      expect(confidenceBadge).not.toHaveTextContent('Model self-rating');
+      expect(confidenceBadge).not.toHaveAttribute('data-confidence-kind');
+    },
+  );
+
+  it('does not render a confidence badge for the explicit null backend contract', () => {
+    render(
+      <ResultVerdictPanel
+        verdict="The simulation completed without a valid confidence rating."
+        confidence={null}
+        confidenceKind={null}
+        question="Which branch holds?"
+      />,
+    );
+
+    expect(screen.getByTestId('result-verdict-text')).toBeInTheDocument();
+    expect(screen.queryByTestId('result-verdict-confidence-badge')).not.toBeInTheDocument();
   });
 
   it('shows a neutral unavailable fallback that anchors the question when verdict is blank', () => {

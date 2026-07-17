@@ -4904,6 +4904,130 @@ class TestStoryEndpoint:
         assert good["story"] == "王国恢复和平"
         assert good["insight"] == "合作很重要"
 
+    def test_get_story_labels_result_confidence_as_model_self_rating(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "result_quality": {
+                    "verdict": "The model expects approval.",
+                    "confidence": "high",
+                    "confidence_kind": "model_self_rating",
+                    "confidence_terminal_branch_ids": [bid],
+                }
+            }
+            session.add(scenario)
+            session.commit()
+
+        response = client.get(f"/api/scenario/{sid}/story")
+
+        assert response.status_code == 200
+        assert response.json()["verdict"] == "The model expects approval."
+        assert response.json()["verdict_confidence"] == "high"
+        assert response.json()["verdict_confidence_kind"] == "model_self_rating"
+
+    def test_get_story_uses_terminal_report_analytic_confidence_as_authority(
+        self,
+        client,
+    ):
+        from tests.test_result_report_contract import _legal_full_report
+
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        report = _legal_full_report()
+        report["target_branch_id"] = bid
+        report["verdict"]["headline_answer"] = (
+            "The evidence-backed report expects conditional approval."
+        )
+        report["verdict"]["analytic_confidence"] = {
+            "level": "low",
+            "basis": "Claim validation found limited temporal coverage.",
+        }
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "result_quality": {
+                    "verdict": "The model expects approval.",
+                    "confidence": "high",
+                    "confidence_kind": "model_self_rating",
+                    "confidence_terminal_branch_ids": [bid],
+                },
+                "full_report": report,
+            }
+            session.add(scenario)
+            session.commit()
+
+        response = client.get(f"/api/scenario/{sid}/story")
+
+        assert response.status_code == 200
+        assert response.json()["full_report"]["target_branch_id"] == bid
+        assert response.json()["verdict"] == (
+            "The evidence-backed report expects conditional approval."
+        )
+        assert response.json()["verdict_confidence"] == "low"
+        assert response.json()["verdict_confidence_kind"] is None
+
+    def test_get_story_marks_self_rating_stale_after_resume_branch_changes_scope(
+        self,
+        client,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        parent_id = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        _seed_branch(
+            engine,
+            sid,
+            status=BranchStatus.ACTIVE,
+            parent_branch_id=parent_id,
+            fork_round=1,
+        )
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "result_quality": {
+                    "verdict": "The old terminal branch was preferred.",
+                    "confidence": "low",
+                    "confidence_kind": "model_self_rating",
+                    "confidence_terminal_branch_ids": [parent_id],
+                }
+            }
+            session.add(scenario)
+            session.commit()
+
+        response = client.get(f"/api/scenario/{sid}/story")
+
+        assert response.status_code == 200
+        assert response.json()["verdict_confidence"] is None
+        assert response.json()["verdict_confidence_kind"] is None
+
+    def test_get_story_does_not_label_legacy_confidence_as_model_self_rating(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "result_quality": {
+                    "verdict": "A legacy verdict without source metadata.",
+                    "confidence": "medium",
+                }
+            }
+            session.add(scenario)
+            session.commit()
+
+        response = client.get(f"/api/scenario/{sid}/story")
+
+        assert response.status_code == 200
+        assert response.json()["verdict_confidence"] == "medium"
+        assert response.json()["verdict_confidence_kind"] is None
+
     def test_get_story_nonexistent(self, client):
         """Should return 404 for unknown scenario."""
         resp = client.get("/api/scenario/nonexistent/story")

@@ -42,6 +42,52 @@ interface Props {
   isReplayMode?: boolean;
 }
 
+export type ReportContentLanguage = 'zh' | 'en';
+
+const REPORT_CONTENT_LANGUAGES: readonly ReportContentLanguage[] = ['zh', 'en'];
+
+function isReportContentLanguage(value: unknown): value is ReportContentLanguage {
+  return value === 'zh' || value === 'en';
+}
+
+/**
+ * Resolve the language of report-authored content independently from the UI chrome.
+ * New reports use both metadata fields, with an explicit `missing` status vetoing a
+ * stale `available_languages` entry. The final fallbacks keep persisted legacy reports
+ * readable when one or both metadata fields are absent at runtime.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveReportContentLanguage(
+  report: Pick<FullReport, 'language' | 'available_languages' | 'language_status'>,
+  preferredLanguage: ReportContentLanguage,
+): ReportContentLanguage {
+  const declaredLanguages = Array.isArray(report.available_languages)
+    ? report.available_languages.filter(isReportContentLanguage)
+    : [];
+  const uniqueDeclaredLanguages = [...new Set(declaredLanguages)];
+  const status = report.language_status;
+  const hasAuthoritativeStatus = Boolean(status && typeof status === 'object');
+  const statusLanguages = hasAuthoritativeStatus
+    ? REPORT_CONTENT_LANGUAGES.filter((language) => status?.[language] === 'available')
+    : [];
+  const availableLanguages = hasAuthoritativeStatus
+    ? [
+        ...uniqueDeclaredLanguages.filter((language) => status?.[language] === 'available'),
+        ...statusLanguages.filter((language) => !uniqueDeclaredLanguages.includes(language)),
+      ]
+    : uniqueDeclaredLanguages;
+
+  if (availableLanguages.includes(preferredLanguage)) return preferredLanguage;
+  if (isReportContentLanguage(report.language) && availableLanguages.includes(report.language)) {
+    return report.language;
+  }
+  if (availableLanguages[0]) return availableLanguages[0];
+
+  // Legacy compatibility: old persisted payloads may not carry availability metadata.
+  if (isReportContentLanguage(report.language)) return report.language;
+  return preferredLanguage;
+}
+
 function isTruncatedReportMarker(
   report: FullReport | FullReportTruncatedMarker | null | undefined,
 ): report is FullReportTruncatedMarker {
@@ -113,20 +159,20 @@ function splitSentencesDecimalSafe(text: string): string[] {
 
 function deriveTakeaways(report: FullReport, lang: 'zh' | 'en'): string[] {
   const items: string[] = [];
+  const usesPrimaryLanguage = lang === report.language;
 
-  // 1. verdict.headline_answer
-  const headline = report.verdict?.headline_answer?.trim() ?? '';
-  if (headline) {
-    items.push(headline);
+  // Fields without an i18n contract are authored in `report.language`. When the
+  // viewer selects a genuinely available alternate language, do not mix those
+  // primary-language strings into the localized digest.
+  if (usesPrimaryLanguage) {
+    const headline = report.verdict?.headline_answer?.trim() ?? '';
+    if (headline) {
+      items.push(headline);
+    }
   }
 
   // 2. summary_i18n[lang] 首 1-2 句(按小数安全切句)
-  const summaryText = (
-    report.summary_i18n?.[lang] ||
-    report.summary_i18n?.en ||
-    report.summary_i18n?.zh ||
-    ''
-  ).trim();
+  const summaryText = (report.summary_i18n?.[lang] || '').trim();
   if (summaryText) {
     const sentences = splitSentencesDecimalSafe(summaryText);
     const summarySentences = sentences.slice(0, 2);
@@ -135,21 +181,23 @@ function deriveTakeaways(report: FullReport, lang: 'zh' | 'en'): string[] {
     }
   }
 
-  // 3. follow_ups[] 取 1-2
-  const followUps = report.follow_ups || [];
-  for (const fu of followUps.slice(0, 2)) {
-    const trimmed = fu?.trim() ?? '';
-    if (trimmed) {
-      items.push(trimmed);
+  if (usesPrimaryLanguage) {
+    // 3. follow_ups[] 取 1-2
+    const followUps = report.follow_ups || [];
+    for (const fu of followUps.slice(0, 2)) {
+      const trimmed = fu?.trim() ?? '';
+      if (trimmed) {
+        items.push(trimmed);
+      }
     }
-  }
 
-  // 4. indicators_to_watch[].signal 取 1-2
-  const indicators = report.indicators_to_watch || [];
-  for (const ind of indicators.slice(0, 2)) {
-    const signal = ind?.signal?.trim() ?? '';
-    if (signal) {
-      items.push(signal);
+    // 4. indicators_to_watch[].signal 取 1-2
+    const indicators = report.indicators_to_watch || [];
+    for (const ind of indicators.slice(0, 2)) {
+      const signal = ind?.signal?.trim() ?? '';
+      if (signal) {
+        items.push(signal);
+      }
     }
   }
 
@@ -303,7 +351,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   isZh,
   isReplayMode,
 }: Props & { isZh: boolean; isReplayMode: boolean }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const {
     capabilities,
@@ -343,6 +391,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const isEnabled = capabilities?.result_report?.enabled ?? false;
 
   const isGenerating = !pollStalled && (report?.status === 'generating' || localGenerating);
+  const preferredContentLanguage: ReportContentLanguage = isZh ? 'zh' : 'en';
+  const reportContentLanguage = report
+    ? resolveReportContentLanguage(report, preferredContentLanguage)
+    : preferredContentLanguage;
 
   const beginAuthorityAttempt = useCallback(() => {
     const epoch = attemptEpochRef.current + 1;
@@ -495,10 +547,8 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   const takeaways = useMemo(() => {
     if (!report) return [];
-    const rawLang = i18n.language || 'en';
-    const lang = rawLang.startsWith('zh') ? 'zh' : 'en';
-    return deriveTakeaways(report, lang);
-  }, [report, i18n.language]);
+    return deriveTakeaways(report, reportContentLanguage);
+  }, [report, reportContentLanguage]);
 
   const sections = useMemo(() => report?.sections || [], [report]);
   const evidenceDict = useMemo(() => {
@@ -1002,7 +1052,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     return null;
   }
 
-  const title = isZh ? report.title_i18n.zh || report.title : report.title_i18n.en || report.title;
+  const title = report.title_i18n[reportContentLanguage] || report.title;
 
   return (
     <div className="report-doc report-panel-container report-panel-container--rendered">
@@ -1087,7 +1137,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       <div className="report-panel-body">
         {variant === 'inline' ? (
           <>
-            <ReportConfidenceBadge verdict={report.verdict} />
+            <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
 
             {report.status === 'complete' && takeaways.length > 0 && (
               <div className="report-digest">
@@ -1103,7 +1153,11 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             )}
 
             {report.status === 'complete' && (
-              <ReportToc sections={sections} hrefBase={`/result/${activeScenarioId}/report`} />
+              <ReportToc
+                sections={sections}
+                hrefBase={`/result/${activeScenarioId}/report`}
+                language={reportContentLanguage}
+              />
             )}
 
             <div className="report-cta">
@@ -1130,9 +1184,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             )}
 
             {/* HERO STAT BAND — probability / confidence / consensus / disclaimer band */}
-            <ReportConfidenceBadge verdict={report.verdict} />
+            <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
 
-            <ReportToc sections={sections} />
+            <ReportToc sections={sections} language={reportContentLanguage} />
 
             <div className="report-content">
               {sections.map((section, idx) => (
@@ -1141,6 +1195,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
                   section={section}
                   index={idx}
                   onOpenEvidence={handleOpenEvidence}
+                  language={reportContentLanguage}
                 />
               ))}
               {retrying &&
@@ -1165,7 +1220,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             <PremortemAnalysisBlock
               analysis={report.premortem_analysis}
               evidence={report.evidence}
-              isZh={isZh}
+              isZh={reportContentLanguage === 'zh'}
               onOpenEvidence={handleOpenEvidence}
             />
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from decimal import Decimal, InvalidOperation
 
 from app.log_sanitize import _scrub_sensitive_text
 from app.services.lang_detect import detect_language, get_language_directive
@@ -20,6 +21,14 @@ logger = logging.getLogger(__name__)
 _INITIAL_TITLE_PROMPT_GUIDANCE = (
     "推演起点的标题（用通俗口语概括核心假设，如：放弃核电后、房价翻倍那一年；"
     "不要用抽象词或宏大标签，8字以内）"
+)
+
+_TIME_UNIT_PRESERVATION_RULES = (
+    "- 时间语义硬约束：严格保持题面时间单位和范围；“推演轮次”仅表示模拟顺序，"
+    "不得改写为日/周/月/年，除非题面明确给出日历周期。\n"
+    "- Time semantics hard constraint: Strictly preserve the question's time units and "
+    "ranges; \"simulation rounds\" indicate simulation order only and must not be rewritten "
+    "as days, weeks, months, or years unless the question explicitly provides a calendar period."
 )
 
 PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
@@ -61,6 +70,7 @@ PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
 - branch_sensitivity: 0-1, 越高越容易产生分支 (建议 0.5-0.8)
 - {language_directive}
 - {untrusted_input_guardrail}
+__TIME_UNIT_PRESERVATION_RULES__
 - persona 写作要求（150-300字，必须覆盖以下六点）:
   1. 性格特征和行为习惯
   2. 说话风格和口头禅
@@ -69,7 +79,9 @@ PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
   5. 面对压力时的典型反应
   6. 一个让人记住这个人的细节
   坏的例子: "性格沉稳，做事认真"（太空泛）
-""".replace("__INITIAL_TITLE_PROMPT_GUIDANCE__", _INITIAL_TITLE_PROMPT_GUIDANCE)
+""".replace(
+    "__INITIAL_TITLE_PROMPT_GUIDANCE__", _INITIAL_TITLE_PROMPT_GUIDANCE
+).replace("__TIME_UNIT_PRESERVATION_RULES__", _TIME_UNIT_PRESERVATION_RULES)
 
 # P3-A: extended prompt for hierarchical mode (groups field)
 PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
@@ -123,6 +135,7 @@ PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
 - branch_sensitivity: 0-1, 越高越容易产生分支 (建议 0.5-0.8)
 - {language_directive}
 - {untrusted_input_guardrail}
+__TIME_UNIT_PRESERVATION_RULES__
 - persona 写作要求（150-300字，必须覆盖以下六点）:
   1. 性格特征和行为习惯
   2. 说话风格和口头禅
@@ -130,7 +143,9 @@ PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
   4. 影响决策的关键经历
   5. 面对压力时的典型反应
   6. 一个让人记住这个人的细节
-""".replace("__INITIAL_TITLE_PROMPT_GUIDANCE__", _INITIAL_TITLE_PROMPT_GUIDANCE)
+""".replace(
+    "__INITIAL_TITLE_PROMPT_GUIDANCE__", _INITIAL_TITLE_PROMPT_GUIDANCE
+).replace("__TIME_UNIT_PRESERVATION_RULES__", _TIME_UNIT_PRESERVATION_RULES)
 
 PARSE_RETRY_PROMPT = """你上一次只返回了 {current_agents} 个角色，\
 但目标是 {target_agents} 个。请重新生成完整结果，并严格满足数量要求。
@@ -144,9 +159,125 @@ PARSE_RETRY_PROMPT = """你上一次只返回了 {current_agents} 个角色，\
 - simulation_rounds 范围 5-{max_rounds}
 - {language_directive}
 - {untrusted_input_guardrail}
+__TIME_UNIT_PRESERVATION_RULES__
 - 角色名必须唯一，不能重复
 - 不要解释，不要 markdown，只返回 JSON
-"""
+""".replace("__TIME_UNIT_PRESERVATION_RULES__", _TIME_UNIT_PRESERVATION_RULES)
+
+_CHINESE_NUMBER_TOKEN = r"(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千]+)"
+_ENGLISH_NUMBER_WORD = (
+    r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
+    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)"
+)
+_ENGLISH_NUMBER_TOKEN = (
+    rf"(?:\d+(?:\.\d+)?|{_ENGLISH_NUMBER_WORD}"
+    rf"(?:[\s-]+(?:and[\s-]+)?{_ENGLISH_NUMBER_WORD})*)"
+)
+_SIMULATION_ROUND_PATTERNS = (
+    re.compile(rf"{_CHINESE_NUMBER_TOKEN}\s*(?:轮|回合)"),
+    re.compile(rf"(?:推演|模拟)?轮次\s*(?:为|是|[:：=])?\s*{_CHINESE_NUMBER_TOKEN}"),
+    re.compile(
+        rf"\b{_ENGLISH_NUMBER_TOKEN}[\s-]*(?:simulation[\s-]+)?rounds?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b(?:simulation[\s-]+)?rounds?\s*[:=]\s*{_ENGLISH_NUMBER_TOKEN}\b",
+        re.IGNORECASE,
+    ),
+)
+_CHINESE_CALENDAR_UNIT_PATTERN = r"小时|分钟|个月|星期|天|日|周|月|年"
+_ENGLISH_CALENDAR_UNIT_PATTERN = r"minutes?|hours?|days?|weeks?|months?|years?"
+_CHINESE_CALENDAR_RANGE_RE = re.compile(
+    rf"(?P<start>{_CHINESE_NUMBER_TOKEN})\s*"
+    rf"(?P<start_unit>{_CHINESE_CALENDAR_UNIT_PATTERN})?\s*"
+    r"(?P<connector>-|－|–|—|~|～|至|到)\s*"
+    rf"(?P<end>{_CHINESE_NUMBER_TOKEN})\s*"
+    rf"(?P<end_unit>{_CHINESE_CALENDAR_UNIT_PATTERN})?"
+)
+_CHINESE_CALENDAR_PERIOD_RE = re.compile(
+    rf"(?P<number>{_CHINESE_NUMBER_TOKEN})\s*"
+    rf"(?P<unit>{_CHINESE_CALENDAR_UNIT_PATTERN})"
+)
+_ENGLISH_CALENDAR_RANGE_RE = re.compile(
+    rf"\b(?P<start>{_ENGLISH_NUMBER_TOKEN})"
+    rf"(?:[\s-]*(?P<start_unit>{_ENGLISH_CALENDAR_UNIT_PATTERN}))?\s*"
+    r"(?P<connector>to|through|until|-|–|—|~)\s*"
+    rf"(?P<end>{_ENGLISH_NUMBER_TOKEN})"
+    rf"(?:[\s-]*(?P<end_unit>{_ENGLISH_CALENDAR_UNIT_PATTERN}))?\b",
+    re.IGNORECASE,
+)
+_ENGLISH_CALENDAR_PERIOD_RE = re.compile(
+    rf"\b(?P<number>{_ENGLISH_NUMBER_TOKEN})[\s-]*"
+    rf"(?P<unit>{_ENGLISH_CALENDAR_UNIT_PATTERN})\b",
+    re.IGNORECASE,
+)
+_CHINESE_NEGATED_PERIOD_RE = re.compile(
+    r"(?:不是|并非|而非|不等于|不要(?:按|当作|视为)?|不能(?:按|当作|视为|算作)?)\s*"
+    r"(?:(?:未来|接下来|连续|整整|约|大约|将近)\s*)?$"
+)
+_ENGLISH_NEGATED_PERIOD_RE = re.compile(
+    r"(?:\bnot\b|\bis\s+not\b|\bisn't\b|\brather\s+than\b|"
+    r"\bdo(?:es)?\s+not\s+mean\b)\s*"
+    r"(?:(?:a|an|the|next|future|coming|about|approximately|roughly|exactly)\s+){0,3}$",
+    re.IGNORECASE,
+)
+_CHINESE_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CHINESE_MULTIPLIERS = {"十": 10, "百": 100, "千": 1000}
+_ENGLISH_NUMBER_VALUES = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+_CHINESE_CALENDAR_UNITS = {
+    "分钟": "minute",
+    "小时": "hour",
+    "天": "day",
+    "日": "day",
+    "周": "week",
+    "星期": "week",
+    "月": "month",
+    "个月": "month",
+    "年": "year",
+}
 
 
 def _format_document_reference_block(world_context: dict | None) -> str:
@@ -383,6 +514,239 @@ def _resolve_parse_language(question: str, language: str | None) -> str:
     if language == "en":
         return "English"
     return detect_language(question)
+
+
+def _normalize_decimal_number(value: str) -> str | None:
+    try:
+        return format(Decimal(value).normalize(), "f")
+    except InvalidOperation:
+        return None
+
+
+def _normalize_chinese_number(value: str) -> str | None:
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return _normalize_decimal_number(value)
+    if not value or any(char not in _CHINESE_DIGITS | _CHINESE_MULTIPLIERS for char in value):
+        return None
+    if not any(char in _CHINESE_MULTIPLIERS for char in value):
+        return str(int("".join(str(_CHINESE_DIGITS[char]) for char in value)))
+
+    total = 0
+    current = 0
+    for char in value:
+        if char in _CHINESE_DIGITS:
+            current = _CHINESE_DIGITS[char]
+            continue
+        total += (current or 1) * _CHINESE_MULTIPLIERS[char]
+        current = 0
+    return str(total + current)
+
+
+def _normalize_english_number(value: str) -> str | None:
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return _normalize_decimal_number(value)
+
+    total = 0
+    current = 0
+    for token in re.findall(r"[a-z]+", value.lower()):
+        if token == "and":
+            continue
+        if token == "hundred":
+            current = (current or 1) * 100
+        elif token == "thousand":
+            total += (current or 1) * 1000
+            current = 0
+        elif token in _ENGLISH_NUMBER_VALUES:
+            current += _ENGLISH_NUMBER_VALUES[token]
+        else:
+            return None
+    return str(total + current)
+
+
+def _contains_simulation_round_expression(question: str) -> bool:
+    return any(pattern.search(question) for pattern in _SIMULATION_ROUND_PATTERNS)
+
+
+_CalendarPeriodKey = tuple[str, ...]
+
+
+def _english_calendar_unit(value: str) -> str:
+    return value.lower().removesuffix("s")
+
+
+def _range_period_key(
+    *,
+    start_number: str | None,
+    end_number: str | None,
+    start_unit: str | None,
+    end_unit: str | None,
+) -> _CalendarPeriodKey | None:
+    if start_number is None or end_number is None:
+        return None
+    units = [unit for unit in (start_unit, end_unit) if unit is not None]
+    if not units or any(unit != units[0] for unit in units[1:]):
+        return None
+    return ("range", start_number, end_number, units[0])
+
+
+def _period_authority_keys(period: _CalendarPeriodKey) -> set[_CalendarPeriodKey]:
+    keys = {period}
+    if len(period) == 4 and period[0] == "range":
+        keys.add(("single", period[1], period[3]))
+        keys.add(("single", period[2], period[3]))
+    return keys
+
+
+def _period_is_negated(text: str, start: int) -> bool:
+    clause_prefix = re.split(r"[,，。;；:：!?！？\n]", text[:start])[-1]
+    return bool(
+        _CHINESE_NEGATED_PERIOD_RE.search(clause_prefix)
+        or _ENGLISH_NEGATED_PERIOD_RE.search(clause_prefix)
+    )
+
+
+def _extract_calendar_periods(
+    text: str,
+) -> list[tuple[int, int, _CalendarPeriodKey]]:
+    periods: list[tuple[int, int, _CalendarPeriodKey]] = []
+    range_spans: list[tuple[int, int]] = []
+
+    for match in _CHINESE_CALENDAR_RANGE_RE.finditer(text):
+        start_unit = match.group("start_unit")
+        end_unit = match.group("end_unit")
+        period = _range_period_key(
+            start_number=_normalize_chinese_number(match.group("start")),
+            end_number=_normalize_chinese_number(match.group("end")),
+            start_unit=_CHINESE_CALENDAR_UNITS.get(start_unit) if start_unit else None,
+            end_unit=_CHINESE_CALENDAR_UNITS.get(end_unit) if end_unit else None,
+        )
+        if period is not None:
+            periods.append((match.start(), match.end(), period))
+            range_spans.append((match.start(), match.end()))
+
+    for match in _ENGLISH_CALENDAR_RANGE_RE.finditer(text):
+        start_unit = match.group("start_unit")
+        end_unit = match.group("end_unit")
+        period = _range_period_key(
+            start_number=_normalize_english_number(match.group("start")),
+            end_number=_normalize_english_number(match.group("end")),
+            start_unit=_english_calendar_unit(start_unit) if start_unit else None,
+            end_unit=_english_calendar_unit(end_unit) if end_unit else None,
+        )
+        if period is not None:
+            periods.append((match.start(), match.end(), period))
+            range_spans.append((match.start(), match.end()))
+
+    def inside_range(start: int, end: int) -> bool:
+        return any(
+            start >= range_start and end <= range_end
+            for range_start, range_end in range_spans
+        )
+
+    for match in _CHINESE_CALENDAR_PERIOD_RE.finditer(text):
+        if inside_range(match.start(), match.end()):
+            continue
+        number = _normalize_chinese_number(match.group("number"))
+        if number is not None:
+            periods.append(
+                (
+                    match.start(),
+                    match.end(),
+                    ("single", number, _CHINESE_CALENDAR_UNITS[match.group("unit")]),
+                )
+            )
+    for match in _ENGLISH_CALENDAR_PERIOD_RE.finditer(text):
+        if inside_range(match.start(), match.end()):
+            continue
+        number = _normalize_english_number(match.group("number"))
+        if number is not None:
+            periods.append(
+                (
+                    match.start(),
+                    match.end(),
+                    ("single", number, _english_calendar_unit(match.group("unit"))),
+                )
+            )
+    return sorted(periods, key=lambda item: item[0])
+
+
+def _calendar_period_authorities(
+    text: str,
+) -> tuple[set[_CalendarPeriodKey], set[_CalendarPeriodKey]]:
+    allowed: set[_CalendarPeriodKey] = set()
+    forbidden: set[_CalendarPeriodKey] = set()
+    for start, _end, period in _extract_calendar_periods(text):
+        destination = forbidden if _period_is_negated(text, start) else allowed
+        destination.update(_period_authority_keys(period))
+    return allowed, forbidden
+
+
+def _repair_time_field(
+    value: object,
+    *,
+    allowed_periods: set[_CalendarPeriodKey],
+    forbidden_periods: set[_CalendarPeriodKey],
+    replacement: str,
+) -> tuple[object, bool]:
+    if not isinstance(value, str):
+        return value, False
+    unauthorized = [
+        period
+        for period in _extract_calendar_periods(value)
+        if period[2] in forbidden_periods or period[2] not in allowed_periods
+    ]
+    if not unauthorized:
+        return value, False
+
+    repaired = value
+    for start, end, _period in reversed(unauthorized):
+        repaired = f"{repaired[:start]}{replacement}{repaired[end:]}"
+    return re.sub(r"\s{2,}", " ", repaired).strip(), True
+
+
+def _repair_parse_time_drift(payload: dict, *, question: str, language: str) -> dict:
+    """Repair ungrounded calendar periods without reading agent content."""
+    if not _contains_simulation_round_expression(question):
+        return payload
+
+    allowed_periods, forbidden_periods = _calendar_period_authorities(question)
+    replacement = "推演期间" if language == "Chinese" else "the simulation period"
+    repaired_fields: list[str] = []
+
+    setting = payload.get("setting")
+    if isinstance(setting, dict):
+        for field in ("time_period", "background"):
+            repaired, changed = _repair_time_field(
+                setting.get(field),
+                allowed_periods=allowed_periods,
+                forbidden_periods=forbidden_periods,
+                replacement=replacement,
+            )
+            if changed:
+                setting[field] = repaired
+                repaired_fields.append(f"setting.{field}")
+
+    for field in ("key_variable", "initial_title"):
+        repaired, changed = _repair_time_field(
+            payload.get(field),
+            allowed_periods=allowed_periods,
+            forbidden_periods=forbidden_periods,
+            replacement=replacement,
+        )
+        if changed:
+            payload[field] = (
+                _fallback_initial_title(str(repaired), language)
+                if field == "initial_title"
+                else repaired
+            )
+            repaired_fields.append(field)
+
+    if repaired_fields:
+        logger.warning(
+            "Parser repaired ungrounded calendar periods in fields: %s",
+            ",".join(repaired_fields),
+        )
+    return payload
 
 
 def _build_unique_agent_name(
@@ -725,6 +1089,8 @@ async def parse_question(
         )
         result = _normalize_parse_result(result, language=language, hierarchical=hierarchical)
 
+    result = _repair_parse_time_drift(result, question=question, language=language)
+
     if len(result.get("agents", [])) < requested_agents:
         logger.warning(
             "Parser under-filled agents for '%s': got %d, requested %d. Retrying once.",
@@ -753,6 +1119,11 @@ async def parse_question(
                 retry_result,
                 language=language,
                 hierarchical=hierarchical,
+            )
+            retry_result = _repair_parse_time_drift(
+                retry_result,
+                question=question,
+                language=language,
             )
         except (LLMError, ValueError, TypeError) as exc:
             logger.warning(

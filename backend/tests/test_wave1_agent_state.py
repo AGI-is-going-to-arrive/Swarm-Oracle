@@ -115,7 +115,9 @@ async def test_round_two_prompt_uses_updated_emotion_without_visualization(monke
 
     async def fake_llm_call(prompt: str, *_args, **_kwargs):
         prompts.append(prompt)
-        return "I will keep the state visible."
+        if len(prompts) == 1:
+            return "I will keep the state visible."
+        return "I will revise the plan using the newly visible state."
 
     async def fake_llm_call_json(*_args, **_kwargs):
         return {
@@ -229,12 +231,14 @@ async def test_fork_children_inherit_then_isolate_prompt_checkpoint_and_narratio
             turn_prompts["Beta path"] = prompt
             return "BETA_TURN"
         turn_prompts["Root"] = prompt
-        return "ROOT_TURN"
+        return "ROOT_TURN Two incompatible paths"
 
     async def fake_metadata(prompt: str, *_args, **_kwargs):
-        if "ALPHA_TURN" in prompt:
+        # Decision metadata is now requested before speech, so branch context—not
+        # the yet-to-be-produced utterance—selects the branch-scoped emotion.
+        if "Alpha path" in prompt:
             return {"content": "ALPHA_TURN", "emotion": "angry", "diverge": None}
-        if "BETA_TURN" in prompt:
+        if "Beta path" in prompt:
             return {"content": "BETA_TURN", "emotion": "hopeful", "diverge": None}
         return {
             "content": "ROOT_TURN",

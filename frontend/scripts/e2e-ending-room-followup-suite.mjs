@@ -23,12 +23,6 @@ const DESKTOP_CONTEXT_OPTIONS = {
   viewport: { width: 1600, height: 900 },
 };
 
-const MOBILE_CONTEXT_OPTIONS = {
-  viewport: { width: 390, height: 844 },
-  isMobile: true,
-  hasTouch: true,
-};
-
 const BROWSER_LAUNCH_OPTIONS = {
   headless: true,
   args: ["--use-gl=angle", "--use-angle=swiftshader"],
@@ -47,6 +41,106 @@ const SINGLE_ENDING_FIXTURE_QUESTION =
 // mobile follow-up validation can quickly fall back to API-visible checks.
 const OPTIONAL_FOLLOWUP_CAPTURE_TIMEOUT_MS = 12000;
 const OPTIONAL_EPILOGUE_CAPTURE_TIMEOUT_MS = 15000;
+const OBSERVED_CONTEXTS = new WeakSet();
+const OBSERVED_ISSUES = [];
+const EXPECTED_HTTP_FAILURES = new Map();
+const ENDING_ROOM_FIXTURE_ROUTED_CONTEXTS = new WeakSet();
+
+function observedHttpKey({ method, status, pathname }) {
+  return `${String(method ?? "").toUpperCase()} ${Number(status)} ${pathname ?? ""}`;
+}
+
+function expectHttpFailure({ method, status, pathname, reason, minCount = 0, maxCount = 1 }) {
+  const key = observedHttpKey({ method, status, pathname });
+  const existing = EXPECTED_HTTP_FAILURES.get(key);
+  EXPECTED_HTTP_FAILURES.set(key, {
+    reason: existing?.reason ?? reason,
+    min_count: (existing?.min_count ?? 0) + minCount,
+    max_count: (existing?.max_count ?? 0) + maxCount,
+  });
+}
+
+function registerReplayImportDirectorConflict(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const match = /^\/sim\/([^/]+)$/u.exec(url.pathname);
+    if (!match) return;
+    const importedScenarioId = decodeURIComponent(match[1]);
+    expectHttpFailure({
+      method: "PUT",
+      status: 409,
+      pathname: `/api/campaign/scenario/${importedScenarioId}/director-state`,
+      reason: "This exact scenario was created by the suite's replay import; the director-state contract handles its initial optimistic-concurrency conflict by reading and merging the server revision.",
+    });
+  } catch {
+    // An invalid import URL must not create an expected-failure entry.
+  }
+}
+
+function observedRequestLocation(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return { origin: url.origin, pathname: url.pathname };
+  } catch {
+    return { origin: null, pathname: String(rawUrl ?? "") };
+  }
+}
+
+function recordObservedIssue(issue) {
+  OBSERVED_ISSUES.push(issue);
+  const location = issue.pathname ? ` ${issue.pathname}` : "";
+  const status = issue.status ? ` ${issue.status}` : "";
+  const detail = issue.message ?? issue.error_text ?? "unknown";
+  console.warn(`[${issue.label}:${issue.kind}]${status}${location} ${detail}`);
+}
+
+function buildObservedDiagnosticsFrom(observedIssues, expectedFailures) {
+  const occurrenceCounts = new Map();
+  const issues = observedIssues.map((issue) => {
+    if (issue.kind !== "http_error") return { ...issue };
+    const key = observedHttpKey(issue);
+    const expectation = expectedFailures.get(key);
+    if (!expectation) return { ...issue };
+    const occurrence = (occurrenceCounts.get(key) ?? 0) + 1;
+    occurrenceCounts.set(key, occurrence);
+    if (occurrence > expectation.max_count) {
+      return {
+        ...issue,
+        expected: false,
+        expected_reason: `Expected HTTP failure budget exceeded (max ${expectation.max_count}): ${expectation.reason}`,
+      };
+    }
+    return {
+      ...issue,
+      expected: true,
+      expected_reason: expectation.reason,
+    };
+  });
+  const missing = [];
+  for (const [key, expectation] of expectedFailures) {
+    const observedCount = occurrenceCounts.get(key) ?? 0;
+    if (observedCount < expectation.min_count) {
+      missing.push({
+        kind: "expected_http_error_missing",
+        expected: false,
+        expected_reason: `Expected HTTP failure minimum was not met (${observedCount}/${expectation.min_count}): ${expectation.reason}`,
+        expected_http_key: key,
+      });
+    }
+  }
+  const allIssues = [...issues, ...missing];
+  const unexpected = allIssues.filter((issue) => issue.expected !== true);
+  return {
+    total: allIssues.length,
+    expected_count: allIssues.length - unexpected.length,
+    unexpected_count: unexpected.length,
+    issues: allIssues,
+  };
+}
+
+function buildObservedDiagnostics() {
+  return buildObservedDiagnosticsFrom(OBSERVED_ISSUES, EXPECTED_HTTP_FAILURES);
+}
 
 function normalizeLocale(locale) {
   return String(locale ?? "").toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -74,7 +168,16 @@ async function configureLocaleContext(context, locale) {
       } catch {
         // Ignore storage failures in automation bootstrap.
       }
-      document.documentElement.lang = documentLanguage;
+      const applyDocumentLanguage = () => {
+        if (document.documentElement) {
+          document.documentElement.lang = documentLanguage;
+        }
+      };
+      if (document.documentElement) {
+        applyDocumentLanguage();
+      } else {
+        document.addEventListener("DOMContentLoaded", applyDocumentLanguage, { once: true });
+      }
     },
     {
       storageKey: LANGUAGE_STORAGE_KEY,
@@ -88,6 +191,162 @@ function getContextLocale(context) {
   return normalizeLocale(context?.__swarmLocale ?? "zh");
 }
 
+function isValidEndingRoomFixtureRequest(rawUrl, method, scenarioId, endpoint) {
+  if (String(method ?? "").toUpperCase() !== "GET") return false;
+  try {
+    const url = new URL(rawUrl);
+    if (url.pathname !== `/api/scenario/${scenarioId}/${endpoint}`) return false;
+    if (endpoint === "social-feed") return url.search === "";
+    if (endpoint !== "faction-timeline") return false;
+    const queryKeys = [...url.searchParams.keys()];
+    return queryKeys.length === 1
+      && queryKeys[0] === "branch_id"
+      && url.searchParams.getAll("branch_id").length === 1
+      && Boolean(url.searchParams.get("branch_id")?.trim());
+  } catch {
+    return false;
+  }
+}
+
+function observeContextIssues(context, label) {
+  if (OBSERVED_CONTEXTS.has(context)) return;
+  OBSERVED_CONTEXTS.add(context);
+  const observePage = (page) => {
+    page.on("console", (message) => {
+      if (message.type() !== "error") return;
+      const text = message.text();
+      const mirroredHttpFailure = /^Failed to load resource: the server responded with a status of \d+/u.test(text);
+      recordObservedIssue({
+        kind: "console_error",
+        label,
+        message: text,
+        expected: mirroredHttpFailure,
+        expected_reason: mirroredHttpFailure
+          ? "Mirrored browser console message; the exact HTTP response is evaluated separately by method, pathname, and status."
+          : null,
+      });
+    });
+    page.on("pageerror", (error) => recordObservedIssue({
+      kind: "pageerror",
+      label,
+      message: error.message,
+      expected: false,
+      expected_reason: null,
+    }));
+    page.on("requestfailed", (request) => {
+      const location = observedRequestLocation(request.url());
+      recordObservedIssue({
+        kind: "requestfailed",
+        label,
+        method: request.method(),
+        ...location,
+        error_text: request.failure()?.errorText ?? "unknown",
+        expected: false,
+        expected_reason: null,
+      });
+    });
+    page.on("response", (response) => {
+      if (response.status() < 400) return;
+      const request = response.request();
+      const location = observedRequestLocation(response.url());
+      recordObservedIssue({
+        kind: "http_error",
+        label,
+        method: request.method(),
+        status: response.status(),
+        ...location,
+        message: response.statusText(),
+        expected: false,
+        expected_reason: null,
+      });
+    });
+  };
+  context.on("page", observePage);
+  context.pages().forEach(observePage);
+}
+
+async function installEndingRoomFixtureRoutes(context, scenarioIds) {
+  if (ENDING_ROOM_FIXTURE_ROUTED_CONTEXTS.has(context)) return;
+  ENDING_ROOM_FIXTURE_ROUTED_CONTEXTS.add(context);
+  context.__swarmEndingFixtureScenarioIds = scenarioIds;
+
+  if (process.env.SWARM_E2E_FIXTURE_MODE === "1") {
+    const scenarioIdList = [...new Set([scenarioIds?.multiId, scenarioIds?.singleId].filter(Boolean))];
+    for (const scenarioId of scenarioIdList) {
+      await context.route(`**/api/scenario/${scenarioId}/faction-timeline*`, async (route) => {
+        const request = route.request();
+        if (!isValidEndingRoomFixtureRequest(
+          request.url(),
+          request.method(),
+          scenarioId,
+          "faction-timeline",
+        )) {
+          await route.abort("blockedbyclient");
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "[]",
+        });
+      });
+    }
+  }
+
+  await context.route("**/api/scenario/oracle-replay-scenario/faction-timeline*", async (route) => {
+    const request = route.request();
+    if (!isValidEndingRoomFixtureRequest(
+      request.url(),
+      request.method(),
+      "oracle-replay-scenario",
+      "faction-timeline",
+    )) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "[]",
+    });
+  });
+  await context.route("**/api/scenario/oracle-replay-scenario/social-feed*", async (route) => {
+    const request = route.request();
+    if (!isValidEndingRoomFixtureRequest(
+      request.url(),
+      request.method(),
+      "oracle-replay-scenario",
+      "social-feed",
+    )) {
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        scenario_id: "oracle-replay-scenario",
+        question: "Ending-room replay fixture",
+        generation_mode: "deterministic",
+        events: [],
+        headline_cards: [],
+      }),
+    });
+  });
+}
+
+function parseViewportDimension(rawValue, flagName, { min, max }) {
+  const raw = String(rawValue ?? "").trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${flagName} must be an integer between ${min} and ${max}; got ${rawValue ?? "empty"}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${flagName} must be an integer between ${min} and ${max}; got ${raw}`);
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
@@ -96,6 +355,8 @@ function parseArgs(argv) {
     headless: true,
     browser: "chromium",
     locale: normalizeLocale(process.env.SWARM_E2E_LOCALE || "zh"),
+    mobileWidth: 390,
+    mobileHeight: 844,
   };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -115,13 +376,19 @@ function parseArgs(argv) {
     } else if (arg === "--locale" && next) {
       args.locale = normalizeLocale(next);
       i += 1;
+    } else if (arg === "--mobile-width" && next) {
+      args.mobileWidth = parseViewportDimension(next, "--mobile-width", { min: 240, max: 2560 });
+      i += 1;
+    } else if (arg === "--mobile-height" && next) {
+      args.mobileHeight = parseViewportDimension(next, "--mobile-height", { min: 320, max: 4096 });
+      i += 1;
     }
   }
   if (!args.url) {
     throw new Error("--url is required");
   }
   if (!["desktop", "mobile", "mobile-multi-only", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-ending-room-followup-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--headless]");
+    throw new Error("Usage: node scripts/e2e-ending-room-followup-suite.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--mobile-width WIDTH] [--mobile-height HEIGHT] [--headless]");
   }
   if (!VALID_BROWSERS.has(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
@@ -565,6 +832,16 @@ async function importEndingRoomFixtureScenario(frontendUrl, kind) {
 }
 
 async function ensureScenarioIds(frontendUrl) {
+  if (process.env.SWARM_E2E_FIXTURE_MODE === "1") {
+    const [multiDetail, singleDetail] = await Promise.all([
+      importEndingRoomFixtureScenario(frontendUrl, "multi"),
+      importEndingRoomFixtureScenario(frontendUrl, "single"),
+    ]);
+    return {
+      multiId: multiDetail.id,
+      singleId: singleDetail.id,
+    };
+  }
   try {
     return await findScenarioIds(frontendUrl);
   } catch (initialError) {
@@ -785,9 +1062,20 @@ async function enterRoomFromPicker(page, options = {}) {
   };
 }
 
+async function openRoomFromResult(page, {
+  resultUrl,
+  buttonPattern,
+  buttonIndex,
+  expectedRoomId,
+}) {
+  await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
+  await openPicker(page, buttonPattern, buttonIndex);
+  return enterRoomFromPicker(page, { expectedRoomId });
+}
+
 async function reopenLiveEndingRoomPage(
   context,
-  roomUrl,
+  openRoom,
   roomId,
   roomType,
   label,
@@ -802,7 +1090,9 @@ async function reopenLiveEndingRoomPage(
     if (browser) {
       try {
         freshContext = await browser.newContext(contextOptions);
+        await installEndingRoomFixtureRoutes(freshContext, context.__swarmEndingFixtureScenarioIds);
         await configureLocaleContext(freshContext, getContextLocale(context));
+        observeContextIssues(freshContext, `ending-room-${label}`);
       } catch {
         freshContext = null;
       }
@@ -811,12 +1101,14 @@ async function reopenLiveEndingRoomPage(
       const fallbackBrowser = await chromium.launch(BROWSER_LAUNCH_OPTIONS);
       OWNED_FALLBACK_BROWSERS.add(fallbackBrowser);
       freshContext = await fallbackBrowser.newContext(contextOptions);
+      await installEndingRoomFixtureRoutes(freshContext, context.__swarmEndingFixtureScenarioIds);
       await configureLocaleContext(freshContext, getContextLocale(context));
+      observeContextIssues(freshContext, `ending-room-${label}`);
       console.warn(`[ending-room] ${label}: relaunched browser after context/browser closure`);
     }
     page = await freshContext.newPage();
   }
-  await page.goto(roomUrl, { waitUntil: "domcontentloaded" });
+  await openRoom(page);
   await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
   await waitForLiveEndingRoomVisible(page, {
     expectedRoomId: roomId,
@@ -830,7 +1122,7 @@ async function reopenLiveEndingRoomPage(
 async function ensureLiveEndingRoomPage(
   page,
   context,
-  roomUrl,
+  openRoom,
   roomId,
   roomType,
   label,
@@ -857,7 +1149,7 @@ async function ensureLiveEndingRoomPage(
   console.warn(`[ending-room] ${label}: page unavailable or stale, reopening room`);
   return reopenLiveEndingRoomPage(
     context,
-    roomUrl,
+    openRoom,
     roomId,
     roomType,
     `${label} reopen`,
@@ -1508,17 +1800,54 @@ async function sendAnchoredFollowup(page, label, options = {}) {
 }
 
 async function captureEndingRoomFit(page) {
-  return page.evaluate(() => {
+  const fit = await page.evaluate(() => {
     const modal = document.querySelector(".ending-chat-modal");
     if (!(modal instanceof HTMLElement)) return null;
     const rect = modal.getBoundingClientRect();
+    const toRect = (selector) => {
+      const element = document.querySelector(selector);
+      if (!(element instanceof HTMLElement)) return null;
+      const value = element.getBoundingClientRect();
+      return { x: value.x, y: value.y, width: value.width, height: value.height };
+    };
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       fitsHorizontally: rect.left >= 0 && rect.right <= window.innerWidth,
       fitsVertically: rect.top >= 0 && rect.bottom <= window.innerHeight,
+      headerRect: toRect(".ending-chat-header"),
+      bodyRect: toRect(".ending-chat-body"),
+      transcriptRect: toRect(".ending-chat-transcript"),
+      transcriptHeaderRect: toRect(".ending-chat-transcript-header"),
+      transcriptScrollRect: toRect(".ending-chat-transcript-scroll"),
+      composerRect: toRect(".ending-chat-composer"),
     };
   });
+  if (!fit) return null;
+  const horizontalTargets = [
+    ["header", fit.headerRect],
+    ["body", fit.bodyRect],
+    ["transcript", fit.transcriptRect],
+    ["transcript_header", fit.transcriptHeaderRect],
+    ["transcript_scroll", fit.transcriptScrollRect],
+    ["composer", fit.composerRect],
+  ];
+  fit.horizontalFit = Object.fromEntries(horizontalTargets.map(([name, targetRect]) => [
+    name,
+    targetRect
+      ? targetRect.x >= 0 && targetRect.x + targetRect.width <= fit.viewport.width
+      : null,
+  ]));
+  fit.knownProductFailures = horizontalTargets.flatMap(([name, targetRect]) => {
+    if (!targetRect || fit.horizontalFit[name] !== false) return [];
+    return [{
+      code: "ENDING_ROOM_MOBILE_HORIZONTAL_OVERFLOW",
+      target: name,
+      viewport_width: fit.viewport.width,
+      rect: targetRect,
+    }];
+  });
+  return fit;
 }
 
 async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, locale) {
@@ -1546,13 +1875,19 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     selectedAgentIds: pickerSeed.selectedAgentIds,
     language: locale,
   });
-  const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
-  await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const openChamberFromResult = (targetPage) => openRoomFromResult(targetPage, {
+    resultUrl,
+    buttonPattern: getEnterChamberPattern(locale),
+    buttonIndex: 0,
+    expectedRoomId: prewarmedChamber.id,
+  });
+  const enteredChamber = await enterRoomFromPicker(page, {
+    expectedRoomId: prewarmedChamber.id,
+  });
   await assertUiLocale(page, locale, "ending-room desktop chamber ui");
   const pickerA = {
     cards: pickerSeed.selectedNames,
-    modalState: {
+    modalState: enteredChamber.modalState ?? {
       room_id: prewarmedChamber.id,
       branch_id: prewarmedChamber.anchor_branch_id ?? anchorBranchId,
       room_type: "ending_chamber",
@@ -1613,7 +1948,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    directOpenUrl,
+    openChamberFromResult,
     roomId,
     "ending_chamber",
     "hotseat follow-up",
@@ -1672,7 +2007,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   if (page.isClosed()) {
     page = await reopenLiveEndingRoomPage(
       context,
-      directOpenUrl,
+      openChamberFromResult,
       roomId,
       "ending_chamber",
       "post-hotseat room reopen",
@@ -1730,7 +2065,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    directOpenUrl,
+    openChamberFromResult,
     roomId,
     "ending_chamber",
     "all-present follow-up",
@@ -1818,7 +2153,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     page = await ensureLiveEndingRoomPage(
       page,
       context,
-      directOpenUrl,
+      openChamberFromResult,
       roomId,
       "ending_chamber",
       "epilogue follow-up",
@@ -1873,7 +2208,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    directOpenUrl,
+    openChamberFromResult,
     roomId,
     "ending_chamber",
     "pre-one-move flow",
@@ -1891,9 +2226,15 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     selectedAgentIds: pickerBSeed.selectedAgentIds,
     language: locale,
   });
-  const oneMoveOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedOneMove.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=one_move_only&debugEndingRoomAgents=${encodeURIComponent(pickerBSeed.selectedAgentIds.join(","))}`;
-  await page.goto(oneMoveOpenUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const openOneMoveFromResult = (targetPage) => openRoomFromResult(targetPage, {
+    resultUrl,
+    buttonPattern: /One Move Only|只改一步/i,
+    buttonIndex: 1,
+    expectedRoomId: prewarmedOneMove.id,
+  });
+  const enteredOneMove = await enterRoomFromPicker(page, {
+    expectedRoomId: prewarmedOneMove.id,
+  });
   const oneMoveAutomation = await waitForLiveEndingRoomVisible(page, {
     expectedRoomId: prewarmedOneMove.id,
     expectedRoomType: "one_move_only",
@@ -1902,7 +2243,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   });
   const pickerB = {
     cards: pickerBSeed.selectedNames,
-    modalState: oneMoveAutomation?.page?.controls?.modal_state ?? {
+    modalState: oneMoveAutomation?.page?.controls?.modal_state ?? enteredOneMove.modalState ?? {
       room_id: prewarmedOneMove.id,
       branch_id: prewarmedOneMove.anchor_branch_id ?? anchorBranchId,
       room_type: "one_move_only",
@@ -1919,7 +2260,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    oneMoveOpenUrl,
+    openOneMoveFromResult,
     prewarmedOneMove.id,
     "one_move_only",
     "pre-gallery flow",
@@ -1949,12 +2290,16 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     language: locale,
   });
   const evidenceRoomId = evidenceChamber.id;
-  const evidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(evidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
+  const openEvidenceFromResult = (targetPage) => openRoomFromResult(targetPage, {
+    resultUrl,
+    buttonPattern: getEnterChamberPattern(locale),
+    buttonIndex: 0,
+    expectedRoomId: evidenceRoomId,
+  });
   if (page.isClosed()) {
     page = await context.newPage();
   }
-  await page.goto(evidenceOpenUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  await openEvidenceFromResult(page);
   await waitForLiveEndingRoomVisible(page, {
     expectedRoomType: "ending_chamber",
     timeout: 45000,
@@ -2021,7 +2366,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     page = await ensureLiveEndingRoomPage(
       page,
       context,
-      directOpenUrl,
+      openEvidenceFromResult,
       actualEvidenceRoomId,
       "ending_chamber",
       "evidence-card replay controls",
@@ -2069,6 +2414,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     await importButton.click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
+    registerReplayImportDirectorConflict(artifactImportedUrl);
 
     await (await waitForEndingRoomHeaderAction(page, {
       label: "ending-room live save readonly copy",
@@ -2095,6 +2441,7 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
     })).click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
+    registerReplayImportDirectorConflict(importedUrl);
   } catch (error) {
     replayCoverageError = String(error);
     fs.writeFileSync(
@@ -2142,16 +2489,16 @@ async function runMultiDesktop(context, frontendUrl, outputDir, scenarioIds, loc
   };
 }
 
-async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, locale) {
+async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, locale, mobileContextOptions) {
   const { singleId } = scenarioIds;
   const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${singleId}`;
   const context = await browser.newContext({
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
+    ...mobileContextOptions,
     locale: resolveContextLocale(locale),
   });
+  await installEndingRoomFixtureRoutes(context, scenarioIds);
+  observeContextIssues(context, "ending-room-single-mobile");
   await configureLocaleContext(context, locale);
   let page = await context.newPage();
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
@@ -2169,9 +2516,15 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
     language: locale,
   });
   await saveScreenshot(page, path.join(outputDir, "single-mobile-picker.png"));
-  const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
-  await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const openChamberFromResult = (targetPage) => openRoomFromResult(targetPage, {
+    resultUrl,
+    buttonPattern: getEnterChamberPattern(locale),
+    buttonIndex: 0,
+    expectedRoomId: prewarmedChamber.id,
+  });
+  const enteredChamber = await enterRoomFromPicker(page, {
+    expectedRoomId: prewarmedChamber.id,
+  });
   await assertUiLocale(page, locale, "ending-room single mobile chamber ui");
   const liveVisibleState = await waitForLiveEndingRoomVisible(page, {
     expectedRoomId: prewarmedChamber.id,
@@ -2181,7 +2534,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
   });
   const pickerState = {
     cards: pickerSeed.selectedNames,
-    modalState: {
+    modalState: enteredChamber.modalState ?? {
       room_id: prewarmedChamber.id,
       branch_id: prewarmedChamber.anchor_branch_id ?? anchorBranchId,
       room_type: "ending_chamber",
@@ -2192,17 +2545,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
   };
   const roomLanguage = await assertRoomLanguage(frontendUrl, prewarmedChamber.id, locale, "ending-room single mobile chamber");
   const automation = liveVisibleState ?? await getAutomationState(page);
-  const fit = await page.evaluate(() => {
-    const modal = document.querySelector(".ending-chat-modal");
-    if (!(modal instanceof HTMLElement)) return null;
-    const rect = modal.getBoundingClientRect();
-    return {
-      viewport: { width: window.innerWidth, height: window.innerHeight },
-      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-      fitsHorizontally: rect.left >= 0 && rect.right <= window.innerWidth,
-      fitsVertically: rect.top >= 0 && rect.bottom <= window.innerHeight,
-    };
-  });
+  const fit = await captureEndingRoomFit(page);
   await saveScreenshot(page, path.join(outputDir, "single-mobile-chamber.png"));
   fs.writeFileSync(
     path.join(outputDir, "single-mobile-chamber.json"),
@@ -2264,11 +2607,11 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    directOpenUrl,
+    openChamberFromResult,
     roomId,
     "ending_chamber",
     "single ending anchored follow-up",
-    MOBILE_CONTEXT_OPTIONS,
+    mobileContextOptions,
   );
   let anchoredState = anchoredLifecycle?.payload ?? null;
   if (!isFollowupModalStateSatisfied(anchoredState?.page?.controls?.modal_state, {
@@ -2352,11 +2695,11 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    directOpenUrl,
+    openChamberFromResult,
     roomId,
     "ending_chamber",
     "single ending replay controls",
-    MOBILE_CONTEXT_OPTIONS,
+    mobileContextOptions,
   );
   await armClipboardCapture(page);
   let artifactReadonly = null;
@@ -2392,6 +2735,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
     })).click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
+    registerReplayImportDirectorConflict(artifactImportedUrl);
     await closePlaywrightPage(sharePage, "ending-room-single-mobile-share-page");
 
     await (await waitForEndingRoomHeaderAction(page, {
@@ -2420,6 +2764,7 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
     })).click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
+    registerReplayImportDirectorConflict(importedUrl);
 
     const reloadPage = await context.newPage();
     await reloadPage.goto(replayReadonlyUrl, { waitUntil: "domcontentloaded" });
@@ -2483,16 +2828,16 @@ async function runSingleMobile(browser, frontendUrl, outputDir, scenarioIds, loc
   };
 }
 
-async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, locale) {
+async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, locale, mobileContextOptions) {
   const { multiId } = scenarioIds;
   const backendUrl = resolveBackendUrl(frontendUrl);
   const resultUrl = `${new URL(frontendUrl).origin}/result/${multiId}`;
   const context = await browser.newContext({
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
+    ...mobileContextOptions,
     locale: resolveContextLocale(locale),
   });
+  await installEndingRoomFixtureRoutes(context, scenarioIds);
+  observeContextIssues(context, "ending-room-multi-mobile");
   await configureLocaleContext(context, locale);
   let page = await context.newPage();
   await page.goto(resultUrl, { waitUntil: "domcontentloaded" });
@@ -2516,9 +2861,15 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     selectedAgentIds: pickerSeed.selectedAgentIds,
     language: locale,
   });
-  const directOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(prewarmedChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
-  await page.goto(directOpenUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+  const openChamberFromResult = (targetPage) => openRoomFromResult(targetPage, {
+    resultUrl,
+    buttonPattern: getEnterChamberPattern(locale),
+    buttonIndex: 0,
+    expectedRoomId: prewarmedChamber.id,
+  });
+  const enteredChamber = await enterRoomFromPicker(page, {
+    expectedRoomId: prewarmedChamber.id,
+  });
   await assertUiLocale(page, locale, "ending-room multi mobile chamber ui");
   const liveVisibleState = await waitForLiveEndingRoomVisible(page, {
     expectedRoomId: prewarmedChamber.id,
@@ -2528,7 +2879,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
   });
   const chamberState = {
     cards: pickerSeed.selectedNames,
-    modalState: {
+    modalState: enteredChamber.modalState ?? {
       room_id: prewarmedChamber.id,
       branch_id: prewarmedChamber.anchor_branch_id ?? anchorBranchId,
       room_type: "ending_chamber",
@@ -2592,11 +2943,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
   page = await ensureLiveEndingRoomPage(
     page,
     context,
-    directOpenUrl,
+    openChamberFromResult,
     roomId,
     "ending_chamber",
     "mobile hotseat follow-up",
-    MOBILE_CONTEXT_OPTIONS,
+    mobileContextOptions,
   );
   let hotseatState = hotseatLifecycle?.payload ?? null;
   const hotseatExpectations = buildFollowupExpectations(
@@ -2699,11 +3050,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     page = await ensureLiveEndingRoomPage(
       page,
       context,
-      directOpenUrl,
+      openChamberFromResult,
       roomId,
       "ending_chamber",
       "mobile all-present follow-up",
-      MOBILE_CONTEXT_OPTIONS,
+      mobileContextOptions,
     );
     allPresentSettled = allPresentLifecycle?.payload ?? null;
     const allPresentExpectations = buildFollowupExpectations(
@@ -2746,11 +3097,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     page = await ensureLiveEndingRoomPage(
       page,
       context,
-      directOpenUrl,
+      openChamberFromResult,
       roomId,
       "ending_chamber",
       "mobile all-present post-fallback",
-      MOBILE_CONTEXT_OPTIONS,
+      mobileContextOptions,
     );
     await saveScreenshot(page, path.join(outputDir, "mobile-multi-all-present.png"));
     writeJson(path.join(outputDir, "mobile-multi-all-present.json"), {
@@ -2802,11 +3153,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     page = await ensureLiveEndingRoomPage(
       page,
       context,
-      directOpenUrl,
+      openChamberFromResult,
       roomId,
       "ending_chamber",
       "mobile epilogue follow-up",
-      MOBILE_CONTEXT_OPTIONS,
+      mobileContextOptions,
     );
     epilogueState = epilogueLifecycle?.payload ?? null;
     const epilogueExpectations = buildFollowupExpectations(
@@ -2889,9 +3240,12 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
       language: locale,
     });
     const mobileEvidenceRoomId = mobileEvidenceChamber.id;
-    const mobileEvidenceOpenUrl = `${resultUrl}?debugEndingRoomBranch=${encodeURIComponent(mobileEvidenceChamber.anchor_branch_id ?? anchorBranchId ?? "")}&debugEndingRoomMode=ending_chamber&debugEndingRoomAgents=${encodeURIComponent(pickerSeed.selectedAgentIds.join(","))}`;
-    await page.goto(mobileEvidenceOpenUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector(".ending-chat-modal", { timeout: 30000 });
+    await openRoomFromResult(page, {
+      resultUrl,
+      buttonPattern: getEnterChamberPattern(locale),
+      buttonIndex: 0,
+      expectedRoomId: mobileEvidenceRoomId,
+    });
     await waitForLiveEndingRoomVisible(page, {
       expectedRoomType: "ending_chamber",
       timeout: 45000,
@@ -2962,11 +3316,11 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     page = await ensureLiveEndingRoomPage(
       page,
       context,
-      directOpenUrl,
+      openChamberFromResult,
       roomId,
       "ending_chamber",
       "mobile ending-room replay controls",
-      MOBILE_CONTEXT_OPTIONS,
+      mobileContextOptions,
     );
 
     await armClipboardCapture(page);
@@ -2996,6 +3350,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     })).click();
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
+    registerReplayImportDirectorConflict(artifactImportedUrl);
     await closePlaywrightPage(sharePage, "ending-room-multi-mobile-share-page");
 
     await (await waitForEndingRoomHeaderAction(page, {
@@ -3024,6 +3379,7 @@ async function runMultiMobile(browser, frontendUrl, outputDir, scenarioIds, loca
     })).click();
     await page.waitForURL(/\/sim\//, { timeout: 15000 });
     importedUrl = page.url();
+    registerReplayImportDirectorConflict(importedUrl);
 
     const reloadPage = await context.newPage();
     await reloadPage.goto(replayReadonlyUrl, { waitUntil: "domcontentloaded" });
@@ -3099,6 +3455,11 @@ async function main() {
   ensureDir(args.outputDir);
   const browserEngine = resolveBrowserEngine(args.browser);
   const browser = await browserEngine.launch(buildBrowserLaunchOptions(args.browser, args.headless));
+  const mobileContextOptions = {
+    viewport: { width: args.mobileWidth, height: args.mobileHeight },
+    isMobile: true,
+    hasTouch: true,
+  };
   try {
     const scenarioIds = await ensureScenarioIds(args.url);
     const summary = {
@@ -3106,24 +3467,41 @@ async function main() {
     };
     if (args.mode === "desktop" || args.mode === "full") {
       const desktopContext = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+      await installEndingRoomFixtureRoutes(desktopContext, scenarioIds);
+      observeContextIssues(desktopContext, "ending-room-desktop");
       await configureLocaleContext(desktopContext, args.locale);
       summary.multiDesktop = await runMultiDesktop(desktopContext, args.url, args.outputDir, scenarioIds, args.locale);
       await closePlaywrightContext(desktopContext, "ending-room-desktop-context");
     }
     if (args.mode === "mobile" || args.mode === "full") {
       summary.mobile = {
-        single: await runSingleMobile(browser, args.url, args.outputDir, scenarioIds, args.locale),
-        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds, args.locale),
+        single: await runSingleMobile(browser, args.url, args.outputDir, scenarioIds, args.locale, mobileContextOptions),
+        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds, args.locale, mobileContextOptions),
       };
     }
     if (args.mode === "mobile-multi-only") {
       summary.mobile = {
         single: "skipped",
-        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds, args.locale),
+        multi: await runMultiMobile(browser, args.url, args.outputDir, scenarioIds, args.locale, mobileContextOptions),
       };
     }
+    summary.diagnostics = buildObservedDiagnostics();
+    summary.knownProductFailures = [
+      ...(summary.mobile?.single?.fit?.knownProductFailures ?? []),
+      ...(summary.mobile?.multi?.chamberFit?.knownProductFailures ?? []),
+    ];
+    writeJson(path.join(args.outputDir, "diagnostics.json"), {
+      diagnostics: summary.diagnostics,
+      knownProductFailures: summary.knownProductFailures,
+    });
     fs.writeFileSync(path.join(args.outputDir, "summary.json"), JSON.stringify(summary, null, 2));
     console.log(JSON.stringify(summary, null, 2));
+    if (summary.diagnostics.unexpected_count > 0 || summary.knownProductFailures.length > 0) {
+      throw new Error(
+        `Ending-room E2E failed closed: unexpected_issues=${summary.diagnostics.unexpected_count}, `
+        + `known_product_failures=${summary.knownProductFailures.length}`,
+      );
+    }
   } finally {
     const ownedBrowsers = [browser, ...OWNED_FALLBACK_BROWSERS];
     OWNED_FALLBACK_BROWSERS.clear();

@@ -27,6 +27,16 @@ describe('buildSingleFileGalleryHtml exporter', () => {
     source_summary: { domains: [] },
   };
 
+  function renderExportedArtifact(exportArtifact: PublicArtifact): Document {
+    const html = buildSingleFileGalleryHtml(exportArtifact, 'en');
+    const documentNode = new DOMParser().parseFromString(html, 'text/html');
+    const renderer = [...documentNode.querySelectorAll('script')]
+      .find((script) => script.id !== 'swarm-artifact');
+    expect(renderer?.textContent).toBeTruthy();
+    new Function('document', renderer?.textContent ?? '')(documentNode);
+    return documentNode;
+  }
+
   it('produces a self-contained HTML containing the inlined artifact script tag and styles', () => {
     const html = buildSingleFileGalleryHtml(artifact, 'en');
 
@@ -95,5 +105,47 @@ describe('buildSingleFileGalleryHtml exporter', () => {
     // Match any link tag that references stylesheet href
     const stylesheetHrefRegex = /<link\s+[^>]*rel=["']stylesheet["']\s+[^>]*href=["'][^"']+["']/i;
     expect(stylesheetHrefRegex.test(html)).toBe(false);
+  });
+
+  it('keeps the verdict visible but omits confidence copy when confidence is null', () => {
+    const documentNode = renderExportedArtifact({
+      ...artifact,
+      branch_verdicts: [{
+        ...artifact.branch_verdicts[0],
+        verdict: 'The exported verdict remains visible without a model rating.',
+        confidence: null,
+      }],
+    });
+
+    expect(documentNode.querySelector('.verdict-box')?.textContent).toBe(
+      'The exported verdict remains visible without a model rating.',
+    );
+    expect(documentNode.querySelector('.confidence-badge')).toBeNull();
+  });
+
+  it.each([
+    ['high', 'High Confidence'],
+    ['medium', 'Medium Confidence'],
+    ['low', 'Low Confidence'],
+  ] as const)('renders the existing %s confidence tier in exported HTML', (confidence, label) => {
+    const documentNode = renderExportedArtifact({
+      ...artifact,
+      branch_verdicts: [{ ...artifact.branch_verdicts[0], confidence }],
+    });
+
+    expect(documentNode.querySelector('.confidence-badge')?.textContent).toBe(label);
+  });
+
+  it('renders a strict v1 artifact as well as the current v2 contract', () => {
+    const documentNode = renderExportedArtifact({
+      ...artifact,
+      schema_version: 'public_artifact.v1',
+      branch_verdicts: [{ ...artifact.branch_verdicts[0], confidence: 'high' }],
+    });
+
+    expect(documentNode.querySelector('.confidence-badge')?.textContent).toBe('High Confidence');
+    expect(documentNode.querySelector('.verdict-box')?.textContent).toBe(
+      artifact.branch_verdicts[0].verdict,
+    );
   });
 });

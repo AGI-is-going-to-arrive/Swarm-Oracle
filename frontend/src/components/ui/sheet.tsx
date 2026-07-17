@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/utils";
+import { GlobalOfflineRecoveryAction } from "../shared/GlobalOfflineBanner";
 
 const Sheet = SheetPrimitive.Root;
 const SheetTrigger = SheetPrimitive.Trigger;
@@ -90,6 +91,7 @@ const SheetContent = React.forwardRef<
           </SheetPrimitive.Close>
         )}
         {children}
+        <GlobalOfflineRecoveryAction />
       </SheetPrimitive.Content>
     </SheetPortal>
   );

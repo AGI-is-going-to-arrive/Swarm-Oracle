@@ -14,7 +14,9 @@ from sqlmodel import Session, select
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario
 
-PUBLIC_ARTIFACT_SCHEMA_VERSION = "public_artifact.v1"
+PUBLIC_ARTIFACT_SCHEMA_VERSION_V1 = "public_artifact.v1"
+PUBLIC_ARTIFACT_SCHEMA_VERSION_V2 = "public_artifact.v2"
+PUBLIC_ARTIFACT_SCHEMA_VERSION = PUBLIC_ARTIFACT_SCHEMA_VERSION_V2
 
 MAX_QUESTION_CHARS = 320
 MAX_LANGUAGE_CHARS = 8
@@ -28,7 +30,6 @@ MAX_BRANCHES = 8
 MAX_TRANSCRIPT_EXCERPTS = 12
 MAX_SOURCE_DOMAINS = 12
 
-_CONFIDENCE_VALUES = {"high", "medium", "low"}
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _WHITESPACE_RE = re.compile(r"\s+")
 _SENSITIVE_KEY_NAMES = frozenset(
@@ -95,6 +96,13 @@ class BranchVerdict(_StrictModel):
     confidence: Literal["high", "medium", "low"]
 
 
+class BranchVerdictV2(_StrictModel):
+    branch_index: int = Field(ge=1)
+    title: str
+    verdict: str
+    confidence: Literal["high", "medium", "low"] | None
+
+
 class ProbabilityBar(_StrictModel):
     branch_index: int = Field(ge=1)
     label: str
@@ -133,6 +141,22 @@ class PublicArtifactV1(_StrictModel):
         return self
 
 
+class PublicArtifactV2(_StrictModel):
+    schema_version: Literal["public_artifact.v2"]
+    question: str
+    language: str
+    display_agent_names: list[str] = Field(default_factory=list)
+    branch_verdicts: list[BranchVerdictV2] = Field(default_factory=list)
+    probability_bars: list[ProbabilityBar] = Field(default_factory=list)
+    transcript_excerpts: list[TranscriptExcerpt] = Field(default_factory=list)
+    source_summary: SourceSummary
+
+    @model_validator(mode="after")
+    def validate_no_sensitive_material(self) -> "PublicArtifactV2":
+        scan_public_artifact_for_secrets(self.model_dump(mode="json"))
+        return self
+
+
 def _normalize_key(key: Any) -> str:
     return str(key).strip().lower().replace("_", "").replace("-", "")
 
@@ -163,9 +187,15 @@ def _clean_language(value: Any, question: str) -> str:
     return "en"
 
 
-def _clean_confidence(value: Any) -> Literal["high", "medium", "low"]:
+def _clean_confidence(value: Any) -> Literal["high", "medium", "low"] | None:
     raw = _clean_text(value, max_chars=16).lower()
-    return raw if raw in _CONFIDENCE_VALUES else "medium"  # type: ignore[return-value]
+    if raw == "high":
+        return "high"
+    if raw == "medium":
+        return "medium"
+    if raw == "low":
+        return "low"
+    return None
 
 
 def _clean_probability(value: Any) -> float:
@@ -417,7 +447,7 @@ def build_public_artifact_from_mapping(data: Mapping[str, Any]) -> dict[str, Any
         ),
         "source_summary": _source_summary(data.get("web_search_context")),
     }
-    return PublicArtifactV1.model_validate(payload).model_dump(mode="json")
+    return PublicArtifactV2.model_validate(payload).model_dump(mode="json")
 
 
 def _decode_web_context(raw: Any) -> dict[str, Any] | None:

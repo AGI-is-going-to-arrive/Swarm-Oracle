@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "../../lib/utils";
+import { GlobalOfflineRecoveryAction } from "../shared/GlobalOfflineBanner";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -51,6 +52,7 @@ const DialogContent = React.forwardRef<
         {...props}
       >
         {children}
+        <GlobalOfflineRecoveryAction />
         <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-elevated transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-surface data-[state=open]:text-text-muted">
           <X className="h-4 w-4" />
           <span className="sr-only">{t("common.close")}</span>

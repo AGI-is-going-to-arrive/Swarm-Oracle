@@ -19,6 +19,27 @@ from app.services.llm_client import (
 logger = logging.getLogger(__name__)
 _NARRATION_TIMEOUT_SECONDS = 35.0
 _ROUND_MARKER_RE = re.compile(r"(?m)^\s*\[R\d+\s+[^\]\n]+\][:：]?\s*")
+_TRANSCRIPT_SPEAKER_LINE_RE = re.compile(
+    r"(?m)^\s*\[R\d+\s+([^\]\n]+)\][:：]?\s*(.*)$"
+)
+_NARRATIVE_QUOTE_PATTERNS = (
+    re.compile(r"“([^”]{1,5000})”"),
+    re.compile(r"‘([^’]{1,5000})’"),
+    re.compile(r"「([^」]{1,5000})」"),
+    re.compile(r"『([^』]{1,5000})』"),
+    re.compile(r"«([^»]{1,5000})»"),
+    re.compile(r"„([^“]{1,5000})“"),
+    re.compile(r'"([^"\n]{1,2000})"'),
+    re.compile(r"(?<!\w)'([^'\n]{1,2000})'(?!\w)"),
+)
+_QUOTE_ATTRIBUTION_SUFFIX_RE = re.compile(
+    r"(?:说(?:道)?|称|喊(?:道)?|表示|强调|指出|写道|回答|反驳|警告|"
+    r"认为|直言|判断|主张|补充|承认|回应|解释|总结|断言|质疑|提醒|"
+    r"said|says|stated|argued|wrote|replied|warned|believes|maintains|"
+    r"declared|explained|responded)\s*[:：]?\s*$",
+    re.IGNORECASE,
+)
+_DIRECT_ATTRIBUTION_SUFFIX_RE = re.compile(r"^\s*[:：]\s*$")
 _NARRATION_DEGRADATION_INSIGHTS = {
     "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。",
     "Narration is temporarily unavailable, so the system fell back to a compact summary built from the raw records.",  # noqa: E501
@@ -28,6 +49,144 @@ _NARRATION_DEGRADATION_INSIGHTS = {
 def _strip_round_markers(text: str) -> str:
     """Remove raw transcript round markers from user-facing narration text."""
     return _ROUND_MARKER_RE.sub("", str(text or "")).strip()
+
+
+def _normalize_quote_spacing(value: str) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _normalize_quote_text(value: str) -> str:
+    # Verbatim provenance is case-sensitive: May and MAY are not the same
+    # quoted text even when they differ only by capitalization.
+    return _normalize_quote_spacing(value)
+
+
+def _transcript_quotes_by_speaker(raw_rounds: str) -> dict[str, tuple[str, ...]]:
+    by_speaker: dict[str, list[str]] = {}
+    for match in _TRANSCRIPT_SPEAKER_LINE_RE.finditer(str(raw_rounds or "")):
+        # Agent identity is case-sensitive in persistence. Keep the exact
+        # normalized display spelling so May and MAY cannot share provenance.
+        speaker = _normalize_quote_spacing(match.group(1))
+        if speaker:
+            utterance = _normalize_quote_text(match.group(2))
+            if utterance:
+                by_speaker.setdefault(speaker, []).append(utterance)
+    return {
+        speaker: tuple(utterances)
+        for speaker, utterances in by_speaker.items()
+    }
+
+
+def _last_speaker_position(text: str, speaker: str) -> int:
+    if speaker.isascii():
+        matches = list(
+            re.finditer(
+                rf"(?<![A-Za-z0-9_]){re.escape(speaker)}(?![A-Za-z0-9_])",
+                text,
+            )
+        )
+        return matches[-1].start() if matches else -1
+    return text.rfind(speaker)
+
+
+def _attributed_speaker(prefix: str, speakers: set[str]) -> tuple[str | None, bool]:
+    sentence_boundary = max(prefix.rfind(mark) for mark in "。！？.!?\n")
+    normalized_prefix = _normalize_quote_spacing(prefix[sentence_boundary + 1 :])
+    candidates: list[tuple[int, str]] = []
+    nearby_speaker = False
+    for speaker in speakers:
+        position = _last_speaker_position(normalized_prefix, speaker)
+        if position < 0:
+            continue
+        suffix = normalized_prefix[position + len(speaker) :]
+        nearby_speaker = True
+        if len(suffix) > 60:
+            continue
+        if _QUOTE_ATTRIBUTION_SUFFIX_RE.fullmatch(
+            suffix
+        ) or _DIRECT_ATTRIBUTION_SUFFIX_RE.fullmatch(suffix):
+            candidates.append((position, speaker))
+    has_generic_attribution = bool(
+        _QUOTE_ATTRIBUTION_SUFFIX_RE.search(normalized_prefix)
+    )
+    return (
+        max(candidates, default=(-1, ""))[1] or None,
+        nearby_speaker or has_generic_attribution,
+    )
+
+
+def _allows_unattributed_transcript_quote(prefix: str) -> bool:
+    """Allow only neutral transcript labels, never an unknown attributed speaker."""
+
+    sentence_boundary = max(prefix.rfind(mark) for mark in "。！？.!?\n")
+    context = _normalize_quote_spacing(prefix[sentence_boundary + 1 :]).casefold()
+    if not context:
+        return True
+    neutral_suffixes = (
+        "记录保留了",
+        "原始记录保留了",
+        "记录写下了",
+        "原始记录中",
+        "结局取决于",
+        "转折点是",
+        "the record preserves",
+        "the transcript records",
+        "the outcome depends on",
+        "the turning point was",
+    )
+    return any(context.endswith(suffix) for suffix in neutral_suffixes)
+
+
+def _remove_ungrounded_narrative_quote_marks(text: str, raw_rounds: str) -> str:
+    """Keep quote marks only when the quoted words occur in the transcript.
+
+    Narration may compress a speaker's position, but a paraphrase must not look
+    like a verbatim transcript quote. The prose itself is retained; only the
+    unsupported quotation marks are downgraded.
+    """
+
+    by_speaker = _transcript_quotes_by_speaker(raw_rounds)
+    all_utterances = tuple(
+        utterance
+        for utterances in by_speaker.values()
+        for utterance in utterances
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        candidate = _normalize_quote_text(match.group(1))
+        speaker, has_nearby_speaker = _attributed_speaker(
+            match.string[: match.start()], set(by_speaker)
+        )
+        if speaker:
+            utterances = by_speaker.get(speaker, ())
+        else:
+            # A nearby named participant or generic attribution with no reliable
+            # identity is ambiguous. Fail closed instead of validating against
+            # somebody else's words in the combined transcript.
+            utterances = (
+                all_utterances
+                if not has_nearby_speaker
+                and _allows_unattributed_transcript_quote(
+                    match.string[: match.start()]
+                )
+                else ()
+            )
+        grounded = bool(candidate) and any(
+            candidate in utterance for utterance in utterances
+        )
+        return match.group(0) if grounded else match.group(1)
+
+    cleaned = str(text or "")
+    for pattern in _NARRATIVE_QUOTE_PATTERNS:
+        # Removing an outer unsupported pair can expose a nested pair that the
+        # first scan could not see. Iterate only while text changes; every
+        # change removes quote marks, so this remains bounded by input size.
+        while True:
+            updated = pattern.sub(replace, cleaned)
+            if updated == cleaned:
+                break
+            cleaned = updated
+    return cleaned
 
 
 def _is_chinese(language: str) -> bool:
@@ -80,6 +239,29 @@ def _build_narration_prompt(
         if question_block
         else ""
     )
+    if probability >= 0.9995:
+        share_boundary_zh = (
+            "重要边界：100% 只表示本次生成并纳入比较的模拟分支权重全部落在这条路径上；"
+            "若本次仅生成并纳入一条路径，100% 是比较结构的必然结果。"
+            "无论路径数如何，它都不代表现实发生概率，也不能估计现实不确定性。"
+        )
+        share_boundary_en = (
+            "Important boundary: 100% means only that this path carries all simulated "
+            "branch weight generated and included in this run. If this run generated "
+            "and included only one path, 100% is a structural result of that comparison. "
+            "Regardless of path count, it is not a real-world probability and cannot "
+            "estimate real-world uncertainty."
+        )
+    else:
+        share_boundary_zh = (
+            "重要边界：该百分比仅为本次模拟分支占比，不代表现实发生概率，"
+            "也不能估计现实不确定性。"
+        )
+        share_boundary_en = (
+            "Important boundary: this percentage is only a simulated branch share for "
+            "this run. It is not a real-world probability and cannot estimate real-world "
+            "uncertainty."
+        )
     if _is_chinese(language):
         return f"""你是一位预测分析师兼叙事者。\
 请把以下群体推演的原始交互记录改写成一段有分析锚点、也有叙事张力的结果叙事。
@@ -90,7 +272,8 @@ def _build_narration_prompt(
 
 【分支标题】
 {branch_title_block}
-【最终概率】{probability:.0%}
+【本次模拟分支占比】{probability:.0%}
+{share_boundary_zh}
 【参与角色】
 {agents_summary_block}
 
@@ -99,7 +282,7 @@ def _build_narration_prompt(
 
 请这样写:
 1. 用第三人称讲清发生了什么，既有分析锚点，也有现场感
-2. 写出人物的具体动作、原话和压力变化，不要堆抽象概念
+2. 写出人物的具体动作和压力变化；人物原话只能逐字复制原始记录，无法逐字复制时必须无引号转述
 3. 找出 2-3 个真正改变走向的转折点，并围绕它们建立张力
 4. 结尾必须回到用户的原始 what-if 问题，用本分支事件给出启示
 5. 总字数控制在 300-500 字
@@ -122,7 +305,8 @@ anchoring and narrative tension.
 
 [Branch Title]
 {branch_title_block}
-[Final Probability] {probability:.0%}
+[Simulated Branch Share] {probability:.0%}
+{share_boundary_en}
 [Participants]
 {agents_summary_block}
 
@@ -131,7 +315,8 @@ anchoring and narrative tension.
 
 Write it this way:
 1. Use third person to make the outcome concrete, readable, and tense
-2. Show specific actions, lines, and pressure shifts instead of abstract summary
+2. Show specific actions and pressure shifts; quote a participant only by copying
+   the transcript verbatim, otherwise paraphrase without quotation marks
 3. Identify 2-3 turning points that truly changed the path and build tension around them
 4. End by returning to the original what-if question through this branch's events
 5. Keep the total length around 300-500 words
@@ -190,18 +375,36 @@ def _build_fallback_narration(
     compact_question = " ".join(str(question or "").split())[:300]
     if language == "Chinese":
         opener = (
-            f"围绕「{compact_question}」，《{branch_title or '未命名分支'}》给出的答案是：这条走向以 {probability:.0%} 的概率成为最终结果。"  # noqa: E501
+            f"围绕「{compact_question}」，《{branch_title or '未命名分支'}》给出的答案是：本次模拟中，这条路径的分支占比为 {probability:.0%}。"  # noqa: E501
             if compact_question
-            else f"《{branch_title or '未命名分支'}》以 {probability:.0%} 的概率成为最终结果。"  # noqa: E501
+            else f"《{branch_title or '未命名分支'}》在本次模拟中的分支占比为 {probability:.0%}。"  # noqa: E501
+        )
+        boundary = (
+            "100% 只表示这条路径占据本次生成并纳入比较的全部模拟分支权重；"
+            "若本次仅生成并纳入一条路径，100% 是比较结构的必然结果。"
+            "无论路径数如何，这都不代表现实发生概率，也不能估计现实不确定性。"
+            if probability >= 0.9995
+            else "该数值仅为本次模拟分支占比，不代表现实发生概率，也不能估计现实不确定性。"
         )
         story_lines = [opener]
     else:
         opener = (
-            f'On "{compact_question}", "{branch_title or "Untitled Branch"}" points to this answer: this path becomes the ending with {probability:.0%} probability.'  # noqa: E501
+            f'On "{compact_question}", "{branch_title or "Untitled Branch"}" points to this answer: its simulated branch share in this run is {probability:.0%}.'  # noqa: E501
             if compact_question
-            else f'"{branch_title or "Untitled Branch"}" becomes the ending with {probability:.0%} probability.'  # noqa: E501
+            else f'"{branch_title or "Untitled Branch"}" has a {probability:.0%} simulated branch share in this run.'  # noqa: E501
+        )
+        boundary = (
+            "A 100% share means only that this path carries all simulated branch weight "
+            "generated and included in this run. If this run generated and included only "
+            "one path, 100% is a structural result of that comparison. Regardless of path "
+            "count, it is not a real-world probability and cannot estimate real-world "
+            "uncertainty."
+            if probability >= 0.9995
+            else "This is only a simulated branch share for this run, not a real-world "
+            "probability or an estimate of real-world uncertainty."
         )
         story_lines = [opener]
+    story_lines.append(boundary)
     if key_moments:
         story_lines.append(
             "能从原始记录直接读到的关键交互：" if language == "Chinese"
@@ -210,14 +413,32 @@ def _build_fallback_narration(
         story_lines.extend(key_moments)
     else:
         story_lines.append(
-            "原始记录不足；这条分支目前只保留了标题和概率。"
+            "原始记录不足；这条分支目前只保留了标题和模拟分支占比。"
             if language == "Chinese"
-            else "The transcript is too thin; only the branch title and probability remain."
+            else (
+                "The transcript is too thin; only the branch title and simulated "
+                "branch share remain."
+            )
+        )
+
+    display_title = branch_title or (
+        "未命名分支" if language == "Chinese" else "Untitled Branch"
+    )
+    grounded_insight = ""
+    if key_moments:
+        grounded_insight = (
+            f"《{display_title}》：{key_moments[0]}"
+            if language == "Chinese"
+            else f"{display_title}: {key_moments[0]}"
         )
 
     return {
         "story": " ".join(story_lines),
-        "insight": "",
+        # Keep both branch identity and the first transcript-grounded signal
+        # available to the result card.
+        # The probability boundary can be longer than the generic 120-char story
+        # excerpt used by ``narrate_branch`` and must not push all evidence out.
+        "insight": grounded_insight,
         "key_moments": key_moments,
     }
 
@@ -273,6 +494,7 @@ async def narrate_branch(
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
     request_timeout, total_timeout, probe_timeout = _narration_timeouts()
+    should_validate_narrative_quotes = True
     try:
         # Pass-1: natural narrative text
         with llm_request_scope(purpose="scenario_narration"):
@@ -290,6 +512,10 @@ async def narrate_branch(
             )
     except Exception as exc:
         logger.warning("Narration fallback for %s: %s", branch_title, exc)
+        # The fallback is assembled locally from the scenario question and
+        # verbatim transcript lines. Do not treat its display punctuation as
+        # model-authored quotation claims (for example, 「scenario question」).
+        should_validate_narrative_quotes = False
         result = _build_fallback_narration(
             branch_title,
             probability,
@@ -372,13 +598,24 @@ async def narrate_branch(
     else:
         key_moments = []
 
-    story = _strip_round_markers(str(result.get("story", "") or ""))
-    insight = _strip_round_markers(str(result.get("insight", "") or ""))
+    def validate_narrative_quotes(value: str) -> str:
+        if not should_validate_narrative_quotes:
+            return value
+        return _remove_ungrounded_narrative_quote_marks(value, raw_rounds)
+
+    story = validate_narrative_quotes(
+        _strip_round_markers(str(result.get("story", "") or ""))
+    )
+    insight = validate_narrative_quotes(
+        _strip_round_markers(str(result.get("insight", "") or ""))
+    )
     if insight in _NARRATION_DEGRADATION_INSIGHTS:
         insight = ""
-    question_answer = _strip_round_markers(str(result.get("question_answer", "") or ""))
+    question_answer = validate_narrative_quotes(
+        _strip_round_markers(str(result.get("question_answer", "") or ""))
+    )
     key_moments = [
-        cleaned
+        validate_narrative_quotes(cleaned)
         for item in key_moments
         if (cleaned := _strip_round_markers(str(item)))
     ]

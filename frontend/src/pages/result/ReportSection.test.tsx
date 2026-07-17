@@ -79,6 +79,22 @@ describe('ReportSection', () => {
     expect(screen.getByText('This is content')).toBeInTheDocument();
   });
 
+  it('uses an explicit report content language instead of the UI locale', () => {
+    render(
+      <ReportSection
+        section={baseSection}
+        onOpenEvidence={mockOnOpenEvidence}
+        index={0}
+        language="zh"
+      />,
+    );
+
+    expect(screen.getByText('测试章节')).toBeInTheDocument();
+    expect(screen.getByText('这是内容')).toBeInTheDocument();
+    expect(screen.queryByText('Test Section')).toBeNull();
+    expect(screen.queryByText('This is content')).toBeNull();
+  });
+
   it.each([
     ['generation', '[L10N generated source]'],
     ['rewrite', '[L10N rewritten source]'],

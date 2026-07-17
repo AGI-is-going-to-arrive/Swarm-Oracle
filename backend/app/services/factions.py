@@ -146,6 +146,7 @@ def process_round(
     branch_id: str,
     round_number: int,
     messages: list,
+    language: str = "English",
 ) -> dict | None:
     """Process a round for faction updates. Returns None if < 4 agents."""
     if len(messages) < 4:
@@ -266,7 +267,8 @@ def process_round(
             confidence = len(group) / total_agents
 
             faction_key = f"faction_{gidx}"
-            label = f"Faction {gidx + 1}"
+            label_prefix = "阵营" if language.startswith("Chinese") else "Faction"
+            label = f"{label_prefix} {gidx + 1}"
 
             factions.append({
                 "key": faction_key,
@@ -412,7 +414,51 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
         )
         events = session.exec(event_stmt).all()
 
-        rounds: dict[tuple[str, int], dict] = {}
+        relation_coordinate_stmt = (
+            select(
+                AgentRelationEdge.branch_id,
+                AgentRelationEdge.round_number,
+            )
+            .where(
+                AgentRelationEdge.scenario_id == scenario_id,
+                _exact_materialized_round_predicate(
+                    AgentRelationEdge,
+                    selection,
+                ),
+            )
+            .distinct()
+        )
+        relation_coordinates = {
+            (branch_id, round_number)
+            for branch_id, round_number in session.exec(
+                relation_coordinate_stmt
+            ).all()
+        }
+        snapshot_coordinates = {
+            (snapshot.branch_id, snapshot.round_number) for snapshot in snapshots
+        }
+        event_coordinates = {
+            (event.branch_id, event.round_number) for event in events
+        }
+
+        # ``process_round`` commits relation edges before returning all-neutral
+        # degradation. A relation-only coordinate therefore preserves that
+        # durable result without inventing a faction. Unprocessed or
+        # insufficient-metadata rounds have no relation edges and stay absent.
+        rounds: dict[tuple[str, int], dict] = {
+            coordinate: _with_lineage_metadata(
+                {
+                    "branch_id": coordinate[0],
+                    "round": coordinate[1],
+                    "degraded": "all_neutral",
+                    "factions": [],
+                    "events": [],
+                }
+            )
+            for coordinate in (
+                relation_coordinates - snapshot_coordinates - event_coordinates
+            )
+        }
 
         for snap in snapshots:
             members = _decode_faction_members(snap.member_agent_ids_json)

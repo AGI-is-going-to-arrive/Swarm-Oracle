@@ -236,6 +236,7 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "status",
         "tier",
         "verdict",
+        "claims",
         "sections",
         "evidence",
         "indicators_to_watch",
@@ -881,6 +882,7 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
         "status",
         "tier",
         "verdict",
+        "claims",
         "sections",
         "evidence",
         "indicators_to_watch",
@@ -916,6 +918,52 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
         "verdict",
         "limitations",
     }
+
+
+def test_legacy_full_report_without_claims_defaults_to_empty_list():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    assert "claims" not in payload
+
+    report = validate_full_report_payload(payload)
+
+    assert report.claims == []
+    assert report.model_dump(mode="json")["claims"] == []
+
+
+def test_full_report_accepts_fail_closed_claim_after_coordinate_pruning():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["claims"] = [
+        {
+            "claim_id": "claim-pruned",
+            "claim_text": "Evidence was removed by byte-budget pruning.",
+            "claim_type": "assertion",
+            "speaker": "Transit Advocate",
+            "agent_id": "agent-1",
+            "message_ids": [],
+            "action_ids": [],
+            "branch_id": "branch-1",
+            "round_numbers": [],
+            "exact_quote": None,
+            "evidence_strength": "unsupported",
+            "temporal_coverage": [],
+            "role_coverage": [],
+            "confidence": "low",
+            "downgrade_reason": "evidence_pruned_for_byte_cap",
+        }
+    ]
+    payload["verdict"]["analytic_confidence"]["level"] = "low"
+
+    report = validate_full_report_payload(payload)
+
+    assert report.claims[0].message_ids == []
+    assert report.claims[0].action_ids == []
+    assert report.claims[0].evidence_strength == "unsupported"
+    assert report.claims[0].confidence == "low"
+    assert report.verdict.analytic_confidence.level == "low"
 
 
 def test_full_report_schema_rejects_section_refs_to_missing_evidence():
@@ -994,6 +1042,42 @@ def test_full_report_schema_rejects_provider_secret_values_everywhere(secret_val
         validate_full_report_payload(payload)
 
 
+@pytest.mark.parametrize(
+    "secret_value",
+    [
+        "sk&#45;entitySecret123456",
+        "sk&amp;#45;nestedEntitySecret123456",
+        "https&#58;//user&#58;pass@example.com/v1",
+    ],
+)
+def test_full_report_schema_canonicalizes_entities_before_secret_scan(
+    secret_value: str,
+):
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["sections"][0]["body_md_i18n"]["en"] = f"Do not leak {secret_value}"
+
+    with pytest.raises(ValueError, match="sensitive value"):
+        validate_full_report_payload(payload)
+
+
+def test_full_report_schema_canonicalizes_entity_encoded_sensitive_keys():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["sections"][0]["charts"][0]["data"]["api&#95;key"] = "plain"
+
+    with pytest.raises(ValueError, match="sensitive key"):
+        validate_full_report_payload(payload)
+
+    payload = _legal_full_report()
+    payload["sections"][0]["charts"][0]["data"]["api key"] = "plain"
+
+    with pytest.raises(ValueError, match="sensitive key"):
+        validate_full_report_payload(payload)
+
+
 def test_full_report_schema_rejects_post_default_byte_cap_overflow():
     from app.services.result_report.schema import (
         FullReport,
@@ -1018,7 +1102,7 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
         FullReport.model_validate(payload).model_dump(mode="json"),
     )
     assert raw_size == 1395
-    assert response_size == 1585
+    assert response_size == 1597
 
     with pytest.raises(ValueError, match="byte budget"):
         validate_full_report_payload(payload, max_bytes=raw_size)

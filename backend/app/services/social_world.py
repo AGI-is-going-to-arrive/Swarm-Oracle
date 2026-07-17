@@ -581,7 +581,29 @@ def render_social_world_context(
             card["trend_score"] = include_score.score
         return card
 
+    followed = state.following.get(agent_id, frozenset())
     visible_posts = [post for post in state.posts if post.author_id not in muted]
+
+    def latest_visible_activity(post: SocialPost) -> int:
+        return max(
+            (
+                sequence
+                for sequence, actor_id in post.activity_events
+                if actor_id not in muted
+            ),
+            default=post.sequence,
+        )
+
+    default_feed_posts = sorted(
+        visible_posts,
+        key=lambda post: (
+            post.author_id in followed,
+            latest_visible_activity(post),
+            post.sequence,
+            post.action_id,
+        ),
+        reverse=True,
+    )
 
     def search_receipt_still_matches(post_id: str, query: str) -> bool:
         post = posts_by_id.get(post_id)
@@ -677,11 +699,7 @@ def render_social_world_context(
             if latest_refresh
             else [
                 post_card(post.action_id)
-                for post in sorted(
-                    visible_posts,
-                    key=lambda item: (item.sequence, item.action_id),
-                    reverse=True,
-                )[:4]
+                for post in default_feed_posts[:4]
             ]
         ),
         "refresh": {
@@ -696,15 +714,22 @@ def render_social_world_context(
     if str(language or "").lower().startswith(("zh", "chinese", "中文")):
         payload["semantics"] = (
             "这是截至上一轮的可重放社交观察；静音优先于关注。当前信息流为空，"
-            "搜索、趋势和刷新只会返回空结果；除非确实应暂不行动，否则先发布一条有用信息。"
+            "搜索、趋势和刷新会返回空结果。这不强制任何角色首发，也不按轮次或角色"
+            "安排动作；如果角色此刻自然地公开提出新方案、公布数据或事实、发出警示"
+            "或号召、向公众提出问题，可以 POST；否则 IDLE 仍然合法。COMMENT/REACTION "
+            "只有出现可见旧帖后才可用。"
             if empty_feed_guidance
             else "这是截至上一轮的可重放社交观察；静音优先于关注。"
         )
     else:
         payload["semantics"] = (
             "Replayable social observations through the previous round; mute overrides follow. "
-            "The feed is empty, so search, trends, and refresh return no results; publish useful "
-            "information first unless idling is genuinely appropriate."
+            "The feed is empty, so search, trends, and refresh return no results. This does not "
+            "force any character to publish first or schedule actions by round or role. If the "
+            "character naturally makes a new public proposal, releases data or facts, issues a "
+            "warning or call to action, or asks the public a question now, POST is available; "
+            "otherwise IDLE remains valid. COMMENT/REACTION become available only after a prior "
+            "visible post exists."
             if empty_feed_guidance
             else "Replayable social observations through the previous round; mute overrides follow."
         )

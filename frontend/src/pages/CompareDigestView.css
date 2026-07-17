@@ -748,7 +748,7 @@
   }
 
   .compare-theater-pane__surface {
-    min-height: 240px;
+    min-height: 0;
     aspect-ratio: 5 / 4;
   }
 

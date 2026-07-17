@@ -14,14 +14,19 @@ _CREDENTIAL_VALUE_PATTERN = (
     r"'(?:\\.|[^'\\\r\n])*'|"
     r"\[redacted(?:-[a-z-]+)?\]|\*{4}|[^\s,;)}\]]+)"
 )
+_CREDENTIAL_LABEL_PATTERN = (
+    r"(?:[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)*[_-])?"
+    r"(?:api[-_ ]?key|authorization|access[_-]?token|refresh[_-]?token|token|"
+    r"password|passwd|client[_-]?secret|private[_-]?key|secret)"
+)
+_CREDENTIAL_LABEL_RE = re.compile(_CREDENTIAL_LABEL_PATTERN, re.IGNORECASE)
 _API_KEY_ASSIGNMENT_RE = re.compile(
     rf"(?P<label>[\"']?\bapi[-_ ]?key[\"']?\s*[:=]\s*)"
     rf"(?P<value>{_CREDENTIAL_VALUE_PATTERN})",
     re.IGNORECASE,
 )
 _LABELED_CREDENTIAL_ASSIGNMENT_RE = re.compile(
-    r"(?P<label>[\"']?\b(?:access[_-]?token|refresh[_-]?token|token|password|passwd|"
-    r"client[_-]?secret|private[_-]?key|secret)[\"']?\s*[:=]\s*)"
+    rf"(?P<label>[\"']?\b{_CREDENTIAL_LABEL_PATTERN}[\"']?\s*[:=]\s*)"
     rf"(?P<value>{_CREDENTIAL_VALUE_PATTERN})",
     re.IGNORECASE,
 )
@@ -44,6 +49,75 @@ _LONG_SECRET_RE = re.compile(
     r"[A-Za-z0-9+/=_-]{32,}"
     r"(?![A-Za-z0-9+/=_-])"
 )
+_SAFE_UUID_ROUTE_SEGMENT_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+_SAFE_STAGE_PROSE_RE = re.compile(r"early/middle/late-stage-cross-validation")
+_ROUTE_UUID = "{uuid}"
+_SCENARIO_ROUTE_SUFFIXES = frozenset(
+    {
+        (),
+        ("action-ledger",),
+        ("actions",),
+        ("agents",),
+        ("analyst",),
+        ("branches",),
+        ("cancel",),
+        ("causal-graph",),
+        ("checkpoints",),
+        ("compare",),
+        ("conversations",),
+        ("counterfactual",),
+        ("director-state",),
+        ("ending-room",),
+        ("ending-room", "active"),
+        ("export",),
+        ("faction-relations",),
+        ("faction-timeline",),
+        ("finalize",),
+        ("gameplay-state",),
+        ("graph-analysis",),
+        ("groups",),
+        ("intervene",),
+        ("intervene", "batch"),
+        ("intervene", "retrospective"),
+        ("intervention-effects",),
+        ("personality-drift",),
+        ("predict",),
+        ("predictions",),
+        ("public-artifact",),
+        ("replay-trace",),
+        ("report",),
+        ("resume",),
+        ("score-predictions",),
+        ("snapshot",),
+        ("social-feed",),
+        ("social", "reddit"),
+        ("social", "weibo"),
+        ("social", "x"),
+        ("social", "xiaohongshu"),
+        ("social", "zhihu"),
+        ("story",),
+        ("summary",),
+        ("survey",),
+    }
+)
+_SAFE_LONG_ROUTE_TEMPLATES = frozenset(
+    {("api", "scenario", _ROUTE_UUID, *suffix) for suffix in _SCENARIO_ROUTE_SUFFIXES}
+    | {
+        ("api", "campaign", "challenges", "rotation"),
+        (
+            "api",
+            "scenario",
+            _ROUTE_UUID,
+            "counterfactual",
+            _ROUTE_UUID,
+            "resimulate",
+        ),
+        ("ws", "scenario", _ROUTE_UUID),
+    }
+)
 _API_KEY_MARKER_RE = re.compile(r"\bapi[-_ ]?key\b", re.IGNORECASE)
 _REDACTED_CREDENTIAL_VALUE_RE = re.compile(
     r"(?:\*{4}|\[redacted(?:-[a-z-]+)?\])",
@@ -57,6 +131,10 @@ _URL_USERINFO_RE = re.compile(
 
 def _scrub_unlabelled_credentials(value: str) -> str:
     return _UNLABELLED_CREDENTIAL_RE.sub("[redacted-key]", value)
+
+
+def _credential_label_is_sensitive(value: object) -> bool:
+    return _CREDENTIAL_LABEL_RE.fullmatch(str(value).strip()) is not None
 
 
 def _credential_value_is_already_redacted(value: str) -> bool:
@@ -86,14 +164,41 @@ def _scrub_basic_auth_credentials(value: str) -> str:
     return _BASIC_AUTH_RE.sub("[redacted-basic-auth]", value)
 
 
+def _route_matches_template(segments: tuple[str, ...], template: tuple[str, ...]) -> bool:
+    if len(segments) != len(template):
+        return False
+    return all(
+        _SAFE_UUID_ROUTE_SEGMENT_RE.fullmatch(segment)
+        if expected == _ROUTE_UUID
+        else segment == expected
+        for segment, expected in zip(segments, template)
+    )
+
+
+def _redact_long_route(candidate: str) -> str:
+    segments = tuple(candidate.removeprefix("/").split("/"))
+    if any(_route_matches_template(segments, template) for template in _SAFE_LONG_ROUTE_TEMPLATES):
+        return candidate
+    return "[redacted-secret]"
+
+
+def _redact_long_secret(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    if candidate.startswith("/"):
+        return _redact_long_route(candidate)
+    if _SAFE_STAGE_PROSE_RE.fullmatch(candidate):
+        return candidate
+    return "[redacted-secret]"
+
+
 def _scrub_sensitive_text(value: str | None) -> str:
     cleaned = str(value or "")
     cleaned = _URL_USERINFO_RE.sub(r"\1\2", cleaned)
     cleaned = _BEARER_TOKEN_RE.sub("[redacted-bearer]", cleaned)
     cleaned = _scrub_basic_auth_credentials(cleaned)
     cleaned = _API_KEY_ASSIGNMENT_RE.sub(_redact_api_key_assignment, cleaned)
+    cleaned = _scrub_labeled_credentials(cleaned)
     cleaned = _PROVIDER_KEY_RE.sub("[redacted-key]", cleaned)
     cleaned = _scrub_unlabelled_credentials(cleaned)
-    cleaned = _LONG_SECRET_RE.sub("[redacted-secret]", cleaned)
-    cleaned = _scrub_labeled_credentials(cleaned)
+    cleaned = _LONG_SECRET_RE.sub(_redact_long_secret, cleaned)
     return _API_KEY_MARKER_RE.sub("api key", cleaned)

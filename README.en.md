@@ -16,13 +16,13 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 ## What It Does
 
 - Multi-branch simulation, Classic branch tree, and Pixel Theater
-- A configurable initial world-event Feed and nine native social actions: `POST`, `COMMENT`, `REACTION`, `FOLLOW`, `MUTE`, `SEARCH`, `TREND`, `REFRESH`, and `IDLE`
+- A configurable initial world-event Feed and nine native social actions whose speech and action are bound by the same structured decision: `POST`, `COMMENT`, `REACTION`, `FOLLOW`, `MUTE`, `SEARCH`, `TREND`, `REFRESH`, and `IDLE`
 - Gameplay Cards, prediction bets, worldline commitments, and a post-run Causal Archive
 - Debate Arena, Ending Chambers, and Worldline Roundtable
 - Counterfactual reruns, branch comparison, and Replay Trace
 - Causal graph, knowledge graph, and timeline views
-- In-run Agent profiles, branch-scoped memory, Custom Agents, persona backups, ordered Agent Packs, prediction journal, and snapshots
-- Bounded, atomic Local Pack imports with clickable Snapshot demos, plus result verdicts, transparent full reports, a redacted offline Gallery, and optional search augmentation
+- In-run Agent profiles, branch-scoped memory, auditable decisions and cross-round state records, Custom Agents, persona backups, ordered Agent Packs, prediction journal, and snapshots
+- Bounded, atomic Local Pack imports with clickable Snapshot demos, plus result verdicts, transparent full reports whose complete/partial output passes through Claim–Evidence compilation, a redacted offline Gallery, and optional search augmentation
 
 ## W2.1 Visibility and Truth Boundaries
 
@@ -33,6 +33,8 @@ Chinese intro video: https://www.bilibili.com/video/BV1Xh7168ECc
 - Local Pack refresh reloads details even when the selected pack keeps the same ID, clears old details and actions before switching, and isolates late responses. Pack `demo_snapshots` are clickable, catalog-whitelisted, validated against the Snapshot contract, and directly importable. Definite failures are retryable; when the outcome cannot be confirmed, the UI asks you to check History before another attempt.
 - Agent Packs atomically import or export Agents in library selection order without identity IDs, owner data, memories, growth history, conversations, or separately stored credentials, and redact common credential patterns. Public Artifacts can be exported as redacted JSON, single-file HTML, or an offline Gallery hash link, while `gallery.html` can open a local file. This is not a hosted registry, community index, or marketplace.
 - The initial Feed accepts at most 20 world events with a source, content, optional publication time, credibility hint, and tags. These fields remain untrusted data, never system instructions. Agents can follow or mute source accounts, and muting affects later Feed, search, and trend projections. The Action Ledger panel in Causal Review shows branch-scoped native actions, targets, and states; a separate evidence-ledger API projects Agent utterances, context observations, and derived consequences, with hashed memory references and source-scenario coordinates rather than memory text. Older runs without the corresponding evidence are explicitly `unavailable` instead of receiving invented history.
+- A live Agent turn first generates and validates a bounded Decision Envelope, then uses the same result to constrain both speech and the native action. `IDLE` requires an explicit reason, but the system does not manufacture activity through action quotas, random actions, or forced rotation. Each round also persists a status-bearing State Transition; verified or failed prior-action outcomes, goal-progress changes, obstacles, relationship changes, simulated world-state changes, and next-round pressure feed the next round, while consecutive highly similar utterances trigger replanning. Unverifiable records degrade explicitly to `unavailable`. Only auditable fields are stored—never hidden chain-of-thought—and simulated state is not presented as a complete domain world model or real-world proof.
+- Before a complete/partial report is saved, its conclusions are compiled into Claims with Agent, message, action, branch, and round coordinates. Verbatim quotations must match the same speaker's same utterance, and role and temporal coverage are checked. Insufficient evidence removes unsafe quotation marks, lowers confidence, or rewrites the conclusion as an “Evidence-limited hypothesis.” When a compiled report is available, the result-page headline and report analytic confidence use the same authority. Outer states such as generating, failed, cancelled, skipped, stalled, and truncated do not claim completed Claim validation; model-synthesized interviews and simulated changes are not real-world evidence.
 
 See the [feature index](docs/FEATURES.en.md) for capability groups and routes, and the [usage guide](docs/USAGE.en.md) for operation.
 

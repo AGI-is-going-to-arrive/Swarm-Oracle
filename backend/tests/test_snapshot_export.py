@@ -37,6 +37,7 @@ from app.services.snapshot_export import (
     SnapshotImportError,
     _remap_full_report_coordinates,
     _remap_payload_json,
+    _remap_result_quality_coordinates,
     build_snapshot_manifest,
     export_snapshot_zip,
     import_snapshot_zip,
@@ -1522,7 +1523,7 @@ def test_snapshot_failed_report_uses_terminal_premortem_reason():
         ("complete", "complete"),
         ("partial", "partial"),
         ("failed", "failed"),
-        ("generating", "partial"),
+        ("generating", "failed"),
     ],
 )
 def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
@@ -1563,6 +1564,11 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
     assert exported_report["premortem"][0] == {
         "risk": f"kept premortem risk for {status}",
     }
+    if status == "generating":
+        assert exported_report["verdict"]["analytic_confidence"]["level"] == "low"
+        assert exported_report["premortem_analysis"]["reason"] == (
+            "report_generation_failed"
+        )
     if status == "failed":
         assert exported_report["sections"] == []
     else:
@@ -1596,7 +1602,14 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
     assert "base_url" not in imported_report_text
     assert imported_report["status"] == expected_status
     assert imported_report["title_i18n"] == exported_report["title_i18n"]
-    assert imported_report["summary_i18n"] == exported_report["summary_i18n"]
+    assert imported_report["summary_i18n"]["zh"].startswith("证据有限的假设：")
+    assert imported_report["summary"] == imported_report["summary_i18n"][
+        imported_report["language"]
+    ]
+    assert any(
+        claim["claim_id"].startswith("claim-summary-")
+        for claim in imported_report["claims"]
+    )
     assert [item["id"] for item in imported_report["evidence"]] == ["ev-1"]
     imported_evidence = imported_report["evidence"][0]
     assert imported_evidence["branch_id"] != "branch-1"
@@ -1780,7 +1793,7 @@ def test_full_report_snapshot_remaps_leaf_target_and_ancestor_evidence_coordinat
     assert set(imported_report["indicators_to_watch"][0]["evidence_refs"]) <= valid_evidence_ids
 
 
-def test_snapshot_import_heals_legacy_generating_full_report_status():
+def test_snapshot_import_fails_closed_legacy_generating_full_report_status():
     report = _full_report_snapshot_fixture("partial")
     scenario_id = _seed_scenario_with_full_report_snapshot(report)
     _seed_full_report_coordinate_rows(scenario_id)
@@ -1803,7 +1816,13 @@ def test_snapshot_import_heals_legacy_generating_full_report_status():
         assert imported is not None
         imported_report = imported.parsed_context["full_report"]
 
-    assert imported_report["status"] == "partial"
+    assert imported_report["status"] == "failed"
+    assert imported_report["verdict"]["analytic_confidence"]["level"] == "low"
+    assert imported_report["premortem_analysis"] == {
+        "status": "missing",
+        "reason": "report_generation_failed",
+        "items": [],
+    }
 
 
 def test_snapshot_import_skips_invalid_full_report_after_remap():
@@ -3396,3 +3415,659 @@ def test_import_rejects_zip_bomb_aggregate_size(monkeypatch):
             import_snapshot_zip(out.getvalue(), "importer-bomb-agg", session)
     msg = str(excinfo.value).lower()
     assert "uncompressed" in msg or "too large" in msg
+
+
+# ── structured Agent runtime snapshot contracts ─────────
+
+
+def _snapshot_agent_runtime_fixture(
+    branch_id: str,
+    agent_id: str,
+    message_id: str,
+    action_id: str,
+) -> dict[str, Any]:
+    return {
+        "version": "1.0",
+        "branches": {
+            branch_id: {
+                "rounds": {
+                    "1": {
+                        "decisions": [
+                            {
+                                "decision_id": "decision-1",
+                                "branch_id": branch_id,
+                                "round_number": 1,
+                                "agent_id": agent_id,
+                                "message_id": message_id,
+                                "action_id": action_id,
+                                "current_goal": "secure a verifiable commitment",
+                                "availability": "available",
+                            }
+                        ],
+                        "transitions": [
+                            {
+                                "transition_id": "transition-1",
+                                "branch_id": branch_id,
+                                "round_number": 1,
+                                "agent_id": agent_id,
+                                "message_id": message_id,
+                                "action_id": action_id,
+                                "transition_semantics": "post_action_v1",
+                                "previous_action_outcomes": [
+                                    {
+                                        "action_id": action_id,
+                                        "message_id": message_id,
+                                        "action_type": "POST",
+                                        "status": "verified",
+                                        "effect_status": "verified",
+                                        "failure_code": None,
+                                    }
+                                ],
+                                "next_round_pressure": "counterparty must answer",
+                                "reflection_records": [
+                                    {
+                                        "status": "verified",
+                                        "reflection_kind": "action_feedback",
+                                        "summary": "The commitment request is now observable.",
+                                        "source_action_ids": [action_id],
+                                        "source_message_ids": [message_id],
+                                    }
+                                ],
+                                "strategy_adjustments": [
+                                    {
+                                        "status": "verified",
+                                        "trigger_status": "verified",
+                                        "reason": "Use the observed response in the next decision.",
+                                        "summary": "Request a concrete answer next.",
+                                        "source_action_ids": [action_id],
+                                        "source_message_ids": [message_id],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+
+def test_agent_runtime_remapper_rewrites_every_portable_coordinate():
+    from app.services.agent_runtime import remap_agent_runtime_coordinates
+
+    runtime = _snapshot_agent_runtime_fixture(
+        "branch-old",
+        "agent-old",
+        "message-old",
+        "action-old",
+    )
+
+    remapped = remap_agent_runtime_coordinates(
+        runtime,
+        branch_id_map={"branch-old": "branch-new"},
+        agent_id_map={"agent-old": "agent-new"},
+        message_id_map={"message-old": "message-new"},
+        action_id_map={"action-old": "action-new"},
+    )
+
+    runtime_text = json.dumps(remapped, ensure_ascii=False, sort_keys=True)
+    for old_id in ("branch-old", "agent-old", "message-old", "action-old"):
+        assert old_id not in runtime_text
+    assert remapped["branches"]["branch-new"]["rounds"]["1"]["decisions"][0] == {
+        "decision_id": "decision-1",
+        "branch_id": "branch-new",
+        "round_number": 1,
+        "agent_id": "agent-new",
+        "message_id": "message-new",
+        "action_id": "action-new",
+        "current_goal": "secure a verifiable commitment",
+        "availability": "available",
+    }
+    transition = remapped["branches"]["branch-new"]["rounds"]["1"][
+        "transitions"
+    ][0]
+    assert transition["transition_semantics"] == "post_action_v1"
+    outcome = transition["previous_action_outcomes"][0]
+    assert outcome["action_id"] == "action-new"
+    assert outcome["message_id"] == "message-new"
+    assert transition["reflection_records"][0]["source_action_ids"] == [
+        "action-new"
+    ]
+    assert transition["reflection_records"][0]["source_message_ids"] == [
+        "message-new"
+    ]
+    assert transition["strategy_adjustments"][0]["source_action_ids"] == [
+        "action-new"
+    ]
+    assert transition["strategy_adjustments"][0]["source_message_ids"] == [
+        "message-new"
+    ]
+
+
+def test_agent_runtime_remapper_maps_source_targets_and_drops_orphans_in_strict_mode():
+    from app.services.agent_runtime import remap_agent_runtime_coordinates
+
+    runtime = _snapshot_agent_runtime_fixture(
+        "branch-old",
+        "agent-old",
+        "message-old",
+        "action-old",
+    )
+    decision = runtime["branches"]["branch-old"]["rounds"]["1"]["decisions"][0]
+    decision["target_agent_or_object"] = {"kind": "source", "id": "source-old"}
+    transition = runtime["branches"]["branch-old"]["rounds"]["1"][
+        "transitions"
+    ][0]
+    transition["reflection_records"].append({
+        "status": "verified",
+        "reflection_kind": "action_feedback",
+        "summary": "This record has an unmapped source message.",
+        "source_action_ids": ["action-old"],
+        "source_message_ids": ["message-orphan"],
+    })
+    transition["strategy_adjustments"].append({
+        "status": "verified",
+        "trigger_status": "verified",
+        "reason": "This record has an unmapped source action.",
+        "summary": "Do not retain this adjustment.",
+        "source_action_ids": ["action-orphan"],
+        "source_message_ids": ["message-old"],
+    })
+    runtime["branches"]["orphan-branch"] = {
+        "rounds": {
+            "1": {
+                "decisions": [dict(decision, branch_id="orphan-branch")],
+                "transitions": [],
+            }
+        }
+    }
+
+    remapped = remap_agent_runtime_coordinates(
+        runtime,
+        branch_id_map={"branch-old": "branch-new"},
+        agent_id_map={
+            "agent-old": "agent-new",
+            "source-old": "source-new",
+        },
+        message_id_map={"message-old": "message-new"},
+        action_id_map={"action-old": "action-new"},
+        drop_unmapped=True,
+    )
+
+    assert set(remapped["branches"]) == {"branch-new"}
+    mapped_decision = remapped["branches"]["branch-new"]["rounds"]["1"][
+        "decisions"
+    ][0]
+    assert mapped_decision["target_agent_or_object"] == {
+        "kind": "source",
+        "id": "source-new",
+    }
+    mapped_transition = remapped["branches"]["branch-new"]["rounds"]["1"][
+        "transitions"
+    ][0]
+    assert mapped_transition["transition_semantics"] == "post_action_v1"
+    assert mapped_transition["reflection_records"] == [{
+        "status": "verified",
+        "reflection_kind": "action_feedback",
+        "summary": "The commitment request is now observable.",
+        "source_action_ids": ["action-new"],
+        "source_message_ids": ["message-new"],
+    }]
+    assert mapped_transition["strategy_adjustments"] == [{
+        "status": "verified",
+        "trigger_status": "verified",
+        "reason": "Use the observed response in the next decision.",
+        "summary": "Request a concrete answer next.",
+        "source_action_ids": ["action-new"],
+        "source_message_ids": ["message-new"],
+    }]
+    strict_text = json.dumps(remapped, ensure_ascii=False, sort_keys=True)
+    assert "message-orphan" not in strict_text
+    assert "action-orphan" not in strict_text
+
+
+def test_snapshot_round_trip_remaps_runtime_and_full_report_claim_coordinates():
+    from app.models.simulation_action import SimulationAction
+    from app.services.simulation_actions import append_simulation_action
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Can a runtime-grounded claim survive snapshot import?",
+            status=ScenarioStatus.DONE,
+            user_id="owner-runtime",
+        )
+        session.add(scenario)
+        session.flush()
+        branch = Branch(
+            scenario_id=scenario.id,
+            title="Runtime branch",
+            probability=1.0,
+            status=BranchStatus.COMPLETED,
+        )
+        agent = Agent(
+            scenario_id=scenario.id,
+            name="Runtime Agent",
+            role="Negotiator",
+            tier=AgentTier.IMPORTANT,
+        )
+        session.add_all([branch, agent])
+        session.flush()
+        round_row = Round(branch_id=branch.id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        message = AgentMessage(
+            round_id=round_row.id,
+            agent_id=agent.id,
+            content="The council accepted an auditable safeguard.",
+            emotion="confident",
+        )
+        session.add(message)
+        session.flush()
+        action = append_simulation_action(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            round_id=round_row.id,
+            round_number=1,
+            agent_id=agent.id,
+            message_id=message.id,
+            idempotency_key="snapshot-runtime-action-1",
+            action={
+                "action_type": "POST",
+                "status": "verified",
+                "content": "The council accepted an auditable safeguard.",
+            },
+        )
+        report = _legal_full_report()
+        report["target_branch_id"] = branch.id
+        report["dissenting"] = None
+        report["sections"][0]["charts"][0]["data"]["branches"][0][
+            "branch_id"
+        ] = branch.id
+        report["evidence"][0].update({
+            "branch_id": branch.id,
+            "round_id": round_row.id,
+            "round_number": 1,
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "message_id": message.id,
+            "quote": message.content,
+        })
+        report["claims"] = [
+            {
+                "claim_id": "claim-1",
+                "claim_text": "The safeguard changed the negotiation.",
+                "claim_type": "evolution",
+                "speaker": agent.name,
+                "agent_id": agent.id,
+                "message_ids": [message.id],
+                "action_ids": [action.id],
+                "branch_id": branch.id,
+                "round_numbers": [1],
+                "exact_quote": message.content,
+                "evidence_strength": "strong",
+                "temporal_coverage": ["early"],
+                "role_coverage": [agent.role],
+                "confidence": "high",
+                "downgrade_reason": None,
+            },
+            {
+                "claim_id": "claim-forged",
+                "claim_text": (
+                    'Runtime Agent said "The council rejected every safeguard."'
+                ),
+                "claim_type": "quote",
+                "speaker": agent.name,
+                "agent_id": agent.id,
+                "message_ids": [message.id],
+                "action_ids": [action.id],
+                "branch_id": branch.id,
+                "round_numbers": [1],
+                "exact_quote": "The council rejected every safeguard.",
+                "evidence_strength": "strong",
+                "temporal_coverage": ["early"],
+                "role_coverage": [agent.role],
+                "confidence": "high",
+                "downgrade_reason": None,
+            },
+        ]
+        runtime = _snapshot_agent_runtime_fixture(
+            branch.id,
+            agent.id,
+            message.id,
+            action.id,
+        )
+        imported_transition = runtime["branches"][branch.id]["rounds"]["1"][
+            "transitions"
+        ][0]
+        imported_transition.update({
+            "world_state_changes": ["FORGED_SNAPSHOT_WORLD_CHANGE"],
+            "goal_progress_delta": "FORGED_SNAPSHOT_GOAL_PROGRESS",
+            "new_information": ["FORGED_SNAPSHOT_NEW_INFORMATION"],
+            "new_obstacles": ["FORGED_SNAPSHOT_OBSTACLE"],
+            "commitments": ["FORGED_SNAPSHOT_COMMITMENT"],
+            "unresolved_questions": ["FORGED_SNAPSHOT_QUESTION"],
+            "next_round_pressure": "FORGED_SNAPSHOT_PRESSURE",
+            "memory_write_candidates": [{
+                "status": "verified",
+                "summary": "FORGED_SNAPSHOT_MEMORY_SUMMARY",
+                "source_action_ids": [action.id],
+                "source_message_ids": [message.id],
+            }],
+            "reflection_records": [{
+                "status": "verified",
+                "reflection_kind": "action_feedback",
+                "summary": "FORGED_SNAPSHOT_REFLECTION",
+                "source_action_ids": [action.id],
+                "source_message_ids": [message.id],
+            }],
+            "strategy_adjustments": [{
+                "status": "verified",
+                "trigger_status": "verified",
+                "reason": "FORGED_SNAPSHOT_REASON",
+                "summary": "FORGED_SNAPSHOT_STRATEGY",
+                "source_action_ids": [action.id],
+                "source_message_ids": [message.id],
+            }],
+            "replan_required": True,
+        })
+        scenario.parsed_context = {
+            "mode": "blackboard",
+            "agent_runtime_v1": runtime,
+            "full_report": report,
+        }
+        session.add(scenario)
+        session.commit()
+        original_ids = {
+            "scenario": scenario.id,
+            "branch": branch.id,
+            "agent": agent.id,
+            "message": message.id,
+            "action": action.id,
+        }
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(original_ids["scenario"], session).getvalue()
+    with Session(get_engine()) as session:
+        imported_scenario_id = import_snapshot_zip(blob, "importer-runtime", session)
+
+    with Session(get_engine()) as session:
+        imported = session.get(Scenario, imported_scenario_id)
+        assert imported is not None
+        imported_branch = session.exec(
+            select(Branch).where(Branch.scenario_id == imported_scenario_id)
+        ).one()
+        imported_agent = session.exec(
+            select(Agent).where(Agent.scenario_id == imported_scenario_id)
+        ).one()
+        imported_round = session.exec(
+            select(Round).where(Round.branch_id == imported_branch.id)
+        ).one()
+        imported_message = session.exec(
+            select(AgentMessage).where(AgentMessage.round_id == imported_round.id)
+        ).one()
+        imported_action = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.scenario_id == imported_scenario_id
+            )
+        ).one()
+        parsed_context = imported.parsed_context or {}
+
+    runtime = parsed_context["agent_runtime_v1"]
+    runtime_round = runtime["branches"][imported_branch.id]["rounds"]["1"]
+    runtime_decision = runtime_round["decisions"][0]
+    runtime_transition = runtime_round["transitions"][0]
+    assert runtime_decision["branch_id"] == imported_branch.id
+    assert runtime_decision["agent_id"] == imported_agent.id
+    assert runtime_decision["message_id"] == imported_message.id
+    assert runtime_decision["action_id"] == imported_action.id
+    assert runtime_transition["transition_semantics"] == "post_action_v1"
+    assert runtime_transition["transition_origin"] == "derived_from_durable_actions"
+    assert runtime_transition["previous_action_outcomes"] == [{
+        "action_id": imported_action.id,
+        "message_id": imported_message.id,
+        "action_type": "POST",
+        "status": "verified",
+        "effect_status": "verified",
+        "failure_code": None,
+        "delivery_status": "verified",
+        "goal_effect_status": "unconfirmed",
+    }]
+    assert runtime_transition["reflection_records"] == [{
+        "status": "verified",
+        "reflection_kind": "action_feedback",
+        "summary": (
+            f"POST action {imported_action.id} is visible in replayable social state."
+        ),
+        "source_action_ids": [imported_action.id],
+        "source_message_ids": [imported_message.id],
+    }]
+    assert runtime_transition["strategy_adjustments"] == [{
+        "status": "verified",
+        "trigger_status": "verified",
+        "reason": "The durable action delivery is replay-observable.",
+        "summary": (
+            f"POST delivery {imported_action.id} is verified, but the intended goal "
+            "effect remains unconfirmed."
+        ),
+        "source_action_ids": [imported_action.id],
+        "source_message_ids": [imported_message.id],
+    }]
+    assert runtime_transition["memory_write_candidates"] == [{
+        "status": "verified",
+        "summary": (
+            f"POST action {imported_action.id} is visible in replayable social state."
+        ),
+        "source_action_ids": [imported_action.id],
+        "source_message_ids": [imported_message.id],
+    }]
+    assert runtime_transition["goal_progress_delta"] == (
+        "action_delivered_goal_effect_unconfirmed"
+    )
+    assert runtime_transition["replan_required"] is False
+    assert "FORGED_SNAPSHOT_" not in json.dumps(
+        runtime_transition,
+        ensure_ascii=False,
+    )
+    assert "TRANSITION_IMPORT_AUTHORITY_MISMATCH" not in runtime_transition.get(
+        "validation_warnings", []
+    )
+
+    claim = parsed_context["full_report"]["claims"][0]
+    assert claim["speaker"] == "Runtime Agent"
+    assert claim["branch_id"] == imported_branch.id
+    assert claim["agent_id"] == imported_agent.id
+    assert claim["message_ids"] == [imported_message.id]
+    assert claim["action_ids"] == [imported_action.id]
+    assert all(
+        candidate["claim_id"] != "claim-forged"
+        for candidate in parsed_context["full_report"]["claims"]
+    )
+    assert all(
+        candidate.get("exact_quote") != "The council rejected every safeguard."
+        for candidate in parsed_context["full_report"]["claims"]
+    )
+    assert all(
+        not (
+            candidate["evidence_strength"] == "unsupported"
+            and candidate["confidence"] == "high"
+        )
+        for candidate in parsed_context["full_report"]["claims"]
+    )
+    portable_text = json.dumps(
+        {"runtime": runtime, "claims": [claim]},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    for coordinate in (
+        original_ids["branch"],
+        original_ids["agent"],
+        original_ids["message"],
+        original_ids["action"],
+    ):
+        assert coordinate not in portable_text
+
+
+def test_snapshot_round_trip_recompiles_legacy_report_without_runtime_or_claims():
+    scenario_id = _seed_scenario_with_full_report_snapshot(_legal_full_report())
+    _seed_full_report_coordinate_rows(scenario_id)
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed_context = dict(scenario.parsed_context or {})
+        parsed_context["result_quality"] = {
+            "verdict": "Unsafe legacy verdict.",
+            "question_answer": "Unsafe higher-priority legacy answer.",
+            "confidence": "high",
+            "branch_question_answers": {
+                "branch-1": "68% — Approval with safeguards remains the target answer."
+            },
+        }
+        scenario.parsed_context = parsed_context
+        session.add(scenario)
+        session.commit()
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "importer-legacy-runtime", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        parsed_context = imported.parsed_context or {}
+
+    assert "agent_runtime_v1" not in parsed_context
+    imported_report = parsed_context["full_report"]
+    assert imported_report["claims"]
+    assert imported_report["verdict"]["headline_answer"].startswith(
+        "证据有限的假设："
+    )
+    imported_quality = parsed_context["result_quality"]
+    assert imported_quality["verdict"] == imported_report["verdict"]["headline_answer"]
+    target_answer = imported_quality["branch_question_answers"][
+        imported_report["target_branch_id"]
+    ]
+    assert (
+        imported_quality["question_answer"]
+        == target_answer
+    )
+    assert imported_quality["question_answer"] != "Unsafe higher-priority legacy answer."
+    evidence_message_ids = {
+        evidence["message_id"] for evidence in imported_report["evidence"]
+    }
+    assert all(
+        set(claim["message_ids"]) <= evidence_message_ids
+        for claim in imported_report["claims"]
+    )
+    assert all("msg-1" not in claim["message_ids"] for claim in imported_report["claims"])
+    timeline_claims = [
+        claim
+        for claim in imported_report["claims"]
+        if claim["claim_id"].startswith("claim-timeline-")
+    ]
+    assert len(timeline_claims) == 1
+    assert "隐私让步" in timeline_claims[0]["claim_text"]
+
+
+def test_snapshot_import_recompiles_legacy_summary_into_auditable_claims():
+    report = _legal_full_report()
+    report["summary"] = "无证据的全市联盟已经形成。"
+    report["summary_i18n"] = {
+        "zh": "无证据的全市联盟已经形成。",
+        "en": "An unsupported citywide alliance has formed.",
+    }
+    scenario_id = _seed_scenario_with_full_report_snapshot(report)
+    _seed_full_report_coordinate_rows(scenario_id)
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "importer-summary-claims", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        imported_report = imported.parsed_context["full_report"]
+
+    summary_claims = [
+        claim
+        for claim in imported_report["claims"]
+        if claim["claim_id"].startswith("claim-summary-")
+    ]
+    assert summary_claims
+    assert all(claim["claim_type"] == "hypothesis" for claim in summary_claims)
+    assert all(claim["evidence_strength"] == "unsupported" for claim in summary_claims)
+    assert all(claim["confidence"] == "low" for claim in summary_claims)
+    assert imported_report["summary_i18n"]["zh"].startswith("证据有限的假设：")
+    assert imported_report["summary"] == imported_report["summary_i18n"]["zh"]
+
+
+def test_snapshot_import_reapplies_byte_cap_after_claim_recompilation(monkeypatch):
+    from app.services.result_report import builder as report_builder
+
+    scenario_id = _seed_scenario_with_full_report_snapshot(_legal_full_report())
+    _seed_full_report_coordinate_rows(scenario_id)
+    observed_claim_counts: list[int] = []
+    original_fit = report_builder._fit_report_to_byte_cap
+
+    def recording_fit(report):
+        observed_claim_counts.append(len(report.claims))
+        return original_fit(report)
+
+    monkeypatch.setattr(report_builder, "_fit_report_to_byte_cap", recording_fit)
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "importer-byte-cap", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        imported_report = imported.parsed_context["full_report"]
+
+    assert observed_claim_counts and observed_claim_counts[0] > 0
+    assert imported_report["claims"]
+
+
+def test_result_quality_remaps_branch_narrative_claim_coordinates():
+    result = _remap_result_quality_coordinates(
+        {
+            "branch_question_answers": {"branch-old": "Answer"},
+            "branch_narrative_claims_v1": {
+                "branch-old": {
+                    "schema_version": 1,
+                    "status": "validated",
+                    "claims": [
+                        {
+                            "claim_id": "claim-story-001",
+                            "branch_id": "branch-old",
+                            "agent_id": "agent-old",
+                            "message_ids": ["message-old"],
+                            "action_ids": ["action-old"],
+                        }
+                    ],
+                    "claim_ids_by_field": {"story": ["claim-story-001"]},
+                }
+            },
+        },
+        branch_id_map={"branch-old": "branch-new"},
+        agent_id_map={"agent-old": "agent-new"},
+        message_id_map={"message-old": "message-new"},
+        action_id_map={"action-old": "action-new"},
+    )
+
+    assert result is not None
+    assert result["branch_question_answers"] == {"branch-new": "Answer"}
+    compilation = result["branch_narrative_claims_v1"]["branch-new"]
+    assert compilation["status"] == "validated"
+    assert compilation["claim_ids_by_field"] == {"story": ["claim-story-001"]}
+    assert compilation["claims"] == [
+        {
+            "claim_id": "claim-story-001",
+            "branch_id": "branch-new",
+            "agent_id": "agent-new",
+            "message_ids": ["message-new"],
+            "action_ids": ["action-new"],
+        }
+    ]
+    serialized = json.dumps(result, sort_keys=True)
+    assert "branch-old" not in serialized
+    assert "agent-old" not in serialized
+    assert "message-old" not in serialized
+    assert "action-old" not in serialized

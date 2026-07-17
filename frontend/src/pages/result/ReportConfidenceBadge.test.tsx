@@ -185,6 +185,42 @@ describe('ReportConfidenceBadge', () => {
     expect(screen.queryByText('legacy basis fallback')).toBeNull();
   });
 
+  it('uses an explicit report content language for basis text instead of the UI locale', () => {
+    render(
+      <ReportConfidenceBadge
+        language="zh"
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'medium',
+            basis: 'machine basis',
+            basis_i18n: { zh: '中文基础', en: 'English basis' },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('中文基础')).toBeInTheDocument();
+    expect(screen.queryByText('English basis')).toBeNull();
+  });
+
+  it('does not cross-fallback to an unavailable basis locale when language is explicit', () => {
+    render(
+      <ReportConfidenceBadge
+        language="zh"
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'medium',
+            basis: '中文原始依据',
+            basis_i18n: { en: 'STALE UNAVAILABLE ENGLISH BASIS' },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('中文原始依据')).toBeInTheDocument();
+    expect(screen.queryByText('STALE UNAVAILABLE ENGLISH BASIS')).toBeNull();
+  });
+
   it('recomposes legacy debug-pattern basis string client-side', () => {
     render(
       <ReportConfidenceBadge

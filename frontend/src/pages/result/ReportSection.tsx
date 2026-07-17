@@ -12,6 +12,7 @@ interface Props {
   section: ReportSectionType;
   onOpenEvidence: (refs: string[]) => void;
   index: number;
+  language?: 'zh' | 'en';
 }
 
 interface LocalizedChipCopy {
@@ -110,15 +111,15 @@ function stripRedundantLeadingTitle(md: string, title: string): string {
   return md;
 }
 
-export const ReportSection = React.memo(function ReportSection({ section, onOpenEvidence, index }: Props) {
+export const ReportSection = React.memo(function ReportSection({ section, onOpenEvidence, index, language }: Props) {
   const { t, i18n } = useTranslation();
-  const isZh = i18n.language.startsWith('zh');
+  const contentLanguage = language ?? (i18n.language.startsWith('zh') ? 'zh' : 'en');
 
-  const title = isZh ? section.title_i18n.zh || section.title : section.title_i18n.en || section.title;
+  const title = section.title_i18n[contentLanguage] || section.title;
   const content = useMemo(() => {
-    const raw = isZh ? section.body_md_i18n.zh || '' : section.body_md_i18n.en || '';
+    const raw = section.body_md_i18n[contentLanguage] || '';
     return demoteHeadings(stripRedundantLeadingTitle(raw, title));
-  }, [isZh, section.body_md_i18n.zh, section.body_md_i18n.en, title]);
+  }, [contentLanguage, section.body_md_i18n, title]);
 
   const sectionNumber = String(index + 1).padStart(2, '0');
   const tier = resolveTier(section.tier);

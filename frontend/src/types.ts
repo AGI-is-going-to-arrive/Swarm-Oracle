@@ -639,6 +639,7 @@ export interface StoryData {
   branches: StoryBranch[];
   verdict?: string | null;
   verdict_confidence?: 'high' | 'medium' | 'low' | null;
+  verdict_confidence_kind?: 'model_self_rating' | null;
   full_report?: FullReport | FullReportTruncatedMarker | null;
 }
 
@@ -751,6 +752,54 @@ export interface ReportEvidence {
   kind: 'utterance' | 'causal_fact' | 'faction_event' | 'interview';
 }
 
+export interface ReportClaim {
+  claim_id: string;
+  claim_text: string;
+  claim_type: string;
+  speaker: string | null;
+  agent_id: string | null;
+  message_ids: string[];
+  action_ids: string[];
+  branch_id: string;
+  round_numbers: number[];
+  exact_quote: string | null;
+  evidence_strength: 'strong' | 'moderate' | 'weak' | 'unsupported';
+  temporal_coverage: Array<'early' | 'middle' | 'late'>;
+  role_coverage: string[];
+  confidence: 'high' | 'medium' | 'low';
+  downgrade_reason: string | null;
+}
+
+export interface ReplayStateTransition extends Record<string, unknown> {
+  transition_id?: string;
+  branch_id?: string;
+  round_number?: number;
+  agent_id?: string;
+  message_id?: string;
+  action_id?: string;
+  transition_status?: 'verified' | 'failed' | 'unavailable';
+  failure_code?: string | null;
+  replan_required?: boolean;
+  next_round_pressure?: string;
+}
+
+export interface ReplayStateTransitionDiff {
+  branch_a: ReplayStateTransition[];
+  branch_b: ReplayStateTransition[];
+  is_identical: boolean;
+}
+
+export interface CounterfactualRoundDiff {
+  round: number;
+  branch_a_summary: string;
+  branch_b_summary: string;
+  branch_a_messages: Array<Record<string, unknown>>;
+  branch_b_messages: Array<Record<string, unknown>>;
+  divergence_score: number;
+  is_identical: boolean;
+  state_transition_diff: ReplayStateTransitionDiff | Record<string, never>;
+}
+
 export type PremortemStatus = 'available' | 'partial' | 'missing';
 
 export type PremortemReason =
@@ -836,6 +885,8 @@ export interface FullReport {
   status: ReportStatus;
   tier: ReportTier;
   verdict: ReportVerdict;
+  // Optional for persisted pre-Claim snapshots; current /story responses include it.
+  claims?: ReportClaim[];
   sections: ReportSection[];
   evidence: ReportEvidence[];
   indicators_to_watch: IndicatorToWatch[];
@@ -1495,14 +1546,18 @@ export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';
 export type Branch = BranchInfo;
 
 // ── Public Artifact Export (F1 Gallery) ─────────────────
-export const PUBLIC_ARTIFACT_SCHEMA_VERSION = 'public_artifact.v1' as const;
+export const PUBLIC_ARTIFACT_SCHEMA_VERSION_V1 = 'public_artifact.v1' as const;
+export const PUBLIC_ARTIFACT_SCHEMA_VERSION = 'public_artifact.v2' as const;
+export type PublicArtifactSchemaVersion =
+  | typeof PUBLIC_ARTIFACT_SCHEMA_VERSION_V1
+  | typeof PUBLIC_ARTIFACT_SCHEMA_VERSION;
 export type PublicArtifactConfidence = 'high' | 'medium' | 'low';
 
 export interface PublicArtifactBranchVerdict {
   branch_index: number;
   title: string;
   verdict: string;
-  confidence: PublicArtifactConfidence;
+  confidence: PublicArtifactConfidence | null;
 }
 
 export interface PublicArtifactProbabilityBar {
@@ -1528,7 +1583,7 @@ export interface PublicArtifactSourceSummary {
 }
 
 export interface PublicArtifact {
-  schema_version: typeof PUBLIC_ARTIFACT_SCHEMA_VERSION;
+  schema_version: PublicArtifactSchemaVersion;
   question: string;
   language: string;
   display_agent_names: string[];
@@ -1761,6 +1816,10 @@ export interface SocialFeedResponse {
   generation_mode: 'llm' | 'deterministic';
   events: SocialFeedEvent[];
   headline_cards: SocialHeadlineCard[];
+  /** Present on bounded server projections; omitted by legacy responses. */
+  total_event_count?: number;
+  /** True when `events` contains only the server's most recent bounded window. */
+  events_truncated?: boolean;
 }
 
 export interface ModelProfile {

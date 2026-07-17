@@ -16,6 +16,10 @@ type FactionForceGraphMockProps = {
   scenarioId: string;
   branchId: string;
   factions: Array<{ key: string; members: string[]; label?: string }>;
+  factionsByRound?: Array<{
+    round: number;
+    factions: Array<{ key: string; members: string[]; label?: string }>;
+  }>;
   totalRounds: number;
   agentNames?: Record<string, string>;
 };
@@ -437,6 +441,28 @@ describe('FactionTimeline', () => {
     expect(items).toHaveLength(2);
   });
 
+  it('explains an all-neutral round accessibly without showing the generic empty state', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+      {
+        round: 1,
+        branch_id: 'b1',
+        scope_kind: 'branch_lineage',
+        degraded: 'all_neutral',
+        factions: [],
+        events: [],
+      },
+    ]));
+
+    await renderFactionTimeline('en');
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'No distinct faction clusters formed this round because all available affect-proxy signals stayed within the neutral band.',
+    );
+    expect(screen.queryByText(localeExpectations.en.empty)).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('faction-timeline-round')).toHaveLength(1);
+    expect(screen.queryByTestId('faction-force-graph-mock')).not.toBeInTheDocument();
+  });
+
   it('uses null label fallback to faction key', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
         {
@@ -736,7 +762,7 @@ describe('FactionTimeline', () => {
     }
   });
 
-  it('renders FactionForceGraph when capability is enabled and timeline has data', async () => {
+  it('passes exact per-round faction memberships to the force graph, including an all-neutral terminal round', async () => {
     mockUseCapabilityCheck.mockReturnValue({ loading: false, enabled: true, capabilities: null, error: null });
     const agentNames = {
       a1: 'Alice',
@@ -761,6 +787,12 @@ describe('FactionTimeline', () => {
           ],
           events: [],
         },
+        {
+          round: 3,
+          degraded: 'all_neutral',
+          factions: [],
+          events: [],
+        },
       ]),
     );
     await renderFactionTimeline('en', { branchId: 'final-branch', agentNames });
@@ -770,14 +802,25 @@ describe('FactionTimeline', () => {
     const graph = screen.getByTestId('faction-force-graph-mock');
     expect(graph).toHaveAttribute('data-scenario-id', 'sc1');
     expect(graph).toHaveAttribute('data-branch-id', 'final-branch');
-    expect(graph).toHaveAttribute('data-total-rounds', '2');
+    expect(graph).toHaveAttribute('data-total-rounds', '3');
     expect(mockFactionForceGraphProps.at(-1)).toEqual({
       scenarioId: 'sc1',
       branchId: 'final-branch',
-      totalRounds: 2,
-      factions: [
-        { key: 'faction_0', members: ['a1', 'a2'], label: 'Hawks' },
-        { key: 'faction_1', members: ['a3', 'a4'], label: undefined },
+      totalRounds: 3,
+      factions: [],
+      factionsByRound: [
+        {
+          round: 1,
+          factions: [{ key: 'faction_0', members: ['a1'], label: 'Early Hawks' }],
+        },
+        {
+          round: 2,
+          factions: [
+            { key: 'faction_0', members: ['a1', 'a2'], label: 'Hawks' },
+            { key: 'faction_1', members: ['a3', 'a4'], label: undefined },
+          ],
+        },
+        { round: 3, factions: [] },
       ],
       agentNames,
     });

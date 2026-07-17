@@ -164,6 +164,20 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
     }, {}),
     [timeline],
   );
+  const factionMembershipsByRound = useMemo(() => timeline.map((round) => ({
+    round: round.round,
+    factions: round.factions.map((faction) => ({
+      key: faction.key,
+      members: faction.members,
+      label: faction.label ?? undefined,
+    })),
+  })), [timeline]);
+  const terminalFactionMemberships = useMemo(() => {
+    return factionMembershipsByRound[factionMembershipsByRound.length - 1]?.factions ?? [];
+  }, [factionMembershipsByRound]);
+  const hasKnownFactionMemberships = factionMembershipsByRound.some(
+    (snapshot) => snapshot.factions.length > 0,
+  );
   const firstRound = timeline[0]?.round ?? 0;
   const lastRound = timeline[timeline.length - 1]?.round ?? firstRound;
   const hasLineageScope = timeline.length > 0
@@ -266,15 +280,12 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
         </div>
       </div>
 
-      {factionsEnabled && timeline.length > 0 && (
+      {factionsEnabled && timeline.length > 0 && hasKnownFactionMemberships && (
         <FactionForceGraph
           scenarioId={scenarioId}
           branchId={branchId}
-          factions={timeline[timeline.length - 1].factions.map((f) => ({
-            key: f.key,
-            members: f.members,
-            label: f.label ?? undefined,
-          }))}
+          factions={terminalFactionMemberships}
+          factionsByRound={factionMembershipsByRound}
           totalRounds={timeline[timeline.length - 1].round}
           agentNames={agentNames}
         />
@@ -377,6 +388,28 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
                 </span>
               )}
             </div>
+
+            {round.degraded === 'all_neutral' && (
+              <p
+                role="status"
+                data-testid={`faction-round-all-neutral-${round.round}`}
+                style={{
+                  margin: '0 0 0.8rem',
+                  padding: '0.6rem 0.7rem',
+                  borderRadius: 10,
+                  border: '1px solid rgba(138, 180, 248, 0.2)',
+                  background: 'rgba(138, 180, 248, 0.08)',
+                  color: '#cbd5e1',
+                  fontSize: '0.76rem',
+                  lineHeight: 1.5,
+                }}
+              >
+                {t(
+                  'factions.degraded_all_neutral',
+                  'No distinct faction clusters formed this round because all available affect-proxy signals stayed within the neutral band.',
+                )}
+              </p>
+            )}
 
             <div
               style={{

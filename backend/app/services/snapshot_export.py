@@ -55,7 +55,12 @@ from app.services.agent_message_metadata import (
     persisted_emotion_from_public_message,
     public_emotion_metadata,
 )
+from app.services.agent_runtime import (
+    remap_agent_runtime_coordinates,
+    sanitize_imported_agent_runtime_in_session,
+)
 from app.services.causal_graph import _message_node_key
+from app.services.result_report.claims import compile_report_claims_in_session
 from app.services.result_report.schema import validate_full_report_payload
 from app.services.simulation_actions import normalize_extracted_action
 
@@ -511,7 +516,30 @@ def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
     if status != "generating":
         return value
     normalized = dict(value)
-    normalized["status"] = "partial"
+    normalized["status"] = "failed"
+    verdict = normalized.get("verdict")
+    if isinstance(verdict, dict):
+        normalized_verdict = dict(verdict)
+        analytic_confidence = normalized_verdict.get("analytic_confidence")
+        if isinstance(analytic_confidence, dict):
+            normalized_confidence = dict(analytic_confidence)
+            normalized_confidence["level"] = "low"
+            normalized_confidence["basis"] = (
+                "Snapshot captured before report claim compilation completed."
+            )
+            normalized_confidence["basis_i18n"] = {
+                "zh": "快照在报告结论编译完成前生成，分析置信度已降级。",
+                "en": (
+                    "Snapshot captured before report claim compilation completed."
+                ),
+            }
+            normalized_verdict["analytic_confidence"] = normalized_confidence
+        normalized["verdict"] = normalized_verdict
+    normalized["premortem_analysis"] = {
+        "status": "missing",
+        "reason": "report_generation_failed",
+        "items": [],
+    }
     return normalized
 
 
@@ -1324,6 +1352,7 @@ def _remap_full_report_coordinates(
     agent_id_map: dict[str, str],
     round_id_map: dict[str, str],
     message_id_map: dict[str, str],
+    action_id_map: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -1362,6 +1391,37 @@ def _remap_full_report_coordinates(
         item["message_id"] = message_id
         evidence.append(item)
     report["evidence"] = evidence
+
+    if "claims" in report:
+        remapped_claims: list[dict[str, Any]] = []
+        available_action_ids = action_id_map or {}
+        raw_claims = report.get("claims")
+        for raw in raw_claims if isinstance(raw_claims, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            branch_id = branch_id_map.get(str(raw.get("branch_id") or ""))
+            original_agent_id = str(raw.get("agent_id") or "").strip()
+            agent_id = agent_id_map.get(original_agent_id) if original_agent_id else None
+            raw_message_ids = raw.get("message_ids")
+            raw_action_ids = raw.get("action_ids")
+            if not isinstance(raw_message_ids, list) or not isinstance(raw_action_ids, list):
+                continue
+            message_ids = [message_id_map.get(str(message_id)) for message_id in raw_message_ids]
+            action_ids = [available_action_ids.get(str(action_id)) for action_id in raw_action_ids]
+            if (
+                not branch_id
+                or (original_agent_id and not agent_id)
+                or any(message_id is None for message_id in message_ids)
+                or any(action_id is None for action_id in action_ids)
+            ):
+                continue
+            claim = dict(raw)
+            claim["branch_id"] = branch_id
+            claim["agent_id"] = agent_id
+            claim["message_ids"] = message_ids
+            claim["action_ids"] = action_ids
+            remapped_claims.append(claim)
+        report["claims"] = remapped_claims
 
     valid_evidence_ids = {str(item.get("id")) for item in evidence if item.get("id")}
     premortem_evidence_ids = _sync_snapshot_premortem_analysis(report, evidence)
@@ -1521,6 +1581,9 @@ def _remap_result_quality_coordinates(
     value: Any,
     *,
     branch_id_map: dict[str, str],
+    agent_id_map: dict[str, str],
+    message_id_map: dict[str, str],
+    action_id_map: dict[str, str],
 ) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -1534,6 +1597,91 @@ def _remap_result_quality_coordinates(
         }
     else:
         result_quality.pop("branch_question_answers", None)
+
+    narrative_compilations = result_quality.get("branch_narrative_claims_v1")
+    if isinstance(narrative_compilations, dict):
+        remapped_compilations: dict[str, dict[str, Any]] = {}
+        for original_branch_id, raw_compilation in narrative_compilations.items():
+            mapped_branch_id = branch_id_map.get(str(original_branch_id))
+            if not mapped_branch_id or not isinstance(raw_compilation, dict):
+                continue
+            compilation = dict(raw_compilation)
+            raw_claims = compilation.get("claims")
+            remapped_claims: list[dict[str, Any]] = []
+            raw_claim_count = 0
+            for raw_claim in raw_claims if isinstance(raw_claims, list) else []:
+                if not isinstance(raw_claim, dict):
+                    continue
+                raw_claim_count += 1
+                claim_branch_id = branch_id_map.get(
+                    str(raw_claim.get("branch_id") or "")
+                )
+                original_agent_id = str(raw_claim.get("agent_id") or "").strip()
+                mapped_agent_id = (
+                    agent_id_map.get(original_agent_id) if original_agent_id else None
+                )
+                raw_message_ids = raw_claim.get("message_ids")
+                raw_action_ids = raw_claim.get("action_ids")
+                if not isinstance(raw_message_ids, list) or not isinstance(
+                    raw_action_ids,
+                    list,
+                ):
+                    continue
+                mapped_message_ids = [
+                    message_id_map.get(str(message_id))
+                    for message_id in raw_message_ids
+                ]
+                mapped_action_ids = [
+                    action_id_map.get(str(action_id))
+                    for action_id in raw_action_ids
+                ]
+                if (
+                    not claim_branch_id
+                    or (original_agent_id and not mapped_agent_id)
+                    or any(message_id is None for message_id in mapped_message_ids)
+                    or any(action_id is None for action_id in mapped_action_ids)
+                ):
+                    continue
+                claim = dict(raw_claim)
+                claim["branch_id"] = claim_branch_id
+                claim["agent_id"] = mapped_agent_id
+                claim["message_ids"] = mapped_message_ids
+                claim["action_ids"] = mapped_action_ids
+                remapped_claims.append(claim)
+
+            retained_claim_ids = {
+                str(claim.get("claim_id") or "")
+                for claim in remapped_claims
+                if claim.get("claim_id")
+            }
+            claim_ids_by_field = compilation.get("claim_ids_by_field")
+            compilation["claim_ids_by_field"] = {
+                str(field): [
+                    str(claim_id)
+                    for claim_id in claim_ids
+                    if str(claim_id) in retained_claim_ids
+                ]
+                for field, claim_ids in (
+                    claim_ids_by_field.items()
+                    if isinstance(claim_ids_by_field, dict)
+                    else []
+                )
+                if isinstance(claim_ids, list)
+            }
+            compilation["claims"] = remapped_claims
+            if len(remapped_claims) != raw_claim_count:
+                compilation["status"] = "coordinate_remap_incomplete"
+                compilation["analytic_confidence"] = {
+                    "level": "low",
+                    "basis": (
+                        "One or more narrative claims lost durable coordinates "
+                        "during snapshot import."
+                    ),
+                }
+            remapped_compilations[mapped_branch_id] = compilation
+        result_quality["branch_narrative_claims_v1"] = remapped_compilations
+    else:
+        result_quality.pop("branch_narrative_claims_v1", None)
     return result_quality
 
 
@@ -1624,11 +1772,13 @@ def import_snapshot_zip(
     )
     deferred_full_report = None
     deferred_result_quality = None
+    deferred_agent_runtime = None
     if isinstance(parsed_context, dict):
         deferred_full_report = _normalize_full_report_status_for_snapshot(
             parsed_context.pop("full_report", None)
         )
         deferred_result_quality = parsed_context.pop("result_quality", None)
+        deferred_agent_runtime = parsed_context.pop("agent_runtime_v1", None)
 
     scenario = Scenario(
         question=str(scenario_payload.get("question", "")).strip() or "Imported snapshot",
@@ -1916,6 +2066,26 @@ def import_snapshot_zip(
             )
         )
 
+    if deferred_agent_runtime is not None:
+        remapped_runtime = remap_agent_runtime_coordinates(
+            deferred_agent_runtime,
+            branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map,
+            message_id_map=message_id_map,
+            action_id_map=action_id_map,
+            drop_unmapped=True,
+        )
+        if isinstance(remapped_runtime, dict):
+            remapped_runtime = sanitize_imported_agent_runtime_in_session(
+                session,
+                new_scenario_id,
+                remapped_runtime,
+            )
+            parsed = dict(scenario.parsed_context or {})
+            parsed["agent_runtime_v1"] = remapped_runtime
+            scenario.parsed_context = parsed
+            session.add(scenario)
+
     for raw in intervention_receipt_rows:
         branch_orig = str(raw.get("branch_id") or "").strip()
         new_branch_id = branch_id_map.get(branch_orig)
@@ -1965,6 +2135,9 @@ def import_snapshot_zip(
         remapped_result_quality = _remap_result_quality_coordinates(
             deferred_result_quality,
             branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map,
+            message_id_map=message_id_map,
+            action_id_map=action_id_map,
         )
         if remapped_result_quality is not None:
             parsed = dict(scenario.parsed_context or {})
@@ -1979,16 +2152,101 @@ def import_snapshot_zip(
             agent_id_map=agent_id_map,
             round_id_map=round_id_map,
             message_id_map=message_id_map,
+            action_id_map=action_id_map,
         )
         if remapped_report is not None:
             remapped_report = _normalize_full_report_status_for_snapshot(remapped_report)
             try:
                 validated_report = validate_full_report_payload(remapped_report)
+                imported_rounds = [
+                    session.get(Round, imported_round_id)
+                    for imported_round_id in round_id_map.values()
+                ]
+                compilation = compile_report_claims_in_session(
+                    session,
+                    new_scenario_id,
+                    validated_report.target_branch_id,
+                    validated_report.sections,
+                    validated_report.evidence,
+                    verdict_headline=validated_report.verdict.headline_answer,
+                    max_round=max(
+                        (
+                            round_row.round_number
+                            for round_row in imported_rounds
+                            if round_row is not None
+                        ),
+                        default=0,
+                    ),
+                    language=validated_report.language,
+                    summary_i18n=validated_report.summary_i18n,
+                )
+                compiled_summary = (
+                    compilation.summary_i18n or validated_report.summary_i18n
+                )
+                validated_report = validated_report.model_copy(
+                    update={
+                        "claims": compilation.claims,
+                        "sections": compilation.sections,
+                        "summary_i18n": compiled_summary,
+                        "summary": getattr(
+                            compiled_summary,
+                            validated_report.language,
+                        ),
+                        "verdict": validated_report.verdict.model_copy(
+                            update={
+                                "headline_answer": compilation.verdict_headline,
+                                "analytic_confidence": compilation.analytic_confidence,
+                            }
+                        ),
+                    }
+                )
+                from app.services.result_report.builder import _fit_report_to_byte_cap
+
+                validated_report = _fit_report_to_byte_cap(validated_report)
             except Exception as exc:
                 logger.warning("Dropped invalid imported full_report: %s", exc)
             else:
                 parsed = dict(scenario.parsed_context or {})
-                parsed["full_report"] = validated_report.model_dump(mode="json")
+                serialized_report = validated_report.model_dump(mode="json")
+                parsed["full_report"] = serialized_report
+                result_quality = parsed.get("result_quality")
+                if isinstance(result_quality, dict):
+                    # The compiled Claim set is the stronger authority. Keep the
+                    # persisted legacy summary aligned with the same headline and
+                    # confidence, and remove the old model-self-rating provenance.
+                    synchronized_quality = dict(result_quality)
+                    synchronized_quality["verdict"] = (
+                        validated_report.verdict.headline_answer
+                    )
+                    branch_answers = synchronized_quality.get(
+                        "branch_question_answers"
+                    )
+                    target_branch_answer = (
+                        str(
+                            branch_answers.get(
+                                validated_report.target_branch_id,
+                                "",
+                            )
+                            or ""
+                        ).strip()
+                        if isinstance(branch_answers, dict)
+                        else ""
+                    )
+                    # ``question_answer`` is the selected terminal branch's
+                    # answer, while ``verdict`` is the report-level compiled
+                    # headline. Preserve that public distinction when a
+                    # remapped target answer exists; otherwise fail closed to
+                    # the compiled headline instead of retaining legacy prose.
+                    synchronized_quality["question_answer"] = (
+                        target_branch_answer
+                        or validated_report.verdict.headline_answer
+                    )
+                    synchronized_quality["confidence"] = (
+                        validated_report.verdict.analytic_confidence.level
+                    )
+                    synchronized_quality.pop("confidence_kind", None)
+                    synchronized_quality.pop("confidence_terminal_branch_ids", None)
+                    parsed["result_quality"] = synchronized_quality
                 scenario.parsed_context = parsed
                 session.add(scenario)
 

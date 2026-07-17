@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { parsePublicArtifact } from './parseArtifact';
-import { PUBLIC_ARTIFACT_SCHEMA_VERSION } from '../types';
+import {
+  PUBLIC_ARTIFACT_SCHEMA_VERSION,
+  PUBLIC_ARTIFACT_SCHEMA_VERSION_V1,
+} from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -78,7 +81,7 @@ describe('parsePublicArtifact runtime validator', () => {
   });
 
   it('returns ok: false and unknown_version for wrong schema versions', () => {
-    const badVersion = { ...validArtifact, schema_version: 'public_artifact.v2' };
+    const badVersion = { ...validArtifact, schema_version: 'public_artifact.v3' };
     const result = parsePublicArtifact(badVersion);
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -141,22 +144,77 @@ describe('parsePublicArtifact runtime validator', () => {
     }
   });
 
-  it('clamps invalid confidence to low', () => {
-    const badConfidence = [
-      {
-        branch_index: 1,
-        title: 'Shu Han Consolidates Power',
-        verdict: 'Shu forces occupy Chang\'an and stabilize the northern front.',
-        confidence: 'extreme-high', // invalid
-      },
-    ];
-    const input = { ...validArtifact, branch_verdicts: badConfidence };
-    const result = parsePublicArtifact(input);
+  it('accepts a strict v1 artifact and preserves its version', () => {
+    const result = parsePublicArtifact({
+      ...validArtifact,
+      schema_version: PUBLIC_ARTIFACT_SCHEMA_VERSION_V1,
+    });
+
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.artifact.branch_verdicts[0].confidence).toBe('low');
+      expect(result.artifact.schema_version).toBe(PUBLIC_ARTIFACT_SCHEMA_VERSION_V1);
+      expect(result.artifact.branch_verdicts[0].confidence).toBe('high');
     }
   });
+
+  it.each([
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION_V1, 'missing', undefined, true],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION_V1, 'explicit null', null, false],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION_V1, 'invalid string', 'extreme-high', false],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION, 'missing', undefined, true],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION, 'invalid string', 'extreme-high', false],
+  ] as const)('rejects %s with %s confidence', (schemaVersion, _label, confidence, omitConfidence) => {
+    const verdict: Record<string, unknown> = {
+      branch_index: 1,
+      title: 'Shu Han Consolidates Power',
+      verdict: 'Shu forces occupy Chang\'an and stabilize the northern front.',
+      confidence,
+    };
+    if (omitConfidence) delete verdict.confidence;
+
+    const result = parsePublicArtifact({
+      ...validArtifact,
+      schema_version: schemaVersion,
+      branch_verdicts: [verdict],
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('accepts explicit null confidence in v2 without inventing a tier', () => {
+    const result = parsePublicArtifact({
+      ...validArtifact,
+      branch_verdicts: [{ ...validArtifact.branch_verdicts[0], confidence: null }],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.artifact.schema_version).toBe(PUBLIC_ARTIFACT_SCHEMA_VERSION);
+      expect(result.artifact.branch_verdicts[0].confidence).toBeNull();
+    }
+  });
+
+  it.each([
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION_V1, 'high'],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION_V1, 'medium'],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION_V1, 'low'],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION, 'high'],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION, 'medium'],
+    [PUBLIC_ARTIFACT_SCHEMA_VERSION, 'low'],
+  ] as const)(
+    'preserves the valid confidence tier for %s (%s)',
+    (schemaVersion, confidence) => {
+      const result = parsePublicArtifact({
+        ...validArtifact,
+        schema_version: schemaVersion,
+        branch_verdicts: [{ ...validArtifact.branch_verdicts[0], confidence }],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.artifact.branch_verdicts[0].confidence).toBe(confidence);
+      }
+    },
+  );
 
   it('consumes the backend golden fixture successfully', () => {
     const goldenPath = path.resolve(__dirname, '../../../samples/public-artifacts/golden.v1.json');
@@ -166,12 +224,34 @@ describe('parsePublicArtifact runtime validator', () => {
     const result = parsePublicArtifact(golden);
     expect(result.ok).toBe(true);
     if (result.ok) {
+      expect(result.artifact.schema_version).toBe(PUBLIC_ARTIFACT_SCHEMA_VERSION_V1);
       expect(result.artifact.transcript_excerpts).toHaveLength(2);
       result.artifact.transcript_excerpts.forEach((item) => {
         expect(typeof item.excerpt).toBe('string');
         expect(typeof item.round).toBe('number');
         expect('text' in item).toBe(false);
       });
+    }
+  });
+
+  it('accepts a v2 equivalent of the v1 golden with explicit null confidence', () => {
+    const goldenPath = path.resolve(__dirname, '../../../samples/public-artifacts/golden.v1.json');
+    const golden = JSON.parse(fs.readFileSync(goldenPath, 'utf8')) as Record<string, unknown>;
+    const branchVerdicts = (golden.branch_verdicts as Record<string, unknown>[]).map((verdict) => ({
+      ...verdict,
+      confidence: null,
+    }));
+
+    const result = parsePublicArtifact({
+      ...golden,
+      schema_version: PUBLIC_ARTIFACT_SCHEMA_VERSION,
+      branch_verdicts: branchVerdicts,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.artifact.schema_version).toBe(PUBLIC_ARTIFACT_SCHEMA_VERSION);
+      expect(result.artifact.branch_verdicts.every((verdict) => verdict.confidence === null)).toBe(true);
     }
   });
 

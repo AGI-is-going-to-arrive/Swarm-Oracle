@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlmodel import Session
 
 from app.models import Agent, AgentMessage, Branch, Round, Scenario, ScenarioStatus
@@ -13,7 +14,11 @@ from app.models.simulation_action import (
     SimulationActionStatus,
     SimulationActionType,
 )
-from app.services.simulator import _build_action_target_catalog, _build_action_target_catalogs
+from app.services.simulator import (
+    _build_action_target_catalog,
+    _build_action_target_catalogs,
+    _project_action_target_catalog,
+)
 from app.services.social_world import reduce_social_world_state, render_social_world_context
 
 
@@ -236,6 +241,153 @@ def test_replays_all_actions_with_personalized_search_trend_and_feed():
         session.close()
 
 
+def test_follow_prioritizes_default_rendered_feed_without_refresh_receipt():
+    session, scenario, branch, agents, round_row = _world()
+    try:
+        _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=agents["followed"],
+            sequence=1,
+            action_type=SimulationActionType.POST,
+            content="older followed update",
+        )
+        _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=agents["newest"],
+            sequence=2,
+            action_type=SimulationActionType.POST,
+            content="newer unfollowed update",
+        )
+        viewer = agents["viewer"]
+        _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=viewer,
+            sequence=3,
+            action_type=SimulationActionType.FOLLOW,
+            target_type="agent",
+            target_id=agents["followed"].id,
+        )
+        session.commit()
+
+        state = reduce_social_world_state(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            cutoff_round=1,
+        )
+        assert state.refresh_receipts.get(viewer.id, ()) == ()
+
+        payload = json.loads(render_social_world_context(state, agent_id=viewer.id))
+        assert [card["content"] for card in payload["feed"][:2]] == [
+            "older followed update",
+            "newer unfollowed update",
+        ]
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize(
+    ("action_type", "change_type"),
+    [
+        (SimulationActionType.COMMENT, "commented_on"),
+        (SimulationActionType.REACTION, "reacted_to"),
+    ],
+    ids=["comment", "reaction"],
+)
+def test_direct_action_target_relationship_uses_target_action_author(
+    action_type,
+    change_type,
+):
+    from app.services.agent_runtime import _derive_transition
+
+    session, scenario, branch, agents, round_row = _world()
+    try:
+        actor = agents["viewer"]
+        target_author = agents["followed"]
+        root_post = _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=actor,
+            sequence=1,
+            action_type=SimulationActionType.POST,
+            content="actor root post",
+        )
+        target_comment = _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=target_author,
+            sequence=2,
+            action_type=SimulationActionType.COMMENT,
+            content="counterparty comment",
+            target_type="post",
+            target_id=root_post.id,
+            parent_action_id=root_post.id,
+        )
+        direct_action = _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=actor,
+            sequence=3,
+            action_type=action_type,
+            content=(
+                "reply to counterparty"
+                if action_type == SimulationActionType.COMMENT
+                else None
+            ),
+            target_type="action",
+            target_id=target_comment.id,
+            parent_action_id=target_comment.id,
+            payload=(
+                {"reaction": "SUPPORT"}
+                if action_type == SimulationActionType.REACTION
+                else None
+            ),
+        )
+        session.commit()
+
+        state = reduce_social_world_state(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            cutoff_round=1,
+        )
+        transition = _derive_transition(
+            session,
+            {"branches": {branch.id: {"rounds": {}}}},
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            round_number=1,
+            agent_id=actor.id,
+            action=direct_action,
+            social_state=state,
+        )
+
+        relationship = transition["relationship_changes"][0]
+        assert direct_action.target_id == target_comment.id
+        assert direct_action.parent_action_id == target_comment.id
+        assert relationship["target_action_id"] == target_comment.id
+        assert relationship["target_agent_id"] == target_author.id
+        assert relationship["target_agent_id"] != actor.id
+        assert relationship["change_type"] == change_type
+    finally:
+        session.close()
+
+
 def test_muted_interactions_do_not_affect_search_trend_or_feed():
     session, scenario, branch, agents, round_row = _world()
     try:
@@ -392,7 +544,50 @@ def test_mute_applies_to_receipts_created_before_the_mute():
         session.close()
 
 
-def test_empty_world_context_explains_cold_start_actions_are_empty():
+@pytest.mark.parametrize(
+    (
+        "language",
+        "empty_copy",
+        "idle_copy",
+        "post_copy",
+        "target_copy",
+        "forced_copy",
+        "default_copy",
+        "literal_gate_copy",
+    ),
+    [
+        (
+            "Chinese",
+            "当前信息流为空",
+            "IDLE 仍然合法",
+            "公开提出新方案、公布数据或事实、发出警示或号召、向公众提出问题",
+            "COMMENT/REACTION 只有出现可见旧帖后才可用",
+            "先发布一条有用信息",
+            "默认暂不行动",
+            "模拟公共信息流",
+        ),
+        (
+            "English",
+            "The feed is empty",
+            "IDLE remains valid",
+            "makes a new public proposal, releases data or facts",
+            "COMMENT/REACTION become available only after a prior visible post exists",
+            "publish useful information first",
+            "default to IDLE",
+            "simulated public feed",
+        ),
+    ],
+)
+def test_empty_world_context_does_not_force_a_cold_start_post(
+    language,
+    empty_copy,
+    idle_copy,
+    post_copy,
+    target_copy,
+    forced_copy,
+    default_copy,
+    literal_gate_copy,
+):
     session, scenario, branch, agents, _round_row = _world()
     try:
         session.commit()
@@ -402,10 +597,21 @@ def test_empty_world_context_explains_cold_start_actions_are_empty():
             branch_id=branch.id,
             cutoff_round=0,
         )
-        payload = json.loads(render_social_world_context(state, agent_id=agents["viewer"].id))
+        payload = json.loads(
+            render_social_world_context(
+                state,
+                agent_id=agents["viewer"].id,
+                language=language,
+            )
+        )
         assert payload["world_counts"]["visible_posts"] == 0
-        assert "当前信息流为空" in payload["semantics"]
-        assert "先发布一条有用信息" in payload["semantics"]
+        assert empty_copy in payload["semantics"]
+        assert idle_copy in payload["semantics"]
+        assert post_copy in payload["semantics"]
+        assert target_copy in payload["semantics"]
+        assert forced_copy not in payload["semantics"]
+        assert default_copy not in payload["semantics"]
+        assert literal_gate_copy not in payload["semantics"]
     finally:
         session.close()
 
@@ -480,7 +686,7 @@ def test_native_lineage_cutoff_sibling_isolation_and_replay_boundary():
         session.close()
 
 
-def test_target_catalog_filters_lineage_before_limit_and_excludes_self():
+def test_target_catalog_filters_lineage_and_unresolvable_actions_before_limit():
     session, scenario, root, agents, root_round = _world()
     try:
         root_post = _action(
@@ -493,13 +699,61 @@ def test_target_catalog_filters_lineage_before_limit_and_excludes_self():
             action_type=SimulationActionType.POST,
             content="visible-old-post",
         )
+        root_comment = _action(
+            session,
+            scenario=scenario,
+            branch=root,
+            round_row=root_round,
+            agent=agents["newest"],
+            sequence=2,
+            action_type=SimulationActionType.COMMENT,
+            content="visible-comment",
+            target_type="post",
+            target_id=root_post.id,
+        )
+        root_reaction = _action(
+            session,
+            scenario=scenario,
+            branch=root,
+            round_row=root_round,
+            agent=agents["viewer"],
+            sequence=3,
+            action_type=SimulationActionType.REACTION,
+            target_type="action",
+            target_id=root_comment.id,
+            payload={"reaction": "LIKE"},
+        )
+        unresolvable_ids: list[str] = []
+        for sequence in range(4, 24):
+            action_type = (
+                SimulationActionType.IDLE
+                if sequence % 2 == 0
+                else SimulationActionType.FOLLOW
+            )
+            row = _action(
+                session,
+                scenario=scenario,
+                branch=root,
+                round_row=root_round,
+                agent=agents["newest"],
+                sequence=sequence,
+                action_type=action_type,
+                target_type="agent" if action_type == SimulationActionType.FOLLOW else None,
+                target_id=(
+                    agents["followed"].id
+                    if action_type == SimulationActionType.FOLLOW
+                    else None
+                ),
+            )
+            unresolvable_ids.append(row.id)
+
         other_root = Branch(scenario_id=scenario.id, fork_round=0)
         session.add(other_root)
         session.flush()
         other_round = Round(branch_id=other_root.id, round_number=1)
         session.add(other_round)
         session.flush()
-        for sequence in range(2, 70):
+        for sequence in range(24, 92):
             _action(
                 session,
                 scenario=scenario,
@@ -520,9 +774,15 @@ def test_target_catalog_filters_lineage_before_limit_and_excludes_self():
             cutoff_round=1,
         )
         assert root_post.id in catalog
+        assert root_comment.id in catalog
+        assert root_reaction.id in catalog
         assert '"kind": "post"' in catalog
+        assert f'"agent_name": "{agents["followed"].name}"' in catalog
         assert agents["viewer"].id not in catalog
-        assert "invisible-69" not in catalog
+        assert all(action_id not in catalog for action_id in unresolvable_ids)
+        assert '"type": "IDLE"' not in catalog
+        assert '"type": "FOLLOW"' not in catalog
+        assert "invisible-91" not in catalog
     finally:
         session.close()
 
@@ -548,3 +808,69 @@ def test_batched_target_catalog_loads_shared_payload_once(monkeypatch):
     assert calls == [("scenario", "branch")]
     assert '"id": "a"' not in catalogs["a"]
     assert '"id": "b"' not in catalogs["b"]
+
+
+def test_target_catalog_prioritizes_actions_before_optional_agents():
+    payload = {
+        "agents": [
+            {"id": f"agent-{index}", "name": "A" * 80, "kind": "agent"}
+            for index in range(32)
+        ],
+        "actions": [
+            {
+                "id": f"action-{index}",
+                "kind": "action",
+                "type": "COMMENT",
+                "agent_name": "Author",
+                "content": "C" * 120,
+            }
+            for index in range(16)
+        ],
+    }
+
+    catalog = _build_action_target_catalogs(
+        object(),
+        "scenario",
+        "branch",
+        agent_ids=["viewer"],
+        payload=payload,
+    )["viewer"]
+
+    assert "…" not in catalog
+    assert all(f'"id": "action-{index}"' in catalog for index in range(16))
+
+
+def test_target_catalog_budget_accounts_for_safety_escape_expansion():
+    payload = {
+        "agents": [
+            {"id": f"agent-{index}", "name": "A" * 80, "kind": "agent"}
+            for index in range(32)
+        ],
+        "actions": [
+            {
+                "id": f"escaped-action-{index}",
+                "kind": "action",
+                "type": "COMMENT",
+                "agent_name": "Author" * 10,
+                "content": "```" * 40,
+            }
+            for index in range(16)
+        ],
+    }
+
+    projected = _project_action_target_catalog(payload, agent_id="viewer")
+    catalog = _build_action_target_catalogs(
+        object(),
+        "scenario",
+        "branch",
+        agent_ids=["viewer"],
+        payload=payload,
+    )["viewer"]
+    rendered_json = catalog.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
+    rendered = json.loads(rendered_json.replace("` ` `", "```"))
+
+    assert "…" not in catalog
+    assert [row["id"] for row in rendered["actions"]] == [
+        row["id"] for row in projected["actions"]
+    ]
+    assert rendered["actions"]

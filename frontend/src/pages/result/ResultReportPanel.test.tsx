@@ -28,16 +28,18 @@ vi.mock('react-router-dom', () => ({
 }));
 // Keep child components light; assert the panel's own gating/render decisions only.
 vi.mock('./ReportConfidenceBadge', () => ({
-  ReportConfidenceBadge: () => <div data-testid="report-confidence-badge" />,
+  ReportConfidenceBadge: ({ language }: { language?: 'zh' | 'en' }) => (
+    <div data-testid="report-confidence-badge" data-language={language} />
+  ),
 }));
 vi.mock('./ReportToc', () => ({
-  ReportToc: ({ sections }: { sections: unknown[] }) => (
-    <nav data-testid="report-toc" data-count={sections.length} />
+  ReportToc: ({ sections, language }: { sections: unknown[]; language?: 'zh' | 'en' }) => (
+    <nav data-testid="report-toc" data-count={sections.length} data-language={language} />
   ),
 }));
 vi.mock('./ReportSection', () => ({
-  ReportSection: ({ section }: { section: { id: string } }) => (
-    <section data-testid={`report-section-${section.id}`} />
+  ReportSection: ({ section, language }: { section: { id: string }; language?: 'zh' | 'en' }) => (
+    <section data-testid={`report-section-${section.id}`} data-language={language} />
   ),
 }));
 vi.mock('../../lib/llmProviderPolicy', () => ({
@@ -57,7 +59,7 @@ import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { generateReport, getStory } from '../../api/client';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
-import { ResultReportPanel } from './ResultReportPanel';
+import { ResultReportPanel, resolveReportContentLanguage } from './ResultReportPanel';
 
 const mockedCtx = vi.mocked(useResultContext);
 const mockedCap = vi.mocked(useCapabilityCheck);
@@ -252,6 +254,134 @@ afterEach(() => {
   Object.defineProperty(window, 'location', {
     writable: true,
     value: { ...window.location, reload: originalReload },
+  });
+});
+
+describe('report content language resolution', () => {
+  it('falls back from an English UI to the only available Chinese report content', () => {
+    const report = makeReport({
+      language: 'zh',
+      available_languages: ['zh'],
+      language_status: { zh: 'available', en: 'missing' },
+    });
+
+    expect(resolveReportContentLanguage(report, 'en')).toBe('zh');
+  });
+
+  it('treats language_status.missing as authoritative over available_languages', () => {
+    const report = makeReport({
+      language: 'en',
+      available_languages: ['zh', 'en'],
+      language_status: { zh: 'available', en: 'missing' },
+    });
+
+    expect(resolveReportContentLanguage(report, 'en')).toBe('zh');
+  });
+
+  it('keeps legacy reports with null language_status readable', () => {
+    const report = makeReport({
+      language: 'zh',
+      available_languages: ['zh'],
+      language_status: null,
+    });
+
+    expect(resolveReportContentLanguage(report, 'en')).toBe('zh');
+  });
+
+  it('uses the English UI preference when the report is genuinely bilingual', () => {
+    const report = makeReport({
+      language: 'zh',
+      available_languages: ['zh', 'en'],
+      language_status: { zh: 'available', en: 'available' },
+    });
+
+    expect(resolveReportContentLanguage(report, 'en')).toBe('en');
+  });
+
+  it('keeps alternate-language takeaways free of primary-only raw fields', () => {
+    const report = makeReport({
+      language: 'zh',
+      available_languages: ['zh', 'en'],
+      language_status: { zh: 'available', en: 'available' },
+      summary: '中文主语言摘要。',
+      summary_i18n: {
+        zh: '中文主语言摘要。',
+        en: 'English alternate summary. A second English sentence.',
+      },
+      verdict: {
+        headline_answer: '中文原始结论',
+        likelihood: { probability: 0.6, interval: [0.5, 0.7], wep: 'likely' },
+        analytic_confidence: { level: 'medium', basis: '中文原始依据' },
+        disclaimer: null,
+      },
+      follow_ups: ['中文原始跟进项'],
+      indicators_to_watch: [{
+        signal: '中文原始指标',
+        direction: 'up',
+        note: '中文原始备注',
+      }],
+    });
+    setCtx({ full_report: report });
+    setCap({});
+
+    render(<ResultReportPanel variant="inline" />);
+
+    expect(screen.getByText('English alternate summary.')).toBeInTheDocument();
+    expect(screen.getByText('A second English sentence.')).toBeInTheDocument();
+    expect(screen.queryByText('中文原始结论')).toBeNull();
+    expect(screen.queryByText('中文原始跟进项')).toBeNull();
+    expect(screen.queryByText('中文原始指标')).toBeNull();
+  });
+
+  it('uses one resolved language for title, digest, child content, confidence, and premortem', () => {
+    const report = makeReport({
+      language: 'zh',
+      available_languages: ['zh'],
+      language_status: { zh: 'available', en: 'missing' },
+      title: '仅中文报告标题',
+      title_i18n: { zh: '仅中文报告标题', en: 'UNAVAILABLE EN TITLE' },
+      summary: '仅中文摘要。第二句。',
+      summary_i18n: { zh: '仅中文摘要。第二句。', en: 'UNAVAILABLE EN SUMMARY.' },
+      sections: [{
+        id: 's1',
+        title: '仅中文章节',
+        title_i18n: { zh: '仅中文章节', en: 'UNAVAILABLE EN SECTION' },
+        intent: '',
+        body_md_i18n: { zh: '仅中文正文', en: 'UNAVAILABLE EN BODY' },
+        evidence_refs: [],
+        charts: [],
+      }],
+      evidence: premortemEvidence,
+      premortem_analysis: availablePremortem as FullReport['premortem_analysis'],
+      verdict: {
+        headline_answer: '仅中文结论',
+        likelihood: { probability: 0.6, interval: [0.5, 0.7], wep: 'likely' },
+        analytic_confidence: {
+          level: 'medium',
+          basis: '仅中文置信依据',
+          basis_i18n: { zh: '仅中文置信依据', en: 'UNAVAILABLE EN BASIS' },
+        },
+        disclaimer: null,
+      },
+    });
+    setCtx({ full_report: report });
+    setCap({});
+
+    const standalone = render(<ResultReportPanel variant="standalone" />);
+    expect(screen.getByRole('heading', { name: '仅中文报告标题' })).toBeInTheDocument();
+    expect(screen.getByTestId('report-confidence-badge')).toHaveAttribute('data-language', 'zh');
+    expect(screen.getByTestId('report-toc')).toHaveAttribute('data-language', 'zh');
+    expect(screen.getByTestId('report-section-s1')).toHaveAttribute('data-language', 'zh');
+    expect(screen.getByText('供应链停摆')).toBeInTheDocument();
+    expect(screen.queryByText('Supply chain stalls')).toBeNull();
+    standalone.unmount();
+
+    render(<ResultReportPanel variant="inline" />);
+    expect(screen.getByText('仅中文摘要。')).toBeInTheDocument();
+    expect(screen.getByText('第二句。')).toBeInTheDocument();
+    expect(screen.queryByText('UNAVAILABLE EN SUMMARY.')).toBeNull();
+    expect(screen.getByTestId('report-confidence-badge')).toHaveAttribute('data-language', 'zh');
+    expect(screen.getByTestId('report-toc')).toHaveAttribute('data-language', 'zh');
   });
 });
 
@@ -1339,7 +1469,11 @@ describe('ResultReportPanel — structured premortem analysis', () => {
   );
 
   it('uses the report language for failure-mode fields', () => {
-    setCtx({ full_report: makePremortemReport(availablePremortem) });
+    const report = makePremortemReport(availablePremortem);
+    report.language = 'zh';
+    report.available_languages = ['zh'];
+    report.language_status = { zh: 'available', en: 'missing' };
+    setCtx({ full_report: report });
     setCap({});
 
     render(<ResultReportPanel variant="standalone" isZh />);

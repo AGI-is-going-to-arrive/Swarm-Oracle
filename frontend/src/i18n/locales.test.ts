@@ -524,6 +524,8 @@ describe('i18n locale resources', () => {
     expect(zh.translation.factions.branch_scope).toBe('分支范围');
     expect(en.translation.factions.error_fetch).toBe('Unable to load the faction timeline right now. Please retry.');
     expect(zh.translation.factions.error_fetch).toBe('阵营时间线暂时无法加载，请稍后重试。');
+    expect(en.translation.factions.degraded_all_neutral).toContain('neutral band');
+    expect(zh.translation.factions.degraded_all_neutral).toContain('中性区间');
     expect(en.translation.debate.import_local_run).toBe('Import as Local Run');
     expect(zh.translation.debate.import_local_run).toBe('导入为本地运行');
     expect(en.translation.debate.importing_local_run).toBe('Importing...');
@@ -533,6 +535,16 @@ describe('i18n locale resources', () => {
   it('labels social faction membership share without presenting it as confidence', () => {
     expect(en.translation.social_feed.confidence_label).toBe('Group share');
     expect(zh.translation.social_feed.confidence_label).toBe('群体占比');
+    expect(en.translation.social_feed.show_more).toContain('{{count}}');
+    expect(zh.translation.social_feed.show_more).toContain('{{count}}');
+    expect(en.translation.social_feed.event_count).toContain('{{visible}}');
+    expect(zh.translation.social_feed.event_count).toContain('{{visible}}');
+    expect(en.translation.social_feed.event_count).toContain('{{total}}');
+    expect(zh.translation.social_feed.event_count).toContain('{{total}}');
+    expect(en.translation.social_feed.event_count_truncated).toContain('{{loaded}}');
+    expect(zh.translation.social_feed.event_count_truncated).toContain('{{loaded}}');
+    expect(en.translation.social_feed.event_count_truncated).toContain('{{total}}');
+    expect(zh.translation.social_feed.event_count_truncated).toContain('{{total}}');
   });
 
   it('provides localized replay, source tooltip, and knowledge-graph error labels', () => {
@@ -710,5 +722,44 @@ describe('i18n locale resources', () => {
       expect(zh.translation.action_ledger[key]).toBeTruthy();
       expect(zh.translation.action_ledger[key]).not.toBe(en.translation.action_ledger[key]);
     }
+  });
+
+  it('provides user-facing labels for every native social action enum', () => {
+    const actionTypes = [
+      'post', 'comment', 'reaction', 'follow', 'mute',
+      'search', 'trend', 'refresh', 'idle',
+    ] as const;
+    for (const actionType of actionTypes) {
+      expect(en.translation.social_feed.event_types[actionType]).toBeTruthy();
+      expect(zh.translation.social_feed.event_types[actionType]).toBeTruthy();
+      expect(zh.translation.social_feed.event_types[actionType]).not.toBe(
+        en.translation.social_feed.event_types[actionType],
+      );
+    }
+    for (const factionEventType of [
+      'alliance_formed', 'alliance_broken', 'affect_shift_proxy',
+    ] as const) {
+      expect(en.translation.social_feed.event_types[factionEventType]).toBeTruthy();
+      expect(zh.translation.social_feed.event_types[factionEventType]).toBeTruthy();
+      expect(zh.translation.social_feed.event_types[factionEventType]).not.toBe(
+        en.translation.social_feed.event_types[factionEventType],
+      );
+    }
+  });
+
+  it('distinguishes verdict model self-rating from report analytic confidence', () => {
+    expect(en.translation.result.verdict_confidence_kind_model_self_rating).toBe('Model self-rating');
+    expect(zh.translation.result.verdict_confidence_kind_model_self_rating).toBe('模型自评');
+    expect(en.translation.result.report.analytic_confidence_label).toBe('Analytic Confidence');
+    expect(zh.translation.result.report.analytic_confidence_label).toBe('分析置信度');
+  });
+
+  it('provides the bounded Social Feed disclosure in both locales', () => {
+    expect(en.translation.social_feed.truncated_notice).toContain('Agent Action Ledger');
+    expect(en.translation.social_feed.truncated_notice).toContain('{{loaded}}');
+    expect(en.translation.social_feed.truncated_notice).toContain('{{total}}');
+    expect(zh.translation.social_feed.truncated_notice).toContain('Agent Action Ledger');
+    expect(zh.translation.social_feed.truncated_notice).toContain('{{loaded}}');
+    expect(zh.translation.social_feed.truncated_notice).toContain('{{total}}');
   });
 });

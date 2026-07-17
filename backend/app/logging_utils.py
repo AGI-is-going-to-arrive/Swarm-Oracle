@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from app.log_sanitize import _scrub_sensitive_text
+from app.log_sanitize import _credential_label_is_sensitive, _scrub_sensitive_text
 
 _PLAIN_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -41,15 +40,10 @@ _STANDARD_LOG_RECORD_FIELDS = {
     "threadName",
     "taskName",
 }
-_SENSITIVE_STRUCTURED_KEY_RE = re.compile(
-    r"^(?:api[-_ ]?key|authorization|access[_-]?token|refresh[_-]?token|token|"
-    r"password|passwd|client[_-]?secret|private[_-]?key|secret)$",
-    re.IGNORECASE,
-)
 
 
 def _is_sensitive_structured_key(key: object) -> bool:
-    return _SENSITIVE_STRUCTURED_KEY_RE.fullmatch(str(key).strip()) is not None
+    return _credential_label_is_sensitive(key)
 
 
 def _normalize_json_mapping_item(key: object, item: Any) -> Any:

@@ -51,6 +51,7 @@ import {
 } from '../components/gameplayCards';
 import { ORACLE_UI_ASSETS } from '../lib/themeRegistry';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useWorldlineRoundtableWS } from '../hooks/useWorldlineRoundtableWS';
 import { useWorldlineRoundtableStore } from '../stores/worldlineRoundtableStore';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
@@ -255,6 +256,7 @@ export default function WorldlineRoundtableView() {
   ));
   const mobileRosterTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileRosterDialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(mobileRosterDialogRef, showMobileRoster, true);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;

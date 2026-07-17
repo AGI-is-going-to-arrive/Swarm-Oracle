@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import Session, select
 
 import app.services.runtime_lock as runtime_lock_module
@@ -131,6 +132,90 @@ def _setup_full_scenario(engine):
         rid = _seed_round(engine, bid, rn)
         _seed_message(engine, rid, aid, content=f"Round {rn} message")
     return sid, bid, aid
+
+
+class TestCounterfactualBranchVectorCleanup:
+    def test_cleanup_intent_updates_preserve_other_context_and_pending_ids(self):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        key = graphs_module._PENDING_BRANCH_MEMORY_CLEANUP_KEY
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "full_report": {"schema_version": "1.0"},
+                key: ["older-branch"],
+            }
+            session.add(scenario)
+            session.commit()
+
+        with Session(engine) as session:
+            graphs_module._mark_replay_branch_memory_cleanup_pending(
+                session,
+                scenario_id,
+                "newer-branch",
+            )
+            session.commit()
+
+        graphs_module._clear_replay_branch_memory_cleanup_pending(
+            scenario_id,
+            "older-branch",
+        )
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.parsed_context["full_report"] == {
+                "schema_version": "1.0"
+            }
+            assert scenario.parsed_context[key] == ["newer-branch"]
+
+    def test_delete_branch_memories_uses_exact_branch_metadata_filter(self):
+        from app.services.vector_store import VectorStore
+
+        store = object.__new__(VectorStore)
+        collection = MagicMock()
+        store._get_existing_collection = MagicMock(return_value=collection)
+        store._run_serialized_write = MagicMock(
+            side_effect=lambda _scenario_id, _operation, write_call: write_call()
+        )
+
+        deleted = store.delete_branch_memories("scenario-1", "failed-branch")
+
+        assert deleted is True
+        store._get_existing_collection.assert_called_once_with("scenario-1")
+        collection.delete.assert_called_once_with(
+            where={"branch_id": "failed-branch"}
+        )
+
+    def test_reconcile_retries_durable_cleanup_intent_and_clears_it(self, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = "failed-replay-branch"
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                graphs_module._PENDING_BRANCH_MEMORY_CLEANUP_KEY: [branch_id]
+            }
+            session.add(scenario)
+            session.commit()
+
+        cleanup = MagicMock(return_value=True)
+        monkeypatch.setattr(graphs_module, "delete_branch_memories", cleanup)
+
+        assert graphs_module.reconcile_pending_replay_branch_memory_cleanups() == 1
+        cleanup.assert_called_once_with(scenario_id, branch_id)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert graphs_module._PENDING_BRANCH_MEMORY_CLEANUP_KEY not in (
+                scenario.parsed_context or {}
+            )
 
 
 # ── POST /counterfactual ─────────────────────────────────
@@ -395,6 +480,19 @@ class TestCreateCounterfactual:
         engine = get_engine()
         sid, bid, aid = _setup_full_scenario(engine)
         background_coro = MagicMock(name="background_coro")
+        delete_branch_memories = MagicMock()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "preserved_context": {"keep": True},
+                "agent_runtime_v1": {
+                    "version": "1.0",
+                    "branches": {bid: {"rounds": {}}},
+                },
+            }
+            session.add(scenario)
+            session.commit()
 
         monkeypatch.setattr(
             "app.api.graphs._acquire_replay_branch_lock",
@@ -419,6 +517,10 @@ class TestCreateCounterfactual:
             raise RuntimeError("schedule failed")
 
         monkeypatch.setattr("app.api.graphs.schedule_background_task", broken_schedule)
+        monkeypatch.setattr(
+            "app.api.graphs.delete_branch_memories",
+            delete_branch_memories,
+        )
 
         with TestClient(app, raise_server_exceptions=False) as failing_client:
             resp = failing_client.post(f"/api/scenario/{sid}/counterfactual", json={
@@ -430,9 +532,14 @@ class TestCreateCounterfactual:
 
         assert resp.status_code == 500
         background_coro.close.assert_called_once()
+        delete_branch_memories.assert_called_once()
+        cleaned_scenario_id, cleaned_branch_id = delete_branch_memories.call_args.args
+        assert cleaned_scenario_id == sid
+        assert cleaned_branch_id != bid
 
         with Session(engine) as session:
             scenario = session.get(Scenario, sid)
+            source_branch = session.get(Branch, bid)
             replay_branches = session.exec(
                 select(Branch).where(
                     Branch.scenario_id == sid,
@@ -440,7 +547,15 @@ class TestCreateCounterfactual:
                 )
             ).all()
             assert scenario is not None
+            assert source_branch is not None
             assert scenario.status == ScenarioStatus.DONE
+            assert "_pending_branch_memory_cleanup" not in (
+                scenario.parsed_context or {}
+            )
+            assert scenario.parsed_context["preserved_context"] == {"keep": True}
+            runtime_branches = scenario.parsed_context["agent_runtime_v1"]["branches"]
+            assert set(runtime_branches) == {bid}
+            assert cleaned_branch_id not in runtime_branches
         assert replay_branches == []
 
     def test_counterfactual_schedule_error_survives_independent_release_failures(
@@ -530,12 +645,22 @@ class TestCreateCounterfactual:
             assert scenario.status == ScenarioStatus.DONE
         assert replay_branches == []
 
-    def test_simulate_true_simulation_lock_busy_rolls_back_branch(self, client, monkeypatch):
+    def test_simulate_true_simulation_lock_busy_rolls_back_branch(
+        self,
+        client,
+        monkeypatch,
+        caplog,
+    ):
         """If the simulation lock is busy, the cloned counterfactual branch is removed."""
         engine = get_engine()
         sid, bid, aid = _setup_full_scenario(engine)
         run_mock = MagicMock()
         schedule_mock = MagicMock()
+        cleanup_calls: list[tuple[str, str]] = []
+
+        def fail_vector_cleanup(scenario_id: str, branch_id: str) -> None:
+            cleanup_calls.append((scenario_id, branch_id))
+            raise RuntimeError("chroma cleanup failed")
 
         monkeypatch.setattr(
             "app.api.graphs._acquire_replay_branch_lock",
@@ -553,6 +678,11 @@ class TestCreateCounterfactual:
         monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args: True)
         monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
         monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
+        monkeypatch.setattr(
+            "app.api.graphs.delete_branch_memories",
+            fail_vector_cleanup,
+        )
+        caplog.set_level(logging.WARNING, logger="app.api.graphs")
 
         resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
             "source_branch_id": bid,
@@ -568,6 +698,268 @@ class TestCreateCounterfactual:
         }
         run_mock.assert_not_called()
         schedule_mock.assert_not_called()
+        assert len(cleanup_calls) == 1
+        cleaned_scenario_id, cleaned_branch_id = cleanup_calls[0]
+        assert cleaned_scenario_id == sid
+        assert cleaned_branch_id != bid
+        assert "Replay branch vector cleanup failed (RuntimeError)" in caplog.text
+        assert "chroma cleanup failed" not in caplog.text
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            source_branch = session.get(Branch, bid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert source_branch is not None
+            assert scenario.status == ScenarioStatus.DONE
+            assert (scenario.parsed_context or {})[
+                "_pending_branch_memory_cleanup"
+            ] == [cleaned_branch_id]
+        assert replay_branches == []
+
+    def test_simulation_lock_acquire_error_cleans_new_branch_and_releases_replay_lock(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        release_mock = MagicMock(return_value=True)
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: replay_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._stop_runtime_lock_heartbeat",
+            lambda *_args: None,
+        )
+
+        def fail_simulation_lock(_scenario_id):
+            raise RuntimeError("simulation lock acquire failed")
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            fail_simulation_lock,
+        )
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", release_mock)
+
+        with TestClient(app) as failing_client:
+            with pytest.raises(RuntimeError, match="simulation lock acquire failed"):
+                failing_client.post(
+                    f"/api/scenario/{sid}/counterfactual",
+                    json={
+                        "source_branch_id": bid,
+                        "round_number": 2,
+                        "agent_id": aid,
+                        "replacement_content": "Alternative stance",
+                    },
+                )
+
+        release_mock.assert_called_once_with(replay_lease)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+        assert replay_branches == []
+
+    def test_busy_simulation_lock_does_not_reset_competing_simulation(self, monkeypatch):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._stop_runtime_lock_heartbeat",
+            lambda *_args: None,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            lambda *_args: True,
+        )
+
+        def lose_simulation_race(_scenario_id):
+            with Session(engine) as session:
+                scenario = session.get(Scenario, sid)
+                assert scenario is not None
+                scenario.status = ScenarioStatus.SIMULATING
+                session.add(scenario)
+                session.commit()
+            return None
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lose_simulation_race,
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual",
+                json={
+                    "source_branch_id": bid,
+                    "round_number": 2,
+                    "agent_id": aid,
+                    "replacement_content": "Alternative stance",
+                },
+            )
+
+        assert response.status_code == 409
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
+        assert replay_branches == []
+
+    def test_status_commit_failure_cleans_new_branch_and_releases_both_locks(
+        self,
+        monkeypatch,
+    ):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        release_mock = MagicMock(return_value=True)
+
+        class FailSimulatingCommitSession(Session):
+            failure_count = 0
+
+            def commit(self) -> None:
+                should_fail = any(
+                    isinstance(value, Scenario)
+                    and value.status == ScenarioStatus.SIMULATING
+                    for value in self.dirty
+                )
+                if should_fail and type(self).failure_count == 0:
+                    type(self).failure_count += 1
+                    raise sqlite3.OperationalError("scenario status commit failed")
+                super().commit()
+
+        monkeypatch.setattr(graphs_module, "Session", FailSimulatingCommitSession)
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_replay_branch_lock",
+            lambda *_args: replay_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_acquire_simulation_lock_for_resume",
+            lambda *_args: simulation_lease,
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            graphs_module,
+            "_stop_runtime_lock_heartbeat",
+            lambda *_args: None,
+        )
+        monkeypatch.setattr(graphs_module, "release_runtime_lock", release_mock)
+        run_mock = MagicMock()
+        monkeypatch.setattr(graphs_module, "run_sim_background", run_mock)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual",
+                json={
+                    "source_branch_id": bid,
+                    "round_number": 2,
+                    "agent_id": aid,
+                    "replacement_content": "Alternative stance",
+                },
+            )
+
+        assert response.status_code == 500
+        assert FailSimulatingCommitSession.failure_count == 1
+        run_mock.assert_not_called()
+        assert release_mock.call_count == 2
+        release_mock.assert_any_call(replay_lease)
+        release_mock.assert_any_call(simulation_lease)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+        assert replay_branches == []
+
+    def test_background_construction_error_cleans_new_branch_and_restores_status(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._stop_runtime_lock_heartbeat",
+            lambda *_args: None,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            lambda *_args: True,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(side_effect=RuntimeError("background construction failed")),
+        )
+
+        with TestClient(app) as failing_client:
+            with pytest.raises(RuntimeError, match="background construction failed"):
+                failing_client.post(
+                    f"/api/scenario/{sid}/counterfactual",
+                    json={
+                        "source_branch_id": bid,
+                        "round_number": 2,
+                        "agent_id": aid,
+                        "replacement_content": "Alternative stance",
+                    },
+                )
 
         with Session(engine) as session:
             scenario = session.get(Scenario, sid)
@@ -579,6 +971,72 @@ class TestCreateCounterfactual:
             ).all()
             assert scenario is not None
             assert scenario.status == ScenarioStatus.DONE
+        assert replay_branches == []
+
+    def test_schedule_failure_does_not_overwrite_concurrent_cancellation(self, monkeypatch):
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        background_coro = MagicMock(name="background_coro")
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._stop_runtime_lock_heartbeat",
+            lambda *_args: None,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            lambda *_args: True,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def cancel_then_fail(_coro):
+            with Session(engine) as session:
+                scenario = session.get(Scenario, sid)
+                assert scenario is not None
+                scenario.status = ScenarioStatus.CANCELLED
+                session.add(scenario)
+                session.commit()
+            raise RuntimeError("schedule failed after cancellation")
+
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", cancel_then_fail)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual",
+                json={
+                    "source_branch_id": bid,
+                    "round_number": 2,
+                    "agent_id": aid,
+                    "replacement_content": "Alternative stance",
+                },
+            )
+
+        assert response.status_code == 500
+        background_coro.close.assert_called_once()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.CANCELLED
         assert replay_branches == []
 
     def test_rejects_nonexistent_scenario(self, client):
@@ -1440,6 +1898,244 @@ class TestResimulateCounterfactual:
             assert scenario is not None
             assert branch is not None
             assert scenario.status == ScenarioStatus.DONE
+
+    def test_resimulate_background_construction_error_restores_status(self, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+        )
+        _seed_round(engine, cf_bid, 1)
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            lambda *_args: True,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(side_effect=RuntimeError("resimulation construction failed")),
+        )
+
+        with TestClient(app) as failing_client:
+            with pytest.raises(RuntimeError, match="resimulation construction failed"):
+                failing_client.post(
+                    f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate"
+                )
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            branch = session.get(Branch, cf_bid)
+            assert scenario is not None
+            assert branch is not None
+            assert scenario.status == ScenarioStatus.DONE
+
+    def test_resimulate_rollback_does_not_overwrite_concurrent_error(self, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+        )
+        _seed_round(engine, cf_bid, 1)
+        background_coro = MagicMock(name="background_coro")
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            lambda *_args: True,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def fail_after_terminal_error(_coro):
+            with Session(engine) as session:
+                scenario = session.get(Scenario, sid)
+                assert scenario is not None
+                scenario.status = ScenarioStatus.ERROR
+                session.add(scenario)
+                session.commit()
+            raise RuntimeError("resimulation schedule failed")
+
+        monkeypatch.setattr(
+            "app.api.graphs.schedule_background_task",
+            fail_after_terminal_error,
+        )
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate"
+            )
+
+        assert response.status_code == 500
+        background_coro.close.assert_called_once()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            branch = session.get(Branch, cf_bid)
+            assert scenario is not None
+            assert branch is not None
+            assert scenario.status == ScenarioStatus.ERROR
+
+
+class TestResumeStartupAtomicity:
+    def test_resume_rollback_does_not_overwrite_concurrent_cancellation(self, monkeypatch):
+        engine = get_engine()
+        sid, bid, _aid = _setup_full_scenario(engine)
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._stop_runtime_lock_heartbeat",
+            lambda *_args: None,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs.release_runtime_lock",
+            lambda *_args: True,
+        )
+
+        def cancel_then_fail(*_args, **_kwargs):
+            with Session(engine) as session:
+                scenario = session.get(Scenario, sid)
+                assert scenario is not None
+                scenario.status = ScenarioStatus.CANCELLED
+                session.add(scenario)
+                session.commit()
+            raise RuntimeError("resume construction failed after cancellation")
+
+        monkeypatch.setattr("app.api.graphs.run_sim_background", cancel_then_fail)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            response = failing_client.post(
+                f"/api/scenario/{sid}/resume",
+                json={"source_branch_id": bid, "round_number": 2},
+            )
+
+        assert response.status_code == 500
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "resume",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.CANCELLED
+        assert replay_branches == []
+
+
+class TestReplayStartupRollbackTransactions:
+    def test_status_rollback_does_not_overwrite_cancellation_between_read_and_write(self):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        cancellation_committed = False
+
+        def cancel_before_rollback_update(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            nonlocal cancellation_committed
+            is_scenario_update = statement.lstrip().upper().startswith("UPDATE SCENARIO")
+            if cancellation_committed or not is_scenario_update:
+                return
+            cancellation_committed = True
+            with Session(engine) as session:
+                scenario = session.get(Scenario, scenario_id)
+                assert scenario is not None
+                scenario.status = ScenarioStatus.CANCELLED
+                session.add(scenario)
+                session.commit()
+
+        event.listen(engine, "before_cursor_execute", cancel_before_rollback_update)
+        try:
+            graphs_module._rollback_resimulation_start(scenario_id, ScenarioStatus.DONE)
+        finally:
+            event.remove(engine, "before_cursor_execute", cancel_before_rollback_update)
+
+        assert cancellation_committed is True
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.CANCELLED
+
+    def test_resume_rollback_keeps_branch_when_status_update_fails(self):
+        from app.api import graphs as graphs_module
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        branch_id = _seed_branch(
+            engine,
+            scenario_id,
+            replay_kind="resume",
+            replay_source_branch_id=None,
+        )
+        injected = False
+
+        def fail_status_update(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            nonlocal injected
+            if injected or not statement.lstrip().upper().startswith("UPDATE SCENARIO"):
+                return
+            injected = True
+            raise sqlite3.OperationalError("injected status rollback failure")
+
+        event.listen(engine, "before_cursor_execute", fail_status_update)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="injected status rollback failure"):
+                graphs_module._rollback_resume_start(scenario_id, branch_id)
+        finally:
+            event.remove(engine, "before_cursor_execute", fail_status_update)
+
+        assert injected is True
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            branch = session.get(Branch, branch_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
+            assert branch is not None
 
 
 # ── GET /compare ─────────────────────────────────────────

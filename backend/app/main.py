@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +25,10 @@ from app.api.ending_rooms import (
 )
 from app.api.ending_rooms import (
     ws_router as ending_rooms_ws_router,
+)
+from app.api.graphs import (
+    pending_replay_branch_memory_cleanup_count,
+    reconcile_pending_replay_branch_memory_cleanups,
 )
 from app.api.graphs import router as graphs_router
 from app.api.interventions import router as interventions_router
@@ -50,6 +56,49 @@ configure_logging(
 )
 
 # ── Lifespan ─────────────────────────────────────────────
+
+_REPLAY_MEMORY_CLEANUP_RETRY_DELAYS_SECONDS = (1.0, 5.0, 30.0)
+
+
+async def _retry_pending_replay_branch_memory_cleanups(
+    *,
+    delays: tuple[float, ...] = _REPLAY_MEMORY_CLEANUP_RETRY_DELAYS_SECONDS,
+    reconcile: Callable[[], int] = reconcile_pending_replay_branch_memory_cleanups,
+    pending_count: Callable[[], int] = pending_replay_branch_memory_cleanup_count,
+    sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    """Retry transient Chroma cleanup failures without blocking app startup."""
+    for delay in delays:
+        if stop_event is not None and stop_event.is_set():
+            return
+        try:
+            if await asyncio.to_thread(pending_count) == 0:
+                return
+        except Exception:  # noqa: BLE001 - retry loop must remain non-fatal
+            logging.getLogger(__name__).exception(
+                "Replay-memory pending-count check failed (non-fatal)"
+            )
+        if stop_event is None:
+            await sleep(delay)
+        else:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=delay)
+            except TimeoutError:
+                pass
+            else:
+                return
+        try:
+            cleaned = await asyncio.to_thread(reconcile)
+            logging.getLogger(__name__).info(
+                "Replay-memory retry sweep: %d pending branch cleanup(s) completed",
+                cleaned,
+            )
+        except Exception:  # noqa: BLE001 - retry loop must remain non-fatal
+            logging.getLogger(__name__).exception(
+                "Replay-memory retry sweep failed (non-fatal)"
+            )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -94,11 +143,44 @@ async def lifespan(app: FastAPI):
         logging.getLogger(__name__).exception(
             "Startup report-lock sweep failed (non-fatal)"
         )
+    replay_memory_cleanup_retry_task: asyncio.Task[None] | None = None
+    replay_memory_cleanup_stop_event = asyncio.Event()
+    try:
+        cleaned_branch_memories = reconcile_pending_replay_branch_memory_cleanups()
+        pending_branch_memories = pending_replay_branch_memory_cleanup_count()
+        logging.getLogger(__name__).info(
+            "Startup replay-memory sweep: %d completed, %d still pending",
+            cleaned_branch_memories,
+            pending_branch_memories,
+        )
+        if pending_branch_memories:
+            replay_memory_cleanup_retry_task = asyncio.create_task(
+                _retry_pending_replay_branch_memory_cleanups(
+                    stop_event=replay_memory_cleanup_stop_event,
+                ),
+                name="replay-memory-cleanup-retry",
+            )
+    except Exception:  # noqa: BLE001 - sweep is best-effort; never block startup
+        logging.getLogger(__name__).exception(
+            "Startup replay-memory sweep failed (non-fatal)"
+        )
+        replay_memory_cleanup_retry_task = asyncio.create_task(
+            _retry_pending_replay_branch_memory_cleanups(
+                stop_event=replay_memory_cleanup_stop_event,
+            ),
+            name="replay-memory-cleanup-retry",
+        )
     logging.getLogger(__name__).info(
         "SwarmOracle started — LLM: %s @ %s",
         settings.LLM_MODEL_NAME, settings.LLM_RESPONSES_URL,
     )
     yield
+    replay_memory_cleanup_stop_event.set()
+    if replay_memory_cleanup_retry_task is not None:
+        # asyncio cancellation cannot stop a running to_thread worker. Await the
+        # cooperative task before disposing the DB so no cleanup can resurrect
+        # the engine or mutate state after shutdown.
+        await replay_memory_cleanup_retry_task
     # Graceful shutdown: cancel outstanding background tasks and dispose DB engine
     from app.api.helpers import shutdown_background_tasks
     await shutdown_background_tasks(reason="app_shutdown")

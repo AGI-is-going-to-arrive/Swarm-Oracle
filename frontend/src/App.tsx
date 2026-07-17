@@ -65,7 +65,7 @@ function RouteFallback() {
 export default function App() {
   return (
     <AppErrorBoundary>
-      <GlobalOfflineBanner />
+      <GlobalOfflineBanner onRetry={() => window.location.reload()} />
       <BrowserRouter>
         <Suspense fallback={<RouteFallback />}>
           <Routes>

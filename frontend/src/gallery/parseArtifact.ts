@@ -1,5 +1,6 @@
 import {
   PUBLIC_ARTIFACT_SCHEMA_VERSION,
+  PUBLIC_ARTIFACT_SCHEMA_VERSION_V1,
   type PublicArtifact,
   type PublicArtifactConfidence,
   type PublicArtifactBranchVerdict,
@@ -35,8 +36,13 @@ export function parsePublicArtifact(
 
   const obj = json as Record<string, unknown>;
 
-  // Check schema version
-  if (obj.schema_version !== PUBLIC_ARTIFACT_SCHEMA_VERSION) {
+  // v1 requires a confidence tier; v2 permits an explicit null but still
+  // requires the field. Unknown versions remain fail-closed.
+  const schemaVersion = obj.schema_version;
+  if (
+    schemaVersion !== PUBLIC_ARTIFACT_SCHEMA_VERSION_V1
+    && schemaVersion !== PUBLIC_ARTIFACT_SCHEMA_VERSION
+  ) {
     return { ok: false, reason: 'unknown_version' };
   }
 
@@ -89,9 +95,13 @@ export function parsePublicArtifact(
       return { ok: false, reason: 'malformed' };
     }
 
-    let parsedConfidence: PublicArtifactConfidence = 'low';
+    let parsedConfidence: PublicArtifactConfidence | null;
     if (confidence === 'high' || confidence === 'medium' || confidence === 'low') {
       parsedConfidence = confidence;
+    } else if (schemaVersion === PUBLIC_ARTIFACT_SCHEMA_VERSION && confidence === null) {
+      parsedConfidence = null;
+    } else {
+      return { ok: false, reason: 'malformed' };
     }
 
     branch_verdicts.push({
@@ -198,7 +208,7 @@ export function parsePublicArtifact(
   return {
     ok: true,
     artifact: {
-      schema_version: PUBLIC_ARTIFACT_SCHEMA_VERSION,
+      schema_version: schemaVersion,
       question,
       language,
       display_agent_names,

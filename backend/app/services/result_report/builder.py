@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import inspect
 import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,11 +41,13 @@ from app.services.result_report.reducer import reduce as reduce_report
 from app.services.result_report.schema import (
     AnalyticConfidence,
     Chart,
+    DissentingView,
     EvidenceRef,
     FullReport,
     I18nText,
     IndicatorToWatch,
     InterviewStatus,
+    KeyParticipant,
     LanguageStatus,
     Likelihood,
     PremortemAnalysis,
@@ -58,6 +62,7 @@ from app.services.result_report.schema import (
     ToolTraceSummary,
     Verdict,
     encode_sse_event,
+    is_sensitive_report_key,
     utf8_json_size_bytes,
     validate_full_report_payload,
 )
@@ -104,6 +109,77 @@ _PREMORTEM_MAX_ITEMS = 3
 _PREMORTEM_TEXT_MAX_CHARS = 600
 _PREMORTEM_RATIONALE_MAX_CHARS = 320
 _SECTION_FAILURE_REASONS = frozenset(get_args(SectionFailureReason))
+_AFFECT_PROXY_PROMPT_CAVEAT = (
+    "Faction and relation data are simulated affect-proxy clusters derived from "
+    "Agent emotion/diverge metadata. They are not verified stances, trust, "
+    "opposition, policy support, coalitions, alliances, or real-world relationships. "
+    "Never promote cluster membership to a factual alliance; label any use as an "
+    "affect proxy and cross-check it against transcript EvidenceRef quotes."
+)
+_AFFECT_PROXY_CAVEAT_ZH = (
+    "> **阵营图限制**：阵营与关系值是由模拟 Agent 的 emotion/diverge 元数据推导的"
+    "情感代理聚类，不是已验证的立场、信任、反对、政策支持、联盟或现实关系；"
+    "应以逐条 EvidenceRef 发言为准。"
+)
+_AFFECT_PROXY_CAVEAT_EN = (
+    "> **Faction chart limitation**: faction and relation values are simulated "
+    "affect-proxy clusters derived from Agent emotion/diverge metadata, not verified "
+    "stances, trust, opposition, policy support, coalitions, alliances, or real-world "
+    "relationships. Check the individual EvidenceRef quotes."
+)
+_SINGLE_PATH_DISCLAIMER_ZH = (
+    "本报告只有一条已完成的模拟路径；该唯一已完成路径记录的模拟分支权重为 "
+    "{share}。由于没有其他已完成路径，无法进行多路径相对比较；该权重不代表"
+    "现实发生概率，也不能估计现实不确定性。"
+)
+_SINGLE_PATH_DISCLAIMER_EN = (
+    "This report has only one completed simulated path; the simulated branch weight "
+    "recorded for that sole completed path is {share}. With no other completed path, "
+    "no relative multi-path comparison is possible. This weight is not a real-world "
+    "probability and cannot estimate real-world uncertainty."
+)
+_AFFECT_PROXY_VERDICT_CAVEAT_ZH = (
+    "标题中的联盟或阵营表述不能由底层情感代理聚类解释为真实联盟；该代理不证明"
+    "参与者形成了真实联盟、政策支持或现实关系，应以逐条发言证据为准。"
+)
+_AFFECT_PROXY_VERDICT_CAVEAT_EN = (
+    "Alliance or faction wording in the headline must not turn the underlying affect-"
+    "proxy clusters into a real alliance. This proxy does not prove a real coalition, "
+    "policy support, or real-world relationship; check the individual transcript evidence."
+)
+_FACTION_SEMANTIC_RE = re.compile(
+    r"(?:阵营|联盟|结盟|派系)|\b(?:alliance|alliances|allied|coalition|coalitions|"
+    r"faction|factions|bloc|blocs)\b",
+    re.IGNORECASE,
+)
+_CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+_LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]+(?:['’\-][A-Za-z]+)*")
+_MARKDOWN_PROTECTED_SEGMENTS_RE = re.compile(
+    r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)",
+)
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\(([^\)\n]+)\)")
+_MARKDOWN_LINK_TITLE_RE = re.compile(
+    r"(?P<destination>\s*(?:<[^>\n]*>|[^\s]+))"
+    r"(?P<spacing>\s+)(?P<delimiter>[\"'])(?P<title>.*)"
+    r"(?P=delimiter)(?P<trailing>\s*)$",
+)
+_HTML_ENTITY_RE = re.compile(
+    r"&(?:#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});?",
+)
+_MARKDOWN_STRUCTURAL_ENTITY_CHARS = frozenset("`[]()<>\\")
+_QUOTED_SPAN_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"“([^”\n]+)”",
+        r"‘([^’\n]+)’",
+        r"「([^」\n]+)」",
+        r"『([^』\n]+)』",
+        r"«([^»\n]+)»",
+        r'"([^"\n]+)"',
+        r"(?<![\w])'([^'\n]+)'(?![\w])",
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -799,9 +875,48 @@ async def _build_report_unlocked(
         premortem_analysis=premortem_analysis,
         tool_trace=tool_trace,
     )
-    report = _fit_report_to_byte_cap(report)
+    coverage_max_round: int | None = None
+    if report.status in {"complete", "partial"}:
+        from app.services.result_report.claims import compile_report_claims
+
+        coverage_max_round = max(
+            [reducer_result.round_count, *(item.round_number for item in report.evidence)],
+            default=0,
+        )
+        compiled = await asyncio.to_thread(
+            compile_report_claims,
+            engine,
+            scenario_id,
+            report.target_branch_id,
+            report.sections,
+            report.evidence,
+            verdict_headline=report.verdict.headline_answer,
+            max_round=coverage_max_round,
+            language=report.language,
+            summary_i18n=report.summary_i18n,
+        )
+        compiled_summary = compiled.summary_i18n or report.summary_i18n
+        report = report.model_copy(
+            update={
+                "claims": compiled.claims,
+                "sections": compiled.sections,
+                "summary_i18n": compiled_summary,
+                "summary": getattr(compiled_summary, report.language),
+                "verdict": report.verdict.model_copy(
+                    update={
+                        "headline_answer": compiled.verdict_headline,
+                        "analytic_confidence": (
+                            _sanitize_analytic_confidence_display_texts(
+                                compiled.analytic_confidence
+                            )
+                        )
+                    }
+                ),
+            }
+        )
+    report = _fit_report_to_byte_cap(report, max_round=coverage_max_round)
     _ensure_report_runtime_lock_alive(report_lock_holder)
-    _persist_report_payload(scenario_id, report.model_dump(mode="json"))
+    _persist_final_report_payload(scenario_id, report.model_dump(mode="json"))
     return report
 
 
@@ -1343,13 +1458,19 @@ def _load_builder_context(scenario_id: str, branch_id: str) -> BuilderContext:
         )
         return BuilderContext(
             scenario_id=scenario_id,
-            question=scenario.question or "",
+            question=_sanitize_report_display_text(
+                scenario.question,
+                fallback="",
+            ),
             language=_detect_language(scenario.question or "", parsed_context),
             parsed_context=parsed_context,
             branch_id=branch.id,
-            branch_title=branch.title or "Dominant branch",
-            branch_story=branch.story or "",
-            branch_insight=branch.insight or "",
+            branch_title=_sanitize_report_display_text(
+                branch.title,
+                fallback="Dominant branch",
+            ),
+            branch_story=_sanitize_report_display_text(branch.story, fallback=""),
+            branch_insight=_sanitize_report_display_text(branch.insight, fallback=""),
             web_context_blocks=_safe_web_context_blocks(scenario.web_context_json),
             is_self_contained_replay=bool(str(branch.replay_kind or "").strip()),
         )
@@ -1358,7 +1479,9 @@ def _load_builder_context(scenario_id: str, branch_id: str) -> BuilderContext:
 def _build_outline_prompt(context: BuilderContext, reducer_result: ReducerResult) -> str:
     evidence_digest = _evidence_digest(reducer_result, max_items=4)
     branch_distribution = json.dumps(
-        reducer_result.branch_distribution[:5],
+        _sanitize_branch_distribution_display_texts(
+            reducer_result.branch_distribution[:5]
+        ),
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -1370,6 +1493,7 @@ def _build_outline_prompt(context: BuilderContext, reducer_result: ReducerResult
             "纲要, outline, report outline, or any planning label in the title.",
             "summary_i18n must use completed voice. Do not write 本报告将..., 报告将..., "
             "This report will..., or any future-tense planning summary.",
+            _AFFECT_PROXY_PROMPT_CAVEAT,
             "Choose 2-5 unique section ids from: "
             + ", ".join(_ALLOWED_SECTION_IDS)
             + ".",
@@ -1502,6 +1626,11 @@ def _build_section_prompt(
             '{"action":"final_section","body_md_i18n":{"zh":"...","en":"..."},'
             '"evidence_refs":["ev_001"]}.',
             "Do not invent probabilities or evidence ids. Use reducer probability only.",
+            "Keep quotation marks only around text copied verbatim from one available "
+            "EvidenceRef quote; paraphrases must be unquoted summaries. For evolution or "
+            "final-state claims, cite supporting early, middle, and late rounds when "
+            "available. Do not cite every evidence row by default.",
+            _AFFECT_PROXY_PROMPT_CAVEAT,
             format_untrusted_text_block("User question", context.question, max_chars=1200),
             format_untrusted_text_block(
                 "Section plan",
@@ -1789,16 +1918,37 @@ def _assemble_report(
         headline = str(result_quality.get("verdict") or "").strip()
     if not headline:
         headline = context.branch_insight or context.branch_title
+    headline = _sanitize_report_display_text(headline)
     language = "zh" if context.language == "zh" else "en"
     title_i18n, summary_i18n = _polish_report_title_summary(
         I18nText.model_validate(outline.title_i18n),
         I18nText.model_validate(outline.summary_i18n),
     )
+    title_i18n = _sanitize_report_i18n(title_i18n)
+    summary_i18n = _sanitize_report_i18n(summary_i18n)
+    safe_evidence = _safe_evidence_refs(reducer_result)
+    safe_evidence_by_id = {item.id: item for item in safe_evidence}
+    outcome_evidence = [
+        safe_evidence_by_id[evidence_id]
+        for evidence_id in reducer_result.outcome_evidence_ids
+        if evidence_id in safe_evidence_by_id
+    ]
     ordinary_sections = _sanitize_ordinary_section_refs(
         sections,
         allowed_ids=set(reducer_result.outcome_evidence_ids),
+        evidence=outcome_evidence,
+    )
+    available_languages, language_status = _generated_report_language_availability(
+        primary_language=language,
+        title_i18n=title_i18n,
+        summary_i18n=summary_i18n,
+        sections=ordinary_sections,
     )
     sections_with_charts = _attach_reducer_charts(ordinary_sections, reducer_result)
+    sections_with_charts = _sanitize_report_section_display_texts(
+        sections_with_charts
+    )
+    sections_with_charts = _ensure_faction_proxy_caveats(sections_with_charts)
     resolved_premortem_analysis = premortem_analysis
     if status == "failed":
         resolved_premortem_analysis = PremortemAnalysis(
@@ -1806,6 +1956,9 @@ def _assemble_report(
             reason="report_generation_failed",
             items=[],
         )
+    resolved_premortem_analysis = _sanitize_premortem_display_texts(
+        resolved_premortem_analysis
+    )
     report = FullReport(
         version="1.0",
         generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -1813,7 +1966,7 @@ def _assemble_report(
         target_branch_id=context.branch_id,
         target_branch_sort=list(reducer_result.target_branch_sort),
         language=language,
-        available_languages=["zh", "en"],
+        available_languages=available_languages,
         title=getattr(title_i18n, language),
         title_i18n=title_i18n,
         summary=getattr(summary_i18n, language),
@@ -1823,26 +1976,42 @@ def _assemble_report(
         verdict=Verdict(
             headline_answer=headline,
             likelihood=reducer_result.likelihood,
-            analytic_confidence=reducer_result.analytic_confidence,
-            disclaimer=reducer_result.verdict_disclaimer,
+            analytic_confidence=_sanitize_analytic_confidence_display_texts(
+                reducer_result.analytic_confidence
+            ),
+            disclaimer=_compose_verdict_disclaimer(
+                context,
+                reducer_result,
+                headline=headline,
+            ),
         ),
         sections=sections_with_charts,
-        evidence=_safe_evidence_refs(reducer_result),
-        indicators_to_watch=_safe_indicators_to_watch(
-            context,
-            reducer_result,
-            llm_indicators=indicators_to_watch,
+        evidence=safe_evidence,
+        indicators_to_watch=_sanitize_indicator_display_texts(
+            _safe_indicators_to_watch(
+                context,
+                reducer_result,
+                llm_indicators=indicators_to_watch,
+            )
         ),
-        dissenting=reducer_result.dissenting,
-        key_participants=reducer_result.key_participants,
-        follow_ups=_follow_ups(context),
+        dissenting=_sanitize_dissenting_display_texts(reducer_result.dissenting),
+        key_participants=_sanitize_key_participant_display_texts(
+            reducer_result.key_participants
+        ),
+        follow_ups=[
+            _sanitize_report_display_text(item) for item in _follow_ups(context)
+        ],
         limitations=_report_lineage_limitations(context),
-        interview_evidence=interview_evidence or [],
-        interview_status=interview_status,
+        interview_evidence=_sanitize_interview_evidence_display_texts(
+            interview_evidence or []
+        ),
+        interview_status=_sanitize_interview_status_display_texts(interview_status),
         premortem=[],
         premortem_analysis=resolved_premortem_analysis,
-        language_status=LanguageStatus(zh="available", en="available"),
-        tool_trace=list(tool_trace or [])[:64],
+        language_status=language_status,
+        tool_trace=_sanitize_tool_trace_display_texts(
+            list(tool_trace or [])[:64]
+        ),
     )
     if status in {"generating", "failed", "cancelled"} and report.sections:
         payload = report.model_dump(mode="json")
@@ -1855,10 +2024,276 @@ def _assemble_report(
     return report
 
 
+def _compose_verdict_disclaimer(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+    *,
+    headline: str,
+) -> str | None:
+    language = "zh" if context.language == "zh" else "en"
+    clauses: list[str] = []
+    existing = _sanitize_optional_report_display_text(
+        reducer_result.verdict_disclaimer
+    )
+    if existing:
+        clauses.append(existing)
+    if reducer_result.likelihood.wep == "single_path":
+        clauses.append(
+            _single_path_disclaimer(
+                reducer_result.likelihood,
+                language=language,
+            )
+        )
+    if _FACTION_SEMANTIC_RE.search(headline) and _has_affect_proxy_data(
+        reducer_result
+    ):
+        clauses.append(
+            _AFFECT_PROXY_VERDICT_CAVEAT_ZH
+            if language == "zh"
+            else _AFFECT_PROXY_VERDICT_CAVEAT_EN
+        )
+    return " ".join(clauses) or None
+
+
+def _single_path_disclaimer(likelihood: Likelihood, *, language: str) -> str:
+    template = (
+        _SINGLE_PATH_DISCLAIMER_ZH
+        if language == "zh"
+        else _SINGLE_PATH_DISCLAIMER_EN
+    )
+    return template.format(share=f"{likelihood.probability:.0%}")
+
+
+def _has_affect_proxy_data(reducer_result: ReducerResult) -> bool:
+    for statistic in (
+        reducer_result.faction_consensus,
+        reducer_result.polarization,
+    ):
+        if statistic.status != "missing" and statistic.value is not None:
+            return True
+    for chart in reducer_result.charts:
+        if chart.type != "faction_share":
+            continue
+        data = chart.data if isinstance(chart.data, dict) else {}
+        if data.get("status") in {"available", "partial"}:
+            return True
+        if data.get("factions") or int(data.get("relation_edge_count") or 0) > 0:
+            return True
+        if data.get("avg_opposition") is not None:
+            return True
+    return False
+
+
+def _generated_report_language_availability(
+    *,
+    primary_language: str,
+    title_i18n: I18nText,
+    summary_i18n: I18nText,
+    sections: list[ReportSection],
+) -> tuple[list[str], LanguageStatus]:
+    primary = "zh" if primary_language == "zh" else "en"
+    supported = {
+        language: _generated_report_has_language(
+            language,
+            title_i18n=title_i18n,
+            summary_i18n=summary_i18n,
+            sections=sections,
+        )
+        for language in ("zh", "en")
+    }
+    available: set[str] = set()
+    for language in ("zh", "en"):
+        if not supported[language]:
+            continue
+        if language != primary and supported[primary]:
+            if not _has_distinct_report_translation(
+                language,
+                primary_language=primary,
+                title_i18n=title_i18n,
+                summary_i18n=summary_i18n,
+                sections=sections,
+            ):
+                continue
+        available.add(language)
+
+    # ``FullReport`` requires at least one available language. Only genuinely
+    # language-neutral content (for example, a numeric title and summary) may use
+    # the requested language as a bounded fallback. Opposite-language or unsupported
+    # provider output must not be relabelled as the requested language.
+    if not available:
+        if _generated_report_is_language_neutral(
+            title_i18n=title_i18n,
+            summary_i18n=summary_i18n,
+            sections=sections,
+        ):
+            available.add(primary)
+        else:
+            raise ResultReportBuilderError(
+                "Generated report has no supported Chinese or English content",
+            )
+    ordered = [language for language in ("zh", "en") if language in available]
+    return ordered, LanguageStatus(
+        zh="available" if "zh" in available else "missing",
+        en="available" if "en" in available else "missing",
+    )
+
+
+def _has_distinct_report_translation(
+    language: str,
+    *,
+    primary_language: str,
+    title_i18n: I18nText,
+    summary_i18n: I18nText,
+    sections: list[ReportSection],
+) -> bool:
+    if not _has_distinct_top_level_translation(
+        language,
+        primary_language=primary_language,
+        title_i18n=title_i18n,
+        summary_i18n=summary_i18n,
+    ):
+        return False
+
+    for section in sections:
+        translated = _section_substantive_language_surface(section, language)
+        primary = _section_substantive_language_surface(section, primary_language)
+        if _is_language_neutral(translated) and _is_language_neutral(primary):
+            continue
+        if _normalize_language_identity(translated) == _normalize_language_identity(primary):
+            return False
+    return True
+
+
+def _has_distinct_top_level_translation(
+    language: str,
+    *,
+    primary_language: str,
+    title_i18n: I18nText,
+    summary_i18n: I18nText,
+) -> bool:
+    return any(
+        _normalize_language_identity(getattr(value, language))
+        != _normalize_language_identity(getattr(value, primary_language))
+        for value in (title_i18n, summary_i18n)
+    )
+
+
+def _normalize_language_identity(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(
+        character
+        for character in normalized
+        if not character.isspace()
+        and not unicodedata.category(character).startswith(("P", "Z"))
+    )
+
+
+def _generated_report_has_language(
+    language: str,
+    *,
+    title_i18n: I18nText,
+    summary_i18n: I18nText,
+    sections: list[ReportSection],
+) -> bool:
+    surfaces = [
+        getattr(title_i18n, language),
+        getattr(summary_i18n, language),
+        *[
+            _section_substantive_language_surface(section, language)
+            for section in sections
+        ],
+    ]
+    has_signal = False
+    for surface in surfaces:
+        if _is_language_neutral(surface):
+            continue
+        if not _surface_has_language_signal(surface, language):
+            return False
+        has_signal = True
+    return has_signal
+
+
+def _section_substantive_language_surface(
+    section: ReportSection,
+    language: str,
+) -> str:
+    body = str(getattr(section.body_md_i18n, language) or "").strip()
+    if section.tier != "static" or section.failure_reason is None:
+        return body
+
+    # ``_static_section_from_context`` wraps the actual branch-derived source
+    # between a deterministic heading and uncertainty paragraph. Inspect only the
+    # source so an English/Chinese scaffold cannot mask untranslated core content.
+    heading = f"### {getattr(section.title_i18n, language)}\n\n"
+    if not body.startswith(heading):
+        return body
+    source_with_uncertainty = body[len(heading) :]
+    source, separator, _uncertainty = source_with_uncertainty.rpartition("\n\n")
+    return (
+        source.strip()
+        if separator and source.strip()
+        else source_with_uncertainty.strip()
+    )
+
+
+def _surface_has_language_signal(value: str, language: str) -> bool:
+    if _has_language_signal(value, language, short=True):
+        return True
+    text = str(value or "")
+    cjk_count = len(_CJK_CHAR_RE.findall(text))
+    latin_count = len(_LATIN_LETTER_RE.findall(text))
+    if language == "zh":
+        return cjk_count > 0 and latin_count == 0
+    return latin_count > 0 and cjk_count == 0
+
+
+def _is_language_neutral(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    return not any(
+        unicodedata.category(character).startswith("L")
+        for character in normalized
+    )
+
+
+def _generated_report_is_language_neutral(
+    *,
+    title_i18n: I18nText,
+    summary_i18n: I18nText,
+    sections: list[ReportSection],
+) -> bool:
+    surfaces = [title_i18n.zh, title_i18n.en, summary_i18n.zh, summary_i18n.en]
+    for section in sections:
+        surfaces.extend(
+            (
+                _section_substantive_language_surface(section, "zh"),
+                _section_substantive_language_surface(section, "en"),
+            )
+        )
+    return all(_is_language_neutral(surface) for surface in surfaces)
+
+
+def _has_language_signal(value: str, language: str, *, short: bool = False) -> bool:
+    text = str(value or "")
+    cjk_count = len(_CJK_CHAR_RE.findall(text))
+    latin_count = len(_LATIN_LETTER_RE.findall(text))
+    if language == "zh":
+        minimum = 2 if short else 4
+        return cjk_count >= minimum and cjk_count * 4 >= latin_count
+    minimum_letters = 3 if short else 12
+    minimum_words = 1 if short else 2
+    return (
+        latin_count >= minimum_letters
+        and len(_LATIN_WORD_RE.findall(text)) >= minimum_words
+        and latin_count >= cjk_count * 2
+    )
+
+
 def _report_lineage_limitations(context: BuilderContext) -> str:
     basis = (
         "Report content is generated from a bounded simulation transcript, "
-        "deterministic reducer stats, and available evidence coordinates. "
+        "deterministic reducer stats, and available evidence coordinates. Faction and "
+        "relation values are simulated affect proxies, not verified stances, trust, "
+        "opposition, policy support, coalitions, alliances, or real-world relationships. "
     )
     if context.is_self_contained_replay:
         return (
@@ -1992,9 +2427,9 @@ def _load_interview_candidates(
     for message, round_, agent in rows:
         if agent.id in seen_agents:
             continue
-        excerpt = _truncate_text(
+        excerpt = _sanitize_report_display_text(
             message.content,
-            settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+            max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
         )
         if not excerpt or excerpt == "Unavailable.":
             continue
@@ -2003,8 +2438,11 @@ def _load_interview_candidates(
             InterviewCandidate(
                 branch_index=branch_index_by_id.get(round_.branch_id, 0),
                 round_number=round_.round_number,
-                agent_name=_truncate_text(agent.name, 120),
-                persona=_truncate_text(agent.persona or agent.role or agent.name, 900),
+                agent_name=_sanitize_report_display_text(agent.name, max_chars=120),
+                persona=_sanitize_report_display_text(
+                    agent.persona or agent.role or agent.name,
+                    max_chars=900,
+                ),
                 excerpt=excerpt,
             )
         )
@@ -2094,10 +2532,17 @@ def _normalize_interview_payload(
             selected_agents.add(candidate.agent_name)
         if rows_by_agent.get(candidate.agent_name, 0) >= _INTERVIEW_EVIDENCE_PER_AGENT_CAP:
             continue
-        excerpt = _truncate_text(
-            str(raw_entry.get("excerpt") or candidate.excerpt),
-            settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
-        )
+        # Interview excerpts are evidence, not model-written paraphrases. Keep
+        # only a non-trivial literal span from the same candidate utterance.
+        supplied_excerpt = str(raw_entry.get("excerpt") or "")
+        meaningful = [character for character in supplied_excerpt if character.isalnum()]
+        minimum = 2 if any(not character.isascii() for character in meaningful) else 3
+        if (
+            len(meaningful) < minimum
+            or supplied_excerpt not in candidate.excerpt
+        ):
+            continue
+        excerpt = supplied_excerpt
         evidence.append(
             {
                 "branch_index": candidate.branch_index,
@@ -2119,19 +2564,243 @@ def _sanitize_ordinary_section_refs(
     sections: list[ReportSection],
     *,
     allowed_ids: set[str],
+    evidence: list[EvidenceRef],
 ) -> list[ReportSection]:
-    return [
-        section.model_copy(
-            update={
-                "evidence_refs": [
-                    evidence_id
-                    for evidence_id in section.evidence_refs
-                    if evidence_id in allowed_ids
-                ]
-            }
+    evidence_by_id = {item.id: item for item in evidence if item.id in allowed_ids}
+    updated: list[ReportSection] = []
+    for section in sections:
+        evidence_refs = [
+            evidence_id
+            for evidence_id in section.evidence_refs
+            if evidence_id in evidence_by_id
+        ]
+        evidence_quotes = [evidence_by_id[evidence_id].quote for evidence_id in evidence_refs]
+        updated.append(
+            section.model_copy(
+                update={
+                    "evidence_refs": evidence_refs,
+                    "body_md_i18n": I18nText(
+                        zh=_remove_ungrounded_quote_marks(
+                            section.body_md_i18n.zh,
+                            evidence_quotes=evidence_quotes,
+                        ),
+                        en=_remove_ungrounded_quote_marks(
+                            section.body_md_i18n.en,
+                            evidence_quotes=evidence_quotes,
+                        ),
+                    ),
+                }
+            )
         )
-        for section in sections
+    return updated
+
+
+def _normalize_quote_for_grounding(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    return re.sub(r"\s+", " ", normalized).strip().casefold()
+
+
+def _decode_visible_html_entities(value: str) -> str:
+    """Decode entities without creating new Markdown structure or controls."""
+
+    decoded = str(value or "")
+
+    def decode_match(match: re.Match[str]) -> str:
+        candidate = html.unescape(match.group(0))
+        if candidate == match.group(0):
+            return match.group(0)
+        if any(
+            character in _MARKDOWN_STRUCTURAL_ENTITY_CHARS
+            or unicodedata.category(character).startswith("C")
+            for character in candidate
+        ):
+            return match.group(0)
+        return candidate
+
+    # Bounded extra passes catch nested forms such as ``&amp;#45;``.
+    for _ in range(3):
+        candidate = _HTML_ENTITY_RE.sub(decode_match, decoded)
+        if candidate == decoded:
+            break
+        decoded = candidate
+    return decoded
+
+
+def _canonicalize_html_entities_for_security_scan(value: str) -> str:
+    canonical = str(value or "")
+    for _ in range(3):
+        decoded = html.unescape(canonical)
+        if decoded == canonical:
+            break
+        canonical = decoded
+    return unicodedata.normalize("NFKC", canonical)
+
+
+def _sanitize_markdown_link_destination(destination: str) -> str:
+    leading = destination[: len(destination) - len(destination.lstrip())]
+    trailing = destination[len(destination.rstrip()) :]
+    candidate = destination.strip()
+    canonical = _canonicalize_html_entities_for_security_scan(candidate)
+    if canonical and _scrub_sensitive_text(canonical) != canonical:
+        return f"{leading}#redacted{trailing}"
+    return destination
+
+
+def _remove_ungrounded_quote_marks(
+    text: str,
+    *,
+    evidence_quotes: list[str],
+) -> str:
+    """Downgrade non-verbatim prose quotations to unquoted summaries."""
+
+    normalized_evidence = [
+        normalized
+        for quote in evidence_quotes
+        if (normalized := _normalize_quote_for_grounding(quote))
     ]
+
+    def is_grounded(candidate: str) -> bool:
+        if len(candidate) < 2:
+            return False
+        if candidate.isascii() and any(character.isalnum() for character in candidate):
+            pattern = re.compile(rf"(?<!\w){re.escape(candidate)}(?!\w)")
+            return any(pattern.search(evidence_quote) for evidence_quote in normalized_evidence)
+        return any(candidate in evidence_quote for evidence_quote in normalized_evidence)
+
+    def sanitize_prose(segment: str) -> str:
+        sanitized = _scrub_sensitive_text(_decode_visible_html_entities(segment))
+        for pattern in _QUOTED_SPAN_PATTERNS:
+
+            def replace(match: re.Match[str]) -> str:
+                candidate = _normalize_quote_for_grounding(match.group(1))
+                if candidate and is_grounded(candidate):
+                    return match.group(0)
+                return match.group(1)
+
+            sanitized = pattern.sub(replace, sanitized)
+        return sanitized
+
+    def sanitize_link_target(target: str) -> str:
+        match = _MARKDOWN_LINK_TITLE_RE.fullmatch(target)
+        if match is None:
+            return _sanitize_markdown_link_destination(target)
+        delimiter = match.group("delimiter")
+        title = sanitize_prose(match.group("title"))
+        # Keep the Markdown title delimiter valid when a grounded inner quote
+        # happens to use the same character.
+        title = title.replace(delimiter, "&quot;" if delimiter == '"' else "&#39;")
+        return "".join(
+            (
+                _sanitize_markdown_link_destination(match.group("destination")),
+                match.group("spacing"),
+                delimiter,
+                title,
+                delimiter,
+                match.group("trailing"),
+            )
+        )
+
+    def sanitize_visible_markdown(segment: str) -> str:
+        parts: list[str] = []
+        cursor = 0
+        for match in _MARKDOWN_LINK_RE.finditer(segment):
+            parts.append(sanitize_prose(segment[cursor : match.start()]))
+            label = sanitize_prose(match.group(1)).replace("[", "&#91;").replace(
+                "]", "&#93;"
+            )
+            parts.append(
+                f"[{label}]({sanitize_link_target(match.group(2))})"
+            )
+            cursor = match.end()
+        parts.append(sanitize_prose(segment[cursor:]))
+        return "".join(parts)
+
+    def sanitize_protected_code(segment: str) -> str:
+        canonical = _canonicalize_html_entities_for_security_scan(segment)
+        if _scrub_sensitive_text(canonical) == canonical:
+            return segment
+        return _scrub_sensitive_text(_decode_visible_html_entities(segment))
+
+    segments = _MARKDOWN_PROTECTED_SEGMENTS_RE.split(str(text or ""))
+    return "".join(
+        sanitize_protected_code(segment)
+        if index % 2
+        else sanitize_visible_markdown(segment)
+        for index, segment in enumerate(segments)
+    )
+
+
+def _ensure_faction_proxy_caveats(
+    sections: list[ReportSection],
+) -> list[ReportSection]:
+    updated: list[ReportSection] = []
+    for section in sections:
+        if not _section_carries_faction_proxy(section):
+            updated.append(section)
+            continue
+        zh = section.body_md_i18n.zh.rstrip()
+        en = section.body_md_i18n.en.rstrip()
+        if not _contains_canonical_caveat(zh, _AFFECT_PROXY_CAVEAT_ZH):
+            zh = f"{_AFFECT_PROXY_CAVEAT_ZH}\n\n{zh}" if zh else _AFFECT_PROXY_CAVEAT_ZH
+        if not _contains_canonical_caveat(en, _AFFECT_PROXY_CAVEAT_EN):
+            en = f"{_AFFECT_PROXY_CAVEAT_EN}\n\n{en}" if en else _AFFECT_PROXY_CAVEAT_EN
+        updated.append(
+            section.model_copy(update={"body_md_i18n": I18nText(zh=zh, en=en)})
+        )
+    return updated
+
+
+def _canonicalize_caveat_text(value: str) -> str:
+    canonical = _canonicalize_html_entities_for_security_scan(value)
+    return re.sub(r"\s+", " ", canonical).strip().casefold()
+
+
+def _markdown_visible_prose(value: str) -> str:
+    return "".join(
+        segment
+        for index, segment in enumerate(_MARKDOWN_PROTECTED_SEGMENTS_RE.split(value))
+        if index % 2 == 0
+    )
+
+
+def _contains_canonical_caveat(body: str, caveat: str) -> bool:
+    canonical_caveat = _canonicalize_caveat_text(caveat)
+    visible_body = _markdown_visible_prose(body)
+    return bool(
+        canonical_caveat
+        and canonical_caveat in _canonicalize_caveat_text(visible_body)
+    )
+
+
+def _section_carries_faction_proxy(section: ReportSection) -> bool:
+    if section.id == "factions":
+        return True
+
+    semantic_text = " ".join(
+        (
+            section.title,
+            section.title_i18n.zh,
+            section.title_i18n.en,
+            section.intent,
+            _markdown_visible_prose(section.body_md_i18n.zh),
+            _markdown_visible_prose(section.body_md_i18n.en),
+        )
+    )
+    semantic_text = _canonicalize_caveat_text(semantic_text)
+    if _FACTION_SEMANTIC_RE.search(semantic_text):
+        return True
+
+    for chart in section.charts:
+        if chart.type != "faction_share":
+            continue
+        data = chart.data if isinstance(chart.data, dict) else {}
+        if data.get("factions"):
+            return True
+        if int(data.get("relation_edge_count") or 0) > 0:
+            return True
+        if data.get("avg_opposition") is not None:
+            return True
+    return False
 
 
 def _attach_reducer_charts(
@@ -2534,7 +3203,11 @@ def _build_indicators_prompt(
         reducer_result, max_items=settings.REPORT_MAX_EVIDENCE_PER_SECTION
     )
     distribution = json.dumps(
-        reducer_result.branch_distribution[:5], ensure_ascii=False, separators=(",", ":")
+        _sanitize_branch_distribution_display_texts(
+            reducer_result.branch_distribution[:5]
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     result_quality = (
         context.parsed_context.get("result_quality")
@@ -2565,7 +3238,10 @@ def _build_indicators_prompt(
             "simulated_affect_convergence_proxy_reason": (
                 reducer_result.agent_consensus.reason
             ),
-            "result_quality_confidence": result_quality.get("confidence"),
+            "result_quality_confidence": _sanitize_report_display_text(
+                result_quality.get("confidence"),
+                fallback="",
+            ),
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -2617,7 +3293,10 @@ def _build_indicators_prompt(
             format_untrusted_text_block(
                 "Verdict / question answer (for anchoring only)",
                 "\n".join(
-                    str(result_quality.get(key) or "").strip()
+                    _sanitize_report_display_text(
+                        result_quality.get(key),
+                        fallback="",
+                    )
                     for key in ("question_answer", "verdict")
                 ).strip(),
                 max_chars=1600,
@@ -3032,10 +3711,35 @@ def _coerce_probability(value: Any) -> float:
     return min(1.0, max(0.0, number))
 
 
-def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
+def _fit_report_to_byte_cap(
+    report: FullReport,
+    *,
+    max_round: int | None = None,
+) -> FullReport:
     max_bytes = settings.REPORT_FULL_REPORT_MAX_BYTES
     payload = report.model_dump(mode="json")
+    terminal_or_incomplete = str(payload.get("status") or "") in {
+        "generating",
+        "failed",
+        "cancelled",
+    }
+    coverage = (
+        _sync_payload_evidence_coverage(
+            payload,
+            max_round=max_round,
+            prepend=False,
+        )
+        if max_round is not None
+        else None
+    )
+    if terminal_or_incomplete or coverage is not None:
+        _sync_payload_analytic_confidence(
+            payload,
+            evidence_coverage=coverage,
+        )
     if utf8_json_size_bytes(payload) <= max_bytes:
+        if terminal_or_incomplete or coverage is not None:
+            return validate_full_report_payload(payload, max_bytes=max_bytes)
         return report
 
     if payload.get("status") == "complete":
@@ -3045,18 +3749,32 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
             "reason": "report_generation_failed",
             "items": [],
         }
+    if max_round is not None:
+        coverage = _sync_payload_evidence_coverage(
+            payload,
+            max_round=max_round,
+            prepend=True,
+        )
+        _sync_payload_analytic_confidence(
+            payload,
+            evidence_coverage=coverage,
+        )
     payload["summary"] = _truncate_text(str(payload.get("summary") or ""), 180)
     payload["summary_i18n"] = _truncate_i18n(payload.get("summary_i18n"), 180)
     payload["limitations"] = (
         "Report was truncated to fit the configured UTF-8 byte budget."
     )
+    for claim in payload.get("claims") or []:
+        if not isinstance(claim, dict):
+            continue
+        claim["claim_text"] = _truncate_text(str(claim.get("claim_text") or ""), 280)
     _bound_payload_premortem_text(payload)
+    _sync_payload_evidence_refs(payload, max_round=max_round)
     if utf8_json_size_bytes(payload) <= max_bytes:
-        _sync_payload_evidence_refs(payload)
         return validate_full_report_payload(payload, max_bytes=max_bytes)
     _prune_payload_premortem_items(payload, max_bytes=max_bytes)
+    _sync_payload_evidence_refs(payload, max_round=max_round)
     if utf8_json_size_bytes(payload) <= max_bytes:
-        _sync_payload_evidence_refs(payload)
         return validate_full_report_payload(payload, max_bytes=max_bytes)
     for item in payload.get("evidence") or []:
         if isinstance(item, dict):
@@ -3066,8 +3784,8 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
             section["body_md_i18n"] = _truncate_i18n(section.get("body_md_i18n"), 700)
 
     for body_limit in (420, 220, 120):
+        _sync_payload_evidence_refs(payload, max_round=max_round)
         if utf8_json_size_bytes(payload) <= max_bytes:
-            _sync_payload_evidence_refs(payload)
             return validate_full_report_payload(payload, max_bytes=max_bytes)
         for section in payload.get("sections") or []:
             if isinstance(section, dict):
@@ -3078,6 +3796,14 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
 
     while payload.get("tool_trace") and utf8_json_size_bytes(payload) > max_bytes:
         payload["tool_trace"].pop()
+
+    while payload.get("claims") and utf8_json_size_bytes(payload) > max_bytes:
+        claims = payload["claims"]
+        weakest_index = min(
+            range(len(claims)),
+            key=lambda index: _claim_retention_rank(claims[index]),
+        )
+        claims.pop(weakest_index)
 
     while payload.get("sections") and utf8_json_size_bytes(payload) > max_bytes:
         payload["sections"].pop()
@@ -3090,8 +3816,24 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
     # instead of raising ResultReportTooLargeError.
     while payload.get("indicators_to_watch") and utf8_json_size_bytes(payload) > max_bytes:
         payload["indicators_to_watch"].pop()
-    _sync_payload_evidence_refs(payload)
+    _sync_payload_evidence_refs(payload, max_round=max_round)
+    # Coverage/confidence reconciliation can add text after the first pruning
+    # pass. Re-apply the documented last-resort indicator pruning so the final
+    # validated payload still obeys the hard byte cap.
+    while payload.get("indicators_to_watch") and utf8_json_size_bytes(payload) > max_bytes:
+        payload["indicators_to_watch"].pop()
     return validate_full_report_payload(payload, max_bytes=max_bytes)
+
+
+def _claim_retention_rank(value: object) -> tuple[int, int]:
+    if not isinstance(value, dict):
+        return (-1, -1)
+    confidence_rank = {"low": 0, "medium": 1, "high": 2}
+    strength_rank = {"unsupported": 0, "moderate": 1, "strong": 2}
+    return (
+        confidence_rank.get(str(value.get("confidence") or ""), -1),
+        strength_rank.get(str(value.get("evidence_strength") or ""), -1),
+    )
 
 
 def _bound_payload_premortem_text(payload: dict[str, Any]) -> None:
@@ -3181,7 +3923,46 @@ def _shrink_payload_indicators(payload: dict[str, Any]) -> None:
                 indicator[field] = _truncate_text(str(indicator.get(field) or ""), limit)
 
 
-def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
+def _sync_payload_evidence_coverage(
+    payload: dict[str, Any],
+    *,
+    max_round: int,
+    prepend: bool,
+):
+    from app.services.result_report.claims import (
+        _evidence_coverage_from_rounds,
+        _with_evidence_coverage_notice,
+    )
+
+    round_numbers: list[int] = []
+    for item in payload.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            round_number = int(item.get("round_number"))
+        except (TypeError, ValueError):
+            continue
+        round_numbers.append(round_number)
+    coverage = _evidence_coverage_from_rounds(
+        round_numbers,
+        max_round=max_round,
+    )
+    summary_i18n = _with_evidence_coverage_notice(
+        I18nText.model_validate(payload.get("summary_i18n")),
+        coverage,
+        prepend=prepend,
+    )
+    payload["summary_i18n"] = summary_i18n.model_dump(mode="json")
+    language = "zh" if payload.get("language") == "zh" else "en"
+    payload["summary"] = getattr(summary_i18n, language)
+    return coverage
+
+
+def _sync_payload_evidence_refs(
+    payload: dict[str, Any],
+    *,
+    max_round: int | None = None,
+) -> None:
     evidence_ids = {
         str(item.get("id"))
         for item in (payload.get("evidence") or [])
@@ -3189,6 +3970,39 @@ def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
     }
     premortem_refs = _sync_payload_premortem_refs(payload, evidence_ids)
     ordinary_evidence_ids = evidence_ids - premortem_refs
+    evidence_by_message_id = {
+        str(item.get("message_id")): item
+        for item in (payload.get("evidence") or [])
+        if isinstance(item, dict) and item.get("message_id")
+    }
+    evidence_message_ids = set(evidence_by_message_id)
+    for claim in payload.get("claims") or []:
+        if not isinstance(claim, dict):
+            continue
+        original_message_ids = [
+            str(message_id)
+            for message_id in claim.get("message_ids") or []
+            if str(message_id)
+        ]
+        retained_message_ids = [
+            str(message_id)
+            for message_id in original_message_ids
+            if str(message_id) in evidence_message_ids
+        ]
+        claim["message_ids"] = retained_message_ids
+        if len(retained_message_ids) != len(original_message_ids) or not retained_message_ids:
+            claim["exact_quote"] = None
+            claim["action_ids"] = []
+            claim["evidence_strength"] = "unsupported"
+            claim["confidence"] = "low"
+            claim["downgrade_reason"] = "evidence_pruned_for_byte_cap"
+            claim["round_numbers"] = sorted({
+                int(evidence_by_message_id[message_id].get("round_number"))
+                for message_id in retained_message_ids
+                if evidence_by_message_id[message_id].get("round_number") is not None
+            })
+            claim["temporal_coverage"] = []
+            claim["role_coverage"] = []
     for section in payload.get("sections") or []:
         if not isinstance(section, dict):
             continue
@@ -3207,6 +4021,79 @@ def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
             for ref in (refs if isinstance(refs, list) else [])
             if str(ref) in ordinary_evidence_ids
         ]
+    evidence_coverage = (
+        _sync_payload_evidence_coverage(
+            payload,
+            max_round=max_round,
+            prepend=True,
+        )
+        if max_round is not None
+        else None
+    )
+    _sync_payload_analytic_confidence(
+        payload,
+        evidence_coverage=evidence_coverage,
+    )
+
+
+def _sync_payload_analytic_confidence(
+    payload: dict[str, Any],
+    *,
+    evidence_coverage: Any | None = None,
+) -> None:
+    claims = [
+        claim
+        for claim in payload.get("claims") or []
+        if isinstance(claim, dict)
+    ]
+    strong = sum(claim.get("evidence_strength") == "strong" for claim in claims)
+    downgraded = sum(claim.get("confidence") == "low" for claim in claims)
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"generating", "failed", "cancelled"} or not claims or downgraded:
+        level = "low"
+    elif strong == len(claims):
+        level = "high"
+    else:
+        level = "medium"
+    basis = (
+        "No compiled claims remain."
+        if not claims
+        else (
+            f"{strong}/{len(claims)} claims have exact evidence; "
+            f"{downgraded} downgraded."
+        )
+    )
+    confidence = AnalyticConfidence(
+        level=level,
+        basis=basis,
+        basis_i18n=I18nText(
+            zh=(
+                "没有保留可编译结论。"
+                if not claims
+                else (
+                    f"{len(claims)} 条结论中 {strong} 条有精确证据，"
+                    f"{downgraded} 条已降级。"
+                )
+            ),
+            en=basis,
+        ),
+    )
+    if evidence_coverage is not None:
+        from app.services.result_report.claims import (
+            _apply_evidence_coverage_to_confidence,
+        )
+
+        confidence = _apply_evidence_coverage_to_confidence(
+            confidence,
+            evidence_coverage,
+        )
+    verdict = payload.get("verdict")
+    if not isinstance(verdict, dict):
+        return
+    analytic_confidence = verdict.get("analytic_confidence")
+    if not isinstance(analytic_confidence, dict):
+        return
+    analytic_confidence.update(confidence.model_dump(mode="json"))
 
 
 def _sync_payload_premortem_refs(
@@ -3624,7 +4511,17 @@ def _transition_report_status_payload(
 ) -> dict[str, Any]:
     """Synchronize status copy while preserving genuinely generated sections."""
     if not existing.sections:
-        return canonical_payload
+        payload = dict(canonical_payload)
+        # A lineage/probability warning remains relevant even when no report body
+        # survived. Preserve only its scrubbed display form on the canonical copy.
+        existing_disclaimer = _sanitize_optional_report_display_text(
+            existing.verdict.disclaimer
+        )
+        if existing_disclaimer:
+            verdict = dict(payload.get("verdict") or {})
+            verdict["disclaimer"] = existing_disclaimer
+            payload["verdict"] = verdict
+        return payload
 
     payload = existing.model_dump(mode="json")
     payload.update({
@@ -3730,6 +4627,8 @@ def _transition_report_status_payload(
     verdict = dict(payload["verdict"])
     verdict["headline_answer"] = partial_copy["headline"][language]
     analytic_confidence = dict(verdict["analytic_confidence"])
+    if status in {"failed", "cancelled"}:
+        analytic_confidence["level"] = "low"
     analytic_confidence["basis"] = partial_copy["basis"]
     analytic_confidence["basis_i18n"] = partial_copy["basis_i18n"]
     verdict["analytic_confidence"] = analytic_confidence
@@ -3954,7 +4853,7 @@ def _placeholder_report_payload(
             likelihood=Likelihood(
                 probability=probability,
                 interval=(probability, probability),
-                wep="unavailable",
+                wep="missing",
             ),
             analytic_confidence=AnalyticConfidence(
                 level="low",
@@ -4007,26 +4906,38 @@ def _json_object_or_empty_expr():
     )
 
 
-def _persist_report_payload(scenario_id: str, payload: dict[str, Any]) -> None:
+def _persist_report_payload(
+    scenario_id: str,
+    payload: dict[str, Any],
+) -> None:
     validate_full_report_payload(
         payload,
         max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
     )
+    parsed_context_expr = _json_object_or_empty_expr()
+    path_value_pairs = [
+        "$.full_report",
+        func.json(json.dumps(payload, ensure_ascii=False)),
+    ]
     with Session(get_engine()) as session:
         result = session.exec(
             update(Scenario)
             .where(Scenario.id == scenario_id)
             .values(
                 parsed_context=func.json_set(
-                    _json_object_or_empty_expr(),
-                    "$.full_report",
-                    func.json(json.dumps(payload, ensure_ascii=False)),
+                    parsed_context_expr,
+                    *path_value_pairs,
                 )
             )
         )
         if getattr(result, "rowcount", 1) == 0:
             raise ResultReportBuilderError("Scenario not found while persisting report")
         session.commit()
+
+
+def _persist_final_report_payload(scenario_id: str, payload: dict[str, Any]) -> None:
+    """Persist a terminal report without mutating the model self-rating contract."""
+    _persist_report_payload(scenario_id, payload)
 
 
 def _tool_query_branch_messages(
@@ -4045,11 +4956,14 @@ def _tool_query_branch_messages(
                 "round_id": evidence.round_id,
                 "round_number": evidence.round_number,
                 "agent_id": evidence.agent_id,
-                "agent_name": evidence.agent_name,
+                "agent_name": _sanitize_report_display_text(
+                    evidence.agent_name,
+                    max_chars=120,
+                ),
                 "message_id": evidence.message_id,
                 "quote": format_untrusted_text_block(
                     "Evidence quote",
-                    evidence.quote,
+                    _sanitize_report_evidence_quote(evidence.quote),
                     max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
                 ),
             }
@@ -4078,7 +4992,7 @@ def _safe_web_context_blocks(raw: str | None) -> list[str]:
     for index, item in enumerate(snippets[:3], 1):
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "").strip()
+        text = _sanitize_report_display_text(item.get("text"), fallback="")
         safe_url = _sanitize_url(str(item.get("source_url") or ""))
         if not text:
             continue
@@ -4114,11 +5028,12 @@ def _evidence_digest(
                 "round_number": evidence.round_number,
                 "branch_id": evidence.branch_id,
                 "agent_id": evidence.agent_id,
-                "agent_name": evidence.agent_name,
-                "message_id": evidence.message_id,
-                "quote": _scrub_sensitive_text(
-                    evidence.quote[: settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS],
+                "agent_name": _sanitize_report_display_text(
+                    evidence.agent_name,
+                    max_chars=120,
                 ),
+                "message_id": evidence.message_id,
+                "quote": _sanitize_report_evidence_quote(evidence.quote),
             }
         )
         if len(rows) >= max_items:
@@ -4318,16 +5233,276 @@ def _safe_error_message(exc: Exception | None) -> str:
     return _truncate_text(text, 160)
 
 
-def _safe_evidence_refs(reducer_result: ReducerResult):
-    refs = []
+def _sanitize_report_display_text(
+    value: object,
+    *,
+    fallback: str = "Unavailable.",
+    max_chars: int | None = None,
+) -> str:
+    cleaned = _scrub_sensitive_text(
+        _decode_visible_html_entities(str(value or ""))
+    ).strip()
+    if not cleaned:
+        return fallback
+    if max_chars is None or len(cleaned) <= max_chars:
+        return cleaned
+    suffix = "\n\n[truncated]"
+    return cleaned[: max(1, max_chars - len(suffix))].rstrip() + suffix
+
+
+def _sanitize_optional_report_display_text(value: object) -> str | None:
+    if value is None:
+        return None
+    cleaned = _sanitize_report_display_text(value, fallback="")
+    return cleaned or None
+
+
+def _sanitize_report_i18n(value: I18nText) -> I18nText:
+    return I18nText(
+        zh=_sanitize_report_display_text(value.zh, fallback="暂不可用。"),
+        en=_sanitize_report_display_text(value.en),
+    )
+
+
+def _sanitize_report_display_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, nested in value.items():
+            raw_key = str(key)
+            safe_key = (
+                "redacted_field"
+                if is_sensitive_report_key(raw_key)
+                else _sanitize_report_display_text(
+                    raw_key,
+                    fallback="field",
+                    max_chars=120,
+                )
+            )
+            candidate_key = safe_key
+            suffix = 2
+            while candidate_key in sanitized:
+                candidate_key = f"{safe_key}_{suffix}"
+                suffix += 1
+            safe_key = candidate_key
+            sanitized[safe_key] = _sanitize_report_display_payload(nested)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_report_display_payload(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_report_display_text(value, fallback="")
+    return value
+
+
+def _sanitize_chart_display_texts(chart: Chart) -> Chart:
+    data = _sanitize_report_display_payload(chart.data)
+    return chart.model_copy(update={"data": data})
+
+
+def _sanitize_branch_distribution_display_texts(
+    values: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **dict(item),
+            "label": _sanitize_report_display_text(item.get("label")),
+        }
+        for item in values
+    ]
+
+
+def _sanitize_report_section_display_texts(
+    sections: list[ReportSection],
+) -> list[ReportSection]:
+    return [
+        section.model_copy(
+            update={
+                "title": _sanitize_report_display_text(section.title),
+                "title_i18n": _sanitize_report_i18n(section.title_i18n),
+                "intent": _sanitize_report_display_text(section.intent),
+                "charts": [
+                    _sanitize_chart_display_texts(chart) for chart in section.charts
+                ],
+            }
+        )
+        for section in sections
+    ]
+
+
+def _sanitize_analytic_confidence_display_texts(
+    value: AnalyticConfidence,
+) -> AnalyticConfidence:
+    return value.model_copy(
+        update={
+            "basis": _sanitize_report_display_text(value.basis),
+            "basis_i18n": (
+                _sanitize_report_i18n(value.basis_i18n)
+                if value.basis_i18n is not None
+                else None
+            ),
+        }
+    )
+
+
+def _sanitize_dissenting_display_texts(
+    value: DissentingView | None,
+) -> DissentingView | None:
+    if value is None:
+        return None
+    return value.model_copy(
+        update={
+            "why_verdict_could_be_wrong": _sanitize_report_display_text(
+                value.why_verdict_could_be_wrong
+            ),
+            "what_almost_won": _sanitize_report_display_text(value.what_almost_won),
+        }
+    )
+
+
+def _sanitize_key_participant_display_texts(
+    values: list[KeyParticipant],
+) -> list[KeyParticipant]:
+    return [
+        item.model_copy(
+            update={
+                "agent_name": _sanitize_report_display_text(
+                    item.agent_name,
+                    max_chars=120,
+                )
+            }
+        )
+        for item in values
+    ]
+
+
+def _sanitize_indicator_display_texts(
+    values: list[IndicatorToWatch],
+) -> list[IndicatorToWatch]:
+    return [
+        item.model_copy(
+            update={
+                "signal": _sanitize_report_display_text(item.signal),
+                "note": _sanitize_report_display_text(item.note),
+                **{
+                    field: _sanitize_report_display_text(
+                        getattr(item, field),
+                        fallback="",
+                    )
+                    for field in (
+                        "threshold",
+                        "observation",
+                        "time_horizon",
+                        "rationale",
+                    )
+                },
+            }
+        )
+        for item in values
+    ]
+
+
+def _sanitize_interview_evidence_display_texts(
+    values: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for value in values:
+        item = _sanitize_report_display_payload(dict(value))
+        if "agent_name" in item:
+            item["agent_name"] = _sanitize_report_display_text(
+                item.get("agent_name"),
+                max_chars=120,
+            )
+        if "excerpt" in item:
+            item["excerpt"] = _sanitize_report_display_text(
+                item.get("excerpt"),
+                max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+            )
+        sanitized.append(item)
+    return sanitized
+
+
+def _sanitize_interview_status_display_texts(
+    value: InterviewStatus | None,
+) -> InterviewStatus | None:
+    if value is None:
+        return None
+    return value.model_copy(
+        update={
+            "message": _sanitize_optional_report_display_text(value.message),
+            "error_code": _sanitize_optional_report_display_text(value.error_code),
+        }
+    )
+
+
+def _sanitize_tool_trace_display_texts(
+    values: list[ToolTraceSummary],
+) -> list[ToolTraceSummary]:
+    return [
+        item.model_copy(
+            update={
+                "section_id": _sanitize_optional_report_display_text(
+                    item.section_id
+                ),
+                "tool": _sanitize_report_display_text(item.tool),
+                "query": _sanitize_report_display_text(item.query, fallback=""),
+            }
+        )
+        for item in values
+    ]
+
+
+def _sanitize_premortem_display_texts(
+    value: PremortemAnalysis | None,
+) -> PremortemAnalysis | None:
+    if value is None:
+        return None
+    items: list[PremortemFailureMode] = []
+    for item in value.items:
+        links = [
+            link.model_copy(
+                update={
+                    "rationale_i18n": _sanitize_report_i18n(link.rationale_i18n)
+                }
+            )
+            for link in item.evidence_chain
+        ]
+        items.append(
+            item.model_copy(
+                update={
+                    "failure_mode_i18n": _sanitize_report_i18n(
+                        item.failure_mode_i18n
+                    ),
+                    "mechanism_i18n": _sanitize_report_i18n(item.mechanism_i18n),
+                    "early_warning_i18n": _sanitize_report_i18n(
+                        item.early_warning_i18n
+                    ),
+                    "uncertainty_i18n": _sanitize_report_i18n(
+                        item.uncertainty_i18n
+                    ),
+                    "evidence_chain": links,
+                }
+            )
+        )
+    return value.model_copy(update={"items": items})
+
+
+def _sanitize_report_evidence_quote(value: str) -> str:
+    return _truncate_text(
+        _decode_visible_html_entities(value),
+        settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+    )
+
+
+def _safe_evidence_refs(reducer_result: ReducerResult) -> list[EvidenceRef]:
+    refs: list[EvidenceRef] = []
     for evidence in reducer_result.evidence:
         refs.append(
             evidence.model_copy(
                 update={
-                    "quote": _truncate_text(
-                        evidence.quote,
-                        settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
-                    )
+                    "agent_name": _sanitize_report_display_text(
+                        evidence.agent_name,
+                        max_chars=120,
+                    ),
+                    "quote": _sanitize_report_evidence_quote(evidence.quote),
                 }
             )
         )

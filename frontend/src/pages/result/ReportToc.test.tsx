@@ -44,4 +44,13 @@ describe('ReportToc Component', () => {
     expect(links[0]).toHaveAttribute('href', '/result/123/report#report-section-sec-1');
     expect(links[1]).toHaveAttribute('href', '/result/123/report#report-section-sec-2');
   });
+
+  it('uses an explicit report content language instead of the UI locale', () => {
+    render(<ReportToc sections={mockSections} language="zh" />);
+
+    expect(screen.getByText('章节一')).toBeInTheDocument();
+    expect(screen.getByText('章节二')).toBeInTheDocument();
+    expect(screen.queryByText('Section One')).toBeNull();
+    expect(screen.queryByText('Section Two')).toBeNull();
+  });
 });

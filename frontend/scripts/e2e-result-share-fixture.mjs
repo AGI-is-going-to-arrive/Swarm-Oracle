@@ -289,6 +289,16 @@ async function installFixtures(page, state) {
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/story`, (route) => route.fulfill(json(STORY_FIXTURE)));
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/agents`, (route) => route.fulfill(json(AGENTS_FIXTURE)));
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/predictions`, (route) => route.fulfill(json(PREDICTIONS_FIXTURE)));
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/score-predictions`, (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    return route.fulfill(json({
+      attempted: 0,
+      scored: 0,
+      failed: 0,
+      all_failed: false,
+      results: [],
+    }));
+  });
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/checkpoints*`, (route) => route.fulfill(json([])));
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/faction-timeline*`, (route) => route.fulfill(json([])));
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/export`, (route) => (
@@ -311,7 +321,7 @@ async function installFixtures(page, state) {
   });
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}`, (route) => {
     const url = route.request().url();
-    if (/\/(story|agents|predictions|checkpoints|faction-timeline|export|social)(?:[/?]|$)/u.test(url)) {
+    if (/\/(story|agents|predictions|score-predictions|checkpoints|faction-timeline|export|social)(?:[/?]|$)/u.test(url)) {
       return route.fallback();
     }
     return route.fulfill(json(SCENARIO_FIXTURE));
@@ -395,15 +405,30 @@ async function runResultShareSurface({ mode, browserName, contextOptions, args }
       initial.page?.branch_titles ?? null,
     ));
     steps.push(createStep(
-      "replay-artifact-created-for-share-url",
-      state.replayArtifactRequests.some((request) => request?.kind === "scenario_result_v1"),
-      state.replayArtifactRequests,
+      "replay-artifact-not-created-before-explicit-share",
+      state.replayArtifactRequests.length === 0,
+      [...state.replayArtifactRequests],
     ));
 
     const shareButton = page.getByRole("button", { name: /生成文案|Generate Copy/i }).first();
     steps.push(createStep("share-button-visible", await shareButton.isVisible().catch(() => false)));
     steps.push(createStep("share-button-enabled", await shareButton.isEnabled().catch(() => false)));
+    const replayArtifactResponsePromise = page.waitForResponse((response) => {
+      const request = response.request();
+      if (request.method() !== "POST") return false;
+      if (new URL(request.url()).pathname !== "/api/replay-artifact") return false;
+      return request.postDataJSON()?.kind === "scenario_result_v1";
+    }, { timeout: 15000 }).catch(() => null);
     await shareButton.click();
+    const replayArtifactResponse = await replayArtifactResponsePromise;
+    const replayArtifactRequests = [...state.replayArtifactRequests];
+    steps.push(createStep(
+      "replay-artifact-created-after-explicit-share",
+      replayArtifactResponse?.status() === 201
+        && replayArtifactRequests.length === 1
+        && replayArtifactRequests[0]?.kind === "scenario_result_v1",
+      replayArtifactRequests,
+    ));
 
     const open = await waitForAutomation(
       page,

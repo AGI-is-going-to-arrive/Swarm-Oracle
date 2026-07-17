@@ -44,12 +44,10 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                   const verdict = branch_verdicts.find(
                     (v) => v.branch_index === bar.branch_index,
                   );
-                  const confidenceKey = verdict
-                    ? `gallery.confidence_${verdict.confidence}`
-                    : 'gallery.confidence_low';
-                  const confidenceLabel = verdict
-                    ? t(confidenceKey, verdict.confidence)
-                    : t('gallery.confidence_low', 'Low');
+                  const confidence = verdict?.confidence ?? null;
+                  const confidenceLabel = confidence
+                    ? t(`gallery.confidence_${confidence}`, confidence)
+                    : null;
 
                   const percentage = Math.round(bar.probability * 100);
 
@@ -57,10 +55,10 @@ export function GalleryArtifactView({ artifact }: GalleryArtifactViewProps) {
                     <article key={bar.branch_index} className="branch-item">
                       <div className="branch-header">
                         <h4 className="branch-title">{bar.label}</h4>
-                        {verdict && (
+                        {confidence && confidenceLabel && (
                           <div className="branch-meta">
                             <span
-                              className={`confidence-badge confidence-${verdict.confidence}`}
+                              className={`confidence-badge confidence-${confidence}`}
                               aria-label={`${t('result.confidence_label', 'Confidence')}: ${confidenceLabel}`}
                             >
                               {confidenceLabel}

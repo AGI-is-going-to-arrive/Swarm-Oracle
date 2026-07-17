@@ -32,6 +32,7 @@ _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
 _CHROMA_INIT_TIMEOUT_SECONDS = 5.0
 _CHROMA_COLLECTION_NAME_MAX = 63  # Chroma DB hard limit
 _CHROMA_IDENTITY_PROFILE_WRITE_PENDING = threading.Semaphore(1)
+_COLLECTION_LOOKUP_UNAVAILABLE = object()
 IDENTITY_MEMORY_PIN_CAP = 20
 
 _IDENTITY_MEMORY_RESERVED_METADATA_KEYS = frozenset({
@@ -243,6 +244,26 @@ class VectorStore:
             )
             logger.warning("Failed to get/create collection for %s: %s", scenario_id, exc)
             return None
+
+    def _get_existing_collection(self, scenario_id: str):
+        """Return an existing scenario collection without creating an empty one."""
+        if not self.available:
+            return _COLLECTION_LOOKUP_UNAVAILABLE
+
+        if scenario_id in self._collections:
+            self._collections.move_to_end(scenario_id)
+            return self._collections[scenario_id]
+
+        name = self._collection_name(scenario_id)
+        collection_names = {
+            item if isinstance(item, str) else str(getattr(item, "name", ""))
+            for item in self._client.list_collections()
+        }
+        if name not in collection_names:
+            return None
+        collection = self._client.get_collection(name=name)
+        self._remember_collection(scenario_id, collection)
+        return collection
 
     def _remember_collection(self, scenario_id: str, collection: Any) -> None:
         """Track a collection in a bounded LRU cache."""
@@ -554,6 +575,54 @@ class VectorStore:
 
         self._run_serialized_write(scenario_id, "delete_collection", _delete)
 
+    def delete_branch_memories(self, scenario_id: str, branch_id: str) -> bool:
+        """Delete only memories whose metadata belongs to one replay branch."""
+        normalized_scenario_id = str(scenario_id or "").strip()
+        normalized_branch_id = str(branch_id or "").strip()
+        if not normalized_scenario_id or not normalized_branch_id:
+            return False
+
+        deleted = False
+
+        def _delete() -> None:
+            nonlocal deleted
+            try:
+                collection = self._get_existing_collection(normalized_scenario_id)
+                if collection is _COLLECTION_LOOKUP_UNAVAILABLE:
+                    return
+                if collection is None:
+                    deleted = True
+                    return
+                collection.delete(where={"branch_id": normalized_branch_id})
+                deleted = True
+                logger.info(
+                    "Deleted ChromaDB memories for scenario=%s branch=%s",
+                    normalized_scenario_id,
+                    normalized_branch_id,
+                )
+            except Exception as exc:
+                self._handle_operation_failure(
+                    scenario_id=normalized_scenario_id,
+                    reason=(
+                        "branch cleanup failed for "
+                        f"{normalized_scenario_id}/{normalized_branch_id}"
+                    ),
+                    exc=exc,
+                )
+                logger.warning(
+                    "Vector store branch cleanup failed for scenario=%s branch=%s (%s)",
+                    normalized_scenario_id,
+                    normalized_branch_id,
+                    type(exc).__name__,
+                )
+
+        self._run_serialized_write(
+            normalized_scenario_id,
+            "delete_branch_memories",
+            _delete,
+        )
+        return deleted
+
     def health_check(self) -> dict:
         """Check ChromaDB connectivity."""
         if not self.available:
@@ -631,6 +700,18 @@ def reset_vector_store() -> None:
 def collection_name_for_scenario(scenario_id: str) -> str:
     """Return the canonical Chroma collection name for a scenario."""
     return VectorStore._collection_name(scenario_id)
+
+
+def delete_branch_memories(scenario_id: str, branch_id: str) -> bool:
+    """Best-effort removal of one branch's scenario-local vector memories."""
+    normalized_scenario_id = str(scenario_id or "").strip()
+    normalized_branch_id = str(branch_id or "").strip()
+    if not normalized_scenario_id or not normalized_branch_id:
+        return False
+    return get_vector_store().delete_branch_memories(
+        normalized_scenario_id,
+        normalized_branch_id,
+    )
 
 
 # ── Identity Memory (cross-scenario) ──────────────────────

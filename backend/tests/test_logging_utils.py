@@ -103,7 +103,7 @@ def test_json_log_formatter_scrubs_message_and_exception_secrets():
     assert "api key [redacted]" in payload["message"]
     assert "[redacted-bearer]" in payload["message"]
     assert "https://example.test/v1" in payload["message"]
-    assert "[redacted-secret]" in payload["message"]
+    assert "secret=[redacted]" in payload["message"]
     assert "api key [redacted]" in payload["exception"]
     assert "[redacted-bearer]" in payload["exception"]
     assert "https://example.test/v1" in payload["exception"]
@@ -116,6 +116,8 @@ def test_json_log_formatter_scrubs_nested_sensitive_extra_values():
         "password": "hunter2",
         "api_key": "tiny-key",
         "Authorization": "Basic dXNlcjpwYXNz",
+        "SESSION_SECRET": "a" * 64,
+        "WEB_SEARCH_API_KEY": "b" * 64,
     }
     logger = logging.getLogger("test.logging.structured-secrets")
     record = logger.makeRecord(
@@ -129,6 +131,7 @@ def test_json_log_formatter_scrubs_nested_sensitive_extra_values():
         extra={
             "provider": {**secrets, "safe_label": "keep-me"},
             "refresh_token": "top-level-secret",
+            "ADMIN_TOKEN": "c" * 64,
         },
     )
 
@@ -138,7 +141,9 @@ def test_json_log_formatter_scrubs_nested_sensitive_extra_values():
     for secret in secrets.values():
         assert secret not in output
     assert "top-level-secret" not in output
+    assert "c" * 64 not in output
     assert payload["extra"]["refresh_token"] == "[redacted-credential]"
+    assert payload["extra"]["ADMIN_TOKEN"] == "[redacted-credential]"
     assert payload["extra"]["provider"]["safe_label"] == "keep-me"
     assert set(payload["extra"]["provider"].values()) == {
         "[redacted-credential]",
@@ -176,6 +181,111 @@ def test_scrub_sensitive_text_redacts_unlabelled_provider_credentials(raw_token)
 )
 def test_scrub_sensitive_text_preserves_credential_prefix_near_misses(safe_text):
     assert _scrub_sensitive_text(safe_text) == safe_text
+
+
+@pytest.mark.parametrize(
+    "safe_text",
+    [
+        "/api/scenario/836245bf-b8f9-4cc9-9604-35c4e721b91f/social-feed",
+        "/api/campaign/challenges/rotation",
+        "The evidence spans early/middle/late-stage-cross-validation.",
+    ],
+)
+def test_scrub_sensitive_text_preserves_long_routes_and_slash_delimited_prose(
+    safe_text,
+):
+    assert _scrub_sensitive_text(safe_text) == safe_text
+
+
+def test_scrub_sensitive_text_still_redacts_mixed_case_unlabelled_secret():
+    raw_secret = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+
+    cleaned = _scrub_sensitive_text(f"upstream returned {raw_secret}")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_still_redacts_opaque_lowercase_slash_token():
+    raw_secret = "abcdefghijklmnopqrstuvwx/0123456789"
+
+    cleaned = _scrub_sensitive_text(f"upstream returned {raw_secret}")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_redacts_opaque_secret_inside_route():
+    raw_secret = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+
+    cleaned = _scrub_sensitive_text(f"GET /reset/{raw_secret}/confirm")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_does_not_whitelist_opaque_multi_slash_token():
+    raw_secret = "abcdefghijkl/mnopqrstuv/0123456789abcdef"
+
+    cleaned = _scrub_sensitive_text(f"upstream returned {raw_secret}")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_redacts_uuid_capability_in_unknown_route():
+    raw_secret = "836245bf-b8f9-4cc9-9604-35c4e721b91f"
+
+    cleaned = _scrub_sensitive_text(f"GET /webhook/{raw_secret}/consume")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_rejects_unregistered_scenario_uuid_route():
+    raw_secret = "836245bf-b8f9-4cc9-9604-35c4e721b91f"
+
+    cleaned = _scrub_sensitive_text(f"GET /api/scenario/{raw_secret}/profile")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_redacts_long_hyphen_token_in_unknown_route():
+    raw_secret = "alpha-bravo-charlie-delta-echo-foxtrot-golf"
+
+    cleaned = _scrub_sensitive_text(f"GET /reset/{raw_secret}/confirm")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+def test_scrub_sensitive_text_redacts_slash_split_token_in_unknown_route():
+    raw_secret = "abcdefghijkl/mnopqrstuv/wxyzabcdef"
+
+    cleaned = _scrub_sensitive_text(f"GET /webhook/{raw_secret}/confirm")
+
+    assert raw_secret not in cleaned
+    assert "[redacted-secret]" in cleaned
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["SESSION_SECRET", "ADMIN_TOKEN", "LLM_API_KEY", "WEB_SEARCH_API_KEY"],
+)
+def test_scrub_sensitive_text_redacts_namespaced_credential_labels(label):
+    raw_secret = "d" * 64
+
+    cleaned = _scrub_sensitive_text(f"{label}={raw_secret}")
+
+    assert raw_secret not in cleaned
+    assert "[redacted]" in cleaned
+
+
+def test_scrub_sensitive_text_preserves_noncredential_namespace_label():
+    message = "LLM_TOKENS_PER_MINUTE=1000"
+
+    assert _scrub_sensitive_text(message) == message
 
 
 @pytest.mark.parametrize(

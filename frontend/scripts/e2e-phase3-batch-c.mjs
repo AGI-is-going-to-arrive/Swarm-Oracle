@@ -166,6 +166,7 @@ const STORY_FIXTURE = {
 
 const SCENARIO_FIXTURE = {
   id: FIXTURE_SCENARIO_ID,
+  causal_graph_id: "graph-e2e-resume",
   question: "What if renewable energy was adopted 50 years earlier?",
   status: "done",
   created_at: "2026-04-10T00:00:00Z",

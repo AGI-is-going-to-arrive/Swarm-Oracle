@@ -26,14 +26,19 @@ from app.models import (
     Round,
     Scenario,
     ScenarioStatus,
+    SimulationAction,
+    SimulationActionStatus,
+    SimulationActionType,
 )
 from app.models.database import get_engine
 from app.services.branch_lineage import BranchLineageError
 from app.services.result_report import builder
 from app.services.result_report.reducer import StatResult
 from app.services.result_report.schema import (
+    EvidenceRef,
     FullReport,
     I18nText,
+    LanguageStatus,
     Likelihood,
     ReportSection,
     ResultReportSSEEvent,
@@ -178,6 +183,33 @@ def test_indicators_prompt_discloses_the_noncausal_affect_proxy_semantics():
     assert '"simulated_affect_convergence_proxy_reason":"metadata_unavailable"' in prompt
     assert '"polarization"' not in prompt
     assert "not verified stance, trust, or real-world polarization" in prompt
+
+
+def test_report_prompts_require_temporal_refs_verbatim_quotes_and_proxy_caveat():
+    scenario_id = _seed_report_scenario()
+    reducer_result = builder.reduce_report(get_engine(), scenario_id)
+    context = _builder_context()
+    section = builder.SectionPlan(
+        section_id="factions",
+        title_i18n={"zh": "阵营", "en": "Factions"},
+        intent="Explain simulated faction changes.",
+    )
+
+    prompts = [
+        builder._build_outline_prompt(context, reducer_result),
+        builder._build_section_prompt(
+            context,
+            section,
+            reducer_result,
+            tier="generation",
+            history=[],
+        ),
+    ]
+
+    assert all("simulated affect-proxy clusters" in prompt for prompt in prompts)
+    assert all("not verified stances" in prompt for prompt in prompts)
+    assert "copied verbatim" in prompts[1]
+    assert "early, middle, and late rounds" in prompts[1]
 
 
 def test_report_scope_kwargs_inherits_profile_runtime_fields():
@@ -365,6 +397,137 @@ def _builder_context() -> builder.BuilderContext:
         branch_insight="Safeguards unlock support.",
         web_context_blocks=[],
     )
+
+
+def _claim_compiler_evidence() -> EvidenceRef:
+    return EvidenceRef(
+        id="ev-privacy",
+        branch_id="branch-a",
+        round_id="round-1",
+        round_number=1,
+        agent_id="agent-privacy",
+        agent_name="Privacy Advocate",
+        message_id="msg-privacy",
+        quote="Privacy safeguards make the approval defensible.",
+        kind="utterance",
+    )
+
+
+def _seed_claim_coverage_evidence(
+    *round_numbers: int,
+) -> tuple[str, list[EvidenceRef]]:
+    scenario_id = _seed_report_scenario()
+    evidence: list[EvidenceRef] = []
+    with Session(get_engine()) as session:
+        session.add_all(
+            Round(
+                id=f"coverage-round-{round_number}",
+                branch_id="branch-a",
+                round_number=round_number,
+            )
+            for round_number in range(3, 11)
+        )
+        for round_number in round_numbers:
+            message_id = f"coverage-message-{round_number}"
+            content = (
+                f"Privacy safeguards remained defensible in round {round_number}."
+            )
+            session.add(
+                AgentMessage(
+                    id=message_id,
+                    round_id=f"coverage-round-{round_number}",
+                    agent_id="agent-privacy",
+                    content=content,
+                    emotion="focused",
+                )
+            )
+            evidence.append(
+                EvidenceRef(
+                    id=f"ev-coverage-{round_number}",
+                    branch_id="branch-a",
+                    round_id=f"coverage-round-{round_number}",
+                    round_number=round_number,
+                    agent_id="agent-privacy",
+                    agent_name="Privacy Advocate",
+                    message_id=message_id,
+                    quote=content,
+                    kind="utterance",
+                )
+            )
+        session.commit()
+    return scenario_id, evidence
+
+
+def _compile_claim_test_sections(
+    sections: list[ReportSection],
+    *,
+    max_round: int = 2,
+    language: str | None = None,
+    verdict_headline: str = "The result remains uncertain.",
+):
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    if max_round > 2:
+        with Session(get_engine()) as session:
+            session.add_all(
+                Round(
+                    id=f"claim-round-{round_number}",
+                    branch_id="branch-a",
+                    round_number=round_number,
+                )
+                for round_number in range(3, max_round + 1)
+            )
+            session.commit()
+    kwargs: dict[str, Any] = {
+        "verdict_headline": verdict_headline,
+        "max_round": max_round,
+    }
+    if language is not None:
+        kwargs["language"] = language
+    return compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        sections,
+        [_claim_compiler_evidence()],
+        **kwargs,
+    )
+
+
+def _claim_compilation_payload(value: object) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump(mode="json")
+        assert isinstance(payload, dict)
+        return payload
+    payload = vars(value)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _compiled_claim_for(compilation: object, needle: str) -> dict[str, Any]:
+    payload = _claim_compilation_payload(compilation)
+    claims = payload.get("claims")
+    assert isinstance(claims, list) and claims
+    for raw_claim in claims:
+        claim = _claim_compilation_payload(raw_claim)
+        if needle in json.dumps(claim.get("claim_text"), ensure_ascii=False):
+            return claim
+    pytest.fail(f"compiled claims did not include material statement: {needle}")
+
+
+def _compiled_section_for(compilation: object, section_id: str) -> dict[str, Any]:
+    payload = _claim_compilation_payload(compilation)
+    sections = payload.get("sections")
+    assert isinstance(sections, list)
+    for raw_section in sections:
+        section = _claim_compilation_payload(raw_section)
+        if section.get("id") == section_id:
+            return section
+    pytest.fail(f"compiled sections did not include: {section_id}")
 
 
 def _reducer_result_with_premortem_evidence():
@@ -585,6 +748,2083 @@ def test_ordinary_report_views_expose_only_outcome_evidence_ids():
         reducer_result.outcome_evidence_ids
     )
     assert indicators[0].evidence_refs == [outcome_id]
+
+
+def test_report_assembly_downgrades_ungrounded_quotes_and_labels_faction_proxy():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = _builder_context()
+    outcome_evidence = [
+        item
+        for item in reducer_result.evidence
+        if item.id in set(reducer_result.outcome_evidence_ids)
+    ]
+    assert len(outcome_evidence) >= 2
+    grounded_evidence, unreferenced_evidence = outcome_evidence[:2]
+    grounded_quote = grounded_evidence.quote
+    section = ReportSection(
+        id="factions",
+        title="Factions",
+        title_i18n=I18nText(zh="阵营", en="Factions"),
+        intent="Explain simulated faction changes.",
+        body_md_i18n=I18nText(
+            zh=(
+                f"发言记录为“{grounded_quote}”，但所谓“财政已经加入真实联盟”只是改写。"
+                "[“链接里的虚构联盟”](https://example.invalid)也不可信，且“财”不是有效引语。"
+                "保留内联代码 `\"literal config\"`。"
+            ),
+            en=(
+                f'One transcript says "{grounded_quote}", while the report called it '
+                f'"a verified alliance" and quoted "{unreferenced_evidence.quote}" '
+                "without a section ref. It also called it 'a shadow coalition' and linked "
+                '["invented support"](https://example.invalid "source title"). '
+                'A one-character "a" is not a useful quote. Keep `"literal config"` unchanged.'
+            ),
+        ),
+        evidence_refs=[grounded_evidence.id],
+        charts=[],
+    )
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "标题", "en": "Title"},
+            summary_i18n={"zh": "摘要", "en": "Summary"},
+            sections=[],
+        ),
+        sections=[section],
+        status="complete",
+        tier="generation",
+    )
+
+    body = report.sections[0].body_md_i18n
+    assert f"“{grounded_quote}”" in body.zh
+    assert "“财政已经加入真实联盟”" not in body.zh
+    assert "财政已经加入真实联盟" in body.zh
+    assert "[链接里的虚构联盟](https://example.invalid)" in body.zh
+    assert "“财”" not in body.zh
+    assert f'"{grounded_quote}"' in body.en
+    assert '"a verified alliance"' not in body.en
+    assert "a verified alliance" in body.en
+    assert f'"{unreferenced_evidence.quote}"' not in body.en
+    assert unreferenced_evidence.quote in body.en
+    assert "'a shadow coalition'" not in body.en
+    assert "a shadow coalition" in body.en
+    assert '[invented support](https://example.invalid "source title")' in body.en
+    assert '"a"' not in body.en
+    assert '`"literal config"`' in body.zh
+    assert '`"literal config"`' in body.en
+    assert "**阵营图限制**" in body.zh
+    assert "**Faction chart limitation**" in body.en
+    assert "not verified stances" in report.limitations
+
+
+def test_claim_compiler_downgrades_cross_speaker_exact_quote_and_removes_quote_marks():
+    quote = "Privacy safeguards make the approval defensible."
+    section = ReportSection(
+        id="cross-speaker",
+        title="Cross-speaker attribution",
+        title_i18n=I18nText(zh="错误归因", en="Cross-speaker attribution"),
+        intent="Audit quote attribution.",
+        body_md_i18n=I18nText(
+            zh=f"交通规划师说：“{quote}”",
+            en=f'Transit Planner said, "{quote}"',
+        ),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section])
+
+    claim = _compiled_claim_for(compiled, "Transit Planner said")
+    assert claim["exact_quote"] in {None, ""}
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "speaker_mismatch"
+    compiled_section = _compiled_section_for(compiled, "cross-speaker")
+    body = compiled_section["body_md_i18n"]
+    assert f'"{quote}"' not in body["en"]
+    assert f"“{quote}”" not in body["zh"]
+    assert quote in body["en"]
+    assert quote in body["zh"]
+
+
+def test_claim_compiler_downgrades_exact_quote_with_reversed_outer_stance():
+    quote = "Privacy safeguards make the approval defensible."
+    statement = f'Privacy Advocate rejected the plan, saying, "{quote}"'
+    section = ReportSection(
+        id="stance-mismatch",
+        title="Stance mismatch",
+        title_i18n=I18nText(zh="立场错配", en="Stance mismatch"),
+        intent="Reject semantic inversion around a real quote.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section])
+
+    claim = _compiled_claim_for(compiled, "Privacy Advocate rejected")
+    assert claim["exact_quote"] == quote
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "stance_semantic_mismatch"
+
+
+def test_claim_compiler_uses_primary_language_without_translation_duplicate_low():
+    supported = "Privacy safeguards make the approval defensible."
+    unsupported_translation = "市议会已无条件批准一项具有约束力的全城联盟。"
+    section = ReportSection(
+        id="primary-language",
+        title="Primary language",
+        title_i18n=I18nText(zh="主语言", en="Primary language"),
+        intent="Compile only the report's authoritative language surface.",
+        body_md_i18n=I18nText(
+            zh=unsupported_translation,
+            en=supported,
+        ),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section],
+        language="en",
+        verdict_headline="",
+    )
+    payload = _claim_compilation_payload(compiled)
+    claims = [
+        _claim_compilation_payload(claim)
+        for claim in payload["claims"]
+        if _claim_compilation_payload(claim)["claim_id"].startswith(
+            "claim-primary-language-"
+        )
+    ]
+
+    assert len(claims) == 1
+    assert claims[0]["claim_text"] == supported
+    assert claims[0]["confidence"] != "low"
+    assert payload["analytic_confidence"]["level"] != "low"
+
+
+def test_claim_compiler_splits_only_outside_literal_quotes():
+    from app.services.result_report.claims import _statements
+
+    quoted = 'Privacy Advocate said, "First verified sentence. Second verified sentence."'
+    section = ReportSection(
+        id="atomic-statements",
+        title="Atomic statements",
+        title_i18n=I18nText(zh="原子结论", en="Atomic statements"),
+        intent="Keep one literal quote intact while atomizing compound prose.",
+        body_md_i18n=I18nText(
+            zh=f"{quoted}；Transit Planner requested a budget cap.",
+            en=f"{quoted}; Transit Planner requested a budget cap.",
+        ),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    assert _statements(section, language="en") == [
+        quoted,
+        "Transit Planner requested a budget cap.",
+    ]
+
+
+def test_claim_compiler_downgrades_missing_named_speaker_coverage():
+    statement = (
+        "Privacy Advocate made the approval defensible together with Transit Planner."
+    )
+    section = ReportSection(
+        id="named-speaker-coverage",
+        title="Named speaker coverage",
+        title_i18n=I18nText(zh="具名角色覆盖", en="Named speaker coverage"),
+        intent="Require evidence for every explicitly named participant.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section], language="en", verdict_headline=""
+    )
+    claim = _compiled_claim_for(compiled, statement)
+
+    assert claim["confidence"] == "low"
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["downgrade_reason"] == "insufficient_speaker_coverage"
+
+
+def test_claim_compiler_binds_subject_not_named_target_to_verified_coordinates():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        session.add_all(
+            [
+                SimulationAction(
+                    id="action-privacy-comment",
+                    scenario_id=scenario_id,
+                    branch_id="branch-a",
+                    round_id="round-1",
+                    round_number=1,
+                    sequence=1,
+                    agent_id="agent-privacy",
+                    message_id="msg-privacy",
+                    action_type=SimulationActionType.COMMENT,
+                    status=SimulationActionStatus.VERIFIED,
+                    target_type="agent",
+                    target_id="agent-planner",
+                    content="Privacy safeguards make the approval defensible.",
+                    payload_json="{}",
+                    idempotency_key="claim-subject:privacy",
+                ),
+                SimulationAction(
+                    id="action-planner-post",
+                    scenario_id=scenario_id,
+                    branch_id="branch-a",
+                    round_id="round-2",
+                    round_number=2,
+                    sequence=2,
+                    agent_id="agent-planner",
+                    message_id="msg-planner",
+                    action_type=SimulationActionType.POST,
+                    status=SimulationActionStatus.VERIFIED,
+                    content="Budget caps keep the transport gains politically viable.",
+                    payload_json="{}",
+                    idempotency_key="claim-subject:planner",
+                ),
+            ]
+        )
+        session.commit()
+
+    planner_evidence = EvidenceRef(
+        id="ev-planner",
+        branch_id="branch-a",
+        round_id="round-2",
+        round_number=2,
+        agent_id="agent-planner",
+        agent_name="Transit Planner",
+        message_id="msg-planner",
+        quote="Budget caps keep the transport gains politically viable.",
+        kind="utterance",
+    )
+    statement = (
+        "Privacy Advocate warned Transit Planner that privacy safeguards "
+        "make approval defensible."
+    )
+    section = ReportSection(
+        id="subject-target-binding",
+        title="Subject and target",
+        title_i18n=I18nText(zh="主语与目标", en="Subject and target"),
+        intent="Bind a claim to its grammatical subject, not its named target.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy", planner_evidence.id],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        [_claim_compiler_evidence(), planner_evidence],
+        verdict_headline="",
+        max_round=2,
+        language="en",
+    )
+    claim = _compiled_claim_for(compiled, "warned Transit Planner")
+
+    assert claim["speaker"] == "Privacy Advocate"
+    assert claim["agent_id"] == "agent-privacy"
+    assert claim["message_ids"] == ["msg-privacy"]
+    assert claim["action_ids"] == ["action-privacy-comment"]
+
+
+def test_claim_compiler_skips_markdown_labels_but_keeps_propositions_and_quotes():
+    quote = "Privacy safeguards make the approval defensible."
+    body = "\n".join(
+        [
+            "### Evidence",
+            (
+                "> **Display disclaimer:** faction values are simulated "
+                "affect-proxy clusters, not verified stances."
+            ),
+            f"**1. {quote}**",
+            (
+                "- **EvidenceRef ev-privacy** — round 1, agent Privacy Advocate, "
+                "message msg-privacy"
+            ),
+            "Verbatim evidence:",
+            f'> "{quote}"',
+        ]
+    )
+    section = ReportSection(
+        id="markdown-claim-boundary",
+        title="Markdown claim boundary",
+        title_i18n=I18nText(zh="Markdown 结论边界", en="Markdown claim boundary"),
+        intent="Compile propositions while ignoring presentation scaffolding.",
+        body_md_i18n=I18nText(zh=body, en=body),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section],
+        language="en",
+        verdict_headline="",
+    )
+    claims = [
+        _claim_compilation_payload(claim)
+        for claim in _claim_compilation_payload(compiled)["claims"]
+        if _claim_compilation_payload(claim)["claim_id"].startswith(
+            "claim-markdown-claim-boundary-"
+        )
+    ]
+    claim_texts = [str(claim["claim_text"]) for claim in claims]
+
+    assert all(
+        not text.lstrip().startswith(
+            (
+                "#",
+                "**1.",
+                "- **EvidenceRef",
+                "> **Display disclaimer:**",
+                "Verbatim evidence:",
+            )
+        )
+        for text in claim_texts
+    )
+    assert any(
+        quote in text and not text.lstrip().startswith(">")
+        for text in claim_texts
+    )
+    quote_claims = [claim for claim in claims if claim["exact_quote"] == quote]
+    assert len(quote_claims) == 1
+    assert quote_claims[0]["speaker"] == "Privacy Advocate"
+    assert quote_claims[0]["message_ids"] == ["msg-privacy"]
+
+
+def test_claim_compiler_binds_every_explicit_round_to_coordinates():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    repeated = "Privacy safeguards still make the approval defensible."
+    with Session(get_engine()) as session:
+        session.add(
+            AgentMessage(
+                id="msg-privacy-round-2",
+                round_id="round-2",
+                agent_id="agent-privacy",
+                content=repeated,
+                emotion="focused",
+            )
+        )
+        session.commit()
+    first = _claim_compiler_evidence()
+    second = EvidenceRef(
+        id="ev-privacy-round-2",
+        branch_id="branch-a",
+        round_id="round-2",
+        round_number=2,
+        agent_id="agent-privacy",
+        agent_name="Privacy Advocate",
+        message_id="msg-privacy-round-2",
+        quote=repeated,
+        kind="utterance",
+    )
+    statement = (
+        f'Privacy Advocate said, "{first.quote}" in round 1 and reaffirmed '
+        "the privacy safeguards in round 2."
+    )
+    section = ReportSection(
+        id="explicit-rounds",
+        title="Explicit rounds",
+        title_i18n=I18nText(zh="明确轮次", en="Explicit rounds"),
+        intent="Bind each round named in prose.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=[first.id, second.id],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        [first, second],
+        verdict_headline="",
+        max_round=2,
+        language="en",
+    )
+    claim = _compiled_claim_for(compiled, "reaffirmed")
+
+    assert claim["round_numbers"] == [1, 2]
+    assert claim["confidence"] == "high"
+
+
+def test_claim_compiler_downgrades_unbound_explicit_round():
+    statement = (
+        "Privacy Advocate kept the approval defensible in round 1 and round 2."
+    )
+    section = ReportSection(
+        id="missing-explicit-round",
+        title="Missing explicit round",
+        title_i18n=I18nText(zh="缺失轮次", en="Missing explicit round"),
+        intent="Reject prose that names an unbound round.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section], language="en", verdict_headline=""
+    )
+    claim = _compiled_claim_for(compiled, statement)
+
+    assert claim["round_numbers"] == [1]
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_temporal_coverage"
+
+
+def test_claim_compiler_downgrades_single_round_repetition_claim():
+    quote = "Privacy safeguards make the approval defensible."
+    statement = f'Privacy Advocate repeatedly said, "{quote}"'
+    section = ReportSection(
+        id="single-round-repetition",
+        title="Single-round repetition",
+        title_i18n=I18nText(zh="单轮重复断言", en="Single-round repetition"),
+        intent="Require distinct rounds for repeated or continuous conduct.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section], language="en", verdict_headline=""
+    )
+    claim = _compiled_claim_for(compiled, "repeatedly")
+
+    assert claim["round_numbers"] == [1]
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_temporal_coverage"
+
+
+def test_claim_compiler_retains_outer_temporal_sources_for_exact_quote():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    quote = "Privacy safeguards make the approval defensible."
+    with Session(get_engine()) as session:
+        session.add(
+            AgentMessage(
+                id="msg-privacy-repeat-round-2",
+                round_id="round-2",
+                agent_id="agent-privacy",
+                content="Privacy safeguards still make the approval defensible.",
+                emotion="focused",
+            )
+        )
+        session.commit()
+    second = EvidenceRef(
+        id="ev-privacy-repeat-round-2",
+        branch_id="branch-a",
+        round_id="round-2",
+        round_number=2,
+        agent_id="agent-privacy",
+        agent_name="Privacy Advocate",
+        message_id="msg-privacy-repeat-round-2",
+        quote="Privacy safeguards still make the approval defensible.",
+        kind="utterance",
+    )
+    statement = f'Privacy Advocate repeatedly said, "{quote}"'
+    section = ReportSection(
+        id="multi-round-repetition",
+        title="Multi-round repetition",
+        title_i18n=I18nText(zh="多轮重复断言", en="Multi-round repetition"),
+        intent="Bind the literal quote and the surrounding repetition claim.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy", second.id],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        [_claim_compiler_evidence(), second],
+        verdict_headline="",
+        max_round=2,
+        language="en",
+    )
+    claim = _compiled_claim_for(compiled, "repeatedly")
+
+    assert claim["round_numbers"] == [1, 2]
+    assert claim["confidence"] == "high"
+
+
+def test_claim_compiler_treats_all_parties_as_full_roster_claim():
+    quote = "Privacy safeguards make the approval defensible."
+    statement = f'各方都认可：“{quote}”'
+    section = ReportSection(
+        id="all-parties",
+        title="All parties",
+        title_i18n=I18nText(zh="各方", en="All parties"),
+        intent="Require every roster member for an all-parties assertion.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section], language="zh", verdict_headline=""
+    )
+    claim = _compiled_claim_for(compiled, "各方")
+
+    assert claim["claim_type"] == "collective"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_roster_coverage"
+
+
+def test_claim_compiler_recognizes_narrowing_evolution_and_requires_full_phases():
+    statement = "政策争点由早期笼统讨论收窄为隐私保障。"
+    section = ReportSection(
+        id="narrowing-evolution",
+        title="Narrowing evolution",
+        title_i18n=I18nText(zh="争点收窄", en="Narrowing evolution"),
+        intent="Require a source state and a later target state.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section], max_round=10, language="zh", verdict_headline=""
+    )
+    claim = _compiled_claim_for(compiled, "收窄")
+
+    assert claim["claim_type"] == "evolution"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_temporal_coverage"
+
+
+def test_claim_compiler_expands_round_ranges_and_chinese_round_lists():
+    from app.services.result_report.claims import _explicit_round_numbers
+
+    assert _explicit_round_numbers(
+        "第2至4轮及第七、八轮均有变化",
+        max_round=10,
+    ) == [2, 3, 4, 7, 8]
+
+
+def test_claim_compiler_covers_and_downgrades_unsupported_summary():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    unsupported = (
+        "Privacy Advocate and Transit Planner signed a binding citywide pact."
+    )
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [],
+        [_claim_compiler_evidence()],
+        verdict_headline="",
+        max_round=2,
+        language="en",
+        summary_i18n=I18nText(zh=unsupported, en=unsupported),
+    )
+    payload = _claim_compilation_payload(compiled)
+    summary_claims = [
+        _claim_compilation_payload(claim)
+        for claim in payload["claims"]
+        if _claim_compilation_payload(claim)["claim_id"].startswith("claim-summary-")
+    ]
+
+    assert len(summary_claims) == 1
+    assert summary_claims[0]["confidence"] == "low"
+    assert summary_claims[0]["downgrade_reason"] == "insufficient_speaker_coverage"
+    assert payload["summary_i18n"]["en"].startswith("Evidence-limited hypothesis:")
+
+
+def test_claim_compiler_marks_unsupported_verdict_as_explicit_hypothesis():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    unsupported = (
+        "Privacy Advocate and Transit Planner signed a binding citywide pact."
+    )
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [],
+        [_claim_compiler_evidence()],
+        verdict_headline=unsupported,
+        max_round=2,
+        language="en",
+        summary_i18n=I18nText(zh=unsupported, en=unsupported),
+    )
+    payload = _claim_compilation_payload(compiled)
+    verdict_claim = next(
+        _claim_compilation_payload(claim)
+        for claim in payload["claims"]
+        if _claim_compilation_payload(claim)["claim_id"] == "claim-verdict-001"
+    )
+
+    assert verdict_claim["evidence_strength"] == "unsupported"
+    assert verdict_claim["confidence"] == "low"
+    assert verdict_claim["claim_type"] == "hypothesis"
+    assert verdict_claim["downgrade_reason"] == "insufficient_speaker_coverage"
+    assert verdict_claim["claim_text"] == (
+        f"Evidence-limited hypothesis: {unsupported}"
+    )
+    assert payload["verdict_headline"] == (
+        f"Evidence-limited hypothesis: {unsupported}"
+    )
+    assert payload["summary_i18n"]["en"].startswith(
+        f"Evidence-limited hypothesis: {unsupported}"
+    )
+    assert "phases=middle" in payload["summary_i18n"]["en"]
+    assert "rounds=2" in payload["summary_i18n"]["en"]
+    assert payload["analytic_confidence"]["level"] == "low"
+
+
+def test_claim_compiler_keeps_unsupported_summary_as_low_audit_hypothesis():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    unsupported = "A binding citywide alliance formed without transcript support."
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [],
+        [_claim_compiler_evidence()],
+        verdict_headline="",
+        max_round=2,
+        language="en",
+        summary_i18n=I18nText(zh=unsupported, en=unsupported),
+    )
+    payload = _claim_compilation_payload(compiled)
+    claim = next(
+        _claim_compilation_payload(item)
+        for item in payload["claims"]
+        if _claim_compilation_payload(item)["claim_id"] == "claim-summary-001"
+    )
+
+    assert claim["claim_id"] == "claim-summary-001"
+    assert claim["claim_type"] == "hypothesis"
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"]
+    assert payload["summary_i18n"]["en"].startswith(
+        "Evidence-limited hypothesis:"
+    )
+
+
+def test_claim_compiler_discloses_coordinate_gaps_without_synthetic_claim():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id, evidence = _seed_claim_coverage_evidence(4, 5, 6, 7, 8)
+    statement = evidence[0].quote
+    section = ReportSection(
+        id="coverage-audit",
+        title="Coverage audit",
+        title_i18n=I18nText(zh="证据覆盖审计", en="Coverage audit"),
+        intent="Compile one material statement without inventing coverage claims.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=[item.id for item in evidence],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        evidence,
+        verdict_headline="",
+        max_round=10,
+        language="en",
+        summary_i18n=I18nText(
+            zh="隐私保障仍使批准方案站得住脚。",
+            en=statement,
+        ),
+    )
+    coverage = _claim_compilation_payload(compiled.evidence_coverage)
+    payload = _claim_compilation_payload(compiled)
+
+    assert coverage["covered_rounds"] == [4, 5, 6, 7, 8]
+    assert coverage["missing_rounds"] == [1, 2, 3, 9, 10]
+    assert coverage["covered_phases"] == ["middle", "late"]
+    assert coverage["missing_phases"] == ["early"]
+    assert coverage.get("max_round", 10) == 10
+
+    summary = payload["summary_i18n"]
+    assert "证据坐标缺口" in summary["zh"]
+    assert "不等于这些轮次未发生事件" in summary["zh"]
+    assert "早期" in summary["zh"]
+    assert "1–3" in summary["zh"]
+    assert "9–10" in summary["zh"]
+    assert "Evidence-coordinate gaps" in summary["en"]
+    assert "does not mean those rounds did not occur" in summary["en"]
+    assert "early" in summary["en"]
+    assert "1–3" in summary["en"]
+    assert "9–10" in summary["en"]
+
+    claims = [_claim_compilation_payload(claim) for claim in payload["claims"]]
+    assert len(claims) == 2
+    claim_text = json.dumps(
+        [claim["claim_text"] for claim in claims],
+        ensure_ascii=False,
+    )
+    assert "证据坐标缺口" not in claim_text
+    assert "Evidence-coordinate gaps" not in claim_text
+
+
+def test_claim_compiler_coordinate_gap_notice_is_idempotent():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id, evidence = _seed_claim_coverage_evidence(4, 5, 6, 7, 8)
+    statement = evidence[0].quote
+    section = ReportSection(
+        id="coverage-idempotency",
+        title="Coverage idempotency",
+        title_i18n=I18nText(zh="覆盖提示幂等性", en="Coverage idempotency"),
+        intent="Keep deterministic coverage metadata out of analytic claims.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=[item.id for item in evidence],
+        charts=[],
+    )
+    first = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        evidence,
+        verdict_headline="",
+        max_round=10,
+        language="en",
+        summary_i18n=I18nText(zh=statement, en=statement),
+    )
+
+    second = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        first.sections,
+        evidence,
+        verdict_headline="",
+        max_round=10,
+        language="en",
+        summary_i18n=first.summary_i18n,
+    )
+    first_payload = _claim_compilation_payload(first)
+    second_payload = _claim_compilation_payload(second)
+
+    assert second_payload["summary_i18n"]["zh"].count("证据坐标缺口") == 1
+    assert (
+        second_payload["summary_i18n"]["en"].count("Evidence-coordinate gaps")
+        == 1
+    )
+    assert len(second_payload["claims"]) == len(first_payload["claims"])
+    claim_text = json.dumps(
+        [
+            _claim_compilation_payload(claim)["claim_text"]
+            for claim in second_payload["claims"]
+        ],
+        ensure_ascii=False,
+    )
+    assert "证据坐标缺口" not in claim_text
+    assert "Evidence-coordinate gaps" not in claim_text
+
+
+def test_claim_compiler_exact_quote_requires_outer_semantic_support():
+    quote = "Privacy safeguards make the approval defensible."
+    statement = (
+        "Privacy Advocate proved a binding citywide alliance, "
+        f'saying, "{quote}"'
+    )
+    section = ReportSection(
+        id="outer-semantics",
+        title="Outer semantics",
+        title_i18n=I18nText(zh="外层语义", en="Outer semantics"),
+        intent="Do not launder an unsupported wrapper through a real quote.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section],
+        language="en",
+        verdict_headline="",
+    )
+
+    claim = _compiled_claim_for(compiled, "binding citywide alliance")
+    assert claim["exact_quote"] == quote
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "outer_semantic_mismatch"
+
+
+def test_claim_type_ignores_spatial_from_to_language_inside_literal_quote():
+    from app.services.result_report.claims import _claim_type
+
+    quote = (
+        "我每天从滨江挤车去钱江新城的票钱是省了能多睡半小时，"
+        "就怕站台早高峰挤到上不了车耽误打卡。"
+    )
+    statement = f'通勤者刘洋确认票钱节省但担忧拥堵："{quote}"'
+
+    assert _claim_type(statement, is_verdict=False) == "quote"
+
+
+def test_claim_compiler_preserves_temporal_and_outer_semantic_downgrades():
+    quote = "Privacy safeguards make the approval defensible."
+    statement = (
+        "Support evolved over time into a binding citywide alliance, "
+        f'saying, "{quote}"'
+    )
+    section = ReportSection(
+        id="evolution-outer-semantics",
+        title="Evolution with unsupported wrapper",
+        title_i18n=I18nText(
+            zh="带不受支持外层语义的演化",
+            en="Evolution with unsupported wrapper",
+        ),
+        intent="Keep every independent downgrade reason auditable.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section],
+        max_round=9,
+        language="en",
+        verdict_headline="",
+    )
+    claim = _compiled_claim_for(compiled, "binding citywide alliance")
+
+    assert claim["claim_type"] == "evolution"
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert "insufficient_temporal_coverage" in claim["downgrade_reason"]
+    assert "outer_semantic_mismatch" in claim["downgrade_reason"]
+
+
+@pytest.mark.parametrize(
+    ("language", "placeholder", "unsafe_inference", "safe_fragment"),
+    [
+        (
+            "en",
+            "(Round 1: Privacy Advocate's repetitive output is unavailable; "
+            "awaiting replanning.)",
+            "Privacy Advocate's output interruption implies social isolation.",
+            "cannot establish any agent stance, relationship, isolation, or evolution",
+        ),
+        (
+            "zh",
+            "（第 1 轮：Privacy Advocate 的重复输出不可用，等待重新规划。）",
+            "Privacy Advocate 的输出中断暗示其立场演变为社交孤立。",
+            "运行故障不能证明任何 Agent 的立场、关系、孤立状态或演化",
+        ),
+        (
+            "en",
+            "(Round 1: Privacy Advocate's repetitive output was not published.)",
+            "Privacy Advocate's unpublished repetitive output implies isolation.",
+            "cannot establish any agent stance, relationship, isolation, or evolution",
+        ),
+        (
+            "zh",
+            "（第 1 轮：Privacy Advocate 的重复输出未发布。）",
+            "Privacy Advocate 的重复输出未发布暗示其立场演变为社交孤立。",
+            "运行故障不能证明任何 Agent 的立场、关系、孤立状态或演化",
+        ),
+        (
+            "en",
+            "(Privacy Advocate stays silent)",
+            "Privacy Advocate stays silent, implying social isolation.",
+            "cannot establish any agent stance, relationship, isolation, or evolution",
+        ),
+        (
+            "zh",
+            "（Privacy Advocate 沉默了）",
+            "Privacy Advocate 沉默了，暗示其立场演变为社交孤立。",
+            "运行故障不能证明任何 Agent 的立场、关系、孤立状态或演化",
+        ),
+    ],
+)
+def test_branch_narrative_neutralizes_runtime_placeholder_world_inference(
+    language: str,
+    placeholder: str,
+    unsafe_inference: str,
+    safe_fragment: str,
+):
+    from app.services.result_report.claims import compile_branch_narrative_claims
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        message = session.get(AgentMessage, "msg-privacy")
+        assert message is not None
+        message.content = placeholder
+        session.add(message)
+        session.commit()
+
+    compiled = compile_branch_narrative_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        {
+            "story": unsafe_inference,
+            "insight": "",
+            "key_moments": [],
+            "question_answer": "",
+        },
+        language=language,
+    )
+    claim = _claim_compilation_payload(compiled.claims[0])
+
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert "runtime_placeholder_not_evidence" in claim["downgrade_reason"]
+    assert claim["message_ids"] == ["msg-privacy"]
+    assert claim["round_numbers"] == [1]
+    assert claim["action_ids"] == []
+    assert claim["temporal_coverage"] == []
+    assert claim["role_coverage"] == []
+    assert unsafe_inference not in compiled.story
+    assert safe_fragment in compiled.story
+
+
+def test_domain_output_failure_is_not_misclassified_as_runtime_placeholder():
+    statement = "Factory output failure shifted stakeholder support."
+    section = ReportSection(
+        id="domain-output-failure",
+        title="Domain output failure",
+        title_i18n=I18nText(
+            zh="领域产出故障",
+            en="Domain output failure",
+        ),
+        intent="Preserve domain events when no runtime placeholder is present.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections(
+        [section],
+        language="en",
+        verdict_headline="",
+    )
+    claim = _compiled_claim_for(compiled, "Factory output failure")
+
+    assert "runtime_placeholder_not_evidence" not in (
+        claim["downgrade_reason"] or ""
+    )
+    assert statement in compiled.sections[0].body_md_i18n.en
+    assert "simulated output for this round is unavailable" not in (
+        compiled.sections[0].body_md_i18n.en
+    )
+
+
+def test_claim_compiler_does_not_treat_legal_evidence_id_as_semantic_support():
+    unsupported_text = "A binding citywide alliance formed unanimously."
+    section = ReportSection(
+        id="unsupported",
+        title="Unsupported conclusion",
+        title_i18n=I18nText(zh="无支持结论", en="Unsupported conclusion"),
+        intent="Reject citation laundering.",
+        body_md_i18n=I18nText(zh=unsupported_text, en=unsupported_text),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section])
+
+    claim = _compiled_claim_for(compiled, unsupported_text)
+    assert claim["message_ids"] == ["msg-privacy"]
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_roster_coverage"
+
+
+def test_claim_compiler_downgrades_evolution_without_early_middle_late_coverage():
+    evolution_text = "The coalition evolved across early, middle, and late rounds."
+    section = ReportSection(
+        id="evolution",
+        title="Evolution",
+        title_i18n=I18nText(zh="演化", en="Evolution"),
+        intent="Trace change across the simulation.",
+        body_md_i18n=I18nText(zh=evolution_text, en=evolution_text),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section], max_round=9)
+
+    claim = _compiled_claim_for(compiled, evolution_text)
+    assert claim["round_numbers"] == [1]
+    assert "temporal_coverage" in claim
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_temporal_coverage"
+
+
+@pytest.mark.parametrize(
+    "evolution_text",
+    [
+        "Support shifted from conditional approval to outright opposition.",
+        "立场从有条件支持转为明确反对。",
+    ],
+)
+def test_claim_compiler_recognizes_expanded_evolution_vocabulary(evolution_text):
+    section = ReportSection(
+        id="expanded-evolution",
+        title="Expanded evolution",
+        title_i18n=I18nText(zh="扩展演化", en="Expanded evolution"),
+        intent="Recognize evolution language beyond the original keyword set.",
+        body_md_i18n=I18nText(zh=evolution_text, en=evolution_text),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section], max_round=9)
+
+    claim = _compiled_claim_for(compiled, evolution_text)
+    assert claim["claim_type"] == "evolution"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_temporal_coverage"
+
+
+def test_claim_compiler_downgrades_reversed_from_to_evolution_direction():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        session.add(Round(id="claim-round-3", branch_id="branch-a", round_number=3))
+        session.add(
+            AgentMessage(
+                id="msg-privacy-late",
+                round_id="claim-round-3",
+                agent_id="agent-privacy",
+                content="The advocate rejected the plan.",
+                emotion="concerned",
+            )
+        )
+        session.commit()
+    early = _claim_compiler_evidence()
+    late = EvidenceRef(
+        id="ev-privacy-late",
+        branch_id="branch-a",
+        round_id="claim-round-3",
+        round_number=3,
+        agent_id="agent-privacy",
+        agent_name="Privacy Advocate",
+        message_id="msg-privacy-late",
+        quote="The advocate rejected the plan.",
+        kind="utterance",
+    )
+    statement = "Privacy Advocate shifted from opposition to support."
+    section = ReportSection(
+        id="direction",
+        title="Direction",
+        title_i18n=I18nText(zh="方向", en="Direction"),
+        intent="Validate chronological from/to direction.",
+        body_md_i18n=I18nText(zh=statement, en=statement),
+        evidence_refs=[early.id, late.id],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        [early, late],
+        verdict_headline="",
+        max_round=3,
+        language="en",
+    )
+
+    claim = _compiled_claim_for(compiled, "shifted from opposition to support")
+    assert claim["round_numbers"] == [1, 3]
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "temporal_direction_mismatch"
+
+
+def test_claim_compiler_preserves_markdown_code_and_link_titles_when_scrubbing_quotes():
+    invented = "invented coalition"
+    body = (
+        f'The report claimed "{invented}". '
+        f'`"{invented}"` remains literal configuration. '
+        f'[source](https://example.invalid "{invented}")'
+    )
+    section = ReportSection(
+        id="markdown-protection",
+        title="Markdown protection",
+        title_i18n=I18nText(zh="Markdown 保护", en="Markdown protection"),
+        intent="Keep non-prose Markdown syntax intact.",
+        body_md_i18n=I18nText(zh=body, en=body),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section])
+
+    compiled_section = _compiled_section_for(compiled, "markdown-protection")
+    compiled_body = compiled_section["body_md_i18n"]["en"]
+    assert f'claimed "{invented}"' not in compiled_body
+    assert f"claimed {invented}" in compiled_body
+    assert f'`"{invented}"`' in compiled_body
+    assert f'](https://example.invalid "{invented}")' in compiled_body
+
+
+def test_claim_compiler_downgrades_all_agent_claim_with_single_role_coverage():
+    consensus_text = "All agents unanimously supported the proposal."
+    section = ReportSection(
+        id="role-coverage",
+        title="Role coverage",
+        title_i18n=I18nText(zh="角色覆盖", en="Role coverage"),
+        intent="Test multi-agent coverage.",
+        body_md_i18n=I18nText(zh=consensus_text, en=consensus_text),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section])
+
+    claim = _compiled_claim_for(compiled, consensus_text)
+    assert "role_coverage" in claim
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_roster_coverage"
+
+
+def test_claim_compiler_collective_requires_full_scenario_roster_coverage():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    collective_text = "All agents unanimously supported the proposal."
+    with Session(get_engine()) as session:
+        privacy_message = session.get(AgentMessage, "msg-privacy")
+        planner_message = session.get(AgentMessage, "msg-planner")
+        assert privacy_message is not None
+        assert planner_message is not None
+        privacy_message.content = collective_text
+        planner_message.content = collective_text
+        session.add(
+            Agent(
+                id="agent-budget-roster",
+                scenario_id=scenario_id,
+                name="Budget Observer",
+                role="Finance",
+                persona="Tracks fiscal exposure",
+            )
+        )
+        session.commit()
+    evidence = [
+        EvidenceRef(
+            id="ev-roster-privacy",
+            branch_id="branch-a",
+            round_id="round-1",
+            round_number=1,
+            agent_id="agent-privacy",
+            agent_name="Privacy Advocate",
+            message_id="msg-privacy",
+            quote=collective_text,
+            kind="utterance",
+        ),
+        EvidenceRef(
+            id="ev-roster-planner",
+            branch_id="branch-a",
+            round_id="round-2",
+            round_number=2,
+            agent_id="agent-planner",
+            agent_name="Transit Planner",
+            message_id="msg-planner",
+            quote=collective_text,
+            kind="utterance",
+        ),
+    ]
+    section = ReportSection(
+        id="roster-coverage",
+        title="Roster coverage",
+        title_i18n=I18nText(zh="名单覆盖", en="Roster coverage"),
+        intent="Require evidence from every scenario agent.",
+        body_md_i18n=I18nText(zh=collective_text, en=collective_text),
+        evidence_refs=[item.id for item in evidence],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-a",
+        [section],
+        evidence,
+        verdict_headline="",
+        max_round=2,
+        language="en",
+    )
+
+    claim = _compiled_claim_for(compiled, collective_text)
+    assert set(claim["role_coverage"]) == {"Civil society", "Planner"}
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "insufficient_roster_coverage"
+
+
+def test_claim_compiler_filters_sibling_evidence_but_keeps_visible_ancestor():
+    from app.services.result_report.claims import compile_report_claims
+
+    scenario_id = _seed_report_scenario()
+    sibling_quote = "Sibling negotiators approved an unrelated package."
+    with Session(get_engine()) as session:
+        session.add_all(
+            [
+                Branch(
+                    id="branch-claim-child",
+                    scenario_id=scenario_id,
+                    parent_branch_id="branch-a",
+                    fork_round=1,
+                    title="Target child",
+                    probability=0.6,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-claim-sibling",
+                    scenario_id=scenario_id,
+                    parent_branch_id="branch-a",
+                    fork_round=1,
+                    title="Sibling child",
+                    probability=0.4,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Round(
+                    id="round-claim-sibling-2",
+                    branch_id="branch-claim-sibling",
+                    round_number=2,
+                ),
+            ]
+        )
+        session.add(
+            AgentMessage(
+                id="msg-claim-sibling",
+                round_id="round-claim-sibling-2",
+                agent_id="agent-privacy",
+                content=sibling_quote,
+                emotion="confident",
+            )
+        )
+        session.commit()
+    ancestor = _claim_compiler_evidence()
+    sibling = EvidenceRef(
+        id="ev-claim-sibling",
+        branch_id="branch-claim-sibling",
+        round_id="round-claim-sibling-2",
+        round_number=2,
+        agent_id="agent-privacy",
+        agent_name="Privacy Advocate",
+        message_id="msg-claim-sibling",
+        quote=sibling_quote,
+        kind="utterance",
+    )
+    ancestor_statement = (
+        f'Privacy Advocate said, "{ancestor.quote}"'
+    )
+    sibling_statement = f'Privacy Advocate said, "{sibling_quote}"'
+    section = ReportSection(
+        id="lineage-filter",
+        title="Lineage filter",
+        title_i18n=I18nText(zh="谱系过滤", en="Lineage filter"),
+        intent="Reject sibling coordinates while preserving ancestors.",
+        body_md_i18n=I18nText(
+            zh=f"{ancestor_statement}\n{sibling_statement}",
+            en=f"{ancestor_statement}\n{sibling_statement}",
+        ),
+        evidence_refs=[ancestor.id, sibling.id],
+        charts=[],
+    )
+
+    compiled = compile_report_claims(
+        get_engine(),
+        scenario_id,
+        "branch-claim-child",
+        [section],
+        [ancestor, sibling],
+        verdict_headline="",
+        max_round=2,
+        language="en",
+    )
+
+    ancestor_claim = _compiled_claim_for(compiled, ancestor.quote)
+    sibling_claim = _compiled_claim_for(compiled, sibling_quote)
+    assert ancestor_claim["message_ids"] == ["msg-privacy"]
+    assert ancestor_claim["exact_quote"] == ancestor.quote
+    assert ancestor_claim["confidence"] == "high"
+    assert "msg-claim-sibling" not in sibling_claim["message_ids"]
+    assert sibling_claim["exact_quote"] in {None, ""}
+    assert sibling_claim["confidence"] == "low"
+
+
+def test_claim_compiler_never_leaves_unsupported_claim_high_confidence():
+    unsupported_text = "The evidence proves every stakeholder signed a binding pact."
+    section = ReportSection(
+        id="unsupported-high",
+        title="Unsupported high confidence",
+        title_i18n=I18nText(zh="不支持的高置信", en="Unsupported high confidence"),
+        intent="Enforce the confidence ceiling.",
+        body_md_i18n=I18nText(zh=unsupported_text, en=unsupported_text),
+        evidence_refs=["ev-privacy"],
+        charts=[],
+    )
+
+    compiled = _compile_claim_test_sections([section])
+    payload = _claim_compilation_payload(compiled)
+    claims = payload.get("claims")
+    assert isinstance(claims, list) and claims
+    claim_payloads = [_claim_compilation_payload(claim) for claim in claims]
+    required_fields = {
+        "claim_id",
+        "claim_text",
+        "claim_type",
+        "speaker",
+        "agent_id",
+        "message_ids",
+        "action_ids",
+        "branch_id",
+        "round_numbers",
+        "exact_quote",
+        "evidence_strength",
+        "temporal_coverage",
+        "role_coverage",
+        "confidence",
+        "downgrade_reason",
+    }
+
+    assert all(required_fields <= set(claim) for claim in claim_payloads)
+    assert not any(
+        claim.get("evidence_strength") == "unsupported"
+        and claim.get("confidence") == "high"
+        for claim in claim_payloads
+    )
+
+
+@pytest.mark.parametrize(
+    ("probability", "expected_share"),
+    [(0.3, "30%"), (1.0, "100%")],
+)
+@pytest.mark.parametrize(
+    (
+        "language",
+        "headline",
+        "existing_disclaimer",
+        "single_path_fragment",
+        "comparison_fragment",
+        "reality_fragment",
+        "proxy_fragment",
+    ),
+    [
+        (
+            "zh",
+            "隐私与预算联盟形成。",
+            "保留既有中文限制。",
+            "该唯一已完成路径记录的模拟分支权重为",
+            "无法进行多路径相对比较",
+            "不代表现实发生概率",
+            "不证明参与者形成了真实联盟",
+        ),
+        (
+            "en",
+            "A privacy and budget coalition forms.",
+            "Keep the existing English limitation.",
+            "simulated branch weight recorded for that sole completed path is",
+            "no relative multi-path comparison is possible",
+            "not a real-world probability",
+            "does not prove a real coalition",
+        ),
+    ],
+)
+def test_report_verdict_preserves_existing_disclaimer_and_bounds_single_path_proxy(
+    language,
+    headline,
+    existing_disclaimer,
+    single_path_fragment,
+    comparison_fragment,
+    reality_fragment,
+    proxy_fragment,
+    probability,
+    expected_share,
+):
+    base = _reducer_result_with_premortem_evidence()
+    reducer_result = replace(
+        base,
+        branch_distribution=base.branch_distribution[:1],
+        likelihood=Likelihood(
+            probability=probability,
+            interval=(probability, probability),
+            wep="single_path",
+        ),
+        faction_consensus=StatResult(status="available", value=0.74),
+        verdict_disclaimer=existing_disclaimer,
+    )
+    context = replace(
+        _builder_context(),
+        language=language,
+        parsed_context={"result_quality": {"question_answer": headline}},
+    )
+    section = ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="关键转折", en="Turning points"),
+        intent="Explain the outcome.",
+        body_md_i18n=I18nText(
+            zh="保障条款改变了最终表决路线。",
+            en="Safeguards changed the final voting route.",
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "Policy trial report"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "The report summarizes the key changes in the completed simulation.",
+            },
+            sections=[],
+        ),
+        sections=[section],
+        status="complete",
+        tier="generation",
+    )
+
+    disclaimer = report.verdict.disclaimer or ""
+    assert existing_disclaimer in disclaimer
+    assert single_path_fragment in disclaimer
+    assert expected_share in disclaimer
+    if probability < 1.0:
+        assert "100%" not in disclaimer
+    assert comparison_fragment in disclaimer
+    assert reality_fragment in disclaimer
+    assert proxy_fragment in disclaimer
+
+
+def test_report_verdict_does_not_add_proxy_caveat_without_affect_proxy_data():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = replace(
+        _builder_context(),
+        parsed_context={
+            "result_quality": {"question_answer": "A temporary coalition forms."}
+        },
+    )
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "Policy trial report"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "The report summarizes the key changes in the completed simulation.",
+            },
+            sections=[],
+        ),
+        sections=[],
+        status="complete",
+        tier="generation",
+    )
+
+    assert report.verdict.disclaimer is None
+
+
+def test_generated_report_language_markers_follow_actual_distinctive_content():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = replace(_builder_context(), language="zh")
+    untranslated_section = ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="关键转折", en="Timeline"),
+        intent="Explain timeline.",
+        body_md_i18n=I18nText(
+            zh="保障条款改变了最终表决路线。",
+            en="保障条款改变了最终表决路线。",
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+    untranslated = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "政策试验报告"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "报告总结已完成推演中的关键变化。",
+            },
+            sections=[],
+        ),
+        sections=[untranslated_section],
+        status="complete",
+        tier="generation",
+    )
+
+    assert untranslated.available_languages == ["zh"]
+    assert untranslated.language_status is not None
+    assert untranslated.language_status.zh == "available"
+    assert untranslated.language_status.en == "missing"
+
+    translated_section = untranslated_section.model_copy(
+        update={
+            "body_md_i18n": I18nText(
+                zh="保障条款改变了最终表决路线。",
+                en="Safeguards changed the final voting route.",
+            )
+        }
+    )
+    translated = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "Policy trial report"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "The report summarizes the key changes in the completed simulation.",
+            },
+            sections=[],
+        ),
+        sections=[translated_section],
+        status="complete",
+        tier="generation",
+    )
+
+    assert translated.available_languages == ["zh", "en"]
+    assert translated.language_status is not None
+    assert translated.language_status.zh == "available"
+    assert translated.language_status.en == "available"
+
+
+def test_generated_report_language_markers_ignore_static_scaffold_language():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = replace(
+        _builder_context(),
+        language="zh",
+        branch_title="隐私保障通过",
+        branch_story="议会在加入隐私条款后通过方案。",
+        branch_insight="隐私保障促成了最终通过。",
+    )
+    static_section = builder._static_section_from_context(
+        context,
+        builder.SectionPlan(
+            section_id="timeline",
+            title_i18n={"zh": "关键转折", "en": "Turning points"},
+            intent="Explain the outcome.",
+        ),
+        reducer_result,
+    ).section
+
+    assert "dominant simulated branch share" in static_section.body_md_i18n.en
+    assert builder._section_substantive_language_surface(
+        static_section,
+        "en",
+    ) == context.branch_insight
+
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "Policy trial report"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "The report summarizes the completed simulation.",
+            },
+            sections=[],
+        ),
+        sections=[static_section],
+        status="complete",
+        tier="static",
+    )
+
+    assert report.available_languages == ["zh"]
+    assert report.language_status == LanguageStatus(zh="available", en="missing")
+
+
+def test_generated_report_requires_every_substantive_section_in_language():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = replace(_builder_context(), language="zh")
+    translated = ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="关键转折", en="Turning points"),
+        intent="Explain timeline.",
+        body_md_i18n=I18nText(
+            zh="隐私保障改变了最终表决路线。",
+            en=(
+                "Safeguards changed the final voting route. "
+                "The council then approved the proposal after a long public review. "
+            )
+            * 6,
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+    untranslated = ReportSection(
+        id="sources",
+        title="Sources",
+        title_i18n=I18nText(zh="证据来源", en="Evidence sources"),
+        intent="Explain evidence.",
+        body_md_i18n=I18nText(
+            zh="预算联盟围绕隐私条款重新组合。",
+            en="预算联盟围绕隐私条款重新组合。",
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "Policy trial report"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "The report summarizes the completed simulation.",
+            },
+            sections=[],
+        ),
+        sections=[translated, untranslated],
+        status="complete",
+        tier="generation",
+    )
+
+    assert report.available_languages == ["zh"]
+    assert report.language_status == LanguageStatus(zh="available", en="missing")
+
+
+def test_generated_report_uses_actual_supported_language_when_primary_is_wrong():
+    section = ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="Timeline", en="Timeline"),
+        intent="Explain timeline.",
+        body_md_i18n=I18nText(
+            zh="Safeguards changed the final vote.",
+            en="Safeguards changed the final vote.",
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    available, status = builder._generated_report_language_availability(
+        primary_language="zh",
+        title_i18n=I18nText(zh="Policy report", en="Policy report"),
+        summary_i18n=I18nText(
+            zh="This report summarizes the completed simulation.",
+            en="This report summarizes the completed simulation.",
+        ),
+        sections=[section],
+    )
+
+    assert available == ["en"]
+    assert status == LanguageStatus(zh="missing", en="available")
+
+
+def test_generated_report_falls_back_to_primary_only_for_language_neutral_content():
+    neutral_section = ReportSection(
+        id="timeline",
+        title="2026",
+        title_i18n=I18nText(zh="2026", en="2026"),
+        intent="Neutral metrics.",
+        body_md_i18n=I18nText(zh="42% → 58%", en="42% → 58%"),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    available, status = builder._generated_report_language_availability(
+        primary_language="zh",
+        title_i18n=I18nText(zh="2026", en="2026"),
+        summary_i18n=I18nText(zh="42% → 58%", en="42% → 58%"),
+        sections=[neutral_section],
+    )
+
+    assert available == ["zh"]
+    assert status == LanguageStatus(zh="available", en="missing")
+
+    unsupported_section = neutral_section.model_copy(
+        update={
+            "body_md_i18n": I18nText(
+                zh="Результат моделирования.",
+                en="Результат моделирования.",
+            )
+        }
+    )
+    with pytest.raises(
+        builder.ResultReportBuilderError,
+        match="no supported Chinese or English content",
+    ):
+        builder._generated_report_language_availability(
+            primary_language="zh",
+            title_i18n=I18nText(zh="Отчёт", en="Отчёт"),
+            summary_i18n=I18nText(
+                zh="Результат моделирования.",
+                en="Результат моделирования.",
+            ),
+            sections=[unsupported_section],
+        )
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Policy trial", "POLICY\u3000TRIAL!"),
+        ("政策试验：报告", "政策试验——报告。"),
+        ("A/B", "a b"),
+    ],
+)
+def test_language_identity_ignores_unicode_punctuation_and_whitespace(left, right):
+    assert builder._normalize_language_identity(left) == (
+        builder._normalize_language_identity(right)
+    )
+
+
+def test_generated_report_rejects_per_section_noop_translation():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = replace(_builder_context(), language="zh")
+    mixed_body = "保障条款改变表决 Safeguards change vote"
+    section = ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="关键转折", en="Turning points"),
+        intent="Explain timeline.",
+        body_md_i18n=I18nText(zh=mixed_body, en=f"{mixed_body}！"),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "政策试验报告", "en": "Policy trial report"},
+            summary_i18n={
+                "zh": "报告总结已完成推演中的关键变化。",
+                "en": "The report summarizes the completed simulation.",
+            },
+            sections=[],
+        ),
+        sections=[section],
+        status="complete",
+        tier="generation",
+    )
+
+    assert report.available_languages == ["zh"]
+    assert report.language_status == LanguageStatus(zh="available", en="missing")
+
+
+def test_generated_report_does_not_advertise_identical_mixed_language_alternate():
+    reducer_result = _reducer_result_with_premortem_evidence()
+    context = replace(_builder_context(), language="zh")
+    mixed_title = "政策试验 Policy trial"
+    normalized_same_title = "政策试验　POLICY   TRIAL"
+    mixed_summary = "政策结果支持调整 Policy results support change"
+    normalized_same_summary = "政策结果支持调整  POLICY RESULTS   SUPPORT CHANGE"
+    mixed_body = "保障条款改变表决 Safeguards change vote"
+    section = ReportSection(
+        id="timeline",
+        title="Timeline",
+        title_i18n=I18nText(zh="关键转折", en="Turning points"),
+        intent="Explain timeline.",
+        body_md_i18n=I18nText(zh=mixed_body, en=mixed_body),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": mixed_title, "en": normalized_same_title},
+            summary_i18n={"zh": mixed_summary, "en": normalized_same_summary},
+            sections=[],
+        ),
+        sections=[section],
+        status="complete",
+        tier="generation",
+    )
+
+    assert report.title_i18n.zh != report.title_i18n.en
+    assert report.summary_i18n.zh != report.summary_i18n.en
+    assert builder._normalize_language_identity(
+        report.title_i18n.zh
+    ) == builder._normalize_language_identity(report.title_i18n.en)
+    assert builder._normalize_language_identity(
+        report.summary_i18n.zh
+    ) == builder._normalize_language_identity(report.summary_i18n.en)
+    assert builder._generated_report_has_language(
+        "zh",
+        title_i18n=report.title_i18n,
+        summary_i18n=report.summary_i18n,
+        sections=report.sections,
+    )
+    assert builder._generated_report_has_language(
+        "en",
+        title_i18n=report.title_i18n,
+        summary_i18n=report.summary_i18n,
+        sections=report.sections,
+    )
+    assert report.available_languages == ["zh"]
+    assert report.language_status is not None
+    assert report.language_status.en == "missing"
+
+
+def test_quote_gate_decodes_visible_entities_and_sanitizes_link_title_only():
+    markdown = (
+        "&quot;invented named&quot;, &#34;invented decimal&#34;, and "
+        "&#x22;Grounded claim&#x22;. "
+        "[&quot;invented label&quot; sk&#45;labelsecret123]"
+        "(https://example.invalid/a&#45;b "
+        '"&quot;invented title&quot; sk&#45;titlesecret123"). '
+        "[unsafe destination]"
+        "(https://example.invalid/?key=sk&#45;destinationsecret123). "
+        'Keep `&quot;literal config&quot;` and ```\n&#34;literal block&#34;\n``` unchanged.'
+    )
+
+    sanitized = builder._remove_ungrounded_quote_marks(
+        markdown,
+        evidence_quotes=["Grounded claim is verbatim."],
+    )
+
+    assert '"Grounded claim"' in sanitized
+    assert '"invented named"' not in sanitized
+    assert '"invented decimal"' not in sanitized
+    assert (
+        "[invented label &#91;redacted-key&#93;]"
+        '(https://example.invalid/a&#45;b "invented title [redacted-key]")'
+        in sanitized
+    )
+    assert "https://example.invalid/a&#45;b" in sanitized
+    assert "sk-labelsecret123" not in sanitized
+    assert "sk-titlesecret123" not in sanitized
+    assert "[unsafe destination](#redacted)" in sanitized
+    assert "destinationsecret123" not in sanitized
+    assert '`&quot;literal config&quot;`' in sanitized
+    assert "```\n&#34;literal block&#34;\n```" in sanitized
+
+
+def test_report_assembly_redacts_secret_shaped_agent_evidence_before_ir():
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        message = session.get(AgentMessage, "msg-privacy")
+        assert message is not None
+        message.content = (
+            "Rotate sk-agentsecret123 and sk&#45;entitysecret456 before launch."
+        )
+        session.add(message)
+        session.commit()
+
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+        max_evidence=2,
+    )
+    raw_evidence = next(
+        item for item in reducer_result.evidence if item.message_id == "msg-privacy"
+    )
+    section = ReportSection(
+        id="sources",
+        title="Sources",
+        title_i18n=I18nText(zh="证据", en="Sources"),
+        intent="Summarize available evidence.",
+        body_md_i18n=I18nText(zh="证据坐标可用。", en="Evidence coordinates are available."),
+        evidence_refs=[raw_evidence.id],
+        charts=[],
+    )
+    report = builder._assemble_report(
+        _builder_context(),
+        reducer_result,
+        builder.ReportOutline(
+            title_i18n={"zh": "标题", "en": "Title"},
+            summary_i18n={"zh": "摘要", "en": "Summary"},
+            sections=[],
+        ),
+        sections=[section],
+        status="complete",
+        tier="generation",
+    )
+
+    safe_evidence = next(item for item in report.evidence if item.id == raw_evidence.id)
+    assert safe_evidence.quote == (
+        "Rotate [redacted-key] and [redacted-key] before launch."
+    )
+    assert (
+        safe_evidence.branch_id,
+        safe_evidence.round_id,
+        safe_evidence.round_number,
+        safe_evidence.agent_id,
+        safe_evidence.message_id,
+    ) == (
+        raw_evidence.branch_id,
+        raw_evidence.round_id,
+        raw_evidence.round_number,
+        raw_evidence.agent_id,
+        raw_evidence.message_id,
+    )
+    validate_full_report_payload(report.model_dump(mode="json"))
+
+
+def test_report_assembly_sanitizes_user_controlled_display_text_across_ir():
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        privacy_agent = session.get(Agent, "agent-privacy")
+        dominant = session.get(Branch, "branch-a")
+        runner_up = session.get(Branch, "branch-b")
+        assert scenario is not None
+        assert privacy_agent is not None
+        assert dominant is not None
+        assert runner_up is not None
+        privacy_agent.name = "Privacy sk&#45;agentsecret123"
+        dominant.title = "Approval sk&#45;branchsecret123"
+        dominant.story = "An alliance uses sk&#45;storysecret123."
+        dominant.insight = "Insight xai&#45;insightsecret123"
+        runner_up.title = "Delay sk&#45;runnersecret123"
+        parsed_context = dict(scenario.parsed_context or {})
+        result_quality = dict(parsed_context.get("result_quality") or {})
+        result_quality["question_answer"] = "Outcome sk&#45;answersecret123"
+        parsed_context["result_quality"] = result_quality
+        scenario.parsed_context = parsed_context
+        session.add_all([scenario, privacy_agent, dominant, runner_up])
+        session.commit()
+
+    reducer_result = builder.reduce_report(
+        get_engine(),
+        scenario_id,
+        dominant_branch_id="branch-a",
+        max_evidence=2,
+    )
+    context = builder._load_builder_context(scenario_id, "branch-a")
+    section = builder._static_section_from_context(
+        context,
+        builder.SectionPlan(
+            section_id="timeline",
+            title_i18n={"zh": "关键转折", "en": "Turning points"},
+            intent="Explain the alliance outcome.",
+        ),
+        reducer_result,
+    ).section
+    report = builder._assemble_report(
+        context,
+        reducer_result,
+        builder._fallback_outline(context, reducer_result),
+        sections=[section],
+        status="complete",
+        tier="static",
+    )
+
+    payload = report.model_dump(mode="json")
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "[redacted-key]" in serialized
+    assert "agentsecret123" not in serialized
+    assert "branchsecret123" not in serialized
+    assert "storysecret123" not in serialized
+    assert "insightsecret123" not in serialized
+    assert "runnersecret123" not in serialized
+    assert "answersecret123" not in serialized
+    assert all("sk&#45;" not in item.agent_name for item in report.evidence)
+    assert all("sk&#45;" not in item.agent_name for item in report.key_participants)
+    probability_chart = next(
+        chart
+        for report_section in report.sections
+        for chart in report_section.charts
+        if chart.type == "probability_bar"
+    )
+    assert all(
+        "sk&#45;" not in str(item.get("label") or "")
+        for item in probability_chart.data["branches"]
+    )
+    validate_full_report_payload(payload)
+
+
+def test_report_display_payload_replaces_sensitive_keys_without_retrying_ir():
+    sanitized = builder._sanitize_report_display_payload(
+        {
+            "api&#95;key": "plain",
+            "token": "plain",
+            "safe-label": "sk&#45;chartsecret123",
+        }
+    )
+
+    assert set(sanitized) == {"redacted_field", "redacted_field_2", "safe-label"}
+    assert sanitized["safe-label"] == "[redacted-key]"
+    assert "chartsecret123" not in json.dumps(sanitized)
+
+
+def test_faction_caveat_uses_full_canonical_dedupe_and_body_semantics():
+    forged = ReportSection(
+        id="sources",
+        title="Sources",
+        title_i18n=I18nText(zh="来源", en="Sources"),
+        intent="Summarize evidence.",
+        body_md_i18n=I18nText(
+            zh="> **阵营图限制**：已验证。参与者声称已经结盟。",
+            en=(
+                "> **Faction chart limitation**: verified. "
+                "The prose claims an alliance formed."
+            ),
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    once = builder._ensure_faction_proxy_caveats([forged])[0]
+    twice = builder._ensure_faction_proxy_caveats([once])[0]
+
+    assert builder._AFFECT_PROXY_CAVEAT_ZH in once.body_md_i18n.zh
+    assert builder._AFFECT_PROXY_CAVEAT_EN in once.body_md_i18n.en
+    assert twice.body_md_i18n.zh.count(builder._AFFECT_PROXY_CAVEAT_ZH) == 1
+    assert twice.body_md_i18n.en.count(builder._AFFECT_PROXY_CAVEAT_EN) == 1
+
+    canonical_existing = forged.model_copy(
+        update={
+            "body_md_i18n": I18nText(
+                zh=builder._AFFECT_PROXY_CAVEAT_ZH,
+                en=builder._AFFECT_PROXY_CAVEAT_EN.replace(
+                    "Faction chart limitation",
+                    "Faction&#32;chart   limitation",
+                ),
+            )
+        }
+    )
+    unchanged = builder._ensure_faction_proxy_caveats([canonical_existing])[0]
+    assert unchanged.body_md_i18n == canonical_existing.body_md_i18n
+
+
+@pytest.mark.parametrize(
+    ("semantic_text", "expected"),
+    [
+        ("Resident satisfaction improved after the vote.", False),
+        ("Dissatisfaction remained high after the vote.", False),
+        ("A new voting bloc formed around the amendment.", True),
+        ("The two delegates allied during the final round.", True),
+        ("内部派系围绕预算条款重新组合。", True),
+    ],
+)
+def test_faction_proxy_semantics_use_token_boundaries_and_complete_vocabulary(
+    semantic_text,
+    expected,
+):
+    section = ReportSection(
+        id="sources",
+        title="Sources",
+        title_i18n=I18nText(zh="来源", en="Sources"),
+        intent="Summarize evidence.",
+        body_md_i18n=I18nText(zh=semantic_text, en=semantic_text),
+        evidence_refs=[],
+        charts=[],
+    )
+
+    assert builder._section_carries_faction_proxy(section) is expected
 
 
 def test_new_outline_filters_ordinary_premortem_section():
@@ -1389,11 +3629,57 @@ async def test_build_report_persists_polished_outline_title_and_summary(monkeypa
 
     assert report.title_i18n.zh == "巴西能否夺得2026世界杯"
     assert report.title_i18n.en == "Can Brazil win the 2026 World Cup"
-    assert report.summary_i18n.zh.startswith("本报告评估")
-    assert report.summary_i18n.en.startswith("This report examines")
+    assert report.summary_i18n.zh.startswith("证据有限的假设：本报告评估")
+    assert report.summary_i18n.en.startswith(
+        "Evidence-limited hypothesis: This report examines",
+    )
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.title_i18n.zh == report.title_i18n.zh
     assert persisted.summary_i18n.en == report.summary_i18n.en
+    assert persisted.verdict.headline_answer == report.verdict.headline_answer
+
+
+@pytest.mark.asyncio
+async def test_build_report_rewrites_unsupported_verdict_headline(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    unsupported = (
+        "Privacy Advocate and Transit Planner signed a binding citywide pact."
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed_context = dict(scenario.parsed_context or {})
+        result_quality = dict(parsed_context.get("result_quality") or {})
+        result_quality["question_answer"] = unsupported
+        parsed_context["result_quality"] = result_quality
+        scenario.parsed_context = parsed_context
+        session.add(scenario)
+        session.commit()
+
+    monkeypatch.setattr(
+        builder,
+        "llm_call_json",
+        QueuedLlm(
+            [
+                _outline_payload(["timeline", "sources"]),
+                _section_payload("timeline"),
+                _section_payload("sources"),
+            ],
+        ),
+    )
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    expected = f"Evidence-limited hypothesis: {unsupported}"
+    assert report.verdict.headline_answer == expected
+    verdict_claim = next(
+        claim for claim in report.claims if claim.claim_id == "claim-verdict-001"
+    )
+    assert verdict_claim.claim_type == "hypothesis"
+    assert verdict_claim.evidence_strength == "unsupported"
+    assert verdict_claim.confidence == "low"
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.verdict.headline_answer == expected
 
 
 @pytest.mark.asyncio
@@ -2233,6 +4519,124 @@ def test_byte_cap_prunes_indicator_refs_when_evidence_is_truncated(monkeypatch):
     assert fitted.indicators_to_watch[0].evidence_refs == ["ev-1"]
 
 
+def test_byte_cap_recomputes_coordinate_gaps_after_evidence_pruning(monkeypatch):
+    from tests.test_result_report_contract import _legal_full_report
+
+    payload = _legal_full_report()
+    payload["status"] = "partial"
+    payload["claims"] = []
+    payload["sections"] = []
+    payload["indicators_to_watch"] = []
+    payload["tool_trace"] = []
+    payload["summary"] = "基础摘要。"
+    payload["summary_i18n"] = {"zh": "基础摘要。", "en": "Base summary."}
+    payload["limitations"] = (
+        "Report was truncated to fit the configured UTF-8 byte budget."
+    )
+    payload["evidence"][0].update(
+        {
+            "round_number": 3,
+            "quote": "Early-round safeguards remained viable.",
+        }
+    )
+    payload["evidence"].append(
+        {
+            **payload["evidence"][0],
+            "id": "ev-late",
+            "round_id": "round-8",
+            "round_number": 8,
+            "message_id": "msg-late",
+            "quote": "Late-round safeguards remained viable.",
+        }
+    )
+    report = FullReport.model_validate(payload)
+
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", 100_000)
+    unpruned = builder._fit_report_to_byte_cap(report, max_round=10)
+
+    assert [item.id for item in unpruned.evidence] == ["ev-1", "ev-late"]
+    assert "证据坐标缺口" in unpruned.summary_i18n.zh
+    assert "中期" in unpruned.summary_i18n.zh
+    assert "后期" not in unpruned.summary_i18n.zh
+    assert "4–7" in unpruned.summary_i18n.zh
+    assert "middle" in unpruned.summary_i18n.en
+    assert "late" not in unpruned.summary_i18n.en
+    assert unpruned.verdict.analytic_confidence.level == "low"
+    assert "Whole evidence phases are missing: middle" in (
+        unpruned.verdict.analytic_confidence.basis
+    )
+    assert unpruned.verdict.analytic_confidence.basis_i18n is not None
+    assert "证据坐标缺少完整阶段：中期" in (
+        unpruned.verdict.analytic_confidence.basis_i18n.zh
+    )
+
+    single_payload = unpruned.model_dump(mode="json")
+    single_payload["evidence"] = single_payload["evidence"][:1]
+    single_report = FullReport.model_validate(single_payload)
+    single_fitted = builder._fit_report_to_byte_cap(single_report, max_round=10)
+    max_bytes = utf8_json_size_bytes(single_fitted.model_dump(mode="json")) + 48
+    assert utf8_json_size_bytes(unpruned.model_dump(mode="json")) > max_bytes
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", max_bytes)
+
+    fitted = builder._fit_report_to_byte_cap(unpruned, max_round=10)
+    fitted_payload = fitted.model_dump(mode="json")
+
+    assert [item.id for item in fitted.evidence] == ["ev-1"]
+    assert "证据坐标缺口" in fitted.summary_i18n.zh
+    assert "不等于这些轮次未发生事件" in fitted.summary_i18n.zh
+    assert "中期" in fitted.summary_i18n.zh
+    assert "后期" in fitted.summary_i18n.zh
+    assert "4–10" in fitted.summary_i18n.zh
+    assert "Evidence-coordinate gaps" in fitted.summary_i18n.en
+    assert "does not mean those rounds did not occur" in fitted.summary_i18n.en
+    assert "middle" in fitted.summary_i18n.en
+    assert "late" in fitted.summary_i18n.en
+    assert "4–10" in fitted.summary_i18n.en
+    assert utf8_json_size_bytes(fitted_payload) <= max_bytes
+    assert validate_full_report_payload(fitted_payload, max_bytes=max_bytes) == fitted
+
+
+def test_byte_cap_sync_downgrades_zero_evidence_claim_and_recomputes_confidence():
+    from tests.test_result_report_contract import _legal_full_report
+
+    payload = _legal_full_report()
+    payload["claims"] = [
+        {
+            "claim_id": "claim-pruned",
+            "claim_text": "The safeguards have verified support.",
+            "claim_type": "assertion",
+            "speaker": "Transit Advocate",
+            "agent_id": "agent-1",
+            "message_ids": ["msg-pruned"],
+            "action_ids": ["action-pruned"],
+            "branch_id": "branch-1",
+            "round_numbers": [8],
+            "exact_quote": "The safeguards have verified support.",
+            "evidence_strength": "strong",
+            "temporal_coverage": ["late"],
+            "role_coverage": ["Transit advocate"],
+            "confidence": "high",
+            "downgrade_reason": None,
+        }
+    ]
+    payload["verdict"]["analytic_confidence"]["level"] = "high"
+
+    builder._sync_payload_evidence_refs(payload)
+
+    claim = payload["claims"][0]
+    assert claim["message_ids"] == []
+    assert claim["action_ids"] == []
+    assert claim["round_numbers"] == []
+    assert claim["temporal_coverage"] == []
+    assert claim["role_coverage"] == []
+    assert claim["exact_quote"] is None
+    assert claim["evidence_strength"] == "unsupported"
+    assert claim["confidence"] == "low"
+    assert claim["downgrade_reason"] == "evidence_pruned_for_byte_cap"
+    assert payload["verdict"]["analytic_confidence"]["level"] == "low"
+    validate_full_report_payload(payload)
+
+
 def test_byte_cap_preserves_existing_missing_premortem_reason(monkeypatch):
     from tests.test_result_report_contract import _legal_full_report
 
@@ -2401,6 +4805,13 @@ async def test_concurrent_repeat_generation_serializes_without_corruption(monkey
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert len(persisted.sections) == 2
     assert {section.id for section in persisted.sections} == {"timeline", "sources"}
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        result_quality = (scenario.parsed_context or {})["result_quality"]
+    assert result_quality["verdict"] == "The plan likely passes after privacy safeguards."
+    assert result_quality["confidence"] == "medium"
+    assert result_quality["question_answer"] == "It likely passes with safeguards."
 
 
 def test_persist_report_payload_preserves_interleaved_context_update(monkeypatch):
@@ -2451,6 +4862,30 @@ def test_persist_report_payload_preserves_interleaved_context_update(monkeypatch
 
     assert parsed["full_report"]["version"] == "1.0"
     assert parsed["result_quality"]["verdict"] == "late concurrent verdict"
+
+
+def test_persist_final_report_payload_preserves_model_result_quality():
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    payload = _legal_full_report()
+    payload["verdict"]["headline_answer"] = "Final report answer."
+    payload["verdict"]["analytic_confidence"]["level"] = "low"
+
+    builder._persist_final_report_payload(scenario_id, payload)
+
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed = scenario.parsed_context or {}
+
+    assert parsed["full_report"]["verdict"]["headline_answer"] == "Final report answer."
+    assert parsed["result_quality"]["verdict"] == (
+        "The plan likely passes after privacy safeguards."
+    )
+    assert parsed["result_quality"]["confidence"] == "medium"
+    assert parsed["result_quality"]["question_answer"] == "It likely passes with safeguards."
 
 
 @pytest.mark.parametrize(
@@ -2590,6 +5025,64 @@ async def test_build_report_releases_durable_lock_after_early_failure(monkeypatc
         persisted.model_dump(mode="json"),
         ensure_ascii=False,
     )
+
+
+@pytest.mark.parametrize("status", ["generating", "failed", "cancelled"])
+def test_zero_section_placeholder_marks_branch_probability_unavailable_for_display(
+    status,
+):
+    scenario_id = _seed_report_scenario()
+
+    placeholder = builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status=status,
+    )
+
+    assert placeholder.sections == []
+    assert placeholder.target_branch_id == "branch-a"
+    assert placeholder.verdict.likelihood.probability == 0.68
+    assert placeholder.verdict.likelihood.interval == (0.68, 0.68)
+    assert placeholder.verdict.likelihood.wep == "missing"
+
+
+def test_zero_section_transition_preserves_and_sanitizes_existing_disclaimer():
+    scenario_id = _seed_report_scenario()
+    existing = builder._persist_placeholder_report_if_absent(
+        scenario_id,
+        "branch-a",
+        status="generating",
+    )
+    existing = existing.model_copy(
+        update={
+            "verdict": existing.verdict.model_copy(
+                update={
+                    "disclaimer": (
+                        "Keep this boundary; remove sk&#45;transitionsecret123."
+                    )
+                }
+            )
+        }
+    )
+    canonical_payload = existing.model_dump(mode="json")
+    canonical_payload["status"] = "failed"
+    canonical_payload["verdict"]["disclaimer"] = None
+
+    transitioned = builder._transition_report_status_payload(
+        existing,
+        canonical_payload,
+        status="failed",
+    )
+    validated = FullReport.model_validate(transitioned)
+
+    assert validated.sections == []
+    assert validated.verdict.disclaimer == (
+        "Keep this boundary; remove [redacted-key]."
+    )
+    assert validated.verdict.likelihood.probability == 0.68
+    assert validated.verdict.likelihood.interval == (0.68, 0.68)
+    assert validated.verdict.likelihood.wep == "missing"
+    assert "transitionsecret123" not in json.dumps(transitioned)
 
 
 @pytest.mark.parametrize(
@@ -2798,6 +5291,8 @@ def test_partial_section_transition_replaces_confidence_basis_in_both_languages(
     assert expected_zh in basis_i18n.zh
     assert "stale" not in basis_i18n.en.lower()
     assert "旧置信" not in basis_i18n.zh
+    if status in {"failed", "cancelled"}:
+        assert transitioned.verdict.analytic_confidence.level == "low"
 
 
 def test_persist_generating_report_placeholder_if_absent():
@@ -5115,6 +7610,10 @@ def test_persist_failed_report_resolves_empty_dominant_to_reducer_anchor():
     assert failed.status == "failed"
     assert failed.target_branch_id == "branch-rich-sibling"
     assert failed.verdict.likelihood.probability == 0.30
+    assert failed.verdict.likelihood.interval == (0.30, 0.30)
+    # Keep the reducer anchor for diagnostics while telling the UI that a
+    # zero-section placeholder has no interpretable probability estimate.
+    assert failed.verdict.likelihood.wep == "missing"
 
 
 @pytest.mark.asyncio
@@ -5398,7 +7897,9 @@ async def test_section_no_progress_tool_call_forces_final_not_static(monkeypatch
     # The section is grounded LLM output, NOT the static fallback.
     assert timeline.tier != "static"
     assert timeline.failure_reason is None
-    assert timeline.body_md_i18n.en == "Forced final on real evidence."
+    assert timeline.body_md_i18n.en == (
+        "**Evidence-limited hypothesis:** Forced final on real evidence."
+    )
     # The forced-final directive actually reached the model.
     assert any(_FORCE_FINAL_MARKER in prompt for prompt in section_prompts)
     # The no-progress guard bounds section calls to the per-tier ceiling (3) — it
@@ -5536,4 +8037,6 @@ async def test_slow_section_succeeds_under_longer_timeout(monkeypatch):
     timeline = next(section for section in report.sections if section.id == "timeline")
     assert timeline.tier != "static"
     assert timeline.failure_reason is None
-    assert timeline.body_md_i18n.en == "Generated despite slow response."
+    assert timeline.body_md_i18n.en == (
+        "**Evidence-limited hypothesis:** Generated despite slow response."
+    )

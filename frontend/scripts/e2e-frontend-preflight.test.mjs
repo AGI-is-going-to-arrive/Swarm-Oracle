@@ -435,6 +435,68 @@ test("buildPhase3BatchAPreflightPaths includes each deep-link route used by batc
   );
 });
 
+test("phase3-a action fixture accepts only the exact GET contract", () => {
+  const validate = batchATest.isValidActionFixtureRequest;
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/sc-e2e-causal-001/actions?limit=100",
+    "GET",
+  ), true);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/sc-e2e-causal-001/actions?cursor=1%3Aaction%3Aledger-1&limit=100",
+    "GET",
+  ), true);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/sc-e2e-causal-001/actions-shadow?limit=100",
+    "GET",
+  ), false);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/sc-e2e-causal-001/actions?limit=999",
+    "GET",
+  ), false);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/sc-e2e-causal-001/actions?limit=100&unexpected=1",
+    "GET",
+  ), false);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/sc-e2e-causal-001/actions?limit=100",
+    "POST",
+  ), false);
+});
+
+test("phase3-a fixture routing fails closed for every unhandled API request", async () => {
+  const registrations = [];
+  await batchATest.installFixtures({
+    async route(pattern, handler) {
+      registrations.push({ pattern, handler });
+    },
+  });
+
+  assert.equal(registrations[0]?.pattern, "**/api/**");
+  let abortReason = null;
+  await registrations[0].handler({
+    abort(reason) {
+      abortReason = reason;
+    },
+  });
+  assert.equal(abortReason, "blockedbyclient");
+
+  const workshop = registrations.find(({ pattern }) => pattern === "**/api/agents/workshop**");
+  assert.ok(workshop);
+  let fallbackCount = 0;
+  let continueCount = 0;
+  await workshop.handler({
+    request: () => ({ method: () => "PATCH" }),
+    fallback: () => {
+      fallbackCount += 1;
+    },
+    continue: () => {
+      continueCount += 1;
+    },
+  });
+  assert.equal(fallbackCount, 1);
+  assert.equal(continueCount, 0);
+});
+
 test("buildPhase3BatchBPreflightPaths includes each deep-link route used by batch-b", () => {
   assert.deepEqual(
     buildPhase3BatchBPreflightPaths({
@@ -511,6 +573,57 @@ test("roundtable parseArgs accepts explicit mobile viewport dimensions", () => {
 
   assert.equal(args.mobileWidth, 320);
   assert.equal(args.mobileHeight, 740);
+});
+
+test("roundtable replay fixtures accept only exact faction and social-feed GET contracts", () => {
+  const validate = roundtableSuiteTest.isValidReplayFixtureRequest;
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/oracle-replay-scenario/faction-timeline?branch_id=oracle-branch-a",
+    "GET",
+    "faction-timeline",
+  ), true);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/oracle-replay-scenario/faction-timeline",
+    "GET",
+    "faction-timeline",
+  ), false);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/oracle-replay-scenario/faction-timeline?branch_id=oracle-branch-a&extra=1",
+    "GET",
+    "faction-timeline",
+  ), false);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/oracle-replay-scenario/social-feed",
+    "GET",
+    "social-feed",
+  ), true);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/oracle-replay-scenario/social-feed?branch_id=oracle-branch-a",
+    "GET",
+    "social-feed",
+  ), false);
+  assert.equal(validate(
+    "http://127.0.0.1:18927/api/scenario/oracle-replay-scenario/social-feed",
+    "POST",
+    "social-feed",
+  ), false);
+});
+
+test("roundtable diagnostics stop exempting repeated HTTP failures after their budget", () => {
+  const diagnostics = roundtableSuiteTest.buildObservedDiagnosticsFrom(
+    [
+      { kind: "http_error", method: "GET", status: 404, pathname: "/api/example" },
+      { kind: "http_error", method: "GET", status: 404, pathname: "/api/example" },
+    ],
+    new Map([
+      ["GET 404 /api/example", { reason: "documented empty lookup", min_count: 0, max_count: 1 }],
+    ]),
+  );
+
+  assert.equal(diagnostics.expected_count, 1);
+  assert.equal(diagnostics.unexpected_count, 1);
+  assert.equal(diagnostics.issues[1].expected, false);
+  assert.match(diagnostics.issues[1].expected_reason, /budget.*1/u);
 });
 
 test("roundtable parseArgs accepts an explicit scenario id", () => {

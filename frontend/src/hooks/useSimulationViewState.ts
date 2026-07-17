@@ -430,7 +430,11 @@ export function useSimulationDirectorState({
         setBackendDirectorOverrideState(persisted);
         return;
       } catch (err) {
-        if (!(isApiError(err) && err.status === 409)) {
+        if (!(
+          isApiError(err)
+          && err.status === 409
+          && err.code === 'DIRECTOR_STATE_CONFLICT'
+        )) {
           console.warn('[DirectorState] Failed to persist backend state', err);
           return;
         }

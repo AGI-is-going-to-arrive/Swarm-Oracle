@@ -9,8 +9,9 @@ from typing import Any
 from sqlmodel import Session, col, select
 
 from app.models.agent_identity import AgentGrowthEvent
-from app.models.database import Agent, AgentMessage, Branch, Round, get_engine
+from app.models.database import Agent, AgentMessage, Branch, Round, Scenario, get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.models.simulation_action import SimulationAction
 
 _STATUS_VALUES = {"verified", "empty", "unavailable"}
 _SOURCE_ID_LIMIT = 32
@@ -36,6 +37,20 @@ def _bounded_ids(value: object, *, max_chars: int = 160) -> list[str]:
         for item in value[:_SOURCE_ID_LIMIT]
         if str(item).strip()
     ))
+
+
+def _merge_projection_items(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge independent provenance without dropping or duplicating evidence."""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
 
 
 def _receipt(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -88,6 +103,31 @@ def _observation_projection(receipt: dict[str, Any] | None) -> dict[str, Any]:
         ],
         "recent_messages_status": receipt["recent_messages_status"],
         "identity_memory_status": receipt["identity_memory_status"],
+        "observation_kind": "decision_context",
+    }
+
+
+def _durable_action_observation(
+    action: SimulationAction | None,
+    message_id: str,
+) -> dict[str, Any] | None:
+    """Expose the immediate replay receipt when no later-round outcome exists."""
+    if action is None:
+        return None
+    status = str(getattr(action.status, "value", action.status)).lower()
+    action_type = str(getattr(action.action_type, "value", action.action_type)).upper()
+    if status != "verified" or action_type == "IDLE":
+        return None
+    return {
+        "status": "verified",
+        "source_message_ids": [message_id],
+        "source_action_ids": [action.id],
+        "memory_refs": [],
+        "memory_source_scenario_ids": [],
+        "recent_messages_status": "verified",
+        "identity_memory_status": "empty",
+        "provenance_kind": "durable_action",
+        "observation_kind": "durable_action_receipt",
     }
 
 
@@ -99,6 +139,34 @@ def _latest_snapshot(session: Session, scenario_id: str) -> GraphSnapshot | None
             GraphSnapshot.graph_kind == "causal_review",
         ).order_by(col(GraphSnapshot.created_at).desc(), col(GraphSnapshot.id).desc())
     ).first()
+
+
+def _runtime_transitions(parsed_context: object) -> list[dict[str, Any]]:
+    if not isinstance(parsed_context, dict):
+        return []
+    runtime = parsed_context.get("agent_runtime_v1")
+    if not isinstance(runtime, dict) or runtime.get("version") != "1.0":
+        return []
+    branches = runtime.get("branches")
+    if not isinstance(branches, dict):
+        return []
+    transitions: list[dict[str, Any]] = []
+    for branch_payload in branches.values():
+        if not isinstance(branch_payload, dict):
+            continue
+        rounds = branch_payload.get("rounds")
+        if not isinstance(rounds, dict):
+            continue
+        for round_payload in rounds.values():
+            if not isinstance(round_payload, dict):
+                continue
+            raw_transitions = round_payload.get("transitions")
+            if not isinstance(raw_transitions, list):
+                continue
+            transitions.extend(
+                item for item in raw_transitions if isinstance(item, dict)
+            )
+    return transitions
 
 
 def build_action_ledger(
@@ -136,6 +204,205 @@ def build_action_ledger(
 
         message_ids = [message.id for message, _branch, _round, _agent in message_rows]
         message_id_set = set(message_ids)
+        action_by_message: dict[str, SimulationAction] = {}
+        if message_ids:
+            action_by_message = {
+                str(action.message_id): action
+                for action in session.exec(
+                    select(SimulationAction).where(
+                        SimulationAction.scenario_id == scenario_id,
+                        col(SimulationAction.message_id).in_(message_ids),
+                    )
+                ).all()
+                if action.message_id in message_id_set
+            }
+
+        scenario = session.get(Scenario, scenario_id)
+        runtime_observations: dict[str, dict[str, Any]] = {}
+        runtime_consequences: dict[str, list[dict[str, Any]]] = {}
+        runtime_reflections: dict[str, list[dict[str, Any]]] = {}
+        action_message_ids = {
+            action.id: message_id for message_id, action in action_by_message.items()
+        }
+        actions_by_id = {
+            action.id: action for action in action_by_message.values()
+        }
+        for transition in _runtime_transitions(
+            scenario.parsed_context if scenario is not None else None
+        ):
+            transition_message_id = str(transition.get("message_id") or "")
+            if (
+                transition_message_id not in message_id_set
+                or str(transition.get("transition_status") or "").lower()
+                != "verified"
+            ):
+                continue
+            outcomes: list[dict[str, Any]] = []
+            for outcome in transition.get("previous_action_outcomes", []):
+                if not isinstance(outcome, dict):
+                    continue
+                action_id = str(outcome.get("action_id") or "")
+                durable_action = actions_by_id.get(action_id)
+                durable_status = (
+                    str(getattr(durable_action.status, "value", durable_action.status))
+                    if durable_action is not None
+                    else ""
+                )
+                supplied_message_id = str(outcome.get("message_id") or "")
+                if (
+                    durable_action is None
+                    or str(outcome.get("status") or "") != durable_status
+                    or (
+                        supplied_message_id
+                        and supplied_message_id != durable_action.message_id
+                    )
+                ):
+                    continue
+                outcomes.append(outcome)
+            for outcome in outcomes:
+                prior_action_id = str(outcome.get("action_id") or "")
+                prior_message_id = (
+                    str(outcome.get("message_id") or "")
+                    or action_message_ids.get(prior_action_id, "")
+                )
+                if prior_message_id not in message_id_set:
+                    continue
+                effect_status = str(
+                    outcome.get("effect_status")
+                    or outcome.get("status")
+                    or "unavailable"
+                ).lower()
+                observation_status = (
+                    effect_status
+                    if effect_status in {"verified", "failed"}
+                    else "unavailable"
+                )
+                runtime_observations[prior_message_id] = {
+                    "status": observation_status,
+                    "source_message_ids": [transition_message_id],
+                    "source_action_ids": [prior_action_id],
+                    "memory_refs": [],
+                    "memory_source_scenario_ids": [],
+                    "recent_messages_status": observation_status,
+                    "identity_memory_status": "empty",
+                    "provenance_kind": "agent_runtime",
+                    "observation_kind": "action_outcome",
+                }
+
+            verified_effect_action_ids = {
+                str(outcome.get("action_id") or "")
+                for outcome in outcomes
+                if str(outcome.get("status") or "").lower() == "verified"
+                and str(outcome.get("effect_status") or "").lower() == "verified"
+            }
+            world_changes = [
+                str(item).strip()
+                for item in transition.get("world_state_changes", [])
+                if str(item).strip()
+            ]
+            memory_candidates = [
+                item
+                for item in transition.get("memory_write_candidates", [])
+                if isinstance(item, dict)
+            ]
+            reflection_records = [
+                item
+                for item in transition.get("reflection_records", [])
+                if isinstance(item, dict)
+            ]
+            for outcome in outcomes:
+                prior_action_id = str(outcome.get("action_id") or "")
+                prior_message_id = (
+                    str(outcome.get("message_id") or "")
+                    or action_message_ids.get(prior_action_id, "")
+                )
+                if prior_message_id not in message_id_set:
+                    continue
+                if world_changes and prior_action_id in verified_effect_action_ids:
+                    runtime_consequences.setdefault(prior_message_id, []).extend(
+                        {
+                            "status": "derived",
+                            "type": "world_state_change",
+                            "summary": summary,
+                            "source_action_ids": [prior_action_id]
+                            if prior_action_id
+                            else [],
+                            "source_effect_status": "verified",
+                            "observed_in_message_id": transition_message_id,
+                            "provenance_kind": "agent_runtime",
+                        }
+                        for summary in world_changes
+                    )
+                for candidate in memory_candidates:
+                    source_action_ids = _bounded_ids(
+                        candidate.get("source_action_ids")
+                    )
+                    if (
+                        not source_action_ids
+                        or prior_action_id not in source_action_ids
+                        or not set(source_action_ids).issubset(verified_effect_action_ids)
+                    ):
+                        continue
+                    summary = str(candidate.get("summary") or "").strip()
+                    if not summary:
+                        continue
+                    runtime_reflections.setdefault(prior_message_id, []).append({
+                        "status": "candidate",
+                        "reflection_kind": "memory_write_candidate",
+                        "summary": summary,
+                        "source_action_ids": source_action_ids,
+                        "source_message_ids": [prior_message_id],
+                        "retrieved_in_message_ids": [transition_message_id],
+                        "provenance_kind": "agent_runtime",
+                    })
+
+            for reflection in reflection_records:
+                if (
+                    str(reflection.get("status") or "").lower() != "verified"
+                    or str(reflection.get("reflection_kind") or "").lower()
+                    != "action_feedback"
+                ):
+                    continue
+                source_action_ids = _bounded_ids(
+                    reflection.get("source_action_ids")
+                )
+                source_message_ids = _bounded_ids(
+                    reflection.get("source_message_ids")
+                )
+                if (
+                    not source_action_ids
+                    or not source_message_ids
+                    or not set(source_action_ids).issubset(verified_effect_action_ids)
+                ):
+                    continue
+                expected_message_ids = {
+                    str(actions_by_id[action_id].message_id or "")
+                    for action_id in source_action_ids
+                    if action_id in actions_by_id
+                }
+                expected_message_ids.discard("")
+                if (
+                    len(expected_message_ids) != len(source_action_ids)
+                    or set(source_message_ids) != expected_message_ids
+                    or not expected_message_ids.issubset(message_id_set)
+                ):
+                    continue
+                summary = str(reflection.get("summary") or "").strip()[:500]
+                if not summary:
+                    continue
+                projected = {
+                    "status": "verified",
+                    "reflection_kind": "action_feedback",
+                    "summary": summary,
+                    "source_action_ids": source_action_ids,
+                    "source_message_ids": source_message_ids,
+                    "provenance_kind": "agent_runtime",
+                }
+                for source_message_id in source_message_ids:
+                    runtime_reflections.setdefault(source_message_id, []).append(
+                        dict(projected)
+                    )
+
         event_by_message: dict[str, GraphNode] = {}
         outgoing_by_message: dict[str, list[dict[str, Any]]] = {}
         snapshot = _latest_snapshot(session, scenario_id)
@@ -248,16 +515,56 @@ def build_action_ledger(
         entries: list[dict[str, Any]] = []
         for message, message_branch_id, round_number, agent in message_rows:
             receipt = receipts_by_message.get(message.id)
+            durable_action = action_by_message.get(message.id)
+            if durable_action is None:
+                action_payload = {"type": "utterance", "text": message.content}
+                action_id_value = f"message:{message.id}"
+            else:
+                action_payload = {
+                    "type": getattr(
+                        durable_action.action_type,
+                        "value",
+                        durable_action.action_type,
+                    ),
+                    "status": getattr(
+                        durable_action.status,
+                        "value",
+                        durable_action.status,
+                    ),
+                    "content": durable_action.content,
+                    "target": (
+                        {
+                            "kind": durable_action.target_type,
+                            "id": durable_action.target_id,
+                        }
+                        if durable_action.target_type and durable_action.target_id
+                        else None
+                    ),
+                    "failure_code": durable_action.failure_code,
+                    "text": message.content,
+                }
+                action_id_value = durable_action.id
+            observation = runtime_observations.get(message.id)
+            if observation is None:
+                observation = _durable_action_observation(durable_action, message.id)
+            if observation is None:
+                observation = _observation_projection(receipt)
             entries.append({
-                "action_id": f"message:{message.id}",
+                "action_id": action_id_value,
                 "message_id": message.id,
                 "agent": {"id": agent.id, "name": agent.name},
                 "branch_id": message_branch_id,
                 "round": round_number,
-                "action": {"type": "utterance", "text": message.content},
-                "observation": _observation_projection(receipt),
-                "consequences": outgoing_by_message.get(message.id, []),
-                "reflections": reflections_by_message.get(message.id, []),
+                "action": action_payload,
+                "observation": observation,
+                "consequences": _merge_projection_items(
+                    outgoing_by_message.get(message.id, []),
+                    runtime_consequences.get(message.id, []),
+                ),
+                "reflections": _merge_projection_items(
+                    reflections_by_message.get(message.id, []),
+                    runtime_reflections.get(message.id, []),
+                ),
             })
 
     page = entries[safe_cursor : safe_cursor + safe_limit]

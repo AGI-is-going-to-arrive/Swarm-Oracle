@@ -410,15 +410,18 @@ export function buildSingleFileGalleryHtml(artifact: PublicArtifact, lang: 'en' 
             itemHeader.appendChild(title);
 
             const verdict = verdicts.find(v => v.branch_index === bar.branch_index);
-            if (verdict) {
+            const confidence = verdict && ['high', 'medium', 'low'].includes(verdict.confidence)
+              ? verdict.confidence
+              : null;
+            if (confidence) {
               const meta = document.createElement('div');
               const badge = document.createElement('span');
-              badge.className = 'confidence-badge confidence-' + verdict.confidence;
+              badge.className = 'confidence-badge confidence-' + confidence;
 
-              let confText = verdict.confidence;
-              if (verdict.confidence === 'high') confText = '${isZh ? '高置信度' : 'High Confidence'}';
-              else if (verdict.confidence === 'medium') confText = '${isZh ? '中置信度' : 'Medium Confidence'}';
-              else if (verdict.confidence === 'low') confText = '${isZh ? '低置信度' : 'Low Confidence'}';
+              let confText = confidence;
+              if (confidence === 'high') confText = '${isZh ? '高置信度' : 'High Confidence'}';
+              else if (confidence === 'medium') confText = '${isZh ? '中置信度' : 'Medium Confidence'}';
+              else if (confidence === 'low') confText = '${isZh ? '低置信度' : 'Low Confidence'}';
 
               badge.textContent = confText;
               meta.appendChild(badge);

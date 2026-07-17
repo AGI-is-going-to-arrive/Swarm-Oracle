@@ -5,11 +5,12 @@ import type { ReportSection } from '../../types';
 interface Props {
   sections: ReportSection[];
   hrefBase?: string;
+  language?: 'zh' | 'en';
 }
 
-export const ReportToc = React.memo(function ReportToc({ sections, hrefBase }: Props) {
+export const ReportToc = React.memo(function ReportToc({ sections, hrefBase, language }: Props) {
   const { t, i18n } = useTranslation();
-  const isZh = i18n.language.startsWith('zh');
+  const contentLanguage = language ?? (i18n.language.startsWith('zh') ? 'zh' : 'en');
 
   if (sections.length === 0) return null;
 
@@ -33,7 +34,7 @@ export const ReportToc = React.memo(function ReportToc({ sections, hrefBase }: P
           >
             <span className="report-toc__num" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
             <span className="report-toc__title">
-              {isZh ? section.title_i18n.zh || section.title : section.title_i18n.en || section.title}
+              {section.title_i18n[contentLanguage] || section.title}
             </span>
           </a>
         ))}

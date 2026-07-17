@@ -151,7 +151,7 @@ def load_evidence_message_coords(
     key_moments: list[str],
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Return a bounded candidate window of scored message coordinates."""
+    """Return a bounded, temporally stratified window of scored messages."""
 
     report_scope = _validate_report_lineage_scope(report_scope)
     if limit <= 0:
@@ -160,31 +160,95 @@ def load_evidence_message_coords(
         return []
 
     score_expr = _message_score_expr(key_moments)
+
+    def _query_rows(
+        session: Session,
+        *,
+        round_ids: tuple[str, ...],
+        row_limit: int,
+    ) -> list[tuple[Any, ...]]:
+        if row_limit <= 0 or not round_ids:
+            return []
+        return list(
+            session.exec(
+                select(
+                    Round.id,
+                    Round.branch_id,
+                    Round.round_number,
+                    AgentMessage.id,
+                    AgentMessage.agent_id,
+                    Agent.name,
+                    Agent.tier,
+                    Agent.role,
+                    AgentMessage.content,
+                    AgentMessage.emotion,
+                    AgentMessage.diverge,
+                )
+                .join(AgentMessage, AgentMessage.round_id == Round.id)
+                .join(Branch, Round.branch_id == Branch.id)
+                .join(Agent, AgentMessage.agent_id == Agent.id, isouter=True)
+                .where(
+                    Branch.scenario_id == report_scope.scenario_id,
+                    _round_scope_predicate(report_scope),
+                    Round.id.in_(round_ids),
+                )
+                .order_by(
+                    score_expr.desc(),
+                    Round.round_number.asc(),
+                    AgentMessage.id.asc(),
+                )
+                .limit(row_limit)
+            ).all(),
+        )
+
     with Session(engine) as session:
-        rows = session.exec(
-            select(
-                Round.id,
-                Round.branch_id,
-                Round.round_number,
-                AgentMessage.id,
-                AgentMessage.agent_id,
-                Agent.name,
-                Agent.tier,
-                Agent.role,
-                AgentMessage.content,
-                AgentMessage.emotion,
-                AgentMessage.diverge,
+        # The old global score-first LIMIT could fill the whole window with early
+        # rounds when many messages shared the same score. For reports spanning at
+        # least three rounds, reserve bounded capacity for early/middle/late thirds.
+        # A final global fill keeps the original quality ranking when one third has
+        # too few messages, while the returned row count never exceeds ``limit``.
+        if len(report_scope.rounds) >= 3 and limit >= 3:
+            bucket_count = 3
+            buckets: list[list[str]] = [[] for _ in range(bucket_count)]
+            total_rounds = len(report_scope.rounds)
+            for index, round_ref in enumerate(report_scope.rounds):
+                bucket_index = min(
+                    bucket_count - 1,
+                    index * bucket_count // total_rounds,
+                )
+                buckets[bucket_index].append(round_ref.round_id)
+
+            base_budget, remainder = divmod(limit, bucket_count)
+            rows: list[tuple[Any, ...]] = []
+            for bucket_index, bucket_round_ids in enumerate(buckets):
+                bucket_budget = base_budget + int(bucket_index < remainder)
+                rows.extend(
+                    _query_rows(
+                        session,
+                        round_ids=tuple(bucket_round_ids),
+                        row_limit=bucket_budget,
+                    ),
+                )
+
+            if len(rows) < limit:
+                seen_message_ids = {str(row[3]) for row in rows}
+                for row in _query_rows(
+                    session,
+                    round_ids=report_scope.round_ids,
+                    row_limit=limit,
+                ):
+                    if str(row[3]) in seen_message_ids:
+                        continue
+                    rows.append(row)
+                    seen_message_ids.add(str(row[3]))
+                    if len(rows) >= limit:
+                        break
+        else:
+            rows = _query_rows(
+                session,
+                round_ids=report_scope.round_ids,
+                row_limit=limit,
             )
-            .join(AgentMessage, AgentMessage.round_id == Round.id)
-            .join(Branch, Round.branch_id == Branch.id)
-            .join(Agent, AgentMessage.agent_id == Agent.id, isouter=True)
-            .where(
-                Branch.scenario_id == report_scope.scenario_id,
-                _round_scope_predicate(report_scope),
-            )
-            .order_by(score_expr.desc(), Round.round_number.asc(), AgentMessage.id.asc())
-            .limit(limit)
-        ).all()
 
     return [_message_coord_from_row(row) for row in rows]
 

@@ -30,6 +30,7 @@ from app.services.agent_message_metadata import (
     message_emotion_if_available,
     public_emotion_metadata,
 )
+from app.services.agent_runtime import clone_runtime_history
 from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,7 @@ def clone_until_round(
 
         new_branch_id = new_branch.id
         cloned_action_ids: dict[str, str] = {}
+        cloned_message_ids: dict[str, str] = {}
 
         for src_round in source_rounds:
             if ensure_lock is not None:
@@ -372,6 +374,7 @@ def clone_until_round(
                 )
                 active_session.add(new_msg)
                 active_session.flush()
+                cloned_message_ids[msg.id] = new_msg.id
                 source_action = active_session.exec(
                     select(SimulationAction).where(SimulationAction.message_id == msg.id)
                 ).first()
@@ -424,6 +427,74 @@ def clone_until_round(
                 )
                 if source_action is not None:
                     cloned_action_ids[source_action.id] = cloned_action.id
+
+        scenario = active_session.get(Scenario, scenario_id)
+        parsed_context = dict(scenario.parsed_context or {}) if scenario is not None else {}
+        runtime_history = parsed_context.get("agent_runtime_v1")
+        if scenario is not None and isinstance(runtime_history, dict):
+            # A branch lineage may inherit rounds owned by ancestor branches.
+            # Present that effective history to the coordinate remapper while
+            # keeping every source branch payload byte-for-byte intact.
+            runtime_for_clone = json.loads(
+                json.dumps(runtime_history, ensure_ascii=False, default=str)
+            )
+            runtime_branches = runtime_for_clone.get("branches")
+            if not isinstance(runtime_branches, dict):
+                runtime_branches = {}
+                runtime_for_clone["branches"] = runtime_branches
+            source_runtime = runtime_branches.get(source_branch_id)
+            source_round_history = (
+                source_runtime.get("rounds") if isinstance(source_runtime, dict) else None
+            )
+            visible_round_history: dict[str, Any] = {}
+            for source_round in source_rounds:
+                round_key = str(source_round.round_number)
+                round_runtime = (
+                    source_round_history.get(round_key)
+                    if isinstance(source_round_history, dict)
+                    else None
+                )
+                if not isinstance(round_runtime, dict):
+                    owner_runtime = runtime_branches.get(source_round.branch_id)
+                    owner_rounds = (
+                        owner_runtime.get("rounds") if isinstance(owner_runtime, dict) else None
+                    )
+                    round_runtime = (
+                        owner_rounds.get(round_key) if isinstance(owner_rounds, dict) else None
+                    )
+                if isinstance(round_runtime, dict):
+                    visible_round_history[round_key] = round_runtime
+            effective_source_runtime = (
+                dict(source_runtime) if isinstance(source_runtime, dict) else {}
+            )
+            effective_source_runtime["rounds"] = visible_round_history
+            runtime_branches[source_branch_id] = effective_source_runtime
+            visible_branch_id_map = {
+                source_round.branch_id: new_branch_id for source_round in source_rounds
+            }
+            visible_branch_id_map[source_branch_id] = new_branch_id
+            cloned_runtime = clone_runtime_history(
+                runtime_for_clone,
+                source_branch_id=source_branch_id,
+                target_branch_id=new_branch_id,
+                through_round=round_number,
+                branch_id_map=visible_branch_id_map,
+                message_id_map=cloned_message_ids,
+                action_id_map=cloned_action_ids,
+            )
+            persisted_runtime = json.loads(
+                json.dumps(runtime_history, ensure_ascii=False, default=str)
+            )
+            persisted_branches = persisted_runtime.setdefault("branches", {})
+            cloned_branches = cloned_runtime.get("branches")
+            cloned_branch_runtime = (
+                cloned_branches.get(new_branch_id) if isinstance(cloned_branches, dict) else None
+            )
+            if isinstance(persisted_branches, dict) and isinstance(cloned_branch_runtime, dict):
+                persisted_branches[new_branch_id] = cloned_branch_runtime
+            parsed_context["agent_runtime_v1"] = persisted_runtime
+            scenario.parsed_context = parsed_context
+            active_session.add(scenario)
 
         if ensure_lock is not None:
             ensure_lock()
@@ -501,6 +572,93 @@ def seed_counterfactual(
         if branch:
             branch.replay_source_agent_id = agent_id
             session.add(branch)
+            scenario = session.get(Scenario, branch.scenario_id)
+            parsed_context = dict(scenario.parsed_context or {}) if scenario is not None else {}
+            runtime_history = parsed_context.get("agent_runtime_v1")
+            if scenario is not None and isinstance(runtime_history, dict):
+                # Counterfactual text replaces the cloned utterance, so the
+                # corresponding old decision is no longer valid. Preserve
+                # the record but never fabricate a replacement decision.
+                runtime_copy = json.loads(
+                    json.dumps(runtime_history, ensure_ascii=False, default=str)
+                )
+                branches = runtime_copy.get("branches")
+                branch_runtime = branches.get(branch_id) if isinstance(branches, dict) else None
+                rounds = branch_runtime.get("rounds") if isinstance(branch_runtime, dict) else None
+                round_runtime = (
+                    rounds.get(str(last_round.round_number)) if isinstance(rounds, dict) else None
+                )
+                decisions = (
+                    round_runtime.get("decisions") if isinstance(round_runtime, dict) else None
+                )
+                runtime_changed = False
+                for decision in decisions if isinstance(decisions, list) else []:
+                    if not isinstance(decision, dict):
+                        continue
+                    if (
+                        decision.get("agent_id") == agent_id
+                        and decision.get("message_id") == message.id
+                    ):
+                        decision["availability"] = "unavailable"
+                        decision["unavailable_reason"] = "counterfactual_replaced"
+                        decision["decision_status"] = "unavailable"
+                        decision["failure_code"] = "COUNTERFACTUAL_REPLACED"
+                        decision["selected_action"] = "IDLE"
+                        decision["action_parameters"] = {}
+                        decision["target_agent_or_object"] = None
+                        # Keep similarity/replan inputs aligned with the
+                        # replacement message while retaining an explicitly
+                        # unavailable decision rather than fabricating one.
+                        decision["utterance"] = str(message.content or "")[:2_000]
+                        decision["idle_reason"] = (
+                            "Counterfactual replacement invalidated the cloned decision"
+                        )
+                        runtime_changed = True
+                transitions = (
+                    round_runtime.get("transitions") if isinstance(round_runtime, dict) else None
+                )
+                for transition in transitions if isinstance(transitions, list) else []:
+                    if not isinstance(transition, dict):
+                        continue
+                    if (
+                        transition.get("agent_id") == agent_id
+                        and transition.get("message_id") == message.id
+                    ):
+                        # The replacement invalidates every consequence derived
+                        # from the original utterance/action. Keep the durable
+                        # coordinates for auditability, but force the next turn
+                        # to replan from an explicitly unavailable transition.
+                        transition.update(
+                            {
+                                "previous_action_outcomes": [],
+                                "goal_progress_delta": "unknown",
+                                "new_information": [],
+                                "new_obstacles": [],
+                                "relationship_changes": [],
+                                "commitments": [],
+                                "unresolved_questions": [],
+                                "world_state_changes": [],
+                                "state_deltas": [],
+                                "next_round_pressure": (
+                                    "Replan from the counterfactual replacement; verify its "
+                                    "effects before assuming any world consequence."
+                                ),
+                                "memory_write_candidates": [],
+                                "reflection_records": [],
+                                "strategy_adjustments": [],
+                                "transition_origin": "counterfactual_replacement",
+                                "validation_warnings": [],
+                                "transition_status": "unavailable",
+                                "failure_code": "COUNTERFACTUAL_REPLACED",
+                                "utterance_similarity": 0.0,
+                                "replan_required": True,
+                            }
+                        )
+                        runtime_changed = True
+                if runtime_changed:
+                    parsed_context["agent_runtime_v1"] = runtime_copy
+                    scenario.parsed_context = parsed_context
+                    session.add(scenario)
             agent = session.get(Agent, agent_id)
             if agent is not None and agent.scenario_id == branch.scenario_id:
                 memory_payload = {
@@ -573,6 +731,138 @@ def _round_messages(session: Session, round_: Round) -> list[dict]:
         }
         for msg, agent in rows
     ]
+
+
+def _runtime_transitions_for_round(
+    runtime_history: object,
+    *,
+    branch_id: str,
+    round_number: int,
+) -> list[dict[str, Any]]:
+    if not isinstance(runtime_history, dict) or runtime_history.get("version") != "1.0":
+        return []
+    branches = runtime_history.get("branches")
+    branch_runtime = branches.get(branch_id) if isinstance(branches, dict) else None
+    rounds = branch_runtime.get("rounds") if isinstance(branch_runtime, dict) else None
+    round_runtime = rounds.get(str(round_number)) if isinstance(rounds, dict) else None
+    transitions = round_runtime.get("transitions") if isinstance(round_runtime, dict) else None
+    if not isinstance(transitions, list):
+        return []
+    return [dict(transition) for transition in transitions if isinstance(transition, dict)]
+
+
+def _runtime_transition_summary(transitions: list[dict[str, Any]]) -> str:
+    pressures = [
+        str(transition.get("next_round_pressure") or "").strip() for transition in transitions
+    ]
+    return " ".join(pressure for pressure in pressures if pressure)
+
+
+def _is_runtime_coordinate_key(key: str) -> bool:
+    """Return whether a transition field is branch-local coordinate noise."""
+    return (
+        key in {"transition_id", "decision_id", "branch_id", "round_id"}
+        or key.endswith("_transition_id")
+        or key.endswith("_transition_ids")
+        or key.endswith("_branch_id")
+        or key == "message_id"
+        or key == "message_ids"
+        or key.endswith("_message_id")
+        or key.endswith("_message_ids")
+        or key == "action_id"
+        or key == "action_ids"
+        or key.endswith("_action_id")
+        or key.endswith("_action_ids")
+    )
+
+
+def _runtime_coordinate_placeholder(key: str) -> str:
+    for kind in ("action", "message", "branch", "round", "transition", "decision"):
+        if kind in key:
+            return f"<runtime-{kind}-coordinate>"
+    return "<runtime-coordinate>"
+
+
+def _runtime_coordinate_text_replacements(value: Any) -> tuple[tuple[str, str], ...]:
+    replacements: set[tuple[str, str]] = set()
+
+    def collect(child: Any) -> None:
+        if isinstance(child, dict):
+            for raw_key, nested in child.items():
+                key = str(raw_key)
+                if _is_runtime_coordinate_key(key):
+                    coordinates = nested if isinstance(nested, list) else [nested]
+                    replacements.update(
+                        (str(coordinate), _runtime_coordinate_placeholder(key))
+                        for coordinate in coordinates
+                        if str(coordinate or "")
+                    )
+                collect(nested)
+        elif isinstance(child, list):
+            for nested in child:
+                collect(nested)
+
+    collect(value)
+    return tuple(sorted(replacements, key=lambda item: len(item[0]), reverse=True))
+
+
+def _semantic_runtime_value(
+    value: Any,
+    *,
+    coordinate_replacements: tuple[tuple[str, str], ...] = (),
+) -> Any:
+    """Strip remapped durable IDs while retaining transition semantics."""
+    if isinstance(value, dict):
+        return {
+            key: _semantic_runtime_value(
+                child,
+                coordinate_replacements=coordinate_replacements,
+            )
+            for key, child in value.items()
+            if not _is_runtime_coordinate_key(str(key))
+        }
+    if isinstance(value, list):
+        return [
+            _semantic_runtime_value(
+                item,
+                coordinate_replacements=coordinate_replacements,
+            )
+            for item in value
+        ]
+    if isinstance(value, str):
+        for coordinate, placeholder in coordinate_replacements:
+            value = value.replace(coordinate, placeholder)
+    return value
+
+
+def _runtime_transitions_identical(
+    branch_a: list[dict[str, Any]],
+    branch_b: list[dict[str, Any]],
+) -> bool:
+    """Compare state semantics without treating replay-remapped IDs as changes."""
+
+    def normalized(transitions: list[dict[str, Any]]) -> list[Any]:
+        values = [
+            _semantic_runtime_value(
+                transition,
+                coordinate_replacements=_runtime_coordinate_text_replacements(
+                    transition
+                ),
+            )
+            for transition in transitions
+        ]
+        return sorted(
+            values,
+            key=lambda item: json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
+
+    return normalized(branch_a) == normalized(branch_b)
 
 
 def _agent_messages_for_round(
@@ -814,6 +1104,11 @@ def compare_branches(
             branch_b,
             branch_param="branch_b",
         )
+        scenario = session.get(Scenario, scenario_id)
+        parsed_context = scenario.parsed_context if scenario is not None else None
+        runtime_history = (
+            parsed_context.get("agent_runtime_v1") if isinstance(parsed_context, dict) else None
+        )
 
         rounds_a = select_branch_rounds(
             session,
@@ -834,15 +1129,74 @@ def compare_branches(
 
         diffs = []
         for rn in all_round_numbers:
-            a_summary = _round_summary(session, a_by_round[rn]) if rn in a_by_round else ""
-            b_summary = _round_summary(session, b_by_round[rn]) if rn in b_by_round else ""
+            a_transitions = (
+                _runtime_transitions_for_round(
+                    runtime_history,
+                    branch_id=a_by_round[rn].branch_id,
+                    round_number=rn,
+                )
+                if rn in a_by_round
+                else []
+            )
+            b_transitions = (
+                _runtime_transitions_for_round(
+                    runtime_history,
+                    branch_id=b_by_round[rn].branch_id,
+                    round_number=rn,
+                )
+                if rn in b_by_round
+                else []
+            )
+            a_runtime_summary = _runtime_transition_summary(a_transitions)
+            b_runtime_summary = _runtime_transition_summary(b_transitions)
+            a_summary = a_runtime_summary or (
+                _round_summary(session, a_by_round[rn]) if rn in a_by_round else ""
+            )
+            b_summary = b_runtime_summary or (
+                _round_summary(session, b_by_round[rn]) if rn in b_by_round else ""
+            )
             a_messages = _round_messages(session, a_by_round[rn]) if rn in a_by_round else []
             b_messages = _round_messages(session, b_by_round[rn]) if rn in b_by_round else []
-            is_identical = a_summary == b_summary
+            transitions_identical = _runtime_transitions_identical(
+                a_transitions,
+                b_transitions,
+            )
+            is_identical = (
+                (rn in a_by_round) == (rn in b_by_round)
+                and a_messages == b_messages
+                and transitions_identical
+            )
+            state_transition_diff = (
+                {
+                    "branch_a": a_transitions,
+                    "branch_b": b_transitions,
+                    "is_identical": transitions_identical,
+                }
+                if a_transitions or b_transitions
+                else {}
+            )
 
-            # Compute divergence via word-set Jaccard
-            a_words = _tokenize(a_summary) if a_summary.strip() else set()
-            b_words = _tokenize(b_summary) if b_summary.strip() else set()
+            # Score both the displayed transition pressure and the utterances.
+            # Otherwise equal pressure can misleadingly show 0% divergence for
+            # a round that is correctly non-identical because its messages differ.
+            a_comparison_summary = " ".join(
+                part
+                for part in (
+                    a_summary,
+                    " ".join(str(message.get("content") or "") for message in a_messages),
+                )
+                if part.strip()
+            )
+            b_comparison_summary = " ".join(
+                part
+                for part in (
+                    b_summary,
+                    " ".join(str(message.get("content") or "") for message in b_messages),
+                )
+                if part.strip()
+            )
+            a_words = _tokenize(a_comparison_summary) if a_comparison_summary else set()
+            b_words = _tokenize(b_comparison_summary) if b_comparison_summary else set()
             divergence_score = round(1.0 - _jaccard_similarity(a_words, b_words), 4)
 
             diffs.append(
@@ -854,6 +1208,7 @@ def compare_branches(
                     "branch_b_messages": b_messages,
                     "divergence_score": divergence_score,
                     "is_identical": is_identical,
+                    "state_transition_diff": state_transition_diff,
                 }
             )
 

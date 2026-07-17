@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -184,6 +184,7 @@ const {
   setMockLanguage,
   getMockLanguage,
   changeLanguageMock,
+  fixedTranslator,
   stableTranslator,
 } = vi.hoisted(() => {
   let currentLanguage = 'en';
@@ -196,6 +197,71 @@ const {
       const value = vars[name];
       return value === undefined || value === null ? match : String(value);
     });
+  const fixedReportCopy: Record<string, Record<string, string>> = {
+    en: {
+      'result.report.title': 'Full report',
+      'result.report.disclaimer': 'This probability is a narrative simulation result, not a real-world prediction.',
+      'result.report.disclaimer_suppressed': 'Statistical band hidden: no answer-bearing branch was available to anchor it.',
+      'result.report.confidence_level.high': 'High',
+      'result.report.confidence_level.medium': 'Medium',
+      'result.report.confidence_level.low': 'Low',
+      'result.report.premortem.title': 'Premortem analysis',
+      'result.report.premortem.disclosure': 'Simulation evidence does not establish statistical independence or real-world proof.',
+      'result.report.premortem.statusLabel': 'Status',
+      'result.report.premortem.reasonLabel': 'Reason',
+      'result.report.premortem.status.available': 'Available',
+      'result.report.premortem.status.partial': 'Partial analysis',
+      'result.report.premortem.status.missing': 'Analysis unavailable',
+      'result.report.premortem.reason.insufficient_source_diversity': 'Simulation source diversity was insufficient for a complete analysis.',
+      'result.report.premortem.failureModeLabel': 'Failure mode',
+      'result.report.premortem.mechanismLabel': 'Mechanism',
+      'result.report.premortem.earlyWarningLabel': 'Early warning',
+      'result.report.premortem.uncertaintyLabel': 'Uncertainty',
+      'result.report.premortem.evidenceChainLabel': 'Evidence chain',
+      'result.report.premortem.role.failure_signal': 'Failure signal',
+      'result.report.premortem.openEvidence': 'Open evidence {{id}}',
+    },
+    zh: {
+      'result.report.title': '完整报告',
+      'result.report.disclaimer': '本概率为叙事推演产物，非真实世界预测。',
+      'result.report.disclaimer_suppressed': '已隐藏统计区间：本次推演没有能直接回答问题的分支可作锚点。',
+      'result.report.confidence_level.high': '高',
+      'result.report.confidence_level.medium': '中',
+      'result.report.confidence_level.low': '低',
+      'result.report.premortem.title': '事前验尸分析',
+      'result.report.premortem.disclosure': '推演证据不能证明来源在统计上相互独立，也不构成真实世界证明。',
+      'result.report.premortem.statusLabel': '状态',
+      'result.report.premortem.reasonLabel': '原因',
+      'result.report.premortem.status.available': '可用',
+      'result.report.premortem.status.partial': '部分分析',
+      'result.report.premortem.status.missing': '分析不可用',
+      'result.report.premortem.reason.insufficient_source_diversity': '推演来源多样性不足，无法形成完整分析。',
+      'result.report.premortem.failureModeLabel': '失效模式',
+      'result.report.premortem.mechanismLabel': '作用机制',
+      'result.report.premortem.earlyWarningLabel': '早期预警',
+      'result.report.premortem.uncertaintyLabel': '不确定性',
+      'result.report.premortem.evidenceChainLabel': '证据链',
+      'result.report.premortem.role.failure_signal': '失效信号',
+      'result.report.premortem.openEvidence': '打开证据 {{id}}',
+    },
+  };
+  const fixedTranslator = (language: string) => (
+    key: string,
+    defaultOrOptions?: string | Record<string, unknown>,
+    maybeOptions?: Record<string, unknown>,
+  ) => {
+    const options = typeof defaultOrOptions === 'object'
+      ? defaultOrOptions
+      : maybeOptions;
+    const defaultValue = typeof defaultOrOptions === 'string'
+      ? defaultOrOptions
+      : typeof options?.defaultValue === 'string'
+        ? options.defaultValue
+        : key;
+    const normalizedLanguage = language.startsWith('zh') ? 'zh' : 'en';
+    const template = fixedReportCopy[normalizedLanguage]?.[key] || defaultValue;
+    return options ? interpolate(template, options) : template;
+  };
   const stableTranslator = (
     key: string,
     defaultOrOptions?: string | Record<string, unknown>,
@@ -316,6 +382,7 @@ const {
     setMockLanguage,
     getMockLanguage,
     changeLanguageMock,
+    fixedTranslator,
     stableTranslator,
   };
 });
@@ -385,6 +452,7 @@ vi.mock('react-i18next', () => ({
         return getMockLanguage();
       },
       changeLanguage: changeLanguageMock,
+      getFixedT: (language: string) => fixedTranslator(language),
     },
   }),
 }));
@@ -758,7 +826,10 @@ vi.mock('../components/gameplayCards', () => ({
 }));
 
 vi.mock('../components/ShareModal', () => ({
-  default: (props: unknown) => shareModalMock(props),
+  default: (props: unknown) => {
+    shareModalMock(props);
+    return <div data-testid="share-modal-mock" />;
+  },
 }));
 
 vi.mock('../components/result/AgentProfileSheet', () => ({
@@ -1960,8 +2031,9 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText(/conversation\.error\.byok_invalid/)).toBeInTheDocument();
   });
 
-  it('copies a shareable challenge link for the current scenario', async () => {
+  it('persists a replay only after explicit share and reuses it when copying', async () => {
     const user = userEvent.setup();
+    createReplayArtifactMock.mockClear();
     let copiedUrl = '';
     const writeText = vi.fn(async (text: string) => {
       copiedUrl = text;
@@ -2018,7 +2090,12 @@ describe('ResultView campaign summary', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'result.copy_permalink_btn' })).not.toBeDisabled();
     });
+    expect(createReplayArtifactMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'result.share_btn' }));
+    await waitFor(() => expect(shareModalMock).toHaveBeenCalled());
+    expect(createReplayArtifactMock).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole('button', { name: 'result.copy_permalink_btn' }));
+    expect(createReplayArtifactMock).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole('button', { name: 'result.share_challenge_btn' }));
 
     expect(writeText).toHaveBeenCalledTimes(2);
@@ -2026,6 +2103,136 @@ describe('ResultView campaign summary', () => {
     expect(copiedUrl).toContain('sharedChallenge=1');
     expect(copiedUrl).toContain('question=');
     expect(copiedUrl).toContain('preset=balanced');
+  });
+
+  it('ignores a stale replay artifact after switching scenarios', async () => {
+    const user = userEvent.setup();
+    createReplayArtifactMock.mockClear();
+    let resolveArtifactA!: (value: Awaited<ReturnType<typeof apiClient.createReplayArtifact>>) => void;
+    const artifactA = new Promise<Awaited<ReturnType<typeof apiClient.createReplayArtifact>>>((resolve) => {
+      resolveArtifactA = resolve;
+    });
+    createReplayArtifactMock
+      .mockImplementationOnce(() => artifactA)
+      .mockResolvedValueOnce({ id: 'share-b', kind: 'scenario_result_v1', created_at: '2026-03-19T00:00:00Z' });
+    const getStoryMock = vi.mocked(apiClient.getStory);
+    const getScenarioMock = vi.mocked(apiClient.getScenario);
+    const storyBase = await getStoryMock.getMockImplementation()!('fixture');
+    const scenarioBase = await getScenarioMock.getMockImplementation()!('fixture');
+    getStoryMock
+      .mockResolvedValueOnce({ ...storyBase, scenario_id: 'scenario-a', question: 'Question A' })
+      .mockResolvedValueOnce({ ...storyBase, scenario_id: 'scenario-b', question: 'Question B' });
+    getScenarioMock
+      .mockResolvedValueOnce({ ...scenarioBase, id: 'scenario-a', question: 'Question A' })
+      .mockResolvedValueOnce({ ...scenarioBase, id: 'scenario-b', question: 'Question B' });
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-a']}>
+        <Link to="/result/scenario-b">switch scenario</Link>
+        <Routes><Route path="/result/:id" element={<ResultView />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('result-verdict-question')).toHaveTextContent('Question A');
+    expect(createReplayArtifactMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'result.share_btn' }));
+    expect(createReplayArtifactMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('link', { name: 'switch scenario' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('result-verdict-question')).toHaveTextContent('Question B');
+    });
+    expect(createReplayArtifactMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'result.share_btn' }));
+    await waitFor(() => expect(createReplayArtifactMock).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolveArtifactA({ id: 'share-a', kind: 'scenario_result_v1', created_at: '2026-03-19T00:00:00Z' });
+      await artifactA;
+    });
+    await waitFor(() => {
+      const props = shareModalMock.mock.calls.at(-1)?.[0] as {
+        scenarioId?: string;
+        shareContext?: { permalinkUrl?: string | null };
+      };
+      expect(props.scenarioId).toBe('scenario-b');
+      expect(props.shareContext?.permalinkUrl).toContain('share-b');
+    });
+    await user.click(screen.getByRole('button', { name: 'result.copy_permalink_btn' }));
+    expect(writeText).toHaveBeenLastCalledWith(expect.stringContaining('share-b'));
+    expect(createReplayArtifactMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an explicit share open when a same-scenario report refresh updates the replay snapshot', async () => {
+    type BrowserSetTimeout = (
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => number;
+    const timerWindow = window as unknown as { setTimeout: BrowserSetTimeout };
+    const nativeSetTimeout = window.setTimeout.bind(window) as BrowserSetTimeout;
+    const reportPolls: TimerHandler[] = [];
+    const setTimeoutSpy = vi.spyOn(timerWindow, 'setTimeout').mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 15_000) {
+        reportPolls.push(handler);
+        return 2_147_483_000 + reportPolls.length;
+      }
+      return nativeSetTimeout(handler, timeout, ...args);
+    });
+    try {
+      const user = userEvent.setup();
+      const getStoryMock = vi.mocked(apiClient.getStory);
+      const storyBase = await getStoryMock.getMockImplementation()!('fixture');
+      const generatingStory = {
+        ...storyBase,
+        full_report: fullReportFixture('generating', []),
+      };
+      const completedStory = {
+        ...storyBase,
+        full_report: {
+          ...fullReportFixture(),
+          generated_at: '2026-03-19T00:00:00Z',
+        },
+      };
+      getStoryMock.mockReset();
+      getStoryMock
+        .mockResolvedValueOnce(generatingStory)
+        .mockResolvedValueOnce(completedStory)
+        .mockResolvedValue(completedStory);
+      createReplayArtifactMock.mockClear();
+      setMockCapabilities({ result_report: { enabled: true } });
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes><Route path="/result/:id" element={<ResultView />} /></Routes>
+        </MemoryRouter>,
+      );
+
+      await vi.waitFor(() => {
+        expect(screen.getByRole('button', { name: 'result.share_btn' })).not.toBeDisabled();
+      });
+      await user.click(screen.getByRole('button', { name: 'result.share_btn' }));
+      expect(screen.getByTestId('share-modal-mock')).toBeInTheDocument();
+      await vi.waitFor(() => expect(createReplayArtifactMock).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        expect(reportPolls.length).toBeGreaterThan(0);
+        for (const reportPoll of reportPolls) {
+          expect(reportPoll).toBeTypeOf('function');
+          (reportPoll as () => void)();
+        }
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(getStoryMock).toHaveBeenCalledTimes(3));
+
+      expect(screen.getByTestId('share-modal-mock')).toBeInTheDocument();
+      expect(createReplayArtifactMock).toHaveBeenCalledTimes(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it('renders from a replay token without finalizing campaign again', async () => {
@@ -5520,6 +5727,158 @@ describe('ResultView export flow', () => {
     expect(blobText).toContain('This probability is a narrative simulation result, not a real-world prediction.');
     expect(blobText).not.toContain('Disclaimer: null');
     expect(blobText).not.toContain('Disclaimer: undefined');
+  });
+
+  it('exports the resolved report content language when the English UI opens a Chinese-only report', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+    setMockLanguage('en');
+    setMockCapabilities({ result_report: { enabled: true } });
+    mockStoryWithFullReport({
+      ...fullReportFixture(),
+      language: 'zh',
+      available_languages: ['zh'],
+      language_status: { zh: 'available', en: 'missing' },
+      title: '仅中文报告标题',
+      title_i18n: { zh: '仅中文报告标题', en: 'UNAVAILABLE EN TITLE' },
+      summary: '仅中文报告摘要',
+      summary_i18n: { zh: '仅中文报告摘要', en: 'UNAVAILABLE EN SUMMARY' },
+      sections: [{
+        ...REPORT_SECTION,
+        title: '仅中文章节',
+        title_i18n: { zh: '仅中文章节', en: 'UNAVAILABLE EN SECTION' },
+        body_md_i18n: { zh: '仅中文章节正文', en: 'UNAVAILABLE EN BODY' },
+      }],
+      verdict: {
+        headline_answer: '仅中文结论',
+        likelihood: { probability: 0.9, interval: [0.8, 1], wep: 'almost_certain' },
+        analytic_confidence: {
+          level: 'high',
+          basis: '仅中文置信依据',
+          basis_i18n: { zh: '仅中文置信依据', en: 'UNAVAILABLE EN BASIS' },
+        },
+        disclaimer: null,
+      },
+      evidence: [{
+        id: 'ev-1',
+        branch_id: 'branch-1',
+        round_id: 'round-1',
+        round_number: 1,
+        agent_id: 'agent-1',
+        agent_name: '分析者',
+        message_id: 'message-1',
+        quote: '库存跌破运行缓冲。',
+        kind: 'utterance',
+      }],
+      premortem_analysis: structuredPremortemFixture,
+      limitations: '仅中文限制说明',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'result.export' }));
+    await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+    const blobText = await readBlobText(createObjectURLMock.mock.calls[0][0] as Blob);
+
+    expect(blobText).toContain('# 仅中文报告标题');
+    expect(blobText).toContain('**摘要**: 仅中文报告摘要');
+    expect(blobText).toContain('## 仅中文章节');
+    expect(blobText).toContain('仅中文章节正文');
+    expect(blobText).toContain('高 — 仅中文置信依据');
+    expect(blobText).toContain('**免责声明**: 本概率为叙事推演产物，非真实世界预测。');
+    expect(blobText).toContain('## 事前验尸分析');
+    expect(blobText).toContain('**状态**: 部分分析');
+    expect(blobText).toContain('### pm_001 — 供应链停摆');
+    expect(blobText).toContain('## 限制');
+    expect(blobText).not.toContain('UNAVAILABLE EN');
+    expect(blobText).not.toContain('Premortem analysis');
+    expect(blobText).not.toContain('This probability is a narrative simulation result');
+  });
+
+  it('omits primary-only report fields when exporting a bilingual alternate language', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+    setMockLanguage('en');
+    setMockCapabilities({ result_report: { enabled: true } });
+    mockStoryWithFullReport({
+      ...fullReportFixture(),
+      language: 'zh',
+      available_languages: ['zh', 'en'],
+      language_status: { zh: 'available', en: 'available' },
+      title: '中文原始标题',
+      title_i18n: { zh: '中文原始标题', en: 'English report title' },
+      summary: '中文原始摘要',
+      summary_i18n: { zh: '中文原始摘要', en: 'English report summary' },
+      sections: [{
+        ...REPORT_SECTION,
+        title: '中文原始章节',
+        title_i18n: { zh: '中文原始章节', en: 'English report section' },
+        body_md_i18n: { zh: '中文原始正文', en: 'English report body.' },
+      }],
+      verdict: {
+        headline_answer: '中文原始结论',
+        likelihood: { probability: 0.9, interval: [0.8, 1], wep: 'almost_certain' },
+        analytic_confidence: {
+          level: 'high',
+          basis: '中文原始依据',
+          basis_i18n: { zh: '中文原始依据', en: 'English confidence basis' },
+        },
+        disclaimer: '中文原始定制免责声明',
+      },
+      evidence: [{
+        id: 'ev-1',
+        branch_id: 'branch-1',
+        round_id: 'round-1',
+        round_number: 1,
+        agent_id: 'agent-1',
+        agent_name: 'Analyst',
+        message_id: 'message-1',
+        quote: '证据原话保持原样。',
+        kind: 'utterance',
+      }],
+      indicators_to_watch: [{
+        signal: '中文原始指标',
+        direction: 'up',
+        note: '中文原始指标备注',
+      }],
+      limitations: '中文原始限制',
+      premortem_analysis: null,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'result.export' }));
+    await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+    const blobText = await readBlobText(createObjectURLMock.mock.calls[0][0] as Blob);
+
+    expect(blobText).toContain('# English report title');
+    expect(blobText).toContain('**Summary**: English report summary');
+    expect(blobText).toContain('## English report section');
+    expect(blobText).toContain('English report body.');
+    expect(blobText).toContain('High — English confidence basis');
+    expect(blobText).toContain('## Evidence');
+    expect(blobText).toContain('证据原话保持原样。');
+    expect(blobText).toContain('**Disclaimer**: This probability is a narrative simulation result');
+    expect(blobText).not.toContain('中文原始结论');
+    expect(blobText).not.toContain('中文原始指标');
+    expect(blobText).not.toContain('中文原始限制');
+    expect(blobText).not.toContain('中文原始定制免责声明');
+    expect(blobText).not.toContain('## Indicators to Watch');
+    expect(blobText).not.toContain('## Limitations');
   });
 
   it('exports structured premortem status, failure-mode fields, and evidence-chain roles', async () => {

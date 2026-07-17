@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import event
 from sqlmodel import Session, select
 
@@ -35,7 +36,9 @@ from app.services.public_artifacts import (
     MAX_TITLE_CHARS,
     MAX_TRANSCRIPT_EXCERPTS,
     PUBLIC_ARTIFACT_SCHEMA_VERSION,
+    PUBLIC_ARTIFACT_SCHEMA_VERSION_V1,
     PublicArtifactV1,
+    PublicArtifactV2,
     build_public_artifact_for_scenario,
     build_public_artifact_from_mapping,
     scan_public_artifact_for_secrets,
@@ -392,6 +395,57 @@ def test_public_artifact_roundtrips_as_stable_json() -> None:
         "label": "Rationed grid",
         "probability": 0.72,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_confidence", "expected"),
+    [
+        ("high", "high"),
+        ("medium", "medium"),
+        ("low", "low"),
+        (None, None),
+        ("certain", None),
+    ],
+)
+def test_public_artifact_preserves_only_valid_confidence_tiers(
+    raw_confidence: object,
+    expected: str | None,
+) -> None:
+    mapping = _dirty_mapping()
+    mapping["parsed_context"]["result_quality"]["confidence"] = raw_confidence
+
+    artifact = build_public_artifact_from_mapping(mapping)
+
+    assert artifact["branch_verdicts"][0]["confidence"] == expected
+
+
+def test_public_artifact_missing_confidence_emits_null() -> None:
+    mapping = _dirty_mapping()
+    mapping["parsed_context"]["result_quality"].pop("confidence")
+
+    artifact = build_public_artifact_from_mapping(mapping)
+
+    assert artifact["schema_version"] == PUBLIC_ARTIFACT_SCHEMA_VERSION
+    assert artifact["branch_verdicts"][0]["confidence"] is None
+
+
+@pytest.mark.parametrize("confidence", [None, "certain"])
+def test_public_artifact_v1_rejects_non_tier_confidence(confidence: object) -> None:
+    payload = build_public_artifact_from_mapping(_dirty_mapping())
+    payload["schema_version"] = PUBLIC_ARTIFACT_SCHEMA_VERSION_V1
+    payload["branch_verdicts"][0]["confidence"] = confidence
+
+    with pytest.raises(ValidationError):
+        PublicArtifactV1.model_validate(payload)
+
+
+def test_public_artifact_v1_rejects_missing_confidence() -> None:
+    payload = build_public_artifact_from_mapping(_dirty_mapping())
+    payload["schema_version"] = PUBLIC_ARTIFACT_SCHEMA_VERSION_V1
+    payload["branch_verdicts"][0].pop("confidence")
+
+    with pytest.raises(ValidationError):
+        PublicArtifactV1.model_validate(payload)
 
 
 def test_public_artifact_truncates_field_budgets() -> None:
@@ -768,7 +822,7 @@ def test_unlabelled_credential_redaction_avoids_boundary_false_positives(
     assert "[redacted-key]" not in payload
 
 
-def test_public_artifact_golden_fixture_matches_current_builder_shape() -> None:
+def test_public_artifact_v1_golden_remains_strict_and_matches_v2_shape() -> None:
     fixture_path = (
         Path(__file__).resolve().parents[2]
         / "samples"
@@ -778,13 +832,38 @@ def test_public_artifact_golden_fixture_matches_current_builder_shape() -> None:
     golden = json.loads(fixture_path.read_text(encoding="utf-8"))
     generated = build_public_artifact_from_mapping(_golden_public_artifact_mapping())
 
-    assert golden["schema_version"] == PUBLIC_ARTIFACT_SCHEMA_VERSION
+    assert golden["schema_version"] == PUBLIC_ARTIFACT_SCHEMA_VERSION_V1
     PublicArtifactV1.model_validate(golden)
+    assert generated["schema_version"] == PUBLIC_ARTIFACT_SCHEMA_VERSION
+    PublicArtifactV2.model_validate(generated)
     assert _key_shape(golden) == _key_shape(generated)
     assert golden["transcript_excerpts"]
     for excerpt in golden["transcript_excerpts"]:
         assert set(excerpt) == {"branch_index", "round", "agent_name", "excerpt"}
         assert isinstance(excerpt["round"], int)
+
+
+def test_public_artifact_v2_equivalent_accepts_explicit_null_confidence() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[2]
+        / "samples"
+        / "public-artifacts"
+        / "golden.v1.json"
+    )
+    golden = json.loads(fixture_path.read_text(encoding="utf-8"))
+    v2_equivalent = {
+        **golden,
+        "schema_version": PUBLIC_ARTIFACT_SCHEMA_VERSION,
+        "branch_verdicts": [
+            {**verdict, "confidence": None}
+            for verdict in golden["branch_verdicts"]
+        ],
+    }
+
+    parsed = PublicArtifactV2.model_validate(v2_equivalent)
+
+    assert parsed.schema_version == PUBLIC_ARTIFACT_SCHEMA_VERSION
+    assert all(verdict.confidence is None for verdict in parsed.branch_verdicts)
 
 
 def test_endpoint_returns_public_artifact_for_signed_owner(

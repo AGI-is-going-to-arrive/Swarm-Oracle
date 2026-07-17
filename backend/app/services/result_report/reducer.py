@@ -6,6 +6,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from itertools import product
 from typing import Any, Generic, Literal, TypeVar
 
 from sqlmodel import Session, select
@@ -48,6 +49,8 @@ PREMORTEM_EVIDENCE_CANDIDATE_LIMIT = (
     PREMORTEM_EVIDENCE_LIMIT * EVIDENCE_CANDIDATE_MULTIPLIER
 )
 PREMORTEM_EVIDENCE_MAX_CANDIDATES = PREMORTEM_EVIDENCE_CANDIDATE_LIMIT * 2
+_RESULT_VERDICT_CONFIDENCE_KIND = "model_self_rating"
+_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY = "confidence_terminal_branch_ids"
 StatStatus = Literal["available", "partial", "missing"]
 T = TypeVar("T")
 
@@ -224,7 +227,10 @@ def reduce(
         for branch in all_branches
         if branch.parent_branch_id
     }
-    result_quality_confidence = _scenario_result_quality_confidence(scenario)
+    result_quality_confidence = _scenario_result_quality_confidence(
+        scenario,
+        all_branches,
+    )
     status = resolution.status
     reason = resolution.reason
     target = resolution.target
@@ -437,10 +443,9 @@ def derive_confidence(
     """Derive analytic confidence from real branch/evidence counts only.
 
     ``confidence_ceiling`` (S5) clamps the result so the countable analytic
-    confidence never claims more certainty than the LLM's own
-    ``result_quality.confidence`` self-rating. This kills the split-brain where
-    a prologue-root ``evidence_count>=3`` bump pushed the verdict to ``high``
-    while the model reported ``medium``.
+    confidence never claims more certainty than a current, provenance-marked
+    verdict-model self-rating. The basis names that ceiling only when it lowers
+    the derived level.
     """
 
     # Kept in the signature for wire/caller compatibility. This value is an
@@ -460,18 +465,26 @@ def derive_confidence(
     else:
         level = "low"
 
-    level = _clamp_confidence_level(level, confidence_ceiling)
+    derived_level = level
+    level = _clamp_confidence_level(derived_level, confidence_ceiling)
+    was_clamped = level != derived_level
 
-    basis_i18n = I18nText(
-        zh=f"依据 {branch_count} 条终端分支、{evidence_count} 条证据",
-        en=(
-            f"Based on {branch_count} terminal branches and "
-            f"{evidence_count} evidence items"
-        ),
+    basis = f"branch_count={branch_count}; evidence_count={evidence_count}"
+    basis_zh = f"依据 {branch_count} 条终端分支、{evidence_count} 条证据"
+    basis_en = (
+        f"Based on {branch_count} terminal branches and "
+        f"{evidence_count} evidence items"
     )
+    if was_clamped:
+        basis += f"; model_self_rating_ceiling={confidence_ceiling}"
+        ceiling_zh = {"high": "高", "medium": "中", "low": "低"}[level]
+        basis_zh += f"；模型自评置信度上限将结果下调至{ceiling_zh}"
+        basis_en += f"; reduced to {level} by the model self-rating ceiling"
+
+    basis_i18n = I18nText(zh=basis_zh, en=basis_en)
     return AnalyticConfidence(
         level=level,
-        basis=f"branch_count={branch_count}; evidence_count={evidence_count}",
+        basis=basis,
         basis_i18n=basis_i18n,
     )
 
@@ -732,9 +745,22 @@ def collect_evidence_pool(
             row["message_id"],
         ),
     )
+    eligible_ranked = [
+        row
+        for row in ranked
+        if _truncate_quote(
+            row.get("content") or "",
+            max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+        )
+    ]
+    selected_rows = _select_temporally_diverse_evidence_rows(
+        eligible_ranked,
+        max_evidence=max_evidence,
+        total_rounds=len(resolved_scope.rounds),
+    )
 
     evidence: list[EvidenceRef] = []
-    for row in ranked:
+    for row in selected_rows:
         quote = _truncate_quote(
             row.get("content") or "",
             max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
@@ -754,8 +780,6 @@ def collect_evidence_pool(
                 kind="utterance",
             ),
         )
-        if len(evidence) >= max_evidence:
-            break
     return evidence
 
 
@@ -1135,8 +1159,24 @@ def _percentage_probability(text: str) -> float | None:
     return _clamp_probability(value)
 
 
-def _scenario_result_quality_confidence(scenario: Scenario | None) -> str | None:
-    """Extract ``parsed_context.result_quality.confidence`` if present (S5)."""
+def _terminal_confidence_branch_ids(branches: list[Branch]) -> list[str]:
+    """Return the live terminal scope; ACTIVE resume children stale old ratings."""
+
+    eligible = [
+        branch
+        for branch in branches
+        if branch.status in {BranchStatus.ACTIVE, BranchStatus.COMPLETED}
+    ]
+    parent_ids = {branch.parent_branch_id for branch in branches if branch.parent_branch_id}
+    terminal = [branch for branch in eligible if branch.id not in parent_ids]
+    return sorted(branch.id for branch in (terminal or eligible) if branch.id)
+
+
+def _scenario_result_quality_confidence(
+    scenario: Scenario | None,
+    all_branches: list[Branch],
+) -> str | None:
+    """Return only a provenance-marked verdict-model self-rating (S5)."""
 
     if scenario is None:
         return None
@@ -1146,8 +1186,15 @@ def _scenario_result_quality_confidence(scenario: Scenario | None) -> str | None
     result_quality = parsed_context.get("result_quality")
     if not isinstance(result_quality, dict):
         return None
+    if result_quality.get("confidence_kind") != _RESULT_VERDICT_CONFIDENCE_KIND:
+        return None
+    if (
+        result_quality.get(_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY)
+        != _terminal_confidence_branch_ids(all_branches)
+    ):
+        return None
     confidence = result_quality.get("confidence")
-    return confidence if isinstance(confidence, str) else None
+    return confidence if isinstance(confidence, str) and confidence in _CONFIDENCE_ORDER else None
 
 
 def _sort_branches_for_report(branches: list[Branch]) -> list[Branch]:
@@ -1415,6 +1462,88 @@ def _count_rounds(engine, report_scope: ReportLineageScope) -> int:
 
 def _evidence_candidate_limit(max_evidence: int) -> int:
     return max(max_evidence, max_evidence * EVIDENCE_CANDIDATE_MULTIPLIER)
+
+
+def _select_temporally_diverse_evidence_rows(
+    ranked_rows: list[dict[str, Any]],
+    *,
+    max_evidence: int,
+    total_rounds: int,
+) -> list[dict[str, Any]]:
+    """Reserve every available phase while maximizing distinct-agent coverage."""
+
+    if max_evidence <= 0:
+        return []
+    if max_evidence < 3 or total_rounds < 3:
+        return ranked_rows[:max_evidence]
+
+    phase_candidates: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+    for rank, row in enumerate(ranked_rows):
+        try:
+            round_number = int(row.get("round_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if round_number < 1 or round_number > total_rounds:
+            continue
+        phase = min(2, (round_number - 1) * 3 // total_rounds)
+        phase_candidates.setdefault(phase, []).append((rank, row))
+
+    phase_groups = [phase_candidates[phase] for phase in sorted(phase_candidates)]
+    selected: list[dict[str, Any]] = []
+    if phase_groups:
+        phase_choice = min(
+            product(*phase_groups),
+            key=lambda combination: (
+                -len(
+                    {
+                        str(row.get("agent_id") or "")
+                        for _rank, row in combination
+                        if str(row.get("agent_id") or "")
+                    }
+                ),
+                tuple(sorted(rank for rank, _row in combination)),
+            ),
+        )
+        selected = [row for _rank, row in phase_choice]
+
+    selected_message_ids = {str(row.get("message_id") or "") for row in selected}
+    selected_agent_ids = {
+        str(row.get("agent_id") or "")
+        for row in selected
+        if str(row.get("agent_id") or "")
+    }
+    if len(selected) < max_evidence:
+        for row in ranked_rows:
+            message_id = str(row.get("message_id") or "")
+            agent_id = str(row.get("agent_id") or "")
+            if message_id in selected_message_ids or not agent_id:
+                continue
+            if agent_id in selected_agent_ids:
+                continue
+            selected.append(row)
+            selected_message_ids.add(message_id)
+            selected_agent_ids.add(agent_id)
+            if len(selected) >= max_evidence:
+                break
+    if len(selected) < max_evidence:
+        for row in ranked_rows:
+            message_id = str(row.get("message_id") or "")
+            if message_id in selected_message_ids:
+                continue
+            selected.append(row)
+            selected_message_ids.add(message_id)
+            if len(selected) >= max_evidence:
+                break
+
+    # Evidence IDs and prompt order follow the simulated timeline, not the order
+    # in which the diversity gate happened to reserve rows.
+    return sorted(
+        selected[:max_evidence],
+        key=lambda row: (
+            int(row.get("round_number") or 0),
+            str(row.get("message_id") or ""),
+        ),
+    )
 
 
 def _premortem_diversity_score(

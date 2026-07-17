@@ -1917,6 +1917,7 @@ h3.roundtable-phase-divider {
   .worldline-roundtable-shell {
     display: flex;
     flex-direction: column;
+    align-items: stretch;
     gap: 10px;
   }
 
@@ -2117,6 +2118,11 @@ h3.roundtable-phase-divider {
     -webkit-line-clamp: 1;
     font-size: 0.7rem;
     line-height: 1.28;
+  }
+
+  .worldline-roundtable-view.is-live-room .roundtable-phase-nav,
+  .worldline-roundtable-view.is-live-room .ending-chat-thread-rail {
+    flex: 0 0 auto;
   }
 
   .worldline-roundtable-view.is-live-room .ending-chat-thread-rail {

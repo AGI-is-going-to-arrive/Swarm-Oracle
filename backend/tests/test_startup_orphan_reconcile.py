@@ -9,11 +9,15 @@ locks are left alone so rolling restarts cannot kill a run in another process.
 These tests use real SQLite test databases (conftest's autouse fixture).
 """
 
+import asyncio
+import threading
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+import app.main as main_module
 import app.services.runtime_lock as runtime_lock_module
 import app.services.simulator as simulator_module
 from app.main import app
@@ -228,6 +232,72 @@ def test_main_lifespan_clears_expired_orphaned_report_runtime_lock():
         assert runtime_lock_is_active(lock_key) is False
     finally:
         release_runtime_lock(lease)
+
+
+@pytest.mark.asyncio
+async def test_replay_memory_cleanup_retry_survives_failure_then_drains():
+    pending = iter((1, 1, 0))
+    reconcile_calls = 0
+
+    def pending_count() -> int:
+        return next(pending)
+
+    def reconcile() -> int:
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        if reconcile_calls == 1:
+            raise RuntimeError("transient Chroma failure")
+        return 1
+
+    async def no_sleep(_delay: float) -> object:
+        return None
+
+    await main_module._retry_pending_replay_branch_memory_cleanups(
+        delays=(0.0, 0.0, 0.0),
+        reconcile=reconcile,
+        pending_count=pending_count,
+        sleep=no_sleep,
+    )
+
+    assert reconcile_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_replay_memory_cleanup_stop_waits_for_inflight_worker():
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    stop_event = asyncio.Event()
+
+    def reconcile() -> int:
+        started.set()
+        assert release.wait(timeout=1.0) is True
+        finished.set()
+        return 1
+
+    async def no_sleep(_delay: float) -> object:
+        return None
+
+    retry_task = asyncio.create_task(
+        main_module._retry_pending_replay_branch_memory_cleanups(
+            delays=(0.0,),
+            reconcile=reconcile,
+            pending_count=lambda: 1,
+            sleep=no_sleep,
+            stop_event=stop_event,
+        )
+    )
+    while not started.is_set():
+        await asyncio.sleep(0)
+
+    stop_event.set()
+    await asyncio.sleep(0)
+    assert retry_task.done() is False
+    assert finished.is_set() is False
+
+    release.set()
+    await retry_task
+    assert finished.is_set() is True
 
 
 def test_reconcile_orphaned_report_locks_preserves_live_sqlite_report_lock():

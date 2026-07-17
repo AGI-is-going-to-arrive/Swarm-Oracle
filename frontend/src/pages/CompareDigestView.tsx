@@ -187,6 +187,7 @@ export function CompareDigestView() {
     setLoading(true);
     setError(null);
     setData(null);
+    setSnapshots({ a: null, b: null });
     try {
       let comparePayload: CompareData;
       try {
@@ -394,6 +395,7 @@ export function CompareDigestView() {
   };
 
   const handleRoundSelect = useCallback((round: number) => {
+    setSnapshots({ a: null, b: null });
     setSelectedRound(round);
     setPlaybackMode('skip');
     setTheaterMountKey((value) => value + 1);
@@ -801,7 +803,7 @@ export function CompareDigestView() {
                     </div>
                   </div>
                 )}
-                {!isActive && (
+                {!isActive && snapshots[pane] && (
                   <div className="compare-theater-pane__veil">
                     <span>{mirrorStateLabel}</span>
                     <strong>{selectedRoundLabel}</strong>

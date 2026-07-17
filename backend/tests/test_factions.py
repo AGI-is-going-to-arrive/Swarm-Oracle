@@ -426,6 +426,48 @@ class TestProcessRound:
             all_members.extend(f["members"])
         assert set(all_members) == {"a1", "a2", "a3", "a4"}
 
+    @pytest.mark.parametrize(
+        ("scenario_id", "language_kwargs", "expected_prefix"),
+        [
+            ("faction-label-default-english", {}, "Faction"),
+            ("faction-label-chinese", {"language": "Chinese"}, "阵营"),
+        ],
+    )
+    def test_faction_labels_follow_language_and_match_persisted_snapshots(
+        self,
+        scenario_id,
+        language_kwargs,
+        expected_prefix,
+    ):
+        messages = [
+            MockMessage(agent_id="a1", emotion="aggressive", id="m1"),
+            MockMessage(agent_id="a2", emotion="angry", id="m2"),
+            MockMessage(agent_id="a3", emotion="confident", id="m3"),
+            MockMessage(agent_id="a4", emotion="cooperative", id="m4"),
+        ]
+
+        result = process_round(
+            scenario_id,
+            "branch-1",
+            1,
+            messages,
+            **language_kwargs,
+        )
+
+        assert result is not None
+        returned_labels = [faction["label"] for faction in result["factions"]]
+        assert returned_labels == [
+            f"{expected_prefix} {index}"
+            for index in range(1, len(returned_labels) + 1)
+        ]
+        with Session(get_engine()) as session:
+            persisted_labels = session.exec(
+                select(FactionSnapshot.label)
+                .where(FactionSnapshot.scenario_id == scenario_id)
+                .order_by(FactionSnapshot.faction_key)
+            ).all()
+        assert persisted_labels == returned_labels
+
     def test_faction_chain_never_exceeds_maximum_stance_range(self):
         messages = [
             MockMessage(agent_id="agent-hesitant", emotion="hesitant"),
@@ -1077,6 +1119,99 @@ class TestGetFactionTimeline:
             assert "factions" in entry
             assert "events" in entry
             assert len(entry["factions"]) >= 1
+
+    @pytest.mark.parametrize(
+        ("scenario_id", "round_emotions", "expected_degradation"),
+        [
+            (
+                "timeline-terminal-all-neutral",
+                [
+                    ("aggressive", "angry", "confident", "cooperative"),
+                    ("neutral", "neutral", "neutral", "neutral"),
+                ],
+                [(1, None), (2, "all_neutral")],
+            ),
+            (
+                "timeline-all-rounds-neutral",
+                [
+                    ("neutral", "neutral", "neutral", "neutral"),
+                    ("calm", "neutral", "calm", "neutral"),
+                ],
+                [(1, "all_neutral"), (2, "all_neutral")],
+            ),
+            (
+                "timeline-middle-all-neutral",
+                [
+                    ("aggressive", "angry", "confident", "cooperative"),
+                    ("neutral", "neutral", "neutral", "neutral"),
+                    ("aggressive", "angry", "confident", "cooperative"),
+                ],
+                [(1, None), (2, "all_neutral"), (3, None)],
+            ),
+        ],
+    )
+    def test_relation_only_all_neutral_rounds_remain_visible_in_timeline(
+        self,
+        scenario_id,
+        round_emotions,
+        expected_degradation,
+    ):
+        branch_id = "branch-1"
+        _materialize_native_branch_rounds(
+            scenario_id,
+            branch_id,
+            len(round_emotions),
+        )
+        for round_number, emotions in enumerate(round_emotions, start=1):
+            process_round(
+                scenario_id,
+                branch_id,
+                round_number,
+                [
+                    MockMessage(
+                        agent_id=f"agent-{index}",
+                        emotion=emotion,
+                        id=f"message-{round_number}-{index}",
+                    )
+                    for index, emotion in enumerate(emotions, start=1)
+                ],
+            )
+
+        timeline = get_faction_timeline(scenario_id, branch_id)
+
+        assert [
+            (entry["round"], entry.get("degraded")) for entry in timeline
+        ] == expected_degradation
+        degraded_entries = [
+            entry for entry in timeline if entry.get("degraded") == "all_neutral"
+        ]
+        assert degraded_entries
+        assert all(entry["factions"] == [] for entry in degraded_entries)
+        assert all(entry["events"] == [] for entry in degraded_entries)
+        assert all(entry["scope_kind"] == "branch_lineage" for entry in timeline)
+
+    def test_unprocessed_round_is_not_mislabeled_as_all_neutral(self):
+        scenario_id = "timeline-unprocessed-round"
+        branch_id = "branch-1"
+        _materialize_native_branch_rounds(scenario_id, branch_id, 2)
+        process_round(
+            scenario_id,
+            branch_id,
+            1,
+            [
+                MockMessage(agent_id=f"agent-{index}", emotion=emotion)
+                for index, emotion in enumerate(
+                    ("aggressive", "angry", "confident", "cooperative"),
+                    start=1,
+                )
+            ],
+        )
+
+        timeline = get_faction_timeline(scenario_id, branch_id)
+
+        assert [(entry["round"], entry.get("degraded")) for entry in timeline] == [
+            (1, None)
+        ]
 
     def test_timeline_sorted_by_round(self):
         """Timeline entries are ordered by round number."""

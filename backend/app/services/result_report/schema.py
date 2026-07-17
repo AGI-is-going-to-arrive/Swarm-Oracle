@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import html
 import json
 import math
 import re
+import unicodedata
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -374,6 +376,65 @@ class EvidenceRef(_StrictModel):
     kind: EvidenceKind
 
 
+class Claim(_StrictModel):
+    """Auditable report conclusion bound to durable simulation coordinates."""
+
+    claim_id: str = Field(min_length=1)
+    claim_text: str = Field(min_length=1)
+    claim_type: str = Field(min_length=1)
+    speaker: str | None
+    agent_id: str | None
+    message_ids: list[str]
+    action_ids: list[str]
+    branch_id: str = Field(min_length=1)
+    round_numbers: list[int]
+    exact_quote: str | None
+    evidence_strength: Literal["strong", "moderate", "weak", "unsupported"]
+    temporal_coverage: list[str]
+    role_coverage: list[str]
+    confidence: ConfidenceLevel
+    downgrade_reason: str | None
+
+    @model_validator(mode="after")
+    def validate_claim_contract(self) -> "Claim":
+        for label, values in (
+            ("message_ids", self.message_ids),
+            ("action_ids", self.action_ids),
+        ):
+            if any(not str(value).strip() for value in values):
+                raise ValueError(f"claim {label} must contain nonblank ids")
+            if len(values) != len(set(values)):
+                raise ValueError(f"claim {label} cannot contain duplicates")
+        if any(round_number < 0 for round_number in self.round_numbers):
+            raise ValueError("claim round_numbers must be nonnegative")
+        if len(self.round_numbers) != len(set(self.round_numbers)):
+            raise ValueError("claim round_numbers cannot contain duplicates")
+        allowed_phases = {"early", "middle", "late"}
+        if any(phase not in allowed_phases for phase in self.temporal_coverage):
+            raise ValueError("claim temporal_coverage contains an unknown phase")
+        if len(self.temporal_coverage) != len(set(self.temporal_coverage)):
+            raise ValueError("claim temporal_coverage cannot contain duplicates")
+        if any(not role.strip() for role in self.role_coverage):
+            raise ValueError("claim role_coverage must contain nonblank roles")
+        if len(self.role_coverage) != len(set(self.role_coverage)):
+            raise ValueError("claim role_coverage cannot contain duplicates")
+        if self.exact_quote is not None:
+            if not self.exact_quote:
+                raise ValueError("claim exact_quote cannot be empty")
+            if not self.message_ids or not self.speaker or not self.agent_id:
+                raise ValueError(
+                    "claim exact_quote requires speaker, agent_id, and message_ids"
+                )
+        if self.action_ids and (not self.agent_id or not self.round_numbers):
+            raise ValueError("claim action_ids require agent_id and round_numbers")
+        if self.evidence_strength == "unsupported":
+            if self.confidence == "high":
+                raise ValueError("unsupported claim cannot have high confidence")
+            if not self.downgrade_reason:
+                raise ValueError("unsupported claim requires downgrade_reason")
+        return self
+
+
 def _validate_premortem_i18n(value: I18nText, *, label: str) -> None:
     if not value.zh.strip() or not value.en.strip():
         raise ValueError(f"{label} must contain nonblank zh and en text")
@@ -500,6 +561,7 @@ class FullReport(_StrictModel):
     status: ReportStatus
     tier: ReportTier
     verdict: Verdict
+    claims: list[Claim] = Field(default_factory=list)
     sections: list[ReportSection] = Field(default_factory=list)
     evidence: list[EvidenceRef] = Field(default_factory=list)
     indicators_to_watch: list[IndicatorToWatch] = Field(default_factory=list)
@@ -523,6 +585,44 @@ class FullReport(_StrictModel):
         if len(set(self.available_languages)) != len(self.available_languages):
             raise ValueError("available_languages cannot contain duplicates")
         evidence_ids = {item.id for item in self.evidence}
+        claim_ids = [claim.claim_id for claim in self.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("claim_id must be unique within a report")
+        evidence_by_message_id: dict[str, list[EvidenceRef]] = {}
+        for evidence in self.evidence:
+            evidence_by_message_id.setdefault(evidence.message_id, []).append(evidence)
+        allowed_claim_branch_ids = {self.target_branch_id}
+        allowed_claim_branch_ids.update(
+            evidence.branch_id for evidence in self.evidence
+        )
+        for claim in self.claims:
+            if claim.branch_id not in allowed_claim_branch_ids:
+                raise ValueError("claim branch_id must belong to report evidence scope")
+            unknown_message_ids = [
+                message_id
+                for message_id in claim.message_ids
+                if message_id not in evidence_by_message_id
+            ]
+            if unknown_message_ids:
+                raise ValueError("claim message_ids must reference report evidence")
+            referenced_evidence = [
+                evidence
+                for message_id in claim.message_ids
+                for evidence in evidence_by_message_id.get(message_id, [])
+            ]
+            referenced_rounds = {evidence.round_number for evidence in referenced_evidence}
+            if not referenced_rounds.issubset(set(claim.round_numbers)):
+                raise ValueError(
+                    "claim round_numbers must include referenced message coordinates"
+                )
+            if claim.exact_quote is not None and not any(
+                evidence.agent_id == claim.agent_id
+                and evidence.agent_name == claim.speaker
+                for evidence in referenced_evidence
+            ):
+                raise ValueError(
+                    "claim exact_quote speaker must match referenced evidence coordinates"
+                )
         for section in self.sections:
             unknown_refs = [
                 evidence_id
@@ -652,7 +752,7 @@ def _assert_no_sensitive_material(value: Any, path: str = "$") -> None:
     if isinstance(value, dict):
         for key, nested in value.items():
             key_text = str(key)
-            if _is_sensitive_key(key):
+            if is_sensitive_report_key(key):
                 raise ValueError(f"sensitive key is not allowed at {path}.{key_text}")
             _assert_no_sensitive_material(nested, f"{path}.{key_text}")
         return
@@ -660,14 +760,32 @@ def _assert_no_sensitive_material(value: Any, path: str = "$") -> None:
         for index, nested in enumerate(value):
             _assert_no_sensitive_material(nested, f"{path}[{index}]")
         return
-    if isinstance(value, str) and _SENSITIVE_VALUE_RE.search(value):
+    if isinstance(value, str) and _SENSITIVE_VALUE_RE.search(
+        _canonicalize_html_entities_for_sensitive_scan(value)
+    ):
         raise ValueError(f"sensitive value is not allowed at {path}")
 
 
-def _is_sensitive_key(key: Any) -> bool:
+def _canonicalize_html_entities_for_sensitive_scan(value: str) -> str:
+    """Decode bounded nested entities for detection without mutating payload text."""
+
+    canonical = str(value or "")
+    for _ in range(3):
+        decoded = html.unescape(canonical)
+        if decoded == canonical:
+            break
+        canonical = decoded
+    return unicodedata.normalize("NFKC", canonical)
+
+
+def is_sensitive_report_key(key: Any) -> bool:
     if not isinstance(key, str):
         return False
-    normalized = key.strip().lower().replace("-", "").replace("_", "")
+    normalized = re.sub(
+        r"[\s_-]+",
+        "",
+        _canonicalize_html_entities_for_sensitive_scan(key).strip().lower(),
+    )
     if normalized in _SENSITIVE_KEYS:
         return True
     if normalized.endswith(_SENSITIVE_KEY_SUFFIXES):

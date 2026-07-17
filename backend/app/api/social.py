@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -10,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, field_validator
+from sqlalchemy import case, func, tuple_, update
 from sqlmodel import Session, select
 
 from app.api.errors import api_error, api_error_from_exception
@@ -22,7 +25,15 @@ from app.api.helpers import (
     verify_session,
 )
 from app.config import settings
-from app.models import Agent, Branch, BranchStatus, Scenario
+from app.models import (
+    Agent,
+    Branch,
+    BranchStatus,
+    Scenario,
+    SimulationAction,
+    SimulationActionStatus,
+    SimulationActionType,
+)
 from app.models.checkpoint import FactionEvent, FactionSnapshot
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_language_directive
@@ -52,6 +63,59 @@ SOCIAL_COPY_MAX_CHARS = {
     "reddit": 5_000,
     "x": 1_600,
 }
+_SOCIAL_HEADLINE_CACHE_KEY = "_social_headline_cache_v1"
+_SOCIAL_HEADLINE_CACHE_MAX_BYTES = 8_192
+_SOCIAL_FEED_MAX_EVENTS = 256
+_SOCIAL_HEADLINE_MAX_CANDIDATE_EVENTS = 32
+_SOCIAL_HEADLINE_FINGERPRINT_VERSION = "latest-first-v4-bounded-subject"
+_SOCIAL_HEADLINE_MAX_CHARS = 96
+_SOCIAL_HEADLINE_SUBJECT_MAX_CHARS = 56
+_SOCIAL_SUMMARY_MAX_CHARS = 220
+_SOCIAL_SUMMARY_SUBJECT_MAX_CHARS = 120
+_SOCIAL_HEADLINE_CACHE_FIELDS = {
+    "version",
+    "events_sha256",
+    "generation_mode",
+    "headline_cards",
+}
+_SocialHeadlineHighWater = tuple[int, str, int, str]
+_SocialHeadlineResult = tuple[str, list[dict[str, Any]]]
+_SOCIAL_HEADLINE_INFLIGHT: dict[
+    tuple[int, str, str], asyncio.Task[_SocialHeadlineResult]
+] = {}
+_SOCIAL_HEADLINE_CARD_FIELDS = {
+    "card_id",
+    "headline",
+    "summary",
+    "branch_title",
+    "round_number",
+    "event_type",
+    "faction_label",
+    "source_event_id",
+}
+_CHINESE_REACTION_LABELS = {
+    "LIKE": "点赞",
+    "LOVE": "喜爱",
+    "LAUGH": "觉得好笑",
+    "WOW": "表示惊讶",
+    "SAD": "表示难过",
+    "ANGRY": "表示愤怒",
+    "SUPPORT": "表示支持",
+    "OPPOSE": "表示反对",
+}
+_CHINESE_SOCIAL_EVENT_TYPE_LABELS = {
+    "post": "发布动态",
+    "comment": "评论",
+    "reaction": "互动回应",
+    "follow": "关注",
+    "mute": "静音",
+    "search": "搜索",
+    "trend": "追踪趋势",
+    "refresh": "刷新动态",
+    "alliance formed": "阵营形成",
+    "alliance broken": "阵营解散",
+    "affect shift (proxy)": "情绪代理变化",
+}
 _DISPLAY_SAFE_REDACTION_RE = re.compile(
     r"(?i)"
     r"(authorization\s*:\s*bearer\s+[^\s,;]+|"
@@ -60,6 +124,7 @@ _DISPLAY_SAFE_REDACTION_RE = re.compile(
     r"\b(api[_-]?key|base[_-]?url|authorization|token|owner[_-]?id|"
     r"owner[_-]?user[_-]?id|user[_-]?id)\b\s*[:=]?\s*[^\s,;]*)"
 )
+_DISPLAY_SAFE_URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>\"]+")
 _DISPLAY_SAFE_FORBIDDEN_KEYS = {
     "api_key",
     "apikey",
@@ -390,6 +455,13 @@ def _display_safe_text(value: object, *, max_chars: int = 240) -> str:
     return text[: max_chars - 1].rstrip() + "…"
 
 
+def _cache_safe_text(value: object, *, max_chars: int) -> str:
+    return _DISPLAY_SAFE_URL_RE.sub(
+        "[redacted-url]",
+        _display_safe_text(value, max_chars=max_chars),
+    )
+
+
 def _load_json_object(raw: str | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -420,6 +492,96 @@ def _social_event_display_type(event_type: str) -> str:
     return normalized.replace("_", " ")
 
 
+def _localized_social_event_type(event_type: str, *, use_chinese: bool) -> str:
+    display_type = _social_event_display_type(event_type)
+    if use_chinese:
+        return _CHINESE_SOCIAL_EVENT_TYPE_LABELS.get(display_type, display_type)
+    return display_type
+
+
+def _canonical_social_subject(
+    actor_label: object,
+    faction_label: object,
+    *,
+    use_chinese: bool,
+    subject_max_chars: int | None = None,
+) -> tuple[str, str, str]:
+    actor = _display_safe_text(actor_label, max_chars=80) or (
+        "未知参与者" if use_chinese else "Unknown participant"
+    )
+    faction = _display_safe_text(faction_label, max_chars=80)
+    distinct_faction = faction and actor.casefold() != faction.casefold()
+    if distinct_faction:
+        separator_chars = 2 if use_chinese else 3
+        if subject_max_chars is not None:
+            available = max(2, subject_max_chars - separator_chars)
+            actor_budget = max(1, available // 2)
+            faction_budget = max(1, available - actor_budget)
+            actor_subject = _display_safe_text(actor, max_chars=actor_budget)
+            faction_subject = _display_safe_text(faction, max_chars=faction_budget)
+        else:
+            actor_subject = actor
+            faction_subject = faction
+        subject = (
+            f"{actor_subject}（{faction_subject}）"
+            if use_chinese
+            else f"{actor_subject} ({faction_subject})"
+        )
+    else:
+        subject = (
+            _display_safe_text(actor, max_chars=subject_max_chars)
+            if subject_max_chars is not None
+            else actor
+        )
+    return actor, faction, subject
+
+
+def _canonical_subject_prefix_end(
+    text: str,
+    subject: str,
+    *,
+    use_chinese: bool,
+) -> int | None:
+    pattern = rf"{re.escape(subject)}"
+    if not use_chinese:
+        pattern += r"(?!\w)"
+    match = re.match(pattern, text, flags=re.IGNORECASE)
+    return match.end() if match is not None else None
+
+
+def _canonicalize_social_card_text(
+    text: object,
+    *,
+    full_subject: str,
+    bounded_subject: str,
+    use_chinese: bool,
+    max_chars: int,
+    fallback_body: str,
+) -> str:
+    safe_text = _display_safe_text(text, max_chars=max_chars * 4).lstrip()
+    body = safe_text
+    for candidate in (full_subject, bounded_subject):
+        prefix_end = _canonical_subject_prefix_end(
+            safe_text,
+            candidate,
+            use_chinese=use_chinese,
+        )
+        if prefix_end is not None:
+            body = safe_text[prefix_end:].lstrip()
+            body = re.sub(r"^[：:\-—–|]+\s*", "", body)
+            break
+    body = body or _display_safe_text(fallback_body, max_chars=max_chars)
+    separator = "：" if use_chinese else ": "
+    body_budget = max(1, max_chars - len(bounded_subject) - len(separator))
+    bounded_body = _display_safe_text(body, max_chars=body_budget)
+    return f"{bounded_subject}{separator}{bounded_body}"
+
+
+def _stable_social_event_id(source_kind: str, source_id: str) -> str:
+    digest = hashlib.sha256(f"{source_kind}:{source_id}".encode()).hexdigest()[:20]
+    return f"event_{digest}"
+
+
 def _snapshot_lookup(
     snapshots: list[FactionSnapshot],
 ) -> dict[tuple[str, int, str], FactionSnapshot]:
@@ -434,41 +596,72 @@ def _build_display_safe_social_events(
     branches: list[Branch],
     snapshots: list[FactionSnapshot],
     events: list[FactionEvent],
+    *,
+    agents: list[Agent] | None = None,
 ) -> list[dict[str, Any]]:
     branch_titles = {
         branch.id: _display_safe_text(branch.title, max_chars=120)
         for branch in branches
     }
+    use_chinese = _resolve_social_language(scenario) == "Chinese"
     by_snapshot_key = _snapshot_lookup(snapshots)
+    agents_by_id = {
+        agent.id: agent
+        for agent in (agents or [])
+        if agent.scenario_id == scenario.id
+    }
     display_events: list[dict[str, Any]] = []
-    for index, event in enumerate(events, start=1):
+    for event in events:
         snapshot = by_snapshot_key.get(
             (event.branch_id, event.round_number, event.faction_key)
         )
-        faction_label = (
-            _display_safe_text(snapshot.label, max_chars=80)
-            if snapshot is not None
-            else _display_safe_text(event.faction_key, max_chars=80)
+        faction_label = _display_safe_text(
+            snapshot.label
+            if snapshot is not None and snapshot.label
+            else event.faction_key,
+            max_chars=80,
         )
-        payload_summary = _safe_payload_summary(event.payload_json)
+        actor = agents_by_id.get(event.actor_agent_id)
+        actor_label, faction_label, subject_label = _canonical_social_subject(
+            actor.name if actor is not None else "",
+            faction_label,
+            use_chinese=use_chinese,
+        )
+        display_event_type = _social_event_display_type(event.event_type)
+        # Affect-proxy payloads are internal numeric vectors. Without field labels,
+        # exposing them as prose is meaningless and produced duplicate-looking cards.
+        payload_summary = (
+            ""
+            if display_event_type == "affect shift (proxy)"
+            else _safe_payload_summary(event.payload_json)
+        )
         event_type = _display_safe_text(
-            _social_event_display_type(event.event_type),
+            display_event_type,
+            max_chars=60,
+        )
+        event_type_label = _display_safe_text(
+            _localized_social_event_type(event.event_type, use_chinese=use_chinese),
             max_chars=60,
         )
         branch_title = branch_titles.get(event.branch_id, "worldline")
-        summary_parts = [
-            f"{faction_label} triggered {event_type}",
-            f"on {branch_title}",
-        ]
+        summary_parts = (
+            [f"{subject_label}在{branch_title}触发了{event_type_label}"]
+            if use_chinese
+            else [
+                f"{subject_label} triggered {event_type}",
+                f"on {branch_title}",
+            ]
+        )
         if payload_summary:
             summary_parts.append(payload_summary)
         display_events.append(
             {
-                "event_id": f"event_{index}",
+                "event_id": _stable_social_event_id("faction", event.id),
                 "round_number": event.round_number,
                 "event_type": event_type,
                 "branch_title": branch_title,
                 "faction_label": faction_label,
+                "actor_label": actor_label,
                 "confidence": (
                     max(0.0, min(1.0, float(snapshot.confidence)))
                     if snapshot is not None
@@ -480,22 +673,443 @@ def _build_display_safe_social_events(
     return display_events
 
 
-def _deterministic_headline_cards(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_display_safe_action_events(
+    scenario: Scenario,
+    branches: list[Branch],
+    agents: list[Agent],
+    actions: list[SimulationAction],
+) -> list[dict[str, Any]]:
+    branches_by_id = {branch.id: branch for branch in branches}
+    agents_by_id = {agent.id: agent for agent in agents}
+    use_chinese = _resolve_social_language(scenario) == "Chinese"
+    display_events: list[dict[str, Any]] = []
+    for action in actions:
+        status = str(getattr(action.status, "value", action.status)).lower()
+        action_type = str(getattr(action.action_type, "value", action.action_type)).upper()
+        actor = agents_by_id.get(action.agent_id)
+        branch = branches_by_id.get(action.branch_id)
+        if (
+            status != SimulationActionStatus.VERIFIED.value
+            or action_type == SimulationActionType.IDLE.value
+            or action.scenario_id != scenario.id
+            or branch is None
+            or (actor is not None and actor.scenario_id != action.scenario_id)
+            or branch.scenario_id != action.scenario_id
+        ):
+            continue
+        branch_title = _display_safe_text(branch.title, max_chars=120)
+
+        payload = _load_json_object(action.payload_json)
+        raw_actor_label = actor.name if actor is not None else ""
+        if (
+            actor is not None
+            and actor.source_type == "world_event_source"
+            and action_type == SimulationActionType.POST.value
+            and action.message_id is None
+            and payload.get("bootstrap") is True
+        ):
+            raw_actor_label = payload.get("source_name") or actor.name
+        actor_label, faction_label, subject_label = _canonical_social_subject(
+            raw_actor_label,
+            raw_actor_label,
+            use_chinese=use_chinese,
+        )
+        faction_label = faction_label or actor_label
+        content = _display_safe_text(action.content, max_chars=180)
+        target = agents_by_id.get(str(action.target_id or ""))
+        target_label = (
+            _display_safe_text(target.name, max_chars=80)
+            if target is not None and target.scenario_id == action.scenario_id
+            else ""
+        )
+
+        if action_type == SimulationActionType.POST.value:
+            if not content:
+                continue
+            summary = (
+                f"{subject_label}发布了动态：{content}"
+                if use_chinese
+                else f"{subject_label} posted: {content}"
+            )
+        elif action_type == SimulationActionType.COMMENT.value:
+            if not content:
+                continue
+            summary = (
+                f"{subject_label}评论了一条动态：{content}"
+                if use_chinese
+                else f"{subject_label} commented on a prior post: {content}"
+            )
+        elif action_type == SimulationActionType.REACTION.value:
+            reaction = _display_safe_text(payload.get("reaction"), max_chars=24)
+            if use_chinese:
+                reaction_label = _CHINESE_REACTION_LABELS.get(reaction.upper())
+                summary = (
+                    f"{subject_label}对一条动态表达了“{reaction_label}”"
+                    if reaction_label
+                    else f"{subject_label}对一条动态作出回应"
+                )
+            else:
+                summary = f"{subject_label} reacted"
+                if reaction:
+                    summary += f" with {reaction}"
+                summary += " to a prior post"
+        elif action_type in {
+            SimulationActionType.FOLLOW.value,
+            SimulationActionType.MUTE.value,
+        }:
+            if not target_label or str(action.target_type or "").lower() != "agent":
+                continue
+            if use_chinese:
+                verb = "关注了" if action_type == SimulationActionType.FOLLOW.value else "屏蔽了"
+                summary = f"{subject_label}{verb}{target_label}"
+            else:
+                verb = (
+                    "followed"
+                    if action_type == SimulationActionType.FOLLOW.value
+                    else "muted"
+                )
+                summary = f"{subject_label} {verb} {target_label}"
+        elif action_type == SimulationActionType.SEARCH.value:
+            if not content:
+                continue
+            summary = (
+                f"{subject_label}搜索了：{content}"
+                if use_chinese
+                else f"{subject_label} searched for: {content}"
+            )
+        elif action_type == SimulationActionType.TREND.value:
+            summary = (
+                f"{subject_label}查看了热门话题"
+                if use_chinese
+                else f"{subject_label} checked trending topics"
+            )
+        elif action_type == SimulationActionType.REFRESH.value:
+            summary = (
+                f"{subject_label}刷新了动态"
+                if use_chinese
+                else f"{subject_label} refreshed the social feed"
+            )
+        else:
+            continue
+
+        display_events.append(
+            {
+                "event_id": _stable_social_event_id("action", action.id),
+                "round_number": action.round_number,
+                "event_type": action_type.lower(),
+                "branch_title": branch_title,
+                "faction_label": faction_label,
+                "actor_label": actor_label,
+                "confidence": None,
+                "summary": _display_safe_text(summary, max_chars=280),
+            }
+        )
+    return display_events
+
+
+def _merge_display_safe_social_events(
+    event_groups: list[list[dict[str, Any]]],
+    *,
+    sort_keys: dict[str, tuple[Any, ...]],
+) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for event in (item for group in event_groups for item in group):
+        event_id = str(event.get("event_id") or "")
+        if event_id and event_id not in unique:
+            unique[event_id] = event
+    return sorted(
+        unique.values(),
+        key=lambda event: sort_keys.get(
+            str(event.get("event_id") or ""),
+            ("", 2, int(event.get("round_number") or 0), 0, str(event.get("event_id"))),
+        ),
+    )
+
+
+def _social_events_fingerprint(events: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        events,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    versioned = f"{_SOCIAL_HEADLINE_FINGERPRINT_VERSION}\0{canonical}"
+    return hashlib.sha256(versioned.encode()).hexdigest()
+
+
+def _validated_cached_headline_cards(
+    raw: object,
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    if not isinstance(raw, list) or len(raw) > 5 or (events and not raw):
+        return None
+    events_by_id = {str(event.get("event_id") or ""): event for event in events}
     cards: list[dict[str, Any]] = []
-    for index, event in enumerate(events[:5], start=1):
-        faction_label = str(event.get("faction_label") or "Faction")
-        event_type = str(event.get("event_type") or "event")
-        branch_title = str(event.get("branch_title") or "worldline")
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict) or not set(item).issubset(
+            _SOCIAL_HEADLINE_CARD_FIELDS
+        ):
+            return None
+        source_event_id = str(item.get("source_event_id") or "")
+        source_event = events_by_id.get(source_event_id)
+        if source_event is None:
+            return None
+        headline = _cache_safe_text(
+            item.get("headline"),
+            max_chars=_SOCIAL_HEADLINE_MAX_CHARS,
+        )
+        if not headline:
+            return None
+        round_number = source_event.get("round_number")
+        if isinstance(round_number, bool) or (
+            round_number is not None and not isinstance(round_number, int)
+        ):
+            return None
         cards.append(
             {
                 "card_id": f"headline_{index}",
-                "headline": _display_safe_text(
-                    f"{faction_label}: {event_type}",
-                    max_chars=96,
+                "headline": headline,
+                "summary": _cache_safe_text(
+                    item.get("summary"),
+                    max_chars=_SOCIAL_SUMMARY_MAX_CHARS,
                 ),
-                "summary": _display_safe_text(
-                    event.get("summary") or f"{event_type} on {branch_title}",
-                    max_chars=220,
+                "branch_title": _display_safe_text(
+                    source_event.get("branch_title"),
+                    max_chars=120,
+                ),
+                "round_number": round_number,
+                "event_type": _display_safe_text(
+                    source_event.get("event_type"),
+                    max_chars=60,
+                ),
+                "faction_label": _display_safe_text(
+                    source_event.get("faction_label"),
+                    max_chars=80,
+                ),
+                "source_event_id": source_event_id,
+            }
+        )
+    return cards
+
+
+def _read_social_headline_cache(
+    parsed_context: object,
+    *,
+    events_sha256: str,
+    events: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]] | None:
+    if not isinstance(parsed_context, dict):
+        return None
+    cache = parsed_context.get(_SOCIAL_HEADLINE_CACHE_KEY)
+    if not isinstance(cache, dict) or set(cache) != _SOCIAL_HEADLINE_CACHE_FIELDS:
+        return None
+    try:
+        encoded = json.dumps(
+            cache,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    except (TypeError, ValueError):
+        return None
+    if len(encoded) > _SOCIAL_HEADLINE_CACHE_MAX_BYTES:
+        return None
+    if cache.get("version") != 1 or cache.get("events_sha256") != events_sha256:
+        return None
+    generation_mode = cache.get("generation_mode")
+    # A deterministic card is a temporary fail-soft response. Persisting it
+    # would prevent a repaired or recovered Provider from ever being retried.
+    if generation_mode != "llm":
+        return None
+    cards = _validated_cached_headline_cards(cache.get("headline_cards"), events)
+    if cards is None:
+        return None
+    return generation_mode, cards
+
+
+def _build_social_headline_cache(
+    *,
+    events_sha256: str,
+    generation_mode: str,
+    headline_cards: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    cards = _validated_cached_headline_cards(headline_cards, events)
+    if cards is None or generation_mode != "llm":
+        return None
+    compact_cards = [
+        {
+            "headline": card["headline"],
+            "summary": card["summary"],
+            "source_event_id": card["source_event_id"],
+        }
+        for card in cards
+    ]
+    payload: dict[str, Any] = {
+        "version": 1,
+        "events_sha256": events_sha256,
+        "generation_mode": generation_mode,
+        "headline_cards": compact_cards,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    return (
+        (payload, cards)
+        if len(encoded) <= _SOCIAL_HEADLINE_CACHE_MAX_BYTES
+        else None
+    )
+
+
+def _parsed_context_json_object_expr():
+    return case(
+        (
+            func.json_valid(Scenario.parsed_context) == 1,
+            case(
+                (func.json_type(Scenario.parsed_context) == "object", Scenario.parsed_context),
+                else_=func.json("{}"),
+            ),
+        ),
+        else_=func.json("{}"),
+    )
+
+
+def _persist_social_headline_cache(
+    scenario_id: str,
+    payload: dict[str, Any],
+    *,
+    expected_high_water: _SocialHeadlineHighWater,
+) -> bool:
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    faction_count, faction_latest_id, action_count, action_latest_id = (
+        expected_high_water
+    )
+    faction_count_query = (
+        select(func.count(FactionEvent.id))
+        .where(FactionEvent.scenario_id == scenario_id)
+        .scalar_subquery()
+    )
+    faction_latest_query = (
+        select(FactionEvent.id)
+        .where(FactionEvent.scenario_id == scenario_id)
+        .order_by(
+            FactionEvent.created_at.desc(),
+            FactionEvent.round_number.desc(),
+            FactionEvent.id.desc(),
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+    action_filter = (
+        SimulationAction.scenario_id == scenario_id,
+        SimulationAction.status == SimulationActionStatus.VERIFIED,
+        SimulationAction.action_type != SimulationActionType.IDLE,
+    )
+    action_count_query = (
+        select(func.count(SimulationAction.id))
+        .where(*action_filter)
+        .scalar_subquery()
+    )
+    action_latest_query = (
+        select(SimulationAction.id)
+        .where(*action_filter)
+        .order_by(
+            SimulationAction.created_at.desc(),
+            SimulationAction.round_number.desc(),
+            SimulationAction.sequence.desc(),
+            SimulationAction.id.desc(),
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+    with Session(get_engine()) as session:
+        result = session.exec(
+            update(Scenario)
+            .where(
+                Scenario.id == scenario_id,
+                faction_count_query == faction_count,
+                func.coalesce(faction_latest_query, "") == faction_latest_id,
+                action_count_query == action_count,
+                func.coalesce(action_latest_query, "") == action_latest_id,
+            )
+            .values(
+                parsed_context=func.json_set(
+                    _parsed_context_json_object_expr(),
+                    f'$."{_SOCIAL_HEADLINE_CACHE_KEY}"',
+                    func.json(encoded),
+                )
+            )
+        )
+        session.commit()
+        return getattr(result, "rowcount", 0) == 1
+
+
+def _deterministic_headline_cards(
+    events: list[dict[str, Any]],
+    *,
+    language: str = "English",
+) -> list[dict[str, Any]]:
+    use_chinese = language == "Chinese"
+    cards: list[dict[str, Any]] = []
+    for index, event in enumerate(reversed(events[-5:]), start=1):
+        faction_label = _display_safe_text(
+            event.get("faction_label") or "Faction",
+            max_chars=80,
+        )
+        raw_actor_label = event.get("actor_label")
+        event_type = str(event.get("event_type") or "event")
+        event_type_label = _localized_social_event_type(
+            event_type,
+            use_chinese=use_chinese,
+        )
+        branch_title = str(event.get("branch_title") or "worldline")
+        full_subject = faction_label
+        headline_subject = _display_safe_text(
+            faction_label,
+            max_chars=_SOCIAL_HEADLINE_SUBJECT_MAX_CHARS,
+        )
+        summary_subject = _display_safe_text(
+            faction_label,
+            max_chars=_SOCIAL_SUMMARY_SUBJECT_MAX_CHARS,
+        )
+        if raw_actor_label:
+            _, faction_label, full_subject = _canonical_social_subject(
+                raw_actor_label,
+                faction_label,
+                use_chinese=use_chinese,
+            )
+            _, _, headline_subject = _canonical_social_subject(
+                raw_actor_label,
+                faction_label,
+                use_chinese=use_chinese,
+                subject_max_chars=_SOCIAL_HEADLINE_SUBJECT_MAX_CHARS,
+            )
+            _, _, summary_subject = _canonical_social_subject(
+                raw_actor_label,
+                faction_label,
+                use_chinese=use_chinese,
+                subject_max_chars=_SOCIAL_SUMMARY_SUBJECT_MAX_CHARS,
+            )
+        summary_fallback = f"{event_type} on {branch_title}"
+        cards.append(
+            {
+                "card_id": f"headline_{index}",
+                "headline": _canonicalize_social_card_text(
+                    event_type_label,
+                    full_subject=full_subject,
+                    bounded_subject=headline_subject,
+                    use_chinese=use_chinese,
+                    max_chars=_SOCIAL_HEADLINE_MAX_CHARS,
+                    fallback_body=event_type,
+                ),
+                "summary": _canonicalize_social_card_text(
+                    event.get("summary") or summary_fallback,
+                    full_subject=full_subject,
+                    bounded_subject=summary_subject,
+                    use_chinese=use_chinese,
+                    max_chars=_SOCIAL_SUMMARY_MAX_CHARS,
+                    fallback_body=summary_fallback,
                 ),
                 "branch_title": _display_safe_text(branch_title, max_chars=120),
                 "round_number": event.get("round_number"),
@@ -507,7 +1121,12 @@ def _deterministic_headline_cards(events: list[dict[str, Any]]) -> list[dict[str
     return cards
 
 
-def _normalize_headline_cards(raw: object, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_headline_cards(
+    raw: object,
+    events: list[dict[str, Any]],
+    *,
+    language: str = "English",
+) -> list[dict[str, Any]]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
@@ -524,21 +1143,81 @@ def _normalize_headline_cards(raw: object, events: list[dict[str, Any]]) -> list
     for index, item in enumerate(raw_cards[:5], start=1):
         if not isinstance(item, dict):
             continue
-        source_event_id = str(item.get("source_event_id") or f"event_{index}")
-        source_event = events_by_id.get(
-            source_event_id,
-            events[index - 1] if index <= len(events) else {},
+        source_event_id = str(item.get("source_event_id") or "")
+        source_event = events_by_id.get(source_event_id)
+        if source_event is None:
+            source_event = events[index - 1] if index <= len(events) else {}
+            source_event_id = str(source_event.get("event_id") or source_event_id)
+        headline = _display_safe_text(
+            item.get("headline"),
+            max_chars=_SOCIAL_HEADLINE_MAX_CHARS,
         )
-        headline = _display_safe_text(item.get("headline"), max_chars=96)
-        summary = _display_safe_text(item.get("summary"), max_chars=220)
+        summary = _display_safe_text(
+            item.get("summary"),
+            max_chars=_SOCIAL_SUMMARY_MAX_CHARS,
+        )
         if not headline:
             continue
+        actor_label = _display_safe_text(
+            source_event.get("actor_label"),
+            max_chars=80,
+        )
+        faction_label = _display_safe_text(
+            source_event.get("faction_label"),
+            max_chars=80,
+        )
+        if actor_label:
+            _, _, full_subject = _canonical_social_subject(
+                actor_label,
+                faction_label,
+                use_chinese=language == "Chinese",
+            )
+            _, _, headline_subject = _canonical_social_subject(
+                actor_label,
+                faction_label,
+                use_chinese=language == "Chinese",
+                subject_max_chars=_SOCIAL_HEADLINE_SUBJECT_MAX_CHARS,
+            )
+            _, _, summary_subject = _canonical_social_subject(
+                actor_label,
+                faction_label,
+                use_chinese=language == "Chinese",
+                subject_max_chars=_SOCIAL_SUMMARY_SUBJECT_MAX_CHARS,
+            )
+            event_type = _display_safe_text(
+                source_event.get("event_type") or "event",
+                max_chars=60,
+            )
+            branch_title = _display_safe_text(
+                source_event.get("branch_title") or "worldline",
+                max_chars=120,
+            )
+            headline = _canonicalize_social_card_text(
+                item.get("headline"),
+                full_subject=full_subject,
+                bounded_subject=headline_subject,
+                use_chinese=language == "Chinese",
+                max_chars=_SOCIAL_HEADLINE_MAX_CHARS,
+                fallback_body=event_type,
+            )
+            summary_fallback = f"{event_type} on {branch_title}"
+            summary = _canonicalize_social_card_text(
+                item.get("summary") or source_event.get("summary"),
+                full_subject=full_subject,
+                bounded_subject=summary_subject,
+                use_chinese=language == "Chinese",
+                max_chars=_SOCIAL_SUMMARY_MAX_CHARS,
+                fallback_body=summary_fallback,
+            )
         cards.append(
             {
                 "card_id": f"headline_{index}",
                 "headline": headline,
                 "summary": summary
-                or _display_safe_text(source_event.get("summary"), max_chars=220),
+                or _display_safe_text(
+                    source_event.get("summary"),
+                    max_chars=_SOCIAL_SUMMARY_MAX_CHARS,
+                ),
                 "branch_title": _display_safe_text(
                     item.get("branch_title") or source_event.get("branch_title"),
                     max_chars=120,
@@ -548,10 +1227,7 @@ def _normalize_headline_cards(raw: object, events: list[dict[str, Any]]) -> list
                     item.get("event_type") or source_event.get("event_type"),
                     max_chars=60,
                 ),
-                "faction_label": _display_safe_text(
-                    item.get("faction_label") or source_event.get("faction_label"),
-                    max_chars=80,
-                ),
+                "faction_label": faction_label,
                 "source_event_id": source_event_id,
             }
         )
@@ -566,15 +1242,32 @@ async def _generate_headline_cards(
         return "deterministic", []
     provider_policy = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
     language = _resolve_social_language(scenario)
+    headline_events = list(
+        reversed(events[-_SOCIAL_HEADLINE_MAX_CANDIDATE_EVENTS:])
+    )
     question_block = format_untrusted_text_block(
         "Scenario question",
         _display_safe_text(scenario.question, max_chars=600),
         max_chars=800,
     )
     events_block = format_untrusted_text_block(
-        "Faction event feed",
-        json.dumps(events, ensure_ascii=False),
+        "Unified social event feed",
+        json.dumps(headline_events, ensure_ascii=False),
         max_chars=6000,
+    )
+    example_event_id = str(headline_events[0].get("event_id") or "")
+    response_example = json.dumps(
+        {
+            "headline_cards": [
+                {
+                    "headline": "...",
+                    "summary": "...",
+                    "source_event_id": example_event_id,
+                }
+            ]
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     prompt = (
         "Generate display-safe headline cards for a SwarmOracle social feed.\n"
@@ -583,9 +1276,7 @@ async def _generate_headline_cards(
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
         f"{question_block}\n"
         f"{events_block}\n"
-        "Return strict JSON only: "
-        "{\"headline_cards\":[{\"headline\":\"...\",\"summary\":\"...\","
-        "\"source_event_id\":\"event_1\"}]}\n"
+        f"Return strict JSON only: {response_example}\n"
         f"{get_language_directive(language)}"
     )
     try:
@@ -614,7 +1305,10 @@ async def _generate_headline_cards(
             explicit_base_url=context_base_url,
             explicit_model=context_model,
         ):
-            return "deterministic", _deterministic_headline_cards(events)
+            return "deterministic", _deterministic_headline_cards(
+                events,
+                language=language,
+            )
         effective_llm = resolve_post_completion_llm_call_config(
             parsed_context=provider_policy,
             request_api_key=request_overrides.get("api_key"),
@@ -655,15 +1349,87 @@ async def _generate_headline_cards(
                 base_url=effective_llm.base_url,
                 model=effective_llm.model,
             )
-        cards = _normalize_headline_cards(raw, events)
+        cards = _normalize_headline_cards(raw, headline_events, language=language)
         if cards:
             return "llm", cards
     except Exception as exc:
         logger.debug("social headline generation failed (non-blocking): %s", type(exc).__name__)
-    return "deterministic", _deterministic_headline_cards(events)
+    return "deterministic", _deterministic_headline_cards(events, language=language)
 
 
 # ── Endpoints ────────────────────────────────────────────
+
+
+async def _generate_and_cache_headline_cards(
+    scenario: Scenario,
+    events: list[dict[str, Any]],
+    *,
+    events_sha256: str,
+    expected_high_water: _SocialHeadlineHighWater,
+) -> _SocialHeadlineResult:
+    generation_mode, headline_cards = await _generate_headline_cards(scenario, events)
+    cache_result = _build_social_headline_cache(
+        events_sha256=events_sha256,
+        generation_mode=generation_mode,
+        headline_cards=headline_cards,
+        events=events,
+    )
+    if cache_result is None:
+        return generation_mode, headline_cards
+    cache_payload, headline_cards = cache_result
+    try:
+        _persist_social_headline_cache(
+            scenario.id,
+            cache_payload,
+            expected_high_water=expected_high_water,
+        )
+    except Exception as exc:
+        logger.debug(
+            "social headline cache persistence failed (non-blocking): %s",
+            type(exc).__name__,
+        )
+    return generation_mode, headline_cards
+
+
+def _forget_social_headline_task(
+    key: tuple[int, str, str],
+    task: asyncio.Task[_SocialHeadlineResult],
+) -> None:
+    if _SOCIAL_HEADLINE_INFLIGHT.get(key) is task:
+        _SOCIAL_HEADLINE_INFLIGHT.pop(key, None)
+
+
+async def _generate_headline_cards_singleflight(
+    scenario: Scenario,
+    events: list[dict[str, Any]],
+    *,
+    events_sha256: str,
+    expected_high_water: _SocialHeadlineHighWater,
+) -> _SocialHeadlineResult:
+    loop = asyncio.get_running_loop()
+    key = (id(loop), scenario.id, events_sha256)
+    task = _SOCIAL_HEADLINE_INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(
+            _generate_and_cache_headline_cards(
+                scenario,
+                events,
+                events_sha256=events_sha256,
+                expected_high_water=expected_high_water,
+            )
+        )
+        _SOCIAL_HEADLINE_INFLIGHT[key] = task
+        task.add_done_callback(
+            lambda completed, inflight_key=key: _forget_social_headline_task(
+                inflight_key,
+                completed,
+            )
+        )
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if task.done():
+            _forget_social_headline_task(key, task)
 
 
 @router.get("/scenario/{scenario_id}/social-feed")
@@ -671,34 +1437,213 @@ async def get_social_feed(
     scenario_id: str,
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> dict[str, Any]:
-    """Return display-safe faction events and headline cards."""
+    """Return display-safe faction and verified native-action headline data."""
     _require_social_headlines_feature()
     engine = get_engine()
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
-        branches = list(session.exec(
-            select(Branch).where(Branch.scenario_id == scenario_id)
-        ).all())
-        snapshots = list(session.exec(
-            select(FactionSnapshot).where(FactionSnapshot.scenario_id == scenario_id)
-        ).all())
-        events = list(session.exec(
-            select(FactionEvent)
-            .where(FactionEvent.scenario_id == scenario_id)
-            .order_by(FactionEvent.round_number, FactionEvent.created_at, FactionEvent.id)
-        ).all())
+        action_filter = (
+            SimulationAction.scenario_id == scenario_id,
+            SimulationAction.status == SimulationActionStatus.VERIFIED,
+            SimulationAction.action_type != SimulationActionType.IDLE,
+        )
+        faction_event_count = int(
+            session.exec(
+                select(func.count(FactionEvent.id)).where(
+                    FactionEvent.scenario_id == scenario_id
+                )
+            ).one()
+            or 0
+        )
+        action_count = int(
+            session.exec(
+                select(func.count(SimulationAction.id)).where(*action_filter)
+            ).one()
+            or 0
+        )
+        event_candidates = list(
+            session.exec(
+                select(FactionEvent)
+                .where(FactionEvent.scenario_id == scenario_id)
+                .order_by(
+                    FactionEvent.created_at.desc(),
+                    FactionEvent.round_number.desc(),
+                    FactionEvent.id.desc(),
+                )
+                .limit(_SOCIAL_FEED_MAX_EVENTS)
+            ).all()
+        )
+        action_candidates = list(
+            session.exec(
+                select(SimulationAction)
+                .where(*action_filter)
+                .order_by(
+                    SimulationAction.created_at.desc(),
+                    SimulationAction.round_number.desc(),
+                    SimulationAction.sequence.desc(),
+                    SimulationAction.id.desc(),
+                )
+                .limit(_SOCIAL_FEED_MAX_EVENTS)
+            ).all()
+        )
+        headline_high_water: _SocialHeadlineHighWater = (
+            faction_event_count,
+            event_candidates[0].id if event_candidates else "",
+            action_count,
+            action_candidates[0].id if action_candidates else "",
+        )
 
-    display_events = _build_display_safe_social_events(
+        candidate_rows: list[tuple[tuple[Any, ...], str, Any]] = [
+            (
+                (event.created_at.isoformat(), 0, event.round_number, 0, event.id),
+                "faction",
+                event,
+            )
+            for event in event_candidates
+        ]
+        candidate_rows.extend(
+            (
+                (
+                    action.created_at.isoformat(),
+                    1,
+                    action.round_number,
+                    action.sequence,
+                    action.id,
+                ),
+                "action",
+                action,
+            )
+            for action in action_candidates
+        )
+        selected_rows = sorted(candidate_rows, key=lambda item: item[0])[
+            -_SOCIAL_FEED_MAX_EVENTS:
+        ]
+        events = [row for _, kind, row in selected_rows if kind == "faction"]
+        actions = [row for _, kind, row in selected_rows if kind == "action"]
+
+        branch_ids = {
+            row.branch_id
+            for _, _, row in selected_rows
+            if isinstance(row.branch_id, str) and row.branch_id
+        }
+        branches = (
+            list(
+                session.exec(
+                    select(Branch).where(
+                        Branch.scenario_id == scenario_id,
+                        Branch.id.in_(branch_ids),
+                    )
+                ).all()
+            )
+            if branch_ids
+            else []
+        )
+        agent_ids = {
+            event.actor_agent_id for event in events if event.actor_agent_id
+        }
+        agent_ids.update(action.agent_id for action in actions if action.agent_id)
+        agent_ids.update(
+            str(action.target_id)
+            for action in actions
+            if str(action.target_type or "").lower() == "agent" and action.target_id
+        )
+        agents = (
+            list(
+                session.exec(
+                    select(Agent).where(
+                        Agent.scenario_id == scenario_id,
+                        Agent.id.in_(agent_ids),
+                    )
+                ).all()
+            )
+            if agent_ids
+            else []
+        )
+        snapshot_keys = {
+            (event.branch_id, event.round_number, event.faction_key)
+            for event in events
+        }
+        snapshots = (
+            list(
+                session.exec(
+                    select(FactionSnapshot).where(
+                        FactionSnapshot.scenario_id == scenario_id,
+                        tuple_(
+                            FactionSnapshot.branch_id,
+                            FactionSnapshot.round_number,
+                            FactionSnapshot.faction_key,
+                        ).in_(snapshot_keys),
+                    )
+                ).all()
+            )
+            if snapshot_keys
+            else []
+        )
+        total_event_count = faction_event_count + action_count
+
+    faction_display_events = _build_display_safe_social_events(
         scenario,
         branches,
         snapshots,
         events,
+        agents=agents,
     )
-    generation_mode, headline_cards = await _generate_headline_cards(scenario, display_events)
+    action_display_events = _build_display_safe_action_events(
+        scenario,
+        branches,
+        agents,
+        actions,
+    )
+    sort_keys = {
+        _stable_social_event_id("faction", event.id): (
+            event.created_at.isoformat(),
+            0,
+            event.round_number,
+            0,
+            event.id,
+        )
+        for event in events
+    }
+    sort_keys.update(
+        {
+            _stable_social_event_id("action", action.id): (
+                action.created_at.isoformat(),
+                1,
+                action.round_number,
+                action.sequence,
+                action.id,
+            )
+            for action in actions
+        }
+    )
+    display_events = _merge_display_safe_social_events(
+        [faction_display_events, action_display_events],
+        sort_keys=sort_keys,
+    )
+    events_sha256 = _social_events_fingerprint(display_events)
+    if not display_events:
+        generation_mode, headline_cards = "deterministic", []
+    else:
+        cached_headlines = _read_social_headline_cache(
+            scenario.parsed_context,
+            events_sha256=events_sha256,
+            events=display_events,
+        )
+        if cached_headlines is not None:
+            generation_mode, headline_cards = cached_headlines
+        else:
+            generation_mode, headline_cards = await _generate_headline_cards_singleflight(
+                scenario,
+                display_events,
+                events_sha256=events_sha256,
+                expected_high_water=headline_high_water,
+            )
     return {
         "scenario_id": scenario.id,
         "question": _display_safe_text(scenario.question, max_chars=240),
         "generation_mode": generation_mode,
+        "total_event_count": total_event_count,
+        "events_truncated": total_event_count > len(selected_rows),
         "events": display_events,
         "headline_cards": headline_cards,
     }

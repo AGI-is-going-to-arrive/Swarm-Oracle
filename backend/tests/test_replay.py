@@ -1174,3 +1174,638 @@ class TestCompareBranches:
 
         with pytest.raises(ValueError, match=rf"{missing_param} not found in scenario"):
             compare_branches(sid, branch_a, branch_b)
+
+
+# ── structured Agent runtime replay contracts ───────────
+
+
+def _seed_runtime_action(
+    engine,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    agent_id: str,
+    message_id: str,
+) -> str:
+    from app.services.simulation_actions import append_simulation_action
+
+    with Session(engine) as session:
+        action = append_simulation_action(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            agent_id=agent_id,
+            message_id=message_id,
+            idempotency_key=f"runtime-contract:{branch_id}:{round_number}",
+            action={
+                "action_type": "POST",
+                "status": "verified",
+                "content": f"post-{round_number}",
+            },
+        )
+        action_id = action.id
+        session.commit()
+    return action_id
+
+
+def _agent_runtime_fixture(
+    branch_id: str,
+    agent_id: str,
+    message_ids: list[str],
+    action_ids: list[str],
+) -> dict:
+    rounds: dict[str, dict] = {}
+    for index, (message_id, action_id) in enumerate(
+        zip(message_ids, action_ids, strict=True),
+        start=1,
+    ):
+        previous_action_id = action_ids[index - 2] if index > 1 else None
+        rounds[str(index)] = {
+            "decisions": [
+                {
+                    "decision_id": f"decision-{index}",
+                    "branch_id": branch_id,
+                    "round_number": index,
+                    "agent_id": agent_id,
+                    "message_id": message_id,
+                    "action_id": action_id,
+                    "current_goal": "move the negotiation forward",
+                    "availability": "available",
+                }
+            ],
+            "transitions": [
+                {
+                    "transition_id": f"transition-{index}",
+                    "branch_id": branch_id,
+                    "round_number": index,
+                    "agent_id": agent_id,
+                    "message_id": message_id,
+                    "action_id": action_id,
+                    "previous_action_outcomes": (
+                        [{"action_id": previous_action_id, "status": "verified"}]
+                        if previous_action_id
+                        else []
+                    ),
+                    "next_round_pressure": f"pressure-{index}",
+                }
+            ],
+        }
+    return {
+        "version": "1.0",
+        "branches": {branch_id: {"rounds": rounds}},
+    }
+
+
+class TestAgentRuntimeReplayContract:
+    def test_clone_runtime_history_helper_copies_only_visible_rounds(self):
+        from app.services.agent_runtime import clone_runtime_history
+
+        runtime = _agent_runtime_fixture(
+            "branch-old",
+            "agent-1",
+            ["message-1", "message-2"],
+            ["action-1", "action-2"],
+        )
+        source_transition = runtime["branches"]["branch-old"]["rounds"]["1"][
+            "transitions"
+        ][0]
+        source_transition["next_round_pressure"] = (
+            "Inspect action action-1 after message message-1."
+        )
+        source_transition["reflection_records"] = [
+            {
+                "status": "verified",
+                "reflection_kind": "action_feedback",
+                "summary": "Action action-1 produced message message-1.",
+                "source_action_ids": ["action-1"],
+                "source_message_ids": ["message-1"],
+            }
+        ]
+
+        cloned = clone_runtime_history(
+            runtime,
+            source_branch_id="branch-old",
+            target_branch_id="branch-new",
+            through_round=1,
+            branch_id_map={"branch-old": "branch-new"},
+            message_id_map={"message-1": "message-new-1"},
+            action_id_map={"action-1": "action-new-1"},
+        )
+
+        assert list(cloned["branches"]["branch-new"]["rounds"]) == ["1"]
+        decision = cloned["branches"]["branch-new"]["rounds"]["1"]["decisions"][0]
+        assert decision["branch_id"] == "branch-new"
+        assert decision["message_id"] == "message-new-1"
+        assert decision["action_id"] == "action-new-1"
+        transition = cloned["branches"]["branch-new"]["rounds"]["1"][
+            "transitions"
+        ][0]
+        assert transition["next_round_pressure"] == (
+            "Inspect action action-new-1 after message message-new-1."
+        )
+        assert transition["reflection_records"][0]["summary"] == (
+            "Action action-new-1 produced message message-new-1."
+        )
+        assert runtime["branches"]["branch-old"]["rounds"]["2"]
+
+    def test_clone_until_round_persists_runtime_with_remapped_coordinates(self):
+        from app.models.simulation_action import SimulationAction
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        message_ids: list[str] = []
+        action_ids: list[str] = []
+        for round_number in range(1, 4):
+            round_id = _seed_round(engine, source_branch_id, round_number)
+            message_id = _seed_message(
+                engine,
+                round_id,
+                agent_id,
+                content=f"message-{round_number}",
+            )
+            message_ids.append(message_id)
+            action_ids.append(
+                _seed_runtime_action(
+                    engine,
+                    scenario_id,
+                    source_branch_id,
+                    round_id,
+                    round_number,
+                    agent_id,
+                    message_id,
+                )
+            )
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "agent_runtime_v1": _agent_runtime_fixture(
+                    source_branch_id,
+                    agent_id,
+                    message_ids,
+                    action_ids,
+                )
+            }
+            session.add(scenario)
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            2,
+            replay_kind="resume",
+        )
+
+        with Session(engine) as session:
+            replay_rounds = session.exec(
+                select(Round)
+                .where(Round.branch_id == replay_branch_id)
+                .order_by(Round.round_number)
+            ).all()
+            replay_messages = {
+                round_row.round_number: session.exec(
+                    select(AgentMessage).where(AgentMessage.round_id == round_row.id)
+                ).one()
+                for round_row in replay_rounds
+            }
+            replay_actions = {
+                action.round_number: action
+                for action in session.exec(
+                    select(SimulationAction).where(
+                        SimulationAction.branch_id == replay_branch_id
+                    )
+                ).all()
+            }
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            runtime = scenario.parsed_context["agent_runtime_v1"]
+
+        replay_history = runtime["branches"][replay_branch_id]["rounds"]
+        assert list(replay_history) == ["1", "2"]
+        for round_number in (1, 2):
+            decision = replay_history[str(round_number)]["decisions"][0]
+            transition = replay_history[str(round_number)]["transitions"][0]
+            assert decision["branch_id"] == replay_branch_id
+            assert decision["message_id"] == replay_messages[round_number].id
+            assert decision["action_id"] == replay_actions[round_number].id
+            assert transition["branch_id"] == replay_branch_id
+            assert transition["message_id"] == replay_messages[round_number].id
+            assert transition["action_id"] == replay_actions[round_number].id
+        assert replay_history["2"]["transitions"][0]["previous_action_outcomes"] == [
+            {"action_id": replay_actions[1].id, "status": "verified"}
+        ]
+        assert runtime["branches"][source_branch_id]["rounds"]["3"]
+
+    def test_compare_ignores_clone_source_transition_id_coordinate_noise(self):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        round_id = _seed_round(engine, source_branch_id, 1)
+        message_id = _seed_message(
+            engine,
+            round_id,
+            agent_id,
+            content="unchanged replay state",
+        )
+        action_id = _seed_runtime_action(
+            engine,
+            scenario_id,
+            source_branch_id,
+            round_id,
+            1,
+            agent_id,
+            message_id,
+        )
+        runtime = _agent_runtime_fixture(
+            source_branch_id,
+            agent_id,
+            [message_id],
+            [action_id],
+        )
+        source_transition = runtime["branches"][source_branch_id]["rounds"]["1"][
+            "transitions"
+        ][0]
+        source_transition["transition_id"] = f"transition-{'a' * 24}"
+        source_transition["next_round_pressure"] = (
+            f"Inspect action {action_id} after message {message_id}."
+        )
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {"agent_runtime_v1": runtime}
+            session.add(scenario)
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            1,
+            replay_kind="resume",
+        )
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            replay_transition = scenario.parsed_context["agent_runtime_v1"]["branches"][
+                replay_branch_id
+            ]["rounds"]["1"]["transitions"][0]
+        assert replay_transition["source_transition_id"] == f"transition-{'a' * 24}"
+        assert replay_transition["transition_id"] != replay_transition["source_transition_id"]
+        assert replay_transition["next_round_pressure"] == (
+            f"Inspect action {replay_transition['action_id']} "
+            f"after message {replay_transition['message_id']}."
+        )
+        assert action_id not in replay_transition["next_round_pressure"]
+        assert message_id not in replay_transition["next_round_pressure"]
+
+        comparison = compare_branches(
+            scenario_id,
+            source_branch_id,
+            replay_branch_id,
+        )
+
+        round_diff = comparison["rounds"][0]
+        assert round_diff["state_transition_diff"]["is_identical"] is True
+        assert round_diff["is_identical"] is True
+
+    def test_counterfactual_replacement_marks_runtime_decision_unavailable(self):
+        from app.models.simulation_action import SimulationAction
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        round_id = _seed_round(engine, source_branch_id, 1)
+        message_id = _seed_message(engine, round_id, agent_id, content="original")
+        action_id = _seed_runtime_action(
+            engine,
+            scenario_id,
+            source_branch_id,
+            round_id,
+            1,
+            agent_id,
+            message_id,
+        )
+        runtime = _agent_runtime_fixture(
+            source_branch_id,
+            agent_id,
+            [message_id],
+            [action_id],
+        )
+        source_transition = runtime["branches"][source_branch_id]["rounds"]["1"][
+            "transitions"
+        ][0]
+        source_decision = runtime["branches"][source_branch_id]["rounds"]["1"][
+            "decisions"
+        ][0]
+        source_decision["utterance"] = "original"
+        source_transition.update(
+            {
+                "transition_semantics": "post_action_v1",
+                "previous_action_outcomes": [
+                    {
+                        "action_id": action_id,
+                        "message_id": message_id,
+                        "action_type": "POST",
+                        "status": "verified",
+                        "effect_status": "verified",
+                        "failure_code": None,
+                    }
+                ],
+                "goal_progress_delta": "advanced_by_verified_action",
+                "new_information": ["The original post was observed."],
+                "new_obstacles": ["The original response created resistance."],
+                "relationship_changes": [{"change_type": "follow"}],
+                "commitments": ["Honor the original promise."],
+                "unresolved_questions": ["Will the original plan work?"],
+                "world_state_changes": ["The original post changed the world."],
+                "state_deltas": [
+                    {
+                        "kind": "post_presence",
+                        "scope": "social_world",
+                        "subject": {
+                            "type": "post",
+                            "action_id": action_id,
+                            "agent_id": agent_id,
+                        },
+                        "before": False,
+                        "after": True,
+                        "evidence_status": "verified",
+                        "source_action_ids": [action_id],
+                        "source_message_ids": [message_id],
+                    }
+                ],
+                "memory_write_candidates": [
+                    {
+                        "summary": "Remember the original outcome.",
+                        "status": "verified",
+                        "source_action_ids": [action_id],
+                        "source_message_ids": [message_id],
+                    }
+                ],
+                "reflection_records": [
+                    {
+                        "status": "verified",
+                        "reflection_kind": "action_feedback",
+                        "summary": "The original action succeeded.",
+                        "source_action_ids": [action_id],
+                        "source_message_ids": [message_id],
+                    }
+                ],
+                "strategy_adjustments": [
+                    {
+                        "status": "verified",
+                        "trigger_status": "verified",
+                        "summary": "Continue the original strategy.",
+                        "source_action_ids": [action_id],
+                        "source_message_ids": [message_id],
+                    }
+                ],
+                "transition_origin": "validated_explicit_transition",
+                "validation_warnings": ["original_transition_warning"],
+                "transition_status": "verified",
+                "failure_code": None,
+                "replan_required": False,
+            }
+        )
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {"agent_runtime_v1": runtime}
+            session.add(scenario)
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            1,
+            replay_kind="counterfactual",
+            replay_source_round=1,
+            replay_source_agent_id=agent_id,
+        )
+
+        with Session(engine) as session:
+            replay_round = session.exec(
+                select(Round).where(Round.branch_id == replay_branch_id)
+            ).one()
+            replay_message = session.exec(
+                select(AgentMessage).where(AgentMessage.round_id == replay_round.id)
+            ).one()
+            replay_action = session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.message_id == replay_message.id
+                )
+            ).one()
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            cloned_runtime = scenario.parsed_context["agent_runtime_v1"]
+        cloned_message_id = replay_message.id
+        cloned_action_id = replay_action.id
+        cloned_transition = cloned_runtime["branches"][replay_branch_id]["rounds"][
+            "1"
+        ]["transitions"][0]
+        assert replay_action.status.value == "unavailable"
+        assert cloned_transition["state_deltas"] == [
+            {
+                "kind": "post_presence",
+                "scope": "social_world",
+                "subject": {
+                    "type": "post",
+                    "action_id": cloned_action_id,
+                    "agent_id": agent_id,
+                },
+                "before": False,
+                "after": True,
+                "evidence_status": "verified",
+                "source_action_ids": [cloned_action_id],
+                "source_message_ids": [cloned_message_id],
+            }
+        ]
+        for field in (
+            "memory_write_candidates",
+            "reflection_records",
+            "strategy_adjustments",
+        ):
+            assert cloned_transition[field]
+            assert cloned_transition[field][0]["source_action_ids"] == [
+                cloned_action_id
+            ]
+            assert cloned_transition[field][0]["source_message_ids"] == [
+                cloned_message_id
+            ]
+
+        seed_counterfactual(replay_branch_id, agent_id, "replacement")
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            runtime = scenario.parsed_context["agent_runtime_v1"]
+        decision = runtime["branches"][replay_branch_id]["rounds"]["1"][
+            "decisions"
+        ][0]
+        transition = runtime["branches"][replay_branch_id]["rounds"]["1"][
+            "transitions"
+        ][0]
+        assert decision["availability"] == "unavailable"
+        assert decision["unavailable_reason"] == "counterfactual_replaced"
+        assert decision["decision_status"] == "unavailable"
+        assert decision["failure_code"] == "COUNTERFACTUAL_REPLACED"
+        assert decision["utterance"] == "replacement"
+        assert transition["transition_status"] == "unavailable"
+        assert transition["failure_code"] == "COUNTERFACTUAL_REPLACED"
+        assert transition["transition_origin"] == "counterfactual_replacement"
+        assert transition["validation_warnings"] == []
+        assert transition["goal_progress_delta"] == "unknown"
+        assert transition["replan_required"] is True
+        assert transition["utterance_similarity"] == 0.0
+        assert transition["message_id"] == cloned_message_id
+        assert transition["action_id"] == cloned_action_id
+        assert "counterfactual replacement" in transition["next_round_pressure"].lower()
+        for field in (
+            "previous_action_outcomes",
+            "new_information",
+            "new_obstacles",
+            "relationship_changes",
+            "commitments",
+            "unresolved_questions",
+            "world_state_changes",
+            "state_deltas",
+            "memory_write_candidates",
+            "reflection_records",
+            "strategy_adjustments",
+        ):
+            assert transition[field] == []
+
+        semantic_payload = {
+            key: value
+            for key, value in transition.items()
+            if key not in {"message_id", "action_id"}
+        }
+        semantic_text = json.dumps(semantic_payload, sort_keys=True)
+        for stale_id in (
+            message_id,
+            action_id,
+            cloned_message_id,
+            cloned_action_id,
+        ):
+            assert stale_id not in semantic_text
+
+        source_transition_after = runtime["branches"][source_branch_id]["rounds"]["1"][
+            "transitions"
+        ][0]
+        assert source_transition_after["reflection_records"]
+        assert source_transition_after["strategy_adjustments"]
+        assert source_transition_after["memory_write_candidates"]
+
+    def test_compare_adds_state_transition_diff_without_replacing_message_diff(self):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_a = _seed_branch(engine, scenario_id, title="A")
+        branch_b = _seed_branch(engine, scenario_id, title="B")
+        agent_id = _seed_agent(engine, scenario_id)
+        runtime = {"version": "1.0", "branches": {}}
+        for branch_id, marker in ((branch_a, "pressure-a"), (branch_b, "pressure-b")):
+            round_id = _seed_round(engine, branch_id, 1)
+            message_id = _seed_message(engine, round_id, agent_id, content="same message")
+            action_id = _seed_runtime_action(
+                engine,
+                scenario_id,
+                branch_id,
+                round_id,
+                1,
+                agent_id,
+                message_id,
+            )
+            branch_runtime = _agent_runtime_fixture(
+                branch_id,
+                agent_id,
+                [message_id],
+                [action_id],
+            )["branches"][branch_id]
+            branch_runtime["rounds"]["1"]["transitions"][0][
+                "next_round_pressure"
+            ] = marker
+            runtime["branches"][branch_id] = branch_runtime
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {"agent_runtime_v1": runtime}
+            session.add(scenario)
+            session.commit()
+
+        result = compare_branches(scenario_id, branch_a, branch_b)
+
+        round_diff = result["rounds"][0]
+        assert round_diff["branch_a_summary"] == "pressure-a"
+        assert round_diff["branch_b_summary"] == "pressure-b"
+        assert round_diff["is_identical"] is False
+        assert round_diff["state_transition_diff"]["is_identical"] is False
+        state_diff = json.dumps(
+            round_diff["state_transition_diff"],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        assert "pressure-a" in state_diff
+        assert "pressure-b" in state_diff
+
+    def test_compare_keeps_message_difference_when_transition_pressure_matches(self):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_a = _seed_branch(engine, scenario_id, title="A")
+        branch_b = _seed_branch(engine, scenario_id, title="B")
+        agent_id = _seed_agent(engine, scenario_id)
+        runtime = {"version": "1.0", "branches": {}}
+        for branch_id, message_content in (
+            (branch_a, "approve with safeguards"),
+            (branch_b, "reject until audited"),
+        ):
+            round_id = _seed_round(engine, branch_id, 1)
+            message_id = _seed_message(
+                engine,
+                round_id,
+                agent_id,
+                content=message_content,
+            )
+            action_id = _seed_runtime_action(
+                engine,
+                scenario_id,
+                branch_id,
+                round_id,
+                1,
+                agent_id,
+                message_id,
+            )
+            branch_runtime = _agent_runtime_fixture(
+                branch_id,
+                agent_id,
+                [message_id],
+                [action_id],
+            )["branches"][branch_id]
+            branch_runtime["rounds"]["1"]["transitions"][0][
+                "next_round_pressure"
+            ] = "shared pressure"
+            runtime["branches"][branch_id] = branch_runtime
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {"agent_runtime_v1": runtime}
+            session.add(scenario)
+            session.commit()
+
+        result = compare_branches(scenario_id, branch_a, branch_b)
+
+        round_diff = result["rounds"][0]
+        assert round_diff["branch_a_summary"] == "shared pressure"
+        assert round_diff["branch_b_summary"] == "shared pressure"
+        assert round_diff["state_transition_diff"]["is_identical"] is True
+        assert round_diff["branch_a_messages"][0]["content"] != (
+            round_diff["branch_b_messages"][0]["content"]
+        )
+        assert round_diff["is_identical"] is False
+        assert round_diff["divergence_score"] > 0

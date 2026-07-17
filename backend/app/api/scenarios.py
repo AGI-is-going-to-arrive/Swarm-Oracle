@@ -136,6 +136,8 @@ MAX_IMPORT_REPLAY_SCENARIO_BRANCHES = 256
 MAX_IMPORT_REPLAY_SCENARIO_MESSAGES = 5_000
 MAX_REPLAY_ARTIFACT_BYTES = 2_000_000
 _RESULT_VERDICT_CONFIDENCE_VALUES = {"high", "medium", "low"}
+_RESULT_VERDICT_CONFIDENCE_KIND = "model_self_rating"
+_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY = "confidence_terminal_branch_ids"
 _REPORT_GENERATING_GRACE_SECONDS = 30.0
 _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
     {
@@ -165,6 +167,19 @@ def _terminal_completed_branches(
     }
     terminal = [branch for branch in completed if branch.id not in parent_ids]
     return terminal or completed
+
+
+def _terminal_confidence_branch_ids(branches: list[Branch]) -> list[str]:
+    """Return the live terminal scope; ACTIVE resume children stale old ratings."""
+
+    eligible = [
+        branch
+        for branch in branches
+        if branch.status in {BranchStatus.ACTIVE, BranchStatus.COMPLETED}
+    ]
+    parent_ids = {branch.parent_branch_id for branch in branches if branch.parent_branch_id}
+    terminal = [branch for branch in eligible if branch.id not in parent_ids]
+    return sorted(branch.id for branch in (terminal or eligible) if branch.id)
 
 
 class MultiRunScenarioRequest(CreateScenarioRequest):
@@ -229,9 +244,9 @@ _REPLAY_SENSITIVE_NORMALIZED_KEYS = frozenset(
 
 def _normalize_result_verdict_confidence(value: object) -> str | None:
     if value is None:
-        return "medium"
+        return None
     confidence = str(value).strip().lower()
-    return confidence if confidence in _RESULT_VERDICT_CONFIDENCE_VALUES else "medium"
+    return confidence if confidence in _RESULT_VERDICT_CONFIDENCE_VALUES else None
 
 
 def _normalized_replay_key(key: Any) -> str:
@@ -2656,17 +2671,67 @@ async def get_story(
         raw_branch_answers = result_quality.get("branch_question_answers")
         branch_question_answers = raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
         verdict_text = str(result_quality.get("verdict") or "").strip() or None
+        verdict_confidence = (
+            _normalize_result_verdict_confidence(result_quality.get("confidence"))
+            if verdict_text
+            else None
+        )
+        confidence_scope_matches = (
+            result_quality.get(_RESULT_VERDICT_CONFIDENCE_BRANCH_IDS_KEY)
+            == _terminal_confidence_branch_ids(all_branches)
+        )
+        if (
+            result_quality.get("confidence_kind") == _RESULT_VERDICT_CONFIDENCE_KIND
+            and not confidence_scope_matches
+        ):
+            verdict_confidence = None
+        verdict_confidence_kind = (
+            _RESULT_VERDICT_CONFIDENCE_KIND
+            if verdict_confidence is not None
+            and result_quality.get("confidence_kind") == _RESULT_VERDICT_CONFIDENCE_KIND
+            and confidence_scope_matches
+            else None
+        )
+        # A terminal compiled report is the stronger confidence authority. Its
+        # analytic confidence is evidence-derived and includes an explanation;
+        # do not show a conflicting model self-rating above it.
+        if (
+            isinstance(full_report, dict)
+            and full_report.get("status") in {"complete", "partial"}
+            and full_report.get("target_branch_id") in {branch.id for branch in branches}
+        ):
+            report_verdict = full_report.get("verdict")
+            report_headline = (
+                str(report_verdict.get("headline_answer") or "").strip()
+                if isinstance(report_verdict, dict)
+                else ""
+            )
+            report_confidence = (
+                report_verdict.get("analytic_confidence")
+                if isinstance(report_verdict, dict)
+                else None
+            )
+            report_level = (
+                _normalize_result_verdict_confidence(report_confidence.get("level"))
+                if isinstance(report_confidence, dict)
+                else None
+            )
+            if report_headline:
+                # Text and confidence must describe the same compiled Claim.
+                # Never attach report-derived confidence to result_quality text.
+                verdict_text = report_headline
+                verdict_confidence = report_level
+                # Existing clients understand null as analytic/report-derived;
+                # keep the frozen public union rather than adding a new enum.
+                verdict_confidence_kind = None
 
         return {
             "scenario_id": scenario_id,
             "question": scenario.question,
             "status": scenario.status.value,
             "verdict": verdict_text,
-            "verdict_confidence": _normalize_result_verdict_confidence(
-                result_quality.get("confidence"),
-            )
-            if verdict_text
-            else None,
+            "verdict_confidence": verdict_confidence,
+            "verdict_confidence_kind": verdict_confidence_kind,
             "full_report": full_report,
             "branches": [
                 StoryBranch(
