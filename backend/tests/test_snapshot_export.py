@@ -3492,6 +3492,140 @@ def _snapshot_agent_runtime_fixture(
     }
 
 
+def _forged_opportunity_receipt(*, as_of_round: int) -> dict[str, Any]:
+    return {
+        "version": 1, "as_of_round": as_of_round,
+        "social_state_revision": f"sha256:{'a' * 64}",
+        "domain_state_revision": None, "allowed_rule_ids": [],
+        "requested_action_type": "SEARCH", "effective_action_type": "SEARCH",
+        "available": True, "grounded": True,
+        "reason_codes": ["SEARCH_CORPUS_AVAILABLE"],
+        "eligible_target_count": 0, "selected_target_eligible": None,
+        "parameter_eligible": True,
+        "corpus_revision": f"sha256:{'b' * 64}",
+        "query_fingerprint": f"sha256:{'c' * 64}",
+        "search_history_complete": True,
+        "recent_query_fingerprints": [f"sha256:{'c' * 64}"],
+        "current_trend_signature": f"sha256:{'d' * 64}",
+        "last_trend_signature": f"sha256:{'d' * 64}",
+        "idle_reason_code": None, "failure_code": None,
+        "compatibility_mode": "live",
+    }
+
+
+def _snapshot_runtime_decision(
+    *,
+    branch_id: str,
+    round_number: int,
+    agent_id: str,
+    message_id: str,
+    action_id: str,
+    action_type: str,
+    content: str | None = None,
+    opportunity_receipt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    decision = {
+        "branch_id": branch_id,
+        "round_number": round_number,
+        "agent_id": agent_id,
+        "message_id": message_id,
+        "action_id": action_id,
+        "candidate_actions": ["IDLE", action_type],
+        "selected_action": action_type,
+        "action_parameters": {"content": content} if content is not None else {},
+    }
+    if opportunity_receipt is not None:
+        decision["opportunity_receipt"] = opportunity_receipt
+    return decision
+
+
+def _durable_action_projection(row: Any) -> tuple[Any, ...]:
+    return (
+        row.sequence, row.round_number,
+        str(getattr(row.action_type, "value", row.action_type)),
+        str(getattr(row.status, "value", row.status)),
+        row.failure_code, row.content, row.target_type, row.target_id, row.parent_action_id,
+        json.loads(row.payload_json or "{}"),
+    )
+
+
+def _seed_opportunity_consumption_snapshot() -> bytes:
+    from app.services.simulation_actions import append_simulation_action
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Can imported opportunity receipts become authority?",
+            status=ScenarioStatus.DONE,
+            user_id="owner-opportunity-import",
+        )
+        branch = Branch(scenario_id=scenario.id, status=BranchStatus.COMPLETED)
+        agent = Agent(scenario_id=scenario.id, name="Opportunity Import Agent")
+        session.add_all([scenario, branch, agent])
+        session.flush()
+
+        action_specs = (
+            ("POST", "alpha evidence"),
+            ("POST", "beta evidence"),
+            ("SEARCH", "alpha"),
+            ("TREND", None),
+        )
+        rounds: dict[str, Any] = {}
+        for round_number, (action_type, action_content) in enumerate(action_specs, 1):
+            round_row = Round(branch_id=branch.id, round_number=round_number)
+            session.add(round_row)
+            session.flush()
+            message = AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content=f"I execute {action_type} {action_content or ''} now.",
+            )
+            session.add(message)
+            session.flush()
+            action = append_simulation_action(
+                session,
+                scenario_id=scenario.id,
+                branch_id=branch.id,
+                round_id=round_row.id,
+                round_number=round_number,
+                agent_id=agent.id,
+                message_id=message.id,
+                idempotency_key=f"snapshot-opportunity:{round_number}",
+                action={
+                    "action_type": action_type,
+                    **({"content": action_content} if action_content is not None else {}),
+                },
+            )
+            rounds[str(round_number)] = {
+                "decisions": [
+                    _snapshot_runtime_decision(
+                        branch_id=branch.id,
+                        round_number=round_number,
+                        agent_id=agent.id,
+                        message_id=message.id,
+                        action_id=action.id,
+                        action_type=action_type,
+                        content=action_content,
+                        opportunity_receipt=(
+                            _forged_opportunity_receipt(as_of_round=2)
+                            if action_type == "SEARCH"
+                            else None
+                        ),
+                    )
+                ],
+                "transitions": [],
+            }
+        scenario.parsed_context = {
+            "mode": "blackboard",
+            "agent_runtime_v1": {
+                "version": "1.0",
+                "branches": {branch.id: {"rounds": rounds}},
+            },
+        }
+        session.add(scenario)
+        session.commit()
+        return export_snapshot_zip(scenario.id, session).getvalue()
+
+
 def test_agent_runtime_remapper_rewrites_every_portable_coordinate():
     from app.services.agent_runtime import remap_agent_runtime_coordinates
 
@@ -3737,6 +3871,9 @@ def test_snapshot_round_trip_remaps_runtime_and_full_report_claim_coordinates():
             message.id,
             action.id,
         )
+        assert "opportunity_receipt" not in runtime["branches"][branch.id]["rounds"][
+            "1"
+        ]["decisions"][0]
         imported_transition = runtime["branches"][branch.id]["rounds"]["1"][
             "transitions"
         ][0]
@@ -3821,6 +3958,15 @@ def test_snapshot_round_trip_remaps_runtime_and_full_report_claim_coordinates():
     assert runtime_decision["agent_id"] == imported_agent.id
     assert runtime_decision["message_id"] == imported_message.id
     assert runtime_decision["action_id"] == imported_action.id
+    opportunity_receipt = runtime_decision["opportunity_receipt"]
+    assert opportunity_receipt["compatibility_mode"] == "legacy_import"
+    assert opportunity_receipt["available"] is False
+    assert opportunity_receipt["grounded"] is False
+    assert opportunity_receipt["reason_codes"] == [
+        "OPPORTUNITY_SNAPSHOT_UNAVAILABLE"
+    ]
+    assert opportunity_receipt["requested_action_type"] is None
+    assert opportunity_receipt["effective_action_type"] == "POST"
     assert runtime_transition["transition_semantics"] == "post_action_v1"
     assert runtime_transition["transition_origin"] == "derived_from_durable_actions"
     assert runtime_transition["previous_action_outcomes"] == [{
@@ -3906,6 +4052,439 @@ def test_snapshot_round_trip_remaps_runtime_and_full_report_claim_coordinates():
         original_ids["action"],
     ):
         assert coordinate not in portable_text
+
+
+@pytest.mark.parametrize(
+    "runtime_mode",
+    ["full", "gap", "none"],
+    ids=["forged-runtime-rebuild", "missing-late-records", "no-runtime-conservative"],
+)
+def test_snapshot_import_rebuilds_or_conservatively_closes_consumption(runtime_mode):
+    from app.models.simulation_action import SimulationAction
+    from app.services.action_opportunities import (
+        derive_opportunity_snapshots_v1,
+        search_query_fingerprint_v1,
+    )
+    from app.services.agent_runtime import load_prior_opportunity_receipt
+    from app.services.social_world import reduce_social_world_state
+
+    blob = _seed_opportunity_consumption_snapshot()
+    if runtime_mode != "full":
+        def rewrite_runtime(payload: dict[str, Any]) -> None:
+            parsed_context = dict(payload.get("parsed_context") or {})
+            if runtime_mode == "none":
+                parsed_context.pop("agent_runtime_v1", None)
+            else:
+                runtime = parsed_context["agent_runtime_v1"]
+                for branch_payload in runtime["branches"].values():
+                    rounds = branch_payload["rounds"]
+                    branch_payload["rounds"] = {
+                        key: value for key, value in rounds.items() if int(key) <= 2
+                    }
+            payload["parsed_context"] = parsed_context
+
+        blob = _rewrite_snapshot_scenario_json(blob, rewrite_runtime)
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(
+            blob,
+            f"importer-opportunity-{runtime_mode}",
+            session,
+        )
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        branch = session.exec(
+            select(Branch).where(Branch.scenario_id == imported_id)
+        ).one()
+        agent = session.exec(
+            select(Agent).where(Agent.scenario_id == imported_id)
+        ).one()
+        actions = list(
+            session.exec(
+                select(SimulationAction)
+                .where(SimulationAction.scenario_id == imported_id)
+                .order_by(SimulationAction.sequence)
+            ).all()
+        )
+        states = {
+            cutoff: reduce_social_world_state(
+                session,
+                scenario_id=imported_id,
+                branch_id=branch.id,
+                cutoff_round=cutoff,
+            )
+            for cutoff in (2, 3, 4)
+        }
+        parsed_context = imported.parsed_context or {}
+
+    assert [_durable_action_projection(row) for row in actions] == [
+        (1, 1, "POST", "verified", None, "alpha evidence", None, None, None, {}),
+        (2, 2, "POST", "verified", None, "beta evidence", None, None, None, {}),
+        (3, 3, "SEARCH", "verified", None, "alpha", None, None, None, {}),
+        (4, 4, "TREND", "verified", None, None, None, None, None, {}),
+    ]
+    catalog = {agent.id: {"actions": [], "agents": []}}
+    if runtime_mode == "none":
+        assert "agent_runtime_v1" not in parsed_context
+        assert load_prior_opportunity_receipt(
+            get_engine(), imported_id, branch.id, agent.id, before_round=5
+        ) is None
+        snapshot = derive_opportunity_snapshots_v1(
+            social_state=states[4],
+            target_catalogs_by_actor=catalog,
+            prior_receipts_by_actor={agent.id: None},
+        )[agent.id]
+        search, trend = snapshot.actions["SEARCH"], snapshot.actions["TREND"]
+        assert search["available"] is trend["available"] is False
+        assert search["search_history_complete"] is False
+        assert search["reason_codes"] == ("SEARCH_HISTORY_UNAVAILABLE",)
+        assert trend["current_trend_signature"] is not None
+        assert trend["last_trend_signature"] == trend["current_trend_signature"]
+        assert trend["reason_codes"] == ("TREND_NO_NEW_ACTIVITY",)
+        return
+
+    runtime = parsed_context["agent_runtime_v1"]
+    rounds = runtime["branches"][branch.id]["rounds"]
+    assert set(rounds) == {"1", "2", "3", "4"}
+    if runtime_mode == "gap":
+        retained = rounds["1"]["decisions"][0]
+        assert retained["selected_action"] == "POST"
+        assert retained["action_id"] == actions[0].id
+    search_receipt = rounds["3"]["decisions"][0]["opportunity_receipt"]
+    trend_receipt = rounds["4"]["decisions"][0]["opportunity_receipt"]
+    search_snapshot = derive_opportunity_snapshots_v1(
+        social_state=states[2],
+        target_catalogs_by_actor=catalog,
+        prior_receipts_by_actor={agent.id: None},
+    )[agent.id]
+    fingerprint = search_query_fingerprint_v1(
+        "alpha", corpus_revision=search_snapshot.actions["SEARCH"]["corpus_revision"]
+    )
+    trend_snapshot = derive_opportunity_snapshots_v1(
+        social_state=states[3],
+        target_catalogs_by_actor=catalog,
+        prior_receipts_by_actor={agent.id: search_receipt},
+    )[agent.id]
+    assert fingerprint is not None
+    assert search_receipt["query_fingerprint"] == fingerprint
+    assert search_receipt["recent_query_fingerprints"] == [fingerprint]
+    assert trend_receipt["recent_query_fingerprints"] == [fingerprint]
+    assert trend_receipt["last_trend_signature"] == (
+        trend_snapshot.actions["TREND"]["current_trend_signature"]
+    )
+    for receipt in (search_receipt, trend_receipt):
+        assert receipt["compatibility_mode"] == "legacy_import"
+        assert receipt["available"] is receipt["grounded"] is False
+        assert receipt["reason_codes"] == ["OPPORTUNITY_SNAPSHOT_UNAVAILABLE"]
+    runtime_text = json.dumps(runtime, ensure_ascii=False, sort_keys=True)
+    for forged_hash in ("a", "b", "c", "d"):
+        assert f"sha256:{forged_hash * 64}" not in runtime_text
+    assert '"compatibility_mode": "live"' not in runtime_text
+    loaded_receipt = load_prior_opportunity_receipt(
+        get_engine(), imported_id, branch.id, agent.id, before_round=5
+    )
+    assert loaded_receipt == trend_receipt
+    next_snapshot = derive_opportunity_snapshots_v1(
+        social_state=states[4],
+        target_catalogs_by_actor=catalog,
+        prior_receipts_by_actor={agent.id: loaded_receipt},
+    )[agent.id]
+    next_search, next_trend = (
+        next_snapshot.actions["SEARCH"],
+        next_snapshot.actions["TREND"],
+    )
+    assert next_search["search_history_complete"] is True
+    assert next_search["recent_query_fingerprints"] == (fingerprint,)
+    assert next_trend["last_trend_signature"] == next_trend["current_trend_signature"]
+    assert next_trend["available"] is False
+    assert next_trend["reason_codes"] == ("TREND_NO_NEW_ACTIVITY",)
+
+
+def test_runtime_sanitizer_fail_closes_duplicate_same_round_searches():
+    from app.models.simulation_action import SimulationAction
+    from app.services.action_opportunities import (
+        derive_opportunity_snapshots_v1,
+        search_query_fingerprint_v1,
+    )
+    from app.services.agent_runtime import (
+        load_prior_opportunity_receipt,
+        normalize_decision_envelope,
+        sanitize_imported_agent_runtime_in_session,
+    )
+    from app.services.simulation_actions import append_simulation_action
+    from app.services.social_world import reduce_social_world_state
+
+    engine = get_engine()
+    queries = ("alpha evidence", "beta evidence")
+    with Session(engine) as session:
+        scenario = Scenario(question="Can duplicate imported searches reopen consumption?")
+        branch = Branch(scenario_id=scenario.id)
+        agent = Agent(scenario_id=scenario.id, name="Duplicate Search Actor")
+        session.add_all([scenario, branch, agent])
+        session.flush()
+
+        seed_round = Round(branch_id=branch.id, round_number=1)
+        session.add(seed_round)
+        session.flush()
+        seed_message = AgentMessage(
+            round_id=seed_round.id,
+            agent_id=agent.id,
+            content="I now publish alpha and beta evidence.",
+        )
+        session.add(seed_message)
+        session.flush()
+        seed_action = append_simulation_action(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            round_id=seed_round.id,
+            round_number=1,
+            agent_id=agent.id,
+            message_id=seed_message.id,
+            idempotency_key="duplicate-search:seed",
+            action={"action_type": "POST", "content": seed_message.content},
+        )
+
+        search_round = Round(branch_id=branch.id, round_number=2)
+        session.add(search_round)
+        session.flush()
+        search_decisions: list[dict[str, Any]] = []
+        search_action_ids: list[str] = []
+        for index, query in enumerate(queries, 1):
+            message = AgentMessage(
+                round_id=search_round.id,
+                agent_id=agent.id,
+                content=f"I search for {query} now.",
+            )
+            session.add(message)
+            session.flush()
+            action = append_simulation_action(
+                session,
+                scenario_id=scenario.id,
+                branch_id=branch.id,
+                round_id=search_round.id,
+                round_number=2,
+                agent_id=agent.id,
+                message_id=message.id,
+                idempotency_key=f"duplicate-search:{index}",
+                action={"action_type": "SEARCH", "content": query},
+            )
+            search_action_ids.append(action.id)
+            search_decisions.append(
+                _snapshot_runtime_decision(
+                    branch_id=branch.id,
+                    round_number=2,
+                    agent_id=agent.id,
+                    message_id=message.id,
+                    action_id=action.id,
+                    action_type="SEARCH",
+                    content=query,
+                )
+            )
+
+        imported_runtime = {
+            "version": "1.0",
+            "branches": {
+                branch.id: {
+                    "rounds": {
+                        "1": {
+                            "decisions": [
+                                _snapshot_runtime_decision(
+                                    branch_id=branch.id,
+                                    round_number=1,
+                                    agent_id=agent.id,
+                                    message_id=seed_message.id,
+                                    action_id=seed_action.id,
+                                    action_type="POST",
+                                    content=seed_message.content,
+                                )
+                            ],
+                            "transitions": [],
+                        },
+                        "2": {
+                            "decisions": search_decisions,
+                            "transitions": [],
+                        },
+                    }
+                }
+            },
+        }
+        clean_runtime = sanitize_imported_agent_runtime_in_session(
+            session,
+            scenario.id,
+            imported_runtime,
+        )
+        session.commit()
+        scenario_id, branch_id, agent_id = scenario.id, branch.id, agent.id
+
+    generated_decisions = clean_runtime["branches"][branch_id]["rounds"]["2"][
+        "decisions"
+    ]
+    assert generated_decisions
+    receipts = [decision["opportunity_receipt"] for decision in generated_decisions]
+    assert all(receipt["search_history_complete"] is False for receipt in receipts)
+    assert all(receipt["recent_query_fingerprints"] == [] for receipt in receipts)
+    assert all(
+        receipt["last_trend_signature"] == receipt["current_trend_signature"]
+        for receipt in receipts
+    )
+    with Session(engine) as session:
+        durable_searches = session.exec(
+            select(SimulationAction)
+            .where(SimulationAction.id.in_(search_action_ids))
+            .order_by(SimulationAction.sequence)
+        ).all()
+    assert [action.content for action in durable_searches] == list(queries)
+
+    prior_receipt = load_prior_opportunity_receipt(
+        engine,
+        scenario_id,
+        branch_id,
+        agent_id,
+        before_round=3,
+    )
+    assert prior_receipt is not None
+    with Session(engine) as session:
+        state = reduce_social_world_state(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            cutoff_round=2,
+        )
+    next_snapshot = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor={agent_id: {"actions": [], "agents": []}},
+        prior_receipts_by_actor={agent_id: prior_receipt},
+    )[agent_id]
+    search = next_snapshot.actions["SEARCH"]
+    expected_fingerprints = {
+        search_query_fingerprint_v1(query, corpus_revision=search["corpus_revision"])
+        for query in queries
+    }
+    assert expected_fingerprints.isdisjoint(prior_receipt["recent_query_fingerprints"])
+    assert search["search_history_complete"] is False
+    assert search["reason_codes"] == ("SEARCH_HISTORY_UNAVAILABLE",)
+    assert search["available"] is False
+
+    for query in queries:
+        repeated = normalize_decision_envelope(
+            {
+                "candidate_actions": ["IDLE", "SEARCH"],
+                "selected_action": "SEARCH",
+                "action_parameters": {"content": query},
+            },
+            agent_id=agent_id,
+            branch_id=branch_id,
+            round_number=3,
+            fallback_goal="Keep imported consumption closed",
+            opportunity_snapshot=next_snapshot,
+            compatibility_mode="live",
+        )
+        assert repeated["selected_action"] == "IDLE"
+        assert repeated["decision_status"] == "unavailable"
+        assert repeated["failure_code"] == "DECISION_OPPORTUNITY_UNAVAILABLE"
+
+
+def test_runtime_sanitizer_orders_native_parent_before_lexical_child():
+    from app.services.action_opportunities import derive_opportunity_snapshots_v1
+    from app.services.agent_runtime import (
+        load_prior_opportunity_receipt,
+        sanitize_imported_agent_runtime_in_session,
+    )
+    from app.services.simulation_actions import append_simulation_action
+    from app.services.social_world import reduce_social_world_state
+
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(question="Does native lineage beat lexical branch order?")
+        session.add(scenario)
+        session.flush()
+        parent = Branch(id="z-parent", scenario_id=scenario.id, fork_round=0)
+        child = Branch(
+            id="a-child",
+            scenario_id=scenario.id,
+            parent_branch_id=parent.id,
+            fork_round=4,
+        )
+        agent = Agent(id="lineage-agent", scenario_id=scenario.id, name="Lineage Agent")
+        session.add_all([parent, child, agent])
+        session.flush()
+        action_specs = (
+            (parent.id, 1, "POST", "alpha evidence"),
+            (parent.id, 2, "POST", "beta evidence"),
+            (parent.id, 3, "SEARCH", "alpha"),
+            (parent.id, 4, "TREND", None),
+            (child.id, 5, "IDLE", None),
+        )
+        for branch_id, round_number, action_type, content in action_specs:
+            round_row = Round(branch_id=branch_id, round_number=round_number)
+            session.add(round_row)
+            session.flush()
+            message = AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content=f"Round {round_number}: {action_type} {content or ''}",
+            )
+            session.add(message)
+            session.flush()
+            append_simulation_action(
+                session,
+                scenario_id=scenario.id,
+                branch_id=branch_id,
+                round_id=round_row.id,
+                round_number=round_number,
+                agent_id=agent.id,
+                message_id=message.id,
+                idempotency_key=f"native-lineage:{round_number}",
+                action={
+                    "action_type": action_type,
+                    **({"content": content} if content is not None else {}),
+                },
+            )
+        runtime = sanitize_imported_agent_runtime_in_session(
+            session,
+            scenario.id,
+            {"version": "1.0", "branches": {}},
+        )
+        session.commit()
+        scenario_id, agent_id = scenario.id, agent.id
+
+    assert list(runtime["branches"]) == ["z-parent", "a-child"]
+    parent_rounds = runtime["branches"]["z-parent"]["rounds"]
+    child_receipt = runtime["branches"]["a-child"]["rounds"]["5"]["decisions"][
+        0
+    ]["opportunity_receipt"]
+    search_receipt = parent_rounds["3"]["decisions"][0]["opportunity_receipt"]
+    trend_receipt = parent_rounds["4"]["decisions"][0]["opportunity_receipt"]
+    fingerprint = search_receipt["query_fingerprint"]
+    assert fingerprint is not None
+    assert child_receipt["recent_query_fingerprints"] == [fingerprint]
+    assert child_receipt["search_history_complete"] is True
+    assert child_receipt["last_trend_signature"] == trend_receipt["last_trend_signature"]
+
+    loaded_receipt = load_prior_opportunity_receipt(
+        engine,
+        scenario_id,
+        "a-child",
+        agent_id,
+        before_round=6,
+    )
+    assert loaded_receipt == child_receipt
+    with Session(engine) as session:
+        state = reduce_social_world_state(
+            session,
+            scenario_id=scenario_id,
+            branch_id="a-child",
+            cutoff_round=5,
+        )
+    snapshot = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor={agent_id: {"actions": [], "agents": []}},
+        prior_receipts_by_actor={agent_id: loaded_receipt},
+    )[agent_id]
+    assert snapshot.actions["SEARCH"]["recent_query_fingerprints"] == (fingerprint,)
+    trend = snapshot.actions["TREND"]
+    assert trend["last_trend_signature"] == trend["current_trend_signature"]
+    assert trend["available"] is False
 
 
 def test_snapshot_round_trip_recompiles_legacy_report_without_runtime_or_claims():

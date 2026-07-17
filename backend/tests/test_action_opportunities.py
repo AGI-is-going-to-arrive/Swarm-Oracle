@@ -1,0 +1,527 @@
+"""Pure contracts for deterministic social-action opportunity snapshots."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import replace
+
+from app.config import settings
+from app.services.action_opportunities import (
+    OpportunityReceiptV1,
+    OpportunitySnapshotV1,
+    derive_opportunity_snapshots_v1,
+    opportunity_snapshot_to_prompt_payload_v1,
+    search_query_fingerprint_v1,
+)
+from app.services.social_world import (
+    SocialComment,
+    SocialPost,
+    SocialReaction,
+    SocialRefreshReceipt,
+    SocialSearchReceipt,
+    SocialTrendItem,
+    SocialTrendReceipt,
+    SocialWorldState,
+)
+
+_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _comment(
+    action_id: str,
+    post_id: str,
+    author_id: str,
+    sequence: int,
+    content: str = "comment",
+) -> SocialComment:
+    return SocialComment(action_id, post_id, author_id, content, sequence)
+
+
+def _reaction(
+    action_id: str,
+    post_id: str,
+    author_id: str,
+    sequence: int,
+    kind: str = "LIKE",
+) -> SocialReaction:
+    return SocialReaction(action_id, post_id, author_id, kind, sequence)
+
+
+def _post(
+    action_id: str,
+    author_id: str,
+    sequence: int,
+    *,
+    content: str = "post",
+    comments: tuple[SocialComment, ...] = (),
+    reactions: tuple[SocialReaction, ...] = (),
+    author_name_override: str | None = None,
+    tags: tuple[str, ...] = (),
+    activity_events: tuple[tuple[int, str], ...] | None = None,
+) -> SocialPost:
+    events = activity_events or (
+        (sequence, author_id),
+        *((item.sequence, item.author_id) for item in comments),
+        *((item.sequence, item.author_id) for item in reactions),
+    )
+    return SocialPost(
+        action_id=action_id,
+        author_id=author_id,
+        content=content,
+        sequence=sequence,
+        round_number=1,
+        author_name_override=author_name_override,
+        published_at=None,
+        credibility_hint=None,
+        tags=tags,
+        comments=comments,
+        reactions=reactions,
+        activity_events=events,
+    )
+
+
+def _state(
+    posts: tuple[SocialPost, ...] = (),
+    *,
+    following: dict[str, frozenset[str]] | None = None,
+    muted: dict[str, frozenset[str]] | None = None,
+    recent_searches: dict[str, tuple[SocialSearchReceipt, ...]] | None = None,
+    trend_receipts: dict[str, tuple[SocialTrendReceipt, ...]] | None = None,
+    refresh_receipts: dict[str, tuple[SocialRefreshReceipt, ...]] | None = None,
+    last_seen: dict[str, int] | None = None,
+    diagnostics: dict[str, int] | None = None,
+) -> SocialWorldState:
+    contributor_ids = {
+        contributor
+        for post in posts
+        for contributor in (
+            post.author_id,
+            *(item.author_id for item in post.comments),
+            *(item.author_id for item in post.reactions),
+        )
+    }
+    return SocialWorldState(
+        scenario_id="scenario",
+        branch_id="branch",
+        cutoff_round=4,
+        agent_names={
+            identifier: identifier.title() for identifier in sorted({"viewer", *contributor_ids})
+        },
+        posts=posts,
+        following=following or {},
+        muted=muted or {},
+        recent_searches=recent_searches or {},
+        trend_receipts=trend_receipts or {},
+        refresh_receipts=refresh_receipts or {},
+        last_seen=last_seen or {},
+        trend_counts={post.action_id: len(post.activity_events) for post in posts},
+        diagnostics=diagnostics or {},
+    )
+
+
+def _catalog(
+    action_ids: tuple[str, ...] = (),
+    agent_ids: tuple[str, ...] = (),
+    *,
+    source_ids: frozenset[str] = frozenset(),
+) -> dict:
+    return {
+        "actions": [
+            {
+                "id": identifier,
+                "kind": "post",
+                "type": "POST",
+                "agent_name": "target",
+                "content": "target",
+            }
+            for identifier in action_ids
+        ],
+        "agents": [
+            {
+                "id": identifier,
+                "name": identifier.title(),
+                "kind": "source" if identifier in source_ids else "agent",
+            }
+            for identifier in agent_ids
+        ],
+    }
+
+
+def _derive(
+    state: SocialWorldState,
+    catalog: dict | None = None,
+    receipt: OpportunityReceiptV1 | None = None,
+    *,
+    actor_id: str = "viewer",
+) -> OpportunitySnapshotV1:
+    return derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor={actor_id: catalog or _catalog()},
+        prior_receipts_by_actor={actor_id: receipt},
+    )[actor_id]
+
+
+def _receipt(
+    snapshot: OpportunitySnapshotV1,
+    *,
+    corpus_revision: str | None = None,
+    history: list[str] | None = None,
+    history_complete: bool = True,
+    last_trend_signature: str | None = None,
+) -> OpportunityReceiptV1:
+    return {
+        "version": 1,
+        "as_of_round": snapshot.as_of_round,
+        "social_state_revision": snapshot.social_state_revision,
+        "domain_state_revision": None,
+        "allowed_rule_ids": [],
+        "requested_action_type": "IDLE",
+        "effective_action_type": "IDLE",
+        "available": True,
+        "grounded": True,
+        "reason_codes": ["IDLE_ALWAYS_AVAILABLE"],
+        "eligible_target_count": 0,
+        "selected_target_eligible": None,
+        "parameter_eligible": None,
+        "corpus_revision": corpus_revision,
+        "query_fingerprint": None,
+        "search_history_complete": history_complete,
+        "recent_query_fingerprints": history or [],
+        "current_trend_signature": snapshot.actions["TREND"]["current_trend_signature"],
+        "last_trend_signature": last_trend_signature,
+        "idle_reason_code": "IDLE_NO_ACTION_NEEDED",
+        "failure_code": None,
+        "compatibility_mode": "live",
+    }
+
+
+def test_snapshot_order_hash_and_prompt_payload_are_canonical():
+    state = _state((_post("post-1", "author", 1),), diagnostics={"ignored": 1})
+    snapshots = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor={"zeta": _catalog(), "alpha": _catalog()},
+        prior_receipts_by_actor={},
+    )
+
+    assert list(snapshots) == ["alpha", "zeta"]
+    snapshot = snapshots["alpha"]
+    assert snapshot.version == 1
+    assert snapshot.as_of_round == 4
+    assert snapshot.domain_state_revision is None
+    assert snapshot.allowed_rule_ids == ()
+    assert _SHA256_RE.fullmatch(snapshot.social_state_revision)
+    assert list(snapshot.actions) == [
+        "IDLE",
+        "POST",
+        "COMMENT",
+        "REACTION",
+        "FOLLOW",
+        "MUTE",
+        "SEARCH",
+        "TREND",
+        "REFRESH",
+    ]
+    without_diagnostic_change = _derive(replace(state, diagnostics={"other": 99}))
+    semantic_change = _derive(replace(state, last_seen={"viewer": 1}))
+    assert without_diagnostic_change.social_state_revision == snapshot.social_state_revision
+    assert semantic_change.social_state_revision != snapshot.social_state_revision
+
+    payload = opportunity_snapshot_to_prompt_payload_v1(snapshot)
+    assert list(payload) == [
+        "version",
+        "actor_id",
+        "as_of_round",
+        "social_state_revision",
+        "domain_state_revision",
+        "allowed_rule_ids",
+        "actions",
+    ]
+    assert payload["allowed_rule_ids"] == []
+    assert payload["actions"]["IDLE"]["reason_codes"] == ["IDLE_ALWAYS_AVAILABLE"]
+    assert "opportunity_receipt" not in payload
+
+
+def test_query_fingerprint_uses_exact_normalization_and_corpus_binding():
+    corpus = "sha256:" + "1" * 64
+    fingerprint = search_query_fingerprint_v1("  Straße\n  Alpha  ", corpus_revision=corpus)
+    encoded = json.dumps(
+        {
+            "kind": "search_query_fingerprint_v1",
+            "payload": {
+                "corpus_revision": corpus,
+                "normalized_query": "strasse alpha",
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert fingerprint == f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    assert search_query_fingerprint_v1(" \n\t ", corpus_revision=corpus) is None
+    assert search_query_fingerprint_v1(0, corpus_revision=corpus) is None
+    assert search_query_fingerprint_v1("alpha", corpus_revision="other") != fingerprint
+
+
+def test_empty_world_has_only_idle_and_post_available_without_selection():
+    snapshot = _derive(_state())
+
+    assert [name for name, gate in snapshot.actions.items() if gate["available"]] == [
+        "IDLE",
+        "POST",
+    ]
+    assert snapshot.actions["SEARCH"]["reason_codes"] == ("SEARCH_CORPUS_EMPTY",)
+    assert snapshot.actions["TREND"]["current_trend_signature"] is None
+    assert all("selected_action" not in gate for gate in snapshot.actions.values())
+
+
+def test_comment_follow_and_reaction_gates_use_visible_state_and_catalog_order():
+    comments = (_comment("comment-carol", "post-bob", "carol", 5),)
+    reactions = (
+        _reaction("reaction-viewer", "post-bob", "viewer", 6, "LIKE"),
+        _reaction("reaction-dave", "post-bob", "dave", 7, "WOW"),
+    )
+    state = _state(
+        (
+            _post("post-self", "viewer", 1),
+            _post("post-muted", "muted", 2),
+            _post("post-dave", "dave", 3),
+            _post("post-bob", "bob", 4, comments=comments, reactions=reactions),
+        ),
+        following={"viewer": frozenset({"bob"})},
+        muted={"viewer": frozenset({"muted"})},
+    )
+    catalog = _catalog(
+        (
+            "comment-carol",
+            "post-muted",
+            "post-bob",
+            "reaction-dave",
+            "reaction-viewer",
+            "post-bob",
+            "unknown",
+        ),
+        ("bob", "dave", "muted", "viewer", "carol"),
+    )
+    actions = _derive(state, catalog).actions
+
+    expected_targets = ("comment-carol", "post-bob", "reaction-dave")
+    assert actions["COMMENT"]["eligible_target_ids"] == expected_targets
+    assert actions["REACTION"]["eligible_target_ids"] == expected_targets
+    assert actions["FOLLOW"]["eligible_target_ids"] == ("dave",)
+    reaction_kinds = actions["REACTION"]["eligible_reaction_kinds_by_target"]
+    for target_id in expected_targets:
+        assert "LIKE" not in reaction_kinds[target_id]
+        assert "LOVE" in reaction_kinds[target_id]
+    assert actions["REACTION"]["eligible_reaction_kinds_by_target"]["post-bob"] == (
+        "LOVE",
+        "LAUGH",
+        "WOW",
+        "SAD",
+        "ANGRY",
+        "SUPPORT",
+        "OPPOSE",
+    )
+
+
+def test_mute_accepts_only_presented_nonself_unmuted_contributors():
+    presented = _post(
+        "post-source",
+        "source",
+        1,
+        comments=(
+            _comment("commenter", "post-source", "commenter", 2),
+            _comment("self-comment", "post-source", "viewer", 3),
+            _comment("muted-comment", "post-source", "muted", 4),
+        ),
+        reactions=(
+            _reaction("reactor", "post-source", "reactor", 5),
+            _reaction("muted-reaction", "post-source", "muted", 6),
+        ),
+    )
+    state = _state(
+        (presented, _post("post-outside", "outside", 7)),
+        muted={"viewer": frozenset({"muted"})},
+        refresh_receipts={
+            "viewer": (SocialRefreshReceipt(("post-source",), 1, 8),)
+        },
+    )
+    catalog = _catalog(
+        ("post-source",),
+        ("outside", "source", "commenter", "reactor", "viewer", "muted"),
+        source_ids=frozenset({"source"}),
+    )
+
+    mute = _derive(state, catalog).actions["MUTE"]
+    assert mute["available"] is True
+    assert mute["grounded"] is True
+    assert mute["reason_codes"] == ("MUTE_FILTER_EFFECT_AVAILABLE",)
+    assert mute["eligible_target_ids"] == ("source", "commenter", "reactor")
+
+
+def test_mute_default_feed_excludes_visible_contributor_below_four_cards():
+    posts = tuple(_post(f"post-{index}", f"author-{index}", index) for index in range(1, 6))
+    catalog = _catalog(agent_ids=tuple(f"author-{index}" for index in range(1, 6)))
+
+    mute = _derive(_state(posts), catalog).actions["MUTE"]
+    assert mute["eligible_target_ids"] == (
+        "author-2",
+        "author-3",
+        "author-4",
+        "author-5",
+    )
+    assert "author-1" not in mute["eligible_target_ids"]
+
+
+def test_reliability_spam_and_waiting_text_have_zero_gate_influence():
+    catalog = _catalog(("post-author",), ("author",))
+    noisy = _derive(
+        _state((_post("post-author", "author", 2, content="spam unreliable waiting"),)),
+        catalog,
+    )
+    neutral = _derive(
+        _state((_post("post-author", "author", 2, content="ordinary update"),)),
+        catalog,
+    )
+
+    for action_type in noisy.actions:
+        assert noisy.actions[action_type]["available"] == neutral.actions[action_type]["available"]
+        assert noisy.actions[action_type]["grounded"] == neutral.actions[action_type]["grounded"]
+        assert (
+            noisy.actions[action_type]["eligible_target_ids"]
+            == neutral.actions[action_type]["eligible_target_ids"]
+        )
+
+
+def test_refresh_counts_all_visible_root_posts_only():
+    old_post_with_new_comment = _post(
+        "old",
+        "author",
+        4,
+        comments=(_comment("new-comment", "old", "commenter", 99),),
+    )
+    state = _state(
+        (
+            old_post_with_new_comment,
+            _post("new-visible", "visible", 10),
+            _post("new-muted", "muted", 20),
+        ),
+        muted={"viewer": frozenset({"muted"})},
+        last_seen={"viewer": 4},
+    )
+    assert _derive(state).actions["REFRESH"]["available"] is True
+
+    caught_up = replace(state, last_seen={"viewer": 10})
+    refresh = _derive(caught_up).actions["REFRESH"]
+    assert refresh["available"] is False
+    assert refresh["reason_codes"] == ("REFRESH_NO_UNSEEN_POSTS",)
+
+
+def test_trend_receipt_consumes_signature_and_visible_activity_reopens_it():
+    state = _state((_post("post-a", "a", 1), _post("post-b", "b", 2)))
+    initial = _derive(state)
+    trend = initial.actions["TREND"]
+    assert trend["available"] is True
+    assert trend["reason_codes"] == ("TREND_INITIAL_VOLUME_AVAILABLE",)
+    assert _SHA256_RE.fullmatch(trend["current_trend_signature"] or "")
+
+    consumed = _receipt(initial, last_trend_signature=trend["current_trend_signature"])
+    closed = _derive(state, receipt=consumed).actions["TREND"]
+    assert closed["available"] is False
+    assert closed["reason_codes"] == ("TREND_NO_NEW_ACTIVITY",)
+
+    changed_post = _post(
+        "post-b",
+        "b",
+        2,
+        comments=(_comment("comment-c", "post-b", "c", 3),),
+    )
+    changed = _derive(
+        replace(state, posts=(state.posts[0], changed_post)),
+        receipt=consumed,
+    ).actions["TREND"]
+    assert changed["available"] is True
+    assert changed["reason_codes"] == ("TREND_SIGNATURE_CHANGED",)
+
+    one_with_interaction = _derive(_state((changed_post,))).actions["TREND"]
+    assert one_with_interaction["reason_codes"] == ("TREND_INITIAL_INTERACTION_AVAILABLE",)
+
+
+def test_search_history_is_complete_beyond_five_and_resets_on_corpus_revision():
+    state = _state((_post("post-a", "a", 1, content="alpha"),))
+    initial = _derive(state)
+    corpus = initial.actions["SEARCH"]["corpus_revision"]
+    history = [
+        search_query_fingerprint_v1(f"query {index}", corpus_revision=corpus)
+        for index in range(6)
+    ]
+    assert all(history)
+    receipt = _receipt(initial, corpus_revision=corpus, history=history)
+
+    unchanged = _derive(state, receipt=receipt).actions["SEARCH"]
+    assert unchanged["available"] is True
+    assert unchanged["search_history_complete"] is True
+    assert unchanged["recent_query_fingerprints"] == tuple(history)
+    assert search_query_fingerprint_v1("query 0", corpus_revision=corpus) in history
+
+    changed_state = _state((_post("post-a", "a", 1, content="alpha revised"),))
+    changed = _derive(changed_state, receipt=receipt).actions["SEARCH"]
+    assert changed["corpus_revision"] != corpus
+    assert changed["recent_query_fingerprints"] == ()
+    assert changed["search_history_complete"] is True
+
+
+def test_search_invalid_or_incomplete_history_fails_closed_until_revision_change(monkeypatch):
+    monkeypatch.setattr(settings, "MAX_ROUNDS", 5)
+    state = _state(
+        (_post("post-a", "a", 1, content="alpha"),),
+        recent_searches={"viewer": (SocialSearchReceipt("alpha", ("post-a",), 2),)},
+    )
+    initial = _derive(state)
+    corpus = initial.actions["SEARCH"]["corpus_revision"]
+    over_limit = [
+        search_query_fingerprint_v1(f"query {index}", corpus_revision=corpus)
+        for index in range(6)
+    ]
+    invalid_receipt = _receipt(initial, corpus_revision=corpus, history=over_limit)
+
+    invalid = _derive(state, receipt=invalid_receipt).actions["SEARCH"]
+    assert invalid["available"] is False
+    assert invalid["search_history_complete"] is False
+    assert invalid["reason_codes"] == ("SEARCH_HISTORY_UNAVAILABLE",)
+
+    incomplete_receipt = _receipt(
+        initial,
+        corpus_revision=corpus,
+        history_complete=False,
+    )
+    incomplete = _derive(state, receipt=incomplete_receipt).actions["SEARCH"]
+    assert incomplete["reason_codes"] == ("SEARCH_HISTORY_UNAVAILABLE",)
+
+    revised_state = _state(
+        (_post("post-a", "a", 1, content="different corpus"),),
+        recent_searches=state.recent_searches,
+    )
+    reset = _derive(revised_state, receipt=incomplete_receipt).actions["SEARCH"]
+    assert reset["available"] is True
+    assert reset["search_history_complete"] is True
+    assert reset["recent_query_fingerprints"] == ()
+
+
+def test_missing_trusted_trend_receipt_uses_durable_state_conservative_fallback():
+    state = _state(
+        (_post("post-a", "a", 1), _post("post-b", "b", 2)),
+        trend_receipts={
+            "viewer": (
+                SocialTrendReceipt(
+                    items=(SocialTrendItem("post-a", 1, 64),),
+                    sequence=3,
+                ),
+            )
+        },
+    )
+    trend = _derive(state).actions["TREND"]
+    assert trend["last_trend_signature"] == trend["current_trend_signature"]
+    assert trend["available"] is False
+    assert trend["reason_codes"] == ("TREND_NO_NEW_ACTIVITY",)

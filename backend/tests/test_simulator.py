@@ -32,6 +32,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.models.model_profile import ModelProfile
 from app.models.simulation_action import SimulationAction
+from app.services.action_opportunities import OpportunitySnapshotV1
 from app.services.agent_message_metadata import public_emotion_metadata
 from app.services.blackboard import Blackboard
 from app.services.llm_client import LLMError, llm_request_scope
@@ -188,6 +189,7 @@ def _decision_envelope_fixture(
     selected_action: str = "IDLE",
     candidate_actions: list[str] | None = None,
     idle_reason: str | None = "尚无足够证据支持外部行动",
+    idle_reason_code: str | None = "IDLE_INSUFFICIENT_EVIDENCE",
     action_content: str | None = None,
 ) -> dict:
     return {
@@ -203,35 +205,109 @@ def _decision_envelope_fixture(
         "constraints": ["不得把推测当成已验证结果"],
         "decision_basis": ["当前尚缺东门库存数据"],
         "idle_reason": idle_reason,
+        "idle_reason_code": idle_reason_code,
     }
 
 
-def test_decision_envelope_fail_closes_invalid_idle_and_unlisted_selection():
+def _opportunity_snapshot_fixture(
+    *,
+    actor_id: str = "agent-a",
+    as_of_round: int = 1,
+    action_overrides: dict[str, dict] | None = None,
+) -> OpportunitySnapshotV1:
+    def entry(available: bool, reason_code: str) -> dict:
+        return {
+            "available": available,
+            "grounded": available,
+            "reason_codes": (reason_code,),
+            "eligible_target_ids": (),
+        }
+
+    actions: dict[str, dict] = {
+        "IDLE": entry(True, "IDLE_ALWAYS_AVAILABLE"),
+        "POST": entry(True, "POST_ALWAYS_AVAILABLE"),
+        "COMMENT": entry(False, "COMMENT_NO_ELIGIBLE_TARGET"),
+        "REACTION": {
+            **entry(False, "REACTION_NO_ELIGIBLE_TARGET"),
+            "eligible_reaction_kinds_by_target": {},
+        },
+        "FOLLOW": entry(False, "FOLLOW_NO_ELIGIBLE_TARGET"),
+        "MUTE": entry(False, "MUTE_NO_FILTER_EFFECT"),
+        "SEARCH": {
+            **entry(False, "SEARCH_CORPUS_EMPTY"),
+            "corpus_revision": f"sha256:{'1' * 64}",
+            "search_history_complete": True,
+            "recent_query_fingerprints": (),
+        },
+        "TREND": {
+            **entry(False, "TREND_NO_NEW_ACTIVITY"),
+            "current_trend_signature": None,
+            "last_trend_signature": None,
+        },
+        "REFRESH": entry(False, "REFRESH_NO_UNSEEN_POSTS"),
+    }
+    for action_type, override in (action_overrides or {}).items():
+        actions[action_type] = {**actions[action_type], **override}
+    return OpportunitySnapshotV1(
+        version=1,
+        actor_id=actor_id,
+        as_of_round=as_of_round,
+        social_state_revision=f"sha256:{'0' * 64}",
+        domain_state_revision=None,
+        allowed_rule_ids=(),
+        actions=actions,
+    )
+
+
+def _eligible_target_snapshot(
+    action_type: str,
+    target_id: str,
+    **extra: object,
+) -> OpportunitySnapshotV1:
+    return _opportunity_snapshot_fixture(
+        action_overrides={
+            action_type: {
+                "available": True,
+                "grounded": True,
+                "reason_codes": (f"{action_type}_ELIGIBLE_TARGET_AVAILABLE",),
+                "eligible_target_ids": (target_id,),
+                **extra,
+            }
+        }
+    )
+
+
+def _normalize_decision(raw: dict, **kwargs) -> dict:
     from app.services.agent_runtime import normalize_decision_envelope
 
-    missing_idle_reason = normalize_decision_envelope(
-        _decision_envelope_fixture(idle_reason=None),
+    return normalize_decision_envelope(
+        raw,
         agent_id="agent-a",
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        **kwargs,
+    )
+
+
+def test_decision_envelope_fail_closes_invalid_idle_and_unlisted_selection():
+    missing_idle_reason = _normalize_decision(
+        _decision_envelope_fixture(idle_reason=None),
+        opportunity_snapshot=_opportunity_snapshot_fixture(),
     )
     assert missing_idle_reason["selected_action"] == "IDLE"
     assert missing_idle_reason["decision_status"] == "unavailable"
     assert missing_idle_reason["failure_code"] == "DECISION_IDLE_REASON_REQUIRED"
     assert missing_idle_reason["idle_reason"]
 
-    unlisted = normalize_decision_envelope(
+    unlisted = _normalize_decision(
         _decision_envelope_fixture(
             selected_action="POST",
             candidate_actions=["IDLE", "SEARCH"],
             idle_reason=None,
             action_content="现在公开东门库存",
         ),
-        agent_id="agent-a",
-        branch_id="branch-a",
-        round_number=2,
-        fallback_goal="守住东门",
+        opportunity_snapshot=_eligible_target_snapshot("FOLLOW", "agent-scout"),
     )
     assert unlisted["selected_action"] == "IDLE"
     assert unlisted["decision_status"] == "unavailable"
@@ -239,31 +315,200 @@ def test_decision_envelope_fail_closes_invalid_idle_and_unlisted_selection():
 
 
 def test_decision_envelope_preserves_optional_unresolved_questions_compatibly():
-    from app.services.agent_runtime import normalize_decision_envelope
-
     question = "东门库存还剩多少？"
     raw = _decision_envelope_fixture()
     raw["unresolved_questions"] = [question, "", question]
 
-    normalized = normalize_decision_envelope(
+    snapshot = _eligible_target_snapshot("COMMENT", "action-budget-post")
+    normalized = _normalize_decision(
         raw,
-        agent_id="agent-a",
-        branch_id="branch-a",
-        round_number=2,
-        fallback_goal="守住东门",
+        opportunity_snapshot=snapshot,
     )
-    legacy = normalize_decision_envelope(
+    legacy = _normalize_decision(
         _decision_envelope_fixture(),
-        agent_id="agent-a",
-        branch_id="branch-a",
-        round_number=2,
-        fallback_goal="守住东门",
+        opportunity_snapshot=snapshot,
     )
 
     assert normalized["decision_status"] == "verified"
     assert normalized["unresolved_questions"] == [question]
     assert legacy["decision_status"] == "verified"
     assert legacy["unresolved_questions"] == []
+
+
+def test_live_missing_snapshot_fails_non_idle_closed_but_keeps_valid_idle():
+    post = _normalize_decision(
+        _decision_envelope_fixture(
+            selected_action="POST",
+            candidate_actions=["IDLE", "POST"],
+            idle_reason=None,
+            action_content="现在公开东门库存",
+        ),
+    )
+    idle = _normalize_decision(
+        _decision_envelope_fixture(candidate_actions=["IDLE", "POST"]),
+    )
+
+    assert post["selected_action"] == "IDLE"
+    assert post["decision_status"] == "unavailable"
+    assert post["failure_code"] == "DECISION_OPPORTUNITY_UNAVAILABLE"
+    assert post["idle_reason_code"] == "IDLE_OPPORTUNITY_UNAVAILABLE"
+    assert idle["selected_action"] == "IDLE"
+    assert idle["decision_status"] == "verified"
+    assert idle["idle_reason_code"] == "IDLE_INSUFFICIENT_EVIDENCE"
+
+
+def test_unavailable_decision_does_not_invent_an_absent_requested_action():
+    absent = _decision_envelope_fixture()
+    absent.update({"decision_status": "unavailable", "failure_code": "LLM_FAILED"})
+    invalid = {**absent, "requested_action_type": "NOT_AN_ACTION"}
+    explicit = {**absent, "requested_action_type": "POST"}
+
+    assert _normalize_decision(absent)["requested_action_type"] is None
+    assert _normalize_decision(invalid)["requested_action_type"] is None
+    assert _normalize_decision(explicit)["requested_action_type"] == "POST"
+
+
+def test_snapshot_intersects_candidates_without_forcing_available_action():
+    snapshot = _opportunity_snapshot_fixture()
+    raw = _decision_envelope_fixture(
+        candidate_actions=["SEARCH", "POST", "IDLE", "FOLLOW"],
+    )
+    normalized = _normalize_decision(
+        raw,
+        opportunity_snapshot=snapshot,
+    )
+
+    assert normalized["decision_status"] == "verified"
+    assert normalized["selected_action"] == "IDLE"
+    assert normalized["candidate_actions"] == ["IDLE", "POST"]
+
+
+def test_catalog_gate_precedes_snapshot_target_eligibility_gate():
+    content = "我现在直接回应这条预算公告。"
+    raw = _decision_envelope_fixture(
+        selected_action="COMMENT",
+        candidate_actions=["IDLE", "COMMENT"],
+        idle_reason=None,
+        action_content=content,
+    )
+    raw["target_agent_or_object"] = {"kind": "action", "id": "post-visible"}
+    missing_catalog = _normalize_decision(
+        raw,
+        allowed_action_target_ids=["post-catalog-only"],
+        opportunity_snapshot=_eligible_target_snapshot("COMMENT", "post-visible"),
+    )
+    missing_opportunity = _normalize_decision(
+        raw,
+        allowed_action_target_ids=["post-visible"],
+        opportunity_snapshot=_eligible_target_snapshot("COMMENT", "post-other"),
+    )
+
+    assert missing_catalog["failure_code"] == "DECISION_TARGET_NOT_IN_CATALOG"
+    assert missing_opportunity["failure_code"] == "DECISION_TARGET_NOT_ELIGIBLE"
+
+
+def test_follow_repeat_is_rejected_even_when_target_remains_in_catalog():
+    raw = _decision_envelope_fixture(
+        selected_action="FOLLOW",
+        candidate_actions=["IDLE", "FOLLOW"],
+        idle_reason=None,
+    )
+    raw["target_agent_or_object"] = {"kind": "agent", "id": "already-followed"}
+    raw["action_parameters"] = {"realization_phrase": "我继续关注该作者"}
+    normalized = _normalize_decision(
+        raw,
+        allowed_agent_target_ids=["already-followed"],
+        opportunity_snapshot=_eligible_target_snapshot("FOLLOW", "new-author"),
+    )
+
+    assert normalized["selected_action"] == "IDLE"
+    assert normalized["decision_status"] == "unavailable"
+    assert normalized["failure_code"] == "DECISION_TARGET_NOT_ELIGIBLE"
+
+
+def test_reaction_on_child_comment_rejects_root_same_kind_but_accepts_change():
+    root_target, child_target = "post-root", "comment-child"
+    allowed_kinds = ("LOVE", "LAUGH", "WOW", "SAD", "ANGRY", "SUPPORT", "OPPOSE")
+    snapshot = _opportunity_snapshot_fixture(
+        action_overrides={
+            "REACTION": {
+                "available": True,
+                "grounded": True,
+                "reason_codes": ("REACTION_ELIGIBLE_TARGET_AVAILABLE",),
+                "eligible_target_ids": (root_target, child_target),
+                "eligible_reaction_kinds_by_target": {
+                    root_target: allowed_kinds,
+                    child_target: allowed_kinds,
+                },
+            }
+        }
+    )
+    raw = _decision_envelope_fixture(
+        selected_action="REACTION",
+        candidate_actions=["IDLE", "REACTION"],
+        idle_reason=None,
+    )
+    raw["target_agent_or_object"] = {"kind": "action", "id": child_target}
+    raw["action_parameters"] = {
+        "reaction": "LIKE",
+        "realization_phrase": "我现在点赞这条更新",
+    }
+    same_kind = _normalize_decision(
+        raw,
+        allowed_action_target_ids=[child_target],
+        opportunity_snapshot=snapshot,
+    )
+    raw["action_parameters"]["reaction"] = "LOVE"
+    changed_kind = _normalize_decision(
+        raw,
+        allowed_action_target_ids=[child_target],
+        opportunity_snapshot=snapshot,
+    )
+
+    assert same_kind["failure_code"] == "DECISION_REACTION_NO_OP"
+    assert changed_kind["decision_status"] == "verified"
+    assert changed_kind["action_parameters"]["reaction"] == "LOVE"
+
+
+def test_search_rejects_current_revision_duplicate_but_accepts_new_query():
+    from app.services.action_opportunities import search_query_fingerprint_v1
+    corpus_revision = f"sha256:{'2' * 64}"
+    repeated_query = "  EAST   Gate  "
+    fingerprint = search_query_fingerprint_v1(
+        repeated_query,
+        corpus_revision=corpus_revision,
+    )
+    assert fingerprint is not None
+    snapshot = _opportunity_snapshot_fixture(
+        action_overrides={
+            "SEARCH": {
+                "available": True,
+                "grounded": True,
+                "reason_codes": ("SEARCH_CORPUS_AVAILABLE",),
+                "corpus_revision": corpus_revision,
+                "search_history_complete": True,
+                "recent_query_fingerprints": (fingerprint,),
+            }
+        }
+    )
+    raw = _decision_envelope_fixture(
+        selected_action="SEARCH",
+        candidate_actions=["IDLE", "SEARCH"],
+        idle_reason=None,
+        action_content=repeated_query,
+    )
+    repeated = _normalize_decision(
+        raw,
+        opportunity_snapshot=snapshot,
+    )
+    raw["action_parameters"]["content"] = "western gate"
+    fresh = _normalize_decision(
+        raw,
+        opportunity_snapshot=snapshot,
+    )
+
+    assert repeated["failure_code"] == "DECISION_SEARCH_NO_OP"
+    assert fresh["decision_status"] == "verified"
 
 
 @pytest.mark.parametrize("forbidden_key", ["thought", "reasoning", "chain_of_thought"])
@@ -299,6 +544,7 @@ def test_decision_to_action_uses_selection_and_never_reinfers_from_speech():
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        opportunity_snapshot=_opportunity_snapshot_fixture(),
     )
 
     realized = decision_to_action(envelope, f"我会{public_action}，请各方核对。")
@@ -330,6 +576,7 @@ def test_decision_to_action_supports_target_only_action_realization_phrase():
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        opportunity_snapshot=_eligible_target_snapshot("FOLLOW", "agent-scout"),
     )
 
     realized = decision_to_action(
@@ -348,7 +595,7 @@ def test_decision_to_action_supports_target_only_action_realization_phrase():
     }
 
 
-def test_comment_decision_canonicalizes_parent_over_person_target():
+def test_comment_decision_rejects_conflicting_parent_and_person_target():
     from app.services.agent_runtime import decision_to_action, normalize_decision_envelope
 
     content = "我现在直接回应这条预算公告。"
@@ -367,15 +614,18 @@ def test_comment_decision_canonicalizes_parent_over_person_target():
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        opportunity_snapshot=_eligible_target_snapshot("COMMENT", "action-budget-post"),
     )
     action = decision_to_action(envelope, content)
 
-    assert envelope["target_agent_or_object"] == {
-        "kind": "action",
-        "id": "action-budget-post",
-    }
-    assert action["target"] == {"kind": "action", "id": "action-budget-post"}
-    assert action["parent_action_id"] == "action-budget-post"
+    assert envelope["selected_action"] == "IDLE"
+    assert envelope["decision_status"] == "unavailable"
+    assert envelope["failure_code"] == "DECISION_INVALID_ACTION_TARGET"
+    assert envelope["target_agent_or_object"] is None
+    assert envelope["action_parameters"] == {}
+    assert action["action_type"] == "IDLE"
+    assert action["status"] == "unavailable"
+    assert action["failure_code"] == "DECISION_INVALID_ACTION_TARGET"
 
 
 def test_comment_decision_requires_action_target_and_derives_parent_id():
@@ -395,6 +645,9 @@ def test_comment_decision_requires_action_target_and_derives_parent_id():
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        opportunity_snapshot=_eligible_target_snapshot(
+            "COMMENT", "action-budget-post"
+        ),
     )
 
     action = decision_to_action(envelope, content)
@@ -407,6 +660,9 @@ def test_comment_decision_requires_action_target_and_derives_parent_id():
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        opportunity_snapshot=_eligible_target_snapshot(
+            "COMMENT", "action-budget-post"
+        ),
     )
     assert invalid["decision_status"] == "unavailable"
     assert invalid["failure_code"] == "DECISION_INVALID_ACTION_TARGET"
@@ -419,6 +675,7 @@ def test_comment_decision_requires_action_target_and_derives_parent_id():
         round_number=2,
         fallback_goal="守住东门",
         allowed_action_target_ids=["action-budget-post"],
+        opportunity_snapshot=_eligible_target_snapshot("COMMENT", "invented-action"),
     )
     assert unlisted["decision_status"] == "unavailable"
     assert unlisted["failure_code"] == "DECISION_TARGET_NOT_IN_CATALOG"
@@ -444,6 +701,7 @@ def test_follow_decision_rejects_target_outside_rendered_catalog():
         round_number=2,
         fallback_goal="守住东门",
         allowed_agent_target_ids=["agent-quartermaster"],
+        opportunity_snapshot=_eligible_target_snapshot("FOLLOW", "agent-scout"),
     )
 
     assert unlisted["decision_status"] == "unavailable"
@@ -523,227 +781,27 @@ def test_repetitive_placeholder_does_not_promise_a_future_round():
     assert "replanning" not in en
 
 
-def test_action_affordances_expose_world_facts_without_selecting_an_action():
-    from app.services.simulator import _derive_action_affordances
-    from app.services.social_world import SocialPost, SocialWorldState
-
-    def post(action_id: str, author_id: str, sequence: int) -> SocialPost:
-        return SocialPost(
-            action_id=action_id,
-            author_id=author_id,
-            content=f"evidence from {author_id}",
-            sequence=sequence,
-            round_number=1,
-            author_name_override=None,
-            published_at=None,
-            credibility_hint=None,
-            tags=(),
-            comments=(),
-            reactions=(),
-            activity_events=((sequence, author_id),),
-        )
-
-    state = SocialWorldState(
-        scenario_id="scenario-a",
-        branch_id="branch-a",
-        cutoff_round=1,
-        agent_names={
-            "viewer": "Viewer",
-            "followed": "Followed",
-            "muted": "Muted",
-            "visible": "Visible",
-            "outside": "Outside catalog",
-        },
-        posts=(
-            post("post-self", "viewer", 1),
-            post("post-followed", "followed", 2),
-            post("post-muted", "muted", 3),
-            post("post-visible", "visible", 4),
-            post("post-outside", "outside", 5),
-        ),
-        following={"viewer": frozenset({"followed"})},
-        muted={"viewer": frozenset({"muted"})},
-        recent_searches={},
-        trend_receipts={},
-        refresh_receipts={},
-        last_seen={"viewer": 2},
-        trend_counts={},
-        diagnostics={},
-    )
-    action_targets = tuple(
-        {"id": action_id, "kind": "post", "type": "POST"}
-        for action_id in ("post-self", "post-followed", "post-muted", "post-visible")
-    )
-    agent_targets = tuple(
-        {"id": agent_id, "kind": "agent", "name": agent_id}
-        for agent_id in ("viewer", "followed", "muted", "visible", "catalog-only")
-    )
-    affordances = _derive_action_affordances(
-        agent_id="viewer",
-        social_state=state,
-        prior_transition={
-            "unresolved_questions": ["东门库存还剩多少？"],
-            "new_obstacles": ["现有帖子没有库存数字"],
-            "next_round_pressure": "先补齐证据再决定是否增援",
-            "previous_action_outcomes": [{
-                "action_type": "SEARCH",
-                "status": "verified",
-                "effect_status": "unavailable",
-            }],
-        },
-        projected_action_targets=action_targets,
-        projected_agent_targets=agent_targets,
-        prior_constraints=("Only mute after an observed reliability failure.",),
-    )
-
-    assert "selected_action" not in affordances
-    assert "candidate_actions" not in affordances
-    assert affordances["facts"]["visible_post_count"] == 4
-    # Posts already rendered in the current feed are observed, even when no
-    # durable REFRESH receipt has advanced last_seen yet.
-    assert affordances["facts"]["unseen_post_count"] == 0
-    assert affordances["facts"]["information_gap_count"] >= 1
-    assert affordances["facts"]["prior_failed_or_unobserved_action"] is True
-    actions = affordances["actions"]
-    assert {
-        "FOLLOW",
-        "MUTE",
-        "SEARCH",
-        "TREND",
-        "REFRESH",
-        "REACTION",
-    }.issubset(actions)
-    assert actions["FOLLOW"]["eligible_target_ids"] == ["visible"]
-    assert actions["MUTE"]["eligible_target_ids"] == ["followed", "visible"]
-    assert actions["REACTION"]["eligible_target_ids"] == [
-        "post-followed",
-        "post-visible",
-    ]
-    assert actions["SEARCH"]["available"] is True
-    assert actions["TREND"]["available"] is True
-    assert actions["REFRESH"]["available"] is False
-    assert actions["REFRESH"]["grounded"] is False
-
-    disagreement_only = _derive_action_affordances(
-        agent_id="viewer",
-        social_state=state,
-        prior_transition={"new_obstacles": ["I disagree with Visible's conclusion."]},
-        projected_action_targets=action_targets,
-        projected_agent_targets=agent_targets,
-        prior_constraints=(),
-    )
-    assert disagreement_only["actions"]["MUTE"]["grounded"] is False
-    assert disagreement_only["facts"]["prior_failed_or_unobserved_action"] is False
-
-    failed_prior = _derive_action_affordances(
-        agent_id="viewer",
-        social_state=state,
-        prior_transition={
-            "previous_action_outcomes": [{
-                "action_type": "IDLE",
-                "status": "failed",
-                "effect_status": "failed",
-            }]
-        },
-        projected_action_targets=action_targets,
-        projected_agent_targets=agent_targets,
-        prior_constraints=(),
-    )
-    assert failed_prior["facts"]["prior_failed_or_unobserved_action"] is True
-
-
-def test_refresh_affordance_excludes_posts_already_presented_in_current_feed():
-    from app.services.simulator import _derive_action_affordances
-    from app.services.social_world import (
-        SocialPost,
-        SocialWorldState,
-        render_social_world_context,
-    )
-
-    posts = tuple(
-        SocialPost(
-            action_id=f"post-{sequence}",
-            author_id=f"author-{sequence}",
-            content=f"update-{sequence}",
-            sequence=sequence,
-            round_number=1,
-            author_name_override=None,
-            published_at=None,
-            credibility_hint=None,
-            tags=(),
-            comments=(),
-            reactions=(),
-            activity_events=((sequence, f"author-{sequence}"),),
-        )
-        for sequence in range(1, 5)
-    )
-    state = SocialWorldState(
-        scenario_id="scenario-a",
-        branch_id="branch-a",
-        cutoff_round=1,
-        agent_names={
-            "viewer": "Viewer",
-            **{f"author-{sequence}": f"Author {sequence}" for sequence in range(1, 5)},
-        },
-        posts=posts,
-        following={},
-        muted={},
-        recent_searches={},
-        trend_receipts={},
-        refresh_receipts={},
-        last_seen={"viewer": 0},
-        trend_counts={},
-        diagnostics={},
-    )
-
-    rendered = json.loads(render_social_world_context(state, agent_id="viewer"))
-    presented = {card["content"] for card in rendered["feed"]}
-    assert presented == {"update-1", "update-2", "update-3", "update-4"}
-
-    affordances = _derive_action_affordances(
-        agent_id="viewer",
-        social_state=state,
-        prior_transition={},
-        projected_action_targets=(),
-        projected_agent_targets=(),
-        prior_constraints=(),
-    )
-
-    assert affordances["facts"]["unseen_post_count"] == 0
-    assert affordances["actions"]["REFRESH"]["available"] is False
-    assert affordances["actions"]["REFRESH"]["grounded"] is False
-
-
-def test_decision_prompt_embeds_fact_affordances_and_strict_reaction_contract():
-    affordances = {
-        "facts": {"visible_post_count": 1, "unseen_post_count": 1},
-        "actions": {
-            "REACTION": {
-                "available": True,
-                "eligible_target_ids": ["post-visible"],
-            }
-        },
-    }
+def test_missing_opportunity_snapshot_prompt_is_explicitly_idle_only():
     prompt = simulator_module._build_decision_envelope_prompt(
         "context",
         agent_name="Agent A",
         fallback_goal="Verify the budget",
         action_target_catalog='{"agents":[],"actions":[]}',
-        action_affordances=affordances,
+        opportunity_snapshot=None,
         prior_transition_context="",
         language="English",
     )
 
-    assert "Action affordances" in prompt
-    assert "post-visible" in prompt
-    assert '"candidate_actions":["IDLE","SEARCH"]' in prompt
-    assert (
-        "Allowed candidate action types are IDLE, POST, COMMENT, REACTION, FOLLOW, MUTE, "
-        "SEARCH, TREND, and REFRESH."
-    ) in prompt
-    assert '"candidate_actions":["IDLE","POST","COMMENT"' not in prompt
-    assert '"IDLE|POST|COMMENT|REACTION|FOLLOW|MUTE|SEARCH|TREND|REFRESH"' not in prompt
-    for reaction in (
+    assert '"failure_code":"OPPORTUNITY_SNAPSHOT_UNAVAILABLE"' in prompt
+    assert '"allowed_actions":["IDLE"]' in prompt
+    assert '"candidate_actions":["IDLE"]' in prompt
+    assert "If the snapshot is unavailable, select only IDLE." in prompt
+    assert "information_gap_count" not in prompt
+    assert "prior_failed_or_unobserved_action" not in prompt
+
+
+def test_decision_prompt_embeds_frozen_snapshot_and_strict_reaction_contract():
+    reactions = (
         "LIKE",
         "LOVE",
         "LAUGH",
@@ -752,11 +810,34 @@ def test_decision_prompt_embeds_fact_affordances_and_strict_reaction_contract():
         "ANGRY",
         "SUPPORT",
         "OPPOSE",
-    ):
+    )
+    snapshot = _eligible_target_snapshot(
+        "REACTION",
+        "post-visible",
+        eligible_reaction_kinds_by_target={"post-visible": reactions},
+    )
+    prompt = simulator_module._build_decision_envelope_prompt(
+        "context",
+        agent_name="Agent A",
+        fallback_goal="Verify the budget",
+        action_target_catalog='{"agents":[],"actions":[]}',
+        opportunity_snapshot=snapshot,
+        prior_transition_context="",
+        language="English",
+    )
+
+    assert "Opportunity snapshot" in prompt
+    assert "post-visible" in prompt
+    assert '"social_state_revision":"sha256:' in prompt
+    assert '"allowed_rule_ids":[]' in prompt
+    assert '"candidate_actions":["IDLE","POST","REACTION"]' in prompt
+    assert "The Opportunity Snapshot is the only eligibility source" in prompt
+    assert '"candidate_actions":["IDLE","POST","COMMENT"' not in prompt
+    assert '"IDLE|POST|COMMENT|REACTION|FOLLOW|MUTE|SEARCH|TREND|REFRESH"' not in prompt
+    assert "SEARCH is targetless" in prompt
+    assert '"kind":"action|post|agent|source|query"' not in prompt
+    for reaction in reactions:
         assert reaction in prompt
-    serialized_affordances = json.dumps(affordances).casefold()
-    for control_key in ("quota", "random", "rotate", "forced", "selected_action"):
-        assert control_key not in serialized_affordances
     lowered = prompt.casefold()
     for affirmative_instruction in (
         "choose one platform action",
@@ -767,21 +848,67 @@ def test_decision_prompt_embeds_fact_affordances_and_strict_reaction_contract():
         assert affirmative_instruction not in lowered
 
 
+def test_decision_prompt_preserves_snapshot_larger_than_twelve_thousand_chars():
+    target_ids = tuple(
+        f"post-{index:03d}-{'x' * 140}"
+        for index in range(96)
+    )
+    reactions = {target_id: ("LIKE", "OPPOSE") for target_id in target_ids}
+    snapshot = _opportunity_snapshot_fixture(
+        action_overrides={
+            "COMMENT": {
+                "available": True,
+                "grounded": True,
+                "reason_codes": ("COMMENT_ELIGIBLE_TARGET_AVAILABLE",),
+                "eligible_target_ids": target_ids,
+            },
+            "REACTION": {
+                "available": True,
+                "grounded": True,
+                "reason_codes": ("REACTION_ELIGIBLE_TARGET_AVAILABLE",),
+                "eligible_target_ids": target_ids,
+                "eligible_reaction_kinds_by_target": reactions,
+            },
+        }
+    )
+    expected = simulator_module.opportunity_snapshot_to_prompt_payload_v1(snapshot)
+    serialized = json.dumps(expected, ensure_ascii=False, separators=(",", ":"))
+    assert len(serialized) > 12_000
+
+    prompt = simulator_module._build_decision_envelope_prompt(
+        "context",
+        agent_name="Agent A",
+        fallback_goal="Verify the budget",
+        action_target_catalog='{"agents":[],"actions":[]}',
+        opportunity_snapshot=snapshot,
+        prior_transition_context="",
+        language="English",
+    )
+    marker = "【Opportunity snapshot / UNTRUSTED DATA】\n```text\n"
+    embedded = prompt.split(marker, 1)[1].split("\n```", 1)[0]
+    parsed = json.loads(embedded)
+    tail_id = target_ids[-1]
+
+    assert tail_id in prompt
+    assert parsed == expected
+    assert parsed["actions"]["COMMENT"]["eligible_target_ids"][-1] == tail_id
+    assert parsed["actions"]["REACTION"]["eligible_reaction_kinds_by_target"][
+        tail_id
+    ] == ["LIKE", "OPPOSE"]
+
+
 @pytest.mark.parametrize(
     ("language", "reply_contract", "utility_contract"),
     [
         (
             "Chinese",
             "自然点名回应本身不等于平台 COMMENT",
-            "选择能推进 current_goal 且具有最小、独特、可观察世界状态变化的有依据动作",
+            "目标目录不是资格来源",
         ),
         (
             "English",
             "A natural name-cited reply in speech is not, by itself, a platform COMMENT",
-            (
-                "Select the grounded action with the smallest distinct observable "
-                "world-state effect that advances current_goal"
-            ),
+            "The target catalog is not an eligibility source",
         ),
     ],
     ids=["zh", "en"],
@@ -822,6 +949,7 @@ def test_decision_to_action_rejects_trivial_target_only_realization_phrase():
         branch_id="branch-a",
         round_number=2,
         fallback_goal="守住东门",
+        opportunity_snapshot=_eligible_target_snapshot("FOLLOW", "agent-scout"),
     )
 
     action = decision_to_action(envelope, "我不同意这个判断。")
@@ -852,6 +980,571 @@ def _load_agent_dict(engine, agent_id: str) -> dict:
         agent = session.get(Agent, agent_id)
         assert agent is not None
         return _agent_to_dict(agent)
+
+
+def test_batch_prior_opportunity_receipt_load_coerces_runtime_once(monkeypatch):
+    import app.services.agent_runtime as agent_runtime_module
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Batch receipt load")
+    actor_ids = [
+        _make_agent(engine, scenario_id, name="BatchActorA"),
+        _make_agent(engine, scenario_id, name="BatchActorB"),
+    ]
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.parsed_context = {
+            "agent_runtime_v1": {"version": "1.0", "branches": {}}
+        }
+        session.add(scenario)
+        session.commit()
+    original_coerce = agent_runtime_module._coerce_runtime
+    call_count = 0
+
+    def count_coerce(value):
+        nonlocal call_count
+        call_count += 1
+        return original_coerce(value)
+
+    monkeypatch.setattr(agent_runtime_module, "_coerce_runtime", count_coerce)
+    receipts = agent_runtime_module._load_prior_opportunity_receipts(
+        engine,
+        scenario_id,
+        branch_id,
+        actor_ids,
+        before_round=1,
+    )
+
+    assert call_count == 1
+    assert receipts == dict.fromkeys(actor_ids, None)
+
+
+def test_clone_runtime_history_drops_source_opportunity_receipts():
+    from app.services.agent_runtime import clone_runtime_history
+
+    source_decision = {"opportunity_receipt": {"available": True}}
+    runtime = {
+        "version": "1.0",
+        "branches": {
+            "source": {
+                "rounds": {
+                    "1": {"decisions": [source_decision], "transitions": []}
+                }
+            }
+        },
+    }
+    cloned = clone_runtime_history(
+        runtime,
+        source_branch_id="source",
+        target_branch_id="target",
+        through_round=1,
+    )
+
+    decision = cloned["branches"]["target"]["rounds"]["1"]["decisions"][0]
+    assert "opportunity_receipt" not in decision
+    assert "opportunity_receipt" in source_decision
+
+
+@pytest.mark.asyncio
+async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
+    monkeypatch,
+):
+    import app.services.agent_runtime as agent_runtime_module
+    from app.services.simulation_actions import append_simulation_action
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Snapshot identity")
+    agent_id = _make_agent(engine, scenario_id, name="SnapshotAgent")
+    target_agent_id = _make_agent(engine, scenario_id, name="TargetAgent")
+    prior_round_id = _create_round(engine, branch_id, 1)
+    raw_query_sentinel = "RAWQ7F3A"
+    reaction_map_key = "RAW_REACTION_MAP_KEY_9C2D"
+    repeated = f"评论 {raw_query_sentinel}"
+    _save_message(engine, prior_round_id, agent_id, repeated, "focused", None)
+    target_message_id = _save_message(
+        engine,
+        prior_round_id,
+        target_agent_id,
+        "A durable post that may receive a comment.",
+        "focused",
+        None,
+    )
+    assert target_message_id is not None
+    with Session(engine) as session:
+        target_action = append_simulation_action(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=prior_round_id,
+            round_number=1,
+            agent_id=target_agent_id,
+            message_id=target_message_id,
+            idempotency_key="snapshot-identity-target-post",
+            action={"action_type": "POST", "content": "RAW_POST_CONTENT_4B8E"},
+        )
+        session.commit()
+        sentinel_target_id = target_action.id
+    current_round_id = _create_round(engine, branch_id, 2)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+    agent = _load_agent_dict(engine, agent_id)
+    snapshot = _opportunity_snapshot_fixture(
+        actor_id=agent_id,
+        as_of_round=1,
+        action_overrides={
+            "COMMENT": {
+                "available": True,
+                "grounded": True,
+                "reason_codes": ("COMMENT_ELIGIBLE_TARGET_AVAILABLE",),
+                "eligible_target_ids": (sentinel_target_id,),
+            },
+            "REACTION": {
+                "available": True,
+                "grounded": True,
+                "reason_codes": ("REACTION_ELIGIBLE_TARGET_AVAILABLE",),
+                "eligible_target_ids": (reaction_map_key,),
+                "eligible_reaction_kinds_by_target": {
+                    reaction_map_key: ("LIKE", "LOVE")
+                },
+            },
+        },
+    )
+
+    derive_calls: list[object] = []
+    prompt_snapshots: list[OpportunitySnapshotV1] = []
+    normalize_snapshots: list[OpportunitySnapshotV1 | None] = []
+    persisted_maps: list[object] = []
+    runtime_source_snapshots: list[object] = []
+
+    def derive_once(**kwargs):
+        derive_calls.append(kwargs["social_state"])
+        return {agent_id: snapshot}
+
+    original_prompt_payload = simulator_module.opportunity_snapshot_to_prompt_payload_v1
+
+    def capture_prompt_payload(candidate):
+        prompt_snapshots.append(candidate)
+        return original_prompt_payload(candidate)
+
+    original_normalize = agent_runtime_module.normalize_decision_envelope
+
+    def capture_normalize(*args, **kwargs):
+        normalize_snapshots.append(kwargs.get("opportunity_snapshot"))
+        return original_normalize(*args, **kwargs)
+
+    original_persist = agent_runtime_module.persist_round_runtime_in_session
+
+    def capture_persist(*args, **kwargs):
+        persisted_maps.append(kwargs.get("opportunity_snapshots_by_actor"))
+        runtime_source_snapshots.extend(
+            message.get("opportunity_snapshot") for message in args[4]
+        )
+        return original_persist(*args, **kwargs)
+
+    speech_outputs = [
+        repeated,
+        f"经过重新核对，我用完全不同的公开说明回应该帖子，并附上 {raw_query_sentinel}",
+    ]
+
+    async def fake_decision(*_args, **_kwargs):
+        decision = _decision_envelope_fixture(
+            selected_action="COMMENT",
+            candidate_actions=["IDLE", "COMMENT"],
+            idle_reason=None,
+            action_content=raw_query_sentinel,
+        )
+        decision["target_agent_or_object"] = {
+            "kind": "action",
+            "id": sentinel_target_id,
+        }
+        return {
+            **decision,
+            "emotion": "focused",
+            "diverge": None,
+        }
+
+    async def fake_speech(*_args, **_kwargs):
+        return speech_outputs.pop(0)
+
+    monkeypatch.setattr(simulator_module, "derive_opportunity_snapshots_v1", derive_once)
+    monkeypatch.setattr(
+        simulator_module,
+        "opportunity_snapshot_to_prompt_payload_v1",
+        capture_prompt_payload,
+    )
+    monkeypatch.setattr(
+        agent_runtime_module,
+        "normalize_decision_envelope",
+        capture_normalize,
+    )
+    monkeypatch.setattr(
+        agent_runtime_module,
+        "persist_round_runtime_in_session",
+        capture_persist,
+    )
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_decision)
+    monkeypatch.setattr(simulator_module, "llm_call", fake_speech)
+    monkeypatch.setattr(
+        simulator_module,
+        "retrieve_relevant_memories",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(simulator_module, "store_memory", lambda **_kwargs: None)
+
+    await _gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        current_round_id,
+        2,
+        [agent],
+        "时代: 测试\n地点: 本地\n背景: snapshot identity",
+        "如何核验库存",
+        language="Chinese",
+    )
+
+    assert len(derive_calls) == 1
+    assert len(prompt_snapshots) == 2
+    assert all(candidate is snapshot for candidate in prompt_snapshots)
+    assert len(normalize_snapshots) >= 3
+    assert all(candidate is snapshot for candidate in normalize_snapshots)
+    assert persisted_maps and persisted_maps[0][agent_id] is snapshot
+    assert len(runtime_source_snapshots) == 1
+    assert all(candidate is snapshot for candidate in runtime_source_snapshots)
+    runtime = agent_runtime_module.load_agent_runtime(engine, scenario_id)
+    receipt = runtime["branches"][branch_id]["rounds"]["2"]["decisions"][0][
+        "opportunity_receipt"
+    ]
+    assert set(receipt) == {
+        "version", "as_of_round", "social_state_revision", "domain_state_revision",
+        "allowed_rule_ids", "requested_action_type", "effective_action_type",
+        "available", "grounded", "reason_codes", "eligible_target_count",
+        "selected_target_eligible", "parameter_eligible", "corpus_revision",
+        "query_fingerprint", "search_history_complete", "recent_query_fingerprints",
+        "current_trend_signature", "last_trend_signature", "idle_reason_code",
+        "failure_code", "compatibility_mode",
+    }
+    serialized_receipt = json.dumps(receipt, ensure_ascii=False, sort_keys=True)
+    for raw_ephemeral_value in (
+        sentinel_target_id,
+        raw_query_sentinel,
+        reaction_map_key,
+    ):
+        assert raw_ephemeral_value not in serialized_receipt
+    assert receipt["eligible_target_count"] == 1
+    assert receipt["selected_target_eligible"] is True
+    assert receipt["available"] is receipt["grounded"] is True
+    assert receipt["query_fingerprint"] is None
+    for digest_field in (
+        "social_state_revision",
+        "corpus_revision",
+        "current_trend_signature",
+        "last_trend_signature",
+    ):
+        value = receipt[digest_field]
+        assert value is None or value.startswith("sha256:")
+
+
+def test_missing_snapshot_chain_carries_search_consumption_and_prevents_reopen():
+    from app.services.action_opportunities import (
+        derive_opportunity_snapshots_v1,
+        search_query_fingerprint_v1,
+    )
+    from app.services.agent_runtime import (
+        decision_to_action,
+        get_runtime_branch_round,
+        load_agent_runtime,
+        load_prior_opportunity_receipt,
+        normalize_decision_envelope,
+    )
+    from app.services.social_world import reduce_social_world_state
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Missing snapshot carry")
+    actor_id = _make_agent(engine, scenario_id, name="TrendConsumer")
+    source_ids = [
+        _make_agent(engine, scenario_id, name="TrendSourceA"),
+        _make_agent(engine, scenario_id, name="TrendSourceB"),
+    ]
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+
+    seed_round_id = _create_round(engine, branch_id, 1)
+    seed_contents = [
+        "I now publish the verified eastern inventory report.",
+        "I now publish the verified western inventory report.",
+    ]
+    _save_messages(
+        engine,
+        [
+            {
+                "round_id": seed_round_id,
+                "agent_id": source_id,
+                "content": content,
+                "emotion": "focused",
+                "diverge": None,
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_number": 1,
+                "action": {"type": "POST", "content": content},
+                "decision_envelope": _decision_envelope_fixture(
+                    selected_action="POST",
+                    candidate_actions=["IDLE", "POST"],
+                    idle_reason=None,
+                    action_content=content,
+                ),
+                "idempotency_key": f"missing-snapshot:seed:{index}",
+            }
+            for index, (source_id, content) in enumerate(
+                zip(source_ids, seed_contents),
+                1,
+            )
+        ],
+    )
+
+    with Session(engine) as session:
+        pre_trend_state = reduce_social_world_state(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            cutoff_round=1,
+        )
+    trend_snapshot = derive_opportunity_snapshots_v1(
+        social_state=pre_trend_state,
+        target_catalogs_by_actor={actor_id: {"actions": [], "agents": []}},
+        prior_receipts_by_actor={actor_id: None},
+    )[actor_id]
+    assert trend_snapshot.actions["TREND"]["available"] is True
+
+    trend_round_id = _create_round(engine, branch_id, 2)
+    trend_decision = _decision_envelope_fixture(
+        selected_action="TREND",
+        candidate_actions=["IDLE", "TREND"],
+        idle_reason=None,
+    )
+    trend_decision["action_parameters"] = {
+        "realization_phrase": "I inspect the current verified activity trend now."
+    }
+    _save_messages(
+        engine,
+        [{
+            "round_id": trend_round_id,
+            "agent_id": actor_id,
+            "content": "I inspect the current verified activity trend now.",
+            "emotion": "focused",
+            "diverge": None,
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_number": 2,
+            "action": {"type": "TREND"},
+            "decision_envelope": trend_decision,
+            "idempotency_key": "missing-snapshot:trend",
+        }],
+        opportunity_snapshots_by_actor={actor_id: trend_snapshot},
+        compatibility_mode="live",
+    )
+    trend_receipt = get_runtime_branch_round(
+        load_agent_runtime(engine, scenario_id), branch_id, 2
+    )["decisions"][0]["opportunity_receipt"]
+    assert trend_receipt["last_trend_signature"] == trend_receipt[
+        "current_trend_signature"
+    ]
+    assert trend_receipt["last_trend_signature"] is not None
+
+    with Session(engine) as session:
+        pre_search_state = reduce_social_world_state(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            cutoff_round=2,
+        )
+    search_snapshot = derive_opportunity_snapshots_v1(
+        social_state=pre_search_state,
+        target_catalogs_by_actor={actor_id: {"actions": [], "agents": []}},
+        prior_receipts_by_actor={actor_id: trend_receipt},
+    )[actor_id]
+    search_opportunity = search_snapshot.actions["SEARCH"]
+    assert search_opportunity["available"] is True
+    assert search_opportunity["search_history_complete"] is True
+    assert search_opportunity["corpus_revision"]
+
+    search_round_id = _create_round(engine, branch_id, 3)
+    search_decision = _decision_envelope_fixture(
+        selected_action="SEARCH",
+        candidate_actions=["IDLE", "SEARCH"],
+        idle_reason=None,
+        action_content="alpha",
+    )
+    _save_messages(
+        engine,
+        [{
+            "round_id": search_round_id,
+            "agent_id": actor_id,
+            "content": "I search for alpha now.",
+            "emotion": "focused",
+            "diverge": None,
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_number": 3,
+            "action": {"type": "SEARCH", "content": "alpha"},
+            "decision_envelope": search_decision,
+            "idempotency_key": "missing-snapshot:search-alpha",
+        }],
+        opportunity_snapshots_by_actor={actor_id: search_snapshot},
+        compatibility_mode="live",
+    )
+    search_receipt = get_runtime_branch_round(
+        load_agent_runtime(engine, scenario_id), branch_id, 3
+    )["decisions"][0]["opportunity_receipt"]
+    corpus_revision = search_receipt["corpus_revision"]
+    assert corpus_revision
+    fingerprint = search_query_fingerprint_v1(
+        "alpha",
+        corpus_revision=corpus_revision,
+    )
+    assert fingerprint
+    assert search_receipt["query_fingerprint"] == fingerprint
+    assert fingerprint in search_receipt["recent_query_fingerprints"]
+    assert search_receipt["search_history_complete"] is True
+    assert search_receipt["last_trend_signature"] == trend_receipt[
+        "last_trend_signature"
+    ]
+
+    missing_receipts = []
+    for round_number in (4, 5):
+        missing_round_id = _create_round(engine, branch_id, round_number)
+        _save_messages(
+            engine,
+            [{
+                "round_id": missing_round_id,
+                "agent_id": actor_id,
+                "content": (
+                    "I hold while the current opportunity snapshot is unavailable."
+                ),
+                "emotion": "calm",
+                "diverge": None,
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_number": round_number,
+                "action": {"type": "IDLE"},
+                "decision_envelope": _decision_envelope_fixture(
+                    candidate_actions=["IDLE"],
+                    idle_reason="The current opportunity snapshot is unavailable.",
+                ),
+                "idempotency_key": f"missing-snapshot:idle:{round_number}",
+            }],
+            opportunity_snapshots_by_actor={actor_id: None},
+            compatibility_mode="live",
+        )
+        missing_receipt = get_runtime_branch_round(
+            load_agent_runtime(engine, scenario_id), branch_id, round_number
+        )["decisions"][0]["opportunity_receipt"]
+        assert fingerprint
+        assert fingerprint in missing_receipt["recent_query_fingerprints"]
+        assert missing_receipt["recent_query_fingerprints"] == search_receipt[
+            "recent_query_fingerprints"
+        ]
+        assert missing_receipt["corpus_revision"] == corpus_revision
+        assert missing_receipt["search_history_complete"] is True
+        assert missing_receipt["last_trend_signature"] == search_receipt[
+            "last_trend_signature"
+        ]
+        missing_receipts.append(missing_receipt)
+
+    prior_receipt = load_prior_opportunity_receipt(
+        engine,
+        scenario_id,
+        branch_id,
+        actor_id,
+        before_round=6,
+    )
+    assert prior_receipt == missing_receipts[-1]
+    with Session(engine) as session:
+        post_missing_state = reduce_social_world_state(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            cutoff_round=5,
+        )
+    retry_snapshot = derive_opportunity_snapshots_v1(
+        social_state=post_missing_state,
+        target_catalogs_by_actor={actor_id: {"actions": [], "agents": []}},
+        prior_receipts_by_actor={actor_id: prior_receipt},
+    )[actor_id]
+    retry_search = retry_snapshot.actions["SEARCH"]
+    assert retry_search["corpus_revision"] == corpus_revision
+    assert retry_search["search_history_complete"] is True
+    assert fingerprint in retry_search["recent_query_fingerprints"]
+    assert retry_search["available"] is True
+    assert retry_snapshot.actions["TREND"]["available"] is False
+    assert retry_snapshot.actions["TREND"]["reason_codes"] == (
+        "TREND_NO_NEW_ACTIVITY",
+    )
+
+    retry_decision = _decision_envelope_fixture(
+        selected_action="SEARCH",
+        candidate_actions=["IDLE", "SEARCH"],
+        idle_reason=None,
+        action_content="alpha",
+    )
+    normalized_retry = normalize_decision_envelope(
+        retry_decision,
+        agent_id=actor_id,
+        branch_id=branch_id,
+        round_number=6,
+        fallback_goal="Confirm the eastern inventory evidence.",
+        opportunity_snapshot=retry_snapshot,
+        compatibility_mode="live",
+    )
+    assert normalized_retry["selected_action"] == "IDLE"
+    assert normalized_retry["decision_status"] == "unavailable"
+    assert normalized_retry["failure_code"] == "DECISION_SEARCH_NO_OP"
+
+    retry_speech = "I search for alpha now."
+    retry_action = decision_to_action(normalized_retry, retry_speech)
+    assert retry_action["action_type"] == "IDLE"
+    assert retry_action["status"] == "unavailable"
+    assert retry_action["failure_code"] == "DECISION_SEARCH_NO_OP"
+    retry_round_id = _create_round(engine, branch_id, 6)
+    _save_messages(
+        engine,
+        [{
+            "round_id": retry_round_id,
+            "agent_id": actor_id,
+            "content": retry_speech,
+            "emotion": "focused",
+            "diverge": None,
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_number": 6,
+            "action": retry_action,
+            "decision_envelope": retry_decision,
+            "idempotency_key": "missing-snapshot:retry-alpha",
+        }],
+        opportunity_snapshots_by_actor={actor_id: retry_snapshot},
+        compatibility_mode="live",
+    )
+    persisted_retry = get_runtime_branch_round(
+        load_agent_runtime(engine, scenario_id), branch_id, 6
+    )["decisions"][0]
+    assert persisted_retry["decision_status"] == "unavailable"
+    assert persisted_retry["failure_code"] == "DECISION_SEARCH_NO_OP"
+    retry_receipt = persisted_retry["opportunity_receipt"]
+    assert retry_receipt["requested_action_type"] == "SEARCH"
+    assert retry_receipt["effective_action_type"] == "IDLE"
+    assert retry_receipt["parameter_eligible"] is False
+    assert fingerprint in retry_receipt["recent_query_fingerprints"]
 
 
 def test_save_messages_rolls_back_message_and_action_when_runtime_write_fails(monkeypatch):
@@ -1306,11 +1999,11 @@ def test_zero_result_search_is_verified_feedback_but_requires_semantic_replan():
     ["POST", "COMMENT"],
     ids=["post", "comment"],
 )
-def test_idle_consumes_generic_action_feedback_and_carries_decision_gap_to_search(
+def test_idle_carries_decision_gap_without_controlling_search_opportunity(
     selected_action,
 ):
+    from app.services.action_opportunities import derive_opportunity_snapshots_v1
     from app.services.agent_runtime import get_runtime_branch_round, load_agent_runtime
-    from app.services.simulator import _derive_action_affordances
     from app.services.social_world import reduce_social_world_state
 
     engine = get_engine()
@@ -1449,16 +2142,25 @@ def test_idle_consumes_generic_action_feedback_and_carries_decision_gap_to_searc
             branch_id=branch_id,
             cutoff_round=idle_round_number,
         )
-    affordances = _derive_action_affordances(
+    projected_catalog = simulator_module._project_action_target_catalog(
+        simulator_module._load_action_target_catalog_payload(
+            engine,
+            scenario_id,
+            branch_id,
+            cutoff_round=idle_round_number,
+        ),
         agent_id=actor_id,
-        social_state=social_state,
-        prior_transition=idle_transition,
-        projected_action_targets=(),
-        projected_agent_targets=(),
-        prior_constraints=idle_decision["constraints"],
     )
-    assert affordances["actions"]["SEARCH"]["available"] is True
-    assert affordances["actions"]["SEARCH"]["grounded"] is True
+    snapshot = derive_opportunity_snapshots_v1(
+        social_state=social_state,
+        target_catalogs_by_actor={actor_id: projected_catalog},
+        prior_receipts_by_actor={actor_id: None},
+    )[actor_id]
+    assert snapshot.actions["SEARCH"]["available"] is True
+    assert snapshot.actions["SEARCH"]["grounded"] is True
+    parameters = inspect.signature(derive_opportunity_snapshots_v1).parameters
+    assert "prior_transition" not in parameters
+    assert "prior_constraints" not in parameters
 
 
 def test_unavailable_action_immediately_requires_post_action_replan():
@@ -5509,7 +6211,7 @@ class TestGatherHierarchicalMessages:
                 }
             ]
 
-        def _capture_messages(_engine, rows):
+        def _capture_messages(_engine, rows, **_kwargs):
             saved_batches.append(list(rows))
             timeline.append("save_batch")
             return ["worker-message-1", "worker-message-2"]
@@ -5591,7 +6293,7 @@ class TestGatherHierarchicalMessages:
         async def _push(event: dict):
             pushed_events.append(event)
 
-        def _capture_messages(_engine, rows):
+        def _capture_messages(_engine, rows, **_kwargs):
             saved_rows.extend(rows)
             return ["worker-message-id"]
 
@@ -6898,13 +7600,21 @@ class TestGatherAgentMessages:
         assert "alpha-prior-social-post" in raw_prompts[0]
         assert "先选择一个此刻真正有用的平台动作" not in raw_prompts[0]
         assert "Choose the one platform action" not in raw_prompts[0]
+        assert '"POST":{"available":true,"grounded":true' in metadata_prompts[0]
+        for legacy_eligibility_field in (
+            "information_gap_count",
+            "prior_failed_or_unobserved_action",
+            "waiting_for_new_information",
+            "reliability_evidence_observed",
+            "reliability_constraint_present",
+        ):
+            assert legacy_eligibility_field not in metadata_prompts[0]
         if language == "Chinese":
             assert "绝不能复制目标目录正文或其他角色内容" in metadata_prompts[0]
             assert "不能只返回一个无意义单字" in metadata_prompts[0]
             assert "按原文证据分类，不设动作配额或默认类型" in metadata_prompts[0]
-            assert "POST/SEARCH/TREND/REFRESH/IDLE 不因目录无匹配项而失效" in (
-                metadata_prompts[0]
-            )
+            assert "目标目录不是资格来源" in metadata_prompts[0]
+            assert "Opportunity Snapshot 是本轮唯一资格来源" in metadata_prompts[0]
             assert (
                 "咱们现在就刷屏把这补贴削减逼停，让免费公交顶多试半年就回滚"
                 in metadata_prompts[0]
@@ -6934,7 +7644,10 @@ class TestGatherAgentMessages:
             assert "never copy target-catalog, another character's text" in metadata_prompts[0]
             assert "meaningless single character" in metadata_prompts[0]
             assert "no action quota or default type" in metadata_prompts[0]
-            assert "POST/SEARCH/TREND/REFRESH/IDLE remain" in metadata_prompts[0]
+            assert "The target catalog is not an eligibility source" in metadata_prompts[0]
+            assert "The Opportunity Snapshot is the only eligibility source" in (
+                metadata_prompts[0]
+            )
             assert "Let us post everywhere now to stop these subsidy cuts" in metadata_prompts[0]
             assert "Sun says we should post everywhere now, but I disagree" in metadata_prompts[0]
             assert "If this fails I will post" in metadata_prompts[0]

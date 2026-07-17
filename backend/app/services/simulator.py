@@ -12,7 +12,7 @@ import re
 import time
 import unicodedata
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from time import monotonic
@@ -39,6 +39,12 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.action_opportunities import (
+    CompatibilityModeV1,
+    OpportunitySnapshotV1,
+    derive_opportunity_snapshots_v1,
+    opportunity_snapshot_to_prompt_payload_v1,
+)
 from app.services.agent_message_metadata import (
     encode_metadata_unavailable_emotion,
     message_metadata_failure_code,
@@ -4401,350 +4407,13 @@ def _append_agent_debate_coherence_guidance(
     return f"{prompt}\n\n{guidance}"
 
 
-def _derive_action_affordances(
-    *,
-    agent_id: str,
-    social_state: object | None,
-    prior_transition: object,
-    projected_action_targets: Sequence[object],
-    projected_agent_targets: Sequence[object],
-    prior_constraints: Sequence[object] = (),
-) -> dict[str, Any]:
-    """Derive factual action affordances without choosing or ranking an action."""
-
-    def text_items(value: object) -> list[str]:
-        if isinstance(value, str):
-            cleaned = value.strip()
-            return [cleaned] if cleaned else []
-        if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
-            return []
-        return [
-            cleaned
-            for item in value
-            if (cleaned := str(item or "").strip())
-        ][:16]
-
-    def projected_ids(
-        values: Sequence[object],
-        *,
-        allowed_kinds: frozenset[str],
-    ) -> list[str]:
-        result: list[str] = []
-        for value in values:
-            if not isinstance(value, Mapping):
-                continue
-            kind = str(value.get("kind") or value.get("type") or "").lower().strip()
-            target_id = str(value.get("id") or "").strip()[:160]
-            if target_id and kind in allowed_kinds and target_id not in result:
-                result.append(target_id)
-        return result
-
-    normalized_agent_id = str(agent_id or "").strip()
-    transition = prior_transition if isinstance(prior_transition, Mapping) else {}
-    state_available = social_state is not None
-    muted_map = getattr(social_state, "muted", {}) if state_available else {}
-    following_map = getattr(social_state, "following", {}) if state_available else {}
-    muted = {
-        str(value)
-        for value in (
-            muted_map.get(normalized_agent_id, ()) if isinstance(muted_map, Mapping) else ()
-        )
-        if str(value)
-    }
-    following = {
-        str(value)
-        for value in (
-            following_map.get(normalized_agent_id, ())
-            if isinstance(following_map, Mapping)
-            else ()
-        )
-        if str(value)
-    }
-    posts = tuple(getattr(social_state, "posts", ()) or ()) if state_available else ()
-    visible_posts = tuple(
-        post
-        for post in posts
-        if str(getattr(post, "author_id", "") or "") not in muted
-    )
-    last_seen_map = getattr(social_state, "last_seen", {}) if state_available else {}
-    try:
-        last_seen_sequence = int(
-            last_seen_map.get(normalized_agent_id, 0)
-            if isinstance(last_seen_map, Mapping)
-            else 0
-        )
-    except (TypeError, ValueError):
-        last_seen_sequence = 0
-    latest_refreshes = (
-        getattr(social_state, "refresh_receipts", {}).get(normalized_agent_id, ())
-        if state_available
-        else ()
-    )
-
-    def latest_visible_activity(post: object) -> int:
-        return max(
-            (
-                int(sequence)
-                for sequence, actor_id in tuple(
-                    getattr(post, "activity_events", ()) or ()
-                )
-                if str(actor_id) not in muted
-            ),
-            default=int(getattr(post, "sequence", 0) or 0),
-        )
-
-    if latest_refreshes:
-        visible_post_ids = {
-            str(getattr(post, "action_id", "") or "") for post in visible_posts
-        }
-        current_feed_ids = {
-            str(post_id)
-            for post_id in latest_refreshes[-1].post_ids[:4]
-            if str(post_id) in visible_post_ids
-        }
-    else:
-        current_feed_ids = {
-            str(getattr(post, "action_id", "") or "")
-            for post in sorted(
-                visible_posts,
-                key=lambda post: (
-                    str(getattr(post, "author_id", "") or "") in following,
-                    latest_visible_activity(post),
-                    int(getattr(post, "sequence", 0) or 0),
-                    str(getattr(post, "action_id", "") or ""),
-                ),
-                reverse=True,
-            )[:4]
-        }
-    unseen_post_count = sum(
-        int(getattr(post, "sequence", 0) or 0) > last_seen_sequence
-        and str(getattr(post, "action_id", "") or "") not in current_feed_ids
-        for post in visible_posts
-    )
-    visible_activity_count = sum(
-        max(1, len(tuple(getattr(post, "activity_events", ()) or ())))
-        for post in visible_posts
-    )
-
-    visible_author_ids = {
-        author_id
-        for post in visible_posts
-        if (author_id := str(getattr(post, "author_id", "") or ""))
-        and author_id != normalized_agent_id
-    }
-    visible_action_authors: dict[str, str] = {}
-    for post in visible_posts:
-        post_author = str(getattr(post, "author_id", "") or "")
-        post_id = str(getattr(post, "action_id", "") or "")
-        if post_id and post_author and post_author != normalized_agent_id:
-            visible_action_authors[post_id] = post_author
-        for collection_name in ("comments", "reactions"):
-            for item in tuple(getattr(post, collection_name, ()) or ()):
-                item_author = str(getattr(item, "author_id", "") or "")
-                item_id = str(getattr(item, "action_id", "") or "")
-                if (
-                    item_id
-                    and item_author
-                    and item_author != normalized_agent_id
-                    and item_author not in muted
-                ):
-                    visible_action_authors[item_id] = item_author
-
-    catalog_action_ids = projected_ids(
-        projected_action_targets,
-        allowed_kinds=frozenset({"action", "post"}),
-    )
-    catalog_agent_ids = projected_ids(
-        projected_agent_targets,
-        allowed_kinds=frozenset({"agent", "source"}),
-    )
-    eligible_action_ids = [
-        target_id
-        for target_id in catalog_action_ids
-        if target_id in visible_action_authors
-    ]
-    visible_catalog_agents = [
-        target_id
-        for target_id in catalog_agent_ids
-        if target_id in visible_author_ids
-        and target_id != normalized_agent_id
-        and target_id not in muted
-    ]
-    eligible_follow_ids = [
-        target_id for target_id in visible_catalog_agents if target_id not in following
-    ]
-    eligible_mute_ids = list(visible_catalog_agents)
-
-    unresolved_questions = text_items(transition.get("unresolved_questions"))
-    new_obstacles = text_items(transition.get("new_obstacles"))
-    information_gaps = [*unresolved_questions, *new_obstacles]
-    raw_prior_outcomes = transition.get("previous_action_outcomes")
-    prior_outcomes = (
-        raw_prior_outcomes
-        if isinstance(raw_prior_outcomes, Sequence)
-        and not isinstance(raw_prior_outcomes, (str, bytes, bytearray))
-        else ()
-    )
-    prior_failed_or_unobserved_action = any(
-        isinstance(outcome, Mapping)
-        and (
-            str(outcome.get("status") or "").lower() != "verified"
-            or (
-                str(outcome.get("action_type") or "").upper() != "IDLE"
-                and str(outcome.get("effect_status") or "").lower() != "verified"
-            )
-        )
-        for outcome in prior_outcomes
-    )
-    evidence_text = " ".join(
-        [
-            *text_items(transition.get("new_information")),
-            *new_obstacles,
-            *text_items(transition.get("world_state_changes")),
-        ]
-    ).casefold()
-    constraint_text = " ".join(text_items(prior_constraints)).casefold()
-    reliability_markers = (
-        "noise",
-        "spam",
-        "junk",
-        "unreliable",
-        "reliability",
-        "misinformation",
-        "disinformation",
-        "harassment",
-        "credibility",
-        "untrustworthy",
-        "噪声",
-        "垃圾",
-        "刷屏",
-        "不可靠",
-        "可靠性",
-        "失实",
-        "谣言",
-        "骚扰",
-        "可信度",
-        "低可信",
-    )
-    has_reliability_evidence = any(marker in evidence_text for marker in reliability_markers)
-    has_reliability_constraint = any(
-        marker in constraint_text for marker in reliability_markers
-    )
-    mute_grounded = bool(
-        eligible_mute_ids and has_reliability_evidence and has_reliability_constraint
-    )
-    waiting_text = " ".join(
-        [
-            str(transition.get("next_round_pressure") or ""),
-            *text_items(transition.get("commitments")),
-        ]
-    ).casefold()
-    waiting_markers = (
-        "wait",
-        "await",
-        "new information",
-        "new update",
-        "new post",
-        "等待",
-        "新信息",
-        "新消息",
-        "新动态",
-        "更新",
-    )
-    waiting_for_new_information = any(marker in waiting_text for marker in waiting_markers)
-    search_available = bool(state_available and visible_posts and information_gaps)
-    trend_available = bool(
-        state_available
-        and (len(visible_posts) >= 2 or visible_activity_count > len(visible_posts))
-    )
-    refresh_available = bool(
-        state_available and (unseen_post_count > 0 or waiting_for_new_information)
-    )
-
-    return {
-        "facts": {
-            "social_state_available": state_available,
-            "visible_post_count": len(visible_posts),
-            "visible_activity_count": visible_activity_count,
-            "unseen_post_count": unseen_post_count,
-            "presented_feed_post_count": len(current_feed_ids),
-            "last_seen_sequence": last_seen_sequence,
-            "information_gap_count": len(information_gaps),
-            "prior_failed_or_unobserved_action": prior_failed_or_unobserved_action,
-            "waiting_for_new_information": waiting_for_new_information,
-            "reliability_evidence_observed": has_reliability_evidence,
-            "reliability_constraint_present": has_reliability_constraint,
-        },
-        "actions": {
-            "IDLE": {
-                "available": True,
-                "grounded": True,
-                "eligible_target_ids": [],
-                "expected_effect": "No external world change is claimed.",
-            },
-            "POST": {
-                "available": True,
-                "grounded": True,
-                "eligible_target_ids": [],
-                "expected_effect": "Publish a new public proposal, fact, warning, or question.",
-            },
-            "COMMENT": {
-                "available": bool(eligible_action_ids),
-                "grounded": bool(eligible_action_ids),
-                "eligible_target_ids": eligible_action_ids,
-                "expected_effect": "Add a substantive reply to one visible target.",
-            },
-            "REACTION": {
-                "available": bool(eligible_action_ids),
-                "grounded": bool(eligible_action_ids),
-                "eligible_target_ids": eligible_action_ids,
-                "expected_effect": "Attach a lightweight stance signal to one visible target.",
-            },
-            "FOLLOW": {
-                "available": bool(eligible_follow_ids),
-                "grounded": bool(eligible_follow_ids),
-                "eligible_target_ids": eligible_follow_ids,
-                "expected_effect": "Prioritize future updates from one visible author.",
-            },
-            "MUTE": {
-                "available": mute_grounded,
-                "grounded": mute_grounded,
-                "eligible_target_ids": eligible_mute_ids,
-                "expected_effect": (
-                    "Filter a source grounded in observed reliability or noise evidence."
-                ),
-            },
-            "SEARCH": {
-                "available": search_available,
-                "grounded": search_available,
-                "eligible_target_ids": [],
-                "expected_effect": (
-                    "Query visible evidence for a specific unresolved information gap."
-                ),
-            },
-            "TREND": {
-                "available": trend_available,
-                "grounded": trend_available,
-                "eligible_target_ids": [],
-                "expected_effect": "Compare replay-visible activity and relative salience.",
-            },
-            "REFRESH": {
-                "available": refresh_available,
-                "grounded": refresh_available,
-                "eligible_target_ids": [],
-                "expected_effect": "Record a refresh for unseen posts or awaited new information.",
-            },
-        },
-    }
-
-
 def _build_decision_envelope_prompt(
     context: str,
     *,
     agent_name: str,
     fallback_goal: str,
     action_target_catalog: str,
-    action_affordances: object | None = None,
+    opportunity_snapshot: OpportunitySnapshotV1 | None = None,
     prior_transition_context: str,
     language: str,
     replan_reason: str = "",
@@ -4758,14 +4427,16 @@ def _build_decision_envelope_prompt(
     )
     constraints = (
         "只写事实依据和决策字段；不得输出思维链、逐步推理、thought、reasoning、"
-        "analysis 或 chain_of_thought。IDLE 是合法选择，但必须说明 idle_reason。"
+        "analysis 或 chain_of_thought。IDLE 是合法选择，但必须说明 idle_reason 和"
+        "允许的 idle_reason_code。"
         "不得为动作覆盖率而轮换、随机或强制选择动作。非 IDLE 动作必须是角色本轮"
         "确实要执行、并可由随后发言逐字落实的具体动作。"
         if is_chinese
         else (
             "Write only factual bases and decision fields. Do not output chain-of-thought, "
             "step-by-step reasoning, thought, reasoning, analysis, or chain_of_thought. "
-            "IDLE is valid but requires idle_reason. Never rotate, randomize, or force actions "
+            "IDLE is valid but requires idle_reason and an allowed idle_reason_code. Never "
+            "rotate, randomize, or force actions "
             "for coverage. A non-IDLE action must be a concrete act the character will really "
             "perform this turn and the later speech can realize verbatim."
         )
@@ -4773,14 +4444,16 @@ def _build_decision_envelope_prompt(
     action_guidance = (
         "按当前事实证据和计划发言分类，按原文证据分类，不设动作配额或默认类型。"
         "绝不能复制目标目录正文或其他角色内容作为 content 或 realization_phrase，"
-        "不能只返回一个无意义单字。POST/SEARCH/TREND/REFRESH/IDLE 不因目录无匹配项而失效；"
-        "需要目标的动作只能复制目录中上一轮可见的合法 ID。POST/COMMENT/SEARCH 的 content "
+        "不能只返回一个无意义单字。目标目录不是资格来源；非 IDLE 动作只有在 Opportunity "
+        "Snapshot 中 available 和 grounded 同时为 true 时才可选择。需要目标的动作只能复制"
+        "快照 eligible_target_ids 与目录交集中的合法 ID。POST/COMMENT/SEARCH 的 content "
         "必须是随后发言会逐字包含的具体内容；REACTION/FOLLOW/MUTE/TREND/REFRESH 的 content "
         "必须为空，并用 realization_phrase 给出随后发言会逐字包含的行动短语。COMMENT/REACTION "
         "只能指向目录中上一轮可见的 post/action；target_agent_or_object 是唯一目标字段："
         "COMMENT/REACTION 必须复制 actions 中的 action/post UUID，绝不能填人物姓名或 agent ID；"
         "系统会把该 UUID 同时作为 parent_action_id。FOLLOW/MUTE 只能复制其他 agent/source ID；"
-        "POST/TREND/REFRESH/IDLE 不得带 target。自然点名回应本身不等于平台 COMMENT；"
+        "POST/SEARCH/TREND/REFRESH/IDLE 不得带 target；SEARCH 查询只放在 "
+        "action_parameters.content。自然点名回应本身不等于平台 COMMENT；"
         "只有确实要向一个可见 action/post 写入公开回复才是 COMMENT。“刷新认知”不属于 "
         "REFRESH。不要求原文使用特定平台术语，但必须表达此刻真实执行。"
         "正例：“咱们现在就刷屏把这补贴削减逼停，让免费公交顶多试半年就回滚”。"
@@ -4791,16 +4464,19 @@ def _build_decision_envelope_prompt(
             "Classify from current factual evidence and the planned utterance, with no action "
             "quota or default type; never copy target-catalog, another character's text into "
             "content or realization_phrase, and never return a meaningless single character. "
-            "POST/SEARCH/TREND/REFRESH/IDLE remain valid without a catalog match; actions that "
-            "require targets may copy only prior-round visible listed post/action or agent/source "
-            "IDs. POST/COMMENT/SEARCH content must be concrete text that the later speech includes "
+            "The target catalog is not an eligibility source. A non-IDLE action may be selected "
+            "only when its Opportunity Snapshot entry has both available and grounded set to "
+            "true. Targeted actions may copy only IDs in the intersection of the snapshot's "
+            "eligible_target_ids and the prior-round catalog. POST/COMMENT/SEARCH content must be "
+            "concrete text that the later speech includes "
             "verbatim. REACTION/FOLLOW/MUTE/TREND/REFRESH require null content and a "
             "realization_phrase that the later speech includes verbatim. COMMENT/REACTION may "
             "target only a prior-round visible listed post/action; FOLLOW/MUTE may target only "
             "another agent/source. target_agent_or_object is the only target field. For "
             "COMMENT/REACTION, target_agent_or_object must copy an action/post UUID from actions, "
             "never a person name or agent ID; that UUID also becomes parent_action_id. "
-            "POST/TREND/REFRESH/IDLE require a null target. A natural name-cited reply in speech "
+            "POST/SEARCH/TREND/REFRESH/IDLE require a null target; a SEARCH query belongs only "
+            "in action_parameters.content. A natural name-cited reply in speech "
             "is not, by itself, a platform COMMENT; COMMENT requires actually writing a public "
             "reply to one visible action/post. \"refresh my understanding\" is not "
             "REFRESH. The utterance need not use any special platform phrase, but it must express "
@@ -4819,59 +4495,66 @@ def _build_decision_envelope_prompt(
             "ANGRY, SUPPORT, or OPPOSE."
         )
     )
-    affordance_guidance = (
-        "动作可供性只描述上一轮可重放事实，不是动作命令，也不是待覆盖清单。candidate_actions "
-        "只允许 IDLE、POST、COMMENT、REACTION、FOLLOW、MUTE、SEARCH、TREND、REFRESH；"
-        "JSON schema 中的 [\"IDLE\",\"SEARCH\"] 只是独立字符串元素和有依据子集的格式示例，"
-        "不要求包含 SEARCH。除始终合法的 IDLE 外，只有对应动作的 available 和 grounded 都为 "
-        "true，并且 decision_basis 同时关联 current_goal、一个可见观察事实或具体未决问题/"
-        "障碍、以及 expected_effect 时，才把动作列入 candidate_actions；available 或 grounded "
-        "都不代表必须选择。REACTION "
-        "只表达对合法可见目标的轻量立场；FOLLOW 只在该可见"
-        "作者的后续更新能推进目标时使用；MUTE 必须同时有已观察到的噪声、垃圾信息或可靠性"
-        "问题以及匹配约束，意见不同本身不成立；SEARCH 必须对应具体信息缺口；TREND 必须"
-        "需要比较可见活动；REFRESH 必须有当前 feed 尚未展示的未读帖子或明确等待新信息。"
-        "选择能推进 current_goal 且具有最小、独特、可观察世界状态变化的有依据动作；"
-        "如果发言本身已足够且不需要新增外部状态，选择 IDLE。IDLE 始终合法。"
+    idle_code_contract = (
+        "模型选择 IDLE 时，idle_reason_code 必须且只能是 IDLE_NO_ACTION_NEEDED、"
+        "IDLE_INSUFFICIENT_EVIDENCE、IDLE_WAITING_FOR_NEW_INFORMATION、"
+        "IDLE_CONSTRAINT_BLOCKED、IDLE_STRATEGIC_HOLD 之一。"
         if is_chinese
         else (
-            "Action affordances describe prior-round replayable facts only; they are not commands "
-            "or a coverage checklist. Allowed candidate action types are IDLE, POST, COMMENT, "
-            "REACTION, FOLLOW, MUTE, SEARCH, TREND, and REFRESH. The JSON schema's "
-            '["IDLE","SEARCH"] is only a format example of independent strings and a grounded '
-            "subset; it does not require SEARCH. Except for always-valid IDLE, include an action "
-            "in "
-            "candidate_actions only when its available and grounded values are both true and its "
-            "decision_basis links the current_goal, one visible observation or specific unresolved "
-            "question/obstacle, and the expected_effect. available or grounded never means the "
-            "action must be selected. REACTION is only a lightweight stance on a listed visible "
-            "target; FOLLOW requires future updates from a visible author to serve the goal; MUTE "
-            "requires both observed noise, spam, or reliability evidence and a matching "
-            "constraint, "
-            "while disagreement alone is insufficient; SEARCH needs a specific information gap; "
-            "TREND needs a comparison of visible activity; REFRESH needs unread posts not already "
-            "presented in the current feed or an explicit wait for new information. Select the "
-            "grounded action with the smallest distinct observable world-state effect that "
-            "advances current_goal; choose IDLE when the utterance itself is sufficient and no "
-            "external state change is needed. IDLE always remains valid."
+            "When the model selects IDLE, idle_reason_code must be exactly one of "
+            "IDLE_NO_ACTION_NEEDED, IDLE_INSUFFICIENT_EVIDENCE, "
+            "IDLE_WAITING_FOR_NEW_INFORMATION, IDLE_CONSTRAINT_BLOCKED, or "
+            "IDLE_STRATEGIC_HOLD."
         )
     )
-    affordance_section = ""
-    if action_affordances is not None:
-        try:
-            serialized_affordances = json.dumps(
-                action_affordances if isinstance(action_affordances, Mapping) else {},
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        except (TypeError, ValueError):
-            serialized_affordances = "{}"
-        affordance_section = format_untrusted_text_block(
-            "行动可供性事实" if is_chinese else "Action affordances",
-            serialized_affordances,
-            max_chars=4_800,
+    affordance_guidance = (
+        "Opportunity Snapshot 是本轮唯一资格来源，只描述截至上一轮的可重放事实，不是动作命令"
+        "或待覆盖清单。candidate_actions 必须与严格 JSON 模板一致：IDLE 在首位，随后按快照顺序"
+        "列出每个 available 和 grounded 同时为 true 的动作。available 不代表必须选择。目标和 "
+        "REACTION 参数必须来自快照"
+        "中的完整临时允许列表。SEARCH 查询不得与当前 corpus_revision 的既有指纹重复；TREND、"
+        "REFRESH 只服从各自 reason_codes。IDLE 始终合法；IDLE_WAITING_FOR_NEW_INFORMATION 只"
+        "解释克制，不开放任何动作。若快照不可用，只能选择 IDLE。"
+        if is_chinese
+        else (
+            "The Opportunity Snapshot is the only eligibility source for this turn. It describes "
+            "replayable facts through the prior round; it is not a command or coverage checklist. "
+            "candidate_actions must match the strict JSON template: IDLE first, followed in "
+            "snapshot order by every action whose entry has both available and grounded set to "
+            "true. Availability "
+            "never requires selection. Targets and REACTION parameters must come from the full "
+            "ephemeral snapshot allowlists. A SEARCH query must not repeat a fingerprint for the "
+            "current corpus_revision; TREND and REFRESH follow only their reason_codes. IDLE is "
+            "always legal; IDLE_WAITING_FOR_NEW_INFORMATION only explains restraint and opens no "
+            "action. If the snapshot is unavailable, select only IDLE."
         )
+    )
+    if opportunity_snapshot is None:
+        snapshot_payload: dict[str, object] = {
+            "status": "unavailable",
+            "failure_code": "OPPORTUNITY_SNAPSHOT_UNAVAILABLE",
+            "allowed_actions": ["IDLE"],
+        }
+        advertised_actions = ["IDLE"]
+    else:
+        snapshot_payload = opportunity_snapshot_to_prompt_payload_v1(
+            opportunity_snapshot
+        )
+        advertised_actions = [
+            action_type
+            for action_type, opportunity in opportunity_snapshot.actions.items()
+            if opportunity["available"] and opportunity["grounded"]
+        ]
+    serialized_snapshot = json.dumps(
+        snapshot_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    affordance_section = format_untrusted_text_block(
+        "机会快照" if is_chinese else "Opportunity snapshot",
+        serialized_snapshot,
+        max_chars=max(12_000, len(serialized_snapshot) * 2 + 1),
+    )
     replan = ""
     if replan_reason:
         replan = (
@@ -4884,23 +4567,31 @@ def _build_decision_envelope_prompt(
                 "an action."
             )
         )
+    advertised_actions_json = json.dumps(
+        advertised_actions,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     schema = (
         '{"current_goal":"...","goal_progress":"...",'
         '"recalled_memory_refs":[],"observed_world_changes":[],"unresolved_questions":[],'
-        '"candidate_actions":["IDLE","SEARCH"],'
+        f'"candidate_actions":{advertised_actions_json},'
         '"selected_action":"...","action_parameters":{"content":"... or null",'
         '"realization_phrase":"... or null","reaction":"... or null"},'
         '"target_agent_or_object":null,"expected_effect":"...","constraints":[],'
-        '"decision_basis":[],"idle_reason":"... or null","emotion":"...",'
+        '"decision_basis":[],"idle_reason":"... or null",'
+        '"idle_reason_code":"IDLE_NO_ACTION_NEEDED or null","emotion":"...",'
         '"diverge":"... or null"}'
     )
     target_schema_note = (
         "需要目标的动作把 null 替换为且仅替换为一个目录对象："
-        '{"kind":"action|post|agent|source|query","id":"catalog ID"}。'
+        '{"kind":"action|post|agent|source","id":"catalog ID"}。'
+        "SEARCH 无目标；查询只写入 action_parameters.content。"
         if is_chinese
         else (
             "For a target-required action, replace null with exactly one catalog object: "
-            '{"kind":"action|post|agent|source|query","id":"catalog ID"}.'
+            '{"kind":"action|post|agent|source","id":"catalog ID"}. '
+            "SEARCH is targetless; put its query only in action_parameters.content."
         )
     )
     rendered_affordances = f"{affordance_section}\n\n" if affordance_section else ""
@@ -4909,6 +4600,7 @@ def _build_decision_envelope_prompt(
         rendered_context = rendered_context.replace(prior_transition_context, "").strip()
     return (
         f"{heading}\n{constraints}\n{action_guidance}\n{reaction_contract}\n"
+        f"{idle_code_contract}\n"
         f"{affordance_guidance}{replan}\n\n"
         f"Character: {agent_name}\nFallback goal: {fallback_goal}\n\n"
         f"Prior verified transition:\n{prior_transition_context or '(none)'}\n\n"
@@ -4941,6 +4633,7 @@ def _append_decision_to_speech_prompt(
             "constraints",
             "decision_basis",
             "idle_reason",
+            "idle_reason_code",
             "unresolved_questions",
             "diverge",
         )
@@ -5029,6 +4722,7 @@ def _decision_payload_with_legacy_compat(
             "constraints": ["Do not infer an action from legacy speech content"],
             "decision_basis": ["Legacy structured message selected no action"],
             "idle_reason": "Legacy structured message selected no external action",
+            "idle_reason_code": "IDLE_NO_ACTION_NEEDED",
         }
     selected = str(
         legacy_action.get("type") or legacy_action.get("action_type") or "IDLE"
@@ -5071,6 +4765,9 @@ def _decision_payload_with_legacy_compat(
         "decision_basis": ["Pre-speech structured decision output"],
         "idle_reason": (
             "No concrete external action was selected" if selected == "IDLE" else None
+        ),
+        "idle_reason_code": (
+            "IDLE_NO_ACTION_NEEDED" if selected == "IDLE" else None
         ),
     }
 
@@ -5216,6 +4913,7 @@ async def _gather_agent_messages(
         payload=action_target_catalog_payload,
     )
     from app.services.agent_runtime import (
+        _load_prior_opportunity_receipts,
         load_prior_agent_decision,
         load_prior_agent_transition,
         render_agent_transition_context,
@@ -5249,6 +4947,34 @@ async def _gather_agent_messages(
         )
         if prior_decision.get("decision_status") == "verified":
             prior_decisions[agent_id] = prior_decision
+    projected_target_catalogs = {
+        actor_id: _project_action_target_catalog(
+            action_target_catalog_payload,
+            agent_id=actor_id,
+        )
+        for actor_id in agent_ids
+    }
+    prior_receipts = _load_prior_opportunity_receipts(
+        engine,
+        scenario_id,
+        branch_id,
+        agent_ids,
+        before_round=round_num,
+    )
+    opportunity_snapshots_by_actor: dict[
+        str, OpportunitySnapshotV1 | None
+    ] = dict.fromkeys(agent_ids, None)
+    if social_world_state is not None:
+        try:
+            opportunity_snapshots_by_actor.update(
+                derive_opportunity_snapshots_v1(
+                    social_state=social_world_state,
+                    target_catalogs_by_actor=projected_target_catalogs,
+                    prior_receipts_by_actor=prior_receipts,
+                )
+            )
+        except Exception:
+            logger.exception("Opportunity snapshot derivation failed closed")
     prior_utterances: dict[str, str] = {}
     if agent_ids and round_num > 1:
         with Session(engine) as session:
@@ -5541,24 +5267,11 @@ async def _gather_agent_messages(
                     agent_id,
                     '{"agents":[],"actions":[]}',
                 )
-                projected_action_targets = _project_action_target_catalog(
-                    action_target_catalog_payload,
-                    agent_id=agent_id,
+                projected_action_targets = projected_target_catalogs.get(
+                    agent_id,
+                    {"actions": [], "agents": []},
                 )
-                action_affordances = _derive_action_affordances(
-                    agent_id=agent_id,
-                    social_state=social_world_state,
-                    prior_transition=prior_transition,
-                    projected_action_targets=tuple(
-                        projected_action_targets.get("actions", [])
-                    ),
-                    projected_agent_targets=tuple(
-                        projected_action_targets.get("agents", [])
-                    ),
-                    prior_constraints=(
-                        prior_decisions.get(agent_id, {}).get("constraints") or ()
-                    ),
-                )
+                opportunity_snapshot = opportunity_snapshots_by_actor.get(agent_id)
                 from app.services.agent_runtime import (
                     decision_to_action,
                     normalize_decision_envelope,
@@ -5573,7 +5286,7 @@ async def _gather_agent_messages(
                         agent_name=agent["name"],
                         fallback_goal=fallback_goal,
                         action_target_catalog=action_target_catalog,
-                        action_affordances=action_affordances,
+                        opportunity_snapshot=opportunity_snapshot,
                         prior_transition_context=prior_transition_context,
                         language=language,
                         replan_reason=replan_reason,
@@ -5622,6 +5335,8 @@ async def _gather_agent_messages(
                             for item in projected_action_targets.get("agents", [])
                             if str(item.get("id") or "").strip()
                         ],
+                        opportunity_snapshot=opportunity_snapshot,
+                        compatibility_mode="live",
                     )
                     normalized = _bind_authoritative_goal_progress(
                         normalized,
@@ -5657,6 +5372,8 @@ async def _gather_agent_messages(
                         branch_id=branch_id,
                         round_number=round_num,
                         fallback_goal=fallback_goal,
+                        opportunity_snapshot=opportunity_snapshot,
+                        compatibility_mode="live",
                     )
                     decision_envelope["decision_status"] = "unavailable"
                     decision_envelope["failure_code"] = decision_failure_code
@@ -5791,6 +5508,8 @@ async def _gather_agent_messages(
                             branch_id=branch_id,
                             round_number=round_num,
                             fallback_goal=fallback_goal,
+                            opportunity_snapshot=opportunity_snapshot,
+                            compatibility_mode="live",
                         )
                         unavailable_decision.update({
                             "decision_status": "unavailable",
@@ -5877,6 +5596,7 @@ async def _gather_agent_messages(
                     "constraints": [],
                     "decision_basis": [],
                     "idle_reason": "Decision generation was unavailable",
+                    "idle_reason_code": "IDLE_DECISION_UNAVAILABLE",
                     "decision_status": "unavailable",
                     "failure_code": str(
                         turn_failure_code or metadata_failure_code or "DECISION_UNAVAILABLE"
@@ -5946,6 +5666,8 @@ async def _gather_agent_messages(
                             "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
                         }
                     ],
+                    opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+                    compatibility_mode="live",
                     **({"runtime_lease": runtime_lease} if runtime_lease else {}),
                 )
                 or []
@@ -6084,6 +5806,8 @@ async def _gather_agent_messages(
                             "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
                         }
                     ],
+                    opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+                    compatibility_mode="live",
                     **({"runtime_lease": runtime_lease} if runtime_lease else {}),
                 )
                 or []
@@ -6393,6 +6117,7 @@ async def _gather_hierarchical_messages(
                 "constraints": ["No independent external action was executed"],
                 "decision_basis": ["Hierarchical worker speech was synthesized"],
                 "idle_reason": "Worker turns do not independently execute platform actions",
+                "idle_reason_code": "IDLE_DECISION_UNAVAILABLE",
                 "decision_status": "unavailable",
                 "failure_code": "SYNTHESIZED_DECISION_UNAVAILABLE",
                 "decision_origin": "synthesized",
@@ -6408,6 +6133,10 @@ async def _gather_hierarchical_messages(
     # externally visible. This keeps broadcast and durable replay consistent
     # even when cancellation arrives after the first worker event.
     _check_cancelled(scenario_id)
+    worker_opportunity_snapshots = dict.fromkeys(
+        (str(message["agent_id"]) for message in worker_messages),
+        None,
+    )
     saved_message_ids = (
         _save_messages(
             engine,
@@ -6438,6 +6167,8 @@ async def _gather_hierarchical_messages(
                 }
                 for msg in worker_messages
             ],
+            opportunity_snapshots_by_actor=worker_opportunity_snapshots,
+            compatibility_mode="live",
             **({"runtime_lease": runtime_lease} if runtime_lease else {}),
         )
         or []
@@ -8057,7 +7788,14 @@ def _save_message(engine, round_id, agent_id, content, emotion, diverge) -> str 
 
 
 def _save_messages(
-    engine, messages: list[dict[str, Any]], *, runtime_lease: RuntimeLockLease | None = None
+    engine,
+    messages: list[dict[str, Any]],
+    *,
+    opportunity_snapshots_by_actor: Mapping[
+        str, OpportunitySnapshotV1 | None
+    ] | None = None,
+    compatibility_mode: CompatibilityModeV1 = "legacy_import",
+    runtime_lease: RuntimeLockLease | None = None,
 ) -> list[str]:
     if not messages:
         return []
@@ -8132,6 +7870,11 @@ def _save_messages(
                 "decision_envelope": source.get("decision_envelope") or {},
                 "fallback_goal": source.get("fallback_goal") or "",
                 "context_receipt": source.get("context_receipt") or {},
+                "opportunity_snapshot": (
+                    opportunity_snapshots_by_actor.get(str(source["agent_id"]))
+                    if opportunity_snapshots_by_actor is not None
+                    else None
+                ),
                 **(
                     {"world_state_transition": source["world_state_transition"]}
                     if source.get("world_state_transition") is not None
@@ -8160,6 +7903,8 @@ def _save_messages(
                         branch_id,
                         round_number,
                         runtime_rows,
+                        opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+                        compatibility_mode=compatibility_mode,
                         runtime_lease=runtime_lease,
                     )
                 except ValueError as exc:

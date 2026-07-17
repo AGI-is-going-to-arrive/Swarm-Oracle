@@ -471,15 +471,16 @@ def reduce_social_world_state(
             if row.content or row.parent_action_id or row.target_type or row.target_id:
                 diagnostics["INVALID_REFRESH"] += 1
                 continue
-            visible = _visible_posts(
+            all_visible = _visible_posts(
                 posts,
                 agent_id=actor_id,
                 following=following,
                 muted=muted,
-            )[:_MAX_FEED_POSTS]
+            )
+            visible = all_visible[:_MAX_FEED_POSTS]
             previous_seen = last_seen[actor_id]
-            latest_post_sequence = max(
-                (post.sequence for post in posts.values()),
+            latest_visible_post_sequence = max(
+                (post.sequence for post in all_visible),
                 default=previous_seen,
             )
             refresh_receipts[actor_id].append(
@@ -490,7 +491,7 @@ def reduce_social_world_state(
                 )
             )
             refresh_receipts[actor_id] = refresh_receipts[actor_id][-1:]
-            last_seen[actor_id] = latest_post_sequence
+            last_seen[actor_id] = max(previous_seen, latest_visible_post_sequence)
             continue
 
         if action_type == SimulationActionType.IDLE.value:

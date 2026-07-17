@@ -16,15 +16,28 @@ import time
 import unicodedata
 from collections.abc import Mapping, Sequence
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Literal, cast, get_args
 
 from sqlalchemy import case, func, text, update
 from sqlmodel import Session, select
 
+from app.config import settings
 from app.models import AgentMessage, Branch, Scenario
 from app.models.simulation_action import (
     SimulationAction,
     SimulationActionStatus,
+)
+from app.services.action_opportunities import (
+    ActionTypeV1,
+    CompatibilityModeV1,
+    DecisionFailureCodeV1,
+    IdleReasonCodeV1,
+    OpportunityReasonCodeV1,
+    OpportunityReceiptV1,
+    OpportunitySnapshotV1,
+    ReactionKindV1,
+    derive_opportunity_snapshots_v1,
+    search_query_fingerprint_v1,
 )
 
 RUNTIME_CONTEXT_KEY = "agent_runtime_v1"
@@ -32,13 +45,90 @@ RUNTIME_VERSION = "1.0"
 POST_ACTION_TRANSITION_SEMANTICS = "post_action_v1"
 LEGACY_TRANSITION_SEMANTICS = "pre_action_v1"
 
-_ACTION_TYPES = frozenset(
-    {"IDLE", "POST", "COMMENT", "REACTION", "FOLLOW", "MUTE", "SEARCH", "TREND", "REFRESH"}
+_ACTION_TYPE_ORDER: tuple[ActionTypeV1, ...] = (
+    "IDLE",
+    "POST",
+    "COMMENT",
+    "REACTION",
+    "FOLLOW",
+    "MUTE",
+    "SEARCH",
+    "TREND",
+    "REFRESH",
 )
+_ACTION_TYPES = frozenset(_ACTION_TYPE_ORDER)
 _CONTENT_ACTIONS = frozenset({"POST", "COMMENT", "SEARCH"})
-_REACTIONS = frozenset(
-    {"LIKE", "LOVE", "LAUGH", "WOW", "SAD", "ANGRY", "SUPPORT", "OPPOSE"}
+_REACTION_KIND_ORDER: tuple[ReactionKindV1, ...] = (
+    "LIKE",
+    "LOVE",
+    "LAUGH",
+    "WOW",
+    "SAD",
+    "ANGRY",
+    "SUPPORT",
+    "OPPOSE",
 )
+_REACTIONS = frozenset(_REACTION_KIND_ORDER)
+_LIVE_IDLE_REASON_CODES = frozenset(
+    {
+        "IDLE_NO_ACTION_NEEDED",
+        "IDLE_INSUFFICIENT_EVIDENCE",
+        "IDLE_WAITING_FOR_NEW_INFORMATION",
+        "IDLE_CONSTRAINT_BLOCKED",
+        "IDLE_STRATEGIC_HOLD",
+    }
+)
+_IDLE_REASON_CODES = frozenset(get_args(IdleReasonCodeV1))
+_OPPORTUNITY_REASON_CODES = frozenset(get_args(OpportunityReasonCodeV1))
+_DECISION_FAILURE_CODES = frozenset(get_args(DecisionFailureCodeV1))
+_RECEIPT_FIELDS = frozenset(OpportunityReceiptV1.__required_keys__)
+_TARGET_ACTIONS = frozenset({"COMMENT", "REACTION", "FOLLOW", "MUTE"})
+_PARAMETER_ACTIONS = frozenset({"REACTION", "SEARCH"})
+_TARGETLESS_ACTIONS = frozenset({"IDLE", "POST", "SEARCH", "TREND", "REFRESH"})
+_AVAILABLE_REASON_CODES = frozenset(
+    {
+        "IDLE_ALWAYS_AVAILABLE",
+        "POST_ALWAYS_AVAILABLE",
+        "COMMENT_ELIGIBLE_TARGET_AVAILABLE",
+        "FOLLOW_ELIGIBLE_TARGET_AVAILABLE",
+        "REACTION_ELIGIBLE_TARGET_AVAILABLE",
+        "MUTE_FILTER_EFFECT_AVAILABLE",
+        "REFRESH_UNSEEN_POSTS_AVAILABLE",
+        "TREND_INITIAL_VOLUME_AVAILABLE",
+        "TREND_INITIAL_INTERACTION_AVAILABLE",
+        "TREND_SIGNATURE_CHANGED",
+        "SEARCH_CORPUS_AVAILABLE",
+    }
+)
+_REASON_CODES_BY_ACTION = {
+    "IDLE": frozenset({"IDLE_ALWAYS_AVAILABLE"}),
+    "POST": frozenset({"POST_ALWAYS_AVAILABLE"}),
+    "COMMENT": frozenset(
+        {"COMMENT_ELIGIBLE_TARGET_AVAILABLE", "COMMENT_NO_ELIGIBLE_TARGET"}
+    ),
+    "REACTION": frozenset(
+        {"REACTION_ELIGIBLE_TARGET_AVAILABLE", "REACTION_NO_ELIGIBLE_TARGET"}
+    ),
+    "FOLLOW": frozenset(
+        {"FOLLOW_ELIGIBLE_TARGET_AVAILABLE", "FOLLOW_NO_ELIGIBLE_TARGET"}
+    ),
+    "MUTE": frozenset({"MUTE_FILTER_EFFECT_AVAILABLE", "MUTE_NO_FILTER_EFFECT"}),
+    "SEARCH": frozenset(
+        {"SEARCH_CORPUS_AVAILABLE", "SEARCH_CORPUS_EMPTY", "SEARCH_HISTORY_UNAVAILABLE"}
+    ),
+    "TREND": frozenset(
+        {
+            "TREND_INITIAL_VOLUME_AVAILABLE",
+            "TREND_INITIAL_INTERACTION_AVAILABLE",
+            "TREND_SIGNATURE_CHANGED",
+            "TREND_NO_NEW_ACTIVITY",
+        }
+    ),
+    "REFRESH": frozenset(
+        {"REFRESH_UNSEEN_POSTS_AVAILABLE", "REFRESH_NO_UNSEEN_POSTS"}
+    ),
+}
+_SHA256_REVISION_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _FORBIDDEN_REASONING_KEYS = frozenset(
     {
         "analysis",
@@ -66,6 +156,7 @@ _DECISION_FIELDS = (
     "constraints",
     "decision_basis",
     "idle_reason",
+    "idle_reason_code",
     "unresolved_questions",
 )
 _TRANSITION_FIELDS = (
@@ -265,26 +356,39 @@ def _canonical_action_target(
 ) -> tuple[dict[str, Any], dict[str, str] | None, str | None]:
     """Collapse legacy duplicate target fields into one action-specific target."""
     normalized_parameters = dict(parameters)
+    parent_action_id = _bounded_text(
+        normalized_parameters.get("parent_action_id"), 160
+    )
+    nested_target = _target(normalized_parameters.get("target"))
+    if nested_target is not None and target is not None and nested_target != target:
+        return normalized_parameters, target, "DECISION_INVALID_ACTION_TARGET"
+    normalized_parameters.pop("target", None)
+    if selected in {"POST", "SEARCH", "TREND", "REFRESH"}:
+        if target is not None or parent_action_id:
+            return normalized_parameters, target, "DECISION_INVALID_ACTION_TARGET"
+        return normalized_parameters, None, None
     if selected in {"FOLLOW", "MUTE"}:
-        if target is None or target.get("kind") not in {"agent", "source"}:
+        if (
+            parent_action_id
+            or target is None
+            or target.get("kind") not in {"agent", "source"}
+        ):
             return normalized_parameters, target, "DECISION_INVALID_ACTION_TARGET"
         return normalized_parameters, target, None
     if selected not in {"COMMENT", "REACTION"}:
         return normalized_parameters, target, None
 
-    parent_action_id = _bounded_text(
-        normalized_parameters.get("parent_action_id"), 160
-    )
     if parent_action_id:
         if (
             target is not None
-            and target.get("kind") in {"action", "post"}
-            and target.get("id") != parent_action_id
+            and (
+                target.get("kind") not in {"action", "post"}
+                or target.get("id") != parent_action_id
+            )
         ):
             return normalized_parameters, target, "DECISION_INVALID_ACTION_TARGET"
         canonical_target = {"kind": "action", "id": parent_action_id}
         normalized_parameters["parent_action_id"] = parent_action_id
-        normalized_parameters.pop("target", None)
         return normalized_parameters, canonical_target, None
 
     if target is None or target.get("kind") not in {"action", "post"}:
@@ -294,8 +398,111 @@ def _canonical_action_target(
         return normalized_parameters, target, "DECISION_INVALID_ACTION_TARGET"
     canonical_target = {"kind": target["kind"], "id": target_id}
     normalized_parameters["parent_action_id"] = target_id
-    normalized_parameters.pop("target", None)
     return normalized_parameters, canonical_target, None
+
+
+def _is_sha256_revision(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_REVISION_RE.fullmatch(value) is not None
+
+
+def _valid_identifier_tuple(value: object) -> bool:
+    if not isinstance(value, tuple):
+        return False
+    normalized = [_bounded_text(item, 160) for item in value]
+    return bool(
+        all(
+            isinstance(item, str) and canonical and item == canonical
+            for item, canonical in zip(value, normalized)
+        )
+        and len(normalized) == len(set(normalized))
+    )
+
+
+def _valid_opportunity_snapshot(
+    snapshot: object,
+    *,
+    agent_id: str,
+    round_number: int,
+) -> bool:
+    if not isinstance(snapshot, OpportunitySnapshotV1):
+        return False
+    if not (
+        snapshot.version == 1
+        and snapshot.actor_id == agent_id
+        and type(snapshot.as_of_round) is int
+        and snapshot.as_of_round == max(0, round_number - 1)
+        and _is_sha256_revision(snapshot.social_state_revision)
+        and snapshot.domain_state_revision is None
+        and snapshot.allowed_rule_ids == ()
+        and isinstance(snapshot.actions, Mapping)
+        and tuple(snapshot.actions) == _ACTION_TYPE_ORDER
+    ):
+        return False
+    base_fields = {"available", "grounded", "reason_codes", "eligible_target_ids"}
+    for action_type in _ACTION_TYPE_ORDER:
+        opportunity = snapshot.actions.get(action_type)
+        extra_fields = (
+            {"eligible_reaction_kinds_by_target"}
+            if action_type == "REACTION"
+            else {
+                "corpus_revision",
+                "search_history_complete",
+                "recent_query_fingerprints",
+            }
+            if action_type == "SEARCH"
+            else {"current_trend_signature", "last_trend_signature"}
+            if action_type == "TREND"
+            else set()
+        )
+        if not isinstance(opportunity, Mapping) or set(opportunity) != base_fields | extra_fields:
+            return False
+        available = opportunity.get("available")
+        grounded = opportunity.get("grounded")
+        reason_codes = opportunity.get("reason_codes")
+        target_ids = opportunity.get("eligible_target_ids")
+        if not (
+            type(available) is bool
+            and type(grounded) is bool
+            and grounded == available
+            and isinstance(reason_codes, tuple)
+            and len(reason_codes) == 1
+            and reason_codes[0] in _REASON_CODES_BY_ACTION[action_type]
+            and available == (reason_codes[0] in _AVAILABLE_REASON_CODES)
+            and _valid_identifier_tuple(target_ids)
+        ):
+            return False
+        if action_type in _TARGETLESS_ACTIONS and target_ids:
+            return False
+        if action_type in _TARGET_ACTIONS and bool(target_ids) != available:
+            return False
+        if action_type == "REACTION":
+            reaction_map = opportunity.get("eligible_reaction_kinds_by_target")
+            if not isinstance(reaction_map, Mapping) or tuple(reaction_map) != target_ids:
+                return False
+            for kinds in reaction_map.values():
+                if (
+                    not isinstance(kinds, tuple)
+                    or not kinds
+                    or tuple(kind for kind in _REACTION_KIND_ORDER if kind in kinds) != kinds
+                ):
+                    return False
+        elif action_type == "SEARCH":
+            fingerprints = opportunity.get("recent_query_fingerprints")
+            if not (
+                _is_sha256_revision(opportunity.get("corpus_revision"))
+                and type(opportunity.get("search_history_complete")) is bool
+                and isinstance(fingerprints, tuple)
+                and len(fingerprints) <= max(0, int(settings.MAX_ROUNDS))
+                and len(fingerprints) == len(set(fingerprints))
+                and all(_is_sha256_revision(item) for item in fingerprints)
+            ):
+                return False
+        elif action_type == "TREND":
+            for field in ("current_trend_signature", "last_trend_signature"):
+                value = opportunity.get(field)
+                if value is not None and not _is_sha256_revision(value):
+                    return False
+    return True
 
 
 def _meaningful_realization_phrase(value: object) -> bool:
@@ -328,8 +535,14 @@ def _fail_closed_decision(
     round_number: int,
     fallback_goal: str,
     constraints: object = (),
+    requested_action_type: str | None = None,
 ) -> dict[str, Any]:
     reason = f"Structured decision unavailable ({code})."
+    requested = (
+        cast(ActionTypeV1, requested_action_type)
+        if requested_action_type in _ACTION_TYPES
+        else None
+    )
     return {
         "current_goal": _bounded_text(fallback_goal) or "Maintain a safe, evidence-based goal",
         "goal_progress": "unknown",
@@ -337,12 +550,18 @@ def _fail_closed_decision(
         "observed_world_changes": [],
         "candidate_actions": ["IDLE"],
         "selected_action": "IDLE",
+        "requested_action_type": requested,
         "action_parameters": {},
         "target_agent_or_object": None,
         "expected_effect": "",
         "constraints": _bounded_text_list(constraints),
         "decision_basis": [reason],
         "idle_reason": reason,
+        "idle_reason_code": (
+            "IDLE_OPPORTUNITY_UNAVAILABLE"
+            if code == "DECISION_OPPORTUNITY_UNAVAILABLE"
+            else "IDLE_DECISION_UNAVAILABLE"
+        ),
         "unresolved_questions": [],
         "input_transition_id": None,
         "input_action_outcome_ids": [],
@@ -366,6 +585,8 @@ def normalize_decision_envelope(
     allowed_world_changes: Sequence[str] = (),
     allowed_action_target_ids: Sequence[str] | None = None,
     allowed_agent_target_ids: Sequence[str] | None = None,
+    opportunity_snapshot: OpportunitySnapshotV1 | None = None,
+    compatibility_mode: Literal["live", "legacy_import"] = "live",
 ) -> dict[str, Any]:
     """Validate and bound an auditable Decision Envelope.
 
@@ -386,58 +607,86 @@ def normalize_decision_envelope(
             round_number=normalized_round,
             fallback_goal=fallback_goal,
         )
-    if _contains_forbidden_reasoning(raw):
-        return _fail_closed_decision(
-            code="DECISION_FORBIDDEN_FIELD",
-            agent_id=normalized_agent_id,
-            branch_id=normalized_branch_id,
-            round_number=normalized_round,
-            fallback_goal=fallback_goal,
-            constraints=raw.get("constraints") or (),
-        )
+    raw_selected = _bounded_text(raw.get("selected_action"), 20).upper()
     supplied_status = _bounded_text(raw.get("decision_status"), 24).lower()
+    carried_requested = _bounded_text(raw.get("requested_action_type"), 20).upper()
     if supplied_status in {"unavailable", "failed"}:
+        requested_action_type = (
+            carried_requested
+            if "requested_action_type" in raw and carried_requested in _ACTION_TYPES
+            else None
+        )
+    else:
+        requested_action_type = raw_selected if raw_selected in _ACTION_TYPES else None
+
+    def fail(code: str) -> dict[str, Any]:
         return _fail_closed_decision(
-            code=_bounded_text(raw.get("failure_code"), 64)
-            or "DECISION_UNAVAILABLE",
+            code=code,
             agent_id=normalized_agent_id,
             branch_id=normalized_branch_id,
             round_number=normalized_round,
             fallback_goal=fallback_goal,
             constraints=raw.get("constraints") or (),
+            requested_action_type=requested_action_type,
         )
+
+    if _contains_forbidden_reasoning(raw):
+        return fail("DECISION_FORBIDDEN_FIELD")
+    supplied_failure = _bounded_text(raw.get("failure_code"), 64)
+    if supplied_status in {"unavailable", "failed"} or supplied_failure:
+        return fail("DECISION_UNAVAILABLE")
 
     candidates = _candidate_actions(raw.get("candidate_actions"))
-    selected = _bounded_text(raw.get("selected_action"), 20).upper()
+    selected = raw_selected
     if selected not in _ACTION_TYPES:
-        return _fail_closed_decision(
-            code="DECISION_INVALID_ACTION_TYPE",
-            agent_id=normalized_agent_id,
-            branch_id=normalized_branch_id,
-            round_number=normalized_round,
-            fallback_goal=fallback_goal,
-            constraints=raw.get("constraints") or (),
-        )
+        return fail("DECISION_INVALID_ACTION_TYPE")
     if selected not in candidates:
-        return _fail_closed_decision(
-            code="DECISION_SELECTED_ACTION_NOT_CANDIDATE",
-            agent_id=normalized_agent_id,
-            branch_id=normalized_branch_id,
-            round_number=normalized_round,
-            fallback_goal=fallback_goal,
-            constraints=raw.get("constraints") or (),
-        )
+        return fail("DECISION_SELECTED_ACTION_NOT_CANDIDATE")
+
+    live_mode = compatibility_mode != "legacy_import"
+    snapshot_valid = _valid_opportunity_snapshot(
+        opportunity_snapshot,
+        agent_id=normalized_agent_id,
+        round_number=normalized_round,
+    )
+    selected_opportunity: Mapping[str, Any] | None = None
+    if live_mode:
+        allowed_actions = {"IDLE"}
+        if snapshot_valid:
+            snapshot = cast(OpportunitySnapshotV1, opportunity_snapshot)
+            allowed_actions.update(
+                action_type
+                for action_type in _ACTION_TYPE_ORDER
+                if snapshot.actions[action_type]["available"]
+                and snapshot.actions[action_type]["grounded"]
+            )
+            selected_opportunity = snapshot.actions[selected]
+        candidates = [
+            "IDLE",
+            *(
+                candidate
+                for candidate in candidates
+                if candidate != "IDLE" and candidate in allowed_actions
+            ),
+        ]
 
     idle_reason = _bounded_text(raw.get("idle_reason"), _MAX_TEXT)
-    if selected == "IDLE" and not idle_reason:
-        return _fail_closed_decision(
-            code="DECISION_IDLE_REASON_REQUIRED",
-            agent_id=normalized_agent_id,
-            branch_id=normalized_branch_id,
-            round_number=normalized_round,
-            fallback_goal=fallback_goal,
-            constraints=raw.get("constraints") or (),
-        )
+    idle_reason_code = _bounded_text(raw.get("idle_reason_code"), 64).upper()
+    if selected == "IDLE":
+        if not idle_reason or (live_mode and not idle_reason_code):
+            return fail("DECISION_IDLE_REASON_REQUIRED")
+        if not idle_reason_code:
+            idle_reason_code = "IDLE_LEGACY_UNSPECIFIED"
+        valid_idle_codes = _LIVE_IDLE_REASON_CODES if live_mode else _IDLE_REASON_CODES
+        if idle_reason_code not in valid_idle_codes:
+            return fail("DECISION_INVALID_IDLE_REASON_CODE")
+    elif live_mode and (
+        not snapshot_valid
+        or selected_opportunity is None
+        or not selected_opportunity["available"]
+        or not selected_opportunity["grounded"]
+    ):
+        return fail("DECISION_OPPORTUNITY_UNAVAILABLE")
 
     memory_allowlist = {
         item for item in (_bounded_text(value, 160) for value in allowed_memory_refs) if item
@@ -457,14 +706,7 @@ def normalize_decision_envelope(
             target,
         )
         if target_error:
-            return _fail_closed_decision(
-                code=target_error,
-                agent_id=normalized_agent_id,
-                branch_id=normalized_branch_id,
-                round_number=normalized_round,
-                fallback_goal=fallback_goal,
-                constraints=raw.get("constraints") or (),
-            )
+            return fail(target_error)
         if selected in {"COMMENT", "REACTION"} and allowed_action_target_ids is not None:
             action_target_allowlist = {
                 item
@@ -474,14 +716,7 @@ def normalize_decision_envelope(
                 if item
             }
             if target is None or target.get("id") not in action_target_allowlist:
-                return _fail_closed_decision(
-                    code="DECISION_TARGET_NOT_IN_CATALOG",
-                    agent_id=normalized_agent_id,
-                    branch_id=normalized_branch_id,
-                    round_number=normalized_round,
-                    fallback_goal=fallback_goal,
-                    constraints=raw.get("constraints") or (),
-                )
+                return fail("DECISION_TARGET_NOT_IN_CATALOG")
         if selected in {"FOLLOW", "MUTE"} and allowed_agent_target_ids is not None:
             agent_target_allowlist = {
                 item
@@ -491,14 +726,29 @@ def normalize_decision_envelope(
                 if item
             }
             if target is None or target.get("id") not in agent_target_allowlist:
-                return _fail_closed_decision(
-                    code="DECISION_TARGET_NOT_IN_CATALOG",
-                    agent_id=normalized_agent_id,
-                    branch_id=normalized_branch_id,
-                    round_number=normalized_round,
-                    fallback_goal=fallback_goal,
-                    constraints=raw.get("constraints") or (),
-                )
+                return fail("DECISION_TARGET_NOT_IN_CATALOG")
+        if live_mode and selected in _TARGET_ACTIONS:
+            eligible_target_ids = selected_opportunity["eligible_target_ids"]
+            if target is None or target.get("id") not in eligible_target_ids:
+                return fail("DECISION_TARGET_NOT_ELIGIBLE")
+        if live_mode and selected == "REACTION":
+            reaction = _bounded_text(parameters.get("reaction"), 24).upper()
+            if reaction not in _REACTIONS:
+                return fail("DECISION_INVALID_ACTION_PARAMETER")
+            eligible_kinds = selected_opportunity[
+                "eligible_reaction_kinds_by_target"
+            ].get(target["id"], ())
+            if reaction not in eligible_kinds:
+                return fail("DECISION_REACTION_NO_OP")
+        if live_mode and selected == "SEARCH":
+            fingerprint = search_query_fingerprint_v1(
+                parameters.get("content"),
+                corpus_revision=selected_opportunity["corpus_revision"],
+            )
+            if fingerprint is None:
+                return fail("DECISION_INVALID_ACTION_PARAMETER")
+            if fingerprint in selected_opportunity["recent_query_fingerprints"]:
+                return fail("DECISION_SEARCH_NO_OP")
     return {
         "current_goal": _bounded_text(raw.get("current_goal"))
         or _bounded_text(fallback_goal)
@@ -515,12 +765,14 @@ def normalize_decision_envelope(
         ),
         "candidate_actions": candidates,
         "selected_action": selected,
+        "requested_action_type": selected,
         "action_parameters": parameters,
         "target_agent_or_object": target,
         "expected_effect": _bounded_text(raw.get("expected_effect")),
         "constraints": _bounded_text_list(raw.get("constraints")),
         "decision_basis": _bounded_text_list(raw.get("decision_basis")),
         "idle_reason": idle_reason if selected == "IDLE" else None,
+        "idle_reason_code": idle_reason_code if selected == "IDLE" else None,
         "unresolved_questions": _bounded_text_list(raw.get("unresolved_questions")),
         "input_transition_id": None,
         "input_action_outcome_ids": [],
@@ -747,6 +999,244 @@ def _prior_runtime_record(
             if isinstance(record, Mapping) and record.get("agent_id") == agent_id:
                 return copy.deepcopy(dict(record))
     return None
+
+
+def _simulation_action_type(action: SimulationAction) -> ActionTypeV1 | None:
+    value = str(getattr(action.action_type, "value", action.action_type)).upper()
+    return cast(ActionTypeV1, value) if value in _ACTION_TYPES else None
+
+
+def _opportunity_receipt_is_valid(receipt: object) -> bool:
+    if not isinstance(receipt, Mapping) or set(receipt) != _RECEIPT_FIELDS:
+        return False
+    requested_action_type = receipt.get("requested_action_type")
+    effective_action_type = receipt.get("effective_action_type")
+    reason_codes = receipt.get("reason_codes")
+    fingerprints = receipt.get("recent_query_fingerprints")
+    idle_reason_code = receipt.get("idle_reason_code")
+    failure_code = receipt.get("failure_code")
+    compatibility_mode = receipt.get("compatibility_mode")
+    selected_target_eligible = receipt.get("selected_target_eligible")
+    parameter_eligible = receipt.get("parameter_eligible")
+    if (
+        requested_action_type is not None
+        and (
+            not isinstance(requested_action_type, str)
+            or requested_action_type not in _ACTION_TYPES
+        )
+    ):
+        return False
+    if (
+        not isinstance(effective_action_type, str)
+        or effective_action_type not in _ACTION_TYPES
+    ):
+        return False
+    if (
+        not isinstance(reason_codes, list)
+        or len(reason_codes) != 1
+        or not isinstance(reason_codes[0], str)
+        or reason_codes[0] not in _OPPORTUNITY_REASON_CODES
+    ):
+        return False
+    if (
+        not isinstance(fingerprints, list)
+        or not all(isinstance(item, str) for item in fingerprints)
+        or len(fingerprints) > max(0, int(settings.MAX_ROUNDS))
+        or len(fingerprints) != len(set(fingerprints))
+        or not all(_is_sha256_revision(item) for item in fingerprints)
+    ):
+        return False
+    if (
+        idle_reason_code is not None
+        and (
+            not isinstance(idle_reason_code, str)
+            or idle_reason_code not in _IDLE_REASON_CODES
+        )
+    ):
+        return False
+    if (
+        failure_code is not None
+        and (
+            not isinstance(failure_code, str)
+            or failure_code not in _DECISION_FAILURE_CODES
+        )
+    ):
+        return False
+    if (
+        not isinstance(compatibility_mode, str)
+        or compatibility_mode not in {"live", "legacy_import"}
+    ):
+        return False
+    return bool(
+        receipt.get("version") == 1
+        and type(receipt.get("as_of_round")) is int
+        and receipt["as_of_round"] >= 0
+        and (
+            receipt.get("social_state_revision") is None
+            or _is_sha256_revision(receipt.get("social_state_revision"))
+        )
+        and receipt.get("domain_state_revision") is None
+        and receipt.get("allowed_rule_ids") == []
+        and type(receipt.get("available")) is bool
+        and type(receipt.get("grounded")) is bool
+        and type(receipt.get("eligible_target_count")) is int
+        and receipt["eligible_target_count"] >= 0
+        and (
+            selected_target_eligible is None or type(selected_target_eligible) is bool
+        )
+        and (parameter_eligible is None or type(parameter_eligible) is bool)
+        and (
+            receipt.get("corpus_revision") is None
+            or _is_sha256_revision(receipt.get("corpus_revision"))
+        )
+        and (
+            receipt.get("query_fingerprint") is None
+            or _is_sha256_revision(receipt.get("query_fingerprint"))
+        )
+        and type(receipt.get("search_history_complete")) is bool
+        and (
+            receipt.get("current_trend_signature") is None
+            or _is_sha256_revision(receipt.get("current_trend_signature"))
+        )
+        and (
+            receipt.get("last_trend_signature") is None
+            or _is_sha256_revision(receipt.get("last_trend_signature"))
+        )
+    )
+
+
+def _runtime_branch_round_view(
+    runtime: Mapping[str, Any],
+    branch_id: str,
+    round_number: int,
+) -> Mapping[str, Any]:
+    branches = runtime.get("branches")
+    branch = branches.get(branch_id) if isinstance(branches, Mapping) else None
+    rounds = branch.get("rounds") if isinstance(branch, Mapping) else None
+    payload = rounds.get(str(round_number)) if isinstance(rounds, Mapping) else None
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _prior_opportunity_receipts_in_session(
+    session: Session,
+    runtime: dict[str, Any],
+    *,
+    scenario_id: str,
+    coordinates: Sequence[tuple[str, int]],
+    agent_ids: Sequence[str],
+) -> dict[str, OpportunityReceiptV1 | None]:
+    ordered_agent_ids = tuple(dict.fromkeys(_bounded_text(item, 160) for item in agent_ids))
+    receipts: dict[str, OpportunityReceiptV1 | None] = {
+        agent_id: None for agent_id in ordered_agent_ids
+    }
+    pending = set(ordered_agent_ids)
+    for owner_branch_id, round_number in coordinates:
+        payload = _runtime_branch_round_view(runtime, owner_branch_id, round_number)
+        raw_decisions = payload.get("decisions")
+        if not isinstance(raw_decisions, list):
+            continue
+        for decision in raw_decisions:
+            if not isinstance(decision, Mapping):
+                continue
+            agent_id = _bounded_text(decision.get("agent_id"), 160)
+            if agent_id not in pending:
+                continue
+            receipt = decision.get("opportunity_receipt")
+            action_id = _bounded_text(decision.get("action_id"), 160)
+            message_id = _bounded_text(decision.get("message_id"), 160)
+            action = session.get(SimulationAction, action_id) if action_id else None
+            if (
+                not _opportunity_receipt_is_valid(receipt)
+                or action is None
+                or decision.get("branch_id") != owner_branch_id
+                or decision.get("round_number") != round_number
+                or action.scenario_id != scenario_id
+                or action.branch_id != owner_branch_id
+                or action.round_number != round_number
+                or action.agent_id != agent_id
+                or action.message_id != message_id
+                or receipt["as_of_round"] != max(0, round_number - 1)
+                or receipt["effective_action_type"] != _simulation_action_type(action)
+            ):
+                continue
+            receipts[agent_id] = cast(
+                OpportunityReceiptV1,
+                copy.deepcopy(dict(receipt)),
+            )
+            pending.remove(agent_id)
+        if not pending:
+            break
+    return receipts
+
+
+def _prior_opportunity_receipt_in_session(
+    session: Session,
+    runtime: dict[str, Any],
+    *,
+    scenario_id: str,
+    coordinates: Sequence[tuple[str, int]],
+    agent_id: str,
+) -> OpportunityReceiptV1 | None:
+    normalized_agent_id = _bounded_text(agent_id, 160)
+    return _prior_opportunity_receipts_in_session(
+        session,
+        runtime,
+        scenario_id=scenario_id,
+        coordinates=coordinates,
+        agent_ids=(normalized_agent_id,),
+    )[normalized_agent_id]
+
+
+def _load_prior_opportunity_receipts(
+    engine: Any,
+    scenario_id: str,
+    branch_id: str,
+    agent_ids: Sequence[str],
+    before_round: int,
+) -> dict[str, OpportunityReceiptV1 | None]:
+    """Batch-load trusted receipts from one immutable pre-round runtime copy."""
+
+    ordered_agent_ids = tuple(dict.fromkeys(_bounded_text(item, 160) for item in agent_ids))
+    missing: dict[str, OpportunityReceiptV1 | None] = {
+        agent_id: None for agent_id in ordered_agent_ids
+    }
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None or not isinstance(scenario.parsed_context, Mapping):
+            return missing
+        runtime = _coerce_runtime(scenario.parsed_context.get(RUNTIME_CONTEXT_KEY))
+        coordinates = _visible_runtime_coordinates(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            before_round=before_round,
+        )
+        return _prior_opportunity_receipts_in_session(
+            session,
+            runtime,
+            scenario_id=scenario_id,
+            coordinates=coordinates,
+            agent_ids=ordered_agent_ids,
+        )
+
+
+def load_prior_opportunity_receipt(
+    engine: Any,
+    scenario_id: str,
+    branch_id: str,
+    agent_id: str,
+    before_round: int,
+) -> OpportunityReceiptV1 | None:
+    """Return the newest trusted cumulative receipt in effective lineage."""
+
+    normalized_agent_id = _bounded_text(agent_id, 160)
+    return _load_prior_opportunity_receipts(
+        engine,
+        scenario_id,
+        branch_id,
+        (normalized_agent_id,),
+        before_round,
+    )[normalized_agent_id]
 
 
 def _normalize_outcomes(value: object) -> list[dict[str, Any]]:
@@ -2049,6 +2539,210 @@ def _validated_explicit_transition(
     return validated
 
 
+def _decision_matches_action(
+    decision: Mapping[str, Any],
+    action: SimulationAction,
+) -> bool:
+    action_type = _simulation_action_type(action)
+    selected = _bounded_text(decision.get("selected_action"), 20).upper()
+    if action_type is None or selected != action_type:
+        return False
+    if action_type in {"IDLE", "POST", "SEARCH", "TREND", "REFRESH"} and any(
+        (action.target_type, action.target_id, action.parent_action_id)
+    ):
+        return False
+    if action_type == "IDLE":
+        return True
+    parameters = _action_parameters(decision.get("action_parameters"))
+    target = _target(decision.get("target_agent_or_object")) or _target(
+        parameters.get("target")
+    )
+    parameters, target, target_error = _canonical_action_target(
+        action_type,
+        parameters,
+        target,
+    )
+    if target_error:
+        return False
+    if action_type in _CONTENT_ACTIONS and _bounded_text(
+        parameters.get("content"),
+        _MAX_ACTION_CONTENT,
+        preserve=True,
+    ) != _bounded_text(action.content, _MAX_ACTION_CONTENT, preserve=True):
+        return False
+    if action_type in _TARGET_ACTIONS:
+        durable_target_id = _bounded_text(action.target_id or action.parent_action_id, 160)
+        if target is None or target.get("id") != durable_target_id:
+            return False
+        if action_type in {"FOLLOW", "MUTE"} and action.parent_action_id is not None:
+            return False
+    if action_type == "REACTION":
+        try:
+            payload = json.loads(action.payload_json or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        durable_reaction = (
+            _bounded_text(payload.get("reaction"), 24).upper()
+            if isinstance(payload, Mapping)
+            else ""
+        )
+        if _bounded_text(parameters.get("reaction"), 24).upper() != durable_reaction:
+            return False
+    return True
+
+
+def _finalize_opportunity_receipt(
+    *,
+    decision: Mapping[str, Any],
+    action: SimulationAction,
+    round_number: int,
+    opportunity_snapshot: OpportunitySnapshotV1 | None,
+    cumulative_snapshot: OpportunitySnapshotV1 | None,
+    prior_receipt: OpportunityReceiptV1 | None,
+    compatibility_mode: CompatibilityModeV1,
+) -> OpportunityReceiptV1:
+    effective_action_type = _simulation_action_type(action) or "IDLE"
+    requested_value = (
+        decision.get("requested_action_type")
+        if "requested_action_type" in decision
+        else decision.get("selected_action")
+    )
+    requested_raw = _bounded_text(requested_value, 20).upper()
+    requested_action_type = (
+        cast(ActionTypeV1, requested_raw) if requested_raw in _ACTION_TYPES else None
+    )
+    snapshot = cumulative_snapshot
+    receipt_action_type = requested_action_type or effective_action_type
+    opportunity = snapshot.actions[receipt_action_type] if snapshot is not None else None
+    search = snapshot.actions["SEARCH"] if snapshot is not None else None
+    trend = snapshot.actions["TREND"] if snapshot is not None else None
+    target_ids = tuple(opportunity["eligible_target_ids"]) if opportunity is not None else ()
+    failure_raw = _bounded_text(decision.get("failure_code"), 64)
+    failure_code = (
+        cast(DecisionFailureCodeV1, failure_raw)
+        if failure_raw in _DECISION_FAILURE_CODES
+        else "DECISION_UNAVAILABLE"
+        if failure_raw
+        else None
+    )
+    idle_raw = _bounded_text(decision.get("idle_reason_code"), 64).upper()
+    idle_reason_code = (
+        cast(IdleReasonCodeV1, idle_raw) if idle_raw in _IDLE_REASON_CODES else None
+    )
+
+    selected_target_eligible: bool | None = None
+    parameter_eligible: bool | None = None
+    if compatibility_mode == "live" and requested_action_type in _TARGET_ACTIONS:
+        target = _target(decision.get("target_agent_or_object"))
+        if target is not None:
+            selected_target_eligible = target.get("id") in target_ids
+        elif failure_code in {
+            "DECISION_INVALID_ACTION_TARGET",
+            "DECISION_TARGET_NOT_IN_CATALOG",
+            "DECISION_TARGET_NOT_ELIGIBLE",
+        }:
+            selected_target_eligible = False
+    if compatibility_mode == "live" and requested_action_type in _PARAMETER_ACTIONS:
+        if failure_code in {
+            "DECISION_INVALID_ACTION_PARAMETER",
+            "DECISION_REACTION_NO_OP",
+            "DECISION_SEARCH_NO_OP",
+        }:
+            parameter_eligible = False
+        elif decision.get("decision_status") == "verified":
+            parameter_eligible = True
+
+    corpus_revision = (
+        search.get("corpus_revision")
+        if search is not None
+        else prior_receipt.get("corpus_revision")
+        if prior_receipt is not None
+        else None
+    )
+    history_complete = (
+        bool(search.get("search_history_complete"))
+        if search is not None
+        else bool(prior_receipt.get("search_history_complete"))
+        if prior_receipt is not None
+        else False
+    )
+    action_status = str(getattr(action.status, "value", action.status)).lower()
+    query_fingerprint = None
+    if (
+        corpus_revision is not None
+        and action_status == "verified"
+        and effective_action_type == "SEARCH"
+    ):
+        query_fingerprint = search_query_fingerprint_v1(
+            action.content,
+            corpus_revision=corpus_revision,
+        )
+    recent_query_fingerprints = (
+        list(search.get("recent_query_fingerprints", ()))
+        if search is not None
+        else list(prior_receipt.get("recent_query_fingerprints", ()))
+        if prior_receipt is not None
+        else []
+    )
+    if (
+        action_status == "verified"
+        and effective_action_type == "SEARCH"
+        and query_fingerprint is not None
+        and query_fingerprint not in recent_query_fingerprints
+    ):
+        recent_query_fingerprints.append(query_fingerprint)
+    current_trend_signature = (
+        trend.get("current_trend_signature") if trend is not None else None
+    )
+    last_trend_signature = (
+        trend.get("last_trend_signature")
+        if trend is not None
+        else prior_receipt.get("last_trend_signature")
+        if prior_receipt is not None
+        else None
+    )
+    if (
+        trend is not None
+        and action_status == "verified"
+        and effective_action_type == "TREND"
+    ):
+        last_trend_signature = current_trend_signature
+
+    live_snapshot_available = (
+        compatibility_mode == "live" and opportunity_snapshot is not None
+    )
+    return {
+        "version": 1,
+        "as_of_round": max(0, round_number - 1),
+        "social_state_revision": (
+            opportunity_snapshot.social_state_revision if live_snapshot_available else None
+        ),
+        "domain_state_revision": None,
+        "allowed_rule_ids": [],
+        "requested_action_type": requested_action_type,
+        "effective_action_type": effective_action_type,
+        "available": bool(opportunity["available"]) if live_snapshot_available else False,
+        "grounded": bool(opportunity["grounded"]) if live_snapshot_available else False,
+        "reason_codes": (
+            list(opportunity["reason_codes"])
+            if live_snapshot_available
+            else ["OPPORTUNITY_SNAPSHOT_UNAVAILABLE"]
+        ),
+        "eligible_target_count": len(target_ids) if live_snapshot_available else 0,
+        "selected_target_eligible": selected_target_eligible,
+        "parameter_eligible": parameter_eligible,
+        "corpus_revision": corpus_revision,
+        "query_fingerprint": query_fingerprint,
+        "search_history_complete": history_complete,
+        "recent_query_fingerprints": recent_query_fingerprints,
+        "current_trend_signature": current_trend_signature,
+        "last_trend_signature": last_trend_signature,
+        "idle_reason_code": idle_reason_code,
+        "failure_code": failure_code,
+        "compatibility_mode": compatibility_mode,
+    }
+
+
 def persist_round_runtime_in_session(
     session: Session,
     scenario_id: str,
@@ -2056,10 +2750,16 @@ def persist_round_runtime_in_session(
     round_number: int,
     messages: Sequence[Mapping[str, Any]],
     *,
+    opportunity_snapshots_by_actor: Mapping[
+        str, OpportunitySnapshotV1 | None
+    ] | None,
+    compatibility_mode: CompatibilityModeV1,
     runtime_lease: object | None = None,
 ) -> dict[str, Any]:
     """Merge a branch-round into the caller's uncommitted transaction."""
     normalized_round = max(1, int(round_number))
+    if compatibility_mode not in {"live", "legacy_import"}:
+        raise ValueError("AGENT_RUNTIME_COMPATIBILITY_MODE_INVALID")
     if not _runtime_lease_is_held(session, runtime_lease):
         raise ValueError("AGENT_RUNTIME_LEASE_LOST")
     scenario = session.get(Scenario, scenario_id)
@@ -2115,6 +2815,27 @@ def persist_round_runtime_in_session(
         branch_id=branch_id,
         before_round=normalized_round,
     )
+    prior_actor_ids: list[str] = []
+    for message in messages:
+        actor_id = _bounded_text(message.get("agent_id"), 160)
+        supplied_snapshot = (
+            opportunity_snapshots_by_actor.get(actor_id)
+            if opportunity_snapshots_by_actor is not None
+            else None
+        )
+        if compatibility_mode == "legacy_import" or not _valid_opportunity_snapshot(
+            supplied_snapshot,
+            agent_id=actor_id,
+            round_number=normalized_round,
+        ):
+            prior_actor_ids.append(actor_id)
+    prior_receipts_by_actor = _prior_opportunity_receipts_in_session(
+        session,
+        runtime,
+        scenario_id=scenario_id,
+        coordinates=coordinates,
+        agent_ids=prior_actor_ids,
+    )
     decisions: list[dict[str, Any]] = []
     transitions: list[dict[str, Any]] = []
     for message in messages:
@@ -2143,6 +2864,37 @@ def persist_round_runtime_in_session(
             raw_world_changes = raw_decision.get("observed_world_changes") or ()
         else:
             raw_memory_refs = raw_world_changes = ()
+        supplied_snapshot = (
+            opportunity_snapshots_by_actor.get(agent_id)
+            if opportunity_snapshots_by_actor is not None
+            else None
+        )
+        trusted_snapshot = (
+            supplied_snapshot
+            if _valid_opportunity_snapshot(
+                supplied_snapshot,
+                agent_id=agent_id,
+                round_number=normalized_round,
+            )
+            else None
+        )
+        prior_receipt = prior_receipts_by_actor.get(agent_id)
+        cumulative_snapshot = trusted_snapshot
+        if compatibility_mode == "legacy_import" or (
+            trusted_snapshot is None and prior_receipt is None
+        ):
+            cumulative_snapshot = None
+            if previous_social_state is not None:
+                try:
+                    cumulative_snapshot = derive_opportunity_snapshots_v1(
+                        social_state=previous_social_state,
+                        target_catalogs_by_actor={
+                            agent_id: {"actions": [], "agents": []}
+                        },
+                        prior_receipts_by_actor={agent_id: prior_receipt},
+                    )[agent_id]
+                except Exception:
+                    cumulative_snapshot = None
         decision = normalize_decision_envelope(
             raw_decision,
             agent_id=agent_id,
@@ -2152,7 +2904,54 @@ def persist_round_runtime_in_session(
             or "Continue the current evidence-based goal",
             allowed_memory_refs=tuple(raw_memory_refs),
             allowed_world_changes=tuple(raw_world_changes),
+            opportunity_snapshot=trusted_snapshot,
+            compatibility_mode=compatibility_mode,
         )
+        if not _decision_matches_action(decision, action):
+            decision = _fail_closed_decision(
+                code="DECISION_UNAVAILABLE",
+                agent_id=agent_id,
+                branch_id=branch_id,
+                round_number=normalized_round,
+                fallback_goal=_bounded_text(message.get("fallback_goal"))
+                or "Continue the current evidence-based goal",
+                constraints=(raw_decision or {}).get("constraints", ())
+                if isinstance(raw_decision, Mapping)
+                else (),
+                requested_action_type=_bounded_text(
+                    decision.get("requested_action_type"),
+                    20,
+                ).upper()
+                or None,
+            )
+        action_status = str(getattr(action.status, "value", action.status)).lower()
+        durable_failure_code = _bounded_text(action.failure_code, 64).upper()
+        if (
+            compatibility_mode == "live"
+            and action_status in {"unavailable", "failed"}
+            and durable_failure_code
+        ):
+            reason = f"Structured decision unavailable ({durable_failure_code})."
+            decision["decision_status"] = "unavailable"
+            decision["failure_code"] = durable_failure_code
+            decision["idle_reason"] = reason
+            decision["idle_reason_code"] = (
+                "IDLE_OPPORTUNITY_UNAVAILABLE"
+                if durable_failure_code == "DECISION_OPPORTUNITY_UNAVAILABLE"
+                else "IDLE_DECISION_UNAVAILABLE"
+            )
+            decision["decision_basis"] = [reason]
+        opportunity_receipt = _finalize_opportunity_receipt(
+            decision=decision,
+            action=action,
+            round_number=normalized_round,
+            opportunity_snapshot=trusted_snapshot,
+            cumulative_snapshot=cumulative_snapshot,
+            prior_receipt=prior_receipt,
+            compatibility_mode=compatibility_mode,
+        )
+        decision.pop("requested_action_type", None)
+        decision["opportunity_receipt"] = opportunity_receipt
         utterance = _bounded_text(
             message.get("content") or message.get("speech"),
             _MAX_ACTION_CONTENT,
@@ -2348,6 +3147,10 @@ def persist_round_runtime(
     round_number: int,
     messages: Sequence[Mapping[str, Any]],
     *,
+    opportunity_snapshots_by_actor: Mapping[
+        str, OpportunitySnapshotV1 | None
+    ] | None = None,
+    compatibility_mode: CompatibilityModeV1 = "legacy_import",
     runtime_lease: object | None = None,
 ) -> dict[str, Any]:
     """Persist one branch-round in an owned transaction."""
@@ -2358,6 +3161,8 @@ def persist_round_runtime(
             branch_id,
             round_number,
             messages,
+            opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+            compatibility_mode=compatibility_mode,
             runtime_lease=runtime_lease,
         )
         if not _runtime_lease_is_held(session, runtime_lease):
@@ -2569,27 +3374,18 @@ def sanitize_imported_agent_runtime_in_session(
             return None
         return number if number > 0 else None
 
-    for raw_branch_id, raw_branch in sorted(
-        source["branches"].items(),
-        key=lambda item: str(item[0]),
-    ):
-        branch_id = str(raw_branch_id)
-        branch = session.get(Branch, branch_id)
-        if branch is None or branch.scenario_id != scenario_id:
+    supplied_decisions: dict[tuple[str, int, str, str, str], Mapping[str, Any]] = {}
+    for raw_branch_id, raw_branch in source["branches"].items():
+        if not isinstance(raw_branch, Mapping):
             continue
-        raw_rounds = raw_branch.get("rounds") if isinstance(raw_branch, Mapping) else None
+        branch_id = str(raw_branch_id)
+        raw_rounds = raw_branch.get("rounds")
         if not isinstance(raw_rounds, Mapping):
             continue
-        ordered_rounds = sorted(
-            (
-                (number, payload)
-                for key, payload in raw_rounds.items()
-                if (number := round_number_from_key(key)) is not None
-                and isinstance(payload, Mapping)
-            ),
-            key=lambda item: item[0],
-        )
-        for round_number, raw_round in ordered_rounds:
+        for raw_round_number, raw_round in raw_rounds.items():
+            round_number = round_number_from_key(raw_round_number)
+            if round_number is None or not isinstance(raw_round, Mapping):
+                continue
             raw_decisions = raw_round.get("decisions", [])
             raw_transitions = raw_round.get("transitions", [])
             decisions_by_agent = {
@@ -2602,18 +3398,92 @@ def sanitize_imported_agent_runtime_in_session(
                 for record in raw_transitions
                 if isinstance(record, Mapping) and str(record.get("agent_id") or "")
             }
-            records: list[dict[str, Any]] = []
             for agent_id in sorted(set(decisions_by_agent) | set(transitions_by_agent)):
                 decision = decisions_by_agent.get(agent_id, {})
                 transition = transitions_by_agent.get(agent_id, {})
-                coordinate = transition or decision
+                decision_action_id = _bounded_text(decision.get("action_id"), 160)
+                decision_message_id = _bounded_text(decision.get("message_id"), 160)
+                coordinate = (
+                    decision
+                    if decision_action_id and decision_message_id
+                    else transition
+                )
                 action_id = _bounded_text(coordinate.get("action_id"), 160)
                 message_id = _bounded_text(coordinate.get("message_id"), 160)
-                action = session.get(SimulationAction, action_id) if action_id else None
+                if action_id and message_id:
+                    supplied_decisions.setdefault(
+                        (branch_id, round_number, agent_id, message_id, action_id),
+                        decision,
+                    )
+
+    branches = session.exec(
+        select(Branch).where(Branch.scenario_id == scenario_id)
+    ).all()
+    branches_by_id = {str(branch.id): branch for branch in branches}
+
+    def native_parent_depth(branch: Branch) -> int:
+        if bool(str(branch.replay_kind or "").strip()):
+            return 0
+        depth = 0
+        current = branch
+        seen = {str(branch.id)}
+        while current.parent_branch_id:
+            parent_id = str(current.parent_branch_id)
+            parent = branches_by_id.get(parent_id)
+            if parent is None or parent_id in seen:
+                break
+            depth += 1
+            seen.add(parent_id)
+            if bool(str(parent.replay_kind or "").strip()):
+                break
+            current = parent
+        return depth
+
+    durable_actions = session.exec(
+        select(SimulationAction)
+        .where(
+            SimulationAction.scenario_id == scenario_id,
+            SimulationAction.message_id.is_not(None),
+        )
+        .order_by(SimulationAction.sequence, SimulationAction.id)
+    ).all()
+    actions_by_coordinate: dict[tuple[str, int], list[SimulationAction]] = {}
+    for action in durable_actions:
+        branch_id = str(action.branch_id)
+        round_number = round_number_from_key(action.round_number)
+        if branch_id not in branches_by_id or round_number is None:
+            continue
+        actions_by_coordinate.setdefault((branch_id, round_number), []).append(action)
+
+    action_branch_ids = {branch_id for branch_id, _round in actions_by_coordinate}
+    ordered_branches = sorted(
+        (
+            branch
+            for branch_id, branch in branches_by_id.items()
+            if branch_id in action_branch_ids
+        ),
+        key=lambda branch: (native_parent_depth(branch), str(branch.id)),
+    )
+    for branch in ordered_branches:
+        branch_id = str(branch.id)
+        ordered_round_numbers = sorted(
+            round_number
+            for owner_branch_id, round_number in actions_by_coordinate
+            if owner_branch_id == branch_id
+        )
+        for round_number in ordered_round_numbers:
+            records: list[dict[str, Any]] = []
+            round_actions = sorted(
+                actions_by_coordinate[(branch_id, round_number)],
+                key=lambda action: (int(action.sequence), str(action.id)),
+            )
+            for action in round_actions:
+                agent_id = str(action.agent_id)
+                action_id = str(action.id)
+                message_id = _bounded_text(action.message_id, 160)
                 message = session.get(AgentMessage, message_id) if message_id else None
                 if (
-                    action is None
-                    or message is None
+                    message is None
                     or action.scenario_id != scenario_id
                     or action.branch_id != branch_id
                     or action.round_number != round_number
@@ -2623,19 +3493,42 @@ def sanitize_imported_agent_runtime_in_session(
                     or message.round_id != action.round_id
                 ):
                     continue
+                decision = supplied_decisions.get(
+                    (branch_id, round_number, agent_id, message.id, action.id)
+                )
                 # Imported transition prose is not authoritative. Omitting it makes
                 # persistence rebuild the transition from the durable action and
                 # replayed social state.
+                sanitized_decision = (
+                    copy.deepcopy(dict(decision))
+                    if isinstance(decision, Mapping)
+                    else None
+                )
+                if sanitized_decision is not None:
+                    sanitized_decision.pop("opportunity_receipt", None)
                 records.append({
                     "agent_id": agent_id,
                     "message_id": message.id,
                     "action_id": action.id,
                     "content": message.content,
-                    "fallback_goal": _bounded_text(decision.get("current_goal")),
-                    "decision_envelope": decision,
+                    "fallback_goal": _bounded_text(
+                        decision.get("current_goal")
+                        if isinstance(decision, Mapping)
+                        else None
+                    ),
+                    "decision_envelope": sanitized_decision,
                 })
             if not records:
                 continue
+            actor_action_counts: dict[str, int] = {}
+            for record in records:
+                actor_id = str(record["agent_id"])
+                actor_action_counts[actor_id] = actor_action_counts.get(actor_id, 0) + 1
+            duplicate_actor_ids = {
+                actor_id
+                for actor_id, action_count in actor_action_counts.items()
+                if action_count > 1
+            }
             context = copy.deepcopy(base_context)
             context[RUNTIME_CONTEXT_KEY] = clean
             scenario.parsed_context = context
@@ -2647,6 +3540,8 @@ def sanitize_imported_agent_runtime_in_session(
                 branch_id,
                 round_number,
                 records,
+                opportunity_snapshots_by_actor=None,
+                compatibility_mode="legacy_import",
             )
             generated_round = (
                 clean.get("branches", {})
@@ -2654,6 +3549,24 @@ def sanitize_imported_agent_runtime_in_session(
                 .get("rounds", {})
                 .get(str(round_number), {})
             )
+            for generated in generated_round.get("decisions", []):
+                if (
+                    not isinstance(generated, dict)
+                    or str(generated.get("agent_id") or "") not in duplicate_actor_ids
+                ):
+                    continue
+                receipt = generated.get("opportunity_receipt")
+                if not isinstance(receipt, dict):
+                    continue
+                # Multiple durable actions for one actor in one round violate the
+                # cumulative-receipt invariant. Keep the import, but make every
+                # generated receipt for that actor conservatively suppress SEARCH
+                # and consume the currently visible TREND signature.
+                receipt["search_history_complete"] = False
+                receipt["recent_query_fingerprints"] = []
+                receipt["last_trend_signature"] = receipt.get(
+                    "current_trend_signature"
+                )
             for generated in generated_round.get("transitions", []):
                 if not isinstance(generated, dict):
                     continue
@@ -2987,7 +3900,12 @@ def clone_runtime_history(
         except (TypeError, ValueError):
             continue
         if number <= cutoff:
-            selected_rounds[str(number)] = copy.deepcopy(payload)
+            cloned_payload = copy.deepcopy(payload)
+            if isinstance(cloned_payload, Mapping):
+                for decision in cloned_payload.get("decisions", []):
+                    if isinstance(decision, dict):
+                        decision.pop("opportunity_receipt", None)
+            selected_rounds[str(number)] = cloned_payload
     fragment = {
         "version": RUNTIME_VERSION,
         "branches": {source_branch_id: {"rounds": selected_rounds}},
@@ -3016,6 +3934,7 @@ __all__ = [
     "load_agent_runtime",
     "load_prior_agent_decision",
     "load_prior_agent_transition",
+    "load_prior_opportunity_receipt",
     "normalize_decision_envelope",
     "persist_round_runtime",
     "persist_round_runtime_in_session",

@@ -295,6 +295,86 @@ def test_follow_prioritizes_default_rendered_feed_without_refresh_receipt():
         session.close()
 
 
+def test_refresh_cursor_uses_all_visible_posts_and_never_regresses():
+    session, scenario, branch, agents, round_row = _world()
+    viewer = agents["viewer"]
+
+    def add(
+        agent_name: str,
+        sequence: int,
+        action_type: SimulationActionType,
+        **kwargs,
+    ) -> SimulationAction:
+        return _action(
+            session,
+            scenario=scenario,
+            branch=branch,
+            round_row=round_row,
+            agent=agents[agent_name],
+            sequence=sequence,
+            action_type=action_type,
+            **kwargs,
+        )
+
+    try:
+        followed_posts = [
+            add("followed", sequence, SimulationActionType.POST, content=f"followed-{sequence}")
+            for sequence in range(1, 9)
+        ]
+        newer_visible = add("newest", 9, SimulationActionType.POST, content="newer-visible")
+        add("muted", 10, SimulationActionType.POST, content="muted-high-sequence")
+        add(
+            "viewer",
+            11,
+            SimulationActionType.FOLLOW,
+            target_type="agent",
+            target_id=agents["followed"].id,
+        )
+        add(
+            "viewer",
+            12,
+            SimulationActionType.MUTE,
+            target_type="agent",
+            target_id=agents["muted"].id,
+        )
+        add("viewer", 13, SimulationActionType.REFRESH)
+        session.commit()
+
+        state = reduce_social_world_state(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            cutoff_round=1,
+        )
+        receipt = state.refresh_receipts[viewer.id][-1]
+        assert receipt.post_ids == tuple(post.id for post in reversed(followed_posts))
+        assert newer_visible.id not in receipt.post_ids
+        assert receipt.new_count == 8
+        assert state.last_seen[viewer.id] == 9
+
+        add(
+            "viewer",
+            14,
+            SimulationActionType.MUTE,
+            target_type="agent",
+            target_id=agents["newest"].id,
+        )
+        add("viewer", 15, SimulationActionType.REFRESH)
+        session.commit()
+
+        state_after_mute = reduce_social_world_state(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            cutoff_round=1,
+        )
+        latest_receipt = state_after_mute.refresh_receipts[viewer.id][-1]
+        assert latest_receipt.new_count == 0
+        assert state_after_mute.last_seen[viewer.id] == 9
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize(
     ("action_type", "change_type"),
     [
