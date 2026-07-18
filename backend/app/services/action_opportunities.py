@@ -6,9 +6,19 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Literal, TypedDict
 
 from app.config import settings
+from app.services.domain_world import (
+    _NUMERIC_RE,
+    MAX_DECIMAL_SCALE,
+    DomainOpportunityEvaluationV1,
+    _canonical_numeric,
+    _exact_mapping,
+    _normalize_identifier,
+    _normalize_unit,
+)
 from app.services.social_world import SocialWorldState
 
 ActionTypeV1 = Literal[
@@ -37,6 +47,11 @@ DecisionFailureCodeV1 = Literal[
     "DECISION_TARGET_NOT_IN_CATALOG", "DECISION_TARGET_NOT_ELIGIBLE",
     "DECISION_OPPORTUNITY_UNAVAILABLE", "DECISION_REACTION_NO_OP",
     "DECISION_SEARCH_NO_OP",
+]
+DomainOpportunityReasonCodeV1 = Literal[
+    "OPPORTUNITY_DOMAIN_RULE_ALLOWED",
+    "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",
+    "OPPORTUNITY_DOMAIN_SOCIAL_GATE_CLOSED",
 ]
 IdleReasonCodeV1 = Literal[
     "IDLE_NO_ACTION_NEEDED", "IDLE_INSUFFICIENT_EVIDENCE",
@@ -70,6 +85,7 @@ class ActionOpportunityV1(TypedDict):
     available: bool
     grounded: bool
     reason_codes: tuple[OpportunityReasonCodeV1, ...]
+    domain_reason_codes: tuple[DomainOpportunityReasonCodeV1, ...]
     eligible_target_ids: tuple[str, ...]
 
 
@@ -143,6 +159,16 @@ _FAILURE_CODES = frozenset(DecisionFailureCodeV1.__args__)
 _IDLE_REASON_CODES = frozenset(IdleReasonCodeV1.__args__)
 _RECEIPT_FIELDS = frozenset(OpportunityReceiptV1.__required_keys__)
 _TREND_RECENCY_WINDOW = 64
+_DOMAIN_ACTION_TYPES = frozenset(_ACTION_TYPES[1:])
+_DOMAIN_EVALUATION_FIELDS = frozenset(
+    {"version", "schema_hash", "input_state_revision", "as_of_round", "rules"}
+)
+_DOMAIN_RULE_FIELDS = frozenset(
+    {"rule_id", "variable_id", "action_type", "preconditions_met", "preconditions"}
+)
+_DOMAIN_PREDICATE_FIELDS = frozenset(
+    {"variable_id", "comparator", "expected_value", "actual_value", "unit", "met"}
+)
 
 
 def _digest(kind: str, payload: object) -> str:
@@ -167,6 +193,126 @@ def _is_optional_digest(value: object) -> bool:
 
 def _is_optional_bool(value: object) -> bool:
     return value is None or type(value) is bool
+
+
+def _is_domain_id(value: object) -> bool:
+    try:
+        return _normalize_identifier(value) == value
+    except ValueError:
+        return False
+
+
+def _domain_predicate_fact(value: object) -> tuple[str, tuple[str, str, int, object]] | None:
+    try:
+        row = _exact_mapping(value, _DOMAIN_PREDICATE_FIELDS)
+        variable_id = _normalize_identifier(row["variable_id"])
+        comparator, expected, actual = (
+            row["comparator"], row["expected_value"], row["actual_value"]
+        )
+        unit = _normalize_unit(row["unit"])
+        if (
+            type(comparator) is not str
+            or comparator not in {"eq", "ne", "lt", "lte", "gt", "gte"}
+            or type(row["met"]) is not bool
+            or type(expected) is not type(actual)
+            or type(expected) not in {str, bool}
+        ):
+            raise ValueError
+        if type(actual) is bool:
+            if comparator not in {"eq", "ne"} or unit != "unitless":
+                raise ValueError
+            left, right, kind, scale = actual, expected, "boolean", 0
+        else:
+            actual_match = _NUMERIC_RE.fullmatch(actual)
+            expected_match = _NUMERIC_RE.fullmatch(expected)
+            if unit != "unitless" or actual_match or expected_match:
+                if actual_match is None or expected_match is None:
+                    raise ValueError
+                scale, expected_scale = len(actual_match.group(3) or ""), len(
+                    expected_match.group(3) or ""
+                )
+                if scale != expected_scale or scale > MAX_DECIMAL_SCALE:
+                    raise ValueError
+                scale_zero_unit = unit in {"count", "basis_point", "second"} or unit.startswith(
+                    "currency:"
+                )
+                if scale_zero_unit and scale:
+                    raise ValueError
+                if (
+                    _canonical_numeric(actual, scale) != actual
+                    or _canonical_numeric(expected, scale) != expected
+                ):
+                    raise ValueError
+                left, right, kind = Decimal(actual), Decimal(expected), "numeric"
+            else:
+                if comparator not in {"eq", "ne"}:
+                    raise ValueError
+                left, right, kind, scale = (
+                    _normalize_identifier(actual), _normalize_identifier(expected), "enum", 0
+                )
+        calculated = {
+            "eq": left == right, "ne": left != right, "lt": left < right,
+            "lte": left <= right, "gt": left > right, "gte": left >= right,
+        }[comparator]
+        if row["met"] is not calculated:
+            raise ValueError
+        return variable_id, (kind, unit, scale, actual)
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return None
+
+
+def _valid_domain_opportunities(
+    value: object,
+    *,
+    as_of_round: int,
+) -> DomainOpportunityEvaluationV1 | None:
+    try:
+        row = _exact_mapping(value, _DOMAIN_EVALUATION_FIELDS)
+        rules = row["rules"]
+        if (
+            type(row["version"]) is not int or row["version"] != 1
+            or not _is_digest(row["schema_hash"])
+            or not _is_digest(row["input_state_revision"])
+            or type(row["as_of_round"]) is not int or row["as_of_round"] != as_of_round
+            or not isinstance(rules, tuple) or len(rules) > 16
+        ):
+            raise ValueError
+        rule_ids: list[str] = []
+        state_facts: dict[str, tuple[str, str, int, object]] = {}
+        for raw_rule in rules:
+            rule = _exact_mapping(raw_rule, _DOMAIN_RULE_FIELDS)
+            rule_id, action_type, predicates = (
+                _normalize_identifier(rule["rule_id"]), rule["action_type"], rule["preconditions"]
+            )
+            _normalize_identifier(rule["variable_id"])
+            if (
+                type(action_type) is not str or action_type not in _DOMAIN_ACTION_TYPES
+                or type(rule["preconditions_met"]) is not bool
+                or not isinstance(predicates, tuple) or len(predicates) > 4
+                or rule["preconditions_met"] is not all(item["met"] for item in predicates)
+            ):
+                raise ValueError
+            for predicate in predicates:
+                fact = _domain_predicate_fact(predicate)
+                if fact is None or state_facts.setdefault(fact[0], fact[1]) != fact[1]:
+                    raise ValueError
+            rule_ids.append(rule_id)
+        if rule_ids != sorted(set(rule_ids)):
+            raise ValueError
+        return value
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _domain_receipt_fields_are_valid(revision: object, rule_ids: object) -> bool:
+    if (
+        not isinstance(rule_ids, list)
+        or len(rule_ids) > 16
+        or any(not _is_domain_id(item) for item in rule_ids)
+        or rule_ids != sorted(set(rule_ids))
+    ):
+        return False
+    return (revision is None and not rule_ids) or _is_digest(revision)
 
 
 def _canonical(value: object) -> object:
@@ -326,8 +472,9 @@ def _receipt_is_valid(receipt: object) -> bool:
         and type(receipt.get("as_of_round")) is int
         and receipt["as_of_round"] >= 0
         and _is_optional_digest(receipt.get("social_state_revision"))
-        and receipt.get("domain_state_revision") is None
-        and receipt.get("allowed_rule_ids") == []
+        and _domain_receipt_fields_are_valid(
+            receipt.get("domain_state_revision"), receipt.get("allowed_rule_ids")
+        )
         and receipt.get("requested_action_type") in (*_ACTION_TYPES, None)
         and receipt.get("effective_action_type") in _ACTION_TYPES
         and type(receipt.get("available")) is bool
@@ -376,6 +523,7 @@ def _opportunity(
         "available": available,
         "grounded": available,
         "reason_codes": (reason,),
+        "domain_reason_codes": (),
         "eligible_target_ids": targets,
     }
 
@@ -395,10 +543,15 @@ def derive_opportunity_snapshots_v1(
     social_state: SocialWorldState,
     target_catalogs_by_actor: Mapping[str, ActionTargetCatalogV1],
     prior_receipts_by_actor: Mapping[str, OpportunityReceiptV1 | None],
+    domain_opportunities: DomainOpportunityEvaluationV1 | None = None,
 ) -> dict[str, OpportunitySnapshotV1]:
     """Derive exactly one immutable N-1 snapshot per actor before gather tasks."""
     social_revision = _state_revision(social_state)
     target_index = _target_index(social_state)
+    valid_domain = _valid_domain_opportunities(
+        domain_opportunities,
+        as_of_round=social_state.cutoff_round,
+    )
     snapshots: dict[str, OpportunitySnapshotV1] = {}
     for actor_id in sorted(target_catalogs_by_actor):
         catalog = target_catalogs_by_actor[actor_id]
@@ -567,13 +720,38 @@ def derive_opportunity_snapshots_v1(
             "TREND": trend,
             "REFRESH": refresh,
         }
+        domain_revision: str | None = None
+        allowed_rule_ids: tuple[str, ...] = ()
+        if valid_domain is not None:
+            domain_revision = valid_domain["input_state_revision"]
+            contributed: set[str] = set()
+            for action_type in _ACTION_TYPES[1:]:
+                bound = tuple(
+                    rule for rule in valid_domain["rules"]
+                    if rule["action_type"] == action_type
+                )
+                threshold_met = tuple(rule for rule in bound if rule["preconditions_met"])
+                socially_open = (
+                    actions[action_type]["available"] and actions[action_type]["grounded"]
+                )
+                if not bound:
+                    reason: tuple[DomainOpportunityReasonCodeV1, ...] = ()
+                elif threshold_met and socially_open:
+                    reason = ("OPPORTUNITY_DOMAIN_RULE_ALLOWED",)
+                    contributed.update(rule["rule_id"] for rule in threshold_met)
+                elif threshold_met:
+                    reason = ("OPPORTUNITY_DOMAIN_SOCIAL_GATE_CLOSED",)
+                else:
+                    reason = ("OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",)
+                actions[action_type]["domain_reason_codes"] = reason
+            allowed_rule_ids = tuple(sorted(contributed))
         snapshots[actor_id] = OpportunitySnapshotV1(
             version=1,
             actor_id=actor_id,
             as_of_round=social_state.cutoff_round,
             social_state_revision=social_revision,
-            domain_state_revision=None,
-            allowed_rule_ids=(),
+            domain_state_revision=domain_revision,
+            allowed_rule_ids=allowed_rule_ids,
             actions=actions,
         )
     return snapshots
@@ -625,6 +803,7 @@ __all__ = (
     "CatalogAgentTargetV1",
     "CompatibilityModeV1",
     "DecisionFailureCodeV1",
+    "DomainOpportunityReasonCodeV1",
     "IdleReasonCodeV1",
     "OpportunityActionsV1",
     "OpportunityReasonCodeV1",

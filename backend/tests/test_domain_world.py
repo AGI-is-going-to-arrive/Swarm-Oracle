@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import decimal
 import hashlib
 import json
 import re
@@ -15,6 +16,7 @@ from app.services.domain_world import (
     DomainFailureCodeV1,
     DomainWorldConfigV1,
     canonical_json_bytes_v1,
+    evaluate_domain_opportunities_v1,
     freeze_domain_schema_v1,
     initial_domain_state_v1,
     reduce_domain_round_v1,
@@ -332,6 +334,10 @@ def test_public_surface_constants_and_exact_failure_codes_are_frozen():
         "reduce_domain_round_v1",
         "string_has_credential_features",
         "scan_domain_payload_for_secret_features",
+        "DomainOpportunityEvaluationV1",
+        "DomainPredicateEvaluationV1",
+        "DomainRuleOpportunityEvaluationV1",
+        "evaluate_domain_opportunities_v1",
     )
     assert domain_world.__all__ == expected
     assert DomainFailureCodeV1.__args__ == _EXACT_FAILURE_CODES
@@ -2155,3 +2161,144 @@ def test_state_and_semantic_hashes_exclude_coordinates_but_revision_keeps_event_
     assert first == remapped_coordinates
     assert first != different_history
     assert semantic == semantic_state_hash_v1(schema_hash=config.schema_hash, state=state)
+
+
+def _opportunity_result(config, *, state=None, accepted=(), revision=None, as_of_round=0):
+    if state is None:
+        assert config.schema is not None
+        state = dict(initial_domain_state_v1(config.schema))
+    revision = revision if revision is not None else _state_revision(
+        config, state=state, as_of_round=as_of_round, accepted=accepted
+    )
+    return evaluate_domain_opportunities_v1(
+        config=config,
+        state=state,
+        input_state_revision=revision,
+        as_of_round=as_of_round,
+        accepted_event_identities=accepted,
+    )
+
+
+@pytest.mark.parametrize(
+    ("variable", "comparator", "raw", "canonical"),
+    [
+        *[(_variable(), *case) for case in (
+            ("eq", "5", "5"), ("ne", "4", "4"), ("lt", "6", "6"),
+            ("lte", "5", "5"), ("gt", "4", "4"), ("gte", "5", "5"),
+        )],
+        (_variable("amount", value_type="decimal", unit="unitless", scale=2,
+                   minimum="0", maximum="10", initial_value="5.00"), "eq", "5", "5.00"),
+        *[(_variable("enabled", value_type="boolean", initial_value=True), *case)
+          for case in (("eq", True, True), ("ne", False, False))],
+        *[(_variable("phase", value_type="enum", initial_value="open",
+                    enum_values=["open", "closed"]), *case)
+          for case in (("eq", "open", "open"), ("ne", "closed", "closed"))],
+    ],
+)
+def test_domain_opportunity_evaluator_uses_all_frozen_typed_comparators(
+    variable, comparator, raw, canonical
+):
+    variable_id, unit = str(variable["variable_id"]), str(variable["unit"])
+    operation = (
+        "add_requested" if variable["value_type"] in {"integer", "decimal"} else "set_if_expected"
+    )
+    rule = _rule(
+        variable_id=variable_id, operation=operation, unit=unit,
+        preconditions=[_predicate(variable_id, comparator, raw, unit)],
+        opportunity_mode="allow_when_preconditions_met",
+    )
+    result = _opportunity_result(_active_config(variables=[variable], rules=[rule]))
+    predicate = result["rules"][0]["preconditions"][0]
+    assert (
+        predicate["comparator"], predicate["expected_value"],
+        predicate["actual_value"], predicate["met"],
+    ) == (comparator, canonical, variable["initial_value"], True)
+
+
+def test_domain_opportunity_evaluator_emits_full_and_excludes_effect_only():
+    rules = [
+        _rule("z_effect", opportunity_mode="effect_only"),
+        _rule("a_empty", opportunity_mode="allow_when_preconditions_met"),
+        _rule("b_pass", preconditions=[_predicate("balance", "gte", "5"),
+                                       _predicate("balance", "lte", "5")],
+              opportunity_mode="allow_when_preconditions_met"),
+        _rule("c_fail", preconditions=[_predicate("balance", "lt", "4"),
+                                       _predicate("balance", "gt", "1")],
+              opportunity_mode="allow_when_preconditions_met"),
+    ]
+    result = _opportunity_result(_active_config(rules=rules))
+    assert tuple(result) == (
+        "version", "schema_hash", "input_state_revision", "as_of_round", "rules"
+    )
+    assert [row["rule_id"] for row in result["rules"]] == ["a_empty", "b_pass", "c_fail"]
+    assert [
+        (row["preconditions_met"], [item["met"] for item in row["preconditions"]])
+        for row in result["rules"]
+    ] == [(True, []), (True, [True, True]), (False, [False, True])]
+
+
+def test_domain_opportunity_evaluator_fails_closed_for_config_state_and_revision():
+    config = _active_config(rules=[_rule(opportunity_mode="allow_when_preconditions_met")])
+    state, revision = {"balance": "5"}, _state_revision(config)
+    bad_configs = (
+        freeze_domain_schema_v1(None), dataclasses.replace(config, schema_hash=_digest("a")),
+        dataclasses.replace(config, version=2),
+        dataclasses.replace(config, unit_registry_version="other"),
+        dataclasses.replace(config, schema=None),
+    )
+    for bad_config in bad_configs:
+        with pytest.raises(ValueError):
+            _opportunity_result(bad_config, state=state, revision=revision)
+    bad_states = ({}, {"balance": "5", "extra": "0"}, {"balance": "05"},
+                  {"balance": True}, {"balance": "11"},
+                  {"balance": decimal.Decimal("5")})
+    for bad_state in bad_states:
+        with pytest.raises(ValueError):
+            _opportunity_result(config, state=bad_state, revision=revision)
+    for bad_round in (True, -1):
+        with pytest.raises(ValueError):
+            _opportunity_result(config, state=state, revision=revision, as_of_round=bad_round)
+    with pytest.raises(ValueError):
+        _opportunity_result(config, state=state, accepted=[("not", "three")], revision=revision)
+    accepted = (("change_balance", "balance", "seen-event"),)
+    assert _state_revision(config, accepted=accepted) != revision
+    with pytest.raises(ValueError):
+        _opportunity_result(config, state=state, accepted=accepted, revision=revision)
+
+
+def test_domain_opportunity_evaluator_is_capped_ordered_and_byte_deterministic():
+    variables = [_variable(), _variable("enabled", value_type="boolean", initial_value=True)]
+    rules = [_rule(f"rule_{index:02d}", opportunity_mode="allow_when_preconditions_met")
+             for index in reversed(range(16))]
+    config = _active_config(variables=variables, rules=rules)
+    state = {"enabled": True, "balance": "5"}
+    accepted = (("rule_02", "balance", "event-b"),
+                ("rule_01", "balance", "event-a"))
+    revision = _state_revision(config, state=state, accepted=accepted)
+    first = _opportunity_result(config, state=state, accepted=accepted, revision=revision)
+    permuted = _opportunity_result(
+        config, state={"balance": "5", "enabled": True},
+        accepted=tuple(reversed(accepted)), revision=revision
+    )
+    assert [row["rule_id"] for row in first["rules"]] == [
+        f"rule_{index:02d}" for index in range(16)
+    ]
+    assert canonical_json_bytes_v1(first) == canonical_json_bytes_v1(permuted)
+    assert b"\r" not in canonical_json_bytes_v1(first)
+    relabeled = _active_config(
+        variables=[dict(variables[0], label_en="Other label", label_zh="其他标签"), variables[1]],
+        rules=rules,
+    )
+    assert canonical_json_bytes_v1(
+        _opportunity_result(relabeled, state=state, accepted=accepted, revision=revision)
+    ) == canonical_json_bytes_v1(first)
+    variants = (
+        {"operation": "add_constant", "operand": "9"},
+        {"requested_minimum": "-2", "requested_maximum": "2"},
+    )
+    for changes in variants:
+        rules = [_rule(f"rule_{index:02d}", opportunity_mode="allow_when_preconditions_met",
+                       **changes) for index in range(16)]
+        changed = _active_config(variables=variables, rules=rules)
+        result = _opportunity_result(changed, state=state, accepted=accepted)
+        assert result["rules"] == first["rules"]

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 from dataclasses import replace
 
+import app.services.action_opportunities as action_opportunities
 from app.config import settings
 from app.services.action_opportunities import (
+    DomainOpportunityReasonCodeV1,
     OpportunityReceiptV1,
     OpportunitySnapshotV1,
     derive_opportunity_snapshots_v1,
@@ -155,11 +158,13 @@ def _derive(
     receipt: OpportunityReceiptV1 | None = None,
     *,
     actor_id: str = "viewer",
+    domain_opportunities: dict | None = None,
 ) -> OpportunitySnapshotV1:
     return derive_opportunity_snapshots_v1(
         social_state=state,
         target_catalogs_by_actor={actor_id: catalog or _catalog()},
         prior_receipts_by_actor={actor_id: receipt},
+        domain_opportunities=domain_opportunities,
     )[actor_id]
 
 
@@ -170,13 +175,15 @@ def _receipt(
     history: list[str] | None = None,
     history_complete: bool = True,
     last_trend_signature: str | None = None,
+    domain_state_revision: str | None = None,
+    allowed_rule_ids: list[str] | None = None,
 ) -> OpportunityReceiptV1:
     return {
         "version": 1,
         "as_of_round": snapshot.as_of_round,
         "social_state_revision": snapshot.social_state_revision,
-        "domain_state_revision": None,
-        "allowed_rule_ids": [],
+        "domain_state_revision": domain_state_revision,
+        "allowed_rule_ids": allowed_rule_ids or [],
         "requested_action_type": "IDLE",
         "effective_action_type": "IDLE",
         "available": True,
@@ -240,6 +247,8 @@ def test_snapshot_order_hash_and_prompt_payload_are_canonical():
     ]
     assert payload["allowed_rule_ids"] == []
     assert payload["actions"]["IDLE"]["reason_codes"] == ["IDLE_ALWAYS_AVAILABLE"]
+    assert all(gate["domain_reason_codes"] == () for gate in snapshot.actions.values())
+    assert all(gate["domain_reason_codes"] == [] for gate in payload["actions"].values())
     assert "opportunity_receipt" not in payload
 
 
@@ -525,3 +534,173 @@ def test_missing_trusted_trend_receipt_uses_durable_state_conservative_fallback(
     assert trend["last_trend_signature"] == trend["current_trend_signature"]
     assert trend["available"] is False
     assert trend["reason_codes"] == ("TREND_NO_NEW_ACTIVITY",)
+
+
+_DOMAIN_REVISION = "sha256:" + "b" * 64
+
+
+def _evaluated_rule(rule_id: str, action_type: object, *, met: bool = True, **changes) -> dict:
+    predicate = {
+        "variable_id": "balance", "comparator": "eq",
+        "expected_value": "1" if met else "2", "actual_value": "1",
+        "unit": "count", "met": met,
+    }
+    predicate.update(changes)
+    return {
+        "rule_id": rule_id, "variable_id": "balance", "action_type": action_type,
+        "preconditions_met": met, "preconditions": (predicate,),
+    }
+
+
+def _domain_evaluation(*rules: dict, **changes) -> dict:
+    value = {
+        "version": 1, "schema_hash": "sha256:" + "a" * 64,
+        "input_state_revision": _DOMAIN_REVISION, "as_of_round": 4, "rules": rules,
+    }
+    value.update(changes)
+    return value
+
+
+def _rich_domain_fixture() -> tuple[SocialWorldState, dict]:
+    return _state(
+        (_post("post-a", "alice", 1), _post("post-b", "bob", 2)),
+        muted={"closed": frozenset({"alice", "bob"})},
+    ), _catalog(("post-a", "post-b"), ("alice", "bob"))
+
+
+def test_domain_exact_set_oracle_conjoins_all_eight_actions_per_actor():
+    assert DomainOpportunityReasonCodeV1.__args__ == (
+        "OPPORTUNITY_DOMAIN_RULE_ALLOWED", "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",
+        "OPPORTUNITY_DOMAIN_SOCIAL_GATE_CLOSED",
+    )
+    state, catalog = _rich_domain_fixture()
+    action_types = ("COMMENT", "FOLLOW", "MUTE", "POST", "REACTION", "REFRESH", "SEARCH", "TREND")
+    evaluation = _domain_evaluation(*(
+        _evaluated_rule(f"allow_{action.lower()}", action) for action in action_types
+    ))
+    opened = _derive(state, catalog, domain_opportunities=evaluation)
+    closed = _derive(state, catalog, actor_id="closed", domain_opportunities=evaluation)
+    assert opened.allowed_rule_ids == (
+        "allow_comment", "allow_follow", "allow_mute", "allow_post",
+        "allow_reaction", "allow_refresh", "allow_search", "allow_trend",
+    )
+    assert closed.allowed_rule_ids == ("allow_post",)
+    assert opened.domain_state_revision == _DOMAIN_REVISION
+    assert all(opened.actions[action]["domain_reason_codes"] == (
+        "OPPORTUNITY_DOMAIN_RULE_ALLOWED",
+    ) for action in action_types)
+    assert all(closed.actions[action]["domain_reason_codes"] == (
+        "OPPORTUNITY_DOMAIN_SOCIAL_GATE_CLOSED",
+    ) for action in action_types if action != "POST")
+    assert closed.actions["IDLE"]["domain_reason_codes"] == ()
+    for action, baseline in _derive(state, catalog).actions.items():
+        assert {key: value for key, value in opened.actions[action].items()
+                if key != "domain_reason_codes"} == {
+            key: value for key, value in baseline.items() if key != "domain_reason_codes"
+        }
+
+
+def test_domain_false_mixed_and_empty_evaluations_have_exact_reasons():
+    state, catalog = _rich_domain_fixture()
+    snapshot = _derive(state, catalog, domain_opportunities=_domain_evaluation(
+        _evaluated_rule("a_false", "POST", met=False), _evaluated_rule("b_true", "POST"),
+        _evaluated_rule("c_false", "COMMENT", met=False),
+    ))
+    assert snapshot.allowed_rule_ids == ("b_true",)
+    assert snapshot.actions["POST"]["domain_reason_codes"] == (
+        "OPPORTUNITY_DOMAIN_RULE_ALLOWED",
+    )
+    assert snapshot.actions["COMMENT"]["domain_reason_codes"] == (
+        "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",
+    )
+    assert snapshot.actions["FOLLOW"]["domain_reason_codes"] == ()
+    empty = _derive(state, catalog, domain_opportunities=_domain_evaluation())
+    assert (empty.domain_state_revision, empty.allowed_rule_ids) == (_DOMAIN_REVISION, ())
+    assert all(gate["domain_reason_codes"] == () for gate in empty.actions.values())
+
+
+def test_invalid_domain_evaluation_is_atomic_and_valid_caps_are_retained():
+    state, catalog = _rich_domain_fixture()
+    valid, wrong_met = _domain_evaluation(_evaluated_rule("a_rule", "POST")), _evaluated_rule(
+        "a_rule", "POST"
+    )
+    wrong_met["preconditions_met"] = False
+    invalid_action = _evaluated_rule("a_rule", [])
+    conflicting = _evaluated_rule("b_rule", "POST", expected_value="2", actual_value="2")
+    invalid = (
+        *(_domain_evaluation(**change) for change in (
+            {"version": 2}, {"schema_hash": "invalid"}, {"input_state_revision": "invalid"},
+            {"as_of_round": 3}, {"rules": list(valid["rules"])},
+        )),
+        _domain_evaluation(_evaluated_rule("b_rule", "POST"), _evaluated_rule("a_rule", "POST")),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST"), _evaluated_rule("a_rule", "POST")),
+        _domain_evaluation(_evaluated_rule("a_rule", "IDLE")), _domain_evaluation(wrong_met),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST", expected_value="banana",
+                                          actual_value="banana")),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST", unit="unitless",
+                                          expected_value="1.0", actual_value="1.00")),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST", unit="unitless",
+                                          expected_value="1.0000000", actual_value="1.0000000")),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST", comparator=[])),
+        _domain_evaluation(invalid_action),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST", expected_value="1" * 29,
+                                          actual_value="1" * 29)),
+        _domain_evaluation(_evaluated_rule("a_rule", "POST"), conflicting),
+        _domain_evaluation(*(_evaluated_rule(f"rule_{index:02d}", "POST") for index in range(17))),
+    )
+    baseline = _derive(state, catalog)
+    assert all(_derive(state, catalog, domain_opportunities=row) == baseline for row in invalid)
+    sixteen = _domain_evaluation(*(
+        _evaluated_rule(f"rule_{index:02d}", "POST") for index in range(16)
+    ))
+    assert _derive(state, catalog, domain_opportunities=sixteen).allowed_rule_ids == tuple(
+        f"rule_{index:02d}" for index in range(16)
+    )
+    custom = _evaluated_rule(
+        "custom_rule", "POST", unit="custom_count:score",
+        expected_value="1.00", actual_value="1.00",
+    )
+    custom_snapshot = _derive(state, catalog, domain_opportunities=_domain_evaluation(custom))
+    assert custom_snapshot.allowed_rule_ids == ("custom_rule",)
+
+
+def test_receipt_domain_fields_validate_but_never_grant_current_permission():
+    state, catalog = _rich_domain_fixture()
+    initial, digest = _derive(state, catalog), "sha256:" + "c" * 64
+    receipt = _receipt(initial)
+    valid_cases = ((None, []), (digest, []), (digest, [f"rule_{i:02d}" for i in range(16)]))
+    invalid_cases = (
+        (None, ["rule_a"]), ("sha256:" + "A" * 64, []), (digest, ["rule_b", "rule_a"]),
+        (digest, ["rule_a", "rule_a"]), (digest, ["Bad"]),
+        (digest, [f"rule_{i:02d}" for i in range(17)]),
+    )
+    for expected, cases in ((True, valid_cases), (False, invalid_cases)):
+        for revision, rule_ids in cases:
+            assert action_opportunities._receipt_is_valid({
+                **receipt, "domain_state_revision": revision, "allowed_rule_ids": rule_ids,
+            }) is expected
+    current = _domain_evaluation(_evaluated_rule("current_rule", "POST"))
+    populated = _receipt(initial, domain_state_revision=digest, allowed_rule_ids=["prior_rule"])
+    assert _derive(state, catalog, populated, domain_opportunities=current) == _derive(
+        state, catalog, receipt, domain_opportunities=current
+    )
+
+
+def test_catalog_prose_mutation_is_byte_invariant_for_domain_derivation():
+    state, catalog = _rich_domain_fixture()
+    changed = {
+        "actions": [{**row, "agent_name": "Changed", "content": "Unrelated prose"}
+                    for row in catalog["actions"]],
+        "agents": [{**row, "name": "Different name"} for row in catalog["agents"]],
+    }
+    evaluation = _domain_evaluation(_evaluated_rule("allow_post", "POST"))
+    payloads = [opportunity_snapshot_to_prompt_payload_v1(
+        _derive(state, value, domain_opportunities=evaluation)
+    ) for value in (catalog, changed)]
+    assert json.dumps(payloads[0], sort_keys=True, separators=(",", ":")) == json.dumps(
+        payloads[1], sort_keys=True, separators=(",", ":")
+    )
+    assert set(inspect.signature(derive_opportunity_snapshots_v1).parameters) == {
+        "social_state", "target_catalogs_by_actor", "prior_receipts_by_actor",
+        "domain_opportunities",
+    }

@@ -4654,7 +4654,11 @@ def _build_decision_envelope_prompt(
         "REACTION 参数必须来自快照"
         "中的完整临时允许列表。SEARCH 查询不得与当前 corpus_revision 的既有指纹重复；TREND、"
         "REFRESH 只服从各自 reason_codes。IDLE 始终合法；IDLE_WAITING_FOR_NEW_INFORMATION 只"
-        "解释克制，不开放任何动作。若快照不可用，只能选择 IDLE。"
+        "解释克制，不开放任何动作。allowed_rule_ids 只含本角色合法的 "
+        "allow_when_preconditions_met 规则；effect_only 不在其中、也不是权限，但可附着于社会层"
+        "合法动作。域意图必须逐字"
+        "复制 schema hash、state revision 和 rule ID；无域意图时省略整组。若快照不可用，只能"
+        "选择 IDLE。"
         if is_chinese
         else (
             "The Opportunity Snapshot is the only eligibility source for this turn. It describes "
@@ -4666,7 +4670,12 @@ def _build_decision_envelope_prompt(
             "ephemeral snapshot allowlists. A SEARCH query must not repeat a fingerprint for the "
             "current corpus_revision; TREND and REFRESH follow only their reason_codes. IDLE is "
             "always legal; IDLE_WAITING_FOR_NEW_INFORMATION only explains restraint and opens no "
-            "action. If the snapshot is unavailable, select only IDLE."
+            "action. allowed_rule_ids contains only actor-legal "
+            "allow_when_preconditions_met rules; effect_only is not permission and is absent from "
+            "that list, but may attach to an otherwise socially legal action. Copy the schema "
+            "hash, state "
+            "revision, and rule ID exactly; omit the whole group without domain intent. If the "
+            "snapshot is unavailable, select only IDLE."
         )
     )
     if opportunity_snapshot is None:
@@ -4978,6 +4987,7 @@ async def _gather_agent_messages(
     progress_counter: list[int] | None = None,
     progress_lock: asyncio.Lock | None = None,
     relationship_agents: list[dict[str, Any]] | None = None,
+    opportunity_authority_out: dict[str, object] | None = None,
     runtime_lease: RuntimeLockLease | None = None,
 ) -> list[dict]:
     """Gather messages from all agents for this round.
@@ -5029,6 +5039,11 @@ async def _gather_agent_messages(
         for agent in agents
         if str(agent.get("id") or "").strip()
     ]
+    snapshot_actor_ids = [
+        str(agent.get("id") or "")
+        for agent in (relationship_agents if relationship_agents is not None else agents)
+        if str(agent.get("id") or "").strip()
+    ]
     social_world_state = None
     try:
         with Session(engine) as session:
@@ -5073,7 +5088,7 @@ async def _gather_agent_messages(
         engine,
         scenario_id,
         branch_id,
-        agent_ids=agent_ids,
+        agent_ids=snapshot_actor_ids,
         cutoff_round=social_cutoff_round,
         payload=action_target_catalog_payload,
     )
@@ -5083,13 +5098,6 @@ async def _gather_agent_messages(
         load_prior_agent_decision,
         load_prior_agent_transition,
         render_agent_transition_context,
-    )
-
-    domain_world_context = _load_domain_decision_context_v1(
-        engine,
-        scenario_id=scenario_id,
-        branch_id=branch_id,
-        round_number=round_num,
     )
 
     # Load the previous durable transition and same-agent utterance before any
@@ -5125,18 +5133,33 @@ async def _gather_agent_messages(
             action_target_catalog_payload,
             agent_id=actor_id,
         )
-        for actor_id in agent_ids
+        for actor_id in snapshot_actor_ids
     }
     prior_receipts = _load_prior_opportunity_receipts(
         engine,
         scenario_id,
         branch_id,
-        agent_ids,
+        snapshot_actor_ids,
         before_round=round_num,
+    )
+    domain_world_context: Mapping[str, object] | None = None
+    try:
+        domain_world_context = _load_domain_decision_context_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_num,
+        )
+    except Exception:
+        logger.exception("Domain opportunity context unavailable for this round")
+    domain_opportunities = (
+        domain_world_context.get("opportunity_evaluation")
+        if domain_world_context is not None
+        else None
     )
     opportunity_snapshots_by_actor: dict[
         str, OpportunitySnapshotV1 | None
-    ] = dict.fromkeys(agent_ids, None)
+    ] = dict.fromkeys(snapshot_actor_ids, None)
     if social_world_state is not None:
         try:
             opportunity_snapshots_by_actor.update(
@@ -5144,10 +5167,16 @@ async def _gather_agent_messages(
                     social_state=social_world_state,
                     target_catalogs_by_actor=projected_target_catalogs,
                     prior_receipts_by_actor=prior_receipts,
+                    domain_opportunities=domain_opportunities,
                 )
             )
         except Exception:
             logger.exception("Opportunity snapshot derivation failed closed")
+    if opportunity_authority_out is not None:
+        opportunity_authority_out["opportunity_snapshots_by_actor"] = (
+            opportunity_snapshots_by_actor
+        )
+        opportunity_authority_out["domain_world_context"] = domain_world_context
     prior_utterances: dict[str, str] = {}
     if agent_ids and round_num > 1:
         with Session(engine) as session:
@@ -5510,6 +5539,7 @@ async def _gather_agent_messages(
                             if str(item.get("id") or "").strip()
                         ],
                         opportunity_snapshot=opportunity_snapshot,
+                        domain_world_context=domain_world_context,
                         compatibility_mode="live",
                     )
                     normalized = _bind_authoritative_goal_progress(
@@ -5547,6 +5577,7 @@ async def _gather_agent_messages(
                         round_number=round_num,
                         fallback_goal=fallback_goal,
                         opportunity_snapshot=opportunity_snapshot,
+                        domain_world_context=domain_world_context,
                         compatibility_mode="live",
                     )
                     decision_envelope["decision_status"] = "unavailable"
@@ -5683,6 +5714,7 @@ async def _gather_agent_messages(
                             round_number=round_num,
                             fallback_goal=fallback_goal,
                             opportunity_snapshot=opportunity_snapshot,
+                            domain_world_context=domain_world_context,
                             compatibility_mode="live",
                         )
                         unavailable_decision.update({
@@ -5841,6 +5873,7 @@ async def _gather_agent_messages(
                         }
                     ],
                     opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+                    domain_world_context=domain_world_context,
                     compatibility_mode="live",
                     **({"runtime_lease": runtime_lease} if runtime_lease else {}),
                 )
@@ -5981,6 +6014,7 @@ async def _gather_agent_messages(
                         }
                     ],
                     opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+                    domain_world_context=domain_world_context,
                     compatibility_mode="live",
                     **({"runtime_lease": runtime_lease} if runtime_lease else {}),
                 )
@@ -6200,6 +6234,7 @@ async def _gather_hierarchical_messages(
 
     # Step 1: Gather Leader messages (with LLM calls)
     _check_cancelled(scenario_id)
+    opportunity_authority: dict[str, object] = {}
     leader_messages = await _gather_agent_messages(
         engine,
         scenario_id,
@@ -6225,6 +6260,7 @@ async def _gather_hierarchical_messages(
         progress_counter=progress_counter,
         progress_lock=progress_lock,
         relationship_agents=[*leader_agents, *worker_agents],
+        opportunity_authority_out=opportunity_authority,
         runtime_lease=runtime_lease,
     )
     _check_cancelled(scenario_id)
@@ -6307,10 +6343,18 @@ async def _gather_hierarchical_messages(
     # externally visible. This keeps broadcast and durable replay consistent
     # even when cancellation arrives after the first worker event.
     _check_cancelled(scenario_id)
-    worker_opportunity_snapshots = dict.fromkeys(
-        (str(message["agent_id"]) for message in worker_messages),
-        None,
+    opportunity_snapshots = opportunity_authority.get(
+        "opportunity_snapshots_by_actor"
     )
+    if not isinstance(opportunity_snapshots, Mapping):
+        opportunity_snapshots = {}
+    worker_opportunity_snapshots = {
+        str(message["agent_id"]): opportunity_snapshots.get(str(message["agent_id"]))
+        for message in worker_messages
+    }
+    domain_world_context = opportunity_authority.get("domain_world_context")
+    if not isinstance(domain_world_context, Mapping):
+        domain_world_context = None
     saved_message_ids = (
         _save_messages(
             engine,
@@ -6342,6 +6386,7 @@ async def _gather_hierarchical_messages(
                 for msg in worker_messages
             ],
             opportunity_snapshots_by_actor=worker_opportunity_snapshots,
+            domain_world_context=domain_world_context,
             compatibility_mode="live",
             **({"runtime_lease": runtime_lease} if runtime_lease else {}),
         )
@@ -7968,6 +8013,7 @@ def _save_messages(
     opportunity_snapshots_by_actor: Mapping[
         str, OpportunitySnapshotV1 | None
     ] | None = None,
+    domain_world_context: Mapping[str, object] | None = None,
     compatibility_mode: CompatibilityModeV1 = "legacy_import",
     runtime_lease: RuntimeLockLease | None = None,
 ) -> list[str]:
@@ -8078,6 +8124,7 @@ def _save_messages(
                         round_number,
                         runtime_rows,
                         opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
+                        domain_world_context=domain_world_context,
                         compatibility_mode=compatibility_mode,
                         runtime_lease=runtime_lease,
                     )

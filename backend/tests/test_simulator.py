@@ -6,6 +6,7 @@ in isolation, using real SQLite test databases.
 
 import ast
 import asyncio
+import copy
 import dataclasses
 import inspect
 import json
@@ -215,6 +216,8 @@ def _opportunity_snapshot_fixture(
     *,
     actor_id: str = "agent-a",
     as_of_round: int = 1,
+    domain_state_revision: str | None = None,
+    allowed_rule_ids: tuple[str, ...] = (),
     action_overrides: dict[str, dict] | None = None,
 ) -> OpportunitySnapshotV1:
     def entry(available: bool, reason_code: str) -> dict:
@@ -222,6 +225,7 @@ def _opportunity_snapshot_fixture(
             "available": available,
             "grounded": available,
             "reason_codes": (reason_code,),
+            "domain_reason_codes": (),
             "eligible_target_ids": (),
         }
 
@@ -255,8 +259,8 @@ def _opportunity_snapshot_fixture(
         actor_id=actor_id,
         as_of_round=as_of_round,
         social_state_revision=f"sha256:{'0' * 64}",
-        domain_state_revision=None,
-        allowed_rule_ids=(),
+        domain_state_revision=domain_state_revision,
+        allowed_rule_ids=allowed_rule_ids,
         actions=actions,
     )
 
@@ -834,6 +838,10 @@ def test_decision_prompt_embeds_frozen_snapshot_and_strict_reaction_contract():
     assert '"allowed_rule_ids":[]' in prompt
     assert '"candidate_actions":["IDLE","POST","REACTION"]' in prompt
     assert "The Opportunity Snapshot is the only eligibility source" in prompt
+    assert "allowed_rule_ids contains only actor-legal" in prompt
+    assert "effect_only is not permission" in prompt
+    assert "may attach to an otherwise socially legal action" in prompt
+    assert "Copy the schema hash, state revision, and rule ID exactly" in prompt
     assert '"candidate_actions":["IDLE","POST","COMMENT"' not in prompt
     assert '"IDLE|POST|COMMENT|REACTION|FOLLOW|MUTE|SEARCH|TREND|REFRESH"' not in prompt
     assert "SEARCH is targetless" in prompt
@@ -1096,9 +1104,17 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
         session.add(scenario)
         session.commit()
     agent = _load_agent_dict(engine, agent_id)
+    domain_evaluation = {"sentinel": "single-pre-gather-evaluation"}
+    domain_context = {"version": 1, "schema_hash": f"sha256:{'a' * 64}",
+                      "input_state_revision": f"sha256:{'b' * 64}", "as_of_round": 1,
+                      "state": {"balance": "5"},
+                      "schema": {"variables": [], "rules": []},
+                      "opportunity_evaluation": domain_evaluation}
     snapshot = _opportunity_snapshot_fixture(
         actor_id=agent_id,
         as_of_round=1,
+        domain_state_revision=domain_context["input_state_revision"],
+        allowed_rule_ids=("change_balance",),
         action_overrides={
             "COMMENT": {
                 "available": True,
@@ -1121,11 +1137,13 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
     derive_calls: list[object] = []
     prompt_snapshots: list[OpportunitySnapshotV1] = []
     normalize_snapshots: list[OpportunitySnapshotV1 | None] = []
+    context_sinks: list[object] = []
+    loader_calls: list[object] = []
     persisted_maps: list[object] = []
     runtime_source_snapshots: list[object] = []
 
     def derive_once(**kwargs):
-        derive_calls.append(kwargs["social_state"])
+        derive_calls.append(kwargs["domain_opportunities"])
         return {agent_id: snapshot}
 
     original_prompt_payload = simulator_module.opportunity_snapshot_to_prompt_payload_v1
@@ -1134,16 +1152,20 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
         prompt_snapshots.append(candidate)
         return original_prompt_payload(candidate)
 
+    original_domain_prompt = simulator_module._domain_world_decision_prompt_v1
+
     original_normalize = agent_runtime_module.normalize_decision_envelope
 
     def capture_normalize(*args, **kwargs):
         normalize_snapshots.append(kwargs.get("opportunity_snapshot"))
+        context_sinks.append(kwargs.get("domain_world_context"))
         return original_normalize(*args, **kwargs)
 
     original_persist = agent_runtime_module.persist_round_runtime_in_session
 
     def capture_persist(*args, **kwargs):
         persisted_maps.append(kwargs.get("opportunity_snapshots_by_actor"))
+        context_sinks.append(kwargs.get("domain_world_context"))
         runtime_source_snapshots.extend(
             message.get("opportunity_snapshot") for message in args[4]
         )
@@ -1176,10 +1198,18 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
 
     monkeypatch.setattr(simulator_module, "derive_opportunity_snapshots_v1", derive_once)
     monkeypatch.setattr(
+        agent_runtime_module, "_load_domain_decision_context_v1",
+        lambda *_args, **_kwargs: (loader_calls.append(domain_context), domain_context)[1],
+    )
+    monkeypatch.setattr(
         simulator_module,
         "opportunity_snapshot_to_prompt_payload_v1",
         capture_prompt_payload,
     )
+    monkeypatch.setattr(simulator_module, "_domain_world_decision_prompt_v1",
+                        lambda candidate, **kwargs: (
+                            context_sinks.append(candidate),
+                            original_domain_prompt(candidate, **kwargs))[1])
     monkeypatch.setattr(
         agent_runtime_module,
         "normalize_decision_envelope",
@@ -1212,6 +1242,8 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
     )
 
     assert len(derive_calls) == 1
+    assert loader_calls == [domain_context]
+    assert derive_calls[0] is domain_evaluation
     assert len(prompt_snapshots) == 2
     assert all(candidate is snapshot for candidate in prompt_snapshots)
     assert len(normalize_snapshots) >= 3
@@ -1219,6 +1251,7 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
     assert persisted_maps and persisted_maps[0][agent_id] is snapshot
     assert len(runtime_source_snapshots) == 1
     assert all(candidate is snapshot for candidate in runtime_source_snapshots)
+    assert context_sinks and all(candidate is domain_context for candidate in context_sinks)
     runtime = agent_runtime_module.load_agent_runtime(engine, scenario_id)
     receipt = runtime["branches"][branch_id]["rounds"]["2"]["decisions"][0][
         "opportunity_receipt"
@@ -1242,6 +1275,8 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
     assert receipt["eligible_target_count"] == 1
     assert receipt["selected_target_eligible"] is True
     assert receipt["available"] is receipt["grounded"] is True
+    assert receipt["domain_state_revision"] == snapshot.domain_state_revision
+    assert receipt["allowed_rule_ids"] == list(snapshot.allowed_rule_ids)
     assert receipt["query_fingerprint"] is None
     for digest_field in (
         "social_state_revision",
@@ -1251,6 +1286,19 @@ async def test_one_snapshot_object_flows_through_prompt_replan_and_persistence(
     ):
         value = receipt[digest_field]
         assert value is None or value.startswith("sha256:")
+
+    def fail_context(*_args, **_kwargs):
+        raise RuntimeError("domain rebuild unavailable")
+
+    derive_calls.clear()
+    monkeypatch.setattr(agent_runtime_module, "_load_domain_decision_context_v1", fail_context)
+    monkeypatch.setattr(simulator_module, "derive_opportunity_snapshots_v1", lambda **kwargs: (
+        derive_calls.append(kwargs), {})[1])
+    failure_round_id = _create_round(engine, branch_id, 3)
+    assert await _gather_agent_messages(
+        engine, scenario_id, branch_id, failure_round_id, 3, [], "setting", "topic") == []
+    assert len(derive_calls) == 1 and derive_calls[0]["social_state"] is not None
+    assert derive_calls[0]["domain_opportunities"] is None
 
 
 def test_missing_snapshot_chain_carries_search_consumption_and_prevents_reopen():
@@ -10432,7 +10480,13 @@ class TestBranchNarrativeClaimCompilation:
 # ── DomainWorld v1 coordinator contracts ────────────────────
 
 
-def _domain_finalizer_setup(engine, *, agent_count: int = 1):
+def _domain_finalizer_setup(
+    engine,
+    *,
+    agent_count: int = 1,
+    mode: str = "effect_only",
+    preconditions: list[dict[str, object]] | None = None,
+):
     from app.services.domain_world import freeze_domain_schema_v1
 
     scenario_id = _make_scenario(engine)
@@ -10468,8 +10522,8 @@ def _domain_finalizer_setup(engine, *, agent_count: int = 1):
                     "constant_value": None,
                     "requested_minimum": "-5",
                     "requested_maximum": "5",
-                    "preconditions": [],
-                    "opportunity_mode": "effect_only",
+                    "preconditions": preconditions if preconditions is not None else [],
+                    "opportunity_mode": mode,
                     "epistemic_scope": "scenario_assumption",
                 }
             ],
@@ -10526,6 +10580,291 @@ def _domain_action_group(
     }
 
 
+@pytest.mark.asyncio
+async def test_hierarchical_worker_reuses_pre_gather_domain_snapshot(monkeypatch):
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+    scenario_id, branch_id, agent_ids, config = _domain_finalizer_setup(
+        engine,
+        agent_count=2,
+        mode="allow_when_preconditions_met",
+    )
+    round_id = _create_round(engine, branch_id, 1)
+    leader, worker = (_load_agent_dict(engine, agent_id) for agent_id in agent_ids)
+    evaluations: list[dict[str, object]] = []
+    original_evaluate = runtime_module.evaluate_domain_opportunities_v1
+
+    def evaluate_once(**kwargs):
+        evaluations.append(kwargs)
+        return original_evaluate(**kwargs)
+
+    async def fake_decision(*_args, **_kwargs):
+        return {
+            **_decision_envelope_fixture(
+                idle_reason_code="IDLE_CONSTRAINT_BLOCKED",
+            ),
+            "emotion": "neutral",
+            "diverge": None,
+        }
+
+    monkeypatch.setattr(runtime_module, "evaluate_domain_opportunities_v1", evaluate_once)
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_decision)
+    monkeypatch.setattr(simulator_module, "llm_call", _fake_llm_call)
+    monkeypatch.setattr(simulator_module, "retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr(simulator_module, "store_memory", lambda *a, **k: None)
+
+    await _gather_hierarchical_messages(
+        engine=engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_num=1,
+        leader_agents=[leader],
+        worker_agents=[worker],
+        agent_to_group={worker["name"]: "domain"},
+        group_leaders={"domain": leader["name"]},
+        setting_bg="Domain snapshot regression",
+        topic="Wait until the constraints change",
+        language="English",
+    )
+
+    assert len(evaluations) == 1
+    runtime = runtime_module.load_agent_runtime(engine, scenario_id)
+    decisions = runtime["branches"][branch_id]["rounds"]["1"]["decisions"]
+    decisions_by_actor = {decision["agent_id"]: decision for decision in decisions}
+    leader_receipt = decisions_by_actor[leader["id"]]["opportunity_receipt"]
+    worker_decision = decisions_by_actor[worker["id"]]
+    worker_receipt = worker_decision["opportunity_receipt"]
+    expected_revision = _domain_initial_revision(config)
+    assert leader_receipt["domain_state_revision"] == expected_revision
+    assert worker_receipt["domain_state_revision"] == expected_revision
+    assert leader_receipt["allowed_rule_ids"] == ["change_balance"]
+    assert worker_receipt["allowed_rule_ids"] == ["change_balance"]
+    assert worker_decision["decision_status"] == "unavailable"
+    assert worker_receipt["effective_action_type"] == "IDLE"
+
+
+def test_all_false_domain_constraints_persist_verified_idle_without_effects():
+    from app.services.action_opportunities import derive_opportunity_snapshots_v1
+    from app.services.agent_runtime import (
+        _load_domain_decision_context_v1,
+        decision_to_action,
+        finalize_domain_round_v1,
+        load_agent_runtime,
+        normalize_decision_envelope,
+    )
+    from app.services.runtime_lock import release_runtime_lock
+    from app.services.social_world import reduce_social_world_state
+
+    engine = get_engine()
+    scenario_id, branch_id, agent_ids, _config = _domain_finalizer_setup(
+        engine,
+        mode="allow_when_preconditions_met",
+        preconditions=[
+            {
+                "variable_id": "balance",
+                "comparator": "gt",
+                "value": "5",
+                "unit": "count",
+            }
+        ],
+    )
+    agent_id = agent_ids[0]
+    round_id = _create_round(engine, branch_id, 1)
+    context = _load_domain_decision_context_v1(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_number=1,
+    )
+    assert context is not None
+    rules = context["opportunity_evaluation"]["rules"]
+    assert [
+        (rule["preconditions_met"], [item["met"] for item in rule["preconditions"]])
+        for rule in rules
+    ] == [(False, [False])]
+    with Session(engine) as session:
+        social_state = reduce_social_world_state(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            cutoff_round=0,
+        )
+    snapshot = derive_opportunity_snapshots_v1(
+        social_state=social_state,
+        target_catalogs_by_actor={agent_id: {"actions": [], "agents": []}},
+        prior_receipts_by_actor={agent_id: None},
+        domain_opportunities=context["opportunity_evaluation"],
+    )[agent_id]
+    assert snapshot.allowed_rule_ids == ()
+    assert snapshot.actions["POST"]["domain_reason_codes"] == (
+        "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",
+    )
+
+    decision = normalize_decision_envelope(
+        _decision_envelope_fixture(idle_reason_code="IDLE_CONSTRAINT_BLOCKED"),
+        agent_id=agent_id,
+        branch_id=branch_id,
+        round_number=1,
+        fallback_goal="Wait for a permitted domain action",
+        opportunity_snapshot=snapshot,
+        domain_world_context=context,
+        compatibility_mode="live",
+    )
+    assert (
+        decision["selected_action"],
+        decision["decision_status"],
+        decision["idle_reason_code"],
+    ) == ("IDLE", "verified", "IDLE_CONSTRAINT_BLOCKED")
+    action = decision_to_action(decision, "I will wait until the constraint changes.")
+    assert action["payload"] == {}
+    message_ids = _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": agent_id,
+                "content": "I will wait until the constraint changes.",
+                "emotion": "neutral",
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_number": 1,
+                "action": action,
+                "decision_envelope": decision,
+                "fallback_goal": "Wait for a permitted domain action",
+                "idempotency_key": f"all-false:{round_id}:{agent_id}",
+            }
+        ],
+        opportunity_snapshots_by_actor={agent_id: snapshot},
+        domain_world_context=context,
+        compatibility_mode="live",
+    )
+    assert len(message_ids) == 1
+    runtime = load_agent_runtime(engine, scenario_id)
+    decision_record = runtime["branches"][branch_id]["rounds"]["1"]["decisions"][0]
+    receipt = decision_record["opportunity_receipt"]
+    assert decision_record["decision_status"] == "verified"
+    assert receipt["domain_state_revision"] == context["input_state_revision"]
+    assert receipt["allowed_rule_ids"] == []
+
+    lease = _process_domain_lease(scenario_id)
+    try:
+        result = finalize_domain_round_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+            expected_agent_ids=agent_ids,
+            current_runtime_lease=lambda: lease,
+        )
+    finally:
+        release_runtime_lock(lease)
+    assert result.status == "committed"
+    assert result.domain_adjudications == ()
+    assert result.domain_state_deltas == ()
+    assert result.domain_state_after == {"balance": "5"}
+    with Session(engine) as session:
+        durable = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.message_id == message_ids[0]
+            )
+        ).one()
+        assert durable.action_type.value == "IDLE"
+        assert durable.status.value == "verified"
+        assert durable.failure_code is None
+        assert json.loads(durable.payload_json or "{}") == {}
+    runtime_round = _domain_runtime_round(engine, scenario_id, branch_id, 1)
+    assert runtime_round["domain_finalization"]["status"] == "complete"
+    assert runtime_round["domain_adjudications"] == []
+    assert runtime_round["domain_state_deltas"] == []
+
+
+def test_domain_live_binding_is_atomic_mode_aware_and_socially_additive(monkeypatch):
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+    scenario_id, branch_id, _agents, config = _domain_finalizer_setup(
+        engine, mode="allow_when_preconditions_met")
+    _create_round(engine, branch_id, 1)
+    evaluations = []
+    original_evaluate = runtime_module.evaluate_domain_opportunities_v1
+    monkeypatch.setattr(runtime_module, "evaluate_domain_opportunities_v1", lambda **kwargs: (
+        evaluations.append(kwargs), original_evaluate(**kwargs))[1])
+    load = runtime_module._load_domain_decision_context_v1
+    context = load(engine, scenario_id=scenario_id, branch_id=branch_id, round_number=1)
+    assert context is not None and len(evaluations) == 1
+    assert tuple(context) == (
+        "version", "schema_hash", "input_state_revision", "as_of_round",
+        "state", "schema", "opportunity_evaluation")
+    revision = context["input_state_revision"]
+    snapshot = _opportunity_snapshot_fixture(
+        as_of_round=0, domain_state_revision=revision,
+        allowed_rule_ids=("change_balance",),
+        action_overrides={"POST": {"domain_reason_codes": (
+            "OPPORTUNITY_DOMAIN_RULE_ALLOWED",)}})
+    group = _domain_action_group(config, revision=revision, event_key="binding-event")
+
+    def normalize(domain_group, *, ctx=context, snap=snapshot, mode="live"):
+        raw = _decision_envelope_fixture(
+            selected_action="POST", candidate_actions=["IDLE", "POST"],
+            idle_reason=None, idle_reason_code=None, action_content="publish binding-event")
+        if domain_group is not ...:
+            raw["action_parameters"]["domain_world_v1"] = domain_group
+        return runtime_module.normalize_decision_envelope(
+            raw, agent_id="agent-a", branch_id="branch-a", round_number=1,
+            fallback_goal="守住东门", opportunity_snapshot=snap,
+            domain_world_context=ctx, compatibility_mode=mode)
+
+    assert normalize(group)["decision_status"] == "verified"
+    assert normalize({**group, "proposals": []})["decision_status"] == "verified"
+    esid, ebid, _effect_agents, econfig = _domain_finalizer_setup(engine)
+    _create_round(engine, ebid, 1)
+    econtext = load(engine, scenario_id=esid, branch_id=ebid, round_number=1)
+    assert econtext is not None
+    erevision = econtext["input_state_revision"]
+    esnapshot = _opportunity_snapshot_fixture(as_of_round=0, domain_state_revision=erevision)
+    egroup = _domain_action_group(econfig, revision=erevision, event_key="effect-event")
+    assert normalize(egroup, ctx=econtext, snap=esnapshot)["decision_status"] == "verified"
+
+    unknown, mixed = (copy.deepcopy(group) for _ in range(2))
+    unknown["proposals"][0]["rule_id"] = "unknown_rule"
+    mixed["proposals"].append({
+        **mixed["proposals"][0], "rule_id": "unknown_rule", "event_key": "mixed-event",
+    })
+    mismatch_context = copy.deepcopy(context)
+    mismatch_context["schema"]["rules"][0]["action_type"] = "COMMENT"
+    stale_hash = {**group, "schema_hash": f"sha256:{'a' * 64}"}
+    cases = [
+        (stale_hash, context, snapshot),
+        ({**group, "input_state_revision": f"sha256:{'b' * 64}"}, context, snapshot),
+        (unknown, context, snapshot),
+        (group, mismatch_context, snapshot),
+        (group, {**context, "as_of_round": False}, snapshot),
+        (group, context, dataclasses.replace(snapshot, allowed_rule_ids=())),
+        (mixed, context, snapshot),
+        (group, context, dataclasses.replace(snapshot, allowed_rule_ids=(True,))),
+    ]
+    for invalid_group, ctx, snap in cases:
+        failed = normalize(invalid_group, ctx=ctx, snap=snap)
+        assert failed["requested_action_type"] == "POST"
+        assert (failed["selected_action"], failed["decision_status"]) == ("IDLE", "unavailable")
+        assert failed["failure_code"] == "DECISION_OPPORTUNITY_UNAVAILABLE"
+        assert failed["idle_reason_code"] == "IDLE_OPPORTUNITY_UNAVAILABLE"
+        assert failed["action_parameters"] == {}
+
+    plain_active = normalize(...)
+    plain_inactive = normalize(..., ctx=None, snap=_opportunity_snapshot_fixture(as_of_round=0))
+    assert plain_active == plain_inactive
+    assert normalize(stale_hash, ctx=None, snap=None,
+                     mode="legacy_import")["decision_status"] == "verified"
+    for idle_snapshot in (None, snapshot, esnapshot):
+        idle = _normalize_decision(
+            _decision_envelope_fixture(idle_reason_code="IDLE_CONSTRAINT_BLOCKED"),
+            opportunity_snapshot=idle_snapshot,
+            domain_world_context=context if idle_snapshot else None)
+        assert idle["decision_status"] == "verified"
 def _append_domain_turn(
     engine,
     *,
@@ -11259,6 +11598,22 @@ def test_domain_transport_preserves_explicit_null_until_ingress_rejects_it():
         "failure_code": "ACTION_INVALID_PAYLOAD",
         "payload": {},
     }
+    proposal = {"variable_id": "balance", "rule_id": "change_balance", "unit": "count",
+                "operation": "add_requested", "requested_value": "1",
+                "expected_before": None, "event_key": "transport-event"}
+    empty = {"schema_hash": "hash", "input_state_revision": "revision", "proposals": []}
+    for group, failure_code in (
+        ({"unexpected": True}, "ACTION_INVALID_PAYLOAD"),
+        ({**empty, "proposals": [proposal] * 5}, "DOMAIN_PAYLOAD_LIMIT_EXCEEDED"),
+        ({**empty, "proposals": [{**proposal, "requested_value": "1" * 5000}]},
+         "DOMAIN_PAYLOAD_LIMIT_EXCEEDED"),
+    ):
+        post_raw["action_parameters"]["domain_world_v1"] = group
+        envelope = _normalize_decision(
+            post_raw, opportunity_snapshot=_opportunity_snapshot_fixture())
+        assert envelope["action_parameters"]["domain_world_v1"] == group
+        action = decision_to_action(envelope, "I will publish grounded domain intent now.")
+        assert normalize_extracted_action(action)["failure_code"] == failure_code
 
 
 def test_active_domain_prompt_template_is_optional_exact_and_untrusted():
@@ -11638,8 +11993,10 @@ def test_domain_failed_proposal_does_not_downgrade_verified_social_action():
 
 
 def test_domain_prior_lineage_replay_restores_accepted_event_identity():
+    import app.services.agent_runtime as runtime_module
     from app.services.agent_runtime import finalize_domain_round_v1
 
+    load = runtime_module._load_domain_decision_context_v1
     engine = get_engine()
     scenario_id, branch_id, agent_ids, config = _domain_finalizer_setup(engine)
     lease = _process_domain_lease(scenario_id)
@@ -11669,11 +12026,12 @@ def test_domain_prior_lineage_replay_restores_accepted_event_identity():
     )
     assert first.state_revision is not None
 
-    second_round_id = _create_round(engine, branch_id, 2)
+    child_id = _create_branch(engine, scenario_id, parent_branch_id=branch_id, fork_round=1)
+    second_round_id = _create_round(engine, child_id, 2)
     _append_domain_turn(
         engine,
         scenario_id=scenario_id,
-        branch_id=branch_id,
+        branch_id=child_id,
         round_id=second_round_id,
         round_number=2,
         agent_id=agent_ids[0],
@@ -11684,10 +12042,14 @@ def test_domain_prior_lineage_replay_restores_accepted_event_identity():
         ),
         idempotency_key="lineage-second-turn",
     )
+    same_round = load(engine, scenario_id=scenario_id, branch_id=child_id, round_number=2)
+    assert same_round is not None
+    assert same_round["state"] == first.domain_state_after
+    assert same_round["input_state_revision"] == first.state_revision
     second = finalize_domain_round_v1(
         engine,
         scenario_id=scenario_id,
-        branch_id=branch_id,
+        branch_id=child_id,
         round_id=second_round_id,
         round_number=2,
         expected_agent_ids=agent_ids,
@@ -11700,6 +12062,20 @@ def test_domain_prior_lineage_replay_restores_accepted_event_identity():
     assert second.domain_adjudications[0].failure_code == "DOMAIN_DUPLICATE_EVENT"
     assert second.domain_state_deltas == ()
     assert second.domain_state_after == first.domain_state_after == {"balance": "6"}
+    sibling_id = _create_branch(engine, scenario_id, parent_branch_id=branch_id, fork_round=1)
+    _create_round(engine, sibling_id, 2)
+    sibling = load(engine, scenario_id=scenario_id, branch_id=sibling_id, round_number=2)
+    assert sibling is not None
+    assert (sibling["state"], sibling["input_state_revision"]) == (
+        first.domain_state_after, first.state_revision)
+    _create_round(engine, child_id, 3)
+    next_round = load(engine, scenario_id=scenario_id, branch_id=child_id, round_number=3)
+    assert next_round is not None
+    assert (next_round["as_of_round"], next_round["state"]) == (2, {"balance": "6"})
+    assert next_round["input_state_revision"] == second.state_revision
+    _create_round(engine, child_id, 4)
+    with pytest.raises(RuntimeError, match="^DOMAIN_FINALIZATION_PRIOR_STATE_INCOMPLETE$"):
+        load(engine, scenario_id=scenario_id, branch_id=child_id, round_number=4)
 
 
 def test_domain_round_reverse_append_order_preserves_portable_state_hashes():

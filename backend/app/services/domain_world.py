@@ -129,6 +129,33 @@ class DomainWorldConfigV1:
     schema: DomainSchemaV1 | None
 
 
+class DomainPredicateEvaluationV1(_typing.TypedDict):
+    variable_id: str
+    comparator: DomainComparatorV1
+    expected_value: DomainValueV1
+    actual_value: DomainValueV1
+    unit: str
+    met: bool
+
+
+class DomainRuleOpportunityEvaluationV1(_typing.TypedDict):
+    rule_id: str
+    variable_id: str
+    action_type: _typing.Literal[
+        "POST", "COMMENT", "REACTION", "FOLLOW", "MUTE", "TREND", "REFRESH", "SEARCH"
+    ]
+    preconditions_met: bool
+    preconditions: tuple[DomainPredicateEvaluationV1, ...]
+
+
+class DomainOpportunityEvaluationV1(_typing.TypedDict):
+    version: _typing.Literal[1]
+    schema_hash: str
+    input_state_revision: str
+    as_of_round: int
+    rules: tuple[DomainRuleOpportunityEvaluationV1, ...]
+
+
 class DomainProposalV1(_typing.TypedDict):
     variable_id: str
     rule_id: str
@@ -1295,6 +1322,102 @@ def _predicate_holds(
     return _typing.cast(_decimal.Decimal, left) >= _typing.cast(_decimal.Decimal, right)
 
 
+def evaluate_domain_opportunities_v1(
+    *,
+    config: DomainWorldConfigV1,
+    state: _typing.Mapping[str, DomainValueV1],
+    input_state_revision: str,
+    as_of_round: int,
+    accepted_event_identities: _typing.Collection[tuple[str, str, str]],
+) -> DomainOpportunityEvaluationV1:
+    """Evaluate allow-mode rules against one validated immutable domain state."""
+
+    if (
+        not isinstance(config, DomainWorldConfigV1)
+        or type(config.version) is not int
+        or config.version != DOMAIN_WORLD_VERSION
+        or config.status != "active"
+        or config.unit_registry_version != UNIT_REGISTRY_VERSION
+        or config.schema is None
+        or config.schema_hash is None
+    ):
+        raise ValueError("domain opportunity config is unavailable")
+    try:
+        recomputed_schema_hash = schema_hash_v1(config.schema)
+    except (TypeError, ValueError, _decimal.InvalidOperation) as error:
+        raise ValueError("domain opportunity schema is invalid") from error
+    if recomputed_schema_hash != config.schema_hash:
+        raise ValueError("domain opportunity schema hash does not match")
+    if type(as_of_round) is not int or as_of_round < 0:
+        raise ValueError("domain opportunity round is invalid")
+
+    try:
+        normalized_state = _normalized_state(config.schema, state)
+        for variable in config.schema.variables:
+            if variable.value_type not in _NUMERIC_TYPES:
+                continue
+            actual = _decimal_value(_typing.cast(str, normalized_state[variable.variable_id]))
+            if not (
+                _decimal_value(_typing.cast(str, variable.minimum))
+                <= actual
+                <= _decimal_value(_typing.cast(str, variable.maximum))
+            ):
+                raise ValueError("domain opportunity state is outside frozen bounds")
+    except (TypeError, ValueError, _decimal.InvalidOperation) as error:
+        raise ValueError("domain opportunity state is invalid") from error
+    try:
+        recomputed_revision = state_revision_v1(
+            schema_hash=config.schema_hash,
+            as_of_round=as_of_round,
+            state=normalized_state,
+            accepted_event_identities=accepted_event_identities,
+        )
+    except (TypeError, ValueError, _decimal.InvalidOperation) as error:
+        raise ValueError("domain opportunity state revision input is invalid") from error
+    if type(input_state_revision) is not str or recomputed_revision != input_state_revision:
+        raise ValueError("domain opportunity state revision does not match")
+
+    variables = {variable.variable_id: variable for variable in config.schema.variables}
+    evaluated_rules: list[DomainRuleOpportunityEvaluationV1] = []
+    for rule in sorted(config.schema.rules, key=lambda item: item.rule_id):
+        if rule.opportunity_mode != "allow_when_preconditions_met":
+            continue
+        try:
+            predicates = tuple(
+                DomainPredicateEvaluationV1(
+                    variable_id=predicate.variable_id,
+                    comparator=predicate.comparator,
+                    expected_value=predicate.value,
+                    actual_value=normalized_state[predicate.variable_id],
+                    unit=predicate.unit,
+                    met=_predicate_holds(
+                        predicate,
+                        variables[predicate.variable_id],
+                        normalized_state,
+                    ),
+                )
+                for predicate in rule.preconditions
+            )
+        except (KeyError, TypeError, ValueError, _decimal.InvalidOperation) as error:
+            raise ValueError("domain opportunity rule is invalid") from error
+        evaluated_rules.append(
+            DomainRuleOpportunityEvaluationV1(
+                rule_id=rule.rule_id,
+                variable_id=rule.variable_id,
+                action_type=rule.action_type,
+                preconditions_met=all(predicate["met"] for predicate in predicates),
+                preconditions=predicates,
+            )
+        )
+    return DomainOpportunityEvaluationV1(
+        version=DOMAIN_WORLD_VERSION,
+        schema_hash=config.schema_hash,
+        input_state_revision=input_state_revision,
+        as_of_round=as_of_round,
+        rules=tuple(evaluated_rules),
+    )
+
+
 def _value_has_json_type(value: object, variable: DomainVariableV1) -> bool:
     if variable.value_type in _NUMERIC_TYPES:
         return type(value) is str
@@ -1962,4 +2085,8 @@ __all__ = (
     "reduce_domain_round_v1",
     "string_has_credential_features",
     "scan_domain_payload_for_secret_features",
+    "DomainOpportunityEvaluationV1",
+    "DomainPredicateEvaluationV1",
+    "DomainRuleOpportunityEvaluationV1",
+    "evaluate_domain_opportunities_v1",
 )

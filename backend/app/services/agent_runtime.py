@@ -33,11 +33,14 @@ from app.services.action_opportunities import (
     ActionTypeV1,
     CompatibilityModeV1,
     DecisionFailureCodeV1,
+    DomainOpportunityReasonCodeV1,
     IdleReasonCodeV1,
     OpportunityReasonCodeV1,
     OpportunityReceiptV1,
     OpportunitySnapshotV1,
     ReactionKindV1,
+    _domain_receipt_fields_are_valid,
+    _valid_domain_opportunities,
     derive_opportunity_snapshots_v1,
     search_query_fingerprint_v1,
 )
@@ -49,6 +52,7 @@ from app.services.domain_world import (
     DomainValueV1,
     DomainWorldConfigV1,
     canonical_json_bytes_v1,
+    evaluate_domain_opportunities_v1,
     initial_domain_state_v1,
     reduce_domain_round_v1,
     state_revision_v1,
@@ -97,6 +101,7 @@ _LIVE_IDLE_REASON_CODES = frozenset(
 )
 _IDLE_REASON_CODES = frozenset(get_args(IdleReasonCodeV1))
 _OPPORTUNITY_REASON_CODES = frozenset(get_args(OpportunityReasonCodeV1))
+_DOMAIN_REASON_TUPLES = ((), *((code,) for code in get_args(DomainOpportunityReasonCodeV1)))
 _DECISION_FAILURE_CODES = frozenset(get_args(DecisionFailureCodeV1))
 _RECEIPT_FIELDS = frozenset(OpportunityReceiptV1.__required_keys__)
 _TARGET_ACTIONS = frozenset({"COMMENT", "REACTION", "FOLLOW", "MUTE"})
@@ -462,13 +467,16 @@ def _valid_opportunity_snapshot(
         and type(snapshot.as_of_round) is int
         and snapshot.as_of_round == max(0, round_number - 1)
         and _is_sha256_revision(snapshot.social_state_revision)
-        and snapshot.domain_state_revision is None
-        and snapshot.allowed_rule_ids == ()
+        and isinstance(snapshot.allowed_rule_ids, tuple)
+        and _domain_receipt_fields_are_valid(
+            snapshot.domain_state_revision, list(snapshot.allowed_rule_ids)
+        )
         and isinstance(snapshot.actions, Mapping)
         and tuple(snapshot.actions) == _ACTION_TYPE_ORDER
     ):
         return False
-    base_fields = {"available", "grounded", "reason_codes", "eligible_target_ids"}
+    base_fields = {"available", "grounded", "reason_codes", "domain_reason_codes",
+                   "eligible_target_ids"}
     for action_type in _ACTION_TYPE_ORDER:
         opportunity = snapshot.actions.get(action_type)
         extra_fields = (
@@ -489,6 +497,7 @@ def _valid_opportunity_snapshot(
         available = opportunity.get("available")
         grounded = opportunity.get("grounded")
         reason_codes = opportunity.get("reason_codes")
+        domain_reason_codes = opportunity.get("domain_reason_codes")
         target_ids = opportunity.get("eligible_target_ids")
         if not (
             type(available) is bool
@@ -498,6 +507,10 @@ def _valid_opportunity_snapshot(
             and len(reason_codes) == 1
             and reason_codes[0] in _REASON_CODES_BY_ACTION[action_type]
             and available == (reason_codes[0] in _AVAILABLE_REASON_CODES)
+            and isinstance(domain_reason_codes, tuple)
+            and domain_reason_codes in _DOMAIN_REASON_TUPLES
+            and (not domain_reason_codes or snapshot.domain_state_revision is not None
+                 and action_type != "IDLE")
             and _valid_identifier_tuple(target_ids)
         ):
             return False
@@ -533,6 +546,43 @@ def _valid_opportunity_snapshot(
                 if value is not None and not _is_sha256_revision(value):
                     return False
     return True
+
+
+def _domain_group_is_bound_v1(
+    group: DomainActionPayloadV1, selected_action: str, snapshot: OpportunitySnapshotV1,
+    context: Mapping[str, object] | None,
+) -> bool:
+    try:
+        context_keys = ("version", "schema_hash", "input_state_revision", "as_of_round",
+                        "state", "schema", "opportunity_evaluation")
+        if not isinstance(context, Mapping) or set(context) != set(context_keys):
+            return False
+        schema, state, context_round = context["schema"], context["state"], context["as_of_round"]
+        evaluation = _valid_domain_opportunities(
+            context["opportunity_evaluation"], as_of_round=snapshot.as_of_round)
+        if (type(context["version"]) is not int or context["version"] != 1
+                or type(context_round) is not int or not isinstance(state, Mapping)
+                or not isinstance(schema, Mapping) or evaluation is None
+                or not isinstance(schema.get("rules"), (list, tuple))):
+            return False
+        raw_rules = schema["rules"]
+        keys = ("schema_hash", "input_state_revision", "as_of_round")
+        coordinates = (group["schema_hash"], group["input_state_revision"], snapshot.as_of_round)
+        if (coordinates != tuple(context[key] for key in keys)
+                or coordinates != tuple(evaluation[key] for key in keys)
+                or snapshot.domain_state_revision != group["input_state_revision"]):
+            return False
+        rules = {rule["rule_id"]: rule for rule in raw_rules}
+        return len(rules) == len(raw_rules) and all(
+            (rule := rules.get(proposal["rule_id"])) is not None
+            and rule["action_type"] == selected_action
+            and (rule["opportunity_mode"] == "effect_only"
+                 or rule["opportunity_mode"] == "allow_when_preconditions_met"
+                 and proposal["rule_id"] in snapshot.allowed_rule_ids)
+            for proposal in group["proposals"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _meaningful_realization_phrase(value: object) -> bool:
@@ -616,6 +666,7 @@ def normalize_decision_envelope(
     allowed_action_target_ids: Sequence[str] | None = None,
     allowed_agent_target_ids: Sequence[str] | None = None,
     opportunity_snapshot: OpportunitySnapshotV1 | None = None,
+    domain_world_context: Mapping[str, object] | None = None,
     compatibility_mode: Literal["live", "legacy_import"] = "live",
 ) -> dict[str, Any]:
     """Validate and bound an auditable Decision Envelope.
@@ -783,6 +834,26 @@ def normalize_decision_envelope(
                 return fail("DECISION_INVALID_ACTION_PARAMETER")
             if fingerprint in selected_opportunity["recent_query_fingerprints"]:
                 return fail("DECISION_SEARCH_NO_OP")
+    if live_mode and "domain_world_v1" in parameters:
+        try:
+            raw_group = parameters["domain_world_v1"]
+            outer = {"domain_world_v1": raw_group}
+            if selected == "REACTION":
+                outer = {"reaction": parameters.get("reaction"), **outer}
+            validation = validate_domain_action_payload_v1(
+                raw_group, action_type=selected, is_bootstrap=False,
+                canonical_outer_payload_bytes=len(canonical_json_bytes_v1(outer)),
+            )
+        except (TypeError, ValueError):
+            validation = None
+        group = validation.payload if validation and not validation.action_failure_code else None
+        trusted_snapshot = cast(OpportunitySnapshotV1, opportunity_snapshot)
+        if group and group["proposals"] and (
+            not snapshot_valid or not _domain_group_is_bound_v1(
+                group, selected, trusted_snapshot, domain_world_context,
+            )
+        ):
+            return fail("DECISION_OPPORTUNITY_UNAVAILABLE")
     return {
         "current_goal": _bounded_text(raw.get("current_goal"))
         or _bounded_text(fallback_goal)
@@ -1405,19 +1476,25 @@ def _load_domain_decision_context_v1(
         config = _domain_config_from_scenario_v1(scenario)
         if config.status != "active" or config.schema is None or config.schema_hash is None:
             return None
-        state, revision, _accepted = _rebuild_prior_domain_state_v1(
+        state, revision, accepted = _rebuild_prior_domain_state_v1(
             session,
             scenario=scenario,
             branch_id=branch_id,
             round_number=round_number,
             config=config,
         )
+        as_of_round = max(0, round_number - 1)
         return {
             "version": 1,
             "schema_hash": config.schema_hash,
             "input_state_revision": revision,
+            "as_of_round": as_of_round,
             "state": copy.deepcopy(dict(state)),
             "schema": asdict(config.schema),
+            "opportunity_evaluation": evaluate_domain_opportunities_v1(
+                config=config, state=state, input_state_revision=revision,
+                as_of_round=as_of_round, accepted_event_identities=accepted,
+            ),
         }
 
 
@@ -2390,8 +2467,9 @@ def _opportunity_receipt_is_valid(receipt: object) -> bool:
             receipt.get("social_state_revision") is None
             or _is_sha256_revision(receipt.get("social_state_revision"))
         )
-        and receipt.get("domain_state_revision") is None
-        and receipt.get("allowed_rule_ids") == []
+        and _domain_receipt_fields_are_valid(
+            receipt.get("domain_state_revision"), receipt.get("allowed_rule_ids")
+        )
         and type(receipt.get("available")) is bool
         and type(receipt.get("grounded")) is bool
         and type(receipt.get("eligible_target_count")) is int
@@ -4034,8 +4112,10 @@ def _finalize_opportunity_receipt(
         "social_state_revision": (
             opportunity_snapshot.social_state_revision if live_snapshot_available else None
         ),
-        "domain_state_revision": None,
-        "allowed_rule_ids": [],
+        "domain_state_revision": opportunity_snapshot.domain_state_revision
+        if live_snapshot_available else None,
+        "allowed_rule_ids": list(opportunity_snapshot.allowed_rule_ids)
+        if live_snapshot_available else [],
         "requested_action_type": requested_action_type,
         "effective_action_type": effective_action_type,
         "available": bool(opportunity["available"]) if live_snapshot_available else False,
@@ -4071,6 +4151,7 @@ def persist_round_runtime_in_session(
         str, OpportunitySnapshotV1 | None
     ] | None,
     compatibility_mode: CompatibilityModeV1,
+    domain_world_context: Mapping[str, object] | None = None,
     runtime_lease: object | None = None,
 ) -> dict[str, Any]:
     """Merge a branch-round into the caller's uncommitted transaction."""
@@ -4222,6 +4303,7 @@ def persist_round_runtime_in_session(
             allowed_memory_refs=tuple(raw_memory_refs),
             allowed_world_changes=tuple(raw_world_changes),
             opportunity_snapshot=trusted_snapshot,
+            domain_world_context=domain_world_context,
             compatibility_mode=compatibility_mode,
         )
         if not _decision_matches_action(decision, action):
@@ -4473,6 +4555,7 @@ def persist_round_runtime(
         str, OpportunitySnapshotV1 | None
     ] | None = None,
     compatibility_mode: CompatibilityModeV1 = "legacy_import",
+    domain_world_context: Mapping[str, object] | None = None,
     runtime_lease: object | None = None,
 ) -> dict[str, Any]:
     """Persist one branch-round in an owned transaction."""
@@ -4485,6 +4568,7 @@ def persist_round_runtime(
             messages,
             opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
             compatibility_mode=compatibility_mode,
+            domain_world_context=domain_world_context,
             runtime_lease=runtime_lease,
         )
         if not _runtime_lease_is_held(session, runtime_lease):
