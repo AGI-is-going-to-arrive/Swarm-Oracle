@@ -74,6 +74,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine, get_session
+from app.services.action_ledger import project_world_outcomes_v1
 from app.services.agent_message_metadata import persisted_emotion_from_public_message
 from app.services.branch_lineage import BranchLineageError
 from app.services.campaign import remove_scenario_campaign_artifacts
@@ -2733,6 +2734,12 @@ async def get_story(
             "verdict_confidence": verdict_confidence,
             "verdict_confidence_kind": verdict_confidence_kind,
             "full_report": full_report,
+            "world_outcomes": project_world_outcomes_v1(
+                session,
+                scenario=scenario,
+                branches=list(branches),
+                full_report=full_report,
+            ),
             "branches": [
                 StoryBranch(
                     id=b.id,

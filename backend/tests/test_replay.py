@@ -1,6 +1,7 @@
 """Tests for replay service — F4 checkpoint & counterfactual branching."""
 
 import json
+from copy import deepcopy
 
 import pytest
 from sqlmodel import Session, select
@@ -19,6 +20,8 @@ from app.models.database import (
     get_engine,
 )
 from app.services.replay import (
+    _build_domain_runtime_for_branches_in_session,
+    _rebuild_domain_runtime_for_branches_in_session,
     _tokenize,
     clone_until_round,
     compare_branches,
@@ -388,6 +391,286 @@ class TestCloneUntilRound:
 
         assert exc_info.value.code == "BRANCH_LINEAGE_ROUND_NOT_FOUND"
         assert [branch.id for branch in branches] == [source_id]
+
+    def test_clone_actions_follow_source_sequence_before_legacy_backfill(self):
+        from app.models.simulation_action import SimulationAction
+        from app.services.simulation_actions import append_simulation_action
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        round_id = _seed_round(engine, source_branch_id, 1)
+
+        # Message rowid deliberately disagrees with durable action sequence:
+        # legacy first, comment second, source POST third.
+        legacy_message_id = _seed_message(
+            engine, round_id, agent_id, content="legacy-no-action"
+        )
+        comment_message_id = _seed_message(
+            engine, round_id, agent_id, content="comment-message"
+        )
+        post_message_id = _seed_message(
+            engine, round_id, agent_id, content="post-message"
+        )
+        with Session(engine) as session:
+            source_agent = Agent(
+                scenario_id=scenario_id,
+                name="Wire Service",
+                role="Non-participant world-event source",
+                source_type="world_event_source",
+            )
+            session.add(source_agent)
+            session.flush()
+            bootstrap = append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=source_agent.id,
+                message_id=None,
+                idempotency_key="source-sequence-bootstrap",
+                action={
+                    "action_type": "POST",
+                    "status": "verified",
+                    "content": "bootstrap-post",
+                    "payload": {
+                        "bootstrap": True,
+                        "source_name": "Wire Service",
+                        "published_at": None,
+                        "credibility_hint": None,
+                        "tags": [],
+                    },
+                },
+                _allow_bootstrap_post=True,
+            )
+            post = append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=post_message_id,
+                idempotency_key="source-sequence-post",
+                action={
+                    "action_type": "POST",
+                    "status": "verified",
+                    "content": "source-post",
+                },
+            )
+            comment = append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=comment_message_id,
+                idempotency_key="source-sequence-comment",
+                action={
+                    "action_type": "COMMENT",
+                    "status": "verified",
+                    "content": "source-comment",
+                    "parent_action_id": post.id,
+                    "target": {"kind": "post", "id": post.id},
+                },
+            )
+            source_ids = (bootstrap.id, post.id, comment.id)
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            1,
+            replay_kind="resume",
+        )
+
+        with Session(engine) as session:
+            replay_actions = session.exec(
+                select(SimulationAction)
+                .where(SimulationAction.branch_id == replay_branch_id)
+                .order_by(SimulationAction.sequence, SimulationAction.id)
+            ).all()
+            replay_messages = {
+                message.content: message.id
+                for message in session.exec(
+                    select(AgentMessage)
+                    .join(Round, Round.id == AgentMessage.round_id)
+                    .where(Round.branch_id == replay_branch_id)
+                ).all()
+            }
+
+        assert [action.action_type.value for action in replay_actions] == [
+            "POST",
+            "POST",
+            "COMMENT",
+            "IDLE",
+        ]
+        replay_bootstrap, replay_post, replay_comment, replay_legacy = replay_actions
+        assert replay_bootstrap.message_id is None
+        assert replay_bootstrap.content == "bootstrap-post"
+        assert replay_post.message_id == replay_messages["post-message"]
+        assert replay_comment.message_id == replay_messages["comment-message"]
+        assert replay_comment.parent_action_id == replay_post.id
+        assert replay_comment.target_type == "post"
+        assert replay_comment.target_id == replay_post.id
+        assert replay_legacy.message_id == replay_messages["legacy-no-action"]
+        assert replay_legacy.failure_code == "REPLAY_ACTION_UNAVAILABLE"
+        assert all(
+            source_id not in {action.id for action in replay_actions}
+            for source_id in source_ids
+        )
+        assert legacy_message_id not in {action.message_id for action in replay_actions}
+
+    def test_counterfactual_clone_strips_source_action_intent(self):
+        from app.models.simulation_action import SimulationAction
+        from app.services.simulation_actions import append_simulation_action
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        round_id = _seed_round(engine, source_branch_id, 1)
+        message_id = _seed_message(engine, round_id, agent_id, content="original")
+        with Session(engine) as session:
+            append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=message_id,
+                idempotency_key="counterfactual-domain-source",
+                action={
+                    "action_type": "POST",
+                    "status": "verified",
+                    "content": "source intent",
+                    "payload": {
+                        "domain_world_v1": {
+                            "schema_hash": f"sha256:{'a' * 64}",
+                            "input_state_revision": f"sha256:{'b' * 64}",
+                            "proposals": [
+                                {
+                                    "variable_id": "cash",
+                                    "rule_id": "spend",
+                                    "operation": "add_requested",
+                                    "requested_value": "-1",
+                                    "unit": "count",
+                                    "expected_before": None,
+                                    "event_key": "counterfactual-source",
+                                }
+                            ],
+                        }
+                    },
+                },
+            )
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            1,
+            replay_kind="counterfactual",
+            replay_source_round=1,
+            replay_source_agent_id=agent_id,
+        )
+
+        with Session(engine) as session:
+            replay_action = session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.branch_id == replay_branch_id
+                )
+            ).one()
+
+        assert replay_action.action_type.value == "IDLE"
+        assert replay_action.status.value == "unavailable"
+        assert replay_action.failure_code == "COUNTERFACTUAL_ACTION_UNAVAILABLE"
+        assert replay_action.parent_action_id is None
+        assert replay_action.target_type is None
+        assert replay_action.target_id is None
+        assert replay_action.content is None
+        assert json.loads(replay_action.payload_json or "{}") == {}
+
+    def test_clone_fails_closed_when_post_target_mapped_to_fallback(self):
+        from app.models.simulation_action import SimulationAction
+        from app.services.simulation_actions import append_simulation_action
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        round_id = _seed_round(engine, source_branch_id, 1)
+        post_message_id = _seed_message(
+            engine, round_id, agent_id, content="malformed-post"
+        )
+        comment_message_id = _seed_message(
+            engine, round_id, agent_id, content="dependent-comment"
+        )
+        with Session(engine) as session:
+            post = append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=post_message_id,
+                idempotency_key="fallback-chain-post",
+                action={
+                    "action_type": "POST",
+                    "status": "verified",
+                    "content": "post",
+                },
+            )
+            comment = append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=comment_message_id,
+                idempotency_key="fallback-chain-comment",
+                action={
+                    "action_type": "COMMENT",
+                    "status": "verified",
+                    "content": "comment",
+                    "parent_action_id": post.id,
+                    "target": {"kind": "post", "id": post.id},
+                },
+            )
+            # Simulate a legacy malformed forward parent.  The first source
+            # action must become a Replay fallback; its dependent post target
+            # must then also fail closed instead of targeting that IDLE row.
+            post.parent_action_id = comment.id
+            session.add(post)
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            1,
+            replay_kind="resume",
+        )
+
+        with Session(engine) as session:
+            replay_actions = session.exec(
+                select(SimulationAction)
+                .where(SimulationAction.branch_id == replay_branch_id)
+                .order_by(SimulationAction.sequence, SimulationAction.id)
+            ).all()
+
+        assert [action.action_type.value for action in replay_actions] == [
+            "IDLE",
+            "IDLE",
+        ]
+        assert [action.failure_code for action in replay_actions] == [
+            "REPLAY_ACTION_UNAVAILABLE",
+            "REPLAY_ACTION_UNAVAILABLE",
+        ]
 
 
 # ── seed_counterfactual tests ────────────────────────────
@@ -1179,6 +1462,69 @@ class TestCompareBranches:
 # ── structured Agent runtime replay contracts ───────────
 
 
+def _domain_config_fixture():
+    from app.services.domain_world import freeze_domain_schema_v1
+
+    config = freeze_domain_schema_v1(
+        {
+            "variables": [
+                {
+                    "variable_id": "balance",
+                    "label_en": "Balance",
+                    "label_zh": "余额",
+                    "value_type": "integer",
+                    "semantic_role": "stock",
+                    "unit": "count",
+                    "scale": 0,
+                    "minimum": "0",
+                    "maximum": "10",
+                    "initial_value": "5",
+                    "enum_values": [],
+                }
+            ],
+            "rules": [
+                {
+                    "rule_id": "change_balance",
+                    "variable_id": "balance",
+                    "action_type": "POST",
+                    "operation": "add_requested",
+                    "unit": "count",
+                    "constant_value": None,
+                    "requested_minimum": "-10",
+                    "requested_maximum": "10",
+                    "preconditions": [],
+                    "opportunity_mode": "effect_only",
+                    "epistemic_scope": "scenario_assumption",
+                }
+            ],
+        }
+    )
+    assert config.status == "active"
+    assert config.schema is not None
+    assert config.schema_hash is not None
+    return config
+
+
+def _domain_config_json(config) -> dict:
+    from app.services.domain_world import canonical_json_bytes_v1
+
+    return json.loads(canonical_json_bytes_v1(config))
+
+
+def _initial_domain_revision(config) -> str:
+    from app.services.domain_world import initial_domain_state_v1, state_revision_v1
+
+    assert config.schema is not None
+    assert config.schema_hash is not None
+    state = initial_domain_state_v1(config.schema)
+    return state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=0,
+        state=state,
+        accepted_event_identities=(),
+    )
+
+
 def _seed_runtime_action(
     engine,
     scenario_id: str,
@@ -1209,6 +1555,84 @@ def _seed_runtime_action(
         action_id = action.id
         session.commit()
     return action_id
+
+
+def _seed_domain_compare_fixture(
+    *,
+    value_a: str = "1",
+    value_b: str = "2",
+    include_b_round: bool = True,
+) -> tuple[str, str, str]:
+    from app.services.simulation_actions import append_simulation_action
+
+    engine = get_engine()
+    scenario_id = _seed_scenario(engine)
+    branch_a = _seed_branch(engine, scenario_id, title="A")
+    branch_b = _seed_branch(engine, scenario_id, title="B")
+    agent_id = _seed_agent(engine, scenario_id)
+    config = _domain_config_fixture()
+    initial_revision = _initial_domain_revision(config)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.parsed_context = {"domain_world_v1": _domain_config_json(config)}
+        session.add(scenario)
+        for branch_id, requested_value in (
+            (branch_a, value_a),
+            (branch_b, value_b),
+        ):
+            if branch_id == branch_b and not include_b_round:
+                continue
+            round_row = Round(branch_id=branch_id, round_number=1)
+            session.add(round_row)
+            session.flush()
+            message = AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent_id,
+                content="same domain utterance",
+            )
+            session.add(message)
+            session.flush()
+            append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_id=round_row.id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=message.id,
+                idempotency_key=f"domain-compare:{branch_id}",
+                action={
+                    "action_type": "POST",
+                    "status": "verified",
+                    "content": "same domain action",
+                    "payload": {
+                        "domain_world_v1": {
+                            "schema_hash": config.schema_hash,
+                            "input_state_revision": initial_revision,
+                            "proposals": [
+                                {
+                                    "variable_id": "balance",
+                                    "rule_id": "change_balance",
+                                    "operation": "add_requested",
+                                    "requested_value": requested_value,
+                                    "unit": "count",
+                                    "expected_before": None,
+                                    "event_key": "branch-local-event",
+                                }
+                            ],
+                        }
+                    },
+                },
+            )
+        session.flush()
+        _rebuild_domain_runtime_for_branches_in_session(
+            session,
+            scenario_id,
+            branch_ids={branch_a, branch_b},
+        )
+        session.commit()
+    return scenario_id, branch_a, branch_b
 
 
 def _agent_runtime_fixture(
@@ -1260,6 +1684,613 @@ def _agent_runtime_fixture(
 
 
 class TestAgentRuntimeReplayContract:
+    def test_compare_domain_only_divergence_sets_score_and_identity(self):
+        scenario_id, branch_a, branch_b = _seed_domain_compare_fixture()
+
+        result = compare_branches(scenario_id, branch_a, branch_b)
+
+        round_diff = result["rounds"][0]
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert round_diff["divergence_components"] == {
+            "text": 0.0,
+            "domain": 1.0,
+        }
+        assert round_diff["divergence_score"] == 1.0
+        assert round_diff["is_identical"] is False
+        assert domain_diff["status"] == "comparable"
+        assert domain_diff["differing_variable_count"] == 1
+        assert domain_diff["comparable_variable_count"] == 1
+        assert len(domain_diff["rows"]) == 1
+        row = domain_diff["rows"][0]
+        assert row["branch_a"]["value"] == "6"
+        assert row["branch_b"]["value"] == "7"
+        assert row["delta"] == "1"
+        assert row["is_different"] is True
+        assert row["first_difference"]["round_number"] == 1
+        assert row["first_difference"]["branch_a_rule_ids"] == [
+            "change_balance"
+        ]
+        assert row["first_difference"]["branch_b_rule_ids"] == [
+            "change_balance"
+        ]
+        assert len(row["first_difference"]["branch_a_source_action_ids"]) == 1
+        assert len(row["first_difference"]["branch_b_source_action_ids"]) == 1
+
+    def test_compare_schema_mismatch_in_current_rebuild_is_fail_closed(
+        self,
+        monkeypatch,
+    ):
+        from app.services import replay as replay_module
+        from app.services.domain_world import semantic_state_hash_v1
+
+        scenario_id, branch_a, branch_b = _seed_domain_compare_fixture(
+            value_a="1",
+            value_b="1",
+        )
+        original_build = _build_domain_runtime_for_branches_in_session
+
+        def build_with_schema_mismatch(
+            session,
+            requested_scenario_id,
+            *,
+            branch_ids=None,
+        ):
+            context, runtime = original_build(
+                session,
+                requested_scenario_id,
+                branch_ids=branch_ids,
+            )
+            round_payload = runtime["branches"][branch_b]["rounds"]["1"]
+            mismatched_hash = f"sha256:{'0' * 64}"
+            round_payload["domain_finalization"]["schema_hash"] = mismatched_hash
+            round_payload["semantic_state_hash"] = semantic_state_hash_v1(
+                schema_hash=mismatched_hash,
+                state=round_payload["domain_state_after"],
+            )
+            return context, runtime
+
+        monkeypatch.setattr(
+            replay_module,
+            "_build_domain_runtime_for_branches_in_session",
+            build_with_schema_mismatch,
+        )
+
+        round_diff = compare_branches(scenario_id, branch_a, branch_b)["rounds"][0]
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "schema_mismatch"
+        assert domain_diff["rows"] == []
+        assert round_diff["divergence_components"]["domain"] == 1.0
+        assert round_diff["divergence_score"] == 1.0
+        assert round_diff["is_identical"] is False
+
+    def test_compare_only_one_active_schema_in_current_rebuild_is_mismatch(
+        self,
+        monkeypatch,
+    ):
+        from app.services import replay as replay_module
+
+        scenario_id, branch_a, branch_b = _seed_domain_compare_fixture(
+            value_a="1",
+            value_b="1",
+        )
+        original_build = _build_domain_runtime_for_branches_in_session
+
+        def build_with_one_inactive_schema(
+            session,
+            requested_scenario_id,
+            *,
+            branch_ids=None,
+        ):
+            context, runtime = original_build(
+                session,
+                requested_scenario_id,
+                branch_ids=branch_ids,
+            )
+            finalization = runtime["branches"][branch_b]["rounds"]["1"][
+                "domain_finalization"
+            ]
+            finalization["schema_hash"] = None
+            finalization["status"] = "unavailable"
+            finalization["failure_code"] = "DOMAIN_SCHEMA_UNAVAILABLE"
+            return context, runtime
+
+        monkeypatch.setattr(
+            replay_module,
+            "_build_domain_runtime_for_branches_in_session",
+            build_with_one_inactive_schema,
+        )
+
+        round_diff = compare_branches(scenario_id, branch_a, branch_b)["rounds"][0]
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "schema_mismatch"
+        assert domain_diff["branch_a_failure_code"] is None
+        assert domain_diff["schema_hash_a"] is not None
+        assert domain_diff["schema_hash_b"] is None
+        assert domain_diff["rows"] == []
+        assert round_diff["divergence_components"]["domain"] == 1.0
+        assert round_diff["divergence_score"] == 1.0
+        assert round_diff["is_identical"] is False
+
+    def test_compare_uses_durable_authority_without_sql_update(self):
+        from sqlalchemy import event
+
+        scenario_id, branch_a, branch_b = _seed_domain_compare_fixture(
+            value_a="1",
+            value_b="1",
+        )
+        stale_hash = f"sha256:{'0' * 64}"
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            context = deepcopy(scenario.parsed_context or {})
+            runtime = context["agent_runtime_v1"]
+            runtime["branches"][branch_b]["rounds"]["1"]["domain_finalization"][
+                "schema_hash"
+            ] = stale_hash
+            context["agent_runtime_v1"] = runtime
+            scenario.parsed_context = context
+            session.add(scenario)
+            session.commit()
+
+        update_statements: list[str] = []
+        engine = get_engine()
+
+        def record_updates(_conn, _cursor, statement, _parameters, _context, _many):
+            if statement.lstrip().upper().startswith("UPDATE "):
+                update_statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record_updates)
+        try:
+            round_diff = compare_branches(scenario_id, branch_a, branch_b)["rounds"][0]
+        finally:
+            event.remove(engine, "before_cursor_execute", record_updates)
+
+        assert update_statements == []
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "comparable"
+        assert domain_diff["schema_hash_a"] == domain_diff["schema_hash_b"]
+        assert domain_diff["schema_hash_b"] != stale_hash
+        assert domain_diff["rows"][0]["branch_a"]["value"] == "6"
+        assert domain_diff["rows"][0]["branch_b"]["value"] == "6"
+        assert round_diff["divergence_components"]["domain"] == 0.0
+        assert round_diff["divergence_score"] == 0.0
+        assert round_diff["is_identical"] is True
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            persisted = scenario.parsed_context["agent_runtime_v1"]
+            assert persisted["branches"][branch_b]["rounds"]["1"][
+                "domain_finalization"
+            ]["schema_hash"] == stale_hash
+
+    def test_compare_same_schema_unavailable_has_null_component(self):
+        scenario_id, branch_a, branch_b = _seed_domain_compare_fixture(
+            include_b_round=False
+        )
+
+        round_diff = compare_branches(scenario_id, branch_a, branch_b)["rounds"][0]
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "unavailable"
+        assert domain_diff["branch_a_failure_code"] is None
+        assert domain_diff["branch_b_failure_code"] == "DOMAIN_ROUND_INCOMPLETE"
+        assert domain_diff["schema_hash_a"] == domain_diff["schema_hash_b"]
+        assert domain_diff["rows"] == []
+        assert round_diff["divergence_components"]["domain"] is None
+        assert round_diff["is_identical"] is False
+
+    def test_compare_rebuilds_coordinated_forged_runtime_without_persisting(self):
+        from app.services.domain_world import semantic_state_hash_v1
+
+        scenario_id, branch_a, branch_b = _seed_domain_compare_fixture(
+            value_a="1",
+            value_b="1",
+        )
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            context = deepcopy(scenario.parsed_context or {})
+            runtime = context["agent_runtime_v1"]
+            round_payload = runtime["branches"][branch_b]["rounds"]["1"]
+            round_payload["domain_state_after"] = {"balance": "9"}
+            round_payload["domain_state_revision"] = f"sha256:{'9' * 64}"
+            round_payload["semantic_state_hash"] = semantic_state_hash_v1(
+                schema_hash=round_payload["domain_finalization"]["schema_hash"],
+                state={"balance": "9"},
+            )
+            context["agent_runtime_v1"] = runtime
+            scenario.parsed_context = context
+            session.add(scenario)
+            session.commit()
+
+        round_diff = compare_branches(scenario_id, branch_a, branch_b)["rounds"][0]
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "comparable"
+        assert domain_diff["rows"][0]["branch_a"]["value"] == "6"
+        assert domain_diff["rows"][0]["branch_b"]["value"] == "6"
+        assert round_diff["divergence_components"]["domain"] == 0.0
+        assert round_diff["divergence_score"] == 0.0
+        assert round_diff["is_identical"] is True
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.parsed_context["agent_runtime_v1"]["branches"][branch_b][
+                "rounds"
+            ]["1"]["domain_state_after"] == {"balance": "9"}
+
+    def test_compare_strips_stale_visible_ancestor_after_incomplete_round(self):
+        from app.services.domain_world import semantic_state_hash_v1
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id, title="root")
+        child_a = _seed_branch(
+            engine,
+            scenario_id,
+            title="child-a",
+            parent_branch_id=root_id,
+            fork_round=2,
+        )
+        child_b = _seed_branch(
+            engine,
+            scenario_id,
+            title="child-b",
+            parent_branch_id=root_id,
+            fork_round=2,
+        )
+        present_agent_id = _seed_agent(engine, scenario_id, name="Present")
+        _seed_agent(engine, scenario_id, name="Missing")
+        round_one_id = _seed_round(engine, root_id, 1)
+        message_id = _seed_message(
+            engine,
+            round_one_id,
+            present_agent_id,
+            content="Only one roster member completed round one.",
+        )
+        _seed_runtime_action(
+            engine,
+            scenario_id,
+            root_id,
+            round_one_id,
+            1,
+            present_agent_id,
+            message_id,
+        )
+        _seed_round(engine, root_id, 2)
+        config = _domain_config_fixture()
+        forged_state = {"balance": "9"}
+        forged_runtime = {
+            "version": "1.0",
+            "branches": {
+                root_id: {
+                    "rounds": {
+                        "2": {
+                            "decisions": [{"sentinel": "preserve-social-runtime"}],
+                            "domain_finalization": {
+                                "status": "complete",
+                                "failure_code": None,
+                                "schema_hash": config.schema_hash,
+                            },
+                            "domain_adjudications": [{"forged": True}],
+                            "domain_state_deltas": [{"forged": True}],
+                            "domain_state_after": forged_state,
+                            "domain_state_revision": f"sha256:{'8' * 64}",
+                            "semantic_state_hash": semantic_state_hash_v1(
+                                schema_hash=config.schema_hash,
+                                state=forged_state,
+                            ),
+                        }
+                    }
+                }
+            },
+        }
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "domain_world_v1": _domain_config_json(config),
+                "agent_runtime_v1": forged_runtime,
+            }
+            session.add(scenario)
+            session.commit()
+
+        result = compare_branches(scenario_id, child_a, child_b)
+        round_two = next(row for row in result["rounds"] if row["round"] == 2)
+        domain_diff = round_two["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "unavailable"
+        assert domain_diff["rows"] == []
+        assert round_two["divergence_components"]["domain"] is None
+
+    def test_compare_without_schema_preserves_text_score_and_identity(self):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_a = _seed_branch(engine, scenario_id, title="A")
+        branch_b = _seed_branch(engine, scenario_id, title="B")
+        agent_id = _seed_agent(engine, scenario_id)
+        for branch_id, content in (
+            (branch_a, "shared legacy message"),
+            (branch_b, "shared legacy message"),
+        ):
+            round_id = _seed_round(engine, branch_id, 1)
+            _seed_message(engine, round_id, agent_id, content=content)
+
+        round_diff = compare_branches(scenario_id, branch_a, branch_b)["rounds"][0]
+        domain_diff = round_diff["state_transition_diff"]["domain_state_diff"]
+        assert domain_diff["status"] == "not_applicable"
+        assert domain_diff["rows"] == []
+        assert domain_diff["differing_variable_count"] == 0
+        assert domain_diff["comparable_variable_count"] == 0
+        assert round_diff["divergence_components"] == {
+            "text": 0.0,
+            "domain": None,
+        }
+        assert round_diff["divergence_score"] == 0.0
+        assert round_diff["is_identical"] is True
+
+    def test_replay_rebuilds_domain_projection_from_cloned_ledger(self):
+        from app.models.simulation_action import SimulationAction
+        from app.services.simulation_actions import append_simulation_action
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        source_branch_id = _seed_branch(engine, scenario_id)
+        agent_id = _seed_agent(engine, scenario_id)
+        round_id = _seed_round(engine, source_branch_id, 1)
+        message_id = _seed_message(engine, round_id, agent_id, content="domain post")
+        config = _domain_config_fixture()
+        initial_revision = _initial_domain_revision(config)
+        domain_group = {
+            "schema_hash": config.schema_hash,
+            "input_state_revision": initial_revision,
+            "proposals": [
+                {
+                    "variable_id": "balance",
+                    "rule_id": "change_balance",
+                    "operation": "add_requested",
+                    "requested_value": "2",
+                    "unit": "count",
+                    "expected_before": None,
+                    "event_key": "round-1-balance",
+                }
+            ],
+        }
+        with Session(engine) as session:
+            source_action = append_simulation_action(
+                session,
+                scenario_id=scenario_id,
+                branch_id=source_branch_id,
+                round_id=round_id,
+                round_number=1,
+                agent_id=agent_id,
+                message_id=message_id,
+                idempotency_key="domain-replay-source",
+                action={
+                    "action_type": "POST",
+                    "status": "verified",
+                    "content": "domain post",
+                    "payload": {"domain_world_v1": domain_group},
+                },
+            )
+            runtime = _agent_runtime_fixture(
+                source_branch_id,
+                agent_id,
+                [message_id],
+                [source_action.id],
+            )
+            runtime["branches"][source_branch_id]["rounds"]["1"]["decisions"][0][
+                "opportunity_receipt"
+            ] = {"forged": "stage-0-receipt"}
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "domain_world_v1": _domain_config_json(config),
+                "agent_runtime_v1": runtime,
+            }
+            session.add(scenario)
+            session.flush()
+            _rebuild_domain_runtime_for_branches_in_session(
+                session,
+                scenario_id,
+                branch_ids={source_branch_id},
+            )
+            session.commit()
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            source_round_runtime = scenario.parsed_context["agent_runtime_v1"][
+                "branches"
+            ][source_branch_id]["rounds"]["1"]
+            expected_state_revision = source_round_runtime["domain_state_revision"]
+            expected_semantic_hash = source_round_runtime["semantic_state_hash"]
+            expected_state_after = source_round_runtime["domain_state_after"]
+            source_round_runtime["domain_finalization"] = {"forged": True}
+            source_round_runtime["domain_adjudications"] = [{"forged": True}]
+            source_round_runtime["domain_state_deltas"] = [{"forged": True}]
+            source_round_runtime["domain_state_after"] = {"balance": "999"}
+            source_round_runtime["domain_state_revision"] = f"sha256:{'f' * 64}"
+            source_round_runtime["semantic_state_hash"] = f"sha256:{'e' * 64}"
+            scenario.parsed_context = dict(scenario.parsed_context)
+            session.add(scenario)
+            session.commit()
+
+        replay_branch_id = clone_until_round(
+            scenario_id,
+            source_branch_id,
+            1,
+            replay_kind="resume",
+        )
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            replay_runtime = scenario.parsed_context["agent_runtime_v1"]["branches"][
+                replay_branch_id
+            ]["rounds"]["1"]
+            replay_action = session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.branch_id == replay_branch_id
+                )
+            ).one()
+            replay_payload = json.loads(replay_action.payload_json or "{}")
+
+        assert replay_payload["domain_world_v1"] == domain_group
+        assert replay_runtime["domain_state_after"] == expected_state_after == {
+            "balance": "7"
+        }
+        assert replay_runtime["domain_state_revision"] == expected_state_revision
+        assert replay_runtime["semantic_state_hash"] == expected_semantic_hash
+        assert replay_runtime["domain_finalization"]["state_revision_before"] == (
+            initial_revision
+        )
+        assert replay_runtime["domain_finalization"]["state_revision_after"] == (
+            expected_state_revision
+        )
+        assert replay_runtime["domain_adjudications"][0]["action_id"] == replay_action.id
+        assert "opportunity_receipt" not in replay_runtime["decisions"][0]
+        assert replay_runtime["domain_finalization"] != {"forged": True}
+
+    def test_domain_rebuild_uses_full_non_source_agent_roster(self):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, scenario_id)
+        present_agent_id = _seed_agent(engine, scenario_id, name="Present")
+        missing_agent_id = _seed_agent(engine, scenario_id, name="Missing")
+        round_id = _seed_round(engine, branch_id, 1)
+        message_id = _seed_message(
+            engine, round_id, present_agent_id, content="only one agent completed"
+        )
+        _seed_runtime_action(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            present_agent_id,
+            message_id,
+        )
+        config = _domain_config_fixture()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {"domain_world_v1": _domain_config_json(config)}
+            session.add(scenario)
+            session.flush()
+            runtime = _rebuild_domain_runtime_for_branches_in_session(
+                session,
+                scenario_id,
+                branch_ids={branch_id},
+            )
+            session.commit()
+
+        round_runtime = runtime["branches"][branch_id]["rounds"]["1"]
+        finalization = round_runtime["domain_finalization"]
+        assert finalization["status"] == "incomplete"
+        assert finalization["failure_code"] == "DOMAIN_ROUND_INCOMPLETE"
+        assert finalization["missing_agent_ids"] == [missing_agent_id]
+        assert round_runtime["domain_adjudications"] == []
+        assert round_runtime["domain_state_deltas"] == []
+        assert "domain_state_after" not in round_runtime
+        assert "domain_state_revision" not in round_runtime
+        assert "semantic_state_hash" not in round_runtime
+
+    def test_domain_rebuild_keeps_sibling_event_identity_isolated(self):
+        from app.services.domain_world import state_revision_v1
+        from app.services.simulation_actions import append_simulation_action
+
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        root_id = _seed_branch(engine, scenario_id, title="root")
+        child_a = _seed_branch(
+            engine,
+            scenario_id,
+            title="child-a",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        child_b = _seed_branch(
+            engine,
+            scenario_id,
+            title="child-b",
+            parent_branch_id=root_id,
+            fork_round=1,
+        )
+        agent_id = _seed_agent(engine, scenario_id)
+        config = _domain_config_fixture()
+        initial_revision = _initial_domain_revision(config)
+        root_revision = state_revision_v1(
+            schema_hash=config.schema_hash,
+            as_of_round=1,
+            state={"balance": "6"},
+            accepted_event_identities={
+                ("change_balance", "balance", "root-event")
+            },
+        )
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {"domain_world_v1": _domain_config_json(config)}
+            session.add(scenario)
+            for branch_id, round_number, revision, event_key in (
+                (root_id, 1, initial_revision, "root-event"),
+                (child_a, 2, root_revision, "sibling-event"),
+                (child_b, 2, root_revision, "sibling-event"),
+            ):
+                round_row = Round(branch_id=branch_id, round_number=round_number)
+                session.add(round_row)
+                session.flush()
+                message = AgentMessage(
+                    round_id=round_row.id,
+                    agent_id=agent_id,
+                    content=f"branch {branch_id} round {round_number}",
+                )
+                session.add(message)
+                session.flush()
+                append_simulation_action(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_row.id,
+                    round_number=round_number,
+                    agent_id=agent_id,
+                    message_id=message.id,
+                    idempotency_key=f"domain-lineage:{branch_id}:{round_number}",
+                    action={
+                        "action_type": "POST",
+                        "status": "verified",
+                        "content": message.content,
+                        "payload": {
+                            "domain_world_v1": {
+                                "schema_hash": config.schema_hash,
+                                "input_state_revision": revision,
+                                "proposals": [
+                                    {
+                                        "variable_id": "balance",
+                                        "rule_id": "change_balance",
+                                        "operation": "add_requested",
+                                        "requested_value": "1",
+                                        "unit": "count",
+                                        "expected_before": None,
+                                        "event_key": event_key,
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                )
+            session.flush()
+            runtime = _rebuild_domain_runtime_for_branches_in_session(
+                session,
+                scenario_id,
+                branch_ids={child_a, child_b},
+            )
+            session.commit()
+
+        for branch_id in (child_a, child_b):
+            child_round = runtime["branches"][branch_id]["rounds"]["2"]
+            assert child_round["domain_state_after"] == {"balance": "7"}
+            assert child_round["domain_adjudications"][0]["status"] == "verified"
+            assert child_round["domain_adjudications"][0]["failure_code"] is None
+
     def test_clone_runtime_history_helper_copies_only_visible_rounds(self):
         from app.services.agent_runtime import clone_runtime_history
 

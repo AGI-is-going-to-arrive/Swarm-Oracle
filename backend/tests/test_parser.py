@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.services.parser as parser_module
+from app.services.domain_world import canonical_json_bytes_v1, freeze_domain_schema_v1
 from app.services.llm_client import LLMError, format_untrusted_text_block
 from app.services.parser import _fallback_initial_title, parse_question
 
@@ -45,6 +46,50 @@ def _valid_parse_payload(agent_count: int, *, initial_title: str) -> dict:
         "agents": agents,
         "simulation_rounds": 8,
         "branch_sensitivity": 0.7,
+    }
+
+
+def _domain_schema(
+    *,
+    initial_value: str = "5",
+    epistemic_scope: str = "bounded_estimate",
+    rules: list[dict] | None = None,
+) -> dict:
+    return {
+        "variables": [
+            {
+                "variable_id": "budget",
+                "label_en": "Budget",
+                "label_zh": "预算",
+                "value_type": "integer",
+                "semantic_role": "stock",
+                "unit": "count",
+                "scale": 0,
+                "minimum": "0",
+                "maximum": "100",
+                "initial_value": initial_value,
+                "enum_values": [],
+            }
+        ],
+        "rules": (
+            [
+                {
+                    "rule_id": "spend_budget",
+                    "variable_id": "budget",
+                    "action_type": "POST",
+                    "operation": "add_requested",
+                    "unit": "count",
+                    "constant_value": None,
+                    "requested_minimum": "-10",
+                    "requested_maximum": "0",
+                    "preconditions": [],
+                    "opportunity_mode": "effect_only",
+                    "epistemic_scope": epistemic_scope,
+                }
+            ]
+            if rules is None
+            else rules
+        ),
     }
 
 
@@ -113,7 +158,9 @@ class TestParseQuestion:
         )
 
         assert llm_mock.await_count == 1
-        _assert_time_unit_preservation_contract(llm_mock.await_args.args[0])
+        prompt = llm_mock.await_args.args[0]
+        _assert_time_unit_preservation_contract(prompt)
+        assert parser_module._DOMAIN_WORLD_SCHEMA_PROMPT_GUIDANCE in prompt
 
     @pytest.mark.asyncio
     async def test_underfill_retry_prompt_preserves_question_time_units(self, monkeypatch):
@@ -564,6 +611,185 @@ class TestParseQuestion:
         assert "变局" not in parser_module.PARSE_PROMPT_HIERARCHICAL
         assert "历史拐点" not in parser_module.PARSE_PROMPT_HIERARCHICAL
         assert "变局开端" not in parser_module.PARSE_PROMPT_HIERARCHICAL
+
+    def test_domain_schema_guidance_example_matches_core_validator(self):
+        """The prompt's executable example must remain valid under the frozen validator."""
+        guidance = parser_module._DOMAIN_WORLD_SCHEMA_PROMPT_GUIDANCE
+        begin_marker = "BEGIN_VALID_DOMAIN_SCHEMA_EXAMPLE"
+        end_marker = "END_VALID_DOMAIN_SCHEMA_EXAMPLE"
+
+        assert guidance.count(begin_marker) == 1
+        assert guidance.count(end_marker) == 1
+        _, _, remainder = guidance.partition(begin_marker)
+        example_json, separator, _ = remainder.partition(end_marker)
+        assert separator == end_marker
+        example = json.loads(example_json.strip())
+
+        assert example == parser_module._DOMAIN_WORLD_SCHEMA_PROMPT_EXAMPLE
+        frozen = freeze_domain_schema_v1(example)
+        assert frozen.status == "active"
+        assert frozen.reason_code is None
+
+    @pytest.mark.asyncio
+    async def test_first_response_domain_schema_is_frozen_and_retry_cannot_replace_it(
+        self,
+        monkeypatch,
+    ):
+        first = _valid_parse_payload(1, initial_title="First")
+        first["domain_world_schema_proposal"] = _domain_schema(initial_value="5")
+        retry = _valid_parse_payload(2, initial_title="Retry")
+        retry["domain_world_schema_proposal"] = _domain_schema(initial_value="99")
+        llm_mock = AsyncMock(side_effect=[first, retry])
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "What if the budget is spent?",
+            max_agents=2,
+            target_agents=2,
+            language="en",
+        )
+
+        assert llm_mock.await_count == 2
+        assert "domain_world_schema_proposal" in llm_mock.await_args_list[0].args[0]
+        retry_prompt = llm_mock.await_args_list[1].args[0]
+        assert "不得返回 domain_world_schema_proposal" in retry_prompt
+        assert result["domain_world_v1"]["status"] == "active"
+        assert result["domain_world_v1"]["schema"]["variables"][0]["initial_value"] == "5"
+        assert (
+            result["domain_world_v1"]["schema"]["rules"][0]["epistemic_scope"]
+            == "scenario_assumption"
+        )
+        assert "domain_world_schema_proposal" not in result
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("proposal", "reason_code"),
+        [
+            ({"variables": [], "rules": [], "extra": True}, "schema_invalid"),
+            (_domain_schema(rules=[]), "no_actionable_rule"),
+            (None, "not_generated"),
+        ],
+    )
+    async def test_first_response_domain_schema_degrades_honestly(
+        self,
+        monkeypatch,
+        proposal,
+        reason_code,
+    ):
+        payload = _valid_parse_payload(1, initial_title="Domain")
+        if proposal is not None:
+            payload["domain_world_schema_proposal"] = proposal
+        retry = _valid_parse_payload(2, initial_title="Retry")
+        retry["domain_world_schema_proposal"] = _domain_schema(initial_value="99")
+        llm_mock = AsyncMock(side_effect=[payload, retry])
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "What if the budget changes?",
+            max_agents=2,
+            target_agents=2,
+            language="en",
+        )
+
+        assert llm_mock.await_count == 2
+        assert result["domain_world_v1"] == {
+            "failure_code": "DOMAIN_SCHEMA_UNAVAILABLE",
+            "reason_code": reason_code,
+            "schema": None,
+            "schema_hash": None,
+            "status": "unavailable",
+            "unit_registry_version": "unit_registry_v1",
+            "version": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_deterministic_fallback_persists_not_generated_domain_world(
+        self,
+        monkeypatch,
+    ):
+        llm_mock = AsyncMock(side_effect=LLMError("provider unavailable"))
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "What if the budget changes?",
+            max_agents=1,
+            target_agents=1,
+            language="en",
+        )
+
+        assert llm_mock.await_count == 1
+        assert result["domain_world_v1"]["status"] == "unavailable"
+        assert result["domain_world_v1"]["reason_code"] == "not_generated"
+
+    @pytest.mark.asyncio
+    async def test_synthesized_top_up_preserves_first_domain_schema(self, monkeypatch):
+        first = _valid_parse_payload(1, initial_title="First")
+        first["domain_world_schema_proposal"] = _domain_schema(initial_value="7")
+        retry = _valid_parse_payload(1, initial_title="Retry")
+        retry["domain_world_schema_proposal"] = _domain_schema(initial_value="88")
+        llm_mock = AsyncMock(side_effect=[first, retry])
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "What if the budget changes?",
+            max_agents=2,
+            target_agents=2,
+            language="en",
+        )
+
+        assert len(result["agents"]) == 2
+        assert result["domain_world_v1"]["schema"]["variables"][0]["initial_value"] == "7"
+
+    @pytest.mark.asyncio
+    async def test_structural_fallback_preserves_first_domain_schema(self, monkeypatch):
+        first = {
+            "setting": {"time_period": "now", "location": "x", "background": "bg"},
+            "domain_world_schema_proposal": _domain_schema(initial_value="6"),
+        }
+        retry = {
+            "setting": {"time_period": "later", "location": "y", "background": "bg"},
+            "domain_world_schema_proposal": _domain_schema(initial_value="77"),
+        }
+        llm_mock = AsyncMock(side_effect=[first, retry])
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "What if the budget changes?",
+            max_agents=1,
+            target_agents=1,
+            language="en",
+        )
+
+        assert llm_mock.await_count == 2
+        assert len(result["agents"]) == 1
+        assert result["domain_world_v1"]["schema"]["variables"][0]["initial_value"] == "6"
+
+    def test_trusted_fixed_schema_uses_shared_validator_without_provider_or_scope_rewrite(
+        self,
+    ):
+        raw_schema = _domain_schema(epistemic_scope="bounded_estimate")
+        trusted = parser_module._freeze_parser_domain_world_v1(
+            raw_schema,
+            trusted_fixed_schema=True,
+        )
+        expected = json.loads(canonical_json_bytes_v1(freeze_domain_schema_v1(raw_schema)))
+        live = parser_module._freeze_parser_domain_world_v1(raw_schema)
+
+        assert trusted == expected
+        assert trusted["schema"]["rules"][0]["epistemic_scope"] == "bounded_estimate"
+        assert live["schema"]["rules"][0]["epistemic_scope"] == "scenario_assumption"
+        assert trusted["schema_hash"] != live["schema_hash"]
+
+    def test_live_schema_missing_scope_remains_missing_and_fails_core_validation(self):
+        raw_schema = _domain_schema()
+        raw_schema["rules"][0].pop("epistemic_scope")
+
+        forced = parser_module._force_live_domain_schema_scope(raw_schema)
+        frozen = parser_module._freeze_parser_domain_world_v1(raw_schema)
+
+        assert "epistemic_scope" not in forced["rules"][0]
+        assert frozen["status"] == "unavailable"
+        assert frozen["reason_code"] == "schema_invalid"
 
     @pytest.mark.asyncio
     async def test_parse_question_wraps_world_context_as_untrusted_document_reference(

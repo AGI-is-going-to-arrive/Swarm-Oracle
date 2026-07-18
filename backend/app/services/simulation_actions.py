@@ -18,11 +18,16 @@ from app.models.simulation_action import (
     SimulationActionStatus,
     SimulationActionType,
 )
+from app.services.domain_world import (
+    MAX_ACTION_PAYLOAD_BYTES,
+    canonical_json_bytes_v1,
+    scan_domain_payload_for_secret_features,
+    validate_domain_action_payload_v1,
+)
 
 _FAILURE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _TARGET_KINDS = {"action", "agent", "source", "post", "topic", "query", "world"}
 _MAX_CONTENT = 2000
-_MAX_PAYLOAD_BYTES = 4096
 _SECRET_RE = re.compile(r"(?i)(authorization|bearer\s+|api[_-]?key|token|sk-[a-z0-9])")
 REACTION_KINDS = frozenset(
     {"LIKE", "LOVE", "LAUGH", "WOW", "SAD", "ANGRY", "SUPPORT", "OPPOSE"}
@@ -70,7 +75,7 @@ def _fingerprint(
         normalized.get("target_type"),
         normalized.get("target_id"),
         normalized.get("content"),
-        json.dumps(normalized.get("payload") or {}, ensure_ascii=False, sort_keys=True),
+        canonical_json_bytes_v1(normalized.get("payload") or {}),
     )
 
 
@@ -92,7 +97,7 @@ def _row_fingerprint(row: SimulationAction) -> tuple[Any, ...]:
         row.target_type,
         row.target_id,
         row.content,
-        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        canonical_json_bytes_v1(payload),
     )
 
 
@@ -106,6 +111,27 @@ def normalize_extracted_action(
     explicit_status = str(value.get("status") or "verified").lower().strip()
     explicit_failure = str(value.get("failure_code") or "").upper().strip() or None
     if explicit_status in {"unavailable", "failed"} and raw_type == "IDLE":
+        raw_payload = value.get("payload")
+        try:
+            explicit_payload_bytes = canonical_json_bytes_v1(
+                {} if raw_payload is None else raw_payload
+            )
+        except (TypeError, ValueError):
+            explicit_payload_bytes = b""
+        if len(explicit_payload_bytes) > MAX_ACTION_PAYLOAD_BYTES:
+            return {
+                "action_type": "IDLE",
+                "status": "unavailable",
+                "failure_code": "DOMAIN_PAYLOAD_LIMIT_EXCEEDED",
+                "payload": {},
+            }
+        if raw_payload is not None and raw_payload != {}:
+            return {
+                "action_type": "IDLE",
+                "status": "unavailable",
+                "failure_code": "ACTION_INVALID_PAYLOAD",
+                "payload": {},
+            }
         return {
             "action_type": "IDLE",
             "status": explicit_status,
@@ -136,11 +162,12 @@ def normalize_extracted_action(
         if candidate_type in _TARGET_KINDS and candidate_id:
             target_type, target_id = candidate_type, candidate_id
     raw_payload = value.get("payload")
-    payload = raw_payload if isinstance(raw_payload, dict) else {}
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
     payload_invalid = raw_payload is not None and not isinstance(raw_payload, dict)
-    payload_invalid = payload_invalid or len(encoded.encode()) > _MAX_PAYLOAD_BYTES
-    payload_invalid = payload_invalid or bool(_SECRET_RE.search(encoded))
+    try:
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        payload_invalid = True
     parent_action_id = str(value.get("parent_action_id") or "").strip()[:160] or None
     invalid = False
     if action_type == SimulationActionType.POST:
@@ -163,10 +190,20 @@ def normalize_extracted_action(
         invalid = bool(content or target_type or parent_action_id)
     if action_type == SimulationActionType.REACTION:
         reaction_kind = str(payload.get("reaction") or "").upper().strip()
-        if set(payload) != {"reaction"} or reaction_kind not in REACTION_KINDS:
+        if set(payload) not in (
+            {"reaction"},
+            {"reaction", "domain_world_v1"},
+        ) or reaction_kind not in REACTION_KINDS:
             payload_invalid = True
         else:
-            payload = {"reaction": reaction_kind}
+            payload = {
+                "reaction": reaction_kind,
+                **(
+                    {"domain_world_v1": payload["domain_world_v1"]}
+                    if "domain_world_v1" in payload
+                    else {}
+                ),
+            }
     elif action_type == SimulationActionType.POST and allow_bootstrap_post:
         expected = {"bootstrap", "source_name", "published_at", "credibility_hint", "tags"}
         if (
@@ -176,10 +213,73 @@ def normalize_extracted_action(
             or not isinstance(payload.get("tags"), list)
         ):
             payload_invalid = True
-    elif payload:
-        # V1 has no payload semantics for non-reaction actions. Reject rather
-        # than persisting fields that the replay reducer would silently ignore.
+    elif action_type == SimulationActionType.IDLE:
+        if payload:
+            payload_invalid = True
+    elif set(payload) not in (set(), {"domain_world_v1"}):
         payload_invalid = True
+
+    has_domain_group = "domain_world_v1" in payload
+    canonical_payload_bytes = b""
+    try:
+        canonical_payload_bytes = canonical_json_bytes_v1(payload)
+    except (TypeError, ValueError):
+        payload_invalid = True
+    if len(canonical_payload_bytes) > MAX_ACTION_PAYLOAD_BYTES:
+        return {
+            "action_type": "IDLE",
+            "status": "unavailable",
+            "failure_code": "DOMAIN_PAYLOAD_LIMIT_EXCEEDED",
+            "payload": {},
+        }
+    if has_domain_group and payload.get("domain_world_v1") is None:
+        payload_invalid = True
+    validated_domain_group = False
+    domain_secret_feature = False
+    if has_domain_group and payload.get("domain_world_v1") is not None:
+        domain_validation = validate_domain_action_payload_v1(
+            payload["domain_world_v1"],
+            action_type=action_type.value,
+            is_bootstrap=allow_bootstrap_post,
+            canonical_outer_payload_bytes=len(canonical_payload_bytes),
+        )
+        if (
+            domain_validation.action_failure_code
+            == "DOMAIN_PAYLOAD_LIMIT_EXCEEDED"
+        ):
+            return {
+                "action_type": "IDLE",
+                "status": "unavailable",
+                "failure_code": domain_validation.action_failure_code,
+                "payload": {},
+            }
+        validated_domain_group = domain_validation.payload is not None
+        if domain_validation.payload is not None:
+            domain_secret_feature = scan_domain_payload_for_secret_features(
+                domain_validation.payload
+            )
+        if not payload_invalid:
+            if domain_validation.payload is None:
+                payload_invalid = True
+            else:
+                payload["domain_world_v1"] = domain_validation.payload
+    legacy_scanned_payload = dict(payload)
+    if validated_domain_group:
+        legacy_scanned_payload.pop("domain_world_v1", None)
+    try:
+        legacy_encoded = json.dumps(
+            legacy_scanned_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        legacy_encoded = ""
+        payload_invalid = True
+    payload_invalid = (
+        payload_invalid
+        or domain_secret_feature
+        or bool(_SECRET_RE.search(legacy_encoded))
+    )
     if payload_invalid:
         return {
             "action_type": "IDLE",
@@ -359,7 +459,9 @@ def append_simulation_action(
         target_type=normalized.get("target_type"),
         target_id=normalized.get("target_id"),
         parent_action_id=parent_action_id,
-        payload_json=json.dumps(normalized.get("payload") or {}, ensure_ascii=False),
+        payload_json=canonical_json_bytes_v1(
+            normalized.get("payload") or {}
+        ).decode("utf-8"),
     )
     try:
         with session.begin_nested():

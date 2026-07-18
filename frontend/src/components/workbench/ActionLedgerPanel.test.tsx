@@ -2,15 +2,24 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getScenarioActions, type SocialActionsResponse } from '../../api/client';
+import { useSimulationStore } from '../../stores/simulationStore';
+import type { WSEvent } from '../../types';
 import ActionLedgerPanel from './ActionLedgerPanel';
 import { ACTION_LEDGER_POLL_INTERVAL_MS, isActionsUnavailableError } from './actionLedgerUtils';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { language: 'en' },
     t: (key: string, values?: Record<string, unknown>) => {
       if (key === 'action_ledger.entry_aria') return `${values?.agent} ${values?.type} round ${values?.round}`;
       if (key === 'action_ledger.round') return `Round ${values?.round}`;
       if (key === 'action_ledger.target') return `Target: ${values?.target}`;
+      if (key === 'action_ledger.domain_chip_verified') {
+        return `${values?.label}: ${values?.before} → ${values?.after} (${values?.rule})`;
+      }
+      if (key === 'action_ledger.domain_chip_failed') {
+        return `action ok · world rejected (${values?.code})`;
+      }
       return key;
     },
   }),
@@ -40,7 +49,10 @@ async function expand(): Promise<void> {
 }
 
 describe('ActionLedgerPanel', () => {
-  beforeEach(() => mockedGetActions.mockReset());
+  beforeEach(() => {
+    mockedGetActions.mockReset();
+    useSimulationStore.getState().reset();
+  });
   afterEach(() => vi.useRealTimers());
 
   it('is collapsed by default and loads only durable actions after expansion', async () => {
@@ -54,6 +66,94 @@ describe('ActionLedgerPanel', () => {
     expect(screen.getByText('Target: topic:launch')).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'action_ledger.details' }));
     expect(screen.getByText('action_ledger.none')).toBeVisible();
+  });
+
+  it('renders domain adjudication chips from /actions domain_adjudications', async () => {
+    mockedGetActions.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      next_cursor: null,
+      has_more: false,
+      items: [{
+        id: 'action-42',
+        sequence: 42,
+        branch_id: 'branch-1',
+        round: 3,
+        agent: { id: 'agent-1', name: 'Ada' },
+        action_type: 'POST',
+        status: 'verified',
+        target: null,
+        parent_action_id: null,
+        content: 'Spend',
+        payload: {},
+        failure_code: null,
+        created_at: '2026-07-14T01:02:03Z',
+        domain_adjudications: [
+          {
+            status: 'verified',
+            rule_id: 'spend_budget',
+            variable_id: 'cash_balance',
+            label_en: 'Cash balance',
+            label_zh: '现金余额',
+            before: '8000',
+            after: '7200',
+            applied_delta: '-800',
+          },
+          {
+            status: 'failed',
+            failure_code: 'DOMAIN_CONFLICT',
+            rule_id: 'spend_budget',
+            variable_id: 'cash_balance',
+            label_en: 'Cash balance',
+            label_zh: '现金余额',
+          },
+        ],
+      }],
+    });
+    render(<ActionLedgerPanel scenarioId="scenario-1" />);
+    await expand();
+    expect(await screen.findByTestId('action-ledger-domain-chips-action-42')).toBeVisible();
+    expect(screen.getByText(/Cash balance/)).toBeVisible();
+    expect(screen.getByText(/DOMAIN_CONFLICT/)).toBeVisible();
+  });
+
+  it('merges live action_committed receipts into the expanded ledger without waiting for poll', async () => {
+    mockedGetActions.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      next_cursor: null,
+      has_more: false,
+      items: [],
+    });
+    useSimulationStore.setState({
+      agents: [{ id: 'agent-live', name: 'Live Agent', role: 'analyst', emotion: 'neutral' } as never],
+    });
+
+    render(<ActionLedgerPanel scenarioId="scenario-1" branchId="branch-1" />);
+    await expand();
+    expect(await screen.findByTestId('action-ledger-empty')).toBeVisible();
+
+    act(() => {
+      useSimulationStore.getState().handleWSEvent({
+        type: 'action_committed',
+        data: {
+          scenario_id: 'scenario-1',
+          action_id: 'live-action-1',
+          sequence: 7,
+          branch_id: 'branch-1',
+          round: 3,
+          agent_id: 'agent-live',
+          action_type: 'POST',
+          status: 'verified',
+          failure_code: null,
+        },
+      } as WSEvent);
+    });
+
+    expect(await screen.findByText('#7')).toBeVisible();
+    expect(screen.getByText('Round 3')).toBeVisible();
+    expect(screen.getAllByText('Live Agent').length).toBeGreaterThanOrEqual(1);
+    // Live receipts have no durable timestamp — honest placeholder, not epoch 1970.
+    expect(screen.getByText('action_ledger.time_unknown')).toBeVisible();
+    expect(screen.queryByText(/1970/)).toBeNull();
   });
 
   it('sends action, agent, round and status filters to the API', async () => {

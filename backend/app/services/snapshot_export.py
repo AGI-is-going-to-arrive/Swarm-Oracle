@@ -60,6 +60,14 @@ from app.services.agent_runtime import (
     sanitize_imported_agent_runtime_in_session,
 )
 from app.services.causal_graph import _message_node_key
+from app.services.domain_world import (
+    MAX_ACTION_PAYLOAD_BYTES,
+    canonical_json_bytes_v1,
+    scan_domain_payload_for_secret_features,
+    string_has_credential_features,
+    validate_domain_action_payload_v1,
+    validate_domain_world_config_v1,
+)
 from app.services.result_report.claims import compile_report_claims_in_session
 from app.services.result_report.schema import validate_full_report_payload
 from app.services.simulation_actions import normalize_extracted_action
@@ -107,6 +115,25 @@ _DATA_FILES = (
     "actions.jsonl",
     "causal_graph.json",
     "intervention_receipts.jsonl",
+)
+_DOMAIN_DERIVED_PARSED_CONTEXT_FIELDS = frozenset(
+    {
+        # Snapshot authority is limited to the frozen config and durable action
+        # proposals.  These response/runtime projections must always be rebuilt.
+        "domain_world",
+        "domain_finalization",
+        "domain_adjudications",
+        "domain_state_deltas",
+        "domain_state_after",
+        "domain_state_revision",
+        "semantic_state_hash",
+        "world_outcomes",
+        "domain_state_diff",
+        "divergence_score",
+        "divergence_components",
+        "state_transition_diff",
+        "round_comparisons",
+    }
 )
 _EXPORT_API_KEY_ASSIGNMENT_RE = re.compile(
     r"\b(?:[A-Za-z0-9]+[_-]+)*api[_-]?key\s*[:=]\s*"
@@ -187,6 +214,21 @@ class SnapshotImportError(ValueError):
     """Raised when an imported ZIP fails validation."""
 
 
+class _DuplicateJsonObjectKey(ValueError):
+    pass
+
+
+def _json_object_without_duplicate_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateJsonObjectKey(key)
+        value[key] = item
+    return value
+
+
 def _validate_snapshot_actions(
     rows: list[dict[str, Any]],
     *,
@@ -209,6 +251,24 @@ def _validate_snapshot_actions(
     }
     by_id: dict[str, dict[str, Any]] = {}
     branch_by_id = {str(row.get("id") or ""): row for row in branches}
+    counterfactual_coordinates: dict[str, tuple[str, int]] = {}
+    for branch_id, branch_row in branch_by_id.items():
+        if branch_row.get("replay_kind") != "counterfactual":
+            continue
+        source_agent_id = str(branch_row.get("replay_source_agent_id") or "").strip()
+        try:
+            source_round = int(
+                branch_row.get("replay_source_round")
+                or branch_row.get("fork_round")
+                or 0
+            )
+        except (TypeError, ValueError):
+            source_round = 0
+        if source_agent_id not in agent_ids or source_round < 1:
+            raise SnapshotImportError(
+                "counterfactual branch replay coordinate is invalid"
+            )
+        counterfactual_coordinates[branch_id] = (source_agent_id, source_round)
     source_agent_ids = {
         str(row.get("id") or "")
         for row in agents
@@ -244,13 +304,25 @@ def _validate_snapshot_actions(
     action_message_ids: set[str] = set()
     for raw in rows:
         action_id = str(raw.get("id") or "").strip()
+        raw_payload_json = raw.get("payload_json")
+        if not isinstance(raw_payload_json, str) or not raw_payload_json:
+            raise SnapshotImportError("actions payload_json must be non-empty JSON text")
         try:
             sequence = int(raw.get("sequence"))
             round_number = int(raw.get("round_number"))
-            payload = json.loads(raw.get("payload_json") or "{}")
+            payload = json.loads(
+                raw_payload_json,
+                object_pairs_hook=_json_object_without_duplicate_keys,
+            )
             _coerce_datetime_field(raw.get("created_at"), "actions.created_at")
+        except _DuplicateJsonObjectKey as exc:
+            raise SnapshotImportError(
+                "actions payload_json contains duplicate object keys"
+            ) from exc
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise SnapshotImportError("actions contain malformed scalar fields") from exc
+        if not isinstance(payload, dict):
+            raise SnapshotImportError("actions payload must be a JSON object")
         branch_id = str(raw.get("branch_id") or "")
         round_id = str(raw.get("round_id") or "")
         agent_id = str(raw.get("agent_id") or "")
@@ -265,6 +337,14 @@ def _validate_snapshot_actions(
         ):
             raise SnapshotImportError("actions contain invalid identity or scope")
         message_id = str(raw.get("message_id") or "")
+        if (
+            counterfactual_coordinates.get(branch_id) == (agent_id, round_number)
+            and message_id
+            and "domain_world_v1" in payload
+        ):
+            raise SnapshotImportError(
+                "counterfactual replacement action cannot restore domain proposals"
+            )
         is_bootstrap = (
             agent_id in source_agent_ids
             and not message_id
@@ -339,6 +419,40 @@ def _validate_snapshot_actions(
             raise SnapshotImportError("actions status/failure_code mismatch")
         if failure and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", failure):
             raise SnapshotImportError("actions.failure_code is invalid")
+        try:
+            canonical_payload_size = len(canonical_json_bytes_v1(payload))
+        except (TypeError, ValueError):
+            raise SnapshotImportError(
+                "actions payload is oversized or contains credentials"
+            ) from None
+        if canonical_payload_size > MAX_ACTION_PAYLOAD_BYTES:
+            raise SnapshotImportError(
+                "actions payload is oversized or contains credentials"
+            )
+        if _json_value_has_credential_features(payload):
+            raise SnapshotImportError(
+                "actions payload is oversized or contains credentials"
+            )
+        # Snapshot portability permits secret-free extension keys without
+        # widening live ingress.  Project only fields with action-family
+        # semantics into the live normalizer; the complete payload above has
+        # already passed size, duplicate-key, and recursive credential checks.
+        normalizer_payload = {}
+        if "domain_world_v1" in payload:
+            normalizer_payload["domain_world_v1"] = payload["domain_world_v1"]
+        raw_action_type = str(raw.get("action_type") or "")
+        if raw_action_type == "REACTION" and "reaction" in payload:
+            normalizer_payload["reaction"] = payload["reaction"]
+        if is_bootstrap:
+            for key in (
+                "bootstrap",
+                "source_name",
+                "published_at",
+                "credibility_hint",
+                "tags",
+            ):
+                if key in payload:
+                    normalizer_payload[key] = payload[key]
         normalized = normalize_extracted_action(
             {
                 "action_type": raw.get("action_type"),
@@ -351,7 +465,7 @@ def _validate_snapshot_actions(
                     else None
                 ),
                 "parent_action_id": raw.get("parent_action_id"),
-                "payload": payload,
+                "payload": normalizer_payload,
             },
             allow_bootstrap_post=is_bootstrap,
         )
@@ -366,7 +480,7 @@ def _validate_snapshot_actions(
             or normalized.get("target_id") != (str(raw.get("target_id") or "").strip() or None)
         ):
             raise SnapshotImportError("actions shape is invalid")
-        if normalized.get("payload") != payload:
+        if normalized.get("payload") != normalizer_payload:
             raise SnapshotImportError("actions payload is oversized or contains credentials")
         by_id[action_id] = raw
         sequences.add(sequence)
@@ -543,20 +657,228 @@ def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
     return normalized
 
 
-def _normalize_parsed_context_for_snapshot(value: Any) -> Any:
-    if not isinstance(value, dict) or "full_report" not in value:
+def _domain_config_json_v1(value: object) -> dict[str, Any]:
+    config = validate_domain_world_config_v1(value)
+    return json.loads(canonical_json_bytes_v1(config))
+
+
+def _redact_domain_config_free_text_v1(
+    validated_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Scrub display labels without rewriting validated schema authority."""
+    if validated_config.get("status") != "active":
+        return validated_config
+    schema = validated_config.get("schema")
+    if not isinstance(schema, dict):
+        return validated_config
+    variables = schema.get("variables")
+    if not isinstance(variables, list):
+        return validated_config
+
+    redacted_variables: list[Any] = []
+    for raw_variable in variables:
+        if not isinstance(raw_variable, dict):
+            redacted_variables.append(raw_variable)
+            continue
+        variable = dict(raw_variable)
+        for label_key in ("label_en", "label_zh"):
+            variable[label_key] = _scrub_export_text(variable.get(label_key))
+        redacted_variables.append(variable)
+
+    redacted_schema = dict(schema)
+    redacted_schema["variables"] = redacted_variables
+    redacted_config = dict(validated_config)
+    redacted_config["schema"] = redacted_schema
+    return _domain_config_json_v1(redacted_config)
+
+
+def _decode_snapshot_action_payload_json(
+    raw: Any,
+) -> tuple[str, dict[str, Any], int]:
+    """Decode one bounded portable payload without rewriting its source bytes."""
+    if not isinstance(raw, str):
+        raise SnapshotImportError("action payload_json must be JSON text")
+    if not raw:
+        raise SnapshotImportError("action payload_json must be non-empty JSON text")
+    try:
+        decoded = json.loads(
+            raw,
+            object_pairs_hook=_json_object_without_duplicate_keys,
+        )
+    except _DuplicateJsonObjectKey as exc:
+        raise SnapshotImportError(
+            "action payload_json contains duplicate object keys"
+        ) from exc
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise SnapshotImportError("action payload_json is malformed JSON") from exc
+    if not isinstance(decoded, dict):
+        raise SnapshotImportError("action payload must be a JSON object")
+    try:
+        outer_size = len(canonical_json_bytes_v1(decoded))
+    except (TypeError, ValueError):
+        message = (
+            "domain action payload is invalid"
+            if "domain_world_v1" in decoded
+            else "action payload is invalid"
+        )
+        raise SnapshotImportError(message) from None
+    if outer_size > MAX_ACTION_PAYLOAD_BYTES:
+        raise SnapshotImportError("action payload exceeds the portable size limit")
+    return raw, decoded, outer_size
+
+
+def _redact_snapshot_action_payload_json(
+    raw: Any,
+    *,
+    action_type: str,
+    is_bootstrap: bool,
+) -> str:
+    """Validate a portable action payload and preserve its original JSON bytes."""
+    raw_json, decoded, outer_size = _decode_snapshot_action_payload_json(raw)
+    if "domain_world_v1" in decoded:
+        validation = validate_domain_action_payload_v1(
+            decoded.get("domain_world_v1"),
+            action_type=action_type,
+            is_bootstrap=is_bootstrap,
+            canonical_outer_payload_bytes=outer_size,
+        )
+        if validation.payload is None:
+            raise SnapshotImportError("domain action payload is invalid")
+        if scan_domain_payload_for_secret_features(validation.payload):
+            raise SnapshotImportError("domain action payload contains credentials")
+    if _json_value_has_credential_features(decoded):
+        raise SnapshotImportError("action payload contains credentials")
+    return raw_json
+
+
+def _serialize_counterfactual_action_payload_json(raw: Any) -> str:
+    """Preserve replacement extensions while stripping only domain intent."""
+    if raw is None or raw == "":
+        return "{}"
+    raw_json, decoded, _outer_size = _decode_snapshot_action_payload_json(raw)
+    if _json_value_has_credential_features(decoded):
+        raise SnapshotImportError("action payload contains credentials")
+    if "domain_world_v1" not in decoded:
+        return raw_json
+    stripped = dict(decoded)
+    stripped.pop("domain_world_v1")
+    return canonical_json_bytes_v1(stripped).decode("utf-8")
+
+
+def _json_value_has_credential_features(value: object) -> bool:
+    """Scan every JSON string key and value with the domain credential predicate."""
+
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if type(item) is str:
+            if string_has_credential_features(item):
+                return True
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
+
+
+def _normalize_parsed_context_for_snapshot(
+    value: Any,
+    *,
+    materialize_missing_domain_config: bool = False,
+) -> Any:
+    if not isinstance(value, dict):
         return value
-    normalized_report = _normalize_full_report_status_for_snapshot(value.get("full_report"))
-    if normalized_report is value.get("full_report"):
-        return value
-    normalized = dict(value)
-    normalized["full_report"] = normalized_report
+
+    # Validate the untouched imported/stored config as one exact record.  In
+    # particular, recursive credential redaction must not remove an unknown
+    # key and thereby turn an illegal config into an active one.
+    has_domain_config = "domain_world_v1" in value
+    validated_domain_config = (
+        _domain_config_json_v1(value.get("domain_world_v1"))
+        if has_domain_config or materialize_missing_domain_config
+        else None
+    )
+    normalized = _redact_dict(value)
+    if "full_report" in normalized:
+        normalized["full_report"] = _normalize_full_report_status_for_snapshot(
+            normalized.get("full_report")
+        )
+    if validated_domain_config is not None:
+        # Schema authority has already passed exact-record validation.  Keep
+        # identifiers and typed values byte-stable; only display labels remain
+        # free text and therefore pass through the ordinary privacy scrubber.
+        normalized["domain_world_v1"] = _redact_domain_config_free_text_v1(
+            validated_domain_config
+        )
+    runtime = normalized.get("agent_runtime_v1")
+    if isinstance(runtime, dict):
+        from app.services.replay import _runtime_copy_without_domain_projections
+
+        normalized["agent_runtime_v1"] = _runtime_copy_without_domain_projections(
+            runtime,
+            branch_ids=None,
+        )
+    for field_name in _DOMAIN_DERIVED_PARSED_CONTEXT_FIELDS:
+        normalized.pop(field_name, None)
     return normalized
 
 
+def _serialize_snapshot_action(
+    row: SimulationAction,
+    *,
+    branches_by_id: dict[str, Branch],
+) -> dict[str, Any]:
+    branch = branches_by_id.get(row.branch_id)
+    counterfactual_coordinate = bool(
+        branch is not None
+        and branch.replay_kind == "counterfactual"
+        and branch.replay_source_agent_id == row.agent_id
+        and (branch.replay_source_round or branch.fork_round) == row.round_number
+        and row.message_id is not None
+    )
+    if counterfactual_coordinate:
+        action_type = "IDLE"
+        status = "unavailable"
+        failure_code = "COUNTERFACTUAL_ACTION_UNAVAILABLE"
+        parent_action_id = target_type = target_id = content = None
+        payload_json = _serialize_counterfactual_action_payload_json(row.payload_json)
+    else:
+        action_type = row.action_type.value
+        status = row.status.value
+        failure_code = row.failure_code
+        parent_action_id = row.parent_action_id
+        target_type = row.target_type
+        target_id = row.target_id
+        content = _scrub_export_text(row.content)
+        payload_json = _redact_snapshot_action_payload_json(
+            row.payload_json,
+            action_type=action_type,
+            is_bootstrap=row.message_id is None,
+        )
+    return {
+        "id": row.id,
+        "branch_id": row.branch_id,
+        "round_id": row.round_id,
+        "round_number": row.round_number,
+        "sequence": row.sequence,
+        "agent_id": row.agent_id,
+        "message_id": row.message_id,
+        "action_type": action_type,
+        "status": status,
+        "failure_code": failure_code,
+        "parent_action_id": parent_action_id,
+        "target_type": target_type,
+        "target_id": target_id,
+        "content": content,
+        "payload_json": payload_json,
+        "idempotency_key": row.idempotency_key,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
 def _serialize_scenario(scenario: Scenario, *, include_private: bool) -> dict[str, Any]:
-    parsed_context = _redact_dict(scenario.parsed_context) if scenario.parsed_context else None
-    parsed_context = _normalize_parsed_context_for_snapshot(parsed_context)
+    parsed_context = _normalize_parsed_context_for_snapshot(scenario.parsed_context)
     director_state = (
         _redact_dict(scenario.director_state_json) if scenario.director_state_json else None
     )
@@ -799,26 +1121,9 @@ def build_snapshot_manifest(
             .order_by(SimulationAction.sequence, SimulationAction.id)
         ).all()
     )
+    branches_by_id = {branch.id: branch for branch in branches}
     actions = [
-        {
-            "id": row.id,
-            "branch_id": row.branch_id,
-            "round_id": row.round_id,
-            "round_number": row.round_number,
-            "sequence": row.sequence,
-            "agent_id": row.agent_id,
-            "message_id": row.message_id,
-            "action_type": row.action_type.value,
-            "status": row.status.value,
-            "failure_code": row.failure_code,
-            "parent_action_id": row.parent_action_id,
-            "target_type": row.target_type,
-            "target_id": row.target_id,
-            "content": _scrub_export_text(row.content),
-            "payload_json": _redact_json_string(row.payload_json),
-            "idempotency_key": row.idempotency_key,
-            "created_at": row.created_at.isoformat(),
-        }
+        _serialize_snapshot_action(row, branches_by_id=branches_by_id)
         for row in action_rows
     ]
 
@@ -1765,24 +2070,23 @@ def import_snapshot_zip(
     else:
         web_context_value = web_context_raw
 
-    parsed_context = (
-        _redact_dict(scenario_payload.get("parsed_context"))
-        if isinstance(scenario_payload.get("parsed_context"), dict)
-        else None
+    raw_parsed_context = scenario_payload.get("parsed_context")
+    parsed_context = _normalize_parsed_context_for_snapshot(
+        raw_parsed_context if isinstance(raw_parsed_context, dict) else {},
+        materialize_missing_domain_config=True,
     )
     deferred_full_report = None
     deferred_result_quality = None
     deferred_agent_runtime = None
-    if isinstance(parsed_context, dict):
-        deferred_full_report = _normalize_full_report_status_for_snapshot(
-            parsed_context.pop("full_report", None)
-        )
-        deferred_result_quality = parsed_context.pop("result_quality", None)
-        deferred_agent_runtime = parsed_context.pop("agent_runtime_v1", None)
+    deferred_full_report = _normalize_full_report_status_for_snapshot(
+        parsed_context.pop("full_report", None)
+    )
+    deferred_result_quality = parsed_context.pop("result_quality", None)
+    deferred_agent_runtime = parsed_context.pop("agent_runtime_v1", None)
 
     scenario = Scenario(
         question=str(scenario_payload.get("question", "")).strip() or "Imported snapshot",
-        parsed_context=parsed_context or None,
+        parsed_context=parsed_context,
         director_state_json=_redact_dict(scenario_payload.get("director_state_json"))
         if isinstance(scenario_payload.get("director_state_json"), dict)
         else None,
@@ -1995,7 +2299,11 @@ def import_snapshot_zip(
             failure_code=raw.get("failure_code"),
             target_type=raw.get("target_type"),
             content=str(raw.get("content") or "")[:2000] or None,
-            payload_json=_redact_json_string(raw.get("payload_json")),
+            payload_json=_redact_snapshot_action_payload_json(
+                raw.get("payload_json"),
+                action_type=str(raw.get("action_type") or "IDLE"),
+                is_bootstrap=not bool(raw.get("message_id")),
+            ),
             idempotency_key=f"snapshot:{new_scenario_id}:{sequence}:{original_id}",
             created_at=_coerce_datetime_field(raw.get("created_at"), "actions.created_at"),
         )
@@ -2085,6 +2393,15 @@ def import_snapshot_zip(
             parsed["agent_runtime_v1"] = remapped_runtime
             scenario.parsed_context = parsed
             session.add(scenario)
+
+    session.flush()
+    from app.services.replay import _rebuild_domain_runtime_for_branches_in_session
+
+    _rebuild_domain_runtime_for_branches_in_session(
+        session,
+        new_scenario_id,
+        branch_ids=set(branch_id_map.values()),
+    )
 
     for raw in intervention_receipt_rows:
         branch_orig = str(raw.get("branch_id") or "").strip()

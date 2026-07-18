@@ -12,7 +12,7 @@ import re
 import time
 import unicodedata
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from time import monotonic
@@ -2891,6 +2891,7 @@ async def run_simulation(
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
     runtime_lease: RuntimeLockLease | None = None,
+    current_runtime_lease: Callable[[], RuntimeLockLease | None] | None = None,
 ):
     """Execute simulation with user-cancel handling.
 
@@ -2909,6 +2910,7 @@ async def run_simulation(
             llm_overrides=llm_overrides,
             branch_id=branch_id,
             runtime_lease=runtime_lease,
+            current_runtime_lease=current_runtime_lease,
         )
     except SimulationCancelled:
         await handle_simulation_cancelled(scenario_id, ws_callback=ws_callback)
@@ -2925,6 +2927,7 @@ async def _run_simulation_impl(
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
     runtime_lease: RuntimeLockLease | None = None,
+    current_runtime_lease: Callable[[], RuntimeLockLease | None] | None = None,
 ):
     """Execute the full simulation pipeline (Stage 2 + Stage 3).
 
@@ -3297,6 +3300,17 @@ async def _run_simulation_impl(
             _check_cancelled(scenario_id)
             current_branch_id = branch_info["id"]
             current_agents = branch_agent_states[current_branch_id]
+            expected_domain_agent_ids = tuple(
+                sorted(
+                    {
+                        str(agent.get("id") or "").strip()
+                        for agent in current_agents
+                        if str(agent.get("id") or "").strip()
+                        and str(agent.get("source_type") or "").strip().lower()
+                        != "world_event_source"
+                    }
+                )
+            )
             current_emotion_state = branch_emotion_states[current_branch_id]
             current_leaders: list[dict[str, Any]] = []
             current_workers: list[dict[str, Any]] = []
@@ -3463,6 +3477,46 @@ async def _run_simulation_impl(
                             exc_info=True,
                         )
                 raise
+
+            from app.services.agent_runtime import finalize_domain_round_v1
+
+            _check_cancelled(scenario_id)
+            try:
+                domain_result = finalize_domain_round_v1(
+                    engine,
+                    scenario_id=scenario_id,
+                    branch_id=current_branch_id,
+                    round_id=round_id,
+                    round_number=round_num,
+                    expected_agent_ids=expected_domain_agent_ids,
+                    current_runtime_lease=current_runtime_lease,
+                )
+            except RuntimeError as exc:
+                if exc.args == ("DOMAIN_FINALIZATION_CANCELLED",):
+                    raise SimulationCancelled(scenario_id) from exc
+                raise
+            _check_cancelled(scenario_id)
+
+            domain_finalization_status = str(
+                domain_result.domain_finalization.get("status") or ""
+            )
+            domain_failure_code = str(
+                domain_result.domain_finalization.get("failure_code") or ""
+            )
+            if domain_failure_code != "DOMAIN_SCHEMA_UNAVAILABLE" and (
+                domain_result.status == "unavailable"
+                or domain_finalization_status in {"incomplete", "unavailable"}
+            ):
+                return
+            if domain_result.should_broadcast:
+                if domain_result.event_data is None:
+                    raise RuntimeError("DOMAIN_FINALIZATION_EVENT_DATA_MISSING")
+                await push(
+                    {
+                        "type": "world_state_committed",
+                        "data": dict(domain_result.event_data),
+                    }
+                )
 
             # 2) Round summary
             if detected_language.startswith("Chinese"):
@@ -4407,6 +4461,91 @@ def _append_agent_debate_coherence_guidance(
     return f"{prompt}\n\n{guidance}"
 
 
+def _domain_world_decision_prompt_v1(
+    domain_world_context: Mapping[str, object] | None,
+    *,
+    language: str,
+) -> str:
+    """Render the active N-1 DomainWorld context and its optional exact group."""
+
+    if not isinstance(domain_world_context, Mapping):
+        return ""
+    schema_hash = domain_world_context.get("schema_hash")
+    state_revision = domain_world_context.get("input_state_revision")
+    if not isinstance(schema_hash, str) or not isinstance(state_revision, str):
+        return ""
+
+    group_template = {
+        "schema_hash": schema_hash,
+        "input_state_revision": state_revision,
+        "proposals": [
+            {
+                "variable_id": "copy a variable_id from the frozen schema",
+                "rule_id": "copy a rule_id from the frozen schema",
+                "operation": "copy that rule's operation",
+                "requested_value": "typed canonical value or null",
+                "unit": "copy that rule's unit",
+                "expected_before": "typed canonical value or null",
+                "event_key": "portable-event-key",
+            }
+        ],
+    }
+    group_json = json.dumps(
+        group_template,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    context_json = json.dumps(
+        domain_world_context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    context_block = format_untrusted_text_block(
+        "Active DomainWorld v1 context",
+        context_json,
+        max_chars=max(40_000, len(context_json) * 2 + 1),
+    )
+    if _is_chinese_language(language):
+        guidance = (
+            "DomainWorld v1 是只读的 N-1 轮状态与冻结 schema。只有角色本轮确实执行的"
+            "非 IDLE 动作可以在 action_parameters 中附带可选 domain_world_v1；无可靠"
+            "领域意图时必须完全省略该键，IDLE 也必须省略。该组必须且只能包含 "
+            "schema_hash、input_state_revision、proposals 三键，并逐字复制下方 hash/revision。"
+            "每个 proposal 必须且只能包含 variable_id、rule_id、operation、requested_value、"
+            "unit、expected_before、event_key 七键；最多 4 个，保持语义顺序，不得加入坐标。"
+            "rule 必须绑定 selected_action。constant 操作的 requested_value 为 null；"
+            "set_if_expected 必须填写非 null expected_before，其余 operation 的 expected_before "
+            "必须为 null。数值按 schema 使用 canonical "
+            "字符串，boolean 使用 JSON boolean，enum 使用 canonical string。不得从发言、"
+            "self-report、world_state_changes 或承诺推断领域效果。以下仅是可选 "
+            "action_parameters.domain_world_v1 的精确结构模板；无可靠领域意图时整键省略：\n"
+            f"{group_json}\n"
+            f"{context_block}"
+        )
+    else:
+        guidance = (
+            "DomainWorld v1 is the read-only N-1 state and frozen schema. Only a non-IDLE action "
+            "the character actually performs this turn may include the optional domain_world_v1 "
+            "inside action_parameters. Omit that key entirely when there is no grounded domain "
+            "intent, and always omit it for IDLE. The group must contain exactly schema_hash, "
+            "input_state_revision, and proposals, copying the hash and revision below verbatim. "
+            "Each proposal must contain exactly variable_id, rule_id, operation, requested_value, "
+            "unit, expected_before, and event_key. Preserve semantic order, emit at most four, "
+            "and never add coordinates. The rule must bind selected_action. Constant operations "
+            "use null requested_value. set_if_expected MUST use non-null expected_before; every "
+            "other operation MUST use null expected_before. "
+            "Use canonical numeric strings, JSON booleans, and canonical enum strings as defined "
+            "by the schema. Never infer domain effects from speech, self-report, "
+            "world_state_changes, or commitments. The following is only the exact structural "
+            "template for the optional action_parameters.domain_world_v1; omit the entire key "
+            "when there is no grounded domain intent:\n"
+            f"{group_json}\n"
+            f"{context_block}"
+        )
+    return guidance
+
+
 def _build_decision_envelope_prompt(
     context: str,
     *,
@@ -4414,6 +4553,7 @@ def _build_decision_envelope_prompt(
     fallback_goal: str,
     action_target_catalog: str,
     opportunity_snapshot: OpportunitySnapshotV1 | None = None,
+    domain_world_context: Mapping[str, object] | None = None,
     prior_transition_context: str,
     language: str,
     replan_reason: str = "",
@@ -4572,6 +4712,10 @@ def _build_decision_envelope_prompt(
         ensure_ascii=False,
         separators=(",", ":"),
     )
+    domain_guidance = _domain_world_decision_prompt_v1(
+        domain_world_context,
+        language=language,
+    )
     schema = (
         '{"current_goal":"...","goal_progress":"...",'
         '"recalled_memory_refs":[],"observed_world_changes":[],"unresolved_questions":[],'
@@ -4594,7 +4738,27 @@ def _build_decision_envelope_prompt(
             "SEARCH is targetless; put its query only in action_parameters.content."
         )
     )
+    if domain_guidance:
+        strict_return_contract = (
+            "返回严格 JSON，并精确包含下列 mandatory public audit fields。唯一允许的"
+            "可选例外是上方 active guidance 所述的 action_parameters.domain_world_v1；"
+            "无 grounded domain intent 时必须省略整个键"
+            if is_chinese
+            else (
+                "Return strict JSON with exactly the mandatory public audit fields below. "
+                "The sole optional exception is action_parameters.domain_world_v1 exactly as "
+                "described in the active guidance above; omit that entire key when there is no "
+                "grounded domain intent"
+            )
+        )
+    else:
+        strict_return_contract = (
+            "返回严格 JSON，并精确包含下列 public audit fields"
+            if is_chinese
+            else "Return strict JSON with exactly these public audit fields"
+        )
     rendered_affordances = f"{affordance_section}\n\n" if affordance_section else ""
+    rendered_domain = f"{domain_guidance}\n\n" if domain_guidance else ""
     rendered_context = str(context or "")
     if prior_transition_context:
         rendered_context = rendered_context.replace(prior_transition_context, "").strip()
@@ -4605,10 +4769,11 @@ def _build_decision_envelope_prompt(
         f"Character: {agent_name}\nFallback goal: {fallback_goal}\n\n"
         f"Prior verified transition:\n{prior_transition_context or '(none)'}\n\n"
         f"{rendered_affordances}"
+        f"{rendered_domain}"
         f"Available action targets (copy IDs exactly when a target is required):\n"
         f"{action_target_catalog}\n\n"
         f"Character and world context:\n{rendered_context}\n\n"
-        f"Return strict JSON with exactly these public audit fields (emotion/diverge are "
+        f"{strict_return_contract} (emotion/diverge are "
         f"companion metadata, not private reasoning):\n{schema}\n{target_schema_note}"
     )
 
@@ -4913,10 +5078,18 @@ async def _gather_agent_messages(
         payload=action_target_catalog_payload,
     )
     from app.services.agent_runtime import (
+        _load_domain_decision_context_v1,
         _load_prior_opportunity_receipts,
         load_prior_agent_decision,
         load_prior_agent_transition,
         render_agent_transition_context,
+    )
+
+    domain_world_context = _load_domain_decision_context_v1(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_number=round_num,
     )
 
     # Load the previous durable transition and same-agent utterance before any
@@ -5287,6 +5460,7 @@ async def _gather_agent_messages(
                         fallback_goal=fallback_goal,
                         action_target_catalog=action_target_catalog,
                         opportunity_snapshot=opportunity_snapshot,
+                        domain_world_context=domain_world_context,
                         prior_transition_context=prior_transition_context,
                         language=language,
                         replan_reason=replan_reason,

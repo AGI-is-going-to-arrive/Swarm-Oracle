@@ -679,6 +679,7 @@ class ScenarioResponse(BaseModel):
     causal_graph_id: str | None = None
     checkpoints: list | None = None
     faction_timeline_id: str | None = None
+    domain_world: dict | None = None
 
 
 class StoryBranch(BaseModel):

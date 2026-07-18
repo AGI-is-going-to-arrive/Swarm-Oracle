@@ -1,0 +1,92 @@
+.world-outcomes {
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border-default, var(--border-color, #e6dfd5));
+  border-radius: 10px;
+  background: var(--bg-surface, var(--bg-elevated, #fff));
+  color: var(--text-primary, inherit);
+  box-shadow: var(--shadow-card, none);
+}
+
+.world-outcomes__title {
+  margin: 0 0 0.45rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary, inherit);
+}
+
+.world-outcomes__banner {
+  margin: 0 0 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px dashed var(--border-default, #e6dfd5);
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg-hover, #f7f4ef));
+  color: var(--text-secondary, var(--text-primary, inherit));
+  font-size: 0.84rem;
+}
+
+.world-outcomes__branch {
+  margin: 0.75rem 0 0;
+}
+
+.world-outcomes__branch-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary, var(--text-muted, #6b5f56));
+}
+
+.world-outcomes__list {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.world-outcomes__item {
+  overflow-wrap: anywhere;
+}
+
+.world-outcomes__summary {
+  margin: 0 0 0.3rem;
+  color: var(--text-primary, inherit);
+}
+
+.world-outcomes__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.world-outcomes__chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.6rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-default, #e6dfd5);
+  background: var(--bg-elevated, var(--bg-hover, #f7f4ef));
+  color: var(--text-primary, inherit);
+  font-size: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.world-outcomes__claim {
+  margin-inline-start: 0.15rem;
+  color: var(--text-muted, #6b5f56);
+  font-size: 0.72rem;
+}
+
+.world-outcomes__truncation {
+  width: 100%;
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-secondary, var(--text-muted, #6b5f56));
+}
+
+@media (forced-colors: active) {
+  .world-outcomes,
+  .world-outcomes__chip {
+    border: 1px solid CanvasText;
+  }
+}

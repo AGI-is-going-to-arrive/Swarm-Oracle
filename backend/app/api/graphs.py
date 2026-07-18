@@ -42,7 +42,10 @@ from app.models.simulation_action import (
     SimulationActionStatus,
     SimulationActionType,
 )
-from app.services.action_ledger import build_action_ledger
+from app.services.action_ledger import (
+    build_action_ledger,
+    project_domain_adjudications_v1,
+)
 from app.services.branch_lineage import (
     BranchLineageError,
     select_branch_rounds,
@@ -771,7 +774,24 @@ async def get_simulation_actions(
         )
         has_more = len(rows) > limit
         page = rows[:limit]
-        items = [serialize_action(action, agent) for action, agent in page]
+        scenario = session.get(Scenario, scenario_id)
+        domain_receipts = (
+            project_domain_adjudications_v1(
+                session,
+                scenario=scenario,
+                actions=[action for action, _agent in page],
+                scope_branch_id=branch_id,
+                scope_as_of_round=round,
+            )
+            if scenario is not None
+            else {}
+        )
+        items = []
+        for action, agent in page:
+            item = serialize_action(action, agent)
+            item["message_id"] = action.message_id
+            item["domain_adjudications"] = domain_receipts.get(action.id, [])
+            items.append(item)
         next_cursor = f"{page[-1][0].sequence}:{page[-1][0].id}" if has_more and page else None
         return {
             "scenario_id": scenario_id,

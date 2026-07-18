@@ -22,6 +22,7 @@ import type {
   SocialFeedResponse,
   ModelProfile, ModelProfileInput, ModelProfilePatchInput,
   KnowledgeDomain,
+  DomainAdjudicationChip,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -1988,6 +1989,10 @@ export interface SocialActionEntry {
   payload: Record<string, unknown>;
   failure_code: string | null;
   created_at: string;
+  /** Stage 1 (§8.4): durable message coordinate when present. */
+  message_id?: string | null;
+  /** Stage 1 (§8.4): domain adjudication chips (max 4). */
+  domain_adjudications?: DomainAdjudicationChip[] | null;
 }
 
 export interface SocialActionsResponse {

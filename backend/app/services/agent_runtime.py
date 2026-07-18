@@ -14,15 +14,17 @@ import json
 import re
 import time
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from typing import Any, Literal, cast, get_args
 
 from sqlalchemy import case, func, text, update
+from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
 from app.config import settings
-from app.models import AgentMessage, Branch, Scenario
+from app.models import AgentMessage, Branch, Round, Scenario, ScenarioStatus
 from app.models.simulation_action import (
     SimulationAction,
     SimulationActionStatus,
@@ -39,6 +41,21 @@ from app.services.action_opportunities import (
     derive_opportunity_snapshots_v1,
     search_query_fingerprint_v1,
 )
+from app.services.domain_world import (
+    DomainActionInputV1,
+    DomainActionPayloadV1,
+    DomainAdjudicationV1,
+    DomainStateDeltaV1,
+    DomainValueV1,
+    DomainWorldConfigV1,
+    canonical_json_bytes_v1,
+    initial_domain_state_v1,
+    reduce_domain_round_v1,
+    state_revision_v1,
+    validate_domain_action_payload_v1,
+    validate_domain_world_config_v1,
+)
+from app.services.runtime_lock import RuntimeLockLease, simulation_lock_key
 
 RUNTIME_CONTEXT_KEY = "agent_runtime_v1"
 RUNTIME_VERSION = "1.0"
@@ -201,6 +218,14 @@ _MAX_ACTION_CONTENT = 2_000
 _MAX_LIST_ITEMS = 12
 _MAX_RECORD_ITEMS = 12
 _MAX_JSON_DEPTH = 4
+_DOMAIN_RUNTIME_ROUND_FIELDS = (
+    "domain_finalization",
+    "domain_adjudications",
+    "domain_state_deltas",
+    "domain_state_after",
+    "domain_state_revision",
+    "semantic_state_hash",
+)
 
 
 def _empty_runtime() -> dict[str, Any]:
@@ -346,6 +371,11 @@ def _action_parameters(value: object) -> dict[str, Any]:
         reaction = _bounded_text(payload.get("reaction"), 24).upper()
     if reaction:
         result["reaction"] = reaction
+    if "domain_world_v1" in value:
+        # Structural/cap validation is owned by simulation_actions at ingress.
+        # Keep the model-supplied JSON value intact so malformed intent fails
+        # closed there instead of being silently repaired or discarded here.
+        result["domain_world_v1"] = copy.deepcopy(value.get("domain_world_v1"))
     return result
 
 
@@ -697,7 +727,11 @@ def normalize_decision_envelope(
     parameters = _action_parameters(raw.get("action_parameters"))
     target = _target(raw.get("target_agent_or_object")) or _target(parameters.get("target"))
     if selected == "IDLE":
-        parameters = {}
+        parameters = (
+            {"domain_world_v1": copy.deepcopy(parameters["domain_world_v1"])}
+            if "domain_world_v1" in parameters
+            else {}
+        )
         target = None
     else:
         parameters, target, target_error = _canonical_action_target(
@@ -817,6 +851,12 @@ def decision_to_action(envelope: object, speech: object) -> dict[str, Any]:
     if selected == "IDLE":
         if not _bounded_text(envelope.get("idle_reason")):
             return _unavailable_action("DECISION_IDLE_REASON_REQUIRED")
+        parameters = _action_parameters(envelope.get("action_parameters"))
+        payload = (
+            {"domain_world_v1": copy.deepcopy(parameters["domain_world_v1"])}
+            if "domain_world_v1" in parameters
+            else {}
+        )
         return {
             "type": "IDLE",
             "action_type": "IDLE",
@@ -825,7 +865,7 @@ def decision_to_action(envelope: object, speech: object) -> dict[str, Any]:
             "content": None,
             "target": None,
             "parent_action_id": None,
-            "payload": {},
+            "payload": payload,
         }
 
     parameters = _action_parameters(envelope.get("action_parameters"))
@@ -857,6 +897,8 @@ def decision_to_action(envelope: object, speech: object) -> dict[str, Any]:
     if selected == "REACTION" and reaction not in _REACTIONS:
         return _unavailable_action("ACTION_INVALID_PAYLOAD")
     payload = {"reaction": reaction} if selected == "REACTION" else {}
+    if "domain_world_v1" in parameters:
+        payload["domain_world_v1"] = copy.deepcopy(parameters["domain_world_v1"])
     return {
         "type": selected,
         "action_type": selected,
@@ -918,7 +960,7 @@ def get_runtime_branch_round(
     runtime: object,
     branch_id: str,
     round_number: int,
-) -> dict[str, list[dict[str, Any]]]:
+) -> dict[str, Any]:
     """Return one branch-round payload without exposing mutable stored state."""
     normalized = _coerce_runtime(runtime)
     branch = normalized["branches"].get(str(branch_id), {})
@@ -926,10 +968,1283 @@ def get_runtime_branch_round(
     payload = rounds.get(str(int(round_number)), {}) if isinstance(rounds, Mapping) else {}
     decisions = payload.get("decisions", []) if isinstance(payload, Mapping) else []
     transitions = payload.get("transitions", []) if isinstance(payload, Mapping) else []
-    return {
+    result: dict[str, Any] = {
         "decisions": copy.deepcopy(decisions) if isinstance(decisions, list) else [],
         "transitions": copy.deepcopy(transitions) if isinstance(transitions, list) else [],
     }
+    if isinstance(payload, Mapping):
+        for field_name in _DOMAIN_RUNTIME_ROUND_FIELDS:
+            if field_name in payload:
+                result[field_name] = copy.deepcopy(payload[field_name])
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class DomainRoundFinalizationResultV1:
+    status: Literal["committed", "already_committed", "unavailable"]
+    should_broadcast: bool
+    domain_finalization: Mapping[str, object]
+    domain_adjudications: tuple[DomainAdjudicationV1, ...]
+    domain_state_deltas: tuple[DomainStateDeltaV1, ...]
+    domain_state_after: Mapping[str, DomainValueV1] | None
+    state_revision: str | None
+    semantic_state_hash: str | None
+    event_data: Mapping[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DomainRoundReadV1:
+    scenario_id: str
+    round_row: Round
+    expected_agent_ids: tuple[str, ...]
+    action_rows: tuple[SimulationAction, ...]
+    action_inputs: tuple[DomainActionInputV1, ...]
+    outer_payloads: tuple[Mapping[str, object], ...]
+    action_count: int
+    missing_agent_ids: tuple[str, ...]
+    duplicate_agent_ids: tuple[str, ...]
+    unexpected_agent_ids: tuple[str, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not (
+            self.missing_agent_ids
+            or self.duplicate_agent_ids
+            or self.unexpected_agent_ids
+        )
+
+
+def _domain_hash_v1(value: object) -> str:
+    return f"sha256:{hashlib.sha256(canonical_json_bytes_v1(value)).hexdigest()}"
+
+
+def _domain_enum_value(value: object) -> str:
+    return str(getattr(value, "value", value))
+
+
+def _domain_config_from_scenario_v1(scenario: Scenario) -> DomainWorldConfigV1:
+    context = scenario.parsed_context
+    raw = context.get("domain_world_v1") if isinstance(context, Mapping) else None
+    return validate_domain_world_config_v1(raw)
+
+
+def _validated_domain_payload_from_action_v1(
+    action: SimulationAction,
+) -> tuple[Mapping[str, object], DomainActionPayloadV1 | None]:
+    try:
+        raw_outer = json.loads(action.payload_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT") from exc
+    if not isinstance(raw_outer, Mapping) or any(type(key) is not str for key in raw_outer):
+        raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT")
+    outer = copy.deepcopy(dict(raw_outer))
+    try:
+        outer_size = len(canonical_json_bytes_v1(outer))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT") from exc
+    validation = validate_domain_action_payload_v1(
+        outer.get("domain_world_v1"),
+        action_type=_domain_enum_value(action.action_type),
+        is_bootstrap=action.message_id is None,
+        canonical_outer_payload_bytes=outer_size,
+    )
+    if validation.action_failure_code is not None:
+        raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT")
+    return outer, validation.payload
+
+
+def _read_domain_round_v1(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    expected_agent_ids: tuple[str, ...],
+) -> _DomainRoundReadV1:
+    round_row = session.get(Round, round_id)
+    if (
+        round_row is None
+        or round_row.branch_id != branch_id
+        or round_row.round_number != round_number
+    ):
+        raise RuntimeError("DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID")
+
+    messages = tuple(
+        session.exec(
+            select(AgentMessage)
+            .where(AgentMessage.round_id == round_id)
+            .order_by(AgentMessage.id)
+        ).all()
+    )
+    rows = tuple(
+        session.exec(
+            select(SimulationAction)
+            .where(
+                SimulationAction.scenario_id == scenario_id,
+                SimulationAction.branch_id == branch_id,
+                SimulationAction.round_id == round_id,
+                SimulationAction.round_number == round_number,
+            )
+            .order_by(SimulationAction.sequence, SimulationAction.id)
+        ).all()
+    )
+    action_rows = tuple(row for row in rows if row.message_id is not None)
+    expected = set(expected_agent_ids)
+    message_by_id = {message.id: message for message in messages}
+    messages_by_agent: dict[str, list[AgentMessage]] = {}
+    for message in messages:
+        messages_by_agent.setdefault(message.agent_id, []).append(message)
+
+    valid_actions_by_agent: dict[str, list[SimulationAction]] = {}
+    malformed_action_agents: set[str] = set()
+    for action in action_rows:
+        message = message_by_id.get(str(action.message_id or ""))
+        if message is None or message.agent_id != action.agent_id:
+            malformed_action_agents.add(action.agent_id)
+            continue
+        valid_actions_by_agent.setdefault(action.agent_id, []).append(action)
+
+    missing: set[str] = set()
+    duplicate: set[str] = set()
+    unexpected = {
+        agent_id
+        for agent_id in {*messages_by_agent, *valid_actions_by_agent, *malformed_action_agents}
+        if agent_id not in expected
+    }
+    for agent_id in expected_agent_ids:
+        agent_messages = messages_by_agent.get(agent_id, [])
+        agent_actions = valid_actions_by_agent.get(agent_id, [])
+        action_message_ids = {str(action.message_id or "") for action in agent_actions}
+        if (
+            not agent_messages
+            or not agent_actions
+            or any(message.id not in action_message_ids for message in agent_messages)
+        ):
+            missing.add(agent_id)
+        if (
+            len(agent_messages) > 1
+            or len(agent_actions) > 1
+            or agent_id in malformed_action_agents
+        ):
+            duplicate.add(agent_id)
+
+    complete_rows: list[SimulationAction] = []
+    action_inputs: list[DomainActionInputV1] = []
+    outer_payloads: list[Mapping[str, object]] = []
+    if not (missing or duplicate or unexpected):
+        for agent_id in expected_agent_ids:
+            action = valid_actions_by_agent[agent_id][0]
+            outer, domain_payload = _validated_domain_payload_from_action_v1(action)
+            complete_rows.append(action)
+            outer_payloads.append(outer)
+            action_inputs.append(
+                DomainActionInputV1(
+                    scenario_id=action.scenario_id,
+                    branch_id=action.branch_id,
+                    round_id=action.round_id,
+                    round_number=action.round_number,
+                    agent_id=action.agent_id,
+                    message_id=cast(str, action.message_id),
+                    action_id=action.id,
+                    action_sequence=action.sequence,
+                    action_type=_domain_enum_value(action.action_type),
+                    action_status=_domain_enum_value(action.status),
+                    payload=domain_payload,
+                )
+            )
+        ordered = sorted(
+            zip(complete_rows, action_inputs, outer_payloads, strict=True),
+            key=lambda item: (item[0].sequence, item[0].id),
+        )
+        complete_rows = [item[0] for item in ordered]
+        action_inputs = [item[1] for item in ordered]
+        outer_payloads = [item[2] for item in ordered]
+
+    return _DomainRoundReadV1(
+        scenario_id=scenario_id,
+        round_row=round_row,
+        expected_agent_ids=expected_agent_ids,
+        action_rows=tuple(complete_rows),
+        action_inputs=tuple(action_inputs),
+        outer_payloads=tuple(outer_payloads),
+        action_count=len(action_rows),
+        missing_agent_ids=tuple(sorted(missing)),
+        duplicate_agent_ids=tuple(sorted(duplicate)),
+        unexpected_agent_ids=tuple(sorted(unexpected)),
+    )
+
+
+def _domain_input_digest_v1(round_read: _DomainRoundReadV1) -> str:
+    if not round_read.complete:
+        raise RuntimeError("DOMAIN_FINALIZATION_ROUND_INCOMPLETE")
+    actions: list[dict[str, object]] = []
+    for row, outer_payload in zip(
+        round_read.action_rows,
+        round_read.outer_payloads,
+        strict=True,
+    ):
+        target = None
+        if row.target_type is not None or row.target_id is not None:
+            target = {"type": row.target_type, "id": row.target_id}
+        actions.append(
+            {
+                "action_id": row.id,
+                "action_sequence": row.sequence,
+                "message_id": row.message_id,
+                "agent_id": row.agent_id,
+                "action_type": _domain_enum_value(row.action_type),
+                "action_status": _domain_enum_value(row.status),
+                "target": target,
+                "parent_action_id": row.parent_action_id,
+                "content": row.content,
+                "payload": outer_payload,
+            }
+        )
+    return _domain_hash_v1(
+        {
+            "version": 1,
+            "scenario_id": round_read.scenario_id,
+            "branch_id": round_read.round_row.branch_id,
+            "round_id": round_read.round_row.id,
+            "round_number": round_read.round_row.round_number,
+            "expected_agent_ids": list(round_read.expected_agent_ids),
+            "actions": actions,
+        }
+    )
+
+
+def _domain_runtime_round_payload_v1(
+    runtime: Mapping[str, Any],
+    *,
+    branch_id: str,
+    round_number: int,
+) -> Mapping[str, Any]:
+    branches = runtime.get("branches")
+    branch = branches.get(branch_id) if isinstance(branches, Mapping) else None
+    rounds = branch.get("rounds") if isinstance(branch, Mapping) else None
+    payload = rounds.get(str(round_number)) if isinstance(rounds, Mapping) else None
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _domain_json_equal_v1(left: object, right: object) -> bool:
+    try:
+        return canonical_json_bytes_v1(left) == canonical_json_bytes_v1(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _validate_prior_domain_projection_v1(
+    *,
+    payload: Mapping[str, Any],
+    finalization: Mapping[str, Any],
+    scenario_id: str,
+    round_read: _DomainRoundReadV1,
+    schema_hash: str,
+    input_digest: str,
+    state_revision_before: str,
+    reduce_result: object,
+) -> None:
+    state_after = getattr(reduce_result, "state_after", None)
+    state_revision = getattr(reduce_result, "state_revision", None)
+    semantic_hash = getattr(reduce_result, "semantic_state_hash", None)
+    adjudications = [
+        asdict(item) for item in getattr(reduce_result, "adjudications", ())
+    ]
+    state_deltas = [
+        asdict(item) for item in getattr(reduce_result, "state_deltas", ())
+    ]
+    if not (
+        finalization.get("version") == 1
+        and finalization.get("status") == "complete"
+        and finalization.get("failure_code") is None
+        and finalization.get("scenario_id") == scenario_id
+        and finalization.get("branch_id") == round_read.round_row.branch_id
+        and finalization.get("round_id") == round_read.round_row.id
+        and finalization.get("round_number") == round_read.round_row.round_number
+        and finalization.get("expected_agent_count")
+        == len(round_read.expected_agent_ids)
+        and finalization.get("action_count") == round_read.action_count
+        and finalization.get("missing_agent_ids") == []
+        and finalization.get("duplicate_agent_ids") == []
+        and finalization.get("unexpected_agent_ids") == []
+        and finalization.get("input_digest") == input_digest
+        and finalization.get("schema_hash") == schema_hash
+        and finalization.get("state_revision_before") == state_revision_before
+        and finalization.get("state_revision_after") == state_revision
+        and finalization.get("semantic_state_hash") == semantic_hash
+        and _domain_json_equal_v1(payload.get("domain_state_after"), state_after)
+        and payload.get("domain_state_revision") == state_revision
+        and payload.get("semantic_state_hash") == semantic_hash
+        and _domain_json_equal_v1(
+            payload.get("domain_adjudications"), adjudications
+        )
+        and _domain_json_equal_v1(payload.get("domain_state_deltas"), state_deltas)
+    ):
+        raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+
+
+def _rebuild_prior_domain_state_v1(
+    session: Session,
+    *,
+    scenario: Scenario,
+    branch_id: str,
+    round_number: int,
+    config: DomainWorldConfigV1,
+) -> tuple[
+    Mapping[str, DomainValueV1],
+    str,
+    frozenset[tuple[str, str, str]],
+]:
+    if config.status != "active" or config.schema is None or config.schema_hash is None:
+        raise RuntimeError("DOMAIN_FINALIZATION_SCHEMA_UNAVAILABLE")
+    try:
+        from app.services.branch_lineage import BranchLineageError, select_branch_rounds
+
+        selection = select_branch_rounds(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch_id,
+            requested_cutoff=round_number,
+        )
+    except BranchLineageError as exc:
+        raise RuntimeError("DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID") from exc
+    current_rows = [
+        row
+        for row in selection.rounds
+        if row.branch_id == branch_id and row.round_number == round_number
+    ]
+    if len(current_rows) != 1:
+        raise RuntimeError("DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID")
+
+    state: Mapping[str, DomainValueV1] = initial_domain_state_v1(config.schema)
+    accepted: frozenset[tuple[str, str, str]] = frozenset()
+    revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=0,
+        state=state,
+        accepted_event_identities=accepted,
+    )
+    context = scenario.parsed_context if isinstance(scenario.parsed_context, Mapping) else {}
+    runtime = _coerce_runtime(context.get(RUNTIME_CONTEXT_KEY))
+    prior_rows = [row for row in selection.rounds if row.round_number < round_number]
+    if round_number > 1 and (
+        not prior_rows or prior_rows[-1].round_number != round_number - 1
+    ):
+        raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_INCOMPLETE")
+    for prior_round in prior_rows:
+        payload = _domain_runtime_round_payload_v1(
+            runtime,
+            branch_id=prior_round.branch_id,
+            round_number=prior_round.round_number,
+        )
+        finalization = payload.get("domain_finalization")
+        if not isinstance(finalization, Mapping) or finalization.get("status") != "complete":
+            raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_INCOMPLETE")
+        expected_count = finalization.get("expected_agent_count")
+        if type(expected_count) is not int or expected_count < 0:
+            raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+        prior_messages = tuple(
+            session.exec(
+                select(AgentMessage)
+                .where(AgentMessage.round_id == prior_round.id)
+                .order_by(AgentMessage.id)
+            ).all()
+        )
+        prior_expected = tuple(sorted({message.agent_id for message in prior_messages}))
+        if len(prior_expected) != expected_count:
+            raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+        round_read = _read_domain_round_v1(
+            session,
+            scenario_id=scenario.id,
+            branch_id=prior_round.branch_id,
+            round_id=prior_round.id,
+            round_number=prior_round.round_number,
+            expected_agent_ids=prior_expected,
+        )
+        if not round_read.complete:
+            raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+        input_digest = _domain_input_digest_v1(round_read)
+        reduce_result = reduce_domain_round_v1(
+            config=config,
+            state_before=state,
+            state_revision_before=revision,
+            accepted_event_identities=accepted,
+            actions=round_read.action_inputs,
+            round_number=prior_round.round_number,
+        )
+        _validate_prior_domain_projection_v1(
+            payload=payload,
+            finalization=finalization,
+            scenario_id=scenario.id,
+            round_read=round_read,
+            schema_hash=config.schema_hash,
+            input_digest=input_digest,
+            state_revision_before=revision,
+            reduce_result=reduce_result,
+        )
+        state = reduce_result.state_after
+        revision = reduce_result.state_revision
+        accepted = reduce_result.accepted_event_identities
+    return state, revision, accepted
+
+
+def _load_domain_decision_context_v1(
+    engine: Engine,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+) -> Mapping[str, object] | None:
+    """Return frozen schema plus the last complete state for a live decision prompt."""
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+        config = _domain_config_from_scenario_v1(scenario)
+        if config.status != "active" or config.schema is None or config.schema_hash is None:
+            return None
+        state, revision, _accepted = _rebuild_prior_domain_state_v1(
+            session,
+            scenario=scenario,
+            branch_id=branch_id,
+            round_number=round_number,
+            config=config,
+        )
+        return {
+            "version": 1,
+            "schema_hash": config.schema_hash,
+            "input_state_revision": revision,
+            "state": copy.deepcopy(dict(state)),
+            "schema": asdict(config.schema),
+        }
+
+
+def _normalize_expected_domain_agents_v1(
+    expected_agent_ids: Sequence[str],
+) -> tuple[str, ...]:
+    if isinstance(expected_agent_ids, (str, bytes, bytearray)):
+        raise RuntimeError("DOMAIN_FINALIZATION_EXPECTED_ROSTER_INVALID")
+    raw = tuple(expected_agent_ids)
+    if any(type(agent_id) is not str or not agent_id for agent_id in raw):
+        raise RuntimeError("DOMAIN_FINALIZATION_EXPECTED_ROSTER_INVALID")
+    normalized = tuple(sorted(set(raw)))
+    if raw != normalized:
+        raise RuntimeError("DOMAIN_FINALIZATION_EXPECTED_ROSTER_INVALID")
+    return normalized
+
+
+def _capture_domain_runtime_lease_v1(
+    current_runtime_lease: Callable[[], RuntimeLockLease | None],
+    *,
+    scenario_id: str,
+    file_backed: bool,
+) -> RuntimeLockLease:
+    if not callable(current_runtime_lease):
+        raise RuntimeError("DOMAIN_FINALIZATION_LEASE_LOST")
+    try:
+        lease = current_runtime_lease()
+    except Exception as exc:
+        raise RuntimeError("DOMAIN_FINALIZATION_LEASE_LOST") from exc
+    expected_key = simulation_lock_key(scenario_id)
+    if (
+        lease is None
+        or lease.lock_key != expected_key
+        or not lease.owner_id
+        or (not file_backed and lease.expires_at <= time.time())
+    ):
+        raise RuntimeError("DOMAIN_FINALIZATION_LEASE_LOST")
+    return lease
+
+
+def _require_same_domain_runtime_lease_v1(
+    current_runtime_lease: Callable[[], RuntimeLockLease | None],
+    *,
+    captured: RuntimeLockLease,
+    scenario_id: str,
+    file_backed: bool,
+) -> RuntimeLockLease:
+    current = _capture_domain_runtime_lease_v1(
+        current_runtime_lease,
+        scenario_id=scenario_id,
+        file_backed=file_backed,
+    )
+    if (
+        current.lock_key != captured.lock_key
+        or current.owner_id != captured.owner_id
+    ):
+        raise RuntimeError("DOMAIN_FINALIZATION_LEASE_LOST")
+    return current
+
+
+def _domain_finalization_record_v1(
+    *,
+    status: Literal["complete", "incomplete", "unavailable"],
+    failure_code: str | None,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    expected_agent_count: int,
+    action_count: int,
+    missing_agent_ids: Sequence[str],
+    duplicate_agent_ids: Sequence[str],
+    unexpected_agent_ids: Sequence[str],
+    input_digest: str | None,
+    schema_hash: str | None,
+    state_revision_before: str | None,
+    state_revision_after: str | None,
+    semantic_state_hash: str | None,
+) -> dict[str, object]:
+    return {
+        "version": 1,
+        "status": status,
+        "failure_code": failure_code,
+        "scenario_id": scenario_id,
+        "branch_id": branch_id,
+        "round_id": round_id,
+        "round_number": round_number,
+        "expected_agent_count": expected_agent_count,
+        "action_count": action_count,
+        "missing_agent_ids": list(missing_agent_ids),
+        "duplicate_agent_ids": list(duplicate_agent_ids),
+        "unexpected_agent_ids": list(unexpected_agent_ids),
+        "input_digest": input_digest,
+        "schema_hash": schema_hash,
+        "state_revision_before": state_revision_before,
+        "state_revision_after": state_revision_after,
+        "semantic_state_hash": semantic_state_hash,
+    }
+
+
+def _domain_unavailable_result_v1(
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    expected_agent_count: int,
+) -> DomainRoundFinalizationResultV1:
+    finalization = _domain_finalization_record_v1(
+        status="unavailable",
+        failure_code="DOMAIN_SCHEMA_UNAVAILABLE",
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=round_number,
+        expected_agent_count=expected_agent_count,
+        action_count=0,
+        missing_agent_ids=(),
+        duplicate_agent_ids=(),
+        unexpected_agent_ids=(),
+        input_digest=None,
+        schema_hash=None,
+        state_revision_before=None,
+        state_revision_after=None,
+        semantic_state_hash=None,
+    )
+    return DomainRoundFinalizationResultV1(
+        status="unavailable",
+        should_broadcast=False,
+        domain_finalization=finalization,
+        domain_adjudications=(),
+        domain_state_deltas=(),
+        domain_state_after=None,
+        state_revision=None,
+        semantic_state_hash=None,
+        event_data=None,
+    )
+
+
+def _domain_branch_unavailable_result_v1(
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    expected_agent_count: int,
+    schema_hash: str,
+) -> DomainRoundFinalizationResultV1:
+    finalization = _domain_finalization_record_v1(
+        status="unavailable",
+        failure_code="DOMAIN_BRANCH_SCOPE_INVALID",
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=round_number,
+        expected_agent_count=expected_agent_count,
+        action_count=0,
+        missing_agent_ids=(),
+        duplicate_agent_ids=(),
+        unexpected_agent_ids=(),
+        input_digest=None,
+        schema_hash=schema_hash,
+        state_revision_before=None,
+        state_revision_after=None,
+        semantic_state_hash=None,
+    )
+    return DomainRoundFinalizationResultV1(
+        status="unavailable",
+        should_broadcast=False,
+        domain_finalization=finalization,
+        domain_adjudications=(),
+        domain_state_deltas=(),
+        domain_state_after=None,
+        state_revision=None,
+        semantic_state_hash=None,
+        event_data=None,
+    )
+
+
+def _validate_incomplete_domain_projection_v1(
+    *,
+    payload: Mapping[str, Any],
+    finalization: Mapping[str, Any],
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    schema_hash: str,
+) -> None:
+    bounded_id_lists = (
+        finalization.get("missing_agent_ids"),
+        finalization.get("duplicate_agent_ids"),
+        finalization.get("unexpected_agent_ids"),
+    )
+    action_count = finalization.get("action_count")
+    expected_agent_count = finalization.get("expected_agent_count")
+    if not (
+        finalization.get("version") == 1
+        and finalization.get("status") == "incomplete"
+        and finalization.get("failure_code") == "DOMAIN_ROUND_INCOMPLETE"
+        and finalization.get("scenario_id") == scenario_id
+        and finalization.get("branch_id") == branch_id
+        and finalization.get("round_id") == round_id
+        and finalization.get("round_number") == round_number
+        and type(expected_agent_count) is int
+        and expected_agent_count >= 0
+        and type(action_count) is int
+        and action_count >= 0
+        and all(
+            isinstance(values, list)
+            and all(type(value) is str for value in values)
+            and values == sorted(set(values))
+            for values in bounded_id_lists
+        )
+        and finalization.get("input_digest") is None
+        and finalization.get("schema_hash") == schema_hash
+        and finalization.get("state_revision_before") is None
+        and finalization.get("state_revision_after") is None
+        and finalization.get("semantic_state_hash") is None
+        and _domain_json_equal_v1(payload.get("domain_adjudications"), [])
+        and _domain_json_equal_v1(payload.get("domain_state_deltas"), [])
+        and "domain_state_after" not in payload
+        and "domain_state_revision" not in payload
+        and "semantic_state_hash" not in payload
+    ):
+        raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+
+
+def _frozen_incomplete_domain_roster_v1(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    finalization: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Recover the immutable first-attempt roster from append-only action rows."""
+
+    action_count = cast(int, finalization["action_count"])
+    expected_agent_count = cast(int, finalization["expected_agent_count"])
+    original_rows = tuple(
+        session.exec(
+            select(SimulationAction)
+            .where(
+                SimulationAction.scenario_id == scenario_id,
+                SimulationAction.branch_id == branch_id,
+                SimulationAction.round_id == round_id,
+                SimulationAction.round_number == round_number,
+                SimulationAction.message_id.is_not(None),
+            )
+            .order_by(SimulationAction.sequence, SimulationAction.id)
+            .limit(action_count)
+        ).all()
+    )
+    if len(original_rows) != action_count:
+        raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+
+    unexpected = set(cast(list[str], finalization["unexpected_agent_ids"]))
+    frozen = {
+        row.agent_id
+        for row in original_rows
+        if row.agent_id not in unexpected
+    }
+    frozen.update(cast(list[str], finalization["missing_agent_ids"]))
+    frozen.update(cast(list[str], finalization["duplicate_agent_ids"]))
+    if len(frozen) != expected_agent_count:
+        raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+    return tuple(sorted(frozen))
+
+
+def _merge_domain_runtime_projection_v1(
+    context: Mapping[str, Any],
+    *,
+    branch_id: str,
+    round_number: int,
+    finalization: Mapping[str, object],
+    adjudications: Sequence[DomainAdjudicationV1],
+    state_deltas: Sequence[DomainStateDeltaV1],
+    state_after: Mapping[str, DomainValueV1] | None,
+    state_revision: str | None,
+    semantic_state_hash: str | None,
+) -> dict[str, Any]:
+    runtime = _coerce_runtime(context.get(RUNTIME_CONTEXT_KEY))
+    branches = runtime.setdefault("branches", {})
+    branch = branches.setdefault(branch_id, {"rounds": {}})
+    rounds = branch.setdefault("rounds", {})
+    existing = rounds.get(str(round_number))
+    payload = copy.deepcopy(dict(existing)) if isinstance(existing, Mapping) else {}
+    payload["domain_finalization"] = copy.deepcopy(dict(finalization))
+    payload["domain_adjudications"] = [asdict(item) for item in adjudications]
+    payload["domain_state_deltas"] = [asdict(item) for item in state_deltas]
+    if state_after is None or state_revision is None or semantic_state_hash is None:
+        payload.pop("domain_state_after", None)
+        payload.pop("domain_state_revision", None)
+        payload.pop("semantic_state_hash", None)
+    else:
+        payload["domain_state_after"] = copy.deepcopy(dict(state_after))
+        payload["domain_state_revision"] = state_revision
+        payload["semantic_state_hash"] = semantic_state_hash
+    rounds[str(round_number)] = payload
+    return runtime
+
+
+def _begin_domain_write_transaction_v1(session: Session, engine: Engine) -> None:
+    if engine.dialect.name == "sqlite":
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def _domain_engine_is_file_backed_v1(engine: Engine) -> bool:
+    """Classify SQLite storage from the connected database, never lease metadata."""
+
+    if engine.dialect.name != "sqlite":
+        return False
+    with engine.connect() as connection:
+        rows = connection.exec_driver_sql("PRAGMA database_list").all()
+    return any(
+        len(row) >= 3 and str(row[1]) == "main" and bool(str(row[2]))
+        for row in rows
+    )
+
+
+def _require_domain_runtime_linearization_v1(
+    session: Session,
+    *,
+    scenario_id: str,
+    lease: RuntimeLockLease,
+    file_backed: bool,
+) -> None:
+    status = session.execute(
+        select(Scenario.status).where(Scenario.id == scenario_id)
+    ).scalar_one_or_none()
+    if status == ScenarioStatus.CANCELLED:
+        raise RuntimeError("DOMAIN_FINALIZATION_CANCELLED")
+    if status is None:
+        raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+    if status != ScenarioStatus.SIMULATING:
+        raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_SIMULATING")
+    if not file_backed:
+        return
+    held = session.execute(
+        text(
+            "SELECT 1 FROM runtime_lock "
+            "WHERE lock_key=:domain_lock_key AND owner_id=:domain_owner_id "
+            "AND expires_at>:domain_now"
+        ),
+        {
+            "domain_lock_key": lease.lock_key,
+            "domain_owner_id": lease.owner_id,
+            "domain_now": time.time(),
+        },
+    ).first()
+    if held is None:
+        raise RuntimeError("DOMAIN_FINALIZATION_LEASE_LOST")
+
+
+def _conditional_domain_runtime_update_v1(
+    session: Session,
+    *,
+    scenario_id: str,
+    runtime: Mapping[str, Any],
+    lease: RuntimeLockLease,
+    file_backed: bool,
+) -> None:
+    parsed_context_expr = case(
+        (
+            func.json_valid(Scenario.parsed_context) == 1,
+            case(
+                (
+                    func.json_type(Scenario.parsed_context) == "object",
+                    Scenario.parsed_context,
+                ),
+                else_=func.json("{}"),
+            ),
+        ),
+        else_=func.json("{}"),
+    )
+    statement = (
+        update(Scenario)
+        .where(
+            Scenario.id == scenario_id,
+            Scenario.status == ScenarioStatus.SIMULATING,
+        )
+        .values(
+            parsed_context=func.json_set(
+                parsed_context_expr,
+                f"$.{RUNTIME_CONTEXT_KEY}",
+                func.json(json.dumps(runtime, ensure_ascii=False)),
+            )
+        )
+    )
+    parameters: dict[str, object] = {}
+    if file_backed:
+        statement = statement.where(
+            text(
+                "EXISTS (SELECT 1 FROM runtime_lock "
+                "WHERE lock_key=:domain_lock_key AND owner_id=:domain_owner_id "
+                "AND expires_at>:domain_now)"
+            )
+        )
+        parameters = {
+            "domain_lock_key": lease.lock_key,
+            "domain_owner_id": lease.owner_id,
+            "domain_now": time.time(),
+        }
+    result = session.execute(statement, parameters)
+    if getattr(result, "rowcount", 0) == 1:
+        return
+    status = session.execute(
+        select(Scenario.status).where(Scenario.id == scenario_id)
+    ).scalar_one_or_none()
+    if status == ScenarioStatus.CANCELLED:
+        raise RuntimeError("DOMAIN_FINALIZATION_CANCELLED")
+    if status is None:
+        raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+    if file_backed and status == ScenarioStatus.SIMULATING:
+        raise RuntimeError("DOMAIN_FINALIZATION_LEASE_LOST")
+    raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_SIMULATING")
+
+
+def _domain_result_from_reduce_v1(
+    *,
+    status: Literal["committed", "already_committed"],
+    finalization: Mapping[str, object],
+    config: DomainWorldConfigV1,
+    reduce_result: object,
+) -> DomainRoundFinalizationResultV1:
+    if config.schema is None or config.schema_hash is None:
+        raise RuntimeError("DOMAIN_FINALIZATION_SCHEMA_UNAVAILABLE")
+    adjudications = cast(
+        tuple[DomainAdjudicationV1, ...],
+        getattr(reduce_result, "adjudications"),
+    )
+    deltas = cast(
+        tuple[DomainStateDeltaV1, ...],
+        getattr(reduce_result, "state_deltas"),
+    )
+    state_after = cast(
+        Mapping[str, DomainValueV1],
+        getattr(reduce_result, "state_after"),
+    )
+    state_revision = cast(str, getattr(reduce_result, "state_revision"))
+    semantic_hash = cast(str, getattr(reduce_result, "semantic_state_hash"))
+    event_data: Mapping[str, object] | None = None
+    if status == "committed":
+        event_data = {
+            "version": 1,
+            "scenario_id": finalization["scenario_id"],
+            "branch_id": finalization["branch_id"],
+            "round_number": finalization["round_number"],
+            "schema_hash": config.schema_hash,
+            "state_revision": state_revision,
+            "semantic_state_hash": semantic_hash,
+            "values": [
+                {
+                    "variable_id": variable.variable_id,
+                    "value": state_after[variable.variable_id],
+                }
+                for variable in config.schema.variables
+            ],
+            "domain_state_deltas": [asdict(item) for item in deltas],
+        }
+    return DomainRoundFinalizationResultV1(
+        status=status,
+        should_broadcast=status == "committed",
+        domain_finalization=copy.deepcopy(dict(finalization)),
+        domain_adjudications=adjudications,
+        domain_state_deltas=deltas,
+        domain_state_after=copy.deepcopy(dict(state_after)),
+        state_revision=state_revision,
+        semantic_state_hash=semantic_hash,
+        event_data=event_data,
+    )
+
+
+def finalize_domain_round_v1(
+    engine: Engine,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    expected_agent_ids: Sequence[str],
+    current_runtime_lease: Callable[[], RuntimeLockLease | None],
+) -> DomainRoundFinalizationResultV1:
+    """Atomically finalize one complete branch-round under the current lease owner."""
+
+    roster = _normalize_expected_domain_agents_v1(expected_agent_ids)
+    if type(round_number) is not int or round_number < 1:
+        raise RuntimeError("DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID")
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+        config = _domain_config_from_scenario_v1(scenario)
+    if config.status != "active" or config.schema is None or config.schema_hash is None:
+        return _domain_unavailable_result_v1(
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            expected_agent_count=len(roster),
+        )
+
+    file_backed = _domain_engine_is_file_backed_v1(engine)
+    captured_lease = _capture_domain_runtime_lease_v1(
+        current_runtime_lease,
+        scenario_id=scenario_id,
+        file_backed=file_backed,
+    )
+    try:
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            if scenario is None:
+                raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+            reread_config = _domain_config_from_scenario_v1(scenario)
+            if reread_config != config:
+                raise RuntimeError("DOMAIN_FINALIZATION_SCHEMA_DRIFT")
+            state_before, state_revision_before, accepted_events = (
+                _rebuild_prior_domain_state_v1(
+                    session,
+                    scenario=scenario,
+                    branch_id=branch_id,
+                    round_number=round_number,
+                    config=config,
+                )
+            )
+            first_read = _read_domain_round_v1(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_id=round_id,
+                round_number=round_number,
+                expected_agent_ids=roster,
+            )
+    except RuntimeError as exc:
+        if exc.args != ("DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID",):
+            raise
+        return _domain_branch_unavailable_result_v1(
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            expected_agent_count=len(roster),
+            schema_hash=config.schema_hash,
+        )
+
+    if not first_read.complete:
+        finalization = _domain_finalization_record_v1(
+            status="incomplete",
+            failure_code="DOMAIN_ROUND_INCOMPLETE",
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            expected_agent_count=len(roster),
+            action_count=first_read.action_count,
+            missing_agent_ids=first_read.missing_agent_ids,
+            duplicate_agent_ids=first_read.duplicate_agent_ids,
+            unexpected_agent_ids=first_read.unexpected_agent_ids,
+            input_digest=None,
+            schema_hash=config.schema_hash,
+            state_revision_before=None,
+            state_revision_after=None,
+            semantic_state_hash=None,
+        )
+        if not file_backed:
+            captured_lease = _require_same_domain_runtime_lease_v1(
+                current_runtime_lease,
+                captured=captured_lease,
+                scenario_id=scenario_id,
+                file_backed=file_backed,
+            )
+        with Session(engine) as session:
+            _begin_domain_write_transaction_v1(session, engine)
+            tx_scenario = session.get(Scenario, scenario_id)
+            if tx_scenario is None:
+                raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+            if _domain_config_from_scenario_v1(tx_scenario) != config:
+                raise RuntimeError("DOMAIN_FINALIZATION_SCHEMA_DRIFT")
+            tx_read = _read_domain_round_v1(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_id=round_id,
+                round_number=round_number,
+                expected_agent_ids=roster,
+            )
+            if (
+                tx_read.complete
+                or tx_read.action_count != first_read.action_count
+                or tx_read.missing_agent_ids != first_read.missing_agent_ids
+                or tx_read.duplicate_agent_ids != first_read.duplicate_agent_ids
+                or tx_read.unexpected_agent_ids != first_read.unexpected_agent_ids
+            ):
+                raise RuntimeError("DOMAIN_FINALIZATION_INPUT_DRIFT")
+            tx_context = (
+                copy.deepcopy(dict(tx_scenario.parsed_context))
+                if isinstance(tx_scenario.parsed_context, Mapping)
+                else {}
+            )
+            tx_runtime = _coerce_runtime(tx_context.get(RUNTIME_CONTEXT_KEY))
+            existing_payload = _domain_runtime_round_payload_v1(
+                tx_runtime,
+                branch_id=branch_id,
+                round_number=round_number,
+            )
+            existing_finalization = existing_payload.get("domain_finalization")
+            existing_incomplete = False
+            if isinstance(existing_finalization, Mapping):
+                existing_status = existing_finalization.get("status")
+                if existing_status == "complete":
+                    raise RuntimeError("DOMAIN_FINALIZATION_INPUT_DRIFT")
+                if existing_status != "incomplete":
+                    raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+                _validate_incomplete_domain_projection_v1(
+                    payload=existing_payload,
+                    finalization=existing_finalization,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_id,
+                    round_number=round_number,
+                    schema_hash=config.schema_hash,
+                )
+                frozen_roster = _frozen_incomplete_domain_roster_v1(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_id,
+                    round_number=round_number,
+                    finalization=existing_finalization,
+                )
+                if frozen_roster != roster:
+                    raise RuntimeError("DOMAIN_FINALIZATION_EXPECTED_ROSTER_DRIFT")
+                finalization = copy.deepcopy(dict(existing_finalization))
+                existing_incomplete = True
+            elif existing_finalization is not None:
+                raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+            if existing_incomplete:
+                _require_domain_runtime_linearization_v1(
+                    session,
+                    scenario_id=scenario_id,
+                    lease=captured_lease,
+                    file_backed=file_backed,
+                )
+                session.rollback()
+            else:
+                runtime = _merge_domain_runtime_projection_v1(
+                    tx_context,
+                    branch_id=branch_id,
+                    round_number=round_number,
+                    finalization=finalization,
+                    adjudications=(),
+                    state_deltas=(),
+                    state_after=None,
+                    state_revision=None,
+                    semantic_state_hash=None,
+                )
+                _conditional_domain_runtime_update_v1(
+                    session,
+                    scenario_id=scenario_id,
+                    runtime=runtime,
+                    lease=captured_lease,
+                    file_backed=file_backed,
+                )
+                session.commit()
+        _require_same_domain_runtime_lease_v1(
+            current_runtime_lease,
+            captured=captured_lease,
+            scenario_id=scenario_id,
+            file_backed=file_backed,
+        )
+        return DomainRoundFinalizationResultV1(
+            status="unavailable",
+            should_broadcast=False,
+            domain_finalization=finalization,
+            domain_adjudications=(),
+            domain_state_deltas=(),
+            domain_state_after=None,
+            state_revision=None,
+            semantic_state_hash=None,
+            event_data=None,
+        )
+
+    input_digest = _domain_input_digest_v1(first_read)
+    reduce_result = reduce_domain_round_v1(
+        config=config,
+        state_before=state_before,
+        state_revision_before=state_revision_before,
+        accepted_event_identities=accepted_events,
+        actions=first_read.action_inputs,
+        round_number=round_number,
+    )
+    finalization = _domain_finalization_record_v1(
+        status="complete",
+        failure_code=None,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=round_number,
+        expected_agent_count=len(roster),
+        action_count=first_read.action_count,
+        missing_agent_ids=(),
+        duplicate_agent_ids=(),
+        unexpected_agent_ids=(),
+        input_digest=input_digest,
+        schema_hash=config.schema_hash,
+        state_revision_before=state_revision_before,
+        state_revision_after=reduce_result.state_revision,
+        semantic_state_hash=reduce_result.semantic_state_hash,
+    )
+
+    if not file_backed:
+        captured_lease = _require_same_domain_runtime_lease_v1(
+            current_runtime_lease,
+            captured=captured_lease,
+            scenario_id=scenario_id,
+            file_backed=file_backed,
+        )
+    already_committed = False
+    with Session(engine) as session:
+        _begin_domain_write_transaction_v1(session, engine)
+        tx_scenario = session.get(Scenario, scenario_id)
+        if tx_scenario is None:
+            raise RuntimeError("DOMAIN_FINALIZATION_SCENARIO_NOT_FOUND")
+        if _domain_config_from_scenario_v1(tx_scenario) != config:
+            raise RuntimeError("DOMAIN_FINALIZATION_SCHEMA_DRIFT")
+        tx_read = _read_domain_round_v1(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            expected_agent_ids=roster,
+        )
+        if not tx_read.complete or _domain_input_digest_v1(tx_read) != input_digest:
+            raise RuntimeError("DOMAIN_FINALIZATION_INPUT_DRIFT")
+        tx_context = (
+            copy.deepcopy(dict(tx_scenario.parsed_context))
+            if isinstance(tx_scenario.parsed_context, Mapping)
+            else {}
+        )
+        tx_runtime = _coerce_runtime(tx_context.get(RUNTIME_CONTEXT_KEY))
+        existing_payload = _domain_runtime_round_payload_v1(
+            tx_runtime,
+            branch_id=branch_id,
+            round_number=round_number,
+        )
+        existing_finalization = existing_payload.get("domain_finalization")
+        if isinstance(existing_finalization, Mapping):
+            existing_status = existing_finalization.get("status")
+            if existing_status == "complete":
+                if existing_finalization.get("input_digest") != input_digest:
+                    raise RuntimeError("DOMAIN_FINALIZATION_INPUT_DRIFT")
+                _validate_prior_domain_projection_v1(
+                    payload=existing_payload,
+                    finalization=existing_finalization,
+                    scenario_id=scenario_id,
+                    round_read=tx_read,
+                    schema_hash=config.schema_hash,
+                    input_digest=input_digest,
+                    state_revision_before=state_revision_before,
+                    reduce_result=reduce_result,
+                )
+                already_committed = True
+            elif existing_status == "incomplete":
+                _validate_incomplete_domain_projection_v1(
+                    payload=existing_payload,
+                    finalization=existing_finalization,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_id,
+                    round_number=round_number,
+                    schema_hash=config.schema_hash,
+                )
+                frozen_roster = _frozen_incomplete_domain_roster_v1(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_id,
+                    round_number=round_number,
+                    finalization=existing_finalization,
+                )
+                if frozen_roster != roster:
+                    raise RuntimeError("DOMAIN_FINALIZATION_EXPECTED_ROSTER_DRIFT")
+            else:
+                raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
+        if already_committed:
+            _require_domain_runtime_linearization_v1(
+                session,
+                scenario_id=scenario_id,
+                lease=captured_lease,
+                file_backed=file_backed,
+            )
+            session.rollback()
+        else:
+            runtime = _merge_domain_runtime_projection_v1(
+                tx_context,
+                branch_id=branch_id,
+                round_number=round_number,
+                finalization=finalization,
+                adjudications=reduce_result.adjudications,
+                state_deltas=reduce_result.state_deltas,
+                state_after=reduce_result.state_after,
+                state_revision=reduce_result.state_revision,
+                semantic_state_hash=reduce_result.semantic_state_hash,
+            )
+            _conditional_domain_runtime_update_v1(
+                session,
+                scenario_id=scenario_id,
+                runtime=runtime,
+                lease=captured_lease,
+                file_backed=file_backed,
+            )
+            session.commit()
+    _require_same_domain_runtime_lease_v1(
+        current_runtime_lease,
+        captured=captured_lease,
+        scenario_id=scenario_id,
+        file_backed=file_backed,
+    )
+    return _domain_result_from_reduce_v1(
+        status="already_committed" if already_committed else "committed",
+        finalization=finalization,
+        config=config,
+        reduce_result=reduce_result,
+    )
 
 
 def _previous_decision(
@@ -2576,15 +3891,17 @@ def _decision_matches_action(
             return False
         if action_type in {"FOLLOW", "MUTE"} and action.parent_action_id is not None:
             return False
+    try:
+        payload = json.loads(action.payload_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, Mapping):
+        return False
+    if parameters.get("domain_world_v1") != payload.get("domain_world_v1"):
+        return False
     if action_type == "REACTION":
-        try:
-            payload = json.loads(action.payload_json or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            payload = {}
         durable_reaction = (
             _bounded_text(payload.get("reaction"), 24).upper()
-            if isinstance(payload, Mapping)
-            else ""
         )
         if _bounded_text(parameters.get("reaction"), 24).upper() != durable_reaction:
             return False
@@ -3107,10 +4424,15 @@ def persist_round_runtime_in_session(
             by_agent[item["agent_id"]] = item
         return sorted(by_agent.values(), key=lambda item: str(item.get("agent_id") or ""))
 
-    rounds[str(normalized_round)] = {
+    round_payload = {
         "decisions": merge_records("decisions", decisions),
         "transitions": merge_records("transitions", transitions),
     }
+    if isinstance(existing, Mapping):
+        for field_name in _DOMAIN_RUNTIME_ROUND_FIELDS:
+            if field_name in existing:
+                round_payload[field_name] = copy.deepcopy(existing[field_name])
+    rounds[str(normalized_round)] = round_payload
     parsed_context_expr = case(
         (
             func.json_valid(Scenario.parsed_context) == 1,
@@ -3928,8 +5250,10 @@ def clone_runtime_history(
 __all__ = [
     "RUNTIME_CONTEXT_KEY",
     "RUNTIME_VERSION",
+    "DomainRoundFinalizationResultV1",
     "clone_runtime_history",
     "decision_to_action",
+    "finalize_domain_round_v1",
     "get_runtime_branch_round",
     "load_agent_runtime",
     "load_prior_agent_decision",

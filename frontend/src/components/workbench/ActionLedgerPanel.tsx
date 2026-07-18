@@ -7,6 +7,12 @@ import {
   type SocialActionStatus,
   type SocialActionType,
 } from '../../api/client';
+import {
+  useSimulationStore,
+  type ActionCommittedReceipt,
+} from '../../stores/simulationStore';
+import { domainVariableLabel, formatDomainValue } from '../../lib/domainWorld';
+import type { DomainAdjudicationChip } from '../../types';
 import { ACTION_LEDGER_POLL_INTERVAL_MS, isActionsUnavailableError } from './actionLedgerUtils';
 import './ActionLedgerPanel.css';
 
@@ -72,8 +78,75 @@ function mergeActions(current: SocialActionEntry[], incoming: SocialActionEntry[
   return Array.from(byId.values()).sort((left, right) => left.sequence - right.sequence);
 }
 
+function isSocialActionType(value: string): value is SocialActionType {
+  return (ACTION_TYPES as string[]).includes(value);
+}
+
+function isSocialActionStatus(value: string): value is SocialActionStatus {
+  return (ACTION_STATUSES as string[]).includes(value);
+}
+
+function domainChipLabel(
+  chip: DomainAdjudicationChip,
+  isZh: boolean,
+  t: (key: string, values?: Record<string, unknown>) => string,
+  actionStatus: SocialActionStatus,
+): string {
+  const label = domainVariableLabel(chip, isZh);
+  if (chip.status === 'verified') {
+    const unknown = t('action_ledger.time_unknown');
+    return t('action_ledger.domain_chip_verified', {
+      label,
+      before: formatDomainValue(chip.before ?? null) || unknown,
+      after: formatDomainValue(chip.after ?? null) || unknown,
+      rule: chip.rule_id,
+    });
+  }
+  if (
+    (chip.status === 'failed' || chip.status === 'unavailable' || chip.status === 'duplicate')
+    && actionStatus === 'verified'
+  ) {
+    return t('action_ledger.domain_chip_failed', {
+      code: chip.failure_code || chip.status,
+    });
+  }
+  return t('action_ledger.domain_chip_other', {
+    label,
+    status: chip.status,
+  });
+}
+
+function receiptToEntry(
+  receipt: ActionCommittedReceipt,
+  agentNameById: Map<string, string>,
+): SocialActionEntry | null {
+  if (!receipt.action_id || typeof receipt.sequence !== 'number') return null;
+  const actionType = isSocialActionType(receipt.action_type) ? receipt.action_type : 'IDLE';
+  const status = isSocialActionStatus(receipt.status) ? receipt.status : 'unavailable';
+  return {
+    id: receipt.action_id,
+    sequence: receipt.sequence,
+    branch_id: receipt.branch_id,
+    round: receipt.round,
+    agent: {
+      id: receipt.agent_id,
+      name: agentNameById.get(receipt.agent_id) ?? receipt.agent_id,
+    },
+    action_type: actionType,
+    status,
+    target: null,
+    parent_action_id: null,
+    content: null,
+    payload: {},
+    failure_code: receipt.failure_code ?? null,
+    // Live WS receipts do not carry durable timestamps; leave empty until API hydrates.
+    created_at: '',
+  };
+}
+
 export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: ActionLedgerPanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isZh = Boolean(i18n?.language?.startsWith('zh'));
   const contentId = useId();
   const scopeKey = `${scenarioId}:${branchId ?? ''}`;
   const [expandedScope, setExpandedScope] = useState<string | null>(null);
@@ -89,9 +162,29 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
   const pageController = useRef<AbortController | null>(null);
   const pollController = useRef<AbortController | null>(null);
   const latestActionCursor = useRef<string | undefined>(undefined);
+  const actionReceipts = useSimulationStore((store) => store.actionReceipts);
+  const storeAgents = useSimulationStore((store) => store.agents);
 
   const scopedFilters = useMemo<SocialActionFilters>(() => ({ ...filters, branchId }), [branchId, filters]);
   const requestKey = JSON.stringify([scopeKey, scopedFilters]);
+  const agentNameById = useMemo(
+    () => new Map(storeAgents.map((agent) => [agent.id, agent.name])),
+    [storeAgents],
+  );
+  const liveReceiptEntries = useMemo(() => {
+    const matching = actionReceipts.filter((receipt) => {
+      if (receipt.scenario_id && receipt.scenario_id !== scenarioId) return false;
+      if (branchId && receipt.branch_id !== branchId) return false;
+      if (filters.agentId && receipt.agent_id !== filters.agentId) return false;
+      if (filters.actionType && receipt.action_type !== filters.actionType) return false;
+      if (filters.round != null && receipt.round !== filters.round) return false;
+      if (filters.status && receipt.status !== filters.status) return false;
+      return true;
+    });
+    return matching
+      .map((receipt) => receiptToEntry(receipt, agentNameById))
+      .filter((entry): entry is SocialActionEntry => entry !== null);
+  }, [actionReceipts, agentNameById, branchId, filters.actionType, filters.agentId, filters.round, filters.status, scenarioId]);
 
   const load = useCallback((controller: AbortController, epoch: number): void => {
     setState('loading');
@@ -130,6 +223,16 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
     return () => controller.abort();
   }, [expanded, load, requestKey]);
 
+  // Durable API rows + live-only WS receipts (never clobber durable rows; receipts are display-only).
+  const displayItems = useMemo(() => {
+    if (liveReceiptEntries.length === 0) return items;
+    const knownIds = new Set(items.map((item) => item.id));
+    const pendingLive = liveReceiptEntries.filter((entry) => !knownIds.has(entry.id));
+    return pendingLive.length === 0 ? items : mergeActions(items, pendingLive);
+  }, [items, liveReceiptEntries]);
+
+  // Poll cursor must stay on durable API rows only. Advancing from live receipts can
+  // skip gap sequences after reconnect and permanently miss intermediate durable actions.
   useEffect(() => {
     const latest = items.at(-1);
     latestActionCursor.current = latest ? `${latest.sequence}:${latest.id}` : undefined;
@@ -192,7 +295,7 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
     }
   }, [loadingMore, nextCursor, scenarioId, scopedFilters]);
 
-  const agents = useMemo(() => Array.from(new Map(items.map((item) => [item.agent.id, item.agent])).values()).sort((a, b) => a.name.localeCompare(b.name)), [items]);
+  const agents = useMemo(() => Array.from(new Map(displayItems.map((item) => [item.agent.id, item.agent])).values()).sort((a, b) => a.name.localeCompare(b.name)), [displayItems]);
   const setFilter = <Key extends keyof SocialActionFilters>(key: Key, value: SocialActionFilters[Key]): void => {
     setFilters((current) => ({ ...current, [key]: value, cursor: undefined }));
   };
@@ -204,6 +307,7 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
       return next;
     });
   };
+  const showLiveReady = state === 'ready' || (state === 'loading' && displayItems.length > 0);
 
   return (
     <section className="action-ledger" data-testid="action-ledger-panel">
@@ -248,14 +352,14 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
             </label>
           </div>
 
-          {state === 'loading' && <p role="status">{t('action_ledger.loading')}</p>}
+          {state === 'loading' && displayItems.length === 0 && <p role="status">{t('action_ledger.loading')}</p>}
           {state === 'unsupported' && <p className="action-ledger__empty" data-testid="action-ledger-unsupported">{t('action_ledger.unsupported')}</p>}
           {state === 'error' && <div role="alert"><p>{t('action_ledger.error')}</p><button type="button" onClick={() => setFilters((current) => ({ ...current }))}>{t('common.retry')}</button></div>}
-          {state === 'ready' && items.length === 0 && <p className="action-ledger__empty" data-testid="action-ledger-empty">{t('action_ledger.empty')}</p>}
-          {state === 'ready' && items.length > 0 && (
+          {showLiveReady && displayItems.length === 0 && <p className="action-ledger__empty" data-testid="action-ledger-empty">{t('action_ledger.empty')}</p>}
+          {showLiveReady && displayItems.length > 0 && (
             <>
               <ol className="action-ledger__list" aria-label={t('action_ledger.list_aria')}>
-                {items.map((item) => {
+                {displayItems.map((item) => {
                   const details = getActionPayloadDetails(item);
                   const hasDetails = Boolean(
                     item.parent_action_id
@@ -275,7 +379,25 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
                       {item.content && <span className="action-ledger__body">{item.content}</span>}
                       {item.target && <span className="action-ledger__target">{t('action_ledger.target', { target: `${item.target.kind}:${item.target.id}` })}</span>}
                       {item.failure_code && <span className="action-ledger__failure">{t('action_ledger.failure_code', { code: item.failure_code })}</span>}
-                      <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
+                      {Array.isArray(item.domain_adjudications) && item.domain_adjudications.length > 0 && (
+                        <div
+                          className="action-ledger__domain-chips"
+                          aria-label={t('action_ledger.domain_chips_aria')}
+                          data-testid={`action-ledger-domain-chips-${item.id}`}
+                        >
+                          {item.domain_adjudications.slice(0, 4).map((chip, index) => (
+                            <span
+                              key={`${item.id}:${chip.proposal_index ?? index}:${chip.variable_id}:${chip.status}`}
+                              className={`action-ledger__domain-chip action-ledger__domain-chip--${chip.status}`}
+                            >
+                              {domainChipLabel(chip, isZh, t as (key: string, values?: Record<string, unknown>) => string, item.status)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {item.created_at
+                        ? <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
+                        : <time dateTime="">{t('action_ledger.time_unknown')}</time>}
                       <span className="action-ledger__actions">
                         <button
                           type="button"

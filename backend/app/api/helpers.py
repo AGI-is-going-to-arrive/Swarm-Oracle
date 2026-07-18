@@ -36,6 +36,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.action_ledger import project_scenario_domain_world_v1
 from app.services.agent_message_metadata import public_emotion_metadata
 from app.services.campaign import (
     normalize_scenario_director_state,
@@ -1148,6 +1149,7 @@ async def run_sim_background(
             "ws_callback": _broadcast_with_activity,
             "llm_overrides": effective_llm_overrides or llm_overrides,
             "runtime_lease": lock_lease_holder[0],
+            "current_runtime_lease": lambda: lock_lease_holder[0],
         }
         if branch_id is not None:
             sim_kwargs["branch_id"] = branch_id
@@ -2707,4 +2709,9 @@ def load_scenario_response(
             fork_debug=fork_debug,
             causal_graph_id=causal_graph_id,
             checkpoints=checkpoints,
+            domain_world=project_scenario_domain_world_v1(
+                session,
+                scenario=s,
+                branches=list(branches),
+            ),
         )

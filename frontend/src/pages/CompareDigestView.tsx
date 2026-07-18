@@ -16,6 +16,8 @@ import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import { captureCompositeElementDataUrl, captureElementDataUrl } from '../hooks/useScreenCapture';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
 import { diffChars } from '../lib/textDiff';
+import DomainCompareRows from '../components/domainWorld/DomainCompareRows';
+import type { DivergenceComponents, DomainStateDiff } from '../types';
 import './CompareDigestView.css';
 
 interface MessageEntry {
@@ -32,7 +34,14 @@ interface RoundDiff {
   branch_a_messages: MessageEntry[];
   branch_b_messages: MessageEntry[];
   divergence_score: number;
+  divergence_components?: DivergenceComponents | null;
   is_identical: boolean;
+  state_transition_diff?: {
+    branch_a?: unknown[];
+    branch_b?: unknown[];
+    is_identical?: boolean;
+    domain_state_diff?: DomainStateDiff | null;
+  } | null;
 }
 
 function DiffHighlight({ oldText, newText, side }: { oldText: string; newText: string; side: 'a' | 'b' }) {
@@ -638,6 +647,14 @@ export function CompareDigestView() {
           {t('compare.stage_intro')}
         </p>
       </section>
+
+      {activeDiff && (
+        <DomainCompareRows
+          domainStateDiff={activeDiff.state_transition_diff?.domain_state_diff ?? null}
+          divergenceComponents={activeDiff.divergence_components ?? null}
+          speechDivergenceScore={activeDiff.divergence_score}
+        />
+      )}
 
       {intervention && (
         <section

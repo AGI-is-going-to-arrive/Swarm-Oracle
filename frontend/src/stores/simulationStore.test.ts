@@ -99,6 +99,201 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().isSimulationComplete).toBe(true);
   });
 
+  it("normalizes terminal status aliases failed/aborted/completed on status events", () => {
+    const store = useSimulationStore;
+
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "failed" },
+    } as WSEvent);
+    expect(store.getState().status).toBe("error");
+    expect(store.getState().isSimulationComplete).toBe(false);
+
+    store.getState().reset();
+    store.getState().setScenario(makeScenario("scenario-abort", { status: "simulating" }));
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "aborted" },
+    } as WSEvent);
+    expect(store.getState().status).toBe("cancelled");
+    expect(store.getState().scenario?.status).toBe("cancelled");
+
+    store.getState().reset();
+    store.getState().setScenario(makeScenario("scenario-complete", { status: "simulating" }));
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "completed" },
+    } as WSEvent);
+    expect(store.getState().status).toBe("done");
+    expect(store.getState().isSimulationComplete).toBe(true);
+    expect(store.getState().scenario?.status).toBe("done");
+  });
+
+  it("simulation_done updates store status and scenario.status together", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-live-done", { status: "simulating" }));
+
+    store.getState().handleWSEvent({ type: "simulation_done" } as WSEvent);
+
+    expect(store.getState().status).toBe("done");
+    expect(store.getState().isSimulationComplete).toBe(true);
+    expect(store.getState().scenario?.status).toBe("done");
+  });
+
+  it("consumes world_state_committed into domainWorld branch values", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(
+      makeScenario("scenario-world", {
+        status: "simulating",
+        domain_world: {
+          version: 1,
+          status: "active",
+          reason_code: null,
+          schema_hash: "sha256:abc",
+          as_of_round: 2,
+          variables: [
+            {
+              variable_id: "cash_balance",
+              label_en: "Cash",
+              label_zh: "现金",
+              value_type: "integer",
+              unit: "currency:USD:minor",
+              scale: 0,
+            },
+          ],
+          branch_states: [
+            {
+              branch_id: "b1",
+              status: "active",
+              as_of_round: 2,
+              values: [{ variable_id: "cash_balance", value: "8000" }],
+              latest_round_deltas: [],
+            },
+          ],
+        },
+      }),
+    );
+
+    store.getState().handleWSEvent({
+      type: "round_summary",
+      data: { branch_id: "b1", round: 2, summary: "r2" },
+    } as WSEvent);
+    const beforeRound = store.getState().currentRound;
+    expect(beforeRound).toBe(2);
+
+    store.getState().handleWSEvent({
+      type: "world_state_committed",
+      data: {
+        version: 1,
+        scenario_id: "scenario-world",
+        branch_id: "b1",
+        round_number: 3,
+        schema_hash: "sha256:abc",
+        state_revision: "sha256:new",
+        semantic_state_hash: "sha256:sem",
+        values: [{ variable_id: "cash_balance", value: "7200" }],
+        domain_state_deltas: [
+          {
+            variable_id: "cash_balance",
+            round_number: 3,
+            unit: "currency:USD:minor",
+            before: "8000",
+            after: "7200",
+            applied_delta: "-800",
+          },
+        ],
+      },
+    } as WSEvent);
+
+    const branch = store.getState().domainWorld?.branch_states.find((row) => row.branch_id === "b1");
+    expect(branch?.values[0]?.value).toBe("7200");
+    expect(branch?.latest_round_deltas[0]?.applied_delta).toBe("-800");
+    expect(store.getState().domainWorld?.as_of_round).toBe(3);
+    // Message-authoritative currentRound must not advance on domain commit.
+    expect(store.getState().currentRound).toBe(2);
+  });
+
+  it("ignores action_committed events for a different scenario_id", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-a", { status: "simulating" }));
+    store.getState().handleWSEvent({
+      type: "action_committed",
+      data: {
+        scenario_id: "scenario-b",
+        action_id: "act-x",
+        sequence: 9,
+        branch_id: "b1",
+        round: 1,
+        agent_id: "a1",
+        action_type: "POST",
+        status: "verified",
+        failure_code: null,
+      },
+    } as WSEvent);
+    expect(store.getState().actionReceipts).toHaveLength(0);
+  });
+
+  it("consumes action_committed receipts for live Action Ledger merge", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-actions", { status: "simulating" }));
+
+    store.getState().handleWSEvent({
+      type: "action_committed",
+      data: {
+        scenario_id: "scenario-actions",
+        action_id: "act-1",
+        sequence: 1,
+        branch_id: "b1",
+        round: 2,
+        agent_id: "agent-1",
+        message_id: "msg-1",
+        action_type: "POST",
+        status: "verified",
+        failure_code: null,
+      },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "action_committed",
+      data: {
+        scenario_id: "scenario-actions",
+        action_id: "act-1",
+        sequence: 1,
+        branch_id: "b1",
+        round: 2,
+        agent_id: "agent-1",
+        action_type: "POST",
+        status: "verified",
+        failure_code: null,
+      },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "action_committed",
+      data: {
+        scenario_id: "scenario-actions",
+        action_id: "act-2",
+        sequence: 2,
+        branch_id: "b1",
+        round: 2,
+        agent_id: "agent-2",
+        action_type: "IDLE",
+        status: "unavailable",
+        failure_code: "DECISION_SELECTED_ACTION_NOT_CANDIDATE",
+      },
+    } as WSEvent);
+
+    expect(store.getState().actionReceipts).toHaveLength(2);
+    expect(store.getState().actionReceipts[0]).toMatchObject({
+      action_id: "act-1",
+      sequence: 1,
+      action_type: "POST",
+      status: "verified",
+    });
+    expect(store.getState().actionReceipts[1]).toMatchObject({
+      action_id: "act-2",
+      failure_code: "DECISION_SELECTED_ACTION_NOT_CANDIDATE",
+    });
+  });
+
   it("does not let a stale simulating status overwrite done", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({

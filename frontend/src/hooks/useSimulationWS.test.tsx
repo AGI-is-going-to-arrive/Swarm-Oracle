@@ -5,6 +5,9 @@ import type { Scenario } from '../types';
 import { useSimulationWS } from './useSimulationWS';
 
 const storeState = {
+  status: 'simulating' as string,
+  activeScenarioId: null as string | null,
+  scenario: null as { id: string } | null,
   setScenario: vi.fn(),
   handleWSEvent: vi.fn(),
   setCancelled: vi.fn(),
@@ -95,6 +98,9 @@ describe('useSimulationWS', () => {
     MockWebSocket.reset();
     getScenarioMock.mockReset();
     dispatchVizEventMock.mockReset();
+    storeState.status = 'simulating';
+    storeState.activeScenarioId = null;
+    storeState.scenario = null;
     storeState.setScenario.mockReset();
     storeState.handleWSEvent.mockReset();
     storeState.setCancelled.mockReset();
@@ -203,6 +209,44 @@ describe('useSimulationWS', () => {
     });
 
     expect(storeState.setScenario).toHaveBeenCalledWith(scenario);
+  });
+
+  it('polls scenario status on clean close while still non-terminal (missed simulation_done safety net)', async () => {
+    const doneScenario = {
+      id: 'scenario-close-done',
+      question: 'Q',
+      status: 'done' as const,
+      created_at: '2026-03-23T00:00:00Z',
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    } satisfies Scenario;
+    getScenarioMock.mockResolvedValue(doneScenario);
+    storeState.status = 'simulating';
+    storeState.activeScenarioId = 'scenario-close-done';
+    storeState.scenario = { id: 'scenario-close-done' };
+
+    render(<Harness scenarioId="scenario-close-done" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.(new Event('open'));
+    });
+
+    getScenarioMock.mockClear();
+    storeState.setScenario.mockClear();
+
+    await act(async () => {
+      // Clean close (1000) does not reconnect; must still poll terminal status.
+      MockWebSocket.instances[0]?.emitClose(1000);
+      await flushMicrotasks();
+    });
+
+    expect(getScenarioMock).toHaveBeenCalledWith('scenario-close-done');
+    expect(storeState.setScenario).toHaveBeenCalledWith(doneScenario);
+    expect(MockWebSocket.instances).toHaveLength(1);
   });
 
   it('does not overwrite newer WS state with a slower reconnect snapshot', async () => {

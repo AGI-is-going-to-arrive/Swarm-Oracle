@@ -13,6 +13,11 @@
 .action-ledger__status { width: fit-content; padding: .15rem .45rem; border-radius: 999px; background: #353850; font-size: .72rem; }
 .action-ledger__status--verified { color: #82e6bb; } .action-ledger__status--failed { color: #ff9b9b; } .action-ledger__status--unavailable { color: #d0b5ff; }
 .action-ledger__body { white-space: pre-wrap; overflow-wrap: anywhere; } .action-ledger__target, .action-ledger time { color: #b8c1d1; font-size: .78rem; }
+.action-ledger__domain-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.action-ledger__domain-chip { display: inline-flex; max-width: 100%; padding: .15rem .45rem; border-radius: 999px; border: 1px solid #555a74; background: #151527; color: #dbe4f8; font-size: .7rem; overflow-wrap: anywhere; }
+.action-ledger__domain-chip--verified { color: #82e6bb; border-color: #3f6f5c; }
+.action-ledger__domain-chip--failed, .action-ledger__domain-chip--unavailable, .action-ledger__domain-chip--duplicate { color: #ffb0b0; border-color: #7a4a4a; }
+.action-ledger__domain-chip--proposed { color: #d0b5ff; }
 .action-ledger__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .action-ledger__details-toggle, .action-ledger__select { min-height: 36px; padding: .35rem .65rem; border: 1px solid #666d8c; border-radius: 7px; background: #151527; color: #e8edfa; cursor: pointer; }
 .action-ledger__details { margin: .15rem 0 0; padding: .65rem; border: 1px solid #3f435d; border-radius: 7px; background: #18182b; display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); gap: .35rem .75rem; }

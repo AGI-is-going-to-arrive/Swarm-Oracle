@@ -131,6 +131,8 @@ import {
   resolveReportContentLanguage,
 } from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
+import DomainWorldStrip from '../components/domainWorld/DomainWorldStrip';
+import WorldOutcomesSection from '../components/domainWorld/WorldOutcomesSection';
 import ExploreDeeperBridge from './result/ExploreDeeperBridge';
 import UnifiedSourceFeed from '../components/result/UnifiedSourceFeed';
 import PredictionsSection from './result/PredictionsSection';
@@ -2108,6 +2110,19 @@ export default function ResultView() {
           question={storyData?.question ?? ''}
         />
       )}
+
+      <DomainWorldStrip
+        domainWorld={scenario?.domain_world ?? null}
+        branchId={branches[0]?.id ?? null}
+        readOnly
+      />
+
+      <WorldOutcomesSection
+        worldOutcomes={storyData?.world_outcomes ?? null}
+        branchTitles={Object.fromEntries(
+          (storyData?.branches ?? []).map((branch) => [branch.id, branch.title]),
+        )}
+      />
 
       <YouVsOracleCard
         scoreResults={scoreResults}

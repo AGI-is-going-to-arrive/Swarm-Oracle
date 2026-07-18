@@ -171,6 +171,8 @@ export interface Scenario {
   causal_graph_id?: string | null;
   checkpoints?: ScenarioCheckpointSummary[] | null;
   faction_timeline_id?: string | null;
+  /** Stage 1 DomainWorld projection (§8.1); null/missing → not_generated. */
+  domain_world?: DomainWorldProjection | null;
 }
 
 export interface AgentInfo {
@@ -641,6 +643,8 @@ export interface StoryData {
   verdict_confidence?: 'high' | 'medium' | 'low' | null;
   verdict_confidence_kind?: 'model_self_rating' | null;
   full_report?: FullReport | FullReportTruncatedMarker | null;
+  /** Stage 1 world outcomes (§8.2); never nested under full_report. */
+  world_outcomes?: WorldOutcomesProjection | null;
 }
 
 export type StoryResponse = StoryData;
@@ -787,6 +791,7 @@ export interface ReplayStateTransitionDiff {
   branch_a: ReplayStateTransition[];
   branch_b: ReplayStateTransition[];
   is_identical: boolean;
+  domain_state_diff?: DomainStateDiff | null;
 }
 
 export interface CounterfactualRoundDiff {
@@ -796,8 +801,230 @@ export interface CounterfactualRoundDiff {
   branch_a_messages: Array<Record<string, unknown>>;
   branch_b_messages: Array<Record<string, unknown>>;
   divergence_score: number;
+  divergence_components?: DivergenceComponents | null;
   is_identical: boolean;
   state_transition_diff: ReplayStateTransitionDiff | Record<string, never>;
+}
+
+// ── Stage 1 DomainWorld projections (contract §8 / §6.3) ──
+
+export type DomainUnavailableReasonCode =
+  | 'not_generated'
+  | 'schema_invalid'
+  | 'no_actionable_rule'
+  | 'round_incomplete'
+  | 'rebuild_failed';
+
+export type DomainValueV1 = string | boolean;
+
+export interface DomainVariableSchema {
+  variable_id: string;
+  label_en: string;
+  label_zh: string;
+  value_type: 'integer' | 'decimal' | 'boolean' | 'enum' | string;
+  semantic_role?: string;
+  unit: string;
+  scale: number;
+  minimum?: string | null;
+  maximum?: string | null;
+  enum_values?: string[];
+  initial_value?: DomainValueV1;
+}
+
+export interface DomainDeltaSource {
+  agent_id: string;
+  agent_name?: string;
+  message_id?: string;
+  action_id: string;
+  action_sequence?: number;
+  action_type?: string;
+  proposal_index?: number;
+  rule_id: string;
+}
+
+export interface DomainStateDelta {
+  variable_id: string;
+  round_number: number;
+  unit: string;
+  before: DomainValueV1 | null;
+  after: DomainValueV1 | null;
+  applied_delta: string | null;
+  effect_code?: string | null;
+  rule_ids?: string[];
+  state_revision_before?: string | null;
+  state_revision_after?: string | null;
+  source_action_ids?: string[];
+  source_action_count?: number;
+  source_action_ids_truncated?: boolean;
+  sources?: DomainDeltaSource[];
+}
+
+export interface DomainVariableValue {
+  variable_id: string;
+  value: DomainValueV1;
+}
+
+export interface DomainBranchState {
+  branch_id: string;
+  status: 'active' | 'unavailable' | string;
+  failure_code?: string | null;
+  reason_code?: DomainUnavailableReasonCode | string | null;
+  as_of_round?: number | null;
+  state_revision?: string | null;
+  semantic_state_hash?: string | null;
+  values: DomainVariableValue[];
+  latest_round_deltas: DomainStateDelta[];
+}
+
+export interface DomainWorldProjection {
+  version: 1 | number;
+  status: 'active' | 'unavailable' | string;
+  failure_code?: string | null;
+  reason_code?: DomainUnavailableReasonCode | string | null;
+  schema_hash?: string | null;
+  unit_registry_version?: string | null;
+  as_of_round?: number | null;
+  variables: DomainVariableSchema[];
+  branch_states: DomainBranchState[];
+}
+
+/** Contract §8.2 + §16 nine-key refs block (all required; empty arrays → count=0, truncated=false). */
+export interface WorldOutcomeItem {
+  variable_id: string;
+  label_en: string;
+  label_zh: string;
+  value_type: string;
+  unit: string;
+  scale: number;
+  initial_value: DomainValueV1;
+  final_value: DomainValueV1;
+  net_delta: string | null;
+  change_count: number;
+  first_change_round?: number | null;
+  last_change_round?: number | null;
+  summary: { en: string; zh: string };
+  source_action_ids: string[];
+  source_action_count: number;
+  source_action_ids_truncated: boolean;
+  source_rule_ids: string[];
+  source_rule_count: number;
+  source_rule_ids_truncated: boolean;
+  related_claim_ids: string[];
+  related_claim_count: number;
+  related_claim_ids_truncated: boolean;
+}
+
+export interface WorldOutcomeBranch {
+  branch_id: string;
+  status: 'available' | 'unavailable' | 'partial' | string;
+  failure_code?: string | null;
+  reason_code?: DomainUnavailableReasonCode | string | null;
+  as_of_round?: number | null;
+  state_revision?: string | null;
+  empty_reason_code?: string | null;
+  outcomes: WorldOutcomeItem[];
+}
+
+export interface WorldOutcomesProjection {
+  version: 1 | number;
+  status: 'available' | 'unavailable' | 'partial' | string;
+  failure_code?: string | null;
+  reason_code?: DomainUnavailableReasonCode | string | null;
+  schema_hash?: string | null;
+  branches: WorldOutcomeBranch[];
+}
+
+export interface DomainCompareSideValue {
+  status: 'available' | 'unavailable' | string;
+  value: DomainValueV1 | null;
+}
+
+export interface DomainCompareFirstDifference {
+  round_number: number;
+  branch_a_rule_ids?: string[];
+  branch_b_rule_ids?: string[];
+  branch_a_source_action_ids?: string[];
+  branch_b_source_action_ids?: string[];
+}
+
+export interface DomainCompareRow {
+  variable_id: string;
+  label_en: string;
+  label_zh: string;
+  value_type: string;
+  unit: string;
+  scale: number;
+  branch_a: DomainCompareSideValue;
+  branch_b: DomainCompareSideValue;
+  delta: string | null;
+  is_different: boolean;
+  first_difference?: DomainCompareFirstDifference | null;
+}
+
+export interface DomainStateDiff {
+  status: 'comparable' | 'schema_mismatch' | 'unavailable' | 'not_applicable' | string;
+  branch_a_failure_code?: string | null;
+  branch_b_failure_code?: string | null;
+  schema_hash_a?: string | null;
+  schema_hash_b?: string | null;
+  branch_a_state_revision?: string | null;
+  branch_b_state_revision?: string | null;
+  differing_variable_count?: number;
+  comparable_variable_count?: number;
+  rows: DomainCompareRow[];
+}
+
+export interface DivergenceComponents {
+  text: number | null;
+  domain: number | null;
+}
+
+export type DomainAdjudicationStatus =
+  | 'proposed'
+  | 'verified'
+  | 'failed'
+  | 'duplicate'
+  | 'unavailable';
+
+export interface DomainAdjudicationChip {
+  schema_hash?: string | null;
+  status: DomainAdjudicationStatus | string;
+  failure_code?: string | null;
+  effect_code?: string | null;
+  rule_id: string;
+  variable_id: string;
+  label_en: string;
+  label_zh: string;
+  operation?: string;
+  requested_value?: DomainValueV1 | null;
+  unit?: string;
+  expected_before?: DomainValueV1 | null;
+  before?: DomainValueV1 | null;
+  after?: DomainValueV1 | null;
+  applied_delta?: string | null;
+  round_number?: number;
+  branch_id?: string;
+  agent_id?: string;
+  message_id?: string;
+  action_id?: string;
+  action_sequence?: number;
+  proposal_index?: number;
+  state_revision_before?: string | null;
+  state_revision_after?: string | null;
+  calculation_confidence?: 'deterministic' | string;
+  epistemic_scope?: string;
+}
+
+export interface WorldStateCommittedEventData {
+  version: 1 | number;
+  scenario_id: string;
+  branch_id: string;
+  round_number: number;
+  schema_hash?: string | null;
+  state_revision?: string | null;
+  semantic_state_hash?: string | null;
+  values: DomainVariableValue[];
+  domain_state_deltas: DomainStateDelta[];
 }
 
 export type PremortemStatus = 'available' | 'partial' | 'missing';
@@ -1450,6 +1677,22 @@ export type WSEvent =
         version: number;
       };
     }
+    | {
+      type: 'action_committed';
+      data: {
+        scenario_id: string;
+        action_id: string;
+        sequence: number;
+        branch_id: string;
+        round: number;
+        agent_id: string;
+        message_id?: string | null;
+        action_type: string;
+        status: string;
+        failure_code?: string | null;
+      };
+    }
+    | { type: 'world_state_committed'; data: WorldStateCommittedEventData }
     | { type: 'simulation_done' }
     | {
       type: 'simulation_error';

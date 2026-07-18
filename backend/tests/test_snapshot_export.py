@@ -2250,6 +2250,15 @@ def test_import_old_snapshot_without_intervention_receipts_file_still_succeeds()
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, new_id)
         assert scenario is not None
+        assert scenario.parsed_context["domain_world_v1"] == {
+            "version": 1,
+            "status": "unavailable",
+            "failure_code": "DOMAIN_SCHEMA_UNAVAILABLE",
+            "reason_code": "not_generated",
+            "unit_registry_version": "unit_registry_v1",
+            "schema_hash": None,
+            "schema": None,
+        }
         logs = list(
             session.exec(
                 select(InterventionLog).where(InterventionLog.scenario_id == new_id)
@@ -3418,6 +3427,1033 @@ def test_import_rejects_zip_bomb_aggregate_size(monkeypatch):
 
 
 # ── structured Agent runtime snapshot contracts ─────────
+
+
+def _snapshot_domain_config_fixture(
+    *,
+    variable_id: str = "balance",
+    rule_id: str = "change_balance",
+    unit: str = "count",
+):
+    from app.services.domain_world import freeze_domain_schema_v1
+
+    config = freeze_domain_schema_v1(
+        {
+            "variables": [
+                {
+                    "variable_id": variable_id,
+                    "label_en": "Balance",
+                    "label_zh": "余额",
+                    "value_type": "integer",
+                    "semantic_role": "stock",
+                    "unit": unit,
+                    "scale": 0,
+                    "minimum": "0",
+                    "maximum": "10",
+                    "initial_value": "5",
+                    "enum_values": [],
+                }
+            ],
+            "rules": [
+                {
+                    "rule_id": rule_id,
+                    "variable_id": variable_id,
+                    "action_type": "POST",
+                    "operation": "add_requested",
+                    "unit": unit,
+                    "constant_value": None,
+                    "requested_minimum": "-10",
+                    "requested_maximum": "10",
+                    "preconditions": [],
+                    "opportunity_mode": "effect_only",
+                    "epistemic_scope": "scenario_assumption",
+                }
+            ],
+        }
+    )
+    assert config.status == "active"
+    assert config.schema is not None
+    assert config.schema_hash is not None
+    return config
+
+
+def _domain_config_json(config) -> dict[str, Any]:
+    from app.services.domain_world import canonical_json_bytes_v1
+
+    return json.loads(canonical_json_bytes_v1(config))
+
+
+def _seed_domain_snapshot(
+    *,
+    with_runtime: bool,
+    variable_id: str = "balance",
+    rule_id: str = "change_balance",
+    event_key: str = "snapshot-round-1",
+    unit: str = "count",
+    action_content: str = "I change the balance by two.",
+    stored_domain_group_mutator: Callable[[dict[str, Any]], None] | None = None,
+    stored_payload_mutator: Callable[[dict[str, Any]], None] | None = None,
+    stored_payload_json_override: str | None = None,
+    stored_payload_json_transform: Callable[[str], str] | None = None,
+) -> tuple[bytes, dict[str, Any], Any]:
+    from app.services.domain_world import initial_domain_state_v1, state_revision_v1
+    from app.services.simulation_actions import append_simulation_action
+
+    config = _snapshot_domain_config_fixture(
+        variable_id=variable_id,
+        rule_id=rule_id,
+        unit=unit,
+    )
+    initial_state = initial_domain_state_v1(config.schema)
+    initial_revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=0,
+        state=initial_state,
+        accepted_event_identities=(),
+    )
+    domain_group = {
+        "schema_hash": config.schema_hash,
+        "input_state_revision": initial_revision,
+        "proposals": [
+            {
+                "variable_id": variable_id,
+                "rule_id": rule_id,
+                "operation": "add_requested",
+                "requested_value": "2",
+                "unit": unit,
+                "expected_before": None,
+                "event_key": event_key,
+            }
+        ],
+    }
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Can portable domain proposals rebuild state?",
+            status=ScenarioStatus.DONE,
+            parsed_context={"domain_world_v1": _domain_config_json(config)},
+        )
+        branch = Branch(scenario_id=scenario.id, status=BranchStatus.COMPLETED)
+        agent = Agent(scenario_id=scenario.id, name="Domain Snapshot Agent")
+        session.add_all([scenario, branch, agent])
+        session.flush()
+        round_row = Round(branch_id=branch.id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        message = AgentMessage(
+            round_id=round_row.id,
+            agent_id=agent.id,
+            content=action_content,
+        )
+        session.add(message)
+        session.flush()
+        action = append_simulation_action(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            round_id=round_row.id,
+            round_number=1,
+            agent_id=agent.id,
+            message_id=message.id,
+            idempotency_key=f"snapshot-domain:{with_runtime}",
+            action={
+                "action_type": "POST",
+                "status": "verified",
+                "content": action_content,
+                "payload": {"domain_world_v1": domain_group},
+            },
+        )
+        if stored_payload_json_transform is not None:
+            action.payload_json = stored_payload_json_transform(
+                action.payload_json or "{}"
+            )
+            session.add(action)
+        elif stored_payload_json_override is not None:
+            action.payload_json = stored_payload_json_override
+            session.add(action)
+        elif stored_payload_mutator is not None:
+            stored_payload = json.loads(action.payload_json or "{}")
+            stored_payload_mutator(stored_payload)
+            action.payload_json = json.dumps(stored_payload, ensure_ascii=False)
+            session.add(action)
+        elif stored_domain_group_mutator is not None:
+            stored_payload = json.loads(action.payload_json or "{}")
+            stored_domain_group_mutator(stored_payload["domain_world_v1"])
+            action.payload_json = json.dumps(stored_payload, ensure_ascii=False)
+            session.add(action)
+        if with_runtime:
+            runtime = _snapshot_agent_runtime_fixture(
+                branch.id,
+                agent.id,
+                message.id,
+                action.id,
+            )
+            round_runtime = runtime["branches"][branch.id]["rounds"]["1"]
+            round_runtime.update(
+                {
+                    "domain_finalization": {"forged": True},
+                    "domain_adjudications": [{"forged": True}],
+                    "domain_state_deltas": [{"forged": True}],
+                    "domain_state_after": {variable_id: "999"},
+                    "domain_state_revision": f"sha256:{'f' * 64}",
+                    "semantic_state_hash": f"sha256:{'e' * 64}",
+                }
+            )
+            parsed = dict(scenario.parsed_context or {})
+            parsed["agent_runtime_v1"] = runtime
+            scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+        return export_snapshot_zip(scenario.id, session).getvalue(), domain_group, config
+
+
+def test_domain_snapshot_round_trip_preserves_valid_api_key_identifiers_byte_exact():
+    from app.models.simulation_action import SimulationAction
+    from app.services.domain_world import canonical_json_bytes_v1
+
+    blob, domain_group, config = _seed_domain_snapshot(
+        with_runtime=False,
+        variable_id="api_key",
+        rule_id="api_key",
+        event_key="api_key",
+        unit="custom_count:api_key",
+        action_content="api_key=sk-domain-free-text-secret-123456",
+    )
+    expected_config_bytes = canonical_json_bytes_v1(config)
+    expected_group_bytes = canonical_json_bytes_v1(domain_group)
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_scenario = json.loads(zf.read("scenario.json"))
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    exported_config = exported_scenario["parsed_context"]["domain_world_v1"]
+    exported_group = json.loads(exported_action["payload_json"])["domain_world_v1"]
+
+    assert canonical_json_bytes_v1(exported_config) == expected_config_bytes
+    assert canonical_json_bytes_v1(exported_group) == expected_group_bytes
+    assert exported_action["content"] == "api key [redacted]"
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "api-key-domain-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        imported_action = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).one()
+        imported_config = (imported.parsed_context or {})["domain_world_v1"]
+        imported_group = json.loads(imported_action.payload_json or "{}")[
+            "domain_world_v1"
+        ]
+
+    assert canonical_json_bytes_v1(imported_config) == expected_config_bytes
+    assert canonical_json_bytes_v1(imported_group) == expected_group_bytes
+    assert imported_action.content == "api key [redacted]"
+
+
+@pytest.mark.parametrize(
+    ("secret_location", "secret_value"),
+    [
+        ("schema_hash", "openai-sk-secret"),
+        ("schema_hash", "sk-live-secret123456"),
+        ("schema_hash", "ghp_abcdefghijklmnopqrst"),
+        ("schema_hash", "ghp_abcdefghijklmnopqrSt"),
+        ("input_state_revision", "Bearer live-token-1234567890"),
+        ("requested_value", "sk-live-secret123456"),
+        ("requested_value", "ghp_abcdefghijklmnopqrst"),
+        ("expected_before", "sk-live-secret123456"),
+        ("event_key", "token:sk-live-secret123456"),
+        ("requested_value", "xai-liveSecret123456"),
+    ],
+)
+def test_domain_snapshot_export_rejects_historical_secret_in_domain_payload(
+    secret_location: str,
+    secret_value: str,
+):
+    def inject_secret(group: dict[str, Any]) -> None:
+        if secret_location in {"schema_hash", "input_state_revision"}:
+            group[secret_location] = secret_value
+        elif secret_location == "expected_before":
+            group["proposals"][0].update(
+                {
+                    "operation": "set_if_expected",
+                    "requested_value": "1",
+                    "expected_before": secret_value,
+                }
+            )
+        elif secret_location == "event_key":
+            group["proposals"][0]["event_key"] = secret_value
+        else:
+            group["proposals"][0]["requested_value"] = secret_value
+
+    with pytest.raises(
+        SnapshotImportError,
+        match="domain action payload contains credentials",
+    ):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_domain_group_mutator=inject_secret,
+        )
+
+
+def test_domain_snapshot_export_rejects_structurally_invalid_historical_group():
+    def add_unknown_secret_field(group: dict[str, Any]) -> None:
+        group["api_key"] = "sk-would-be-redacted123456"
+
+    with pytest.raises(
+        SnapshotImportError,
+        match="domain action payload is invalid",
+    ):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_domain_group_mutator=add_unknown_secret_field,
+        )
+
+
+def test_domain_snapshot_export_rejects_noncanonical_historical_domain_json():
+    def inject_nan(group: dict[str, Any]) -> None:
+        group["proposals"][0]["requested_value"] = float("nan")
+
+    with pytest.raises(
+        SnapshotImportError,
+        match="domain action payload is invalid",
+    ):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_domain_group_mutator=inject_nan,
+        )
+
+
+def test_domain_snapshot_export_preserves_nonsecret_malformed_hash_and_unit_intent():
+    from app.models.simulation_action import SimulationAction
+
+    def replace_hash_and_unit(group: dict[str, Any]) -> None:
+        group["schema_hash"] = "tokenization-error"
+        group["proposals"][0]["unit"] = "tokenized_unit"
+
+    blob, _domain_group, _config = _seed_domain_snapshot(
+        with_runtime=False,
+        variable_id="api_key",
+        rule_id="api_key",
+        event_key="api_key",
+        unit="custom_count:api_key",
+        stored_domain_group_mutator=replace_hash_and_unit,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    exported_group = json.loads(exported_action["payload_json"])["domain_world_v1"]
+
+    assert exported_group["schema_hash"] == "tokenization-error"
+    assert exported_group["proposals"][0] == {
+        "event_key": "api_key",
+        "expected_before": None,
+        "operation": "add_requested",
+        "requested_value": "2",
+        "rule_id": "api_key",
+        "unit": "tokenized_unit",
+        "variable_id": "api_key",
+    }
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "malformed-hash-api-key-importer", session)
+        imported_action = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).one()
+    imported_group = json.loads(imported_action.payload_json or "{}")["domain_world_v1"]
+
+    assert imported_group == exported_group
+
+
+def test_domain_snapshot_outer_payload_round_trips_byte_exact():
+    from app.models.simulation_action import SimulationAction
+    from app.services.domain_world import canonical_json_bytes_v1
+
+    def add_note(payload: dict[str, Any]) -> None:
+        payload["note"] = "x"
+
+    blob, domain_group, _config = _seed_domain_snapshot(
+        with_runtime=False,
+        stored_payload_mutator=add_note,
+    )
+    expected_payload_json = json.dumps(
+        {
+            "domain_world_v1": json.loads(canonical_json_bytes_v1(domain_group)),
+            "note": "x",
+        },
+        ensure_ascii=False,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+
+    assert exported_action["payload_json"] == expected_payload_json
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "domain-note-importer", session)
+        imported_action = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).one()
+
+    assert imported_action.payload_json == expected_payload_json
+
+
+def test_snapshot_unknown_nested_payload_without_domain_round_trips_byte_exact():
+    from app.models.simulation_action import SimulationAction
+
+    expected_payload = {
+        "reaction": "LIKE",
+        "bootstrap": True,
+        "note": {"items": ["x", {"safe": True}]},
+    }
+
+    def replace_with_extension(payload: dict[str, Any]) -> None:
+        payload.clear()
+        payload.update(expected_payload)
+
+    blob, _domain_group, _config = _seed_domain_snapshot(
+        with_runtime=False,
+        stored_payload_mutator=replace_with_extension,
+    )
+    expected_payload_json = json.dumps(expected_payload, ensure_ascii=False)
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+
+    assert exported_action["payload_json"] == expected_payload_json
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "unknown-payload-importer", session)
+        imported_action = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).one()
+
+    assert imported_action.payload_json == expected_payload_json
+
+
+def test_domain_snapshot_export_rejects_secret_in_outer_payload_without_rewrite():
+    def add_secret(payload: dict[str, Any]) -> None:
+        payload["api_key"] = "sk-abc123"
+
+    with pytest.raises(SnapshotImportError, match="action payload contains credentials"):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_payload_mutator=add_secret,
+        )
+
+
+def test_domain_snapshot_export_recursively_rejects_nested_outer_secret():
+    def add_nested_secret(payload: dict[str, Any]) -> None:
+        payload["metadata"] = {"items": ["safe", "openai-sk-secret"]}
+
+    with pytest.raises(SnapshotImportError, match="action payload contains credentials"):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_payload_mutator=add_nested_secret,
+        )
+
+
+def test_domain_snapshot_export_rejects_duplicate_outer_keys_before_raw_passthrough():
+    def add_hidden_duplicate(raw: str) -> str:
+        assert raw.endswith("}")
+        return f'{raw[:-1]},"note":"sk-abc123","note":"x"}}'
+
+    with pytest.raises(SnapshotImportError, match="duplicate object keys"):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_payload_json_transform=add_hidden_duplicate,
+        )
+
+
+def test_domain_snapshot_export_rejects_malformed_payload_json():
+    with pytest.raises(SnapshotImportError, match="payload_json is malformed JSON"):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_payload_json_override='{"domain_world_v1":',
+        )
+
+
+@pytest.mark.parametrize("with_runtime", [True, False], ids=["runtime", "runtime-less"])
+def test_domain_snapshot_round_trip_rebuilds_only_from_config_and_proposals(
+    with_runtime: bool,
+):
+    from app.models.simulation_action import SimulationAction
+    from app.services.domain_world import (
+        semantic_state_hash_v1,
+        state_revision_v1,
+    )
+    from app.services.replay import _rebuild_domain_runtime_for_branches_in_session
+
+    def stable_runtime_bytes(value: object) -> bytes:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    blob, domain_group, config = _seed_domain_snapshot(with_runtime=with_runtime)
+    expected_config = _domain_config_json(config)
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_scenario = json.loads(zf.read("scenario.json"))
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    exported_context = exported_scenario["parsed_context"]
+    assert exported_context["domain_world_v1"] == expected_config
+    if with_runtime:
+        exported_round = next(
+            iter(
+                next(iter(exported_context["agent_runtime_v1"]["branches"].values()))[
+                    "rounds"
+                ].values()
+            )
+        )
+        for field_name in (
+            "domain_finalization",
+            "domain_adjudications",
+            "domain_state_deltas",
+            "domain_state_after",
+            "domain_state_revision",
+            "semantic_state_hash",
+        ):
+            assert field_name not in exported_round
+    else:
+        assert "agent_runtime_v1" not in exported_context
+    assert json.loads(exported_action["payload_json"])["domain_world_v1"] == domain_group
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "domain-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        imported_branch = session.exec(
+            select(Branch).where(Branch.scenario_id == imported_id)
+        ).one()
+        imported_action = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).one()
+        imported_context = imported.parsed_context or {}
+        imported_round = imported_context["agent_runtime_v1"]["branches"][
+            imported_branch.id
+        ]["rounds"]["1"]
+        first_bytes = stable_runtime_bytes(imported_context["agent_runtime_v1"])
+        _rebuild_domain_runtime_for_branches_in_session(
+            session,
+            imported_id,
+            branch_ids={imported_branch.id},
+        )
+        second_bytes = stable_runtime_bytes(
+            (session.get(Scenario, imported_id).parsed_context or {})[
+                "agent_runtime_v1"
+            ]
+        )
+        _rebuild_domain_runtime_for_branches_in_session(
+            session,
+            imported_id,
+            branch_ids={imported_branch.id},
+        )
+        third_bytes = stable_runtime_bytes(
+            (session.get(Scenario, imported_id).parsed_context or {})[
+                "agent_runtime_v1"
+            ]
+        )
+
+    expected_state = {"balance": "7"}
+    expected_revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=1,
+        state=expected_state,
+        accepted_event_identities={
+            ("change_balance", "balance", "snapshot-round-1")
+        },
+    )
+    assert imported_context["domain_world_v1"] == expected_config
+    assert json.loads(imported_action.payload_json or "{}")["domain_world_v1"] == (
+        domain_group
+    )
+    assert imported_round["domain_state_after"] == expected_state
+    assert imported_round["domain_state_revision"] == expected_revision
+    assert imported_round["semantic_state_hash"] == semantic_state_hash_v1(
+        schema_hash=config.schema_hash,
+        state=expected_state,
+    )
+    assert imported_round["domain_adjudications"][0]["action_id"] == imported_action.id
+    assert imported_round["domain_finalization"] != {"forged": True}
+    assert first_bytes == second_bytes == third_bytes
+
+
+def test_invalid_domain_schema_imports_social_data_as_schema_invalid():
+    from app.models.simulation_action import SimulationAction
+
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+    blob = _rewrite_snapshot_scenario_json(
+        blob,
+        lambda payload: payload["parsed_context"]["domain_world_v1"].update(
+            {"schema_hash": f"sha256:{'0' * 64}"}
+        ),
+    )
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "invalid-schema-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        actions = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).all()
+
+    assert len(actions) == 1
+    assert imported.parsed_context["domain_world_v1"]["status"] == "unavailable"
+    assert imported.parsed_context["domain_world_v1"]["reason_code"] == "schema_invalid"
+    assert "agent_runtime_v1" not in imported.parsed_context
+
+
+def test_import_validates_raw_domain_config_before_credential_redaction():
+    from app.models.simulation_action import SimulationAction
+
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+
+    def add_unknown_credential_key(payload: dict[str, Any]) -> None:
+        payload["parsed_context"]["domain_world_v1"]["api_key"] = (
+            "sk-schema-credential-must-not-be-washed-away"
+        )
+
+    # This helper recomputes both manifest metadata and checksums, so the
+    # importer reaches the raw domain-config validation boundary.
+    crafted = _rewrite_snapshot_scenario_json(blob, add_unknown_credential_key)
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(crafted, "raw-schema-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        actions = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).all()
+        imported_context = imported.parsed_context or {}
+
+    assert len(actions) == 1
+    assert imported_context["domain_world_v1"] == {
+        "failure_code": "DOMAIN_SCHEMA_UNAVAILABLE",
+        "reason_code": "schema_invalid",
+        "schema": None,
+        "schema_hash": None,
+        "status": "unavailable",
+        "unit_registry_version": "unit_registry_v1",
+        "version": 1,
+    }
+    assert "api_key" not in json.dumps(imported_context, sort_keys=True)
+    assert "agent_runtime_v1" not in imported_context
+
+
+def test_import_discards_all_top_level_derived_domain_fields_before_rebuild():
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+    forged_fields = {
+        "domain_world": {"status": "available", "forged": True},
+        "domain_finalization": {"status": "complete", "forged": True},
+        "domain_adjudications": [{"status": "verified", "forged": True}],
+        "domain_state_deltas": [{"after": "999", "forged": True}],
+        "domain_state_after": {"balance": "999"},
+        "domain_state_revision": f"sha256:{'a' * 64}",
+        "semantic_state_hash": f"sha256:{'b' * 64}",
+        "world_outcomes": {"status": "available", "forged": True},
+        "domain_state_diff": {"status": "comparable", "forged": True},
+        "divergence_score": 1.0,
+        "divergence_components": {"text": 0.0, "domain": 1.0},
+        "state_transition_diff": {"domain_state_diff": {"forged": True}},
+        "round_comparisons": [{"domain_state_diff": {"forged": True}}],
+    }
+
+    def add_derived_fields(payload: dict[str, Any]) -> None:
+        payload["parsed_context"].update(forged_fields)
+
+    crafted = _rewrite_snapshot_scenario_json(blob, add_derived_fields)
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(crafted, "derived-fields-importer", session)
+        imported = session.get(Scenario, imported_id)
+        assert imported is not None
+        imported_context = imported.parsed_context or {}
+        branch = session.exec(
+            select(Branch).where(Branch.scenario_id == imported_id)
+        ).one()
+
+    for field_name in forged_fields:
+        assert field_name not in imported_context
+    rebuilt_round = imported_context["agent_runtime_v1"]["branches"][branch.id][
+        "rounds"
+    ]["1"]
+    assert rebuilt_round["domain_state_after"] == {"balance": "7"}
+    assert rebuilt_round["domain_finalization"]["status"] == "complete"
+    assert rebuilt_round["domain_adjudications"][0]["status"] == "verified"
+    assert "999" not in json.dumps(rebuilt_round, sort_keys=True)
+
+
+def test_invalid_domain_proposal_rolls_back_snapshot_atomically():
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        payloads = {name: zf.read(name) for name in manifest["files"]}
+    actions = [json.loads(line) for line in payloads["actions.jsonl"].splitlines()]
+    payload = json.loads(actions[0]["payload_json"])
+    payload["domain_world_v1"]["proposals"][0]["unknown"] = True
+    actions[0]["payload_json"] = json.dumps(payload, ensure_ascii=False)
+    payloads["actions.jsonl"] = b"\n".join(
+        json.dumps(action, ensure_ascii=False).encode("utf-8") for action in actions
+    )
+    crafted = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        before = len(session.exec(select(Scenario)).all())
+        with pytest.raises(SnapshotImportError, match="actions shape is invalid"):
+            import_snapshot_zip(crafted, "invalid-proposal-importer", session)
+        after = len(session.exec(select(Scenario)).all())
+
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    ("payload_mode", "invalid_payload_json"),
+    [
+        ("missing", None),
+        ("value", None),
+        ("value", ""),
+        ("value", '{"domain_world_v1":'),
+    ],
+    ids=["missing", "null", "empty", "malformed"],
+)
+def test_import_rejects_missing_or_malformed_action_payload_json(
+    payload_mode: str,
+    invalid_payload_json: object,
+):
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        payloads = {name: zf.read(name) for name in manifest["files"]}
+    actions = [json.loads(line) for line in payloads["actions.jsonl"].splitlines()]
+    if payload_mode == "missing":
+        actions[0].pop("payload_json")
+    else:
+        actions[0]["payload_json"] = invalid_payload_json
+    payloads["actions.jsonl"] = json.dumps(
+        actions[0],
+        ensure_ascii=False,
+    ).encode("utf-8")
+    crafted = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        before = len(session.exec(select(Scenario)).all())
+        with pytest.raises(
+            SnapshotImportError,
+            match=r"actions (payload_json|contain malformed)",
+        ):
+            import_snapshot_zip(crafted, "invalid-payload-json-importer", session)
+        after = len(session.exec(select(Scenario)).all())
+
+    assert after == before
+
+
+def test_domain_snapshot_fails_closed_with_legacy_action_normalizer(monkeypatch):
+    import app.services.snapshot_export as snapshot_export_module
+
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+    current_normalizer = snapshot_export_module.normalize_extracted_action
+
+    def legacy_normalizer(value, *, allow_bootstrap_post=False):
+        candidate = dict(value) if isinstance(value, dict) else value
+        if isinstance(candidate, dict):
+            payload = candidate.get("payload")
+            if isinstance(payload, dict) and "domain_world_v1" in payload:
+                candidate["payload"] = {}
+        return current_normalizer(
+            candidate,
+            allow_bootstrap_post=allow_bootstrap_post,
+        )
+
+    monkeypatch.setattr(
+        snapshot_export_module,
+        "normalize_extracted_action",
+        legacy_normalizer,
+    )
+    with Session(get_engine()) as session, pytest.raises(
+        SnapshotImportError,
+        match="actions payload is oversized or contains credentials",
+    ):
+        import_snapshot_zip(blob, "legacy-domain-importer", session)
+
+
+def _seed_counterfactual_replacement_action(payload_json: str | None) -> tuple[str, str]:
+    from app.services.simulation_actions import append_simulation_action
+
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Can a counterfactual replacement payload remain portable?",
+            status=ScenarioStatus.DONE,
+        )
+        agent = Agent(scenario_id=scenario.id, name="Counterfactual Agent")
+        session.add_all([scenario, agent])
+        session.flush()
+        branch = Branch(
+            scenario_id=scenario.id,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_round=1,
+            replay_source_agent_id=agent.id,
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(branch)
+        session.flush()
+        round_row = Round(branch_id=branch.id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        message = AgentMessage(
+            round_id=round_row.id,
+            agent_id=agent.id,
+            content="replacement",
+        )
+        session.add(message)
+        session.flush()
+        action = append_simulation_action(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            round_id=round_row.id,
+            round_number=1,
+            agent_id=agent.id,
+            message_id=message.id,
+            idempotency_key="counterfactual-replacement-payload",
+            action={
+                "action_type": "IDLE",
+                "status": "unavailable",
+                "failure_code": "COUNTERFACTUAL_ACTION_UNAVAILABLE",
+                "payload": {},
+            },
+        )
+        action.payload_json = payload_json
+        session.add(action)
+        session.commit()
+        return scenario.id, action.id
+
+
+def test_counterfactual_snapshot_unknown_payload_round_trips_byte_exact_twice():
+    from app.models.simulation_action import SimulationAction
+
+    raw_payload = '{ "z": [1, {"note": "x"}], "a": true }'
+    scenario_id, _action_id = _seed_counterfactual_replacement_action(raw_payload)
+
+    with Session(get_engine()) as session:
+        first_blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(first_blob)) as zf:
+        first_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    assert first_action["payload_json"] == raw_payload
+
+    with Session(get_engine()) as session:
+        first_import_id = import_snapshot_zip(first_blob, "counterfactual-first", session)
+        first_imported_action = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.scenario_id == first_import_id
+            )
+        ).one()
+        assert first_imported_action.payload_json == raw_payload
+        second_blob = export_snapshot_zip(first_import_id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(second_blob)) as zf:
+        second_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    assert second_action["payload_json"] == raw_payload
+
+    with Session(get_engine()) as session:
+        second_import_id = import_snapshot_zip(
+            second_blob,
+            "counterfactual-second",
+            session,
+        )
+        second_imported_action = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.scenario_id == second_import_id
+            )
+        ).one()
+    assert second_imported_action.payload_json == raw_payload
+
+
+@pytest.mark.parametrize(
+    "raw_payload",
+    [
+        '{"metadata":{"api_key":"sk-abc123"}}',
+        '{"domain_world_v1":{"requested_value":"sk-abc123"}}',
+    ],
+    ids=["outer-extension", "stripped-domain"],
+)
+def test_counterfactual_snapshot_secret_payload_rejects_export_without_rewrite(
+    raw_payload,
+):
+    from app.models.simulation_action import SimulationAction
+
+    scenario_id, action_id = _seed_counterfactual_replacement_action(raw_payload)
+
+    with Session(get_engine()) as session:
+        with pytest.raises(SnapshotImportError, match="action payload contains credentials"):
+            export_snapshot_zip(scenario_id, session)
+        stored_action = session.get(SimulationAction, action_id)
+
+    assert stored_action is not None
+    assert stored_action.payload_json == raw_payload
+
+
+@pytest.mark.parametrize("payload_json", [None, ""], ids=["missing", "empty"])
+def test_counterfactual_snapshot_empty_payload_remains_empty_object(payload_json):
+    scenario_id, _action_id = _seed_counterfactual_replacement_action(payload_json)
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+
+    assert exported_action["payload_json"] == "{}"
+
+
+def test_counterfactual_snapshot_strips_and_rejects_restored_domain_intent():
+    from app.models.simulation_action import SimulationAction
+    from app.services.domain_world import (
+        canonical_json_bytes_v1,
+        initial_domain_state_v1,
+        state_revision_v1,
+    )
+    from app.services.simulation_actions import append_simulation_action
+
+    config = _snapshot_domain_config_fixture()
+    initial_revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=0,
+        state=initial_domain_state_v1(config.schema),
+        accepted_event_identities=(),
+    )
+    domain_group = {
+        "schema_hash": config.schema_hash,
+        "input_state_revision": initial_revision,
+        "proposals": [
+            {
+                "variable_id": "balance",
+                "rule_id": "change_balance",
+                "operation": "add_requested",
+                "requested_value": "2",
+                "unit": "count",
+                "expected_before": None,
+                "event_key": "forged-counterfactual-intent",
+            }
+        ],
+    }
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="Can a counterfactual snapshot restore source intent?",
+            status=ScenarioStatus.DONE,
+            parsed_context={"domain_world_v1": _domain_config_json(config)},
+        )
+        agent = Agent(scenario_id=scenario.id, name="Counterfactual Agent")
+        session.add_all([scenario, agent])
+        session.flush()
+        branch = Branch(
+            scenario_id=scenario.id,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_round=1,
+            replay_source_agent_id=agent.id,
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(branch)
+        session.flush()
+        round_row = Round(branch_id=branch.id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        message = AgentMessage(
+            round_id=round_row.id,
+            agent_id=agent.id,
+            content="replacement",
+        )
+        session.add(message)
+        session.flush()
+        action = append_simulation_action(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            round_id=round_row.id,
+            round_number=1,
+            agent_id=agent.id,
+            message_id=message.id,
+            idempotency_key="crafted-counterfactual-source-intent",
+            action={
+                "action_type": "POST",
+                "status": "verified",
+                "content": "source intent",
+                "payload": {"domain_world_v1": domain_group},
+            },
+        )
+        outer_extension = {"z": {"nested": ["kept"]}, "a": True}
+        action.payload_json = json.dumps(
+            {
+                "z": outer_extension["z"],
+                "domain_world_v1": domain_group,
+                "a": outer_extension["a"],
+            },
+            ensure_ascii=False,
+        )
+        session.add(action)
+        session.commit()
+        blob = export_snapshot_zip(scenario.id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        payloads = {name: zf.read(name) for name in manifest["files"]}
+    exported_action = json.loads(payloads["actions.jsonl"].splitlines()[0])
+    assert exported_action["action_type"] == "IDLE"
+    assert exported_action["status"] == "unavailable"
+    assert exported_action["failure_code"] == "COUNTERFACTUAL_ACTION_UNAVAILABLE"
+    assert exported_action["parent_action_id"] is None
+    assert exported_action["target_type"] is None
+    assert exported_action["target_id"] is None
+    assert exported_action["content"] is None
+    expected_stripped_payload = canonical_json_bytes_v1(outer_extension).decode("utf-8")
+    assert exported_action["payload_json"] == expected_stripped_payload
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "counterfactual-importer", session)
+        imported_action = session.exec(
+            select(SimulationAction).where(SimulationAction.scenario_id == imported_id)
+        ).one()
+    assert imported_action.action_type.value == "IDLE"
+    assert imported_action.failure_code == "COUNTERFACTUAL_ACTION_UNAVAILABLE"
+    assert imported_action.payload_json == expected_stripped_payload
+
+    exported_action.update(
+        {
+            "action_type": "POST",
+            "status": "verified",
+            "failure_code": None,
+            "content": "restored source intent",
+            "payload_json": json.dumps(
+                {"domain_world_v1": domain_group}, ensure_ascii=False
+            ),
+        }
+    )
+    payloads["actions.jsonl"] = json.dumps(
+        exported_action,
+        ensure_ascii=False,
+    ).encode("utf-8")
+    crafted = _build_snapshot_zip_from_payloads(payloads)
+    with Session(get_engine()) as session, pytest.raises(
+        SnapshotImportError,
+        match="counterfactual replacement action cannot restore domain proposals",
+    ):
+        import_snapshot_zip(crafted, "counterfactual-forgery", session)
+
+    branch_row = json.loads(payloads["branches.jsonl"].splitlines()[0])
+    for source_agent_id in (None, "unknown-agent-id"):
+        invalid_coordinate_payloads = dict(payloads)
+        invalid_branch_row = dict(branch_row)
+        invalid_branch_row["replay_source_agent_id"] = source_agent_id
+        invalid_coordinate_payloads["branches.jsonl"] = json.dumps(
+            invalid_branch_row,
+            ensure_ascii=False,
+        ).encode("utf-8")
+        invalid_bundle = _build_snapshot_zip_from_payloads(
+            invalid_coordinate_payloads
+        )
+        with Session(get_engine()) as session, pytest.raises(
+            SnapshotImportError,
+            match="counterfactual branch replay coordinate is invalid",
+        ):
+            import_snapshot_zip(invalid_bundle, "counterfactual-coordinate", session)
 
 
 def _snapshot_agent_runtime_fixture(

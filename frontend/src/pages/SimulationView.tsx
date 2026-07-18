@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import { SimWarmupNarrative } from '../components/SimWarmupNarrative';
 import { TheaterCurtain } from '../components/TheaterCurtain';
+import DomainWorldStrip from '../components/domainWorld/DomainWorldStrip';
 import '../components/SimWarmup.css';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSimulationWS } from '../hooks/useSimulationWS';
@@ -291,6 +292,7 @@ function SimulationViewContent({
   const setScenario = useSimulationStore((s) => s.setScenario);
   const { enabled: youVsOracleEnabled } = useCapabilityCheck('you_vs_oracle');
   const storeLastContentEventAt = useSimulationStore((s) => s.lastContentEventAt);
+  const storeDomainWorld = useSimulationStore((s) => s.domainWorld);
   const routeStateMatches = !shouldIsolateReplayIntent && (
     !id || (
       activeScenarioId === id
@@ -298,6 +300,7 @@ function SimulationViewContent({
     )
   );
   const scenario = routeStateMatches ? storeScenario : null;
+  const domainWorld = routeStateMatches ? storeDomainWorld : null;
   replayScenarioIdRef.current = scenario?.id ?? null;
   const agents = useMemo(
     () => (routeStateMatches ? storeAgents : []),
@@ -1870,6 +1873,12 @@ function SimulationViewContent({
           <LazyTimelineBar key={scenario?.id ?? id ?? 'live'} stickyBanner />
         </Suspense>
       )}
+
+      <DomainWorldStrip
+        domainWorld={domainWorld}
+        branchId={activeBranches[0]?.id ?? branches[0]?.id ?? null}
+        readOnly={false}
+      />
 
       {/* Error state. The generic runtime fallback (errorCode RUNTIME_ERROR, set by the
           snapshot reducer when a failed run carries no specific message) is rendered via

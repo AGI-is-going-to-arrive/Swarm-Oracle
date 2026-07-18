@@ -13,7 +13,19 @@ import {
   type RequestOptions,
 } from '../api/client';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
-import type { Scenario, AgentMessage, BranchInfo, AgentInfo, GroupInfo, WSEvent } from '../types';
+import {
+  applyWorldStateCommitted,
+  normalizeDomainWorldProjection,
+} from '../lib/domainWorld';
+import type {
+  Scenario,
+  AgentMessage,
+  BranchInfo,
+  AgentInfo,
+  GroupInfo,
+  WSEvent,
+  DomainWorldProjection,
+} from '../types';
 
 let seenMessageKeys = new Set<string>();
 let _seenScenarioId: string | null = null;
@@ -40,6 +52,53 @@ const STATUS_RANK: Record<SimulationState['status'], number> = {
   cancelled: 4,
 };
 
+const MAX_ACTION_RECEIPTS = 500;
+
+type ActiveSimulationStatus = 'parsing' | 'simulating' | 'narrating' | 'done' | 'error' | 'cancelled';
+
+/** Wire-level aliases for terminal/active scenario status (backend + historical). */
+export function normalizeActiveSimulationStatus(
+  raw: string | null | undefined,
+): ActiveSimulationStatus | null {
+  if (typeof raw !== 'string') return null;
+  const key = raw.trim().toLowerCase();
+  switch (key) {
+    case 'parsing':
+    case 'simulating':
+    case 'narrating':
+    case 'done':
+    case 'error':
+    case 'cancelled':
+      return key;
+    case 'complete':
+    case 'completed':
+    case 'success':
+      return 'done';
+    case 'failed':
+    case 'failure':
+      return 'error';
+    case 'aborted':
+    case 'abort':
+    case 'canceled':
+      return 'cancelled';
+    default:
+      return null;
+  }
+}
+
+export interface ActionCommittedReceipt {
+  scenario_id: string;
+  action_id: string;
+  sequence: number;
+  branch_id: string;
+  round: number;
+  agent_id: string;
+  message_id?: string | null;
+  action_type: string;
+  status: string;
+  failure_code?: string | null;
+}
+
 const BRANCH_STATUS_RANK: Record<BranchInfo['status'], number> = {
   ACTIVE: 0,
   COMPLETED: 1,
@@ -55,8 +114,6 @@ export interface ThinkingAgent {
 }
 
 export type InterventionLifecycleState = 'queued' | 'injected' | 'observed' | 'receipt_ready';
-
-type ActiveSimulationStatus = Exclude<SimulationState['status'], 'idle'>;
 
 export interface SimulationState {
   // Data
@@ -99,6 +156,11 @@ export interface SimulationState {
   interventionLog: Array<{ branch_id: string; text: string; round: number }>;
   interventionLifecycle: Map<string, InterventionLifecycleState>;
   isSimulationComplete: boolean;
+
+  /** Live action receipts from `action_committed` WS events (Action Ledger merge source). */
+  actionReceipts: ActionCommittedReceipt[];
+  /** Stage 1 DomainWorld projection (scenario snapshot + live world_state_committed). */
+  domainWorld: DomainWorldProjection | null;
 
   // Actions
   startSimulation: (options: CreateScenarioOptions) => Promise<string>;
@@ -150,6 +212,8 @@ const initialState = {
   interventionLog: [] as InterventionLogEntry[],
   interventionLifecycle: new Map<string, InterventionLifecycleState>(),
   isSimulationComplete: false,
+  actionReceipts: [] as ActionCommittedReceipt[],
+  domainWorld: null as DomainWorldProjection | null,
 };
 
 let activeStartSimulationController: AbortController | null = null;
@@ -231,6 +295,26 @@ function mergeScenarioStatus(
   return STATUS_RANK[current] > STATUS_RANK[incoming] ? (current as ActiveSimulationStatus) : incoming;
 }
 
+function appendActionReceipt(
+  current: ActionCommittedReceipt[],
+  incoming: ActionCommittedReceipt,
+): ActionCommittedReceipt[] {
+  const withoutDup = current.filter((item) => item.action_id !== incoming.action_id);
+  withoutDup.push(incoming);
+  withoutDup.sort((left, right) => left.sequence - right.sequence);
+  return withoutDup.length > MAX_ACTION_RECEIPTS
+    ? withoutDup.slice(withoutDup.length - MAX_ACTION_RECEIPTS)
+    : withoutDup;
+}
+
+function withScenarioStatus(
+  scenario: Scenario | null,
+  status: ActiveSimulationStatus,
+): Scenario | null {
+  if (!scenario || scenario.status === status) return scenario;
+  return { ...scenario, status };
+}
+
 function shouldIgnoreCancelledEvent(status: SimulationState['status'], eventType: string): boolean {
   return status === 'cancelled' && eventType !== 'heartbeat' && eventType !== 'simulation_cancelled';
 }
@@ -240,7 +324,7 @@ function applyScenarioSnapshot(
   scenario: Scenario,
   options?: { forceClassicForDone?: boolean; replayMode?: boolean },
 ): Partial<SimulationState> {
-  const incomingStatus = scenario.status as ActiveSimulationStatus;
+  const normalizedIncoming = normalizeActiveSimulationStatus(scenario.status) ?? (scenario.status as ActiveSimulationStatus);
   const sameScenario = state.scenario?.id === scenario.id;
   const forceClassicForDone = options?.forceClassicForDone ?? false;
   const replayMode = options?.replayMode ?? false;
@@ -251,8 +335,8 @@ function applyScenarioSnapshot(
     ? mergeBranches(state.branches, scenario.branches as BranchInfo[])
     : (scenario.branches as BranchInfo[]);
   const mergedStatus = sameScenario
-    ? mergeScenarioStatus(state.status, incomingStatus)
-    : incomingStatus;
+    ? mergeScenarioStatus(state.status, normalizedIncoming)
+    : normalizedIncoming;
   const highestRound = Math.max(0, ...mergedMessages.map((message) => message.round ?? 0));
 
   rebuildSeenMessageKeys(mergedMessages, scenario.id);
@@ -303,6 +387,9 @@ function applyScenarioSnapshot(
     isSimulationComplete: mergedStatus === 'done',
     interventionLog: sameScenario ? state.interventionLog : [],
     interventionLifecycle: nextLifecycle,
+    actionReceipts: sameScenario ? state.actionReceipts : [],
+    // Snapshot is authority for domain world; null/missing → honest not_generated envelope.
+    domainWorld: normalizeDomainWorldProjection(scenario.domain_world),
     error: mergedStatus === 'error' ? (state.error ?? translate('simulation.runtime_failed')) : null,
     errorCode: mergedStatus === 'error' ? (state.errorCode ?? 'RUNTIME_ERROR') : null,
   };
@@ -332,6 +419,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       turnProgress: null,
       activeRoundProgress: null,
       isSimulationComplete: false,
+      actionReceipts: [],
+      domainWorld: null,
     });
     try {
       const scenario = await createScenario(options, requestOptions);
@@ -360,7 +449,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         activeRoundProgress: null,
         interventionLog: [],
         interventionLifecycle: new Map<string, InterventionLifecycleState>(),
-        isSimulationComplete: scenario.status === 'done',
+        isSimulationComplete: (normalizeActiveSimulationStatus(scenario.status) ?? scenario.status) === 'done',
+        actionReceipts: [],
+        domainWorld: normalizeDomainWorldProjection(scenario.domain_world),
       });
       rebuildSeenMessageKeys((scenario.messages || []) as AgentMessage[], scenario.id);
       return scenario.id;
@@ -461,28 +552,36 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       case 'heartbeat':
         break;
 
-      case 'status':
+      case 'status': {
+        const normalizedStatus = normalizeActiveSimulationStatus(event.data.status);
+        if (!normalizedStatus) {
+          break;
+        }
         set((state) => {
-          const mergedStatus = mergeScenarioStatus(
-            state.status,
-            event.data.status as ActiveSimulationStatus,
-          );
+          const mergedStatus = mergeScenarioStatus(state.status, normalizedStatus);
+          const isTerminal =
+            mergedStatus === 'done' || mergedStatus === 'error' || mergedStatus === 'cancelled';
           return {
             status: mergedStatus,
+            scenario: withScenarioStatus(state.scenario, mergedStatus),
             isSimulationComplete: mergedStatus === 'done',
-            simStartTime: event.data.status === 'simulating' && !state.simStartTime
+            simStartTime: normalizedStatus === 'simulating' && !state.simStartTime
               ? Date.now()
               : state.simStartTime,
             lastContentEventAt: Date.now(),
-            turnProgress: mergedStatus === 'done' || mergedStatus === 'error' || mergedStatus === 'cancelled'
-              ? null
-              : state.turnProgress,
-            activeRoundProgress: mergedStatus === 'done' || mergedStatus === 'error' || mergedStatus === 'cancelled'
-              ? null
-              : state.activeRoundProgress,
+            turnProgress: isTerminal ? null : state.turnProgress,
+            activeRoundProgress: isTerminal ? null : state.activeRoundProgress,
+            thinkingAgents: isTerminal ? [] : state.thinkingAgents,
+            error: mergedStatus === 'error'
+              ? (state.error ?? translate('simulation.runtime_failed'))
+              : (mergedStatus === 'done' || mergedStatus === 'cancelled' ? null : state.error),
+            errorCode: mergedStatus === 'error'
+              ? (state.errorCode ?? 'RUNTIME_ERROR')
+              : (mergedStatus === 'done' || mergedStatus === 'cancelled' ? null : state.errorCode),
           };
         });
         break;
+      }
 
       case 'agent_speak_start':
         // Agent begins thinking — show "thinking" indicator
@@ -823,6 +922,61 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       case 'kg:snapshot_invalidated':
         break;
 
+      case 'action_committed': {
+        const data = event.data;
+        if (!data?.action_id || typeof data.sequence !== 'number') {
+          break;
+        }
+        if (data.scenario_id && currentScenarioId && data.scenario_id !== currentScenarioId) {
+          break;
+        }
+        const receipt: ActionCommittedReceipt = {
+          scenario_id: data.scenario_id ?? currentScenarioId ?? '',
+          action_id: data.action_id,
+          sequence: data.sequence,
+          branch_id: data.branch_id,
+          round: data.round,
+          agent_id: data.agent_id,
+          message_id: data.message_id ?? null,
+          action_type: data.action_type,
+          status: data.status,
+          failure_code: data.failure_code ?? null,
+        };
+        set((state) => ({
+          lastContentEventAt: Date.now(),
+          actionReceipts: appendActionReceipt(state.actionReceipts, receipt),
+        }));
+        break;
+      }
+
+      case 'world_state_committed': {
+        const data = event.data;
+        if (!data?.branch_id || typeof data.round_number !== 'number') {
+          break;
+        }
+        if (data.scenario_id && currentScenarioId && data.scenario_id !== currentScenarioId) {
+          break;
+        }
+        // Domain commits must not advance message-authoritative currentRound.
+        set((state) => ({
+          lastContentEventAt: Date.now(),
+          domainWorld: applyWorldStateCommitted(state.domainWorld, {
+            version: data.version ?? 1,
+            scenario_id: data.scenario_id ?? currentScenarioId ?? '',
+            branch_id: data.branch_id,
+            round_number: data.round_number,
+            schema_hash: data.schema_hash ?? null,
+            state_revision: data.state_revision ?? null,
+            semantic_state_hash: data.semantic_state_hash ?? null,
+            values: Array.isArray(data.values) ? data.values.slice(0, 8) : [],
+            domain_state_deltas: Array.isArray(data.domain_state_deltas)
+              ? data.domain_state_deltas.slice(0, 8)
+              : [],
+          }),
+        }));
+        break;
+      }
+
       case 'simulation_done':
         // H4 fix: cancelled is terminal — late simulation_done must not regress it.
         set((state) => {
@@ -839,6 +993,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           }
           return {
             status: 'done',
+            scenario: withScenarioStatus(state.scenario, 'done'),
             isSimulationComplete: true,
             thinkingAgents: [],
             turnProgress: null,
@@ -851,6 +1006,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       case 'simulation_cancelled':
         set((state) => ({
           status: 'cancelled',
+          scenario: withScenarioStatus(state.scenario, 'cancelled'),
           cancelReason: event.reason ?? 'user_cancelled',
           isSimulationComplete: state.isSimulationComplete,
           thinkingAgents: [],
@@ -873,6 +1029,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           }
           return {
             status: 'error',
+            scenario: withScenarioStatus(state.scenario, 'error'),
             errorCode: getApiErrorCode(event.data.error),
             error: getLocalizedApiErrorMessage(
               event.data.error,
@@ -914,6 +1071,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       }
       return {
         status: 'cancelled',
+        scenario: withScenarioStatus(state.scenario, 'cancelled'),
         cancelReason: reason ?? 'user_cancelled',
         thinkingAgents: [],
         error: null,

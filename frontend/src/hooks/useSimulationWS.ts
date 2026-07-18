@@ -260,7 +260,36 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
 
       // 4001 = auth failure (permanent), 4404 = resource not found — do not reconnect
       const permanentClose = event.code === 4001 || event.code === 4404;
-      if (!cleanedUp.current && event.code !== 1000 && !permanentClose && reconnectCount.current < MAX_RECONNECTS) {
+      const unmounted = cleanedUp.current;
+
+      // Terminal-state safety net: if the socket drops while UI is still non-terminal
+      // (e.g. missed simulation_done / status frame, or clean proxy close), poll once
+      // so the page flips without a manual refresh. Skip unmount and permanent closes.
+      if (!unmounted && !permanentClose) {
+        const liveStatus = useSimulationStore.getState().status;
+        const isTerminal =
+          liveStatus === 'done' || liveStatus === 'error' || liveStatus === 'cancelled';
+        if (!isTerminal) {
+          logWsDebug('SimulationWS', 'resync_on_close', {
+            streamId: currentScenarioId,
+            code: event.code,
+            status: liveStatus,
+          });
+          void Promise.resolve()
+            .then(() => getScenario(currentScenarioId))
+            .then((scenario) => {
+              if (!scenario) return;
+              const state = useSimulationStore.getState();
+              if (state.activeScenarioId !== currentScenarioId && state.scenario?.id !== currentScenarioId) {
+                return;
+              }
+              state.setScenario(scenario);
+            })
+            .catch((error) => console.warn('[WS] Close status poll failed:', error));
+        }
+      }
+
+      if (!unmounted && event.code !== 1000 && !permanentClose && reconnectCount.current < MAX_RECONNECTS) {
         reconnectCount.current += 1;
         const delay = Math.min(
           BASE_RECONNECT_DELAY * Math.pow(2, reconnectCount.current - 1),

@@ -2,8 +2,10 @@
 
 import asyncio
 import base64
+import copy
 import hashlib
 import hmac
+import inspect
 import io
 import json
 import time
@@ -3786,6 +3788,51 @@ class TestReplayArtifactEndpoints:
         assert "run_group_id" in data
         assert data["run_group_id"] is None
 
+    def test_get_scenario_domain_world_is_always_shaped_for_legacy_data(self, client):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+
+        response = client.get(f"/api/scenario/{scenario_id}")
+
+        assert response.status_code == 200
+        assert response.json()["domain_world"] == {
+            "version": 1,
+            "status": "unavailable",
+            "failure_code": "DOMAIN_SCHEMA_UNAVAILABLE",
+            "reason_code": "not_generated",
+            "schema_hash": None,
+            "unit_registry_version": "unit_registry_v1",
+            "as_of_round": None,
+            "variables": [],
+            "branch_states": [],
+        }
+
+    def test_get_scenario_projects_active_domain_state_and_latest_delta(self, client):
+        from tests.test_action_ledger import _seed_domain_projection
+
+        seeded = _seed_domain_projection()
+
+        response = client.get(f"/api/scenario/{seeded['scenario_id']}")
+
+        assert response.status_code == 200
+        world = response.json()["domain_world"]
+        assert world["status"] == "active"
+        assert len(world["variables"]) == 1
+        branch = world["branch_states"][0]
+        assert branch["status"] == "active"
+        assert branch["values"] == [{"variable_id": "cash_balance", "value": "7"}]
+        delta = branch["latest_round_deltas"][0]
+        assert delta["source_action_ids"] == [seeded["action_id"]]
+        assert delta["source_action_count"] == 1
+        assert delta["source_action_ids_truncated"] is False
+        assert delta["sources"][0]["message_id"] == seeded["message_id"]
+
+    def test_runtime_lease_getter_adapter_reads_current_heartbeat_holder(self):
+        from app.api.helpers import run_sim_background
+
+        source = inspect.getsource(run_sim_background)
+
+        assert '"current_runtime_lease": lambda: lock_lease_holder[0]' in source
+
     def test_get_scenario_agents_include_persona_and_identity_id(self, client):
         """GET /api/scenario/{id} exposes scenario agent picker fields."""
         engine = get_engine()
@@ -4904,6 +4951,106 @@ class TestStoryEndpoint:
         assert good["story"] == "王国恢复和平"
         assert good["insight"] == "合作很重要"
 
+    def test_story_projects_world_outcomes_without_touching_full_report(self, client):
+        from tests.test_action_ledger import _seed_domain_projection
+        from tests.test_result_report_contract import _legal_full_report
+
+        seeded = _seed_domain_projection()
+        report = _legal_full_report()
+        report["target_branch_id"] = seeded["branch_id"]
+        report["evidence"][0].update(
+            {
+                "branch_id": seeded["branch_id"],
+                "round_id": seeded["round_id"],
+                "round_number": 1,
+                "agent_id": seeded["agent_id"],
+                "agent_name": "Treasurer",
+                "message_id": seeded["message_id"],
+                "quote": "Spend the approved amount.",
+            }
+        )
+        report["claims"] = [
+            {
+                "claim_id": "claim-budget",
+                "claim_text": "The approved spend reduced the balance.",
+                "claim_type": "assertion",
+                "speaker": "Treasurer",
+                "agent_id": seeded["agent_id"],
+                "message_ids": [seeded["message_id"]],
+                "action_ids": [seeded["action_id"]],
+                "branch_id": seeded["branch_id"],
+                "round_numbers": [1],
+                "exact_quote": "Spend the approved amount.",
+                "evidence_strength": "strong",
+                "temporal_coverage": ["early"],
+                "role_coverage": ["Operator"],
+                "confidence": "high",
+                "downgrade_reason": None,
+            }
+        ]
+        report_before = copy.deepcopy(report)
+        expected_full_report = scenarios_api.full_report_for_story(
+            report,
+            max_bytes=scenarios_api.settings.REPORT_FULL_REPORT_MAX_BYTES,
+        )
+        assert expected_full_report is not None
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, seeded["scenario_id"])
+            assert scenario is not None
+            context = dict(scenario.parsed_context or {})
+            context["full_report"] = report
+            scenario.parsed_context = context
+            session.add(scenario)
+            session.commit()
+
+        response = client.get(f"/api/scenario/{seeded['scenario_id']}/story")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["full_report"] == expected_full_report
+        assert report == report_before
+        world_outcomes = body["world_outcomes"]
+        assert world_outcomes["status"] == "available"
+        outcome = world_outcomes["branches"][0]["outcomes"][0]
+        assert outcome["summary"] == {
+            "en": "Cash balance changed from 10 to 7.",
+            "zh": "现金余额从 10 变为 7。",
+        }
+        assert outcome["related_claim_ids"] == ["claim-budget"]
+        assert outcome["related_claim_count"] == 1
+        assert outcome["related_claim_ids_truncated"] is False
+        assert {
+            "source_action_ids",
+            "source_action_count",
+            "source_action_ids_truncated",
+            "source_rule_ids",
+            "source_rule_count",
+            "source_rule_ids_truncated",
+            "related_claim_ids",
+            "related_claim_count",
+            "related_claim_ids_truncated",
+        }.issubset(outcome)
+
+    def test_story_legacy_world_outcomes_is_shaped_unavailable(self, client):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+        _seed_branch(
+            get_engine(),
+            scenario_id,
+            status=BranchStatus.COMPLETED,
+        )
+
+        response = client.get(f"/api/scenario/{scenario_id}/story")
+
+        assert response.status_code == 200
+        assert response.json()["world_outcomes"] == {
+            "version": 1,
+            "status": "unavailable",
+            "failure_code": "DOMAIN_SCHEMA_UNAVAILABLE",
+            "reason_code": "not_generated",
+            "schema_hash": None,
+            "branches": [],
+        }
+
     def test_get_story_labels_result_confidence_as_model_self_rating(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
@@ -5109,6 +5256,192 @@ class TestStoryEndpoint:
         assert child["parent_branch_id"] == root
         assert child["fork_round"] == 3
         assert child["fork_reason"] == "意见分歧"
+
+
+class TestDomainPublicProjectionEndpoints:
+    def test_actions_and_ledger_share_terminal_domain_receipt(self, client):
+        from tests.test_action_ledger import _seed_domain_projection
+
+        seeded = _seed_domain_projection()
+
+        actions_response = client.get(
+            f"/api/scenario/{seeded['scenario_id']}/actions",
+            params={"branch_id": seeded["branch_id"]},
+        )
+        ledger_response = client.get(
+            f"/api/scenario/{seeded['scenario_id']}/action-ledger",
+            params={"branch_id": seeded["branch_id"]},
+        )
+
+        assert actions_response.status_code == ledger_response.status_code == 200
+        action_item = actions_response.json()["items"][0]
+        assert action_item["message_id"] == seeded["message_id"]
+        receipt = action_item["domain_adjudications"][0]
+        ledger_item = ledger_response.json()["items"][0]
+        consequence = next(
+            item
+            for item in ledger_item["consequences"]
+            if item["type"] == "domain_adjudication"
+        )
+        assert receipt["status"] == consequence["status"] == "verified"
+        assert receipt["action_id"] == consequence["source_action_ids"][0]
+        assert receipt["message_id"] == consequence["source_message_ids"][0]
+        assert receipt["before"] == consequence["before"] == "10"
+        assert receipt["after"] == consequence["after"] == "7"
+
+    def test_complete_round_rebuild_failure_keeps_terminal_receipt_cardinality(
+        self,
+        client,
+    ):
+        from tests.test_action_ledger import _seed_domain_projection
+
+        seeded = _seed_domain_projection()
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, seeded["scenario_id"])
+            assert scenario is not None
+            context = copy.deepcopy(scenario.parsed_context or {})
+            round_payload = context["agent_runtime_v1"]["branches"][
+                seeded["branch_id"]
+            ]["rounds"]["1"]
+            round_payload["domain_adjudications"][0]["after"] = "999"
+            scenario.parsed_context = context
+            session.add(scenario)
+            session.commit()
+
+        actions_response = client.get(
+            f"/api/scenario/{seeded['scenario_id']}/actions",
+            params={"branch_id": seeded["branch_id"]},
+        )
+        ledger_response = client.get(
+            f"/api/scenario/{seeded['scenario_id']}/action-ledger",
+            params={"branch_id": seeded["branch_id"]},
+        )
+
+        assert actions_response.status_code == ledger_response.status_code == 200
+        receipts = actions_response.json()["items"][0]["domain_adjudications"]
+        consequences = [
+            item
+            for item in ledger_response.json()["items"][0]["consequences"]
+            if item["type"] == "domain_adjudication"
+        ]
+        assert len(receipts) == len(consequences) == 1
+        receipt = receipts[0]
+        consequence = consequences[0]
+        assert receipt["status"] == consequence["status"] == "unavailable"
+        assert (
+            receipt["failure_code"]
+            == consequence["failure_code"]
+            == "DOMAIN_BRANCH_SCOPE_INVALID"
+        )
+        assert receipt["before"] is receipt["after"] is receipt["applied_delta"] is None
+        assert consequence["before"] is consequence["after"] is None
+        assert consequence["applied_delta"] is None
+        assert consequence["source_action_ids"] == [receipt["action_id"]]
+        assert consequence["source_message_ids"] == [receipt["message_id"]]
+
+    def test_actions_project_ancestor_receipt_with_requested_child_cutoff(self, client):
+        from tests.test_action_ledger import _seed_domain_projection
+
+        seeded = _seed_domain_projection()
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, seeded["scenario_id"])
+            parent = session.get(Branch, seeded["branch_id"])
+            assert scenario is not None and parent is not None
+            parent_round_two = Round(branch_id=parent.id, round_number=2)
+            child = Branch(
+                scenario_id=scenario.id,
+                title="Child cutoff",
+                status=BranchStatus.COMPLETED,
+                parent_branch_id=parent.id,
+                fork_round=1,
+            )
+            session.add_all([parent_round_two, child])
+            session.flush()
+            session.add(Round(branch_id=child.id, round_number=2))
+
+            context = copy.deepcopy(scenario.parsed_context or {})
+            parent_rounds = context["agent_runtime_v1"]["branches"][parent.id][
+                "rounds"
+            ]
+            corrupted = copy.deepcopy(parent_rounds["1"])
+            corrupted["domain_finalization"].update(
+                {
+                    "round_id": parent_round_two.id,
+                    "round_number": 2,
+                    "action_count": 0,
+                }
+            )
+            corrupted.pop("domain_state_after", None)
+            parent_rounds["2"] = corrupted
+            scenario.parsed_context = context
+            session.add(scenario)
+            session.commit()
+            child_id = child.id
+
+        response = client.get(
+            f"/api/scenario/{seeded['scenario_id']}/actions",
+            params={"branch_id": child_id},
+        )
+
+        assert response.status_code == 200
+        item = next(
+            value
+            for value in response.json()["items"]
+            if value["id"] == seeded["action_id"]
+        )
+        assert len(item["domain_adjudications"]) == 1
+        receipt = item["domain_adjudications"][0]
+        assert receipt["status"] == "verified"
+        assert receipt["before"] == "10"
+        assert receipt["after"] == "7"
+
+    def test_compare_endpoint_preserves_domain_projection_from_compare_service(
+        self,
+        client,
+        monkeypatch,
+    ):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+        branch_a = _seed_branch(
+            get_engine(), scenario_id, status=BranchStatus.COMPLETED
+        )
+        branch_b = _seed_branch(
+            get_engine(), scenario_id, status=BranchStatus.COMPLETED
+        )
+        expected = {
+            "scenario_id": scenario_id,
+            "branch_a": branch_a,
+            "branch_b": branch_b,
+            "common_rounds": 0,
+            "total_rounds": 1,
+            "intervention": None,
+            "diffs": [
+                {
+                    "round": 1,
+                    "divergence_score": 0.5,
+                    "divergence_components": {"text": 0.0, "domain": 0.5},
+                    "is_identical": False,
+                    "state_transition_diff": {
+                        "branch_a": [],
+                        "branch_b": [],
+                        "is_identical": True,
+                        "domain_state_diff": {
+                            "status": "comparable",
+                            "rows": [{"variable_id": "cash_balance"}],
+                        },
+                    },
+                }
+            ],
+        }
+        monkeypatch.setattr(graphs_api.settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+        monkeypatch.setattr(graphs_api, "compare_branches", lambda *_args: expected)
+
+        response = client.get(
+            f"/api/scenario/{scenario_id}/compare",
+            params={"branch_a": branch_a, "branch_b": branch_b},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == expected
 
 
 # ── Agents Endpoint ──────────────────────────────────────
