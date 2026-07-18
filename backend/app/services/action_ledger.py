@@ -23,10 +23,14 @@ from app.services.agent_runtime import (
 )
 from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 from app.services.domain_world import (
+    MAX_DOMAIN_RULES,
+    MAX_RULE_PRECONDITIONS,
     UNIT_REGISTRY_VERSION,
     DomainVariableV1,
     DomainWorldConfigV1,
+    _predicate_holds,
     canonical_json_bytes_v1,
+    evaluate_domain_opportunities_v1,
     initial_domain_state_v1,
     reduce_domain_round_v1,
     semantic_state_hash_v1,
@@ -40,6 +44,7 @@ _SOURCE_ID_LIMIT = 32
 _DOMAIN_ACTION_REF_LIMIT = 32
 _DOMAIN_RULE_REF_LIMIT = 16
 _DOMAIN_CLAIM_REF_LIMIT = 16
+_DOMAIN_IDLE_REASON_LIMIT = 16
 _DOMAIN_REASON_CODES = frozenset(
     {
         "not_generated",
@@ -959,12 +964,18 @@ def _validated_complete_round_projection(
     if expected_state_after != dict(reduced.state_after):
         raise ValueError("DOMAIN_BRANCH_SCOPE_INVALID")
     return {
+        "branch_id": round_row.branch_id,
+        "round_id": round_row.id,
         "round_number": round_row.round_number,
+        "state_before": dict(state_before),
+        "state_revision_before": state_revision_before,
         "state": dict(reduced.state_after),
         "state_revision": reduced.state_revision,
         "semantic_state_hash": reduced.semantic_state_hash,
         "deltas": deltas,
         "receipts_by_action": projected,
+        "actions": tuple(actions),
+        "accepted_event_identities_before": accepted_event_identities,
         "accepted_event_identities": reduced.accepted_event_identities,
     }
 
@@ -1060,6 +1071,241 @@ def _domain_unavailable_envelope(config: DomainWorldConfigV1) -> dict[str, Any]:
     }
 
 
+def _unavailable_opportunity_thresholds(reason_code: str) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "status": "unavailable",
+        "reason_code": reason_code,
+        "as_of_round": None,
+        "schema_hash": None,
+        "input_state_revision": None,
+        "threshold_met_rule_ids": [],
+        "rule_count": 0,
+        "rules_truncated": False,
+        "rules": [],
+    }
+
+
+def _project_opportunity_thresholds_v1(
+    config: DomainWorldConfigV1,
+    evaluation: Mapping[str, Any],
+) -> dict[str, Any]:
+    if config.schema is None:
+        raise ValueError("DOMAIN_OPPORTUNITY_PROJECTION_INVALID")
+    rules_by_id = {rule.rule_id: rule for rule in config.schema.rules}
+    evaluated_rules = evaluation["rules"]
+    rules: list[dict[str, Any]] = []
+    for evaluated in evaluated_rules[:MAX_DOMAIN_RULES]:
+        rule = rules_by_id.get(evaluated["rule_id"])
+        predicates = evaluated["preconditions"]
+        if (
+            rule is None
+            or rule.opportunity_mode != "allow_when_preconditions_met"
+            or len(predicates) > MAX_RULE_PRECONDITIONS
+        ):
+            raise ValueError("DOMAIN_OPPORTUNITY_PROJECTION_INVALID")
+        rules.append(
+            {
+                "rule_id": evaluated["rule_id"],
+                "variable_id": evaluated["variable_id"],
+                "action_type": evaluated["action_type"],
+                "opportunity_mode": rule.opportunity_mode,
+                "epistemic_scope": rule.epistemic_scope,
+                "preconditions_met": evaluated["preconditions_met"],
+                "reason_code": (
+                    "OPPORTUNITY_DOMAIN_RULE_ALLOWED"
+                    if evaluated["preconditions_met"]
+                    else "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET"
+                ),
+                "preconditions": [dict(predicate) for predicate in predicates],
+            }
+        )
+    rule_count = len(evaluated_rules)
+    return {
+        "version": 1,
+        "status": "active",
+        "reason_code": None,
+        "as_of_round": evaluation["as_of_round"],
+        "schema_hash": evaluation["schema_hash"],
+        "input_state_revision": evaluation["input_state_revision"],
+        "threshold_met_rule_ids": sorted(
+            rule["rule_id"]
+            for rule in evaluated_rules
+            if rule["preconditions_met"] is True
+        ),
+        "rule_count": rule_count,
+        "rules_truncated": rule_count > len(rules),
+        "rules": rules,
+    }
+
+
+def _empty_latest_domain_idle_reasons() -> dict[str, Any]:
+    return {
+        "latest_domain_idle_reason_count": 0,
+        "latest_domain_idle_reasons_truncated": False,
+        "latest_domain_idle_reasons": [],
+    }
+
+
+def _blocked_domain_rule_ids_before_v1(
+    config: DomainWorldConfigV1,
+    projection: Mapping[str, Any],
+    latest_evaluation: Mapping[str, Any],
+) -> list[str] | None:
+    if (
+        config.schema is None
+        or latest_evaluation.get("schema_hash") != config.schema_hash
+        or latest_evaluation.get("input_state_revision") != projection["state_revision"]
+        or type(latest_evaluation.get("as_of_round")) is not int
+        or latest_evaluation.get("as_of_round") != projection["round_number"]
+    ):
+        return None
+    raw_evaluated_rules = latest_evaluation.get("rules")
+    if not isinstance(raw_evaluated_rules, tuple) or not all(
+        isinstance(rule, Mapping) for rule in raw_evaluated_rules
+    ):
+        return None
+    allow_rules = tuple(
+        rule
+        for rule in sorted(config.schema.rules, key=lambda item: item.rule_id)
+        if rule.opportunity_mode == "allow_when_preconditions_met"
+    )
+    if tuple(
+        rule.get("rule_id")
+        for rule in raw_evaluated_rules
+    ) != tuple(rule.rule_id for rule in allow_rules):
+        return None
+    variables = {
+        variable.variable_id: variable for variable in config.schema.variables
+    }
+    state_before = projection["state_before"]
+    blocked_rule_ids: list[str] = []
+    try:
+        for rule in allow_rules:
+            if all(
+                _predicate_holds(
+                    predicate,
+                    variables[predicate.variable_id],
+                    state_before,
+                )
+                for predicate in rule.preconditions
+            ):
+                return None
+            blocked_rule_ids.append(rule.rule_id)
+    except (InvalidOperation, KeyError, TypeError, ValueError):
+        return None
+    return blocked_rule_ids or None
+
+
+def _project_latest_domain_idle_reasons_v1(
+    config: DomainWorldConfigV1,
+    projection: Mapping[str, Any],
+    runtime_branches: Mapping[str, Any],
+    latest_evaluation: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _domain_round_payload(
+        runtime_branches,
+        branch_id=projection["branch_id"],
+        round_number=projection["round_number"],
+    )
+    raw_decisions = payload.get("decisions")
+    if not isinstance(raw_decisions, list) or not raw_decisions:
+        return _empty_latest_domain_idle_reasons()
+    seen_action_ids: set[str] = set()
+    duplicate_action_ids: set[str] = set()
+    for decision in raw_decisions:
+        action_id = decision.get("action_id") if isinstance(decision, Mapping) else None
+        if not isinstance(action_id, str):
+            continue
+        if action_id in seen_action_ids:
+            duplicate_action_ids.add(action_id)
+        seen_action_ids.add(action_id)
+    actions_by_id = {
+        action.id: action
+        for action in projection["actions"]
+        if isinstance(action, SimulationAction)
+    }
+    expected_as_of_round = max(0, int(projection["round_number"]) - 1)
+    expected_state_revision = projection["state_revision_before"]
+    eligible_actions: list[SimulationAction] = []
+    for decision in raw_decisions:
+        if (
+            not isinstance(decision, Mapping)
+            or decision.get("decision_status") != "verified"
+            or decision.get("selected_action") != "IDLE"
+            or decision.get("idle_reason_code") != "IDLE_CONSTRAINT_BLOCKED"
+            or decision.get("failure_code") is not None
+            or decision.get("branch_id") != projection["branch_id"]
+            or type(decision.get("round_number")) is not int
+            or decision.get("round_number") != projection["round_number"]
+        ):
+            continue
+        action_id = decision.get("action_id")
+        if not isinstance(action_id, str) or action_id in duplicate_action_ids:
+            continue
+        action = actions_by_id.get(action_id)
+        receipt = decision.get("opportunity_receipt")
+        if (
+            action is None
+            or _enum_value(action.status) != "verified"
+            or _enum_value(action.action_type) != "IDLE"
+            or action.failure_code is not None
+            or decision.get("agent_id") != action.agent_id
+            or decision.get("message_id") != action.message_id
+            or not isinstance(receipt, Mapping)
+            or type(receipt.get("version")) is not int
+            or receipt.get("version") != 1
+            or receipt.get("compatibility_mode") != "live"
+            or type(receipt.get("as_of_round")) is not int
+            or receipt.get("as_of_round") != expected_as_of_round
+            or receipt.get("domain_state_revision")
+            != expected_state_revision
+            or receipt.get("allowed_rule_ids") != []
+            or receipt.get("requested_action_type") != "IDLE"
+            or receipt.get("effective_action_type") != "IDLE"
+            or receipt.get("idle_reason_code") != "IDLE_CONSTRAINT_BLOCKED"
+            or receipt.get("failure_code") is not None
+        ):
+            continue
+        eligible_actions.append(action)
+    if not eligible_actions:
+        return _empty_latest_domain_idle_reasons()
+    blocked_rule_ids = _blocked_domain_rule_ids_before_v1(
+        config,
+        projection,
+        latest_evaluation,
+    )
+    if blocked_rule_ids is None:
+        return _empty_latest_domain_idle_reasons()
+    candidates = [
+        {
+            "round_number": action.round_number,
+            "agent_id": action.agent_id,
+            "message_id": action.message_id,
+            "action_id": action.id,
+            "idle_reason_code": "IDLE_CONSTRAINT_BLOCKED",
+            "input_state_revision": expected_state_revision,
+            "domain_reason_code": "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",
+            "blocked_rule_ids": blocked_rule_ids,
+        }
+        for action in eligible_actions
+    ]
+    candidates.sort(
+        key=lambda item: (
+            item["round_number"],
+            item["agent_id"],
+            item["message_id"],
+            item["action_id"],
+        )
+    )
+    count = len(candidates)
+    return {
+        "latest_domain_idle_reason_count": count,
+        "latest_domain_idle_reasons_truncated": count > _DOMAIN_IDLE_REASON_LIMIT,
+        "latest_domain_idle_reasons": candidates[:_DOMAIN_IDLE_REASON_LIMIT],
+    }
+
+
 def project_scenario_domain_world_v1(
     session: Session,
     *,
@@ -1072,6 +1318,7 @@ def project_scenario_domain_world_v1(
         return _domain_unavailable_envelope(config)
 
     branch_states: list[dict[str, Any]] = []
+    runtime_branches = _domain_runtime(scenario.parsed_context)
     for branch in branches:
         history, failure_code = _branch_domain_history(
             session,
@@ -1080,21 +1327,54 @@ def project_scenario_domain_world_v1(
             config=config,
         )
         if failure_code is not None or not history:
+            reason_code = "rebuild_failed" if failure_code else "round_incomplete"
             branch_states.append(
                 {
                     "branch_id": branch.id,
                     "status": "unavailable",
                     "failure_code": failure_code or "DOMAIN_ROUND_INCOMPLETE",
-                    "reason_code": "rebuild_failed" if failure_code else "round_incomplete",
+                    "reason_code": reason_code,
                     "as_of_round": None,
                     "state_revision": None,
                     "semantic_state_hash": None,
                     "values": [],
                     "latest_round_deltas": [],
+                    "opportunity_thresholds": (
+                        _unavailable_opportunity_thresholds(reason_code)
+                    ),
+                    **_empty_latest_domain_idle_reasons(),
                 }
             )
             continue
         latest = history[-1]
+        latest_evaluation: Mapping[str, Any] | None = None
+        try:
+            latest_evaluation = evaluate_domain_opportunities_v1(
+                config=config,
+                state=latest["state"],
+                input_state_revision=latest["state_revision"],
+                as_of_round=latest["round_number"],
+                accepted_event_identities=latest["accepted_event_identities"],
+            )
+            opportunity_thresholds = _project_opportunity_thresholds_v1(
+                config,
+                latest_evaluation,
+            )
+        except (KeyError, TypeError, ValueError):
+            opportunity_thresholds = _unavailable_opportunity_thresholds(
+                "rebuild_failed"
+            )
+        latest_domain_idle_reasons = (
+            _project_latest_domain_idle_reasons_v1(
+                config,
+                latest,
+                runtime_branches,
+                latest_evaluation,
+            )
+            if opportunity_thresholds["status"] == "active"
+            and latest_evaluation is not None
+            else _empty_latest_domain_idle_reasons()
+        )
         latest_deltas = []
         for delta in latest["deltas"][:8]:
             public_delta = {key: value for key, value in delta.items() if key != "_all_sources"}
@@ -1119,6 +1399,8 @@ def project_scenario_domain_world_v1(
                     for variable in config.schema.variables
                 ],
                 "latest_round_deltas": latest_deltas,
+                "opportunity_thresholds": opportunity_thresholds,
+                **latest_domain_idle_reasons,
             }
         )
     complete_rounds = [

@@ -2809,6 +2809,22 @@
         "no_actionable_rule": "The domain schema has no actionable non-IDLE rules.",
         "round_incomplete": "Domain state for this branch/round is not complete yet.",
         "rebuild_failed": "Domain state could not be rebuilt from the durable ledger."
+      },
+      "threshold": {
+        "unavailable_title": "Domain thresholds unavailable",
+        "chip_met": "Thresholds met ({{count}})",
+        "chip_blocked": "Thresholds blocked ({{count}})",
+        "dialog_title": "Domain thresholds",
+        "empty": "No permission-mode thresholds for this variable.",
+        "rule_meta": "{{action}} · {{status}}",
+        "met": "met",
+        "not_met": "not met",
+        "predicate_line": "{{variable}} actual {{actual}} {{comparator}} expected {{expected}} ({{met}})"
+      },
+      "idle": {
+        "region": "Domain-gated idle reasons",
+        "title": "Domain-gated idle (latest round)",
+        "item_line": "Round {{round}} · actor {{agent}} · blocked {{rules}}"
       }
     },
     "domain_compare": {

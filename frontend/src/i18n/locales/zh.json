@@ -2809,6 +2809,22 @@
         "no_actionable_rule": "域模式没有可执行的非 IDLE 规则。",
         "round_incomplete": "该分支/轮次的域状态尚未完整。",
         "rebuild_failed": "无法从持久化账本重建域状态。"
+      },
+      "threshold": {
+        "unavailable_title": "域阈值不可用",
+        "chip_met": "阈值已满足（{{count}}）",
+        "chip_blocked": "阈值未满足（{{count}}）",
+        "dialog_title": "域阈值",
+        "empty": "该变量没有许可模式阈值。",
+        "rule_meta": "{{action}} · {{status}}",
+        "met": "已满足",
+        "not_met": "未满足",
+        "predicate_line": "{{variable}} 实际 {{actual}} {{comparator}} 期望 {{expected}}（{{met}}）"
+      },
+      "idle": {
+        "region": "域门 IDLE 归因",
+        "title": "域门 IDLE（最近完整轮）",
+        "item_line": "第 {{round}} 轮 · 行动者 {{agent}} · 阻断 {{rules}}"
       }
     },
     "domain_compare": {

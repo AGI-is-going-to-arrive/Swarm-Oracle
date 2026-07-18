@@ -32,6 +32,8 @@ from app.models.simulation_action import (
 )
 from app.services.action_ledger import (
     _project_latest_delta,
+    _project_latest_domain_idle_reasons_v1,
+    _project_opportunity_thresholds_v1,
     _refs_with_metadata,
     _world_outcome_for_variable,
     build_action_ledger,
@@ -41,6 +43,7 @@ from app.services.action_ledger import (
 )
 from app.services.domain_world import (
     DomainActionInputV1,
+    evaluate_domain_opportunities_v1,
     freeze_domain_schema_v1,
     initial_domain_state_v1,
     reduce_domain_round_v1,
@@ -85,10 +88,112 @@ def _domain_schema_proposal() -> dict:
     }
 
 
+def _opportunity_schema_proposal() -> dict:
+    proposal = _domain_schema_proposal()
+
+    def allow_rule(
+        rule_id: str,
+        action_type: str,
+        preconditions: list[dict],
+    ) -> dict:
+        return {
+            "rule_id": rule_id,
+            "variable_id": "cash_balance",
+            "action_type": action_type,
+            "operation": "add_requested",
+            "unit": "count",
+            "constant_value": None,
+            "requested_minimum": "-10",
+            "requested_maximum": "10",
+            "preconditions": preconditions,
+            "opportunity_mode": "allow_when_preconditions_met",
+            "epistemic_scope": "scenario_assumption",
+        }
+
+    def predicate(comparator: str, value: str) -> dict:
+        return {
+            "variable_id": "cash_balance",
+            "comparator": comparator,
+            "value": value,
+            "unit": "count",
+        }
+    proposal["rules"].extend(
+        [
+            allow_rule(
+                "alpha_blocked",
+                "COMMENT",
+                [predicate("gte", "20"), predicate("gt", "0")],
+            ),
+            allow_rule("zeta_allowed", "POST", [predicate("lte", "7")]),
+        ]
+    )
+    return proposal
+
+
+def _domain_idle_receipt(revision: str) -> dict:
+    return {
+        "version": 1,
+        "as_of_round": 0,
+        "social_state_revision": f"sha256:{'1' * 64}",
+        "domain_state_revision": revision,
+        "allowed_rule_ids": [],
+        "requested_action_type": "IDLE",
+        "effective_action_type": "IDLE",
+        "available": True,
+        "grounded": True,
+        "reason_codes": ["IDLE_ALWAYS_AVAILABLE"],
+        "eligible_target_count": 0,
+        "selected_target_eligible": None,
+        "parameter_eligible": None,
+        "corpus_revision": None,
+        "query_fingerprint": None,
+        "search_history_complete": False,
+        "recent_query_fingerprints": [],
+        "current_trend_signature": None,
+        "last_trend_signature": None,
+        "idle_reason_code": "IDLE_CONSTRAINT_BLOCKED",
+        "failure_code": None,
+        "compatibility_mode": "live",
+    }
+
+
+def _domain_idle_decision(action: SimulationAction, revision: str) -> dict:
+    return {
+        "agent_id": action.agent_id,
+        "branch_id": action.branch_id,
+        "round_number": action.round_number,
+        "decision_status": "verified",
+        "selected_action": "IDLE",
+        "idle_reason": "Typed domain constraints are not met.",
+        "idle_reason_code": "IDLE_CONSTRAINT_BLOCKED",
+        "failure_code": None,
+        "message_id": action.message_id,
+        "action_id": action.id,
+        "opportunity_receipt": _domain_idle_receipt(revision),
+    }
+
+
+def _unavailable_thresholds(reason_code: str) -> dict:
+    return {
+        "version": 1,
+        "status": "unavailable",
+        "reason_code": reason_code,
+        "as_of_round": None,
+        "schema_hash": None,
+        "input_state_revision": None,
+        "threshold_met_rule_ids": [],
+        "rule_count": 0,
+        "rules_truncated": False,
+        "rules": [],
+    }
+
+
 def _seed_domain_projection(
     *,
     requested_value: str = "-3",
     durable_status: SimulationActionStatus = SimulationActionStatus.VERIFIED,
+    schema_proposal: dict | None = None,
+    action_type: str = "POST",
 ) -> dict[str, str]:
     from app.services.agent_runtime import finalize_domain_round_v1
     from app.services.runtime_lock import (
@@ -98,7 +203,7 @@ def _seed_domain_projection(
     )
     from app.services.simulation_actions import append_simulation_action
 
-    config = freeze_domain_schema_v1(_domain_schema_proposal())
+    config = freeze_domain_schema_v1(schema_proposal or _domain_schema_proposal())
     assert config.schema is not None and config.schema_hash is not None
     state_before = initial_domain_state_v1(config.schema)
     revision_before = state_revision_v1(
@@ -155,6 +260,13 @@ def _seed_domain_projection(
         )
         session.add(message)
         session.flush()
+        raw_action = {
+            "action_type": action_type,
+            "status": "verified",
+            "content": message.content if action_type != "IDLE" else None,
+        }
+        if action_type != "IDLE":
+            raw_action["payload"] = {"domain_world_v1": domain_group}
         action = append_simulation_action(
             session,
             scenario_id=scenario.id,
@@ -164,12 +276,7 @@ def _seed_domain_projection(
             agent_id=agent.id,
             message_id=message.id,
             idempotency_key=f"domain:{message.id}",
-            action={
-                "action_type": "POST",
-                "status": "verified",
-                "content": message.content,
-                "payload": {"domain_world_v1": domain_group},
-            },
+            action=raw_action,
         )
         if durable_status != SimulationActionStatus.VERIFIED:
             action.status = durable_status
@@ -183,6 +290,8 @@ def _seed_domain_projection(
             "agent_id": agent.id,
             "message_id": message.id,
             "action_id": action.id,
+            "schema_hash": config.schema_hash,
+            "state_revision_before": revision_before,
         }
 
     lease = acquire_runtime_lock(
@@ -213,6 +322,87 @@ def _seed_domain_projection(
         session.add_all([scenario, branch])
         session.commit()
     return seeded
+
+
+def _idle_projection_fixture(
+    count: int = 1,
+    *,
+    allow_rules: bool = True,
+    one_rule_true: bool = False,
+):
+    proposal = (
+        _opportunity_schema_proposal()
+        if allow_rules
+        else _domain_schema_proposal()
+    )
+    if one_rule_true:
+        proposal["rules"][2]["preconditions"][0]["value"] = "10"
+    config = freeze_domain_schema_v1(proposal)
+    assert config.schema is not None and config.schema_hash is not None
+    state = initial_domain_state_v1(config.schema)
+    revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=0,
+        state=state,
+        accepted_event_identities=(),
+    )
+    state_after = dict(state)
+    accepted_after: frozenset[tuple[str, str, str]] = frozenset()
+    revision_after = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=1,
+        state=state_after,
+        accepted_event_identities=accepted_after,
+    )
+    actions = tuple(
+        SimulationAction(
+            id=f"action-{index:02d}",
+            scenario_id="scenario",
+            branch_id="branch",
+            round_id="round",
+            round_number=1,
+            sequence=index + 1,
+            agent_id=f"agent-{count - index:02d}",
+            message_id=f"message-{index:02d}",
+            action_type=SimulationActionType.IDLE,
+            status=SimulationActionStatus.VERIFIED,
+            idempotency_key=f"idle:{index:02d}",
+        )
+        for index in range(count)
+    )
+    projection = {
+        "branch_id": "branch",
+        "round_number": 1,
+        "state_before": state,
+        "state_revision_before": revision,
+        "accepted_event_identities_before": frozenset(),
+        "state": state_after,
+        "state_revision": revision_after,
+        "accepted_event_identities": accepted_after,
+        "actions": actions,
+    }
+    runtime = {
+        "branch": {
+            "rounds": {
+                "1": {
+                    "decisions": [
+                        _domain_idle_decision(action, revision) for action in actions
+                    ]
+                }
+            }
+        }
+    }
+    return config, projection, runtime, actions
+
+
+def _evaluate_projection(config, projection):
+    return evaluate_domain_opportunities_v1(
+        config=config,
+        state=projection["state"],
+        input_state_revision=projection["state_revision"],
+        as_of_round=projection["round_number"],
+        accepted_event_identities=projection["accepted_event_identities"],
+    )
 
 
 def _seed_ledger() -> dict[str, str]:
@@ -957,13 +1147,348 @@ def test_domain_receipt_projection_is_shared_by_actions_and_ledger():
     assert item["consequences"][-1] == consequence
 
 
+def test_domain_threshold_projection_recomputes_latest_frozen_state(monkeypatch):
+    import app.services.action_ledger as action_ledger_module
+
+    seeded = _seed_domain_projection(schema_proposal=_opportunity_schema_proposal())
+    calls: list[dict] = []
+    original = action_ledger_module.evaluate_domain_opportunities_v1
+
+    def recording_evaluator(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        action_ledger_module,
+        "evaluate_domain_opportunities_v1",
+        recording_evaluator,
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        branch = session.get(Branch, seeded["branch_id"])
+        assert scenario is not None and branch is not None
+        world = project_scenario_domain_world_v1(
+            session,
+            scenario=scenario,
+            branches=[branch],
+        )
+
+    branch_state = world["branch_states"][0]
+    thresholds = branch_state["opportunity_thresholds"]
+    assert tuple(thresholds) == (
+        "version", "status", "reason_code", "as_of_round", "schema_hash",
+        "input_state_revision", "threshold_met_rule_ids", "rule_count",
+        "rules_truncated", "rules",
+    )
+    assert thresholds["threshold_met_rule_ids"] == ["zeta_allowed"]
+    assert thresholds["as_of_round"] == branch_state["as_of_round"] == 1
+    assert thresholds["schema_hash"] == world["schema_hash"]
+    assert thresholds["input_state_revision"] == branch_state["state_revision"]
+    assert thresholds["rule_count"] == 2
+    assert thresholds["rules_truncated"] is False
+    assert [rule["rule_id"] for rule in thresholds["rules"]] == [
+        "alpha_blocked", "zeta_allowed",
+    ]
+    alpha, zeta = thresholds["rules"]
+    assert tuple(alpha) == (
+        "rule_id", "variable_id", "action_type", "opportunity_mode",
+        "epistemic_scope", "preconditions_met", "reason_code", "preconditions",
+    )
+    assert tuple(alpha["preconditions"][0]) == (
+        "variable_id", "comparator", "expected_value", "actual_value", "unit", "met",
+    )
+    assert alpha["opportunity_mode"] == "allow_when_preconditions_met"
+    assert alpha["epistemic_scope"] == "scenario_assumption"
+    assert [
+        (item["expected_value"], item["actual_value"])
+        for item in alpha["preconditions"]
+    ] == [("20", "7"), ("0", "7")]
+    assert [item["met"] for item in alpha["preconditions"]] == [False, True]
+    assert alpha["reason_code"] == "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET"
+    assert zeta["reason_code"] == "OPPORTUNITY_DOMAIN_RULE_ALLOWED"
+    assert "spend_budget" not in json.dumps(thresholds)
+    assert "OPPORTUNITY_DOMAIN_SOCIAL_GATE_CLOSED" not in json.dumps(thresholds)
+    assert [(call["as_of_round"], call["state"]) for call in calls] == [
+        (1, {"cash_balance": "7"}),
+    ]
+    assert branch_state["latest_domain_idle_reason_count"] == 0
+    assert branch_state["latest_domain_idle_reasons_truncated"] is False
+    assert branch_state["latest_domain_idle_reasons"] == []
+
+
+def test_domain_threshold_projection_preserves_valid_frozen_caps():
+    proposal = _opportunity_schema_proposal()
+    template = proposal["rules"][1]
+    proposal["rules"] = [
+        {
+            **copy.deepcopy(template),
+            "rule_id": f"rule_{index:02d}",
+            "preconditions": copy.deepcopy(template["preconditions"] * 2),
+        }
+        for index in range(16)
+    ]
+    config = freeze_domain_schema_v1(proposal)
+    assert config.schema is not None and config.schema_hash is not None
+    state = initial_domain_state_v1(config.schema)
+    revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=1,
+        state=state,
+        accepted_event_identities=(),
+    )
+    projection = {
+        "round_number": 1,
+        "state": state,
+        "state_revision": revision,
+        "accepted_event_identities": frozenset(),
+    }
+    thresholds = _project_opportunity_thresholds_v1(
+        config,
+        _evaluate_projection(config, projection),
+    )
+    assert thresholds["rule_count"] == len(thresholds["rules"]) == 16
+    assert thresholds["rules_truncated"] is False
+    assert [rule["rule_id"] for rule in thresholds["rules"]] == [
+        f"rule_{index:02d}" for index in range(16)
+    ]
+    assert all(len(rule["preconditions"]) == 4 for rule in thresholds["rules"])
+
+
+def test_latest_domain_idle_reason_uses_latest_complete_durable_round(monkeypatch):
+    import app.services.action_ledger as action_ledger_module
+    from app.services.action_opportunities import derive_opportunity_snapshots_v1
+    from app.services.agent_runtime import persist_round_runtime
+    from app.services.social_world import reduce_social_world_state
+
+    seeded = _seed_domain_projection(
+        schema_proposal=_opportunity_schema_proposal(),
+        action_type="IDLE",
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        branch = session.get(Branch, seeded["branch_id"])
+        assert scenario is not None and branch is not None
+        config = validate_domain_world_config_v1(
+            scenario.parsed_context["domain_world_v1"]
+        )
+        assert config.schema is not None
+        social_state = reduce_social_world_state(
+            session,
+            scenario_id=scenario.id,
+            branch_id=branch.id,
+            cutoff_round=0,
+        )
+        evaluation = evaluate_domain_opportunities_v1(
+            config=config,
+            state=initial_domain_state_v1(config.schema),
+            input_state_revision=seeded["state_revision_before"],
+            as_of_round=0,
+            accepted_event_identities=(),
+        )
+        snapshots = derive_opportunity_snapshots_v1(
+            social_state=social_state,
+            target_catalogs_by_actor={
+                seeded["agent_id"]: {"actions": [], "agents": []}
+            },
+            prior_receipts_by_actor={seeded["agent_id"]: None},
+            domain_opportunities=evaluation,
+        )
+    runtime = persist_round_runtime(
+        get_engine(),
+        seeded["scenario_id"],
+        seeded["branch_id"],
+        1,
+        [{
+            "agent_id": seeded["agent_id"],
+            "message_id": seeded["message_id"],
+            "action_id": seeded["action_id"],
+            "decision_envelope": {
+                "candidate_actions": ["IDLE"],
+                "selected_action": "IDLE",
+                "action_parameters": {},
+                "idle_reason": "Typed domain constraints are not met.",
+                "idle_reason_code": "IDLE_CONSTRAINT_BLOCKED",
+            },
+        }],
+        opportunity_snapshots_by_actor=snapshots,
+        compatibility_mode="live",
+    )
+    persisted = runtime["branches"][seeded["branch_id"]]["rounds"]["1"][
+        "decisions"
+    ][0]
+    assert persisted["decision_status"] == "verified"
+    assert persisted["opportunity_receipt"]["domain_state_revision"] == seeded[
+        "state_revision_before"
+    ]
+    with Session(get_engine()) as session:
+        session.add(Round(branch_id=seeded["branch_id"], round_number=2))
+        session.commit()
+    calls: list[dict] = []
+    original = action_ledger_module.evaluate_domain_opportunities_v1
+
+    def recording_evaluator(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        action_ledger_module,
+        "evaluate_domain_opportunities_v1",
+        recording_evaluator,
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        branch = session.get(Branch, seeded["branch_id"])
+        assert scenario is not None and branch is not None
+        world = project_scenario_domain_world_v1(
+            session,
+            scenario=scenario,
+            branches=[branch],
+        )
+
+    branch_state = world["branch_states"][0]
+    assert branch_state["as_of_round"] == 1
+    assert [call["as_of_round"] for call in calls] == [1]
+    assert branch_state["latest_domain_idle_reason_count"] == 1
+    assert branch_state["latest_domain_idle_reasons_truncated"] is False
+    assert branch_state["latest_domain_idle_reasons"] == [
+        {
+            "round_number": 1,
+            "agent_id": seeded["agent_id"],
+            "message_id": seeded["message_id"],
+            "action_id": seeded["action_id"],
+            "idle_reason_code": "IDLE_CONSTRAINT_BLOCKED",
+            "input_state_revision": seeded["state_revision_before"],
+            "domain_reason_code": "OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET",
+            "blocked_rule_ids": ["alpha_blocked", "zeta_allowed"],
+        }
+    ]
+
+
+def test_latest_domain_idle_reasons_sort_and_retain_earliest_sixteen():
+    config, projection, runtime, actions = _idle_projection_fixture(17)
+    projected = _project_latest_domain_idle_reasons_v1(
+        config,
+        projection,
+        runtime,
+        _evaluate_projection(config, projection),
+    )
+    expected = sorted(actions, key=lambda action: (
+        action.round_number, action.agent_id, action.message_id, action.id
+    ))[:16]
+    assert projected["latest_domain_idle_reason_count"] == 17
+    assert projected["latest_domain_idle_reasons_truncated"] is True
+    assert [item["action_id"] for item in projected["latest_domain_idle_reasons"]] == [
+        action.id for action in expected
+    ]
+    assert tuple(projected["latest_domain_idle_reasons"][0]) == (
+        "round_number", "agent_id", "message_id", "action_id",
+        "idle_reason_code", "input_state_revision", "domain_reason_code",
+        "blocked_rule_ids",
+    )
+
+
+def test_domain_idle_reason_keeps_n_minus_one_truth_when_latest_state_changes():
+    config, projection, runtime, _ = _idle_projection_fixture()
+    accepted = frozenset({("spend_budget", "cash_balance", "cash-change")})
+    projection["state"] = {"cash_balance": "7"}
+    projection["accepted_event_identities"] = accepted
+    projection["state_revision"] = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=1,
+        state=projection["state"],
+        accepted_event_identities=accepted,
+    )
+    latest_evaluation = _evaluate_projection(config, projection)
+    assert [
+        rule["rule_id"]
+        for rule in latest_evaluation["rules"]
+        if rule["preconditions_met"]
+    ] == ["zeta_allowed"]
+
+    projected = _project_latest_domain_idle_reasons_v1(
+        config,
+        projection,
+        runtime,
+        latest_evaluation,
+    )
+
+    assert projected["latest_domain_idle_reason_count"] == 1
+    assert projected["latest_domain_idle_reasons"][0]["blocked_rule_ids"] == [
+        "alpha_blocked",
+        "zeta_allowed",
+    ]
+    assert projected["latest_domain_idle_reasons"][0][
+        "input_state_revision"
+    ] == projection["state_revision_before"]
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        "decision_unverified", "decision_not_idle", "action_unverified",
+        "action_not_idle", "fail_closed_idle", "revision_mismatch",
+        "no_allow_rules", "one_allow_rule_true", "prose_only",
+        "duplicate_decision", "boolean_round", "float_round",
+        "boolean_receipt_version",
+    ],
+)
+def test_latest_domain_idle_reason_qualifications_fail_closed(forgery: str):
+    config, projection, runtime, actions = _idle_projection_fixture(
+        allow_rules=forgery != "no_allow_rules",
+        one_rule_true=forgery == "one_allow_rule_true",
+    )
+    action = actions[0]
+    decision = runtime["branch"]["rounds"]["1"]["decisions"][0]
+    receipt = decision["opportunity_receipt"]
+    if forgery == "decision_unverified":
+        decision["decision_status"] = "unavailable"
+    elif forgery == "decision_not_idle":
+        decision["selected_action"] = "POST"
+    elif forgery == "action_unverified":
+        action.status = SimulationActionStatus.UNAVAILABLE
+    elif forgery == "action_not_idle":
+        action.action_type = SimulationActionType.POST
+    elif forgery == "fail_closed_idle":
+        decision["idle_reason_code"] = receipt["idle_reason_code"] = (
+            "IDLE_OPPORTUNITY_UNAVAILABLE"
+        )
+    elif forgery == "revision_mismatch":
+        receipt["domain_state_revision"] = f"sha256:{'f' * 64}"
+    elif forgery == "duplicate_decision":
+        runtime["branch"]["rounds"]["1"]["decisions"].append(
+            copy.deepcopy(decision)
+        )
+    elif forgery == "boolean_round":
+        decision["round_number"] = True
+    elif forgery == "float_round":
+        decision["round_number"] = 1.0
+    elif forgery == "boolean_receipt_version":
+        receipt["version"] = True
+    elif forgery == "prose_only":
+        decision["idle_reason"] = "IDLE_CONSTRAINT_BLOCKED"
+        decision["idle_reason_code"] = receipt["idle_reason_code"] = (
+            "IDLE_INSUFFICIENT_EVIDENCE"
+        )
+    assert _project_latest_domain_idle_reasons_v1(
+        config,
+        projection,
+        runtime,
+        _evaluate_projection(config, projection),
+    ) == {
+        "latest_domain_idle_reason_count": 0,
+        "latest_domain_idle_reasons_truncated": False,
+        "latest_domain_idle_reasons": [],
+    }
+
+
 def test_prefinalization_proposal_is_visible_only_as_action_chip():
     seeded = _seed_domain_projection()
     engine = get_engine()
     with Session(engine) as session:
         scenario = session.get(Scenario, seeded["scenario_id"])
+        branch = session.get(Branch, seeded["branch_id"])
         action = session.get(SimulationAction, seeded["action_id"])
-        assert scenario is not None and action is not None
+        assert scenario is not None and branch is not None and action is not None
         context = copy.deepcopy(scenario.parsed_context or {})
         context.pop("agent_runtime_v1", None)
         scenario.parsed_context = context
@@ -975,6 +1500,11 @@ def test_prefinalization_proposal_is_visible_only_as_action_chip():
             scenario=scenario,
             actions=[action],
         )[action.id]
+        world = project_scenario_domain_world_v1(
+            session,
+            scenario=scenario,
+            branches=[branch],
+        )
 
     ledger = build_action_ledger(seeded["scenario_id"], branch_id=seeded["branch_id"])
     item = next(row for row in ledger["items"] if row["action_id"] == seeded["action_id"])
@@ -983,6 +1513,12 @@ def test_prefinalization_proposal_is_visible_only_as_action_chip():
         consequence.get("type") != "domain_adjudication"
         for consequence in item["consequences"]
     )
+    branch_state = world["branch_states"][0]
+    thresholds = branch_state["opportunity_thresholds"]
+    assert thresholds == _unavailable_thresholds("round_incomplete")
+    assert branch_state["latest_domain_idle_reason_count"] == 0
+    assert branch_state["latest_domain_idle_reasons_truncated"] is False
+    assert branch_state["latest_domain_idle_reasons"] == []
 
 
 @pytest.mark.parametrize(
@@ -1096,6 +1632,9 @@ def test_domain_projectors_fail_closed_on_forged_runtime(forgery: str):
     assert receipts[0]["applied_delta"] is None
     assert world["branch_states"][0]["status"] == "unavailable"
     assert world["branch_states"][0]["failure_code"] == "DOMAIN_BRANCH_SCOPE_INVALID"
+    thresholds = world["branch_states"][0]["opportunity_thresholds"]
+    assert thresholds == _unavailable_thresholds("rebuild_failed")
+    assert world["branch_states"][0]["latest_domain_idle_reasons"] == []
 
 
 def test_coordinated_derived_runtime_forgery_is_reduced_fail_closed():

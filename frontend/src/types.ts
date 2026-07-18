@@ -864,6 +864,80 @@ export interface DomainVariableValue {
   value: DomainValueV1;
 }
 
+/** Stage 2 §8.1 — branch-level opportunity threshold tooltip projection. */
+export type DomainThresholdRuleReasonCode =
+  | 'OPPORTUNITY_DOMAIN_RULE_ALLOWED'
+  | 'OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET';
+
+export type DomainThresholdUnavailableReasonCode =
+  | 'round_incomplete'
+  | 'rebuild_failed';
+
+export interface DomainOpportunityThresholdPredicate {
+  variable_id: string;
+  comparator: string;
+  /**
+   * Wire value: numeric/enum as canonical string; boolean as JSON bool (never stringified).
+   * Never null after normalize.
+   */
+  expected_value: string | boolean;
+  actual_value: string | boolean;
+  unit: string;
+  met: boolean;
+}
+
+export interface DomainOpportunityThresholdRule {
+  rule_id: string;
+  variable_id: string;
+  action_type: string;
+  opportunity_mode: string;
+  epistemic_scope: string;
+  preconditions_met: boolean;
+  /** Branch-level only — never SOCIAL_GATE_CLOSED. */
+  reason_code: DomainThresholdRuleReasonCode;
+  preconditions: DomainOpportunityThresholdPredicate[];
+}
+
+/** Discriminated §8.1 envelope: active has non-null hashes; unavailable is shaped empty. */
+export type DomainOpportunityThresholds =
+  | {
+    version: 1;
+    status: 'active';
+    reason_code: null;
+    as_of_round: number | null;
+    schema_hash: string;
+    input_state_revision: string;
+    threshold_met_rule_ids: string[];
+    rule_count: number;
+    rules_truncated: boolean;
+    rules: DomainOpportunityThresholdRule[];
+  }
+  | {
+    version: 1;
+    status: 'unavailable';
+    reason_code: DomainThresholdUnavailableReasonCode;
+    as_of_round: null;
+    schema_hash: null;
+    input_state_revision: null;
+    threshold_met_rule_ids: string[];
+    rule_count: number;
+    rules_truncated: boolean;
+    rules: DomainOpportunityThresholdRule[];
+  };
+
+/** Stage 2 §8.2 — domain-gated IDLE attribution for the latest complete round. */
+export interface DomainIdleReasonItem {
+  round_number: number;
+  agent_id: string;
+  message_id: string;
+  action_id: string;
+  idle_reason_code: 'IDLE_CONSTRAINT_BLOCKED';
+  /** Non-empty revision string after normalize; null/missing entries are dropped. */
+  input_state_revision: string;
+  domain_reason_code: 'OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET';
+  blocked_rule_ids: string[];
+}
+
 export interface DomainBranchState {
   branch_id: string;
   status: 'active' | 'unavailable' | string;
@@ -874,6 +948,15 @@ export interface DomainBranchState {
   semantic_state_hash?: string | null;
   values: DomainVariableValue[];
   latest_round_deltas: DomainStateDelta[];
+  /**
+   * §8.1 — after `normalizeDomainBranchState` always present & non-null.
+   * Optional only on raw wire fixtures / partial constructors.
+   */
+  opportunity_thresholds?: DomainOpportunityThresholds;
+  /** §8.2 — after normalize always present; empty is explicit 0 / false / []. */
+  latest_domain_idle_reason_count?: number;
+  latest_domain_idle_reasons_truncated?: boolean;
+  latest_domain_idle_reasons?: DomainIdleReasonItem[];
 }
 
 export interface DomainWorldProjection {
