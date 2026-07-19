@@ -3713,7 +3713,7 @@ def test_domain_snapshot_export_rejects_noncanonical_historical_domain_json():
 
     with pytest.raises(
         SnapshotImportError,
-        match="domain action payload is invalid",
+        match="action payload_json is malformed JSON",
     ):
         _seed_domain_snapshot(
             with_runtime=False,
@@ -3828,6 +3828,50 @@ def test_snapshot_unknown_nested_payload_without_domain_round_trips_byte_exact()
     assert imported_action.payload_json == expected_payload_json
 
 
+def test_snapshot_unknown_extension_with_finite_numbers_round_trips_byte_exact():
+    from app.models.simulation_action import SimulationAction
+
+    raw_payload = (
+        '{ "extension": {"score": 0.5, "limits": [-1.25, 2e3, 1e400, -0], '
+        '"identifier": "api_key"} }'
+    )
+    blob, _domain_group, _config = _seed_domain_snapshot(
+        with_runtime=False,
+        stored_payload_json_override=raw_payload,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    assert exported_action["payload_json"] == raw_payload
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "float-extension-importer", session)
+        imported_action = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.scenario_id == imported_id
+            )
+        ).one()
+
+    assert imported_action.payload_json == raw_payload
+
+
+@pytest.mark.parametrize(
+    "raw_payload",
+    [
+        '{"extension":{"score":NaN}}',
+        '{"extension":{"score":Infinity}}',
+        '{"extension":{"score":-Infinity}}',
+    ],
+    ids=["nan", "positive-infinity", "negative-infinity"],
+)
+def test_snapshot_unknown_extension_rejects_nonfinite_numbers(raw_payload: str):
+    with pytest.raises(SnapshotImportError, match="payload_json is malformed JSON"):
+        _seed_domain_snapshot(
+            with_runtime=False,
+            stored_payload_json_override=raw_payload,
+        )
+
+
 def test_domain_snapshot_export_rejects_secret_in_outer_payload_without_rewrite():
     def add_secret(payload: dict[str, Any]) -> None:
         payload["api_key"] = "sk-abc123"
@@ -3850,10 +3894,50 @@ def test_domain_snapshot_export_recursively_rejects_nested_outer_secret():
         )
 
 
+@pytest.mark.parametrize(
+    "credential_payload",
+    [
+        {"metadata": {"api_key": "fixture-value"}},
+        {"metadata": {"password": "fixture passphrase 123"}},
+        {"metadata": {"authorization": "Basic Zml4dHVyZTpwYXNz"}},
+    ],
+    ids=["api-key-assignment", "password-assignment", "basic-auth-assignment"],
+)
+def test_import_rejects_structured_credentials_before_persistence(
+    credential_payload: dict[str, Any],
+):
+    blob, _domain_group, _config = _seed_domain_snapshot(with_runtime=False)
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        payloads = {name: zf.read(name) for name in manifest["files"]}
+    actions = [json.loads(line) for line in payloads["actions.jsonl"].splitlines()]
+    actions[0]["payload_json"] = json.dumps(
+        credential_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    payloads["actions.jsonl"] = json.dumps(
+        actions[0],
+        ensure_ascii=False,
+    ).encode("utf-8")
+    crafted = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        before = len(session.exec(select(Scenario)).all())
+        with pytest.raises(
+            SnapshotImportError,
+            match="actions payload is oversized or contains credentials",
+        ):
+            import_snapshot_zip(crafted, "structured-credential-importer", session)
+        after = len(session.exec(select(Scenario)).all())
+
+    assert after == before
+
+
 def test_domain_snapshot_export_rejects_duplicate_outer_keys_before_raw_passthrough():
     def add_hidden_duplicate(raw: str) -> str:
         assert raw.endswith("}")
-        return f'{raw[:-1]},"note":"sk-abc123","note":"x"}}'
+        return f'{raw[:-1]},"note":"x","note":"y"}}'
 
     with pytest.raises(SnapshotImportError, match="duplicate object keys"):
         _seed_domain_snapshot(
@@ -4002,6 +4086,37 @@ def test_invalid_domain_schema_imports_social_data_as_schema_invalid():
     assert "agent_runtime_v1" not in imported.parsed_context
 
 
+def test_import_rejects_active_domain_world_without_branches_before_persistence():
+    config = _snapshot_domain_config_fixture()
+    payloads = {
+        "scenario.json": json.dumps(
+            {
+                "question": "Active domain world requires a durable branch.",
+                "parsed_context": {"domain_world_v1": _domain_config_json(config)},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        "branches.jsonl": b"",
+        "agents.jsonl": b"",
+        "messages.jsonl": b"",
+        "actions.jsonl": b"",
+        "causal_graph.json": b'{"nodes":[],"edges":[]}',
+        "intervention_receipts.jsonl": b"",
+    }
+    crafted = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        before = len(session.exec(select(Scenario)).all())
+        with pytest.raises(
+            SnapshotImportError,
+            match="active domain world snapshot must contain at least one branch",
+        ):
+            import_snapshot_zip(crafted, "zero-branch-domain-importer", session)
+        after = len(session.exec(select(Scenario)).all())
+
+    assert after == before
+
+
 def test_import_validates_raw_domain_config_before_credential_redaction():
     from app.models.simulation_action import SimulationAction
 
@@ -4079,7 +4194,16 @@ def test_import_discards_all_top_level_derived_domain_fields_before_rebuild():
     assert rebuilt_round["domain_state_after"] == {"balance": "7"}
     assert rebuilt_round["domain_finalization"]["status"] == "complete"
     assert rebuilt_round["domain_adjudications"][0]["status"] == "verified"
-    assert "999" not in json.dumps(rebuilt_round, sort_keys=True)
+    for row in (
+        rebuilt_round["domain_finalization"],
+        *rebuilt_round["domain_adjudications"],
+        *rebuilt_round["domain_state_deltas"],
+    ):
+        assert "forged" not in row
+    assert all(
+        delta.get("after") != "999"
+        for delta in rebuilt_round["domain_state_deltas"]
+    )
 
 
 def test_invalid_domain_proposal_rolls_back_snapshot_atomically():
@@ -4267,6 +4391,92 @@ def test_counterfactual_snapshot_unknown_payload_round_trips_byte_exact_twice():
     assert second_imported_action.payload_json == raw_payload
 
 
+def test_counterfactual_snapshot_stripping_preserves_all_other_number_tokens():
+    from app.models.simulation_action import SimulationAction
+
+    raw_payload = (
+        '{ "precise": 0.123456789012345678901234567890, '
+        '"domain_world_v1": {"discarded": 7.654321098765432109876543210}, '
+        '"nested": {"numbers": [1e+003, -0, -0.0, 9.99e-400, 1e400] } }'
+    )
+    expected_payload = (
+        '{ "precise": 0.123456789012345678901234567890, '
+        '"nested": {"numbers": [1e+003, -0, -0.0, 9.99e-400, 1e400] } }'
+    )
+    scenario_id, _action_id = _seed_counterfactual_replacement_action(raw_payload)
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+    assert exported_action["payload_json"] == expected_payload
+
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, "counterfactual-number-importer", session)
+        imported_action = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.scenario_id == imported_id
+            )
+        ).one()
+    assert imported_action.payload_json == expected_payload
+
+
+@pytest.mark.parametrize(
+    "raw_payload, expected_payload",
+    [
+        (
+            '{"domain_world_v1":{"drop":1},"keep":{"value":1e2}}',
+            '{"keep":{"value":1e2}}',
+        ),
+        (
+            '{"keep":{"value":-0},"domain_world_v1":{"drop":1}}',
+            '{"keep":{"value":-0}}',
+        ),
+        (' { "domain_world_v1" : {"drop": 1} } ', ' { } '),
+    ],
+    ids=["first-member", "last-member", "only-member"],
+)
+def test_counterfactual_snapshot_strips_each_member_position_without_rewriting(
+    raw_payload: str,
+    expected_payload: str,
+):
+    scenario_id, _action_id = _seed_counterfactual_replacement_action(raw_payload)
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        exported_action = json.loads(zf.read("actions.jsonl").splitlines()[0])
+
+    assert exported_action["payload_json"] == expected_payload
+
+
+@pytest.mark.parametrize(
+    "raw_payload, error",
+    [
+        ('{"keep":NaN,"domain_world_v1":{}}', "malformed JSON"),
+        ('{"keep":Infinity,"domain_world_v1":{}}', "malformed JSON"),
+        ('{"keep":-Infinity,"domain_world_v1":{}}', "malformed JSON"),
+        (
+            '{"keep":{"nested":1,"nested":2},"domain_world_v1":{}}',
+            "duplicate object keys",
+        ),
+        (
+            '{"domain_world_v1":{},"domain_world_v1":{"again":true}}',
+            "duplicate object keys",
+        ),
+    ],
+    ids=["nan", "infinity", "negative-infinity", "nested-duplicate", "key-duplicate"],
+)
+def test_counterfactual_snapshot_rejects_invalid_json_before_stripping(
+    raw_payload: str,
+    error: str,
+):
+    scenario_id, _action_id = _seed_counterfactual_replacement_action(raw_payload)
+
+    with Session(get_engine()) as session, pytest.raises(SnapshotImportError, match=error):
+        export_snapshot_zip(scenario_id, session)
+
+
 @pytest.mark.parametrize(
     "raw_payload",
     [
@@ -4306,7 +4516,6 @@ def test_counterfactual_snapshot_empty_payload_remains_empty_object(payload_json
 def test_counterfactual_snapshot_strips_and_rejects_restored_domain_intent():
     from app.models.simulation_action import SimulationAction
     from app.services.domain_world import (
-        canonical_json_bytes_v1,
         initial_domain_state_v1,
         state_revision_v1,
     )
@@ -4403,7 +4612,7 @@ def test_counterfactual_snapshot_strips_and_rejects_restored_domain_intent():
     assert exported_action["target_type"] is None
     assert exported_action["target_id"] is None
     assert exported_action["content"] is None
-    expected_stripped_payload = canonical_json_bytes_v1(outer_extension).decode("utf-8")
+    expected_stripped_payload = json.dumps(outer_extension, ensure_ascii=False)
     assert exported_action["payload_json"] == expected_stripped_payload
 
     with Session(get_engine()) as session:

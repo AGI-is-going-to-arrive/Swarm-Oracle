@@ -6,13 +6,18 @@ import i18n from '../../i18n/config';
 import DomainWorldStrip from './DomainWorldStrip';
 import type { DomainWorldProjection } from '../../types';
 
+const SHA_A = `sha256:${'a'.repeat(64)}`;
+const SHA_B = `sha256:${'b'.repeat(64)}`;
+const SHA_C = `sha256:${'c'.repeat(64)}`;
+const SHA_D = `sha256:${'d'.repeat(64)}`;
+
 const thresholdsActive = {
   version: 1 as const,
   status: 'active' as const,
   reason_code: null,
   as_of_round: 3,
-  schema_hash: 'sha256:abc',
-  input_state_revision: 'sha256:rev',
+  schema_hash: SHA_A,
+  input_state_revision: SHA_B,
   threshold_met_rule_ids: ['publish_offer'],
   rule_count: 2,
   rules_truncated: false,
@@ -61,7 +66,10 @@ const thresholdsActive = {
 const active: DomainWorldProjection = {
   version: 1,
   status: 'active',
+  failure_code: null,
   reason_code: null,
+  schema_hash: SHA_A,
+  unit_registry_version: 'unit_registry_v1',
   as_of_round: 3,
   variables: [
     {
@@ -69,15 +77,24 @@ const active: DomainWorldProjection = {
       label_en: 'Monthly ad revenue',
       label_zh: '月广告收入',
       value_type: 'integer',
+      semantic_role: 'flow',
       unit: 'currency:CNY:minor',
       scale: 0,
+      minimum: '0',
+      maximum: '999999999999999999',
+      enum_values: [],
+      initial_value: '700000',
     },
   ],
   branch_states: [
     {
       branch_id: 'branch-a',
       status: 'active',
+      failure_code: null,
+      reason_code: null,
       as_of_round: 3,
+      state_revision: SHA_B,
+      semantic_state_hash: SHA_C,
       values: [{ variable_id: 'monthly_ad_revenue', value: '800000' }],
       latest_round_deltas: [
         {
@@ -87,37 +104,53 @@ const active: DomainWorldProjection = {
           before: '700000',
           after: '800000',
           applied_delta: '100000',
+          effect_code: null,
+          rule_ids: ['publish_offer'],
+          state_revision_before: SHA_D,
+          state_revision_after: SHA_B,
           source_action_ids: ['action-42', 'action-43', 'action-44', 'action-45'],
           source_action_count: 4,
-          source_action_ids_truncated: true,
+          source_action_ids_truncated: false,
           sources: [
             {
               agent_id: 'agent-1',
               agent_name: 'Operator',
+              message_id: 'message-3-1',
               action_id: 'action-42',
+              action_sequence: 42,
               rule_id: 'publish_offer',
               action_type: 'POST',
+              proposal_index: 0,
             },
             {
               agent_id: 'agent-2',
               agent_name: 'Analyst',
+              message_id: 'message-3-2',
               action_id: 'action-43',
+              action_sequence: 43,
               rule_id: 'publish_offer',
               action_type: 'COMMENT',
+              proposal_index: 0,
             },
             {
               agent_id: 'agent-3',
               agent_name: 'Critic',
+              message_id: 'message-3-3',
               action_id: 'action-44',
+              action_sequence: 44,
               rule_id: 'publish_offer',
               action_type: 'POST',
+              proposal_index: 0,
             },
             {
               agent_id: 'agent-4',
               agent_name: 'Extra',
+              message_id: 'message-3-4',
               action_id: 'action-45',
+              action_sequence: 45,
               rule_id: 'publish_offer',
               action_type: 'POST',
+              proposal_index: 0,
             },
           ],
         },
@@ -132,7 +165,7 @@ const active: DomainWorldProjection = {
           message_id: 'message-4-1',
           action_id: 'action-4-1',
           idle_reason_code: 'IDLE_CONSTRAINT_BLOCKED',
-          input_state_revision: 'sha256:n1',
+          input_state_revision: SHA_D,
           domain_reason_code: 'OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET',
           blocked_rule_ids: ['publish_offer', 'seek_supplier'],
         },
@@ -159,8 +192,13 @@ describe('DomainWorldStrip', () => {
     expect(screen.getByTestId('domain-world-strip')).toBeInTheDocument();
     expect(screen.getByText('Monthly ad revenue')).toBeVisible();
     expect(screen.getByText(/8000 CNY/)).toBeVisible();
+    expect(screen.getByText(/Δ 1000 CNY/)).toBeVisible();
+    expect(screen.getByTestId('domain-world-card-monthly_ad_revenue')).toHaveAccessibleName(
+      /8000 CNY, Δ 1000 CNY/,
+    );
     expect(screen.queryByText(/currency:CNY:minor/)).toBeNull();
     expect(screen.queryByText('800000')).toBeNull();
+    expect(screen.queryByText(/100000/)).toBeNull();
   });
 
   it('shows honest unavailable banner for null/missing projection', () => {
@@ -174,11 +212,15 @@ describe('DomainWorldStrip', () => {
   it('shows branch-level unavailable banner without inventing values', () => {
     const projection: DomainWorldProjection = {
       ...active,
+      as_of_round: null,
       branch_states: [
         {
           branch_id: 'branch-a',
           status: 'unavailable',
           reason_code: 'round_incomplete',
+          as_of_round: null,
+          state_revision: null,
+          semantic_state_hash: null,
           values: [],
           latest_round_deltas: [],
           opportunity_thresholds: {
@@ -204,6 +246,13 @@ describe('DomainWorldStrip', () => {
     expect(screen.getByText(/Domain state unavailable for this branch/i)).toBeVisible();
     expect(screen.getByText(/not complete yet/i)).toBeVisible();
     expect(screen.queryByTestId('domain-world-card-monthly_ad_revenue')).toBeNull();
+  });
+
+  it('does not substitute another branch when the requested branch is missing', () => {
+    renderStrip(<DomainWorldStrip domainWorld={active} branchId="branch-pending" />);
+    expect(screen.getByTestId('domain-world-branch-unavailable')).toBeVisible();
+    expect(screen.queryByTestId('domain-world-card-monthly_ad_revenue')).toBeNull();
+    expect(screen.queryByText(/8000 CNY/)).toBeNull();
   });
 
   it('opens provenance as a sibling dialog with truncation hint and Esc close', async () => {
@@ -237,6 +286,14 @@ describe('DomainWorldStrip', () => {
     expect(pred).not.toHaveTextContent(/minor/);
     expect(pred).not.toHaveTextContent(/800000/);
     expect(screen.queryByText(/SOCIAL_GATE_CLOSED/i)).toBeNull();
+  });
+
+  it('reports mixed met and blocked thresholds as separate counts', () => {
+    renderStrip(<DomainWorldStrip domainWorld={active} branchId="branch-a" />);
+    const chip = screen.getByTestId('domain-world-threshold-chip-monthly_ad_revenue');
+    expect(chip).toHaveTextContent('Thresholds met (1)');
+    expect(chip).toHaveTextContent('Thresholds blocked (1)');
+    expect(chip).not.toHaveTextContent('Thresholds blocked (2)');
   });
 
   it('renders zh threshold and idle copy after language switch', async () => {

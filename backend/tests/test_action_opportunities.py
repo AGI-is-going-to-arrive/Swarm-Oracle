@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import random
 import re
 from dataclasses import replace
 
@@ -704,3 +705,232 @@ def test_catalog_prose_mutation_is_byte_invariant_for_domain_derivation():
         "social_state", "target_catalogs_by_actor", "prior_receipts_by_actor",
         "domain_opportunities",
     }
+
+
+def test_equivalent_visibility_cache_preserves_per_actor_semantics_and_permutation():
+    post = _post(
+        "post-shared",
+        "author",
+        3,
+        reactions=(
+            _reaction("reaction-alpha", "post-shared", "alpha", 4, "LOVE"),
+            _reaction("reaction-beta", "post-shared", "beta", 5, "WOW"),
+        ),
+    )
+    state = _state(
+        (post, _post("post-other", "other", 7)),
+        recent_searches={
+            "beta": (SocialSearchReceipt("query", ("post-shared",), 8),),
+        },
+        refresh_receipts={
+            "alpha": (SocialRefreshReceipt(("post-shared",), 1, 9),),
+        },
+        last_seen={"alpha": 0, "beta": 7},
+    )
+    catalogs = {
+        "alpha": _catalog(("post-shared",), ("author", "other")),
+        "beta": _catalog(("post-shared",), ("other", "author")),
+    }
+    receipts = {"alpha": None, "beta": None}
+
+    combined = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor=catalogs,
+        prior_receipts_by_actor=receipts,
+    )
+    permuted = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor=dict(reversed(tuple(catalogs.items()))),
+        prior_receipts_by_actor=dict(reversed(tuple(receipts.items()))),
+    )
+
+    assert combined == permuted
+    for actor_id in catalogs:
+        isolated = derive_opportunity_snapshots_v1(
+            social_state=state,
+            target_catalogs_by_actor={actor_id: catalogs[actor_id]},
+            prior_receipts_by_actor={actor_id: receipts[actor_id]},
+        )
+        assert combined[actor_id] == isolated[actor_id]
+    assert "LOVE" not in combined["alpha"].actions["REACTION"][
+        "eligible_reaction_kinds_by_target"
+    ]["post-shared"]
+    assert "WOW" not in combined["beta"].actions["REACTION"][
+        "eligible_reaction_kinds_by_target"
+    ]["post-shared"]
+    assert combined["alpha"].actions["REFRESH"]["available"] is True
+    assert combined["beta"].actions["REFRESH"]["available"] is False
+    assert combined["alpha"].actions["SEARCH"]["available"] is True
+    assert combined["beta"].actions["SEARCH"]["available"] is False
+
+
+def test_global_visibility_transformations_run_once_per_equivalent_view(monkeypatch):
+    state = _state(
+        (_post("post-a", "a", 1), _post("post-b", "b", 2)),
+        following={"followed": frozenset({"a"})},
+        muted={"muted": frozenset({"b"})},
+    )
+    catalogs = {
+        actor_id: _catalog()
+        for actor_id in ("plain-a", "plain-b", "followed", "muted")
+    }
+    counts = {
+        "muted": 0,
+        "partition": 0,
+        "corpus": 0,
+        "trend": 0,
+        "contributors": 0,
+    }
+
+    def counted(name, original):
+        def wrapper(*args, **kwargs):
+            counts[name] += 1
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    for name, helper_name in (
+        ("muted", "_muted_visibility_projection"),
+        ("partition", "_stable_followed_partition"),
+        ("corpus", "_corpus_revision"),
+        ("trend", "_trend_state"),
+        ("contributors", "_presented_contributors"),
+    ):
+        monkeypatch.setattr(
+            action_opportunities,
+            helper_name,
+            counted(name, getattr(action_opportunities, helper_name)),
+        )
+
+    snapshots = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor=catalogs,
+        prior_receipts_by_actor=dict.fromkeys(catalogs),
+    )
+
+    assert set(snapshots) == set(catalogs)
+    assert counts == {
+        "muted": 2,
+        "partition": 3,
+        "corpus": 3,
+        "trend": 2,
+        "contributors": 3,
+    }
+
+
+def test_muted_cache_and_follow_partition_match_randomized_legacy_oracle():
+    rng = random.Random(0x5A17)
+    authors = ("a", "b", "c", "Ω", "作者")
+    for case in range(80):
+        posts = []
+        for index in range(rng.randrange(0, 25)):
+            author = rng.choice(authors)
+            sequence = rng.randrange(0, 65)
+            commenters = tuple(rng.sample(authors, rng.randrange(0, 3)))
+            comments = tuple(
+                _comment(
+                    f"comment-{case}-{index}-{offset}",
+                    f"post-{case}-{index}",
+                    commenter,
+                    rng.randrange(0, 65),
+                    content=f"回复-{offset}-```json",
+                )
+                for offset, commenter in enumerate(commenters)
+            )
+            events = tuple(
+                (rng.randrange(0, 65), rng.choice(authors))
+                for _ in range(rng.randrange(1, 8))
+            )
+            posts.append(
+                _post(
+                    f"post-{case}-{index}",
+                    author,
+                    sequence,
+                    content=f"内容-{case}-{index}-🌐",
+                    comments=comments,
+                    activity_events=events,
+                )
+            )
+        muted = frozenset(author for author in authors if rng.randrange(2))
+        following = frozenset(author for author in authors if rng.randrange(2))
+        state = _state(
+            tuple(posts),
+            following={"viewer": following},
+            muted={"viewer": muted},
+        )
+
+        legacy_visible = action_opportunities._visible_posts(state, "viewer")
+        muted_projection = action_opportunities._muted_visibility_projection(state, muted)
+        optimized_visible = list(
+            action_opportunities._stable_followed_partition(
+                muted_projection.base_posts,
+                following,
+            )
+        )
+
+        assert optimized_visible == legacy_visible
+        assert muted_projection.trend_state == action_opportunities._trend_state(
+            state,
+            "viewer",
+            legacy_visible,
+        )
+        assert action_opportunities._corpus_revision(
+            state,
+            "viewer",
+            optimized_visible,
+            muted_projection=muted_projection,
+        ) == action_opportunities._corpus_revision(state, "viewer", legacy_visible)
+
+
+def test_shared_muted_129_posts_65_unique_following_views_reuse_expensive_work(
+    monkeypatch,
+):
+    posts = tuple(
+        _post(
+            f"post-{index:03d}",
+            f"author-{index:03d}",
+            index,
+            activity_events=(
+                (index, f"author-{index:03d}"),
+                (128 + index, f"contributor-{index:03d}"),
+            ),
+        )
+        for index in range(129)
+    )
+    actor_ids = tuple(f"viewer-{index:03d}" for index in range(65))
+    state = _state(
+        posts,
+        following={
+            actor_id: frozenset(f"author-{post_index:03d}" for post_index in range(index))
+            for index, actor_id in enumerate(actor_ids)
+        },
+    )
+    counts = {"muted": 0, "partition": 0, "trend": 0, "corpus": 0}
+
+    def counted(name, original):
+        def wrapper(*args, **kwargs):
+            counts[name] += 1
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    for name, helper_name in (
+        ("muted", "_muted_visibility_projection"),
+        ("partition", "_stable_followed_partition"),
+        ("trend", "_trend_state"),
+        ("corpus", "_corpus_revision"),
+    ):
+        monkeypatch.setattr(
+            action_opportunities,
+            helper_name,
+            counted(name, getattr(action_opportunities, helper_name)),
+        )
+
+    snapshots = derive_opportunity_snapshots_v1(
+        social_state=state,
+        target_catalogs_by_actor={actor_id: _catalog() for actor_id in actor_ids},
+        prior_receipts_by_actor=dict.fromkeys(actor_ids),
+    )
+
+    assert len(snapshots) == 65
+    assert counts == {"muted": 1, "partition": 65, "trend": 1, "corpus": 65}

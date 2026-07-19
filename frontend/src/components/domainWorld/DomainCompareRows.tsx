@@ -2,8 +2,10 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   domainVariableLabel,
-  formatDomainValue,
+  formatDomainScalarValue,
+  localizeDomainUnit,
   maxDivergenceScore,
+  normalizeDomainStateDiff,
 } from '../../lib/domainWorld';
 import type { DomainStateDiff, DivergenceComponents } from '../../types';
 import './DomainCompareRows.css';
@@ -22,10 +24,14 @@ export function DomainCompareRows({
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
-  const status = domainStateDiff?.status ?? 'not_applicable';
-  const rows = useMemo(
-    () => (Array.isArray(domainStateDiff?.rows) ? domainStateDiff!.rows.slice(0, 8) : []),
+  const normalizedDiff = useMemo(
+    () => (domainStateDiff ? normalizeDomainStateDiff(domainStateDiff) : null),
     [domainStateDiff],
+  );
+  const status = normalizedDiff?.status ?? 'not_applicable';
+  const rows = useMemo(
+    () => normalizedDiff?.rows ?? [],
+    [normalizedDiff],
   );
 
   const displayScore = useMemo(() => {
@@ -73,12 +79,12 @@ export function DomainCompareRows({
           {status === 'schema_mismatch'
             ? t('domain_compare.schema_mismatch')
             : t('domain_compare.unavailable')}
-          {(domainStateDiff?.branch_a_failure_code || domainStateDiff?.branch_b_failure_code) && (
+          {(normalizedDiff?.branch_a_failure_code || normalizedDiff?.branch_b_failure_code) && (
             <span>
               {' '}
               {t('domain_compare.side_codes', {
-                a: domainStateDiff?.branch_a_failure_code ?? '—',
-                b: domainStateDiff?.branch_b_failure_code ?? '—',
+                a: normalizedDiff?.branch_a_failure_code ?? '—',
+                b: normalizedDiff?.branch_b_failure_code ?? '—',
               })}
             </span>
           )}
@@ -114,6 +120,7 @@ export function DomainCompareRows({
             <tbody>
               {rows.map((row) => {
                 const label = domainVariableLabel(row, isZh);
+                const unit = localizeDomainUnit(row.unit, isZh);
                 const aUnavailable = row.branch_a.status !== 'available';
                 const bUnavailable = row.branch_b.status !== 'available';
                 return (
@@ -123,7 +130,7 @@ export function DomainCompareRows({
                     className={row.is_different ? 'domain-compare-rows__diff' : undefined}
                   >
                     <th scope="row">{label}</th>
-                    <td>{row.unit}</td>
+                    <td>{unit || '—'}</td>
                     <td>
                       {aUnavailable
                         ? (
@@ -134,7 +141,12 @@ export function DomainCompareRows({
                               </span>
                             </>
                           )
-                        : formatDomainValue(row.branch_a.value)}
+                        : formatDomainScalarValue(
+                            row.branch_a.value,
+                            row.unit,
+                            row.scale,
+                            isZh,
+                          )}
                     </td>
                     <td>
                       {bUnavailable
@@ -146,12 +158,22 @@ export function DomainCompareRows({
                               </span>
                             </>
                           )
-                        : formatDomainValue(row.branch_b.value)}
+                        : formatDomainScalarValue(
+                            row.branch_b.value,
+                            row.unit,
+                            row.scale,
+                            isZh,
+                          )}
                     </td>
                     <td>
                       {row.delta == null
                         ? t('domain_compare.delta_na')
-                        : row.delta}
+                        : formatDomainScalarValue(
+                            row.delta,
+                            row.unit,
+                            row.scale,
+                            isZh,
+                          )}
                     </td>
                     <td>
                       {row.first_difference

@@ -74,9 +74,13 @@ export function DomainWorldStrip({
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const topUnavailable = projection.status === 'unavailable';
-  const branchUnavailable = !topUnavailable && branchState?.status === 'unavailable';
+  const branchMissing = !topUnavailable && Boolean(branchId) && branchState === null;
+  const branchUnavailable = !topUnavailable
+    && (branchMissing || branchState?.status === 'unavailable');
   const topReasonKey = domainReasonI18nKey(projection.reason_code);
-  const branchReasonKey = domainReasonI18nKey(branchState?.reason_code);
+  const branchReasonKey = domainReasonI18nKey(
+    branchMissing ? 'round_incomplete' : branchState?.reason_code,
+  );
   const thresholdUnavailable = thresholds?.status === 'unavailable';
   const thresholdReasonKey = domainReasonI18nKey(thresholds?.reason_code);
 
@@ -230,10 +234,25 @@ export function DomainWorldStrip({
             );
             const unitLabel = localizeDomainUnit(card.unit, isZh);
             const delta = card.delta?.applied_delta ?? null;
+            const deltaText = formatDomainUnitValue(
+              delta,
+              card.unit,
+              card.variable.scale ?? 0,
+              isZh,
+            );
             const direction = deltaDirection(delta);
             const variableRules = thresholdsForVariable(thresholds, card.variable.variable_id);
             const hasThresholds = thresholds?.status === 'active' && variableRules.length > 0;
-            const allMet = hasThresholds && variableRules.every((rule) => rule.preconditions_met);
+            const metCount = variableRules.filter((rule) => rule.preconditions_met).length;
+            const blockedCount = variableRules.length - metCount;
+            const thresholdSummary = metCount > 0 && blockedCount > 0
+              ? [
+                  t('domain_world.threshold.chip_met', { count: metCount }),
+                  t('domain_world.threshold.chip_blocked', { count: blockedCount }),
+                ].join(' · ')
+              : metCount > 0
+                ? t('domain_world.threshold.chip_met', { count: metCount })
+                : t('domain_world.threshold.chip_blocked', { count: blockedCount });
             const provenanceOpen = openPanel?.kind === 'provenance'
               && openPanel.variableId === card.variable.variable_id;
             const thresholdOpen = openPanel?.kind === 'threshold'
@@ -243,7 +262,9 @@ export function DomainWorldStrip({
             const name = [
               label,
               valueText || t('domain_world.value_unknown'),
-              delta ? t('domain_world.delta_value', { delta }) : t('domain_world.delta_none'),
+              deltaText
+                ? t('domain_world.delta_value', { delta: deltaText })
+                : t('domain_world.delta_none'),
             ].join(', ');
             return (
               <li key={card.variable.variable_id} className="domain-world-strip__card-item">
@@ -274,8 +295,8 @@ export function DomainWorldStrip({
                     <span className="domain-world-strip__unit">{unitLabel}</span>
                   )}
                   <span className={`domain-world-strip__delta domain-world-strip__delta--${direction}`}>
-                    {delta
-                      ? t('domain_world.delta_value', { delta })
+                    {deltaText
+                      ? t('domain_world.delta_value', { delta: deltaText })
                       : t('domain_world.delta_none')}
                   </span>
                 </button>
@@ -289,7 +310,7 @@ export function DomainWorldStrip({
                     }}
                     className={[
                       'domain-world-strip__threshold-chip',
-                      allMet
+                      blockedCount === 0
                         ? 'domain-world-strip__threshold-chip--met'
                         : 'domain-world-strip__threshold-chip--blocked',
                     ].join(' ')}
@@ -306,9 +327,7 @@ export function DomainWorldStrip({
                       { kind: 'threshold', variableId: card.variable.variable_id },
                     )}
                   >
-                    {allMet
-                      ? t('domain_world.threshold.chip_met', { count: variableRules.length })
-                      : t('domain_world.threshold.chip_blocked', { count: variableRules.length })}
+                    {thresholdSummary}
                   </button>
                 )}
               </li>

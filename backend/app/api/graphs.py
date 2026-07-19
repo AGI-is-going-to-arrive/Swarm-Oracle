@@ -703,21 +703,21 @@ async def get_action_ledger(
     )
 
 
-@router.get("/scenario/{scenario_id}/actions")
-async def get_simulation_actions(
+def _get_simulation_actions_page_sync(
     scenario_id: str,
-    branch_id: Optional[str] = Query(default=None),
-    agent_id: Optional[str] = Query(default=None),
-    action_type: Optional[SimulationActionType] = Query(default=None),
-    round: Optional[int] = Query(default=None, ge=1),
-    status: Optional[SimulationActionStatus] = Query(default=None),
-    cursor: Optional[str] = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=100),
-    principal: SessionPrincipal | None = Depends(require_session_principal),
-):
-    """Return owner-only durable actions using stable keyset pagination."""
+    *,
+    branch_id: str | None,
+    agent_id: str | None,
+    action_type: SimulationActionType | None,
+    round_number: int | None,
+    status: SimulationActionStatus | None,
+    cursor: str | None,
+    limit: int,
+    principal: SessionPrincipal | None,
+) -> dict[str, object]:
+    """Run the bounded actions page query and projection outside the event loop."""
     with Session(get_engine()) as session:
-        require_owned_scenario(session, scenario_id, principal)
+        scenario = require_owned_scenario(session, scenario_id, principal)
         statement = (
             select(SimulationAction, Agent)
             .join(Agent, SimulationAction.agent_id == Agent.id)
@@ -750,8 +750,8 @@ async def get_simulation_actions(
             statement = statement.where(SimulationAction.agent_id == agent_id)
         if action_type is not None:
             statement = statement.where(SimulationAction.action_type == action_type)
-        if round is not None:
-            statement = statement.where(SimulationAction.round_number == round)
+        if round_number is not None:
+            statement = statement.where(SimulationAction.round_number == round_number)
         if status is not None:
             statement = statement.where(SimulationAction.status == status)
         if cursor:
@@ -774,17 +774,12 @@ async def get_simulation_actions(
         )
         has_more = len(rows) > limit
         page = rows[:limit]
-        scenario = session.get(Scenario, scenario_id)
-        domain_receipts = (
-            project_domain_adjudications_v1(
-                session,
-                scenario=scenario,
-                actions=[action for action, _agent in page],
-                scope_branch_id=branch_id,
-                scope_as_of_round=round,
-            )
-            if scenario is not None
-            else {}
+        domain_receipts = project_domain_adjudications_v1(
+            session,
+            scenario=scenario,
+            actions=[action for action, _agent in page],
+            scope_branch_id=branch_id,
+            scope_as_of_round=round_number,
         )
         items = []
         for action, agent in page:
@@ -799,6 +794,33 @@ async def get_simulation_actions(
             "next_cursor": next_cursor,
             "has_more": has_more,
         }
+
+
+@router.get("/scenario/{scenario_id}/actions")
+async def get_simulation_actions(
+    scenario_id: str,
+    branch_id: Optional[str] = Query(default=None),
+    agent_id: Optional[str] = Query(default=None),
+    action_type: Optional[SimulationActionType] = Query(default=None),
+    round: Optional[int] = Query(default=None, ge=1),
+    status: Optional[SimulationActionStatus] = Query(default=None),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return owner-only durable actions using stable keyset pagination."""
+    return await asyncio.to_thread(
+        _get_simulation_actions_page_sync,
+        scenario_id,
+        branch_id=branch_id,
+        agent_id=agent_id,
+        action_type=action_type,
+        round_number=round,
+        status=status,
+        cursor=cursor,
+        limit=limit,
+        principal=principal,
+    )
 
 
 @router.get("/scenario/{scenario_id}/graph-analysis")

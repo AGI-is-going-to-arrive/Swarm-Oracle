@@ -81,6 +81,10 @@ MEMORY_PROMOTION_PURGE_MAX_DOCUMENT_PAGES_V1 = 256
 MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1 = 4096
 MEMORY_PROMOTION_PURGE_MAX_DELETE_BATCHES_V1 = 64
 MEMORY_PROMOTION_PURGE_MAX_CLIENT_CALLS_V1 = 1280
+MEMORY_PROMOTION_RECALL_INITIAL_CANDIDATES_V1 = 4
+MEMORY_PROMOTION_RECALL_MAX_CANDIDATES_V1 = 4096
+MEMORY_PROMOTION_RECALL_MAX_CLIENT_CALLS_V1 = 32
+MEMORY_PROMOTION_RECALL_MAX_SELECTED_TREES_V1 = 3
 
 _MEMORY_PROMOTION_COLLECTION_CONTRACT_V1 = "identity_promotion_collection_v1"
 _MEMORY_PROMOTION_VERSION_V1 = "v1"
@@ -3744,6 +3748,8 @@ def _materialization_from_physical_v1(
 
 def _physical_query_rows_v1(
     result: object,
+    *,
+    max_rows: int,
 ) -> list[tuple[_MemoryPromotionMaterializationV1, float]]:
     if not isinstance(result, Mapping):
         raise _MemoryPromotionStoreConflictV1
@@ -3763,7 +3769,9 @@ def _physical_query_rows_v1(
     if (
         not all(isinstance(value, list) for value in (ids, documents, metadatas, distances))
         or not len(ids) == len(documents) == len(metadatas) == len(distances)
-        or len(ids) > MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1
+        or len(ids) > max_rows
+        or any(type(document_id) is not str or not document_id for document_id in ids)
+        or len(set(ids)) != len(ids)
     ):
         raise _MemoryPromotionStoreConflictV1
     rows: list[tuple[_MemoryPromotionMaterializationV1, float]] = []
@@ -3781,18 +3789,29 @@ def _physical_query_rows_v1(
     return rows
 
 
-def _physical_candidate_ids_v1(result: object) -> list[str]:
-    if not isinstance(result, Mapping):
-        raise _MemoryPromotionStoreConflictV1
-    document_ids = result.get("ids")
-    if (
-        not isinstance(document_ids, list)
-        or len(document_ids) > MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1
-        or any(type(document_id) is not str or not document_id for document_id in document_ids)
-        or len(set(document_ids)) != len(document_ids)
-    ):
-        raise _MemoryPromotionStoreConflictV1
-    return document_ids
+@dataclass(slots=True)
+class _MemoryPromotionRecallBudgetV1:
+    client_calls: int = 0
+    candidate_queries: int = 0
+    selected_trees: int = 0
+
+
+class _MemoryPromotionRecallCapReachedV1(RuntimeError):
+    pass
+
+
+def _recall_require_client_call_v1(budget: _MemoryPromotionRecallBudgetV1) -> None:
+    if budget.client_calls >= MEMORY_PROMOTION_RECALL_MAX_CLIENT_CALLS_V1:
+        raise _MemoryPromotionRecallCapReachedV1
+    budget.client_calls += 1
+
+
+def _is_missing_chroma_collection_v1(exc: BaseException) -> bool:
+    return any(
+        cls.__name__ in {"NotFoundError", "InvalidCollectionException"}
+        and cls.__module__.startswith("chromadb")
+        for cls in type(exc).__mro__
+    )
 
 
 async def _physical_documents_by_id_v1(
@@ -3800,11 +3819,11 @@ async def _physical_documents_by_id_v1(
     deadline: _MemoryPromotionDeadlineV1,
     collection: Any,
     document_ids: Sequence[str],
-    budget: _MemoryPromotionPurgeBudgetV1,
+    budget: _MemoryPromotionRecallBudgetV1,
 ) -> tuple[_MemoryPromotionMaterializationV1, ...]:
     if not document_ids or len(set(document_ids)) != len(document_ids):
         raise _MemoryPromotionStoreConflictV1
-    _purge_require_client_call_v1(budget)
+    _recall_require_client_call_v1(budget)
     result = await _bounded_memory_promotion_call_v1(
         capsule,
         deadline,
@@ -3845,7 +3864,7 @@ async def _load_complete_memory_promotion_tree_v1(
     deadline: _MemoryPromotionDeadlineV1,
     collection: Any,
     root_manifest_id: str,
-    budget: _MemoryPromotionPurgeBudgetV1,
+    budget: _MemoryPromotionRecallBudgetV1,
 ) -> tuple[_MemoryPromotionMaterializationV1, ...]:
     (root,) = await _physical_documents_by_id_v1(
         capsule, deadline, collection, [root_manifest_id], budget
@@ -3880,7 +3899,43 @@ async def _load_complete_memory_promotion_tree_v1(
     return records
 
 
-async def _all_memory_promotion_query_rows_v1(
+def _validated_memory_promotion_candidate_v1(
+    queried: _MemoryPromotionMaterializationV1,
+    *,
+    identity_id: str,
+    current_scenario_id: str,
+) -> tuple[str, str]:
+    if (
+        contains_credential_material(queried.document)
+        or _contains_credential_recursive_v1(queried.semantic_payload)
+        or _contains_credential_recursive_v1(queried.metadata_dict())
+    ):
+        raise ValueError("credential")
+    payload = queried.semantic_payload
+    promotion_key = payload.get("promotion_key")
+    root_manifest_id = payload.get("root_manifest_id")
+    if (
+        payload.get("identity_id") != identity_id
+        or payload.get("scenario_id") == current_scenario_id
+        or payload.get("record_contract") != _MEMORY_PROMOTION_RECORD_CONTRACT_V1
+        or not isinstance(promotion_key, Mapping)
+        or type(root_manifest_id) is not str
+        or not root_manifest_id
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    expected_document_id = _record_document_id_v1(promotion_key)
+    expected_ref = hashlib.sha256(expected_document_id.encode("utf-8")).hexdigest()[
+        :_IDENTITY_MEMORY_REF_LENGTH
+    ]
+    if (
+        queried.document_id != expected_document_id
+        or queried.memory_ref != expected_ref
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    return expected_ref, root_manifest_id
+
+
+async def _ranked_memory_promotion_query_rows_v1(
     *,
     capsule: Stage3QuarantineOwnershipV1,
     deadline: _MemoryPromotionDeadlineV1,
@@ -3888,7 +3943,7 @@ async def _all_memory_promotion_query_rows_v1(
     identity_id: str,
     current_scenario_id: str,
     query_text: str,
-    budget: _MemoryPromotionPurgeBudgetV1,
+    budget: _MemoryPromotionRecallBudgetV1,
 ) -> list[tuple[_MemoryPromotionMaterializationV1, float]]:
     where = {
         "$and": [
@@ -3901,63 +3956,59 @@ async def _all_memory_promotion_query_rows_v1(
             },
         ]
     }
-    candidate_pages: list[tuple[str, ...]] = []
-    seen_ids: set[str] = set()
-    offset = 0
+    result_count = MEMORY_PROMOTION_RECALL_INITIAL_CANDIDATES_V1
+    prior_rows: dict[str, tuple[bytes, bytes]] = {}
     while True:
-        if budget.document_pages >= MEMORY_PROMOTION_PURGE_MAX_DOCUMENT_PAGES_V1:
-            raise _MemoryPromotionPurgeCapReachedV1
-        _purge_require_client_call_v1(budget)
-        budget.document_pages += 1
-        page_result = await _bounded_memory_promotion_call_v1(
-            capsule,
-            deadline,
-            "chroma_get",
-            lambda: collection.get(
-                where=where,
-                limit=MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1,
-                offset=offset,
-                include=[],
-            ),
-        )
-        page_ids = _physical_candidate_ids_v1(page_result)
-        if seen_ids.intersection(page_ids):
-            raise _MemoryPromotionStoreConflictV1
-        seen_ids.update(page_ids)
-        budget.documents += len(page_ids)
-        if budget.documents > MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1:
-            raise _MemoryPromotionPurgeCapReachedV1
-        if page_ids:
-            candidate_pages.append(tuple(page_ids))
-        if len(page_ids) < MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1:
-            break
-        if budget.documents >= MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1:
-            raise _MemoryPromotionPurgeCapReachedV1
-        offset += len(page_ids)
-
-    query_rows: list[tuple[_MemoryPromotionMaterializationV1, float]] = []
-    for page_ids in candidate_pages:
-        _purge_require_client_call_v1(budget)
+        _recall_require_client_call_v1(budget)
+        budget.candidate_queries += 1
         query_result = await _bounded_memory_promotion_call_v1(
             capsule,
             deadline,
             "chroma_query",
             lambda: collection.query(
-                ids=list(page_ids),
                 query_texts=[query_text],
-                n_results=len(page_ids),
+                n_results=result_count,
                 where=where,
                 include=["documents", "metadatas", "distances"],
             ),
         )
-        page_rows = _physical_query_rows_v1(query_result)
-        if (
-            len(page_rows) != len(page_ids)
-            or {row.document_id for row, _distance in page_rows} != set(page_ids)
+        rows = _physical_query_rows_v1(query_result, max_rows=result_count)
+        current_rows = {
+            row.document_id: (
+                row.document_canonical_bytes,
+                row.metadata_canonical_bytes,
+            )
+            for row, _distance in rows
+        }
+        if any(
+            current_rows.get(document_id) != prior
+            for document_id, prior in prior_rows.items()
         ):
             raise _MemoryPromotionStoreConflictV1
-        query_rows.extend(page_rows)
-    return query_rows
+        ranked: list[tuple[float, str, _MemoryPromotionMaterializationV1]] = []
+        seen_refs: set[str] = set()
+        for queried, distance in rows:
+            memory_ref, _root_manifest_id = _validated_memory_promotion_candidate_v1(
+                queried,
+                identity_id=identity_id,
+                current_scenario_id=current_scenario_id,
+            )
+            if memory_ref in seen_refs:
+                raise _MemoryPromotionStoreConflictV1
+            seen_refs.add(memory_ref)
+            ranked.append((distance, memory_ref, queried))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        if len(ranked) < result_count or len(ranked) <= 3:
+            return [(item[2], item[0]) for item in ranked[:3]]
+        if ranked[3][0] > ranked[2][0]:
+            return [(item[2], item[0]) for item in ranked[:3]]
+        if result_count >= MEMORY_PROMOTION_RECALL_MAX_CANDIDATES_V1:
+            raise _MemoryPromotionRecallCapReachedV1
+        prior_rows = current_rows
+        result_count = min(
+            result_count * 2,
+            MEMORY_PROMOTION_RECALL_MAX_CANDIDATES_V1,
+        )
 
 
 async def recall_verified_memory_promotions_v1(
@@ -3983,9 +4034,15 @@ async def recall_verified_memory_promotions_v1(
         return build_recall_context_v1(
             (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
         )
+    if contains_credential_material(query_text):
+        return build_recall_context_v1(
+            (),
+            status="unavailable",
+            reason_code="MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+        )
     deadline = _MemoryPromotionDeadlineV1.start()
     capsule = Stage3QuarantineOwnershipV1()
-    budget = _MemoryPromotionPurgeBudgetV1()
+    budget = _MemoryPromotionRecallBudgetV1()
     active_store = store
     try:
         if active_store is None:
@@ -3997,40 +4054,27 @@ async def recall_verified_memory_promotions_v1(
                 (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
             )
         collection_name = memory_promotion_collection_name_v1(user_id)
-        _purge_require_client_call_v1(budget)
-        listed = await _bounded_memory_promotion_call_v1(
-            capsule,
-            deadline,
-            "chroma_list_collections",
-            active_store._client.list_collections,
-        )
-        if not isinstance(listed, Sequence) or isinstance(
-            listed, (str, bytes, bytearray)
-        ):
-            raise _MemoryPromotionStoreConflictV1
-        matching_names = [
-            _listed_collection_name_v1(item)
-            for item in listed
-            if _listed_collection_name_v1(item) == collection_name
-        ]
-        if not matching_names:
+        _recall_require_client_call_v1(budget)
+        try:
+            collection = await _bounded_memory_promotion_call_v1(
+                capsule,
+                deadline,
+                "chroma_get_collection",
+                lambda: active_store._client.get_collection(name=collection_name),
+            )
+        except Exception as exc:
+            if not _is_missing_chroma_collection_v1(exc):
+                raise
+            capsule.task = None
+            capsule.task_kind = None
             return build_recall_context_v1((), status="empty")
-        if len(matching_names) != 1:
-            raise _MemoryPromotionStoreConflictV1
-        _purge_require_client_call_v1(budget)
-        collection = await _bounded_memory_promotion_call_v1(
-            capsule,
-            deadline,
-            "chroma_get_collection",
-            lambda: active_store._client.get_collection(name=collection_name),
-        )
         if not _exact_collection_metadata_v1(
             getattr(collection, "metadata", None), user_id
         ):
             return build_recall_context_v1(
                 (), status="unavailable", reason_code="MEMORY_RECALL_VERSION_IGNORED"
             )
-        query_rows = await _all_memory_promotion_query_rows_v1(
+        query_rows = await _ranked_memory_promotion_query_rows_v1(
             capsule=capsule,
             deadline=deadline,
             collection=collection,
@@ -4062,6 +4106,12 @@ async def recall_verified_memory_promotions_v1(
             root_manifest_id = cast(str, payload["root_manifest_id"])
             tree_records = tree_cache.get(root_manifest_id)
             if tree_records is None:
+                if (
+                    budget.selected_trees
+                    >= MEMORY_PROMOTION_RECALL_MAX_SELECTED_TREES_V1
+                ):
+                    raise _MemoryPromotionRecallCapReachedV1
+                budget.selected_trees += 1
                 tree_records = await _load_complete_memory_promotion_tree_v1(
                     capsule, deadline, collection, root_manifest_id, budget
                 )
@@ -4102,7 +4152,7 @@ async def recall_verified_memory_promotions_v1(
         return build_recall_context_v1(
             (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
         )
-    except _MemoryPromotionPurgeCapReachedV1:
+    except _MemoryPromotionRecallCapReachedV1:
         return build_recall_context_v1(
             (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
         )

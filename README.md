@@ -21,7 +21,7 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 - 辩论竞技场、结局会客厅和世界线圆桌
 - 反事实续跑、分支对比、Replay Trace
 - 因果图谱、知识图谱与时间线视图
-- 推演内 Agent 档案、分支记忆、可审计决策与跨轮状态记录、自定义 Agent、人物备份、有序 Agent Pack、预测日志与 Snapshot
+- 推演内 Agent 档案、分支记忆、可审计决策、可重放的有界领域状态与跨轮记录、自定义 Agent、人物备份、有序 Agent Pack、预测日志与 Snapshot
 - 有界 Local Pack 原子导入与可点击 Snapshot 演示，以及结果结论、对 complete/partial 输出执行 Claim–Evidence 编译的透明完整报告、脱敏离线 Gallery 与可选搜索增强
 
 ## W2.1 可见性与真值边界
@@ -32,8 +32,10 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 - 报告的 likelihood 与分析置信度只把已完成的终局叶分支当作分支样本，并结合实际证据条目数；分叉父节点不计数，带符号的情绪收敛代理值也不会抬高分析置信度。已执行的章节工具轨迹有界保存，生成、重写或静态回退后刷新/重开仍可查看；结构化 premortem 为每个失败模式保留独立证据链与不确定性，实时“当前章节”位置仍是瞬时状态。
 - Local Pack 刷新会重新读取当前同 ID 包的详情，切换包时先清除旧详情与操作，并隔离迟到响应。包内 `demo_snapshots` 可点击、按目录白名单和 Snapshot 合同校验并直接导入；明确失败可重试，无法确认结果时会提示先检查历史记录，避免重复导入。
 - Agent Pack 按资料库选择顺序原子导入或导出，不携带身份 ID、owner、记忆、成长历史、对话或单独存储的凭据，并脱敏常见凭据模式。Public Artifact 可导出脱敏 JSON、单文件 HTML 或离线 Gallery hash 链接，也可由 `gallery.html` 打开本地文件；它不是 hosted registry、社区索引或 marketplace。
-- 初始 Feed 最多接受 20 条带来源、正文、可选发布时间、可信度提示和标签的世界事件；这些字段始终是不可信数据，不是系统指令。来源账户可被 Agent 关注或静音，静音会影响后续 Feed、搜索与趋势投影。Causal Review 中的 Action Ledger 面板按分支展示已持久化的原生动作、目标与状态；独立证据回执接口投影 Agent 发言、上下文观察与派生后果，记忆只携带哈希引用和来源场景坐标，不公开正文。旧推演缺少对应证据时会明确显示 `unavailable`，不会补造历史。
-- 实时 Agent 回合会先生成并校验有界的 Decision Envelope，再由同一结果约束发言和原生动作；`IDLE` 必须有明确原因，但系统不会用动作配额、随机动作或强制轮换制造活跃。每轮还会持久化带状态的 State Transition；其中上一轮已验证或失败的行动结果、目标进度变化、障碍、关系变化、模拟内世界状态变化与下一轮压力会进入下一轮上下文，连续高相似发言会触发重新规划。不可验证记录明确降级为 `unavailable`；这里只保存可审计字段，不保存隐藏思维链，也不把模拟内状态宣称为完整领域世界模型或现实证明。
+- 初始 Feed 最多接受 20 条带来源、正文、可选发布时间、可信度提示和标签的世界事件；这些字段始终是不可信数据，不是系统指令。来源账户可被 Agent 关注或静音，静音会影响后续 Feed、搜索与趋势投影。Causal Review 中的 Action Ledger 面板按分支展示已持久化的原生动作、目标、状态与领域裁决；独立证据回执接口投影 Agent 发言、上下文观察与派生后果，记忆只携带哈希引用和来源场景坐标，不公开正文。旧推演缺少对应证据时会明确显示 `unavailable`，不会补造历史。
+- 实时 Agent 回合会先生成并校验有界的 Decision Envelope，再由同一结果约束发言和原生动作；COMMENT、REACTION、FOLLOW、MUTE、SEARCH、TREND 与 REFRESH 只在上一轮真实社交机会允许时开放，带领域规则的动作还必须满足同一份冻结 schema、状态 revision 与阈值。`IDLE` 必须有明确原因，但系统不会用动作配额、随机动作或强制轮换制造活跃。
+- parser 可让模型提议预算、客流、容量、承诺等有界领域变量与规则，但只有通过固定类型、单位、精度、边界和凭据校验的 `domain_world_v1` schema 才会被冻结。每个完整轮次只从 durable verified action 确定性裁决状态变化；运行页和结果页显示分支状态条、阈值 tooltip、domain-gated IDLE 归因与有来源坐标的世界结局，Compare 也会显示领域差异。State Transition 继续记录上一轮结果、目标进度、障碍、关系变化和下一轮压力。不可验证或旧数据明确降级为 `unavailable`；这些都是推演内场景假设或有界估计，不是现实测量或因果证明。
+- verified-memory promotion 是默认关闭的后端 core，当前没有 capability、REST 或 UI 入口；只有 `FEATURE_AGENT_IDENTITY=true` 与 `FEATURE_MEMORY_PROMOTION=true` 同时满足时才会启用。启用后，它只把与 verified action、领域裁决和实际 delta 精确绑定的结果写入版本化 Chroma namespace，并以稳定哈希 ref 供后续 Decision 召回；关闭任一 gate 只让 reader 忽略该版本，不删除物理记录。v1 留存为 append-only；显式 user-wide purge 仅是 service-level、有界、point-in-time best-effort，当前没有 production caller、continuation/completion cursor 或 terminal purge-wins 保证；Snapshot/import/clone 中的旧 ref 只作 opaque history。
 - complete/partial 报告在保存前会把结论编译为带 Agent、消息、动作、分支和轮次坐标的 Claim，并校验逐字引语是否命中同一 speaker 的同一 utterance，以及角色与时间覆盖。证据不足时会移除不安全引号、降低置信度或改为“证据有限的假设”；可用的编译报告会让结果页顶部结论与报告分析置信度保持同源。generating、failed、cancelled、skipped、stalled 和 truncated 等外层状态不宣称已完成 Claim 校验，模型合成访谈和模拟变化也不是现实证据。
 
 类别级能力与路由见 [功能索引](docs/FEATURES.md)，操作步骤见 [使用指南](docs/USAGE.md)。

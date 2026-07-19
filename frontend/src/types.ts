@@ -904,7 +904,7 @@ export type DomainOpportunityThresholds =
     version: 1;
     status: 'active';
     reason_code: null;
-    as_of_round: number | null;
+    as_of_round: number;
     schema_hash: string;
     input_state_revision: string;
     threshold_met_rule_ids: string[];
@@ -938,14 +938,9 @@ export interface DomainIdleReasonItem {
   blocked_rule_ids: string[];
 }
 
-export interface DomainBranchState {
+interface DomainBranchStateBase {
   branch_id: string;
-  status: 'active' | 'unavailable' | string;
   failure_code?: string | null;
-  reason_code?: DomainUnavailableReasonCode | string | null;
-  as_of_round?: number | null;
-  state_revision?: string | null;
-  semantic_state_hash?: string | null;
   values: DomainVariableValue[];
   latest_round_deltas: DomainStateDelta[];
   /**
@@ -959,17 +954,46 @@ export interface DomainBranchState {
   latest_domain_idle_reasons?: DomainIdleReasonItem[];
 }
 
-export interface DomainWorldProjection {
-  version: 1 | number;
-  status: 'active' | 'unavailable' | string;
+export type DomainBranchState = DomainBranchStateBase & (
+  | {
+    status: 'active';
+    reason_code: null;
+    as_of_round: number;
+    state_revision: string;
+    semantic_state_hash: string;
+  }
+  | {
+    status: 'unavailable';
+    reason_code: DomainUnavailableReasonCode;
+    as_of_round: null;
+    state_revision: null;
+    semantic_state_hash: null;
+  }
+);
+
+interface DomainWorldProjectionBase {
+  version: 1;
   failure_code?: string | null;
-  reason_code?: DomainUnavailableReasonCode | string | null;
-  schema_hash?: string | null;
-  unit_registry_version?: string | null;
-  as_of_round?: number | null;
   variables: DomainVariableSchema[];
   branch_states: DomainBranchState[];
 }
+
+export type DomainWorldProjection = DomainWorldProjectionBase & (
+  | {
+    status: 'active';
+    reason_code: null;
+    schema_hash: string;
+    unit_registry_version: 'unit_registry_v1';
+    as_of_round: number | null;
+  }
+  | {
+    status: 'unavailable';
+    reason_code: DomainUnavailableReasonCode;
+    schema_hash: null;
+    unit_registry_version: 'unit_registry_v1';
+    as_of_round: null;
+  }
+);
 
 /** Contract §8.2 + §16 nine-key refs block (all required; empty arrays → count=0, truncated=false). */
 export interface WorldOutcomeItem {
@@ -1099,13 +1123,13 @@ export interface DomainAdjudicationChip {
 }
 
 export interface WorldStateCommittedEventData {
-  version: 1 | number;
+  version: 1;
   scenario_id: string;
   branch_id: string;
   round_number: number;
-  schema_hash?: string | null;
-  state_revision?: string | null;
-  semantic_state_hash?: string | null;
+  schema_hash: string;
+  state_revision: string;
+  semantic_state_hash: string;
   values: DomainVariableValue[];
   domain_state_deltas: DomainStateDelta[];
 }

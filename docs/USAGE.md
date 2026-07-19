@@ -27,7 +27,8 @@
 
 - 顶部显示轮次、轮内发言进度、总进度和 ETA；慢模型会显示已运行时长。
 - Classic 展示分支树，Pixel Theater 展示舞台与工具栏。
-- Agent 每轮可在 `POST`、`COMMENT`、`REACTION`、`FOLLOW`、`MUTE`、`SEARCH`、`TREND`、`REFRESH` 和 `IDLE` 中执行一个原生社交动作。关注与静音面向当前可见账户；静音来源不会继续出现在该 Agent 的 Feed、搜索和趋势结果中。
+- Agent 每轮可在 `POST`、`COMMENT`、`REACTION`、`FOLLOW`、`MUTE`、`SEARCH`、`TREND`、`REFRESH` 和 `IDLE` 中执行一个原生社交动作。目标、搜索、趋势和刷新只有在上一轮真实机会快照允许时才开放；带领域规则的动作还必须满足同一份冻结 schema、状态 revision 和阈值。关注与静音面向当前可见账户；静音来源不会继续出现在该 Agent 的 Feed、搜索和趋势结果中。
+- 推演页的领域状态条显示当前分支最多 6 个有界变量、最新 verified 变化和单位。变量旁的阈值入口列出满足/未满足的规则与 actual/expected 值；最新完整轮次因领域 precondition 阻塞而选择 `IDLE` 时，会另列 Agent 与 blocked rule。没有合法 schema、旧数据或无法重放时显示 `unavailable`，不会从发言补算。
 - 干预、玩法卡应用、预测押注和世界线承诺只可在 live 状态写入。终局只读已有记录（玩法卡可预览），Replay 不提供写入口。
 - 从 Agent 列表打开档案，可区分配置立场与已观察情绪，并查看这次观察对应的世界线和轮次；Replay 只查当前有效谱系与轮次截点，包括截点内的分叉前祖先轮次，没有匹配证据时明确显示“无匹配观察”。绑定持久身份时还会展示已有记忆与成长事件；每条成长事件显示场景、分支、轮次和 `event_type`，只有同时匹配当前路由场景与明确所选分支时才标为“当前 · 所选分支片段”，其它可判定事件标为“历史”。
 - 发言成功但情绪/立场元数据解析失败时，发言仍会显示；Agent 档案、Replay 和 Pixel Theater 会把观测标为不可用，不会将其解释成中性情绪。有界错误码会保留在 wire、Replay 与 Snapshot 中，恢复或导入后该状态仍会保留。
@@ -40,6 +41,7 @@
 常用操作：
 
 - 展开世界线故事，查看因果档案、导演复盘或 `/result/:id/report` 完整报告；因果档案会对照玩法卡、预测押注、世界线承诺与最终结算。
+- 查看领域状态条和“世界结局”：后者按分支汇总 initial → final 与净变化，只展示由 verified durable action 确定性重放出的变化，并附有界 action、rule 与可用 Claim refs。无 verified 变化、partial 和 unavailable 分别显示，不会把未发生的变化写成结局。
 - 完整报告会显示外层生命周期、已保存章节的生成/重写/静态回退层级、回退原因和证据坐标。章节在生成、重写或双层失败后静态回退时实际执行的有界工具轨迹都会保存，刷新、轮询或重开报告后仍能恢复；结构化 premortem 会按 available / partial / missing 展示失败模式、机制、早期信号、不确定性和独立 evidence chain。当前手动生成流的章节进度和“当前位置”仍是瞬时状态，不会重放。历史摘录由模型依据模拟历史合成并附上分支/轮次位置，不是逐字原始证据、新采访或真实人物言论；分支占比始终标为模拟权重，而非现实概率。
 - 进入会客厅、只改一步或世界线圆桌；多结局才显示跨线和圆桌入口。
 - 从真实发言创建反事实分支，或从 checkpoint 续跑。
@@ -54,7 +56,7 @@
 - **结局会客厅**：从某条世界线进入。会客厅里的 model profile 选择位于它自己的高级设置中；不选则用全局默认。
 - **世界线圆桌**：多结局时可用，支持讨论形式与代表选择；完成后提供 1 对 1 访谈、研究分析师和交叉质询。
 - **反事实、续跑与 Replay**：修改某轮真实发言或选择 checkpoint，生成带来源关系的新分支；回放消息、Agent 状态和记忆只读取所选有效谱系及轮次截点之前的内容，包括符合范围的分叉前祖先轮次，并排除兄弟分支和分叉后的父分支未来。自包含 Replay 在自己的 Replay 边界停止。Agent 与轮次选择器会在手机窄屏换行，不需要横向滚动。
-- **图谱**：`/workbench/:id` 汇集 Causal、Split、Knowledge Graph；`/kg-explorer/:id` 和 `/timeline-galaxy/:id` 提供独立视图。Causal Review 的 Action Ledger 面板按有效分支谱系展示已持久化的原生动作、目标和状态；独立证据回执接口投影发言、上下文观察和派生后果，记忆只以哈希引用与来源场景坐标出现。旧推演缺少对应证据时显示 `unavailable`，不会从正文反推。因果图中的旧 `stance` 边和节点只按情绪代理值显示，不是已验证的立场或因果证据。
+- **图谱**：`/workbench/:id` 汇集 Causal、Split、Knowledge Graph；`/kg-explorer/:id` 和 `/timeline-galaxy/:id` 提供独立视图。Causal Review 的 Action Ledger 面板按有效分支谱系展示已持久化的原生动作、目标、状态和领域裁决；展开一条动作可核对 rule、before/after 与失败码。独立证据回执接口投影发言、上下文观察和派生后果，记忆只以哈希引用与来源场景坐标出现。旧推演缺少对应证据时显示 `unavailable`，不会从正文反推。因果图中的旧 `stance` 边和节点只按情绪代理值显示，不是已验证的立场或因果证据。
 - **阵营时间线**：结果页会明确当前分析的世界线。旧 `stance` / `trust` / `opposition` 字段只是由模型生成的 `emotion` / `diverge` 推导出的情绪代理值；关系提示只取同场景、同分支上一轮的有界证据摘要。带 `branch_id` 的 causal、faction、report、Replay 和 compare 使用同一有效 root-to-leaf 谱系与 cutoff，包含符合范围的分叉前祖先轮次，不代表所有结局或现实关系。
 - **自定义 Agent**：`/agents` 管理 Agent，`/agents/new` 创建或从 PDF 生成；单人物备份导入会新建身份，不覆盖旧身份。Agent Library 还可按资料库选择顺序导出 Agent Pack v1，或在预览后原子导入整包；导出不含身份 ID、owner、记忆、成长历史、对话和单独存储的凭据，并会脱敏常见凭据模式，导入成员会重建为自定义 Agent。
 
@@ -82,4 +84,5 @@
 - **功能入口缺失？** 页面会区分能力检查中的 loading、error、disabled 和 enabled；error 可直接重试。确认禁用后再查看 `/api/capabilities` 与对应 `FEATURE_*`，修改环境变量后重启后端。
 - **旧 Snapshot 没有 Agent 情绪来源？** 页面会标为快照或无匹配观察，不会补写不存在的世界线和轮次。
 - **旧推演为什么没有完整的 Action Ledger 证据？** 原生动作和上下文回执只存在于记录了对应合同的推演；旧数据会显示 `unavailable`，不会从发言猜测动作或记忆使用情况。
+- **为什么找不到 verified memory promotion 的开关或记录？** 该能力目前只是默认关闭的后端 core，只有 `FEATURE_AGENT_IDENTITY=true` 与 `FEATURE_MEMORY_PROMOTION=true` 同时满足时才会启用，并且没有 capability、REST 或 UI 入口。不要把已有 Identity Inspector 或 Action Ledger 的哈希引用当成已启用的 promotion 证据；Stage 3B 激活面尚未交付。
 - **可以把预测当事实吗？** 不可以。不要用于金融、医疗、法律或其它现实决策。

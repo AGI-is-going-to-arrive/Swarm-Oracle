@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlmodel import Session, col, select
 
 from app.models.agent_identity import AgentGrowthEvent
@@ -45,6 +45,8 @@ _DOMAIN_ACTION_REF_LIMIT = 32
 _DOMAIN_RULE_REF_LIMIT = 16
 _DOMAIN_CLAIM_REF_LIMIT = 16
 _DOMAIN_IDLE_REASON_LIMIT = 16
+_SQL_IN_CHUNK_SIZE = 500
+_DOMAIN_HISTORY_ROUND_CHUNK_SIZE = 256
 _DOMAIN_REASON_CODES = frozenset(
     {
         "not_generated",
@@ -115,6 +117,15 @@ def _merge_projection_items(*groups: list[dict[str, Any]]) -> list[dict[str, Any
             seen.add(key)
             merged.append(item)
     return merged
+
+
+def _chunked_ids(values: set[str]) -> list[tuple[str, ...]]:
+    """Keep every expanding-IN query below conservative SQLite bind limits."""
+    ordered = sorted(values)
+    return [
+        tuple(ordered[index : index + _SQL_IN_CHUNK_SIZE])
+        for index in range(0, len(ordered), _SQL_IN_CHUNK_SIZE)
+    ]
 
 
 def _receipt(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -297,30 +308,56 @@ def _validated_domain_group(action: SimulationAction) -> Mapping[str, Any] | Non
     return result.payload
 
 
-def _durable_action_coordinates_valid(
+def _durable_action_ids_with_valid_coordinates(
     session: Session,
     *,
     scenario_id: str,
-    action: SimulationAction,
-) -> bool:
-    if action.scenario_id != scenario_id or action.message_id is None:
-        return False
-    message = session.get(AgentMessage, action.message_id)
-    round_row = session.get(Round, action.round_id)
-    branch = session.get(Branch, action.branch_id)
-    agent = session.get(Agent, action.agent_id)
-    return bool(
-        message is not None
-        and round_row is not None
-        and branch is not None
-        and agent is not None
-        and message.round_id == action.round_id
-        and message.agent_id == action.agent_id
-        and round_row.branch_id == action.branch_id
-        and round_row.round_number == action.round_number
-        and branch.scenario_id == scenario_id
-        and agent.scenario_id == scenario_id
-    )
+    actions: list[SimulationAction],
+) -> set[str]:
+    """Validate a page/round of action coordinates with one bounded join."""
+    candidates = [
+        action
+        for action in actions
+        if action.scenario_id == scenario_id and action.message_id is not None
+    ]
+    message_ids = {str(action.message_id) for action in candidates}
+    if not message_ids:
+        return set()
+    rows: list[tuple[AgentMessage, Round, Branch, Agent]] = []
+    for message_id_chunk in _chunked_ids(message_ids):
+        rows.extend(
+            session.exec(
+                select(AgentMessage, Round, Branch, Agent)
+                .select_from(AgentMessage)
+                .join(Round, AgentMessage.round_id == Round.id)
+                .join(Branch, Round.branch_id == Branch.id)
+                .join(Agent, AgentMessage.agent_id == Agent.id)
+                .where(col(AgentMessage.id).in_(message_id_chunk))
+            ).all()
+        )
+    coordinates_by_message = {
+        message.id: (message, round_row, branch, agent)
+        for message, round_row, branch, agent in rows
+    }
+    valid: set[str] = set()
+    for action in candidates:
+        coordinates = coordinates_by_message.get(str(action.message_id))
+        if coordinates is None:
+            continue
+        message, round_row, branch, agent = coordinates
+        if (
+            message.round_id == action.round_id
+            and message.agent_id == action.agent_id
+            and round_row.id == action.round_id
+            and round_row.branch_id == action.branch_id
+            and round_row.round_number == action.round_number
+            and branch.id == action.branch_id
+            and branch.scenario_id == scenario_id
+            and agent.id == action.agent_id
+            and agent.scenario_id == scenario_id
+        ):
+            valid.add(action.id)
+    return valid
 
 
 def _domain_variable_index(config: DomainWorldConfigV1) -> dict[str, DomainVariableV1]:
@@ -483,21 +520,34 @@ def project_domain_adjudications_v1(
     config = _domain_config(scenario.parsed_context)
     if config.status != "active" or config.schema_hash is None:
         return {action.id: [] for action in actions}
+    if not actions:
+        return {}
 
     runtime_branches = _domain_runtime(scenario.parsed_context)
     terminal_by_action: dict[str, list[dict[str, Any]]] = {}
-    projection_branch_ids = (
-        {scope_branch_id}
-        if scope_branch_id is not None
-        else {action.branch_id for action in actions}
-    )
-    for branch_id in sorted(projection_branch_ids):
+    if scope_branch_id is not None:
+        projection_cutoffs = {
+            scope_branch_id: max(action.round_number for action in actions)
+        }
+    else:
+        projection_cutoffs: dict[str, int] = {}
+        for action in actions:
+            projection_cutoffs[action.branch_id] = max(
+                projection_cutoffs.get(action.branch_id, 0),
+                action.round_number,
+            )
+    for branch_id, page_cutoff in sorted(projection_cutoffs.items()):
+        cutoff = (
+            min(page_cutoff, scope_as_of_round)
+            if scope_as_of_round is not None
+            else page_cutoff
+        )
         history, failure_code = _branch_domain_history(
             session,
             scenario=scenario,
             branch_id=branch_id,
             config=config,
-            as_of_round=scope_as_of_round,
+            as_of_round=cutoff,
         )
         if failure_code is not None:
             continue
@@ -505,6 +555,11 @@ def project_domain_adjudications_v1(
             for action_id, receipts in projection["receipts_by_action"].items():
                 terminal_by_action[action_id] = receipts
 
+    valid_coordinate_action_ids = _durable_action_ids_with_valid_coordinates(
+        session,
+        scenario_id=scenario.id,
+        actions=actions,
+    )
     projected: dict[str, list[dict[str, Any]]] = {}
     rules = _domain_rule_index(config)
     for action in actions:
@@ -537,11 +592,7 @@ def project_domain_adjudications_v1(
                     domain_group=domain_group,
                 )
                 if isinstance(domain_group, Mapping)
-                and _durable_action_coordinates_valid(
-                    session,
-                    scenario_id=scenario.id,
-                    action=action,
-                )
+                and action.id in valid_coordinate_action_ids
                 else []
             )
             continue
@@ -549,11 +600,7 @@ def project_domain_adjudications_v1(
         if (
             isinstance(proposals, list)
             and domain_group.get("schema_hash") == config.schema_hash
-            and _durable_action_coordinates_valid(
-                session,
-                scenario_id=scenario.id,
-                action=action,
-            )
+            and action.id in valid_coordinate_action_ids
         ):
             for proposal_index, proposal in enumerate(proposals[:4]):
                 if not isinstance(proposal, Mapping):
@@ -815,6 +862,10 @@ def _validated_complete_round_projection(
     state_before: Mapping[str, Any],
     state_revision_before: str,
     accepted_event_identities: frozenset[tuple[str, str, str]],
+    expected_agent_ids: tuple[str, ...],
+    preloaded_messages: Sequence[AgentMessage] | None = None,
+    preloaded_action_rows: Sequence[SimulationAction] | None = None,
+    coordinates_prevalidated: bool = False,
 ) -> dict[str, Any] | None:
     if config.schema_hash is None:
         return None
@@ -843,22 +894,6 @@ def _validated_complete_round_projection(
     ):
         raise ValueError("DOMAIN_BRANCH_SCOPE_INVALID")
 
-    expected_agent_ids = tuple(
-        sorted(
-            {
-                agent.id
-                for agent in session.exec(
-                    select(Agent).where(
-                        Agent.scenario_id == scenario.id,
-                        or_(
-                            Agent.source_type.is_(None),
-                            Agent.source_type != "world_event_source",
-                        ),
-                    )
-                ).all()
-            }
-        )
-    )
     if finalization.get("expected_agent_count") != len(expected_agent_ids):
         raise ValueError("DOMAIN_BRANCH_SCOPE_INVALID")
     try:
@@ -869,6 +904,9 @@ def _validated_complete_round_projection(
             round_id=round_row.id,
             round_number=round_row.round_number,
             expected_agent_ids=expected_agent_ids,
+            preloaded_round_row=round_row,
+            preloaded_messages=preloaded_messages,
+            preloaded_action_rows=preloaded_action_rows,
         )
         if not round_read.complete:
             raise RuntimeError("DOMAIN_FINALIZATION_ROUND_INCOMPLETE")
@@ -876,14 +914,9 @@ def _validated_complete_round_projection(
     except RuntimeError as exc:
         raise ValueError("DOMAIN_BRANCH_SCOPE_INVALID") from exc
     actions = list(round_read.action_rows)
-    if any(
-        not _durable_action_coordinates_valid(
-            session,
-            scenario_id=scenario.id,
-            action=action,
-        )
-        for action in actions
-    ):
+    if not coordinates_prevalidated and _durable_action_ids_with_valid_coordinates(
+        session, scenario_id=scenario.id, actions=actions
+    ) != {action.id for action in actions}:
         raise ValueError("DOMAIN_BRANCH_SCOPE_INVALID")
     reduced = reduce_domain_round_v1(
         config=config,
@@ -1001,6 +1034,79 @@ def _branch_domain_history(
     projections: list[dict[str, Any]] = []
     if config.schema is None or config.schema_hash is None:
         return [], "DOMAIN_SCHEMA_UNAVAILABLE"
+    expected_agent_ids = tuple(
+        sorted(
+            {
+                agent.id
+                for agent in session.exec(
+                    select(Agent).where(
+                        Agent.scenario_id == scenario.id,
+                        or_(
+                            Agent.source_type.is_(None),
+                            Agent.source_type != "world_event_source",
+                        ),
+                    )
+                ).all()
+            }
+        )
+    )
+    round_ids = tuple(round_row.id for round_row in rounds)
+    messages_by_round: dict[str, list[AgentMessage]] = {
+        round_id: [] for round_id in round_ids
+    }
+    actions_by_round: dict[str, list[SimulationAction]] = {
+        round_id: [] for round_id in round_ids
+    }
+    for offset in range(0, len(round_ids), _DOMAIN_HISTORY_ROUND_CHUNK_SIZE):
+        round_id_chunk = round_ids[
+            offset : offset + _DOMAIN_HISTORY_ROUND_CHUNK_SIZE
+        ]
+        for message in session.exec(
+            select(AgentMessage)
+            .where(col(AgentMessage.round_id).in_(round_id_chunk))
+            .order_by(AgentMessage.round_id, AgentMessage.id)
+        ).all():
+            messages_by_round.setdefault(message.round_id, []).append(message)
+        for action in session.exec(
+            select(SimulationAction)
+            .where(col(SimulationAction.round_id).in_(round_id_chunk))
+            .order_by(
+                SimulationAction.round_id,
+                SimulationAction.sequence,
+                SimulationAction.id,
+            )
+        ).all():
+            actions_by_round.setdefault(action.round_id, []).append(action)
+
+    complete_round_ids: set[str] = set()
+    for round_row in rounds:
+        finalization = _domain_round_payload(
+            runtime_branches,
+            branch_id=round_row.branch_id,
+            round_number=round_row.round_number,
+        ).get("domain_finalization")
+        if _round_finalization_is_complete(
+            finalization,
+            scenario_id=scenario.id,
+            branch_id=round_row.branch_id,
+            round_id=round_row.id,
+            round_number=round_row.round_number,
+            schema_hash=config.schema_hash,
+        ):
+            complete_round_ids.add(round_row.id)
+    coordinate_actions = [
+        action
+        for round_id in complete_round_ids
+        for action in actions_by_round.get(round_id, ())
+        if action.message_id is not None
+    ]
+    if _durable_action_ids_with_valid_coordinates(
+        session,
+        scenario_id=scenario.id,
+        actions=coordinate_actions,
+    ) != {action.id for action in coordinate_actions}:
+        return [], "DOMAIN_BRANCH_SCOPE_INVALID"
+
     state_before: Mapping[str, Any] = initial_domain_state_v1(config.schema)
     state_revision_before = state_revision_v1(
         schema_hash=config.schema_hash,
@@ -1021,6 +1127,10 @@ def _branch_domain_history(
                 state_before=state_before,
                 state_revision_before=state_revision_before,
                 accepted_event_identities=accepted_event_identities,
+                expected_agent_ids=expected_agent_ids,
+                preloaded_messages=messages_by_round.get(round_row.id, ()),
+                preloaded_action_rows=actions_by_round.get(round_row.id, ()),
+                coordinates_prevalidated=round_row.id in complete_round_ids,
             )
             if projection is not None:
                 if gap_before_complete:
@@ -1601,6 +1711,15 @@ def project_world_outcomes_v1(
     config = _domain_config(scenario.parsed_context)
     if config.status != "active" or config.schema is None or config.schema_hash is None:
         return _world_outcomes_unavailable(config)
+    if not branches:
+        return {
+            "version": 1,
+            "status": "unavailable",
+            "failure_code": "DOMAIN_BRANCH_SCOPE_INVALID",
+            "reason_code": "rebuild_failed",
+            "schema_hash": config.schema_hash,
+            "branches": [],
+        }
 
     branch_outcomes: list[dict[str, Any]] = []
     for branch in branches:
@@ -1732,15 +1851,18 @@ def build_action_ledger(
             statement = statement.where(Round.branch_id == branch_id)
         if agent_id is not None:
             statement = statement.where(AgentMessage.agent_id == agent_id)
-        message_rows = list(
+        ordered_statement = statement.order_by(
+            Round.branch_id.asc(),
+            Round.round_number.asc(),
+            AgentMessage.id.asc(),
+        )
+        page_with_sentinel = list(
             session.exec(
-                statement.order_by(
-                    Round.branch_id.asc(),
-                    Round.round_number.asc(),
-                    AgentMessage.id.asc(),
-                )
+                ordered_statement.offset(safe_cursor).limit(safe_limit + 1)
             ).all()
         )
+        has_more = len(page_with_sentinel) > safe_limit
+        message_rows = page_with_sentinel[:safe_limit]
 
         message_ids = [message.id for message, _branch, _round, _agent in message_rows]
         message_id_set = set(message_ids)
@@ -1758,11 +1880,13 @@ def build_action_ledger(
             }
 
         scenario = session.get(Scenario, scenario_id)
+        page_actions = list(action_by_message.values())
         domain_receipts_by_action = (
             project_domain_adjudications_v1(
                 session,
                 scenario=scenario,
-                actions=list(action_by_message.values()),
+                actions=page_actions,
+                scope_branch_id=branch_id,
             )
             if scenario is not None
             else {}
@@ -1770,18 +1894,125 @@ def build_action_ledger(
         runtime_observations: dict[str, dict[str, Any]] = {}
         runtime_consequences: dict[str, list[dict[str, Any]]] = {}
         runtime_reflections: dict[str, list[dict[str, Any]]] = {}
-        action_message_ids = {
-            action.id: message_id for message_id, action in action_by_message.items()
-        }
-        actions_by_id = {
-            action.id: action for action in action_by_message.values()
-        }
+        page_action_ids = {action.id for action in page_actions}
+        relevant_transitions: list[dict[str, Any]] = []
+        candidate_action_ids: set[str] = set()
+        candidate_message_ids: set[str] = set()
         for transition in _runtime_transitions(
             scenario.parsed_context if scenario is not None else None
         ):
+            if str(transition.get("transition_status") or "").lower() != "verified":
+                continue
+            transition_message_id = str(transition.get("message_id") or "")
+            raw_outcomes = transition.get("previous_action_outcomes")
+            outcomes = raw_outcomes if isinstance(raw_outcomes, list) else []
+            memory_candidates = [
+                item
+                for item in transition.get("memory_write_candidates", [])
+                if isinstance(item, dict)
+            ]
+            reflection_records = [
+                item
+                for item in transition.get("reflection_records", [])
+                if isinstance(item, dict)
+            ]
+            touches_page = transition_message_id in message_id_set
+            for outcome in outcomes:
+                if not isinstance(outcome, dict):
+                    continue
+                outcome_action_id = str(outcome.get("action_id") or "")
+                outcome_message_id = str(outcome.get("message_id") or "")
+                touches_page = touches_page or outcome_action_id in page_action_ids
+                touches_page = touches_page or outcome_message_id in message_id_set
+            for candidate in memory_candidates:
+                touches_page = touches_page or bool(
+                    set(_bounded_ids(candidate.get("source_action_ids")))
+                    & page_action_ids
+                )
+            for reflection in reflection_records:
+                touches_page = touches_page or bool(
+                    set(_bounded_ids(reflection.get("source_action_ids")))
+                    & page_action_ids
+                )
+                touches_page = touches_page or bool(
+                    set(_bounded_ids(reflection.get("source_message_ids")))
+                    & message_id_set
+                )
+            if not touches_page:
+                continue
+            relevant_transitions.append(transition)
+            if transition_message_id:
+                candidate_message_ids.add(transition_message_id)
+            for outcome in outcomes:
+                if not isinstance(outcome, dict):
+                    continue
+                action_id_value = str(outcome.get("action_id") or "")
+                message_id_value = str(outcome.get("message_id") or "")
+                if action_id_value:
+                    candidate_action_ids.add(action_id_value)
+                if message_id_value:
+                    candidate_message_ids.add(message_id_value)
+            for candidate in memory_candidates:
+                candidate_action_ids.update(
+                    _bounded_ids(candidate.get("source_action_ids"))
+                )
+            for reflection in reflection_records:
+                candidate_action_ids.update(
+                    _bounded_ids(reflection.get("source_action_ids"))
+                )
+                candidate_message_ids.update(
+                    _bounded_ids(reflection.get("source_message_ids"))
+                )
+
+        candidate_actions: dict[str, SimulationAction] = {
+            action.id: action for action in page_actions
+        }
+        for action_ids in _chunked_ids(candidate_action_ids - page_action_ids):
+            for action in session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.scenario_id == scenario_id,
+                    col(SimulationAction.id).in_(action_ids),
+                )
+            ).all():
+                candidate_actions[action.id] = action
+                if action.message_id:
+                    candidate_message_ids.add(str(action.message_id))
+
+        scoped_message_ids = set(message_id_set)
+        for scoped_ids in _chunked_ids(candidate_message_ids - message_id_set):
+            scoped_statement = (
+                select(AgentMessage.id)
+                .join(Round, AgentMessage.round_id == Round.id)
+                .join(Branch, Round.branch_id == Branch.id)
+                .join(Agent, AgentMessage.agent_id == Agent.id)
+                .where(
+                    Branch.scenario_id == scenario_id,
+                    Agent.scenario_id == scenario_id,
+                    col(AgentMessage.id).in_(scoped_ids),
+                )
+            )
+            if branch_id is not None:
+                scoped_statement = scoped_statement.where(Round.branch_id == branch_id)
+            if agent_id is not None:
+                scoped_statement = scoped_statement.where(
+                    AgentMessage.agent_id == agent_id
+                )
+            scoped_message_ids.update(session.exec(scoped_statement).all())
+
+        actions_by_id = {
+            action_id_value: action
+            for action_id_value, action in candidate_actions.items()
+            if action.message_id in scoped_message_ids
+        }
+        action_message_ids = {
+            action_id_value: str(action.message_id)
+            for action_id_value, action in actions_by_id.items()
+            if action.message_id
+        }
+        for transition in relevant_transitions:
             transition_message_id = str(transition.get("message_id") or "")
             if (
-                transition_message_id not in message_id_set
+                transition_message_id not in scoped_message_ids
                 or str(transition.get("transition_status") or "").lower()
                 != "verified"
             ):
@@ -1933,7 +2164,7 @@ def build_action_ledger(
                 if (
                     len(expected_message_ids) != len(source_action_ids)
                     or set(source_message_ids) != expected_message_ids
-                    or not expected_message_ids.issubset(message_id_set)
+                    or not expected_message_ids.issubset(scoped_message_ids)
                 ):
                     continue
                 summary = str(reflection.get("summary") or "").strip()[:500]
@@ -1948,9 +2179,10 @@ def build_action_ledger(
                     "provenance_kind": "agent_runtime",
                 }
                 for source_message_id in source_message_ids:
-                    runtime_reflections.setdefault(source_message_id, []).append(
-                        dict(projected)
-                    )
+                    if source_message_id in message_id_set:
+                        runtime_reflections.setdefault(source_message_id, []).append(
+                            dict(projected)
+                        )
 
         event_by_message: dict[str, GraphNode] = {}
         outgoing_by_message: dict[str, list[dict[str, Any]]] = {}
@@ -1969,17 +2201,26 @@ def build_action_ledger(
                 if node.ref_id in message_id_set
                 and _mapping(node.payload_json).get("provenance_kind") != "runtime_projection"
             }
-            node_by_id = {node.id: node for node in session.exec(
-                select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
-            ).all()}
             source_node_ids = {node.id for node in event_by_message.values()}
             if source_node_ids:
-                edges = session.exec(
+                edges = list(session.exec(
                     select(GraphEdge).where(
                         GraphEdge.snapshot_id == snapshot.id,
                         col(GraphEdge.source_node_id).in_(source_node_ids),
                     )
-                ).all()
+                ).all())
+                target_node_ids = {edge.target_node_id for edge in edges}
+                node_by_id = {node.id: node for node in nodes}
+                for target_ids in _chunked_ids(target_node_ids - set(node_by_id)):
+                    node_by_id.update({
+                        node.id: node
+                        for node in session.exec(
+                            select(GraphNode).where(
+                                GraphNode.snapshot_id == snapshot.id,
+                                col(GraphNode.id).in_(target_ids),
+                            )
+                        ).all()
+                    })
                 message_by_node_id = {
                     node.id: message_id for message_id, node in event_by_message.items()
                 }
@@ -2013,10 +2254,31 @@ def build_action_ledger(
             message.id: agent.agent_identity_id
             for message, _branch, _round, agent in message_rows
         }
+        page_coordinates = {
+            message.id: (message_branch_id, round_number, message.id)
+            for message, message_branch_id, round_number, _agent in message_rows
+        }
         reflections_by_message: dict[str, list[dict[str, Any]]] = {}
-        growth_events = session.exec(
-            select(AgentGrowthEvent).where(AgentGrowthEvent.scenario_id == scenario_id)
-        ).all()
+        page_identity_ids = {
+            str(identity_id)
+            for identity_id in agent_identity_by_message.values()
+            if identity_id
+        }
+        growth_events: list[AgentGrowthEvent] = []
+        if page_identity_ids and message_ids:
+            growth_statement = select(AgentGrowthEvent).where(
+                AgentGrowthEvent.scenario_id == scenario_id,
+                col(AgentGrowthEvent.identity_id).in_(page_identity_ids),
+                or_(
+                    *(
+                        col(AgentGrowthEvent.metrics_json).contains(
+                            message_id
+                        )
+                        for message_id in message_ids
+                    )
+                ),
+            )
+            growth_events = list(session.exec(growth_statement).all())
         for event in growth_events:
             metrics = _mapping(event.metrics_json)
             for source_id in _bounded_ids(metrics.get("source_message_ids")):
@@ -2043,20 +2305,104 @@ def build_action_ledger(
             message_id: _receipt(_mapping(node.payload_json))
             for message_id, node in event_by_message.items()
         }
-        row_order = {message_id: index for index, message_id in enumerate(message_ids)}
+        retrieval_scope: dict[str, tuple[str, str, int, str]] = {}
         for source_id, reflections in reflections_by_message.items():
+            identity_id = agent_identity_by_message.get(source_id)
+            coordinate = page_coordinates.get(source_id)
+            if not identity_id or coordinate is None:
+                continue
+            if any(reflection.get("memory_ref") for reflection in reflections):
+                retrieval_scope[source_id] = (
+                    str(identity_id),
+                    coordinate[0],
+                    coordinate[1],
+                    coordinate[2],
+                )
+
+        retrieval_candidate_rows: list[tuple[str, str | None]] = []
+        if retrieval_scope:
+            after_source_clauses = []
+            for identity_id, source_branch_id, source_round, source_message_id in set(
+                retrieval_scope.values()
+            ):
+                after_source_clauses.append(
+                    and_(
+                        Agent.agent_identity_id == identity_id,
+                        or_(
+                            Round.branch_id > source_branch_id,
+                            and_(
+                                Round.branch_id == source_branch_id,
+                                Round.round_number > source_round,
+                            ),
+                            and_(
+                                Round.branch_id == source_branch_id,
+                                Round.round_number == source_round,
+                                AgentMessage.id > source_message_id,
+                            ),
+                        ),
+                    )
+                )
+            candidate_statement = (
+                select(AgentMessage.id, Agent.agent_identity_id)
+                .join(Round, AgentMessage.round_id == Round.id)
+                .join(Branch, Round.branch_id == Branch.id)
+                .join(Agent, AgentMessage.agent_id == Agent.id)
+                .where(
+                    Branch.scenario_id == scenario_id,
+                    Agent.scenario_id == scenario_id,
+                    or_(*after_source_clauses),
+                )
+            )
+            if branch_id is not None:
+                candidate_statement = candidate_statement.where(
+                    Round.branch_id == branch_id
+                )
+            if agent_id is not None:
+                candidate_statement = candidate_statement.where(
+                    AgentMessage.agent_id == agent_id
+                )
+            retrieval_candidate_rows = list(
+                session.exec(
+                    candidate_statement.order_by(
+                        Round.branch_id.asc(),
+                        Round.round_number.asc(),
+                        AgentMessage.id.asc(),
+                    )
+                ).all()
+            )
+
+        candidate_receipts: dict[str, dict[str, Any] | None] = {}
+        if snapshot is not None and retrieval_candidate_rows:
+            candidate_ids = {row[0] for row in retrieval_candidate_rows}
+            for receipt_ids in _chunked_ids(candidate_ids):
+                for node in session.exec(
+                    select(GraphNode).where(
+                        GraphNode.snapshot_id == snapshot.id,
+                        GraphNode.ref_model == "agent_message",
+                        col(GraphNode.ref_id).in_(receipt_ids),
+                    )
+                ).all():
+                    if (
+                        node.ref_id in candidate_ids
+                        and _mapping(node.payload_json).get("provenance_kind")
+                        != "runtime_projection"
+                    ):
+                        candidate_receipts[str(node.ref_id)] = _receipt(
+                            _mapping(node.payload_json)
+                        )
+
+        for source_id, reflections in reflections_by_message.items():
+            source_identity_id = agent_identity_by_message.get(source_id)
             for reflection in reflections:
                 memory_ref = reflection.get("memory_ref")
                 if not memory_ref:
                     continue
                 reflection["retrieved_in_message_ids"] = [
                     candidate_id
-                    for candidate_id in message_ids
-                    if row_order[candidate_id] > row_order[source_id]
-                    and agent_identity_by_message.get(candidate_id)
-                    == agent_identity_by_message.get(source_id)
+                    for candidate_id, candidate_identity_id in retrieval_candidate_rows
+                    if candidate_identity_id == source_identity_id
                     and memory_ref
-                    in ((receipts_by_message.get(candidate_id) or {}).get(
+                    in ((candidate_receipts.get(candidate_id) or {}).get(
                         "identity_memory_refs"
                     ) or [])
                 ]
@@ -2122,12 +2468,11 @@ def build_action_ledger(
                 ),
             })
 
-    page = entries[safe_cursor : safe_cursor + safe_limit]
-    next_cursor = safe_cursor + len(page)
+    next_cursor = safe_cursor + len(entries)
     return {
         "scenario_id": scenario_id,
-        "items": page,
+        "items": entries,
         "cursor": safe_cursor,
-        "next_cursor": next_cursor if next_cursor < len(entries) else None,
-        "has_more": next_cursor < len(entries),
+        "next_cursor": next_cursor if has_more else None,
+        "has_more": has_more,
     }

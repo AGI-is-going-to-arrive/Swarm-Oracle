@@ -11,7 +11,7 @@ import {
   useSimulationStore,
   type ActionCommittedReceipt,
 } from '../../stores/simulationStore';
-import { domainVariableLabel, formatDomainValue } from '../../lib/domainWorld';
+import { domainVariableLabel, formatDomainUnitValue } from '../../lib/domainWorld';
 import type { DomainAdjudicationChip } from '../../types';
 import { ACTION_LEDGER_POLL_INTERVAL_MS, isActionsUnavailableError } from './actionLedgerUtils';
 import './ActionLedgerPanel.css';
@@ -97,8 +97,8 @@ function domainChipLabel(
     const unknown = t('action_ledger.time_unknown');
     return t('action_ledger.domain_chip_verified', {
       label,
-      before: formatDomainValue(chip.before ?? null) || unknown,
-      after: formatDomainValue(chip.after ?? null) || unknown,
+      before: formatDomainUnitValue(chip.before ?? null, chip.unit ?? '', 0, isZh) || unknown,
+      after: formatDomainUnitValue(chip.after ?? null, chip.unit ?? '', 0, isZh) || unknown,
       rule: chip.rule_id,
     });
   }

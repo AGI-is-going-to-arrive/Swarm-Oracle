@@ -584,6 +584,10 @@ class SimulationCancelled(Exception):
         self.scenario_id = scenario_id
 
 
+class RuntimeLeaseLost(SimulationCancelled):
+    """Stop only the stale worker; a new lease owner remains authoritative."""
+
+
 def _check_cancelled(scenario_id: str) -> None:
     if is_cancelled(scenario_id):
         raise SimulationCancelled(scenario_id)
@@ -3244,6 +3248,10 @@ async def run_simulation(
             runtime_lease=runtime_lease,
             current_runtime_lease=current_runtime_lease,
         )
+    except RuntimeLeaseLost:
+        if is_cancelled(scenario_id):
+            await handle_simulation_cancelled(scenario_id, ws_callback=ws_callback)
+        return
     except SimulationCancelled:
         await handle_simulation_cancelled(scenario_id, ws_callback=ws_callback)
     except asyncio.CancelledError:
@@ -3824,7 +3832,8 @@ async def _run_simulation_impl(
 
             _check_cancelled(scenario_id)
             try:
-                domain_result = finalize_domain_round_v1(
+                domain_result = await asyncio.to_thread(
+                    finalize_domain_round_v1,
                     engine,
                     scenario_id=scenario_id,
                     branch_id=current_branch_id,
@@ -3836,6 +3845,8 @@ async def _run_simulation_impl(
             except RuntimeError as exc:
                 if exc.args == ("DOMAIN_FINALIZATION_CANCELLED",):
                     raise SimulationCancelled(scenario_id) from exc
+                if exc.args == ("DOMAIN_FINALIZATION_LEASE_LOST",):
+                    raise RuntimeLeaseLost(scenario_id) from exc
                 raise
             _check_cancelled(scenario_id)
 
@@ -3863,6 +3874,7 @@ async def _run_simulation_impl(
                 promotion_deadline = (
                     monotonic() + MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1
                 )
+                post_commit_cancellation: SimulationCancelled | None = None
                 try:
                     await _bounded_memory_promotion_thread_call_v1(
                         _ensure_bootstrap_runtime_lease,
@@ -3878,10 +3890,16 @@ async def _run_simulation_impl(
                         round_number=round_num,
                         deadline=promotion_deadline,
                     )
-                except (SimulationCancelled, asyncio.CancelledError):
+                except SimulationCancelled as exc:
+                    # SQL truth is already committed. Preserve the matching event
+                    # before the stale worker yields to the new lease owner.
+                    post_commit_cancellation = exc
+                except asyncio.CancelledError:
                     raise
                 except Exception:
                     logger.warning("Verified memory promotion attempt unavailable")
+            else:
+                post_commit_cancellation = None
             if domain_result.should_broadcast:
                 if domain_result.event_data is None:
                     raise RuntimeError("DOMAIN_FINALIZATION_EVENT_DATA_MISSING")
@@ -3891,6 +3909,8 @@ async def _run_simulation_impl(
                         "data": dict(domain_result.event_data),
                     }
                 )
+            if post_commit_cancellation is not None:
+                raise post_commit_cancellation
 
             # 2) Round summary
             if detected_language.startswith("Chinese"):
@@ -5509,7 +5529,8 @@ async def _gather_agent_messages(
         )
         for actor_id in snapshot_actor_ids
     }
-    prior_receipts = _load_prior_opportunity_receipts(
+    prior_receipts = await asyncio.to_thread(
+        _load_prior_opportunity_receipts,
         engine,
         scenario_id,
         branch_id,
@@ -5518,7 +5539,8 @@ async def _gather_agent_messages(
     )
     domain_world_context: Mapping[str, object] | None = None
     try:
-        domain_world_context = _load_domain_decision_context_v1(
+        domain_world_context = await asyncio.to_thread(
+            _load_domain_decision_context_v1,
             engine,
             scenario_id=scenario_id,
             branch_id=branch_id,
@@ -5537,7 +5559,8 @@ async def _gather_agent_messages(
     if social_world_state is not None:
         try:
             opportunity_snapshots_by_actor.update(
-                derive_opportunity_snapshots_v1(
+                await asyncio.to_thread(
+                    derive_opportunity_snapshots_v1,
                     social_state=social_world_state,
                     target_catalogs_by_actor=projected_target_catalogs,
                     prior_receipts_by_actor=prior_receipts,
@@ -8395,7 +8418,7 @@ def _ensure_bootstrap_runtime_lease(
         with Session(get_engine()) as owned_session:
             held = check(owned_session)
     if held is None:
-        raise SimulationCancelled(scenario_id)
+        raise RuntimeLeaseLost(scenario_id)
 
 
 def _normalized_active_branch_probabilities(
@@ -8672,7 +8695,7 @@ def _save_messages(
                         )
                 except ValueError as exc:
                     if str(exc) == "AGENT_RUNTIME_LEASE_LOST":
-                        raise SimulationCancelled(scenario_id) from exc
+                        raise RuntimeLeaseLost(scenario_id) from exc
                     raise
         if runtime_lease is not None and runtime_lease.db_path is not None:
             from sqlalchemy import text
@@ -8689,7 +8712,7 @@ def _save_messages(
                 },
             ).first()
             if fence is None:
-                raise SimulationCancelled(messages[0].get("scenario_id", ""))
+                raise RuntimeLeaseLost(messages[0].get("scenario_id", ""))
         session.commit()
         return [row.id for row in rows]
 

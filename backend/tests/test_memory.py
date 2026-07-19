@@ -1547,6 +1547,55 @@ def _promotion_two_identity_authority() -> dict:
     return _reproject_promotion_authority(authority)
 
 
+def _promotion_many_identity_authority(count: int) -> dict:
+    assert count >= 1
+    authority = _promotion_authority()
+    authority["domain_world_config"]["schema"]["variables"][0]["maximum"] = str(
+        count + 10
+    )
+    template = authority["actions"][0]
+    authority["actions"] = []
+    authority["roster"] = []
+    for index in range(1, count + 1):
+        action = copy.deepcopy(template)
+        agent_id = f"agent-{index}"
+        identity_id = f"identity-{index}"
+        message_id = f"message-{index}"
+        action_id = f"action-{index}"
+        event_key = f"event-{index}"
+        action.update(
+            {"identity_id": identity_id, "identity_owner_id": "user-a"}
+        )
+        action["action"].update(
+            {
+                "agent_id": agent_id,
+                "message_id": message_id,
+                "action_id": action_id,
+                "action_sequence": index,
+            }
+        )
+        action["action"]["payload"]["proposals"][0]["event_key"] = event_key
+        action["decision"].update(
+            {
+                "agent_id": agent_id,
+                "message_id": message_id,
+                "action_id": action_id,
+            }
+        )
+        action["decision"]["action_parameters"]["domain_world_v1"]["proposals"][
+            0
+        ]["event_key"] = event_key
+        authority["actions"].append(action)
+        authority["roster"].append(
+            {
+                "agent_id": agent_id,
+                "identity_id": identity_id,
+                "identity_owner_id": "user-a",
+            }
+        )
+    return _reproject_promotion_authority(authority)
+
+
 class TestVerifiedMemoryPromotionBuildersV1:
     def test_key_document_id_ref_and_record_bytes_use_independent_oracle(self):
         authority = _promotion_authority()
@@ -1624,6 +1673,28 @@ class TestVerifiedMemoryPromotionBuildersV1:
         assert authority == original
         assert first == second
         assert first.documents == second.documents
+
+    def test_eighty_actor_builder_indexes_each_source_instead_of_rescanning(
+        self, monkeypatch
+    ):
+        authority = _promotion_many_identity_authority(80)
+        original_validator = memory_module.validate_domain_action_payload_v1
+        validation_calls = 0
+
+        def counted_validator(*args, **kwargs):
+            nonlocal validation_calls
+            validation_calls += 1
+            return original_validator(*args, **kwargs)
+
+        monkeypatch.setattr(
+            memory_module, "validate_domain_action_payload_v1", counted_validator
+        )
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "verified"
+        assert len(result.record_documents) == 80
+        assert validation_calls <= 160
 
     def test_multi_proposal_uses_proposal_order_and_complete_sorted_sources(self):
         authority = _promotion_authority(proposal_count=2)

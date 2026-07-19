@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from bisect import bisect_right
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Literal, TypedDict
+from heapq import nlargest
+from typing import Literal, TypedDict, cast
 
 from app.config import settings
 from app.services.domain_world import (
@@ -19,7 +21,7 @@ from app.services.domain_world import (
     _normalize_identifier,
     _normalize_unit,
 )
-from app.services.social_world import SocialWorldState
+from app.services.social_world import SocialPost, SocialWorldState
 
 ActionTypeV1 = Literal[
     "IDLE", "POST", "COMMENT", "REACTION", "FOLLOW", "MUTE", "SEARCH", "TREND", "REFRESH"
@@ -125,6 +127,30 @@ class OpportunitySnapshotV1:
     domain_state_revision: str | None
     allowed_rule_ids: tuple[str, ...]
     actions: OpportunityActionsV1
+
+
+@dataclass(frozen=True, slots=True)
+class _VisibilityProjectionV1:
+    has_visible_posts: bool
+    authors: frozenset[str]
+    posts_by_id: dict[str, SocialPost]
+    sorted_post_sequences: tuple[int, ...]
+    default_contributors: frozenset[str]
+    corpus_revision: str
+    trend_state: tuple[str | None, bool, bool]
+
+
+@dataclass(frozen=True, slots=True)
+class _MutedVisibilityProjectionV1:
+    base_posts: tuple[SocialPost, ...]
+    activity_sequences_by_post: dict[str, tuple[int, ...]]
+    authors: frozenset[str]
+    posts_by_id: dict[str, SocialPost]
+    sorted_post_sequences: tuple[int, ...]
+    corpus_posts_by_id: dict[str, dict[str, object]] | None
+    corpus_agent_names: dict[str, str] | None
+    trend_state: tuple[str | None, bool, bool]
+    unique_post_ids: bool
 
 
 class OpportunityReceiptV1(TypedDict):
@@ -363,6 +389,103 @@ def _visible_posts(state: SocialWorldState, actor_id: str) -> list[object]:
     )
 
 
+def _muted_visibility_projection(
+    state: SocialWorldState,
+    muted: frozenset[str],
+    *,
+    cache_corpus_rows: bool = True,
+) -> _MutedVisibilityProjectionV1:
+    """Build following-independent visibility facts once per exact mute set."""
+    post_rows: list[tuple[SocialPost, tuple[int, ...]]] = []
+    for post in state.posts:
+        if post.author_id in muted:
+            continue
+        sequences = tuple(
+            sequence
+            for sequence, contributor in post.activity_events
+            if contributor not in muted
+        ) or (post.sequence,)
+        post_rows.append((post, sequences))
+
+    base_posts = tuple(
+        post
+        for post, sequences in sorted(
+            post_rows,
+            key=lambda item: (
+                max(item[1]),
+                item[0].sequence,
+                item[0].action_id,
+            ),
+            reverse=True,
+        )
+    )
+    activity_sequences_by_post = {
+        post.action_id: sequences for post, sequences in post_rows
+    }
+    posts_by_id = {post.action_id: post for post in base_posts}
+    unique_post_ids = len(posts_by_id) == len(base_posts)
+    if cache_corpus_rows:
+        relevant_agent_ids = {
+            post.author_id for post in base_posts if post.author_name_override is None
+        }
+        corpus_posts_by_id = {
+            post.action_id: {
+                "id": post.action_id,
+                "author_id": post.author_id,
+                "content": post.content,
+                "source_display": post.author_name_override,
+                "tags": list(post.tags),
+                "sequence": post.sequence,
+                "comments": [
+                    {
+                        "id": comment.action_id,
+                        "author_id": comment.author_id,
+                        "content": comment.content,
+                        "sequence": comment.sequence,
+                    }
+                    for comment in post.comments
+                    if comment.author_id not in muted
+                ],
+            }
+            for post in base_posts
+        }
+        corpus_agent_names = {
+            identifier: state.agent_names.get(identifier, "")
+            for identifier in sorted(relevant_agent_ids)
+        }
+    else:
+        corpus_posts_by_id = None
+        corpus_agent_names = None
+    return _MutedVisibilityProjectionV1(
+        base_posts=base_posts,
+        activity_sequences_by_post=activity_sequences_by_post,
+        authors=frozenset(post.author_id for post in base_posts),
+        posts_by_id=posts_by_id,
+        sorted_post_sequences=tuple(sorted(post.sequence for post in base_posts)),
+        corpus_posts_by_id=corpus_posts_by_id,
+        corpus_agent_names=corpus_agent_names,
+        trend_state=_trend_state(
+            state,
+            "",
+            list(base_posts),
+            activity_sequences_by_post=activity_sequences_by_post,
+        ),
+        unique_post_ids=unique_post_ids,
+    )
+
+
+def _stable_followed_partition(
+    posts: tuple[SocialPost, ...],
+    following: frozenset[str],
+) -> tuple[SocialPost, ...]:
+    """Match the legacy reverse tuple sort after its secondary keys are sorted."""
+    followed: list[SocialPost] = []
+    other: list[SocialPost] = []
+    for post in posts:
+        (followed if post.author_id in following else other).append(post)
+    return (*followed, *other)
+
+
 def _catalog_ids(rows: object) -> tuple[str, ...]:
     if not isinstance(rows, list):
         return ()
@@ -387,13 +510,42 @@ def _target_index(state: SocialWorldState) -> dict[str, tuple[object, str]]:
     return targets
 
 
-def _corpus_revision(state: SocialWorldState, actor_id: str, visible: list[object]) -> str:
+def _reaction_kind_index(state: SocialWorldState) -> dict[tuple[str, str], str]:
+    kinds: dict[tuple[str, str], str] = {}
+    for post in state.posts:
+        for reaction in post.reactions:
+            kinds.setdefault((post.action_id, reaction.author_id), reaction.kind)
+    return kinds
+
+
+def _presented_contributors(
+    posts: Iterable[SocialPost],
+    muted: frozenset[str],
+) -> frozenset[str]:
+    return frozenset(
+        contributor
+        for post in posts
+        for contributor in (
+            post.author_id,
+            *(item.author_id for item in post.comments if item.author_id not in muted),
+            *(item.author_id for item in post.reactions if item.author_id not in muted),
+        )
+    )
+
+
+def _corpus_revision(
+    state: SocialWorldState,
+    actor_id: str,
+    visible: list[object],
+    *,
+    muted_projection: _MutedVisibilityProjectionV1 | None = None,
+) -> str:
     muted = state.muted.get(actor_id, frozenset())
-    relevant_agent_ids = {
-        post.author_id for post in visible if post.author_name_override is None
-    }
-    payload = {
-        "posts": [
+    if muted_projection is None:
+        relevant_agent_ids = {
+            post.author_id for post in visible if post.author_name_override is None
+        }
+        corpus_posts = [
             {
                 "id": post.action_id,
                 "author_id": post.author_id,
@@ -413,11 +565,24 @@ def _corpus_revision(state: SocialWorldState, actor_id: str, visible: list[objec
                 ],
             }
             for post in visible
-        ],
-        "agent_names": {
+        ]
+        agent_names = {
             identifier: state.agent_names.get(identifier, "")
             for identifier in sorted(relevant_agent_ids)
-        },
+        }
+    else:
+        if (
+            muted_projection.corpus_posts_by_id is None
+            or muted_projection.corpus_agent_names is None
+        ):
+            raise ValueError("muted projection has no cached corpus rows")
+        corpus_posts = [
+            muted_projection.corpus_posts_by_id[post.action_id] for post in visible
+        ]
+        agent_names = muted_projection.corpus_agent_names
+    payload = {
+        "posts": corpus_posts,
+        "agent_names": agent_names,
         "following": sorted(state.following.get(actor_id, frozenset())),
         "muted": sorted(muted),
     }
@@ -428,11 +593,13 @@ def _trend_state(
     state: SocialWorldState,
     actor_id: str,
     visible: list[object],
+    *,
+    activity_sequences_by_post: Mapping[str, tuple[int, ...]] | None = None,
 ) -> tuple[str | None, bool, bool]:
     if not visible:
         return None, False, False
     muted = state.muted.get(actor_id, frozenset())
-    sequences_by_post = {
+    sequences_by_post = activity_sequences_by_post or {
         post.action_id: tuple(
             sequence
             for sequence, contributor in post.activity_events
@@ -452,10 +619,10 @@ def _trend_state(
             for sequence in sequences
         )
         ranked.append((score, len(sequences), max(sequences), post.action_id))
-    ranked.sort(reverse=True)
+    top_ranked = nlargest(5, ranked)
     rows = [
         [post_id, activity_count, score, latest_sequence]
-        for score, activity_count, latest_sequence, post_id in ranked[:5]
+        for score, activity_count, latest_sequence, post_id in top_ranked
     ]
     has_volume = len(visible) >= 2
     has_interaction = len(visible) == 1 and ranked[0][1] >= 2
@@ -548,25 +715,86 @@ def derive_opportunity_snapshots_v1(
     """Derive exactly one immutable N-1 snapshot per actor before gather tasks."""
     social_revision = _state_revision(social_state)
     target_index = _target_index(social_state)
+    reaction_kind_index = _reaction_kind_index(social_state)
     valid_domain = _valid_domain_opportunities(
         domain_opportunities,
         as_of_round=social_state.cutoff_round,
     )
+    visibility_projections: dict[
+        tuple[frozenset[str], frozenset[str]], _VisibilityProjectionV1
+    ] = {}
+    muted_visibility_projections: dict[frozenset[str], _MutedVisibilityProjectionV1] = {}
+    muted_view_counts: dict[frozenset[str], int] = {}
+    for actor_id in target_catalogs_by_actor:
+        actor_muted = frozenset(social_state.muted.get(actor_id, frozenset()))
+        muted_view_counts[actor_muted] = muted_view_counts.get(actor_muted, 0) + 1
     snapshots: dict[str, OpportunitySnapshotV1] = {}
     for actor_id in sorted(target_catalogs_by_actor):
         catalog = target_catalogs_by_actor[actor_id]
-        muted = social_state.muted.get(actor_id, frozenset())
-        visible = _visible_posts(social_state, actor_id)
-        visible_post_ids = {post.action_id for post in visible}
+        muted = frozenset(social_state.muted.get(actor_id, frozenset()))
+        following = frozenset(social_state.following.get(actor_id, frozenset()))
+        visibility_key = (muted, following)
+        projection = visibility_projections.get(visibility_key)
+        if projection is None:
+            muted_projection = muted_visibility_projections.get(muted)
+            if muted_projection is None:
+                muted_projection = _muted_visibility_projection(
+                    social_state,
+                    muted,
+                    cache_corpus_rows=muted_view_counts[muted] > 1,
+                )
+                muted_visibility_projections[muted] = muted_projection
+            if muted_projection.unique_post_ids:
+                visible = _stable_followed_partition(
+                    muted_projection.base_posts,
+                    following,
+                )
+                visible_rows = list(visible)
+                trend_state = muted_projection.trend_state
+                visible_authors = muted_projection.authors
+                posts_by_id = muted_projection.posts_by_id
+                sorted_post_sequences = muted_projection.sorted_post_sequences
+            else:
+                # Invalid duplicate post ids can make the legacy trend overwrite
+                # order following-dependent, so preserve that exact fallback.
+                visible_rows = _visible_posts(social_state, actor_id)
+                visible = tuple(visible_rows)
+                trend_state = _trend_state(social_state, actor_id, visible_rows)
+                visible_authors = frozenset(post.author_id for post in visible)
+                posts_by_id = {post.action_id: post for post in visible}
+                sorted_post_sequences = tuple(sorted(post.sequence for post in visible))
+            projection = _VisibilityProjectionV1(
+                has_visible_posts=bool(visible),
+                authors=visible_authors,
+                posts_by_id=posts_by_id,
+                sorted_post_sequences=sorted_post_sequences,
+                default_contributors=_presented_contributors(visible[:4], muted),
+                corpus_revision=_corpus_revision(
+                    social_state,
+                    actor_id,
+                    visible_rows,
+                    muted_projection=(
+                        muted_projection
+                        if (
+                            muted_projection.unique_post_ids
+                            and muted_projection.corpus_posts_by_id is not None
+                        )
+                        else None
+                    ),
+                ),
+                trend_state=trend_state,
+            )
+            visibility_projections[visibility_key] = projection
         action_ids = _catalog_ids(catalog.get("actions"))
         agent_ids = _catalog_ids(catalog.get("agents"))
+        ineligible_action_authors = muted | {actor_id}
 
         eligible_actions = tuple(
             target_id
             for target_id in action_ids
             if target_id in target_index
-            and target_index[target_id][0].action_id in visible_post_ids
-            and target_index[target_id][1] not in {actor_id, *muted}
+            and target_index[target_id][0].action_id in projection.posts_by_id
+            and target_index[target_id][1] not in ineligible_action_authors
         )
         comment = _target_opportunity(
             eligible_actions,
@@ -576,32 +804,24 @@ def derive_opportunity_snapshots_v1(
         reaction_kinds: dict[str, tuple[ReactionKindV1, ...]] = {}
         for target_id in eligible_actions:
             root_post = target_index[target_id][0]
-            current_kind = next(
-                (
-                    reaction.kind
-                    for reaction in root_post.reactions
-                    if reaction.author_id == actor_id
-                ),
-                None,
-            )
+            current_kind = reaction_kind_index.get((root_post.action_id, actor_id))
             reaction_kinds[target_id] = tuple(
                 kind for kind in _REACTION_KINDS if kind != current_kind
             )
-        reaction: ReactionOpportunityV1 = {
-            **_target_opportunity(
+        reaction = cast(
+            ReactionOpportunityV1,
+            _target_opportunity(
                 eligible_actions,
                 "REACTION_ELIGIBLE_TARGET_AVAILABLE",
                 "REACTION_NO_ELIGIBLE_TARGET",
             ),
-            "eligible_reaction_kinds_by_target": reaction_kinds,
-        }
+        )
+        reaction["eligible_reaction_kinds_by_target"] = reaction_kinds
 
-        visible_authors = {post.author_id for post in visible}
-        following = social_state.following.get(actor_id, frozenset())
         follow_ids = tuple(
             target_id
             for target_id in agent_ids
-            if target_id in visible_authors
+            if target_id in projection.authors
             and target_id != actor_id
             and target_id not in muted
             and target_id not in following
@@ -614,23 +834,14 @@ def derive_opportunity_snapshots_v1(
 
         refreshes = social_state.refresh_receipts.get(actor_id, ())
         if refreshes:
-            posts_by_id = {post.action_id: post for post in visible}
-            presented = [
-                posts_by_id[post_id]
+            presented = (
+                projection.posts_by_id[post_id]
                 for post_id in refreshes[-1].post_ids[:4]
-                if post_id in posts_by_id
-            ]
-        else:
-            presented = visible[:4]
-        contributors = {
-            contributor
-            for post in presented
-            for contributor in (
-                post.author_id,
-                *(item.author_id for item in post.comments if item.author_id not in muted),
-                *(item.author_id for item in post.reactions if item.author_id not in muted),
+                if post_id in projection.posts_by_id
             )
-        }
+            contributors = _presented_contributors(presented, muted)
+        else:
+            contributors = projection.default_contributors
         mute_ids = tuple(
             target_id
             for target_id in agent_ids
@@ -642,15 +853,17 @@ def derive_opportunity_snapshots_v1(
             "MUTE_NO_FILTER_EFFECT",
         )
 
-        unseen_count = sum(
-            post.sequence > social_state.last_seen.get(actor_id, 0) for post in visible
+        seen_through = social_state.last_seen.get(actor_id, 0)
+        unseen_count = len(projection.sorted_post_sequences) - bisect_right(
+            projection.sorted_post_sequences,
+            seen_through,
         )
         refresh = _opportunity(
             unseen_count > 0,
             "REFRESH_UNSEEN_POSTS_AVAILABLE" if unseen_count else "REFRESH_NO_UNSEEN_POSTS",
         )
 
-        corpus_revision = _corpus_revision(social_state, actor_id, visible)
+        corpus_revision = projection.corpus_revision
         prior = prior_receipts_by_actor.get(actor_id)
         valid_prior = prior if _receipt_is_valid(prior) else None
         durable_search_exists = bool(social_state.recent_searches.get(actor_id))
@@ -663,24 +876,20 @@ def derive_opportunity_snapshots_v1(
         else:
             history = ()
             history_complete = not durable_search_exists
-        search_available = bool(visible) and history_complete
+        search_available = projection.has_visible_posts and history_complete
         search_reason: OpportunityReasonCodeV1
-        if not visible:
+        if not projection.has_visible_posts:
             search_reason = "SEARCH_CORPUS_EMPTY"
         elif not history_complete:
             search_reason = "SEARCH_HISTORY_UNAVAILABLE"
         else:
             search_reason = "SEARCH_CORPUS_AVAILABLE"
-        search: SearchOpportunityV1 = {
-            **_opportunity(search_available, search_reason),
-            "corpus_revision": corpus_revision,
-            "search_history_complete": history_complete,
-            "recent_query_fingerprints": history,
-        }
+        search = cast(SearchOpportunityV1, _opportunity(search_available, search_reason))
+        search["corpus_revision"] = corpus_revision
+        search["search_history_complete"] = history_complete
+        search["recent_query_fingerprints"] = history
 
-        trend_signature, has_volume, has_interaction = _trend_state(
-            social_state, actor_id, visible
-        )
+        trend_signature, has_volume, has_interaction = projection.trend_state
         if valid_prior is not None:
             last_trend_signature = valid_prior["last_trend_signature"]
         elif social_state.trend_receipts.get(actor_id):
@@ -703,11 +912,9 @@ def derive_opportunity_snapshots_v1(
         else:
             trend_available = False
             trend_reason = "TREND_NO_NEW_ACTIVITY"
-        trend: TrendOpportunityV1 = {
-            **_opportunity(trend_available, trend_reason),
-            "current_trend_signature": trend_signature,
-            "last_trend_signature": last_trend_signature,
-        }
+        trend = cast(TrendOpportunityV1, _opportunity(trend_available, trend_reason))
+        trend["current_trend_signature"] = trend_signature
+        trend["last_trend_signature"] = last_trend_signature
 
         actions: OpportunityActionsV1 = {
             "IDLE": _opportunity(True, "IDLE_ALWAYS_AVAILABLE"),

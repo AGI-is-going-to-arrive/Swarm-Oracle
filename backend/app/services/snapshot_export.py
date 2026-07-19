@@ -38,7 +38,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from app.log_sanitize import _scrub_sensitive_text
+from app.log_sanitize import _scrub_sensitive_text, contains_credential_material
 from app.models import (
     Agent,
     AgentMessage,
@@ -229,6 +229,77 @@ def _json_object_without_duplicate_keys(
     return value
 
 
+class _PortableJsonNumber:
+    """A validated JSON number token that must not pass as a domain string."""
+
+    __slots__ = ("token",)
+
+    def __init__(self, token: str) -> None:
+        self.token = token
+
+
+def _parse_finite_json_float(raw: str) -> _PortableJsonNumber:
+    # json.JSONDecoder calls parse_float only after the token has matched the
+    # strict JSON number grammar. Keeping the token avoids binary-float
+    # overflow/rounding and therefore accepts every syntactically finite value.
+    return _PortableJsonNumber(raw)
+
+
+def _parse_portable_json_int(raw: str) -> int | _PortableJsonNumber:
+    # Python's int("-0") discards the sign.  Preserve that one non-canonical
+    # extension token without changing ordinary JSON integers expected by the
+    # existing action/domain validators.
+    return _PortableJsonNumber(raw) if raw == "-0" else int(raw)
+
+
+def _reject_json_constant(raw: str) -> None:
+    raise ValueError(f"JSON constant is not permitted: {raw}")
+
+
+def _load_portable_json(raw: str) -> Any:
+    """Decode strict JSON while preserving finite numbers for extensions."""
+    return json.loads(
+        raw,
+        object_pairs_hook=_json_object_without_duplicate_keys,
+        parse_int=_parse_portable_json_int,
+        parse_float=_parse_finite_json_float,
+        parse_constant=_reject_json_constant,
+    )
+
+
+def _portable_json_text(value: object) -> str:
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "true" if value else "false"
+    if type(value) is int:
+        return str(value)
+    if isinstance(value, _PortableJsonNumber):
+        return value.token
+    if type(value) is str:
+        return json.dumps(value, ensure_ascii=False, allow_nan=False)
+    if isinstance(value, list):
+        return "[" + ",".join(_portable_json_text(item) for item in value) + "]"
+    if isinstance(value, dict):
+        if any(type(key) is not str for key in value):
+            raise TypeError("JSON object keys must be strings")
+        return "{" + ",".join(
+            f"{_portable_json_text(key)}:{_portable_json_text(value[key])}"
+            for key in sorted(value)
+        ) + "}"
+    raise TypeError(f"unsupported JSON value: {type(value).__name__}")
+
+
+def _portable_json_bytes(value: object) -> bytes:
+    """Serialize generic JSON canonically without applying Domain-only types."""
+    return _portable_json_text(value).encode("utf-8")
+
+
+def _portable_json_size(value: object) -> int:
+    """Return the generic portable JSON size used by the action payload cap."""
+    return len(_portable_json_bytes(value))
+
+
 def _validate_snapshot_actions(
     rows: list[dict[str, Any]],
     *,
@@ -310,10 +381,7 @@ def _validate_snapshot_actions(
         try:
             sequence = int(raw.get("sequence"))
             round_number = int(raw.get("round_number"))
-            payload = json.loads(
-                raw_payload_json,
-                object_pairs_hook=_json_object_without_duplicate_keys,
-            )
+            payload = _load_portable_json(raw_payload_json)
             _coerce_datetime_field(raw.get("created_at"), "actions.created_at")
         except _DuplicateJsonObjectKey as exc:
             raise SnapshotImportError(
@@ -420,7 +488,7 @@ def _validate_snapshot_actions(
         if failure and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", failure):
             raise SnapshotImportError("actions.failure_code is invalid")
         try:
-            canonical_payload_size = len(canonical_json_bytes_v1(payload))
+            canonical_payload_size = _portable_json_size(payload)
         except (TypeError, ValueError):
             raise SnapshotImportError(
                 "actions payload is oversized or contains credentials"
@@ -701,10 +769,7 @@ def _decode_snapshot_action_payload_json(
     if not raw:
         raise SnapshotImportError("action payload_json must be non-empty JSON text")
     try:
-        decoded = json.loads(
-            raw,
-            object_pairs_hook=_json_object_without_duplicate_keys,
-        )
+        decoded = _load_portable_json(raw)
     except _DuplicateJsonObjectKey as exc:
         raise SnapshotImportError(
             "action payload_json contains duplicate object keys"
@@ -714,7 +779,7 @@ def _decode_snapshot_action_payload_json(
     if not isinstance(decoded, dict):
         raise SnapshotImportError("action payload must be a JSON object")
     try:
-        outer_size = len(canonical_json_bytes_v1(decoded))
+        outer_size = _portable_json_size(decoded)
     except (TypeError, ValueError):
         message = (
             "domain action payload is invalid"
@@ -760,23 +825,123 @@ def _serialize_counterfactual_action_payload_json(raw: Any) -> str:
         raise SnapshotImportError("action payload contains credentials")
     if "domain_world_v1" not in decoded:
         return raw_json
-    stripped = dict(decoded)
-    stripped.pop("domain_world_v1")
-    return canonical_json_bytes_v1(stripped).decode("utf-8")
+    return _strip_top_level_json_member(raw_json, "domain_world_v1")
+
+
+_JSON_WHITESPACE = frozenset(" \t\r\n")
+
+
+def _skip_json_whitespace(raw: str, offset: int) -> int:
+    while offset < len(raw) and raw[offset] in _JSON_WHITESPACE:
+        offset += 1
+    return offset
+
+
+def _skip_json_string(raw: str, offset: int) -> int:
+    if offset >= len(raw) or raw[offset] != '"':
+        raise SnapshotImportError("action payload_json is malformed JSON")
+    offset += 1
+    while offset < len(raw):
+        char = raw[offset]
+        offset += 1
+        if char == '"':
+            return offset
+        if char == "\\":
+            offset += 1
+    raise SnapshotImportError("action payload_json is malformed JSON")
+
+
+def _skip_json_value(raw: str, offset: int) -> int:
+    offset = _skip_json_whitespace(raw, offset)
+    if offset >= len(raw):
+        raise SnapshotImportError("action payload_json is malformed JSON")
+    if raw[offset] == '"':
+        return _skip_json_string(raw, offset)
+    if raw[offset] not in "[{":
+        while offset < len(raw) and raw[offset] not in " \t\r\n,]}":
+            offset += 1
+        return offset
+
+    expected_closers = ["]" if raw[offset] == "[" else "}"]
+    offset += 1
+    while expected_closers and offset < len(raw):
+        char = raw[offset]
+        if char == '"':
+            offset = _skip_json_string(raw, offset)
+            continue
+        if char == "[":
+            expected_closers.append("]")
+        elif char == "{":
+            expected_closers.append("}")
+        elif char == expected_closers[-1]:
+            expected_closers.pop()
+        offset += 1
+    if expected_closers:
+        raise SnapshotImportError("action payload_json is malformed JSON")
+    return offset
+
+
+def _strip_top_level_json_member(raw: str, member_name: str) -> str:
+    """Remove one validated top-level member without rewriting other tokens."""
+
+    offset = _skip_json_whitespace(raw, 0)
+    if offset >= len(raw) or raw[offset] != "{":
+        raise SnapshotImportError("action payload must be a JSON object")
+    offset += 1
+    previous_comma: int | None = None
+
+    while True:
+        member_prefix = offset
+        offset = _skip_json_whitespace(raw, offset)
+        if offset >= len(raw) or raw[offset] == "}":
+            break
+        key_start = offset
+        key_end = _skip_json_string(raw, key_start)
+        key = json.loads(raw[key_start:key_end])
+        offset = _skip_json_whitespace(raw, key_end)
+        if offset >= len(raw) or raw[offset] != ":":
+            raise SnapshotImportError("action payload_json is malformed JSON")
+        value_end = _skip_json_value(raw, offset + 1)
+        delimiter = _skip_json_whitespace(raw, value_end)
+
+        if key == member_name:
+            if delimiter < len(raw) and raw[delimiter] == ",":
+                return raw[:member_prefix] + raw[delimiter + 1 :]
+            if previous_comma is not None:
+                return raw[:previous_comma] + raw[value_end:]
+            return raw[:member_prefix] + raw[value_end:]
+
+        if delimiter >= len(raw) or raw[delimiter] != ",":
+            break
+        previous_comma = delimiter
+        offset = delimiter + 1
+
+    raise SnapshotImportError("action payload_json is malformed JSON")
 
 
 def _json_value_has_credential_features(value: object) -> bool:
-    """Scan every JSON string key and value with the domain credential predicate."""
+    """Apply the central credential policy to JSON atoms and assignments."""
 
     pending = [value]
     while pending:
         item = pending.pop()
         if type(item) is str:
-            if string_has_credential_features(item):
+            if contains_credential_material(item) or string_has_credential_features(
+                item
+            ):
                 return True
         elif isinstance(item, dict):
-            pending.extend(item.keys())
-            pending.extend(item.values())
+            for key, nested in item.items():
+                # Scanning key/value atoms independently loses the fact that a
+                # benign-looking fixture value is assigned to a sensitive key.
+                # Reconstruct only that pair for detection; accepted payloads
+                # still retain their exact original bytes.
+                if type(key) is str and contains_credential_material(
+                    _portable_json_bytes({key: nested}).decode("utf-8")
+                ):
+                    return True
+                pending.append(key)
+                pending.append(nested)
         elif isinstance(item, list):
             pending.extend(item)
     return False
@@ -2075,6 +2240,15 @@ def import_snapshot_zip(
         raw_parsed_context if isinstance(raw_parsed_context, dict) else {},
         materialize_missing_domain_config=True,
     )
+    domain_config = parsed_context.get("domain_world_v1")
+    if (
+        isinstance(domain_config, dict)
+        and domain_config.get("status") == "active"
+        and not branches_rows
+    ):
+        raise SnapshotImportError(
+            "active domain world snapshot must contain at least one branch"
+        )
     deferred_full_report = None
     deferred_result_quality = None
     deferred_agent_runtime = None

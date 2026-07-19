@@ -25,6 +25,12 @@ vi.mock("../i18n/config", () => ({
 import { useSimulationStore } from "./simulationStore";
 import type { Scenario, WSEvent } from "../types";
 
+const SHA_A = `sha256:${"a".repeat(64)}`;
+const SHA_B = `sha256:${"b".repeat(64)}`;
+const SHA_C = `sha256:${"c".repeat(64)}`;
+const SHA_D = `sha256:${"d".repeat(64)}`;
+const SHA_E = `sha256:${"e".repeat(64)}`;
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -148,8 +154,10 @@ describe("simulationStore — handleWSEvent", () => {
         domain_world: {
           version: 1,
           status: "active",
+          failure_code: null,
           reason_code: null,
-          schema_hash: "sha256:abc",
+          schema_hash: SHA_A,
+          unit_registry_version: "unit_registry_v1",
           as_of_round: 2,
           variables: [
             {
@@ -157,15 +165,24 @@ describe("simulationStore — handleWSEvent", () => {
               label_en: "Cash",
               label_zh: "现金",
               value_type: "integer",
+              semantic_role: "stock",
               unit: "currency:USD:minor",
               scale: 0,
+              minimum: "0",
+              maximum: "1000000",
+              enum_values: [],
+              initial_value: "10000",
             },
           ],
           branch_states: [
             {
               branch_id: "b1",
               status: "active",
+              failure_code: null,
+              reason_code: null,
               as_of_round: 2,
+              state_revision: SHA_B,
+              semantic_state_hash: SHA_D,
               values: [{ variable_id: "cash_balance", value: "8000" }],
               latest_round_deltas: [],
             },
@@ -188,9 +205,9 @@ describe("simulationStore — handleWSEvent", () => {
         scenario_id: "scenario-world",
         branch_id: "b1",
         round_number: 3,
-        schema_hash: "sha256:abc",
-        state_revision: "sha256:new",
-        semantic_state_hash: "sha256:sem",
+        schema_hash: SHA_A,
+        state_revision: SHA_C,
+        semantic_state_hash: SHA_E,
         values: [{ variable_id: "cash_balance", value: "7200" }],
         domain_state_deltas: [
           {
@@ -200,6 +217,19 @@ describe("simulationStore — handleWSEvent", () => {
             before: "8000",
             after: "7200",
             applied_delta: "-800",
+            effect_code: null,
+            rule_ids: ["spend_budget"],
+            state_revision_before: SHA_B,
+            state_revision_after: SHA_C,
+            sources: [{
+              agent_id: "agent-1",
+              message_id: "message-3",
+              action_id: "action-42",
+              action_sequence: 42,
+              action_type: "POST",
+              proposal_index: 0,
+              rule_id: "spend_budget",
+            }],
           },
         ],
       },
@@ -208,9 +238,142 @@ describe("simulationStore — handleWSEvent", () => {
     const branch = store.getState().domainWorld?.branch_states.find((row) => row.branch_id === "b1");
     expect(branch?.values[0]?.value).toBe("7200");
     expect(branch?.latest_round_deltas[0]?.applied_delta).toBe("-800");
+    expect(branch?.opportunity_thresholds).toMatchObject({
+      status: "unavailable",
+      reason_code: "round_incomplete",
+    });
+    expect(branch?.latest_domain_idle_reasons).toEqual([]);
     expect(store.getState().domainWorld?.as_of_round).toBe(3);
     // Message-authoritative currentRound must not advance on domain commit.
     expect(store.getState().currentRound).toBe(2);
+  });
+
+  it("ignores late/conflicting domain commits without refreshing content progress", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario(
+      makeScenario("scenario-world-late", {
+        status: "simulating",
+        domain_world: {
+          version: 1,
+          status: "active",
+          failure_code: null,
+          reason_code: null,
+          schema_hash: SHA_A,
+          unit_registry_version: "unit_registry_v1",
+          as_of_round: 5,
+          variables: [{
+            variable_id: "cash_balance",
+            label_en: "Cash",
+            label_zh: "现金",
+            value_type: "integer",
+            semantic_role: "stock",
+            unit: "currency:USD:minor",
+            scale: 0,
+            minimum: "0",
+            maximum: "1000000",
+            enum_values: [],
+            initial_value: "10000",
+          }],
+          branch_states: [{
+            branch_id: "b1",
+            status: "active",
+            failure_code: null,
+            reason_code: null,
+            as_of_round: 5,
+            state_revision: SHA_B,
+            semantic_state_hash: SHA_D,
+            values: [{ variable_id: "cash_balance", value: "5000" }],
+            latest_round_deltas: [],
+          }],
+        },
+      }),
+    );
+    const beforeWorld = store.getState().domainWorld;
+    const beforeProgress = store.getState().lastContentEventAt;
+
+    store.getState().handleWSEvent({
+      type: "world_state_committed",
+      data: {
+        version: 1,
+        scenario_id: "scenario-world-late",
+        branch_id: "b1",
+        round_number: 4,
+        schema_hash: SHA_A,
+        state_revision: SHA_C,
+        semantic_state_hash: SHA_E,
+        values: [{ variable_id: "cash_balance", value: "9999" }],
+        domain_state_deltas: [],
+      },
+    });
+
+    expect(store.getState().domainWorld).toBe(beforeWorld);
+    expect(store.getState().domainWorld?.branch_states[0]?.values[0]?.value).toBe("5000");
+    expect(store.getState().lastContentEventAt).toBe(beforeProgress);
+  });
+
+  it("rejects over-cap world commits instead of accepting their first eight values", () => {
+    const variables = Array.from({ length: 8 }, (_, index) => ({
+      variable_id: `metric_${index}`,
+      label_en: `Metric ${index}`,
+      label_zh: `指标 ${index}`,
+      value_type: "integer",
+      semantic_role: "stock",
+      unit: "count",
+      scale: 0,
+      minimum: "0",
+      maximum: "100",
+      enum_values: [],
+      initial_value: "0",
+    }));
+    const values = variables.map((variable) => ({
+      variable_id: variable.variable_id,
+      value: "1",
+    }));
+    const store = useSimulationStore;
+    store.getState().setScenario(makeScenario("scenario-world-cap", {
+      domain_world: {
+        version: 1,
+        status: "active",
+        failure_code: null,
+        reason_code: null,
+        schema_hash: SHA_A,
+        unit_registry_version: "unit_registry_v1",
+        as_of_round: 1,
+        variables,
+        branch_states: [{
+          branch_id: "b1",
+          status: "active",
+          failure_code: null,
+          reason_code: null,
+          as_of_round: 1,
+          state_revision: SHA_B,
+          semantic_state_hash: SHA_D,
+          values,
+          latest_round_deltas: [],
+        }],
+      },
+    }));
+    const beforeWorld = store.getState().domainWorld;
+    const beforeProgress = store.getState().lastContentEventAt;
+
+    store.getState().handleWSEvent({
+      type: "world_state_committed",
+      data: {
+        version: 1,
+        scenario_id: "scenario-world-cap",
+        branch_id: "b1",
+        round_number: 2,
+        schema_hash: SHA_A,
+        state_revision: SHA_C,
+        semantic_state_hash: SHA_E,
+        values: [...values, { variable_id: "metric_8", value: "1" }],
+        domain_state_deltas: [],
+      },
+    } as WSEvent);
+
+    expect(store.getState().domainWorld).toBe(beforeWorld);
+    expect(store.getState().domainWorld?.as_of_round).toBe(1);
+    expect(store.getState().lastContentEventAt).toBe(beforeProgress);
   });
 
   it("ignores action_committed events for a different scenario_id", () => {

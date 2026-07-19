@@ -8,9 +8,10 @@ from dataclasses import asdict
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import event
 from sqlmodel import Session, select
 
-from app.api.graphs import get_action_ledger
+from app.api.graphs import get_action_ledger, get_simulation_actions
 from app.api.helpers import SessionPrincipal
 from app.models.agent_identity import AgentGrowthEvent
 from app.models.database import (
@@ -31,6 +32,8 @@ from app.models.simulation_action import (
     SimulationActionType,
 )
 from app.services.action_ledger import (
+    _branch_domain_history,
+    _durable_action_ids_with_valid_coordinates,
     _project_latest_delta,
     _project_latest_domain_idle_reasons_v1,
     _project_opportunity_thresholds_v1,
@@ -322,6 +325,110 @@ def _seed_domain_projection(
         session.add_all([scenario, branch])
         session.commit()
     return seeded
+
+
+def _seed_deep_domain_history(round_count: int = 64) -> dict[str, object]:
+    from app.services.agent_runtime import finalize_domain_round_v1
+    from app.services.runtime_lock import (
+        acquire_runtime_lock,
+        release_runtime_lock,
+        simulation_lock_key,
+    )
+    from app.services.simulation_actions import append_simulation_action
+
+    config = freeze_domain_schema_v1(_domain_schema_proposal())
+    assert config.schema is not None and config.schema_hash is not None
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(
+            question="Can a deep domain history replay in bounded SQL?",
+            status=ScenarioStatus.SIMULATING,
+            user_id="deep-domain-owner",
+            parsed_context={"domain_world_v1": asdict(config)},
+        )
+        session.add(scenario)
+        session.flush()
+        branch = Branch(
+            scenario_id=scenario.id,
+            title="Deep domain branch",
+            status=BranchStatus.ACTIVE,
+        )
+        agent = Agent(
+            scenario_id=scenario.id,
+            name="Deep domain agent",
+            role="Auditor",
+            tier=AgentTier.CORE,
+        )
+        session.add_all([branch, agent])
+        session.commit()
+        scenario_id = scenario.id
+        branch_id = branch.id
+        agent_id = agent.id
+
+    lease = acquire_runtime_lock(
+        simulation_lock_key(scenario_id),
+        lease_seconds=600,
+    )
+    assert lease is not None
+    action_ids: list[str] = []
+    try:
+        for round_number in range(1, round_count + 1):
+            with Session(engine) as session:
+                round_row = Round(
+                    branch_id=branch_id,
+                    round_number=round_number,
+                )
+                session.add(round_row)
+                session.flush()
+                message = AgentMessage(
+                    round_id=round_row.id,
+                    agent_id=agent_id,
+                    content=f"Hold state at round {round_number}.",
+                )
+                session.add(message)
+                session.flush()
+                action = append_simulation_action(
+                    session,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_row.id,
+                    round_number=round_number,
+                    agent_id=agent_id,
+                    message_id=message.id,
+                    idempotency_key=f"deep-domain:{round_number}",
+                    action={"action_type": "IDLE", "status": "verified"},
+                )
+                session.commit()
+                round_id = round_row.id
+                action_ids.append(action.id)
+            result = finalize_domain_round_v1(
+                engine,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_id=round_id,
+                round_number=round_number,
+                expected_agent_ids=(agent_id,),
+                current_runtime_lease=lambda: lease,
+            )
+            assert result.status == "committed"
+    finally:
+        release_runtime_lock(lease)
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.get(Branch, branch_id)
+        assert scenario is not None and branch is not None
+        scenario.status = ScenarioStatus.DONE
+        branch.status = BranchStatus.COMPLETED
+        session.add_all([scenario, branch])
+        session.commit()
+    return {
+        "scenario_id": scenario_id,
+        "branch_id": branch_id,
+        "agent_id": agent_id,
+        "action_ids": action_ids,
+        "config": config,
+    }
 
 
 def _idle_projection_fixture(
@@ -1075,11 +1182,121 @@ def test_ledger_branch_agent_filters_and_pagination_do_not_cross_scope():
 
     assert first_page["has_more"] is True
     assert len(first_page["items"]) == len(second_page["items"]) == 1
+    assert first_page["items"][0]["consequences"][0]["type"] == "temporal"
+    assert first_page["items"][0]["reflections"][0][
+        "retrieved_in_message_ids"
+    ] == [seeded["message_a2"]]
     assert all(
         item["branch_id"] == seeded["branch_a"]
         and item["agent"]["id"] == seeded["agent_a"]
         for item in first_page["items"] + second_page["items"]
     )
+
+
+def test_ledger_deep_cursor_limits_message_and_action_queries_to_page():
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(question="Deep bounded ledger", status=ScenarioStatus.DONE)
+        branch = Branch(scenario_id=scenario.id, title="Deep branch")
+        agent = Agent(
+            scenario_id=scenario.id,
+            name="Deep agent",
+            role="Auditor",
+            tier=AgentTier.CORE,
+        )
+        session.add_all([scenario, branch, agent])
+        session.flush()
+        message_ids: list[str] = []
+        for round_number in range(1, 65):
+            round_row = Round(branch_id=branch.id, round_number=round_number)
+            session.add(round_row)
+            session.flush()
+            message = AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content=f"Deep message {round_number}",
+            )
+            session.add(message)
+            session.flush()
+            message_ids.append(message.id)
+            session.add(
+                SimulationAction(
+                    scenario_id=scenario.id,
+                    branch_id=branch.id,
+                    round_id=round_row.id,
+                    round_number=round_number,
+                    sequence=round_number,
+                    agent_id=agent.id,
+                    message_id=message.id,
+                    action_type=SimulationActionType.IDLE,
+                    status=SimulationActionStatus.VERIFIED,
+                    idempotency_key=f"deep-ledger:{round_number}",
+                )
+            )
+        session.commit()
+        scenario_id = scenario.id
+        branch_id = branch.id
+        agent_id = agent.id
+
+    statements: list[tuple[str, object]] = []
+
+    def record_statement(
+        _connection,
+        _cursor,
+        statement,
+        parameters,
+        _context,
+        _executemany,
+    ):
+        statements.append((statement, parameters))
+
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        penultimate = build_action_ledger(
+            scenario_id,
+            branch_id=branch_id,
+            agent_id=agent_id,
+            cursor=62,
+            limit=1,
+        )
+        final = build_action_ledger(
+            scenario_id,
+            branch_id=branch_id,
+            agent_id=agent_id,
+            cursor=penultimate["next_cursor"],
+            limit=1,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert [penultimate["items"][0]["message_id"], final["items"][0]["message_id"]] == [
+        message_ids[62],
+        message_ids[63],
+    ]
+    assert penultimate["has_more"] is True
+    assert penultimate["next_cursor"] == 63
+    assert final["has_more"] is False
+    assert final["next_cursor"] is None
+
+    normalized = [(sql.lower(), parameters) for sql, parameters in statements]
+    message_page_queries = [
+        (sql, parameters)
+        for sql, parameters in normalized
+        if "from agent_message" in sql
+        and "join round" in sql
+        and "order by" in sql
+    ]
+    assert len(message_page_queries) == 2
+    assert all(" limit ? offset ?" in sql for sql, _parameters in message_page_queries)
+    action_queries = [
+        (sql, parameters)
+        for sql, parameters in normalized
+        if "from simulation_action" in sql and "message_id in" in sql
+    ]
+    assert len(action_queries) == 2
+    assert all(message_ids[0] not in parameters for _sql, parameters in action_queries)
+    assert message_ids[62] in action_queries[0][1]
+    assert message_ids[63] in action_queries[1][1]
 
 
 @pytest.mark.asyncio
@@ -1097,6 +1314,223 @@ async def test_action_ledger_api_rejects_cross_owner():
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_actions_api_offloads_bounded_page_projection(monkeypatch):
+    import app.api.graphs as graphs_module
+    import app.services.action_ledger as action_ledger_module
+
+    seeded = _seed_domain_projection()
+    thread_functions = []
+    history_cutoffs: list[tuple[str, int | None]] = []
+    original_history = action_ledger_module._branch_domain_history
+
+    async def recording_to_thread(function, /, *args, **kwargs):
+        thread_functions.append(function)
+        return function(*args, **kwargs)
+
+    def recording_history(*args, **kwargs):
+        history_cutoffs.append((kwargs["branch_id"], kwargs["as_of_round"]))
+        return original_history(*args, **kwargs)
+
+    monkeypatch.setattr(graphs_module.asyncio, "to_thread", recording_to_thread)
+    monkeypatch.setattr(
+        action_ledger_module,
+        "_branch_domain_history",
+        recording_history,
+    )
+
+    response = await get_simulation_actions(
+        seeded["scenario_id"],
+        branch_id=seeded["branch_id"],
+        agent_id=None,
+        action_type=None,
+        round=None,
+        status=None,
+        cursor=None,
+        limit=1,
+        principal=SessionPrincipal(subject="domain-owner"),
+    )
+
+    assert thread_functions == [graphs_module._get_simulation_actions_page_sync]
+    assert history_cutoffs == [(seeded["branch_id"], 1)]
+    assert len(response["items"]) == 1
+    assert response["items"][0]["domain_adjudications"][0]["status"] == "verified"
+
+
+def test_action_coordinate_validation_uses_one_query_for_a_bounded_page():
+    seeded = _seed_domain_projection()
+    engine = get_engine()
+    with Session(engine) as session:
+        durable = session.get(SimulationAction, seeded["action_id"])
+        assert durable is not None
+        second_round = Round(
+            branch_id=durable.branch_id,
+            round_number=durable.round_number + 1,
+        )
+        session.add(second_round)
+        session.flush()
+        second_message = AgentMessage(
+            round_id=second_round.id,
+            agent_id=durable.agent_id,
+            content="A second durable coordinate.",
+        )
+        session.add(second_message)
+        session.flush()
+        actions = [
+            SimulationAction(
+                id=f"page-action-{index:03d}",
+                scenario_id=durable.scenario_id,
+                branch_id=durable.branch_id,
+                round_id=durable.round_id if index % 2 == 0 else second_round.id,
+                round_number=(
+                    durable.round_number
+                    if index % 2 == 0
+                    else second_round.round_number
+                ),
+                sequence=index + 1,
+                agent_id=durable.agent_id,
+                message_id=(
+                    durable.message_id if index % 2 == 0 else second_message.id
+                ),
+                action_type=durable.action_type,
+                status=durable.status,
+                idempotency_key=f"page-action:{index:03d}",
+            )
+            for index in range(100)
+        ]
+        forged = SimulationAction(
+            id="page-action-forged-coordinate",
+            scenario_id=durable.scenario_id,
+            branch_id=durable.branch_id,
+            round_id=durable.round_id,
+            round_number=durable.round_number,
+            sequence=101,
+            agent_id=durable.agent_id,
+            message_id=second_message.id,
+            action_type=durable.action_type,
+            status=durable.status,
+            idempotency_key="page-action:forged-coordinate",
+        )
+        candidates = [*actions, forged]
+        statements: list[str] = []
+
+        def record_statement(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            valid = _durable_action_ids_with_valid_coordinates(
+                session,
+                scenario_id=seeded["scenario_id"],
+                actions=candidates,
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert valid == {action.id for action in actions}
+    assert len(statements) == 1
+
+
+def test_deep_domain_history_bulk_reads_are_constant_and_one_mismatch_fails_all():
+    seeded = _seed_deep_domain_history()
+    engine = get_engine()
+    statements: list[str] = []
+
+    def record_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        statements.append(statement.lower())
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        event.listen(engine, "before_cursor_execute", record_statement)
+        try:
+            history, failure_code = _branch_domain_history(
+                session,
+                scenario=scenario,
+                branch_id=seeded["branch_id"],
+                config=seeded["config"],
+                as_of_round=64,
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert failure_code is None
+    assert len(history) == 64
+    assert [projection["round_number"] for projection in history] == list(range(1, 65))
+    assert [projection["actions"][0].id for projection in history] == seeded[
+        "action_ids"
+    ]
+    assert all(
+        projection["receipts_by_action"] == {projection["actions"][0].id: []}
+        for projection in history
+    )
+    expected_state = initial_domain_state_v1(seeded["config"].schema)
+    assert all(projection["state"] == expected_state for projection in history)
+    assert history[-1]["state_revision"] == state_revision_v1(
+        schema_hash=seeded["config"].schema_hash,
+        as_of_round=64,
+        state=expected_state,
+        accepted_event_identities=frozenset(),
+    )
+
+    message_preloads = [
+        statement
+        for statement in statements
+        if "from agent_message" in statement
+        and "agent_message.round_id in" in statement
+        and "join round" not in statement
+    ]
+    action_preloads = [
+        statement
+        for statement in statements
+        if "from simulation_action" in statement
+        and "simulation_action.round_id in" in statement
+    ]
+    coordinate_reads = [
+        statement
+        for statement in statements
+        if "from agent_message" in statement
+        and "join round" in statement
+        and "join branch" in statement
+        and "join agent" in statement
+    ]
+    assert len(message_preloads) == len(action_preloads) == len(coordinate_reads) == 1
+    assert len(statements) <= 8
+
+    with Session(engine) as session:
+        mismatched = session.get(SimulationAction, seeded["action_ids"][31])
+        assert mismatched is not None
+        mismatched.round_number = 999
+        session.add(mismatched)
+        session.commit()
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        corrupted_history, corrupted_failure = _branch_domain_history(
+            session,
+            scenario=scenario,
+            branch_id=seeded["branch_id"],
+            config=seeded["config"],
+            as_of_round=64,
+        )
+
+    assert corrupted_history == []
+    assert corrupted_failure == "DOMAIN_BRANCH_SCOPE_INVALID"
 
 
 def test_domain_receipt_projection_is_shared_by_actions_and_ledger():
@@ -2223,3 +2657,25 @@ def test_world_outcome_claims_intersect_only_published_verified_action_ids():
     assert outcome["related_claim_ids"] == ["eligible"]
     assert outcome["related_claim_count"] == 1
     assert outcome["related_claim_ids_truncated"] is False
+
+
+def test_world_outcomes_fail_closed_when_active_scope_has_no_branches():
+    seeded = _seed_domain_projection()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, seeded["scenario_id"])
+        assert scenario is not None
+        projected = project_world_outcomes_v1(
+            session,
+            scenario=scenario,
+            branches=[],
+            full_report={},
+        )
+
+    assert projected == {
+        "version": 1,
+        "status": "unavailable",
+        "failure_code": "DOMAIN_BRANCH_SCOPE_INVALID",
+        "reason_code": "rebuild_failed",
+        "schema_hash": seeded["schema_hash"],
+        "branches": [],
+    }

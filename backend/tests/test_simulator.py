@@ -1035,6 +1035,126 @@ def test_batch_prior_opportunity_receipt_load_coerces_runtime_once(monkeypatch):
     assert receipts == dict.fromkeys(actor_ids, None)
 
 
+@pytest.mark.parametrize(
+    "latest_mutation",
+    (
+        "receipt",
+        "message_id",
+        "branch_id",
+        "round_number",
+        "agent_id",
+        "duplicate_decision",
+        "duplicate_action",
+    ),
+)
+def test_latest_joined_action_with_malformed_receipt_does_not_revive_older_receipt(
+    latest_mutation,
+):
+    import app.services.agent_runtime as agent_runtime_module
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Malformed latest receipt")
+    actor_id = _make_agent(engine, scenario_id, name="ReceiptActor")
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+
+    for round_number in (1, 2):
+        round_id = _create_round(engine, branch_id, round_number)
+        _save_messages(
+            engine,
+            [
+                {
+                    "round_id": round_id,
+                    "agent_id": actor_id,
+                    "content": f"I wait for verified evidence in round {round_number}.",
+                    "emotion": "calm",
+                    "diverge": None,
+                    "scenario_id": scenario_id,
+                    "branch_id": branch_id,
+                    "round_number": round_number,
+                    "action": {"type": "IDLE"},
+                    "decision_envelope": _decision_envelope_fixture(
+                        candidate_actions=["IDLE"],
+                    ),
+                    "idempotency_key": f"malformed-latest-receipt:{round_number}",
+                }
+            ],
+            opportunity_snapshots_by_actor={
+                actor_id: _opportunity_snapshot_fixture(
+                    actor_id=actor_id,
+                    as_of_round=round_number - 1,
+                )
+            },
+            compatibility_mode="live",
+        )
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None and isinstance(scenario.parsed_context, dict)
+        context = copy.deepcopy(scenario.parsed_context)
+        latest = context["agent_runtime_v1"]["branches"][branch_id]["rounds"]["2"][
+            "decisions"
+        ][0]
+        if latest_mutation == "receipt":
+            latest["opportunity_receipt"]["effective_action_type"] = []
+        elif latest_mutation == "duplicate_decision":
+            context["agent_runtime_v1"]["branches"][branch_id]["rounds"]["2"][
+                "decisions"
+            ].append(copy.deepcopy(latest))
+        elif latest_mutation == "duplicate_action":
+            durable = session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.scenario_id == scenario_id,
+                    SimulationAction.branch_id == branch_id,
+                    SimulationAction.round_number == 2,
+                )
+            ).one()
+            duplicate_message = AgentMessage(
+                round_id=durable.round_id,
+                agent_id=actor_id,
+                content="Ambiguous duplicate actor-round action.",
+            )
+            session.add(duplicate_message)
+            session.flush()
+            session.add(
+                SimulationAction(
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=durable.round_id,
+                    round_number=2,
+                    sequence=durable.sequence + 100,
+                    agent_id=actor_id,
+                    message_id=duplicate_message.id,
+                    action_type=durable.action_type,
+                    status=durable.status,
+                    idempotency_key="malformed-latest-receipt:duplicate-action",
+                )
+            )
+        elif latest_mutation == "round_number":
+            latest[latest_mutation] = 1
+        else:
+            latest[latest_mutation] = f"tampered-{latest_mutation}"
+        scenario.parsed_context = context
+        session.add(scenario)
+        session.commit()
+
+    assert (
+        agent_runtime_module.load_prior_opportunity_receipt(
+            engine,
+            scenario_id,
+            branch_id,
+            actor_id,
+            before_round=3,
+        )
+        is None
+    )
+
+
 def test_clone_runtime_history_drops_source_opportunity_receipts():
     from app.services.agent_runtime import clone_runtime_history
 
@@ -11426,6 +11546,74 @@ def test_domain_finalizer_same_digest_is_idempotent_and_changed_payload_is_drift
     ] == {"balance": "7"}
 
 
+def test_domain_portable_payload_digest_marker_cannot_collide_with_real_payload():
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+    scenario_id, branch_id, agent_ids, config = _domain_finalizer_setup(engine)
+    round_id = _create_round(engine, branch_id, 1)
+    _message_id, action_id = _append_domain_turn(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=1,
+        agent_id=agent_ids[0],
+        domain_group=_domain_action_group(
+            config,
+            revision=_domain_initial_revision(config),
+            event_key="portable-digest-collision",
+        ),
+        idempotency_key="portable-digest-collision",
+    )
+    with Session(engine) as session:
+        action = session.get(SimulationAction, action_id)
+        assert action is not None
+        payload = json.loads(action.payload_json)
+        payload["portable_extension"] = 0.125
+        raw_portable = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        action.payload_json = raw_portable
+        session.add(action)
+        session.commit()
+        first_read = runtime_module._read_domain_round_v1(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+            expected_agent_ids=agent_ids,
+        )
+        first_digest = runtime_module._domain_input_digest_v1(first_read)
+
+        marker_payload = {
+            "portable_json_sha256_v1": hashlib.sha256(
+                raw_portable.encode("utf-8")
+            ).hexdigest()
+        }
+        action.payload_json = json.dumps(
+            marker_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        session.add(action)
+        session.commit()
+        second_read = runtime_module._read_domain_round_v1(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+            expected_agent_ids=agent_ids,
+        )
+
+    assert runtime_module._domain_input_digest_v1(second_read) != first_digest
+
+
 @pytest.mark.parametrize("lock_mutation", ["wrong_owner", "expired"])
 def test_domain_finalizer_file_lease_fences_already_committed_no_write_path(
     lock_mutation,
@@ -11714,7 +11902,7 @@ def test_domain_barrier_source_contract_covers_roster_gather_cancel_and_ws_order
         "messages = await _gather_agent_messages",
         hierarchical_gather_index,
     )
-    finalizer_index = source.index("domain_result = finalize_domain_round_v1")
+    finalizer_index = source.index("domain_result = await asyncio.to_thread(")
     summary_index = source.index("# 2) Round summary", finalizer_index)
     pre_cancel_index = source.rfind(
         "_check_cancelled(scenario_id)",
@@ -11741,14 +11929,22 @@ def test_domain_barrier_source_contract_covers_roster_gather_cancel_and_ws_order
     assert "current_runtime_lease=current_runtime_lease" in source[
         finalizer_index:summary_index
     ]
+    finalizer_error_bridge = source[finalizer_index:post_cancel_index]
+    assert 'exc.args == ("DOMAIN_FINALIZATION_CANCELLED",)' in finalizer_error_bridge
+    assert "raise SimulationCancelled(scenario_id)" in finalizer_error_bridge
+    assert 'exc.args == ("DOMAIN_FINALIZATION_LEASE_LOST",)' in finalizer_error_bridge
+    assert "raise RuntimeLeaseLost(scenario_id)" in finalizer_error_bridge
 
     tree = ast.parse(source)
     finalizer_calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "finalize_domain_round_v1"
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "to_thread"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "finalize_domain_round_v1"
     ]
     assert len(finalizer_calls) == 1
     assert {keyword.arg for keyword in finalizer_calls[0].keywords} == {
@@ -11759,6 +11955,42 @@ def test_domain_barrier_source_contract_covers_roster_gather_cancel_and_ws_order
         "expected_agent_ids",
         "current_runtime_lease",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "user_cancelled", "expected_cancel_handlers"),
+    [
+        (simulator_module.SimulationCancelled, False, 1),
+        (simulator_module.RuntimeLeaseLost, False, 0),
+        (simulator_module.RuntimeLeaseLost, True, 1),
+    ],
+)
+async def test_run_simulation_distinguishes_user_cancel_from_runtime_lease_loss(
+    monkeypatch,
+    exception_type,
+    user_cancelled,
+    expected_cancel_handlers,
+):
+    handled: list[str] = []
+
+    async def fail_run(scenario_id, **_kwargs):
+        raise exception_type(scenario_id)
+
+    async def record_cancel(scenario_id, **_kwargs):
+        handled.append(scenario_id)
+
+    monkeypatch.setattr(simulator_module, "_run_simulation_impl", fail_run)
+    monkeypatch.setattr(simulator_module, "handle_simulation_cancelled", record_cancel)
+    monkeypatch.setattr(
+        simulator_module,
+        "is_cancelled",
+        lambda _scenario_id: user_cancelled,
+    )
+
+    await simulator_module.run_simulation("exception-classification-scenario")
+
+    assert handled == ["exception-classification-scenario"] * expected_cancel_handlers
 
 
 @pytest.mark.asyncio
@@ -12080,6 +12312,154 @@ def test_domain_prior_lineage_replay_restores_accepted_event_identity():
     _create_round(engine, child_id, 4)
     with pytest.raises(RuntimeError, match="^DOMAIN_FINALIZATION_PRIOR_STATE_INCOMPLETE$"):
         load(engine, scenario_id=scenario_id, branch_id=child_id, round_number=4)
+
+
+def test_domain_prior_state_replays_durable_history_and_detects_old_action_tamper(
+    monkeypatch,
+):
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+    scenario_id, branch_id, agent_ids, config = _domain_finalizer_setup(engine)
+    lease = _process_domain_lease(scenario_id)
+    revision = _domain_initial_revision(config)
+    reduce_rounds: list[int] = []
+    preloaded_rounds: list[int] = []
+    original_reduce = runtime_module.reduce_domain_round_v1
+    original_read = runtime_module._read_domain_round_v1
+
+    def tracked_reduce(*args, **kwargs):
+        reduce_rounds.append(kwargs["round_number"])
+        return original_reduce(*args, **kwargs)
+
+    def tracked_read(*args, **kwargs):
+        if kwargs.get("preloaded_round_row") is not None:
+            preloaded_rounds.append(kwargs["round_number"])
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "reduce_domain_round_v1", tracked_reduce)
+    monkeypatch.setattr(runtime_module, "_read_domain_round_v1", tracked_read)
+
+    for round_number in range(1, 5):
+        round_id = _create_round(engine, branch_id, round_number)
+        context = runtime_module._load_domain_decision_context_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_number,
+        )
+        assert context is not None
+        assert context["input_state_revision"] == revision
+        _append_domain_turn(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            agent_id=agent_ids[0],
+            domain_group=_domain_action_group(
+                config,
+                revision=revision,
+                event_key=f"linear-cache-event-{round_number}",
+            ),
+            idempotency_key=f"linear-cache-turn-{round_number}",
+        )
+        result = runtime_module.finalize_domain_round_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            expected_agent_ids=agent_ids,
+            current_runtime_lease=lambda: lease,
+        )
+        assert result.state_revision is not None
+        revision = result.state_revision
+
+    assert reduce_rounds == [
+        1,
+        1,
+        1,
+        2,
+        1,
+        2,
+        1,
+        2,
+        3,
+        1,
+        2,
+        3,
+        1,
+        2,
+        3,
+        4,
+    ]
+    assert preloaded_rounds == [1, 1, 1, 2, 1, 2, 1, 2, 3, 1, 2, 3]
+    _create_round(engine, branch_id, 5)
+    first = runtime_module._load_domain_decision_context_v1(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_number=5,
+    )
+    assert reduce_rounds[-4:] == [1, 2, 3, 4]
+
+    second = runtime_module._load_domain_decision_context_v1(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_number=5,
+    )
+    assert runtime_module.canonical_json_bytes_v1(first) == (
+        runtime_module.canonical_json_bytes_v1(second)
+    )
+    assert reduce_rounds[-4:] == [1, 2, 3, 4]
+    assert preloaded_rounds[-4:] == [1, 2, 3, 4]
+
+    with Session(engine) as session:
+        old_action = session.exec(
+            select(SimulationAction).where(
+                SimulationAction.scenario_id == scenario_id,
+                SimulationAction.branch_id == branch_id,
+                SimulationAction.round_number == 1,
+            )
+        ).one()
+        old_action.content = "tampered historical content"
+        session.add(old_action)
+        session.commit()
+    with pytest.raises(RuntimeError, match="^DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT$"):
+        runtime_module._load_domain_decision_context_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=5,
+        )
+
+
+def test_domain_preloaded_round_requires_exact_round_id():
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+    scenario_id, branch_id, _agent_ids, _config = _domain_finalizer_setup(engine)
+    expected_round_id = _create_round(engine, branch_id, 1)
+    with Session(engine) as session:
+        wrong_round = Round(
+            id="wrong-preloaded-round-id",
+            branch_id=branch_id,
+            round_number=1,
+        )
+        with pytest.raises(RuntimeError, match="^DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID$"):
+            runtime_module._read_domain_round_v1(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_id=expected_round_id,
+                round_number=1,
+                expected_agent_ids=(),
+                preloaded_round_row=wrong_round,
+                preloaded_messages=(),
+                preloaded_action_rows=(),
+            )
 
 
 def test_domain_round_reverse_append_order_preserves_portable_state_hashes():
@@ -12981,6 +13361,26 @@ def test_memory_promotion_normalizer_binds_exact_receipt_and_rejects_ref_mutants
         assert failed_receipt["context_hash"] == context.context_hash
         assert failed_receipt["offered_refs"] == [promotion_ref]
         assert failed_receipt["recalled_refs"] == []
+
+    multi_context = _three_item_promotion_recall_context()
+    reversed_refs = [
+        multi_context.items[2]["memory_ref"],
+        multi_context.items[0]["memory_ref"],
+    ]
+    reversed_claim = normalize_decision_with_memory_promotion_v1(
+        {**raw, "recalled_memory_refs": [legacy_ref, *reversed_refs]},
+        recall_context=multi_context,
+        legacy_allowed_memory_refs=(legacy_ref,),
+        agent_id="agent-a",
+        branch_id="branch-a",
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    assert reversed_claim["decision_status"] == "unavailable"
+    assert reversed_claim["failure_code"] == "DECISION_UNAVAILABLE"
+    assert reversed_claim["memory_promotion_recall_v1"]["reason_code"] == (
+        "MEMORY_RECALL_REF_MISMATCH"
+    )
 
     forged_context = dataclasses.replace(
         context,
@@ -13914,7 +14314,7 @@ async def test_memory_promotion_gate_off_real_gather_has_no_recall_or_receipt(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_point", ["lease_reconfirm", "writer"])
+@pytest.mark.parametrize("failure_point", ["lease_reconfirm", "lease_lost", "writer"])
 async def test_memory_promotion_failure_after_commit_does_not_block_broadcast(
     monkeypatch,
     failure_point,
@@ -13959,7 +14359,7 @@ async def test_memory_promotion_failure_after_commit_does_not_block_broadcast(
         "attempt_verified_memory_promotion_v1",
         fail_promotion,
     )
-    if failure_point == "lease_reconfirm":
+    if failure_point in {"lease_reconfirm", "lease_lost"}:
         original_lease_check = simulator_module._ensure_bootstrap_runtime_lease
         lease_check_count = 0
 
@@ -13967,6 +14367,8 @@ async def test_memory_promotion_failure_after_commit_does_not_block_broadcast(
             nonlocal lease_check_count
             lease_check_count += 1
             if lease_check_count == 4:
+                if failure_point == "lease_lost":
+                    raise simulator_module.RuntimeLeaseLost(scenario_id)
                 raise OSError("simulated post-commit lease read failure")
             return original_lease_check(*args, **kwargs)
 
@@ -13983,7 +14385,12 @@ async def test_memory_promotion_failure_after_commit_does_not_block_broadcast(
 
     lease = _process_domain_lease(scenario_id)
     try:
-        await simulator_module._run_simulation_impl(
+        runner = (
+            simulator_module.run_simulation
+            if failure_point == "lease_lost"
+            else simulator_module._run_simulation_impl
+        )
+        await runner(
             scenario_id,
             ws_callback=ws_callback,
             branch_id=branch_id,
@@ -13992,10 +14399,16 @@ async def test_memory_promotion_failure_after_commit_does_not_block_broadcast(
         )
     finally:
         release_runtime_lock(lease)
-    assert len(promotion_calls) == (0 if failure_point == "lease_reconfirm" else 1)
+    assert len(promotion_calls) == (
+        0 if failure_point in {"lease_reconfirm", "lease_lost"} else 1
+    )
     assert len(world_commits) == 1
     runtime = _domain_runtime_round(engine, scenario_id, branch_id, 1)
     assert runtime["domain_finalization"]["status"] == "complete"
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert scenario.status != ScenarioStatus.CANCELLED
 
 
 @pytest.mark.asyncio
@@ -14435,7 +14848,7 @@ def test_memory_promotion_opaque_clone_is_bounded_only_when_gate_on(monkeypatch)
         "promotion_reason_code": None,
         "context_hash": f"sha256:{'a' * 64}",
         "offered_refs": refs,
-        "recalled_refs": [refs[1], refs[0]],
+        "recalled_refs": [refs[0], refs[2]],
         "source_scenario_ids": ["source-scenario"],
     }
     runtime = {
@@ -14470,14 +14883,14 @@ def test_memory_promotion_opaque_clone_is_bounded_only_when_gate_on(monkeypatch)
     assert opaque["status"] == "unavailable"
     assert opaque["reason_code"] == "MEMORY_RECALL_OPAQUE_HISTORY"
     assert opaque["offered_refs"] == refs[:3]
-    assert opaque["recalled_refs"] == [refs[1], refs[0]]
+    assert opaque["recalled_refs"] == [refs[0], refs[2]]
     assert opaque["source_scenario_ids"] == []
 
     malformed_runtime = copy.deepcopy(runtime)
     malformed_receipt = malformed_runtime["branches"]["source"]["rounds"]["1"]["decisions"][0][
         "memory_promotion_recall_v1"
     ]
-    malformed_receipt["recalled_refs"] = [refs[0], refs[0]]
+    malformed_receipt["recalled_refs"] = [refs[1], refs[0]]
     malformed = clone_runtime_history(
         malformed_runtime,
         source_branch_id="source",
@@ -15047,7 +15460,7 @@ async def test_memory_promotion_blocked_scanner_times_out_into_quarantine(monkey
 
 def test_memory_promotion_trigger_source_order_is_frozen():
     source = inspect.getsource(simulator_module._run_simulation_impl)
-    finalizer = source.index("domain_result = finalize_domain_round_v1")
+    finalizer = source.index("domain_result = await asyncio.to_thread(")
     second_cancel = source.index("_check_cancelled(scenario_id)", finalizer)
     lease_reconfirm = source.index(
         "_ensure_bootstrap_runtime_lease,",

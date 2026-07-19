@@ -2446,6 +2446,27 @@ class TestVerifiedMemoryPromotionReaderV1:
         assert collection.query_calls == []
 
     @pytest.mark.asyncio
+    async def test_credential_query_is_rejected_before_any_store_io(self, monkeypatch):
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        monkeypatch.setattr(
+            vector_store_module,
+            "get_vector_store",
+            lambda: (_ for _ in ()).throw(AssertionError("store lookup called")),
+        )
+
+        result = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="scenario-2",
+            query_text="api_key=fixture_secret_123456",
+        )
+
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        assert result.items == ()
+
+    @pytest.mark.asyncio
     async def test_complete_tree_recalls_once_and_current_scenario_is_excluded(self, monkeypatch):
         monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
         monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
@@ -2483,10 +2504,16 @@ class TestVerifiedMemoryPromotionReaderV1:
         assert tuple(item["memory_ref"] for item in recalled.items) == batch.refs
         assert recalled.items[0]["source_scenario_id"] == "scenario-1"
         assert same_scenario.status == "empty"
-        assert len(collection.query_calls) == 1
-        assert collection.query_calls[0]["where"]["$and"][2] == {
-            "document_contract": {"$eq": "memory_promotion_record_v1"}
-        }
+        assert len(collection.query_calls) == 2
+        assert [call["where"]["$and"][1] for call in collection.query_calls] == [
+            {"scenario_id": {"$ne": "scenario-2"}},
+            {"scenario_id": {"$ne": "scenario-1"}},
+        ]
+        assert all(
+            call["where"]["$and"][2]
+            == {"document_contract": {"$eq": "memory_promotion_record_v1"}}
+            for call in collection.query_calls
+        )
 
     @pytest.mark.asyncio
     async def test_unknown_v2_collection_is_ignored_without_lookup_or_query(self, monkeypatch):
@@ -2532,6 +2559,44 @@ class TestVerifiedMemoryPromotionReaderV1:
         assert context.items
         assert client.requested_names == [client.collection_name]
         assert client.unknown_v2_name not in client.requested_names
+        assert "list_collections" not in client.calls
+
+    @pytest.mark.asyncio
+    async def test_only_unknown_version_collection_returns_empty_by_exact_v1_lookup(
+        self, monkeypatch
+    ):
+        from chromadb.errors import NotFoundError
+
+        class UnknownOnlyClient:
+            def __init__(self):
+                self.calls = []
+
+            def get_collection(self, *, name):
+                self.calls.append(("get_collection", name))
+                raise NotFoundError("collection does not exist")
+
+            def list_collections(self):
+                raise AssertionError("reader enumerated collection catalog")
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        client = UnknownOnlyClient()
+
+        context = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=_vector_store_with_client(client),
+        )
+
+        assert context.status == "empty"
+        assert client.calls == [
+            (
+                "get_collection",
+                vector_store_module.memory_promotion_collection_name_v1("user-a"),
+            )
+        ]
 
     @pytest.mark.asyncio
     async def test_equal_distance_tie_break_precedes_three_item_cutoff(self, monkeypatch):
@@ -2603,58 +2668,45 @@ class TestVerifiedMemoryPromotionReaderV1:
             store=_vector_store_with_client(_PromotionWriterClient(collection)),
         )
 
-        candidate_gets = [
-            call
-            for call in collection.get_calls
-            if call["ids"] is None and isinstance(call["where"], dict)
-        ]
         assert recalled.status == "verified"
         assert [item["memory_ref"] for item in recalled.items] == expected_refs
         assert insertion_order[-1] == next(
             index for index, batch in enumerate(batches) if batch.refs[0] == expected_refs[0]
         )
-        assert [call["offset"] for call in candidate_gets] == [0, 128]
-        assert [call["n_results"] for call in collection.query_calls] == [128, 1]
+        assert [call["n_results"] for call in collection.query_calls] == [
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            256,
+        ]
+        assert all(call["ids"] is None for call in collection.query_calls)
+        assert all(call["where"] is None for call in collection.get_calls)
 
     @pytest.mark.asyncio
-    async def test_recall_candidate_cap_is_unavailable_without_truncated_query(
+    async def test_equal_distance_tie_cap_is_unavailable_without_truncated_result(
         self, monkeypatch
     ):
-        class ExhaustedCandidateCollection(_PromotionWriterCollection):
-            def get(
-                self,
-                *,
-                ids=None,
-                where=None,
-                include=None,
-                limit=None,
-                offset=None,
-                **kwargs,
-            ):
-                if ids is not None:
-                    raise AssertionError("tree lookup must not start after candidate cap")
-                del kwargs
-                self.get_calls.append(
-                    {
-                        "ids": ids,
-                        "where": where,
-                        "include": include,
-                        "limit": limit,
-                        "offset": offset,
-                    }
-                )
-                assert limit == 128
-                start = offset or 0
-                return {
-                    "ids": [f"candidate-{index:04d}" for index in range(start, start + limit)]
-                }
-
+        class EqualDistanceCollection(_PromotionWriterCollection):
             def query(self, **kwargs):
-                raise AssertionError("query must not start from a truncated candidate set")
+                result = super().query(**kwargs)
+                result["distances"] = [[0.25] * len(result["ids"][0])]
+                return result
 
         monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
         monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
-        collection = ExhaustedCandidateCollection()
+        monkeypatch.setattr(
+            vector_store_module, "MEMORY_PROMOTION_RECALL_MAX_CANDIDATES_V1", 4
+        )
+        collection = EqualDistanceCollection()
+        for index in range(4):
+            for document in _promotion_batch_for_source(index).documents:
+                collection.rows[document.document_id] = (
+                    document.document,
+                    document.metadata_dict(),
+                )
 
         recalled = await vector_store_module.recall_verified_memory_promotions_v1(
             user_id="user-a",
@@ -2667,9 +2719,38 @@ class TestVerifiedMemoryPromotionReaderV1:
         assert recalled.status == "unavailable"
         assert recalled.reason_code == "MEMORY_RECALL_STORE_UNAVAILABLE"
         assert recalled.items == ()
-        assert len(collection.get_calls) == 32
-        assert collection.get_calls[-1]["offset"] == 3968
-        assert collection.query_calls == []
+        assert collection.get_calls == []
+        assert [call["n_results"] for call in collection.query_calls] == [4]
+
+    @pytest.mark.asyncio
+    async def test_more_than_424_roots_still_returns_verified_top_three(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        collection = _PromotionWriterCollection()
+        for index in range(425):
+            for document in _promotion_batch_for_source(index).documents:
+                collection.rows[document.document_id] = (
+                    document.document,
+                    document.metadata_dict(),
+                )
+        client = _PromotionWriterClient(collection)
+
+        recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="current-scenario",
+            query_text="verified consequence",
+            store=_vector_store_with_client(client),
+        )
+
+        assert recalled.status == "verified"
+        assert recalled.reason_code is None
+        assert len(recalled.items) == 3
+        assert client.calls == ["get_collection"]
+        assert [call["n_results"] for call in collection.query_calls] == [4]
+        assert len(collection.get_calls) == 9
 
     @pytest.mark.asyncio
     async def test_custom_base_exception_is_re_raised_after_reader_handoff(self, monkeypatch):
@@ -2773,7 +2854,11 @@ class TestVerifiedMemoryPromotionReaderV1:
         )
 
         assert collection.query_calls
-        assert queried.document_id in collection.query_calls[0]["ids"]
+        assert collection.query_calls[0]["ids"] is None
+        assert any(
+            queried.document_id in (call["ids"] or ())
+            for call in collection.get_calls
+        )
         assert batch.root_manifest_document.document_id in collection.rows
         assert all(
             document.document_id in collection.rows

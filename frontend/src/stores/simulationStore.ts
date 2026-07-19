@@ -951,29 +951,48 @@ export const useSimulationStore = create<SimulationState>((set) => ({
 
       case 'world_state_committed': {
         const data = event.data;
-        if (!data?.branch_id || typeof data.round_number !== 'number') {
+        if (
+          !data?.branch_id
+          || data.version !== 1
+          || typeof data.scenario_id !== 'string'
+          || !data.scenario_id.trim()
+          || !Number.isInteger(data.round_number)
+          || data.round_number < 0
+          || typeof data.schema_hash !== 'string'
+          || !data.schema_hash.trim()
+          || typeof data.state_revision !== 'string'
+          || !data.state_revision.trim()
+          || typeof data.semantic_state_hash !== 'string'
+          || !data.semantic_state_hash.trim()
+        ) {
           break;
         }
-        if (data.scenario_id && currentScenarioId && data.scenario_id !== currentScenarioId) {
+        if (!currentScenarioId || data.scenario_id !== currentScenarioId) {
           break;
         }
         // Domain commits must not advance message-authoritative currentRound.
-        set((state) => ({
-          lastContentEventAt: Date.now(),
-          domainWorld: applyWorldStateCommitted(state.domainWorld, {
-            version: data.version ?? 1,
-            scenario_id: data.scenario_id ?? currentScenarioId ?? '',
+        set((state) => {
+          // The event carries no frozen schema; wait for authoritative hydration.
+          if (!state.domainWorld) return {};
+          const domainWorld = applyWorldStateCommitted(state.domainWorld, {
+            version: data.version,
+            scenario_id: data.scenario_id,
             branch_id: data.branch_id,
             round_number: data.round_number,
-            schema_hash: data.schema_hash ?? null,
-            state_revision: data.state_revision ?? null,
-            semantic_state_hash: data.semantic_state_hash ?? null,
-            values: Array.isArray(data.values) ? data.values.slice(0, 8) : [],
+            schema_hash: data.schema_hash,
+            state_revision: data.state_revision,
+            semantic_state_hash: data.semantic_state_hash,
+            values: Array.isArray(data.values) ? data.values : [],
             domain_state_deltas: Array.isArray(data.domain_state_deltas)
-              ? data.domain_state_deltas.slice(0, 8)
+              ? data.domain_state_deltas
               : [],
-          }),
-        }));
+          });
+          if (domainWorld === state.domainWorld) return {};
+          return {
+            lastContentEventAt: Date.now(),
+            domainWorld,
+          };
+        });
         break;
       }
 

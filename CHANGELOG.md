@@ -8,6 +8,9 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
 - A configurable initial world-event Feed with up to 20 untrusted, bounded entries, replayable source accounts, and nine native social actions: `POST`, `COMMENT`, `REACTION`, `FOLLOW`, `MUTE`, `SEARCH`, `TREND`, `REFRESH`, and `IDLE`.
 - An owner-scoped Action Ledger panel in Causal Review for native actions, targets, and states, plus a separate evidence-ledger projection for persisted utterances, context observations, derived consequences, and hashed memory references without memory text.
+- A bounded `domain_world_v1` whose model-proposed schema is frozen by code validation, whose state changes are deterministically adjudicated from verified durable actions, and whose Replay, Compare, Snapshot, Action Ledger, live state strip, threshold tooltips, IDLE attribution, and result outcomes share the same branch-scoped history.
+- A pure domain-threshold opportunity layer that combines N−1 social opportunities with frozen domain preconditions before Agent decisions, without quotas, random actions, or forced rotation.
+- A default-off backend verified-memory-promotion core with verified-only eligibility, deterministic idempotency keys, manifest-complete versioned Chroma records, stable hashed recall refs, non-destructive reader rollback, and bounded best-effort purge coverage. It has no capability, REST, or UI activation surface yet.
 - Three bundled official samples that open as complete local runs without an API key, file picker, or model call; local `*.swarm` import remains available.
 - A durable Director play loop spanning Gameplay Cards, prediction bets, worldline commitments, and the post-run Causal Archive.
 - In-run Agent profiles that distinguish configured stance from observed emotion and show the matching worldline and round.
@@ -25,6 +28,7 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 ### Changed
 
 - Source accounts from the initial Feed can be followed or muted; muted sources are excluded from that Agent's subsequent Feed, search, and trend projections. Snapshots preserve and remap the Feed, source accounts, and native actions, while Replay respects effective lineage and cutoff.
+- COMMENT, REACTION, FOLLOW, MUTE, SEARCH, TREND, and REFRESH decisions are now gated by a real prior-round opportunity snapshot; domain-bound actions additionally require the same schema, state revision, rule binding, and satisfied threshold.
 - Agent turns now carry branch-scoped personal memory, inherited-but-isolated fork state, and bounded previous-round relationship signals.
 - Campaign settlement now derives bets, objectives, commitments, archive grades, and rewards from persisted server state and completed terminal leaf worldlines.
 - Official sample bundles are reproducibly generated and validated for complete results, replay coordinates, graph references, reports, and Agent state.
@@ -46,6 +50,9 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 ### Fixed
 
 - Kept legacy runs truthful by reporting missing context receipts as `unavailable` instead of inferring history, and kept memory receipts bounded to hashed references and source-scenario coordinates.
+- Kept malformed or stale domain wire data, incomplete round history, missing compare sides, and unavailable world outcomes fail-closed instead of rendering partial values as authoritative; currency minor units are formatted with their ISO exponent rather than as raw storage units.
+- Bounded Action Ledger and domain-history pagination, opportunity derivation, verified-memory recall, and reconciliation work while preserving stable ordering and exact receipt binding.
+- Preserved portable Snapshot JSON number tokens during counterfactual payload rewriting, including high-precision, exponent, and negative-zero forms, while continuing to reject duplicate keys and non-finite numbers.
 - Preserved successful Agent speech when second-pass emotion/stance parsing fails, propagated an explicit unavailable status through live, Replay, Snapshot, import/export, reports, and Pixel Theater, and stopped missing observations from being presented as neutral.
 - Prevented stale scenarios, WebSocket events, replay payloads, and automation state from crossing route or replay boundaries.
 - Corrected Agent memory and emotion continuity across forks, nested replay, counterfactual replacement, resume, duplicate names, and branch round cutoffs.

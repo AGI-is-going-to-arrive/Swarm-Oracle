@@ -5,10 +5,20 @@ import i18n from '../../i18n/config';
 import DomainCompareRows from './DomainCompareRows';
 import type { DomainStateDiff } from '../../types';
 
+const SHA_A = `sha256:${'a'.repeat(64)}`;
+const SHA_B = `sha256:${'b'.repeat(64)}`;
+const SHA_C = `sha256:${'c'.repeat(64)}`;
+
 const comparable: DomainStateDiff = {
   status: 'comparable',
+  branch_a_failure_code: null,
+  branch_b_failure_code: null,
+  schema_hash_a: SHA_A,
+  schema_hash_b: SHA_A,
+  branch_a_state_revision: SHA_B,
+  branch_b_state_revision: SHA_C,
   differing_variable_count: 1,
-  comparable_variable_count: 2,
+  comparable_variable_count: 1,
   rows: [
     {
       variable_id: 'cash_balance',
@@ -55,11 +65,57 @@ describe('DomainCompareRows', () => {
     );
     expect(screen.getByRole('table')).toBeInTheDocument();
     expect(screen.getByText('现金余额')).toBeVisible();
-    expect(screen.getByText('7200')).toBeVisible();
-    expect(screen.getByText('8200')).toBeVisible();
-    expect(screen.getByText('1000')).toBeVisible();
+    expect(screen.getByText('USD')).toBeVisible();
+    expect(screen.getByText('72')).toBeVisible();
+    expect(screen.getByText('82')).toBeVisible();
+    expect(screen.getByText('10')).toBeVisible();
+    expect(screen.queryByText(/currency:USD:minor/)).toBeNull();
+    expect(screen.queryByText('7200')).toBeNull();
+    expect(screen.queryByText('8200')).toBeNull();
+    expect(screen.queryByText('1000')).toBeNull();
     expect(screen.getByTestId('domain-compare-score')).toHaveTextContent('合成分歧 50%');
     expect(screen.getByTestId('domain-compare-score')).toHaveTextContent('世界分歧：1 个变量');
+  });
+
+  it('localizes boolean values in zh instead of leaking wire literals', () => {
+    renderRows(
+      <DomainCompareRows
+        domainStateDiff={{
+          status: 'comparable',
+          branch_a_failure_code: null,
+          branch_b_failure_code: null,
+          schema_hash_a: SHA_A,
+          schema_hash_b: SHA_A,
+          branch_a_state_revision: SHA_B,
+          branch_b_state_revision: SHA_C,
+          differing_variable_count: 1,
+          comparable_variable_count: 1,
+          rows: [{
+            variable_id: 'licensed',
+            label_en: 'Licensed',
+            label_zh: '已获许可',
+            value_type: 'boolean',
+            unit: 'unitless',
+            scale: 0,
+            branch_a: { status: 'available', value: false },
+            branch_b: { status: 'available', value: true },
+            delta: null,
+            is_different: true,
+            first_difference: {
+              round_number: 1,
+              branch_a_rule_ids: [],
+              branch_b_rule_ids: ['license_granted'],
+              branch_a_source_action_ids: [],
+              branch_b_source_action_ids: ['action-license'],
+            },
+          }],
+        }}
+      />,
+    );
+    expect(screen.getByText('假')).toBeVisible();
+    expect(screen.getByText('真')).toBeVisible();
+    expect(screen.queryByText('false')).toBeNull();
+    expect(screen.queryByText('true')).toBeNull();
   });
 
   it('shows honest schema mismatch banner without inventing zero values', () => {
@@ -72,6 +128,10 @@ describe('DomainCompareRows', () => {
           comparable_variable_count: 0,
           branch_a_failure_code: 'DOMAIN_SCHEMA_UNAVAILABLE',
           branch_b_failure_code: null,
+          schema_hash_a: SHA_A,
+          schema_hash_b: SHA_B,
+          branch_a_state_revision: null,
+          branch_b_state_revision: null,
         }}
         divergenceComponents={{ text: 0.1, domain: 1 }}
       />,
@@ -82,5 +142,19 @@ describe('DomainCompareRows', () => {
     expect(container.querySelector('tbody')).toBeNull();
     expect(screen.queryByRole('cell', { name: '0' })).toBeNull();
     expect(screen.queryByRole('cell', { name: '0.0' })).toBeNull();
+  });
+
+  it('fails closed and suppresses rows on an inconsistent unavailable envelope', () => {
+    renderRows(
+      <DomainCompareRows
+        domainStateDiff={{
+          ...comparable,
+          status: 'unavailable',
+        }}
+      />,
+    );
+    expect(screen.getByTestId('domain-compare-unavailable')).toBeVisible();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByText('现金余额')).toBeNull();
   });
 });

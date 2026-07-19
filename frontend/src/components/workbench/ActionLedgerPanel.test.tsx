@@ -7,9 +7,11 @@ import type { WSEvent } from '../../types';
 import ActionLedgerPanel from './ActionLedgerPanel';
 import { ACTION_LEDGER_POLL_INTERVAL_MS, isActionsUnavailableError } from './actionLedgerUtils';
 
+const mockI18n = vi.hoisted(() => ({ language: 'en' }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    i18n: { language: 'en' },
+    i18n: mockI18n,
     t: (key: string, values?: Record<string, unknown>) => {
       if (key === 'action_ledger.entry_aria') return `${values?.agent} ${values?.type} round ${values?.round}`;
       if (key === 'action_ledger.round') return `Round ${values?.round}`;
@@ -51,6 +53,7 @@ async function expand(): Promise<void> {
 describe('ActionLedgerPanel', () => {
   beforeEach(() => {
     mockedGetActions.mockReset();
+    mockI18n.language = 'en';
     useSimulationStore.getState().reset();
   });
   afterEach(() => vi.useRealTimers());
@@ -94,9 +97,10 @@ describe('ActionLedgerPanel', () => {
             variable_id: 'cash_balance',
             label_en: 'Cash balance',
             label_zh: '现金余额',
-            before: '8000',
-            after: '7200',
-            applied_delta: '-800',
+            unit: 'currency:USD:minor',
+            before: '800000',
+            after: '720000',
+            applied_delta: '-80000',
           },
           {
             status: 'failed',
@@ -112,8 +116,39 @@ describe('ActionLedgerPanel', () => {
     render(<ActionLedgerPanel scenarioId="scenario-1" />);
     await expand();
     expect(await screen.findByTestId('action-ledger-domain-chips-action-42')).toBeVisible();
-    expect(screen.getByText(/Cash balance/)).toBeVisible();
+    expect(screen.getByText(/Cash balance: 8000 USD → 7200 USD/)).toBeVisible();
+    expect(screen.queryByText(/currency:USD:minor/)).toBeNull();
+    expect(screen.queryByText(/800000/)).toBeNull();
+    expect(screen.queryByText(/720000/)).toBeNull();
     expect(screen.getByText(/DOMAIN_CONFLICT/)).toBeVisible();
+  });
+
+  it('localizes boolean adjudication values in zh', async () => {
+    mockI18n.language = 'zh';
+    mockedGetActions.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      next_cursor: null,
+      has_more: false,
+      items: [{
+        ...response('Toggle').items[0],
+        id: 'action-boolean',
+        domain_adjudications: [{
+          status: 'verified',
+          rule_id: 'enable_license',
+          variable_id: 'licensed',
+          label_en: 'Licensed',
+          label_zh: '已获许可',
+          unit: 'unitless',
+          before: false,
+          after: true,
+        }],
+      }],
+    });
+    render(<ActionLedgerPanel scenarioId="scenario-1" />);
+    await expand();
+    expect(await screen.findByText(/已获许可: 假 → 真/)).toBeVisible();
+    expect(screen.queryByText(/false/)).toBeNull();
+    expect(screen.queryByText(/true/)).toBeNull();
   });
 
   it('merges live action_committed receipts into the expanded ledger without waiting for poll', async () => {

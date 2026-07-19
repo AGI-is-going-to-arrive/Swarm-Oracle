@@ -3,6 +3,7 @@ import {
   applyWorldStateCommitted,
   domainVariableLabel,
   formatDomainBoolean,
+  formatDomainScalarValue,
   formatDomainUnitValue,
   formatDomainValue,
   formatPredicateActualExpected,
@@ -18,12 +19,17 @@ import {
 } from './domainWorld';
 import type { DomainWorldProjection } from '../types';
 
+const SHA_A = `sha256:${'a'.repeat(64)}`;
+const SHA_B = `sha256:${'b'.repeat(64)}`;
+const SHA_C = `sha256:${'c'.repeat(64)}`;
+const SHA_D = `sha256:${'d'.repeat(64)}`;
+
 const activeProjection: DomainWorldProjection = {
   version: 1,
   status: 'active',
   failure_code: null,
   reason_code: null,
-  schema_hash: 'sha256:abc',
+  schema_hash: SHA_A,
   unit_registry_version: 'unit_registry_v1',
   as_of_round: 3,
   variables: [
@@ -32,8 +38,12 @@ const activeProjection: DomainWorldProjection = {
       label_en: 'Cash balance',
       label_zh: '现金余额',
       value_type: 'integer',
+      semantic_role: 'stock',
       unit: 'currency:USD:minor',
       scale: 0,
+      minimum: '0',
+      maximum: '1000000',
+      enum_values: [],
       initial_value: '10000',
     },
     {
@@ -41,8 +51,12 @@ const activeProjection: DomainWorldProjection = {
       label_en: 'Morale',
       label_zh: '士气',
       value_type: 'integer',
-      unit: 'score',
+      semantic_role: 'stock',
+      unit: 'custom_count:score',
       scale: 0,
+      minimum: '0',
+      maximum: '100',
+      enum_values: [],
       initial_value: '50',
     },
   ],
@@ -50,7 +64,11 @@ const activeProjection: DomainWorldProjection = {
     {
       branch_id: 'branch-a',
       status: 'active',
+      failure_code: null,
+      reason_code: null,
       as_of_round: 3,
+      state_revision: SHA_B,
+      semantic_state_hash: SHA_C,
       values: [
         { variable_id: 'cash_balance', value: '7200' },
         { variable_id: 'morale', value: '48' },
@@ -63,13 +81,23 @@ const activeProjection: DomainWorldProjection = {
           before: '8000',
           after: '7200',
           applied_delta: '-800',
+          effect_code: null,
+          rule_ids: ['spend_budget'],
+          state_revision_before: SHA_D,
+          state_revision_after: SHA_B,
+          source_action_ids: ['action-42'],
+          source_action_count: 1,
+          source_action_ids_truncated: false,
           sources: [
             {
               agent_id: 'agent-1',
               agent_name: 'Operator',
+              message_id: 'message-3',
               action_id: 'action-42',
+              action_sequence: 42,
               rule_id: 'spend_budget',
               action_type: 'POST',
+              proposal_index: 0,
             },
           ],
         },
@@ -79,8 +107,8 @@ const activeProjection: DomainWorldProjection = {
         status: 'active',
         reason_code: null,
         as_of_round: 3,
-        schema_hash: 'sha256:abc',
-        input_state_revision: 'sha256:rev',
+        schema_hash: SHA_A,
+        input_state_revision: SHA_B,
         threshold_met_rule_ids: ['publish_offer'],
         rule_count: 2,
         rules_truncated: false,
@@ -134,7 +162,7 @@ const activeProjection: DomainWorldProjection = {
           message_id: 'message-4-1',
           action_id: 'action-4-1',
           idle_reason_code: 'IDLE_CONSTRAINT_BLOCKED',
-          input_state_revision: 'sha256:n1',
+          input_state_revision: SHA_D,
           domain_reason_code: 'OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET',
           blocked_rule_ids: ['publish_offer', 'seek_supplier'],
         },
@@ -149,6 +177,30 @@ describe('domainWorld helpers', () => {
     expect(normalized.status).toBe('unavailable');
     expect(normalized.reason_code).toBe('not_generated');
     expect(normalized.variables).toEqual([]);
+  });
+
+  it('keeps an active schema with no complete branch round honest and shaped', () => {
+    const normalized = normalizeDomainWorldProjection({
+      ...activeProjection,
+      as_of_round: null,
+      branch_states: [{
+        branch_id: 'branch-pending',
+        status: 'unavailable',
+        failure_code: 'DOMAIN_ROUND_INCOMPLETE',
+        reason_code: 'round_incomplete',
+        as_of_round: null,
+        state_revision: null,
+        semantic_state_hash: null,
+        values: [],
+        latest_round_deltas: [],
+      }],
+    });
+    expect(normalized.status).toBe('active');
+    expect(normalized.as_of_round).toBeNull();
+    expect(normalized.branch_states[0]).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'round_incomplete',
+    });
   });
 
   it('maps null world outcomes to not_generated', () => {
@@ -173,12 +225,21 @@ describe('domainWorld helpers', () => {
     expect(formatDomainValue('7200')).toBe('7200');
   });
 
-  it('always scales currency:*:minor minor→major even when scale=0', () => {
+  it('uses ISO currency minor exponents without losing 18-digit precision', () => {
     expect(formatDomainUnitValue('800000', 'currency:CNY:minor', 0, true)).toBe('8000 元');
     expect(formatDomainUnitValue('500000', 'currency:CNY:minor', 0, false)).toBe('5000 CNY');
     expect(formatDomainUnitValue('800', 'currency:USD:minor', 0, false)).toBe('8 USD');
     expect(formatDomainUnitValue('800', 'currency:USD:minor', 2, false)).toBe('8 USD');
+    expect(formatDomainUnitValue('999999999999999999', 'currency:USD:minor', 0, false))
+      .toBe('9999999999999999.99 USD');
+    expect(formatDomainUnitValue('-1', 'currency:USD:minor', 0, false)).toBe('-0.01 USD');
+    expect(formatDomainUnitValue('800', 'currency:JPY:minor', 0, false)).toBe('800 JPY');
+    expect(formatDomainUnitValue('800', 'currency:KWD:minor', 0, false)).toBe('0.8 KWD');
+    expect(formatDomainUnitValue('800', 'currency:ZZZ:minor', 0, false)).toBe('800 ZZZ minor');
+    expect(formatDomainUnitValue('800', 'currency:ZZZ:minor', 0, true)).toBe('800 ZZZ 最小单位');
     expect(formatDomainUnitValue(null, 'currency:CNY:minor', 0)).toBe('');
+    expect(formatDomainScalarValue('800000', 'currency:CNY:minor', 0, true)).toBe('8000');
+    expect(formatDomainScalarValue(false, 'unitless', 0, true)).toBe('假');
   });
 
   it('localizes unit tokens without exposing raw minor/count tokens', () => {
@@ -206,14 +267,14 @@ describe('domainWorld helpers', () => {
     expect(formatted.actual).not.toContain('minor');
   });
 
-  it('normalizes §8.1 thresholds, drops SOCIAL_GATE, and does not fake truncation', () => {
+  it('rejects actor-only SOCIAL_GATE rows in branch threshold wire', () => {
     const normalized = normalizeOpportunityThresholds({
       version: 1,
       status: 'active',
       reason_code: null,
       as_of_round: 3,
-      schema_hash: 'sha256:x',
-      input_state_revision: 'sha256:y',
+      schema_hash: SHA_A,
+      input_state_revision: SHA_B,
       threshold_met_rule_ids: ['ok'],
       rule_count: 2,
       rules_truncated: false,
@@ -249,15 +310,11 @@ describe('domainWorld helpers', () => {
         },
       ],
     });
-    expect(normalized.status).toBe('active');
-    if (normalized.status !== 'active') throw new Error('expected active');
-    expect(normalized.rules.map((rule) => rule.rule_id)).toEqual(['ok']);
-    expect(normalized.rules.some((rule) => String(rule.reason_code).includes('SOCIAL_GATE'))).toBe(false);
-    // After client filter, count equals remaining rules — not truncated.
-    expect(normalized.rule_count).toBe(1);
-    expect(normalized.rules_truncated).toBe(false);
-    expect(normalized.schema_hash).toBe('sha256:x');
-    expect(normalized.input_state_revision).toBe('sha256:y');
+    expect(normalized).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+      rules: [],
+    });
   });
 
   it('shapes unavailable thresholds with bounded reason only', () => {
@@ -393,7 +450,7 @@ describe('domainWorld helpers', () => {
       reason_code: null,
       as_of_round: 3,
       schema_hash: '',
-      input_state_revision: 'sha256:rev',
+      input_state_revision: SHA_B,
       threshold_met_rule_ids: [],
       rule_count: 1,
       rules_truncated: false,
@@ -422,7 +479,7 @@ describe('domainWorld helpers', () => {
       status: 'active',
       reason_code: null,
       as_of_round: 3,
-      schema_hash: 'sha256:x',
+      schema_hash: SHA_A,
       input_state_revision: null,
       threshold_met_rule_ids: [],
       rule_count: 0,
@@ -438,7 +495,7 @@ describe('domainWorld helpers', () => {
       status: 'active',
       reason_code: null,
       as_of_round: 3,
-      schema_hash: 'sha256:x',
+      schema_hash: SHA_A,
       input_state_revision: '  ',
       threshold_met_rule_ids: [],
       rule_count: 0,
@@ -456,8 +513,8 @@ describe('domainWorld helpers', () => {
       status: 'active',
       reason_code: null,
       as_of_round: 2,
-      schema_hash: 'sha256:schema',
-      input_state_revision: 'sha256:rev',
+      schema_hash: SHA_A,
+      input_state_revision: SHA_B,
       threshold_met_rule_ids: [],
       rule_count: 1,
       rules_truncated: false,
@@ -506,11 +563,9 @@ describe('domainWorld helpers', () => {
     expect(formatted.expected).toBe('真');
   });
 
-  it('backend true truncation keeps pre-cap rule_count after SOCIAL_GATE filter', () => {
-    // Backend: rules_truncated=true, rule_count=20 (pre-cap), array already capped to 16,
-    // including one SOCIAL_GATE that FE filters for display.
-    const rules = Array.from({ length: 15 }, (_, i) => ({
-      rule_id: `rule_${i}`,
+  it('fails closed on over-cap or silently truncated threshold rule wire', () => {
+    const rules = Array.from({ length: 17 }, (_, i) => ({
+      rule_id: `rule_${String(i).padStart(2, '0')}`,
       variable_id: 'cash_balance',
       action_type: 'POST',
       opportunity_mode: 'allow_when_preconditions_met',
@@ -530,46 +585,26 @@ describe('domainWorld helpers', () => {
         },
       ],
     }));
-    rules.push({
-      rule_id: 'social_only',
-      variable_id: 'cash_balance',
-      action_type: 'POST',
-      opportunity_mode: 'allow_when_preconditions_met',
-      epistemic_scope: 'scenario_assumption',
-      preconditions_met: false,
-      reason_code: 'OPPORTUNITY_DOMAIN_SOCIAL_GATE_CLOSED' as never,
-      preconditions: [],
-    });
-    expect(rules).toHaveLength(16);
-
     const normalized = normalizeOpportunityThresholds({
       version: 1,
       status: 'active',
       reason_code: null,
       as_of_round: 5,
-      schema_hash: 'sha256:s',
-      input_state_revision: 'sha256:r',
-      threshold_met_rule_ids: [],
-      rule_count: 20,
+      schema_hash: SHA_A,
+      input_state_revision: SHA_B,
+      threshold_met_rule_ids: rules
+        .filter((rule) => rule.preconditions_met)
+        .map((rule) => rule.rule_id),
+      rule_count: 17,
       rules_truncated: true,
       rules,
     });
-    expect(normalized.status).toBe('active');
-    if (normalized.status !== 'active') throw new Error('expected active');
-    // Filter only affects display array.
-    expect(normalized.rules).toHaveLength(15);
-    expect(normalized.rules.some((r) => r.rule_id === 'social_only')).toBe(false);
-    // Count keeps backend pre-cap semantics — not rewritten to filtered length.
-    expect(normalized.rule_count).toBe(20);
-    expect(normalized.rule_count).not.toBe(normalized.rules.length);
-    // Truncation is the backend flag (shown < total still honest).
-    expect(normalized.rules_truncated).toBe(true);
-    // Refs semantics: shown = filtered len, total = rule_count.
-    const shown = normalized.rules.length;
-    const total = normalized.rule_count;
-    expect(shown).toBe(15);
-    expect(total).toBe(20);
-    expect(shown === total).toBe(false);
+    expect(normalized).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+      rule_count: 0,
+      rules: [],
+    });
   });
 
   it('filters thresholds by variable and detects idle reasons', () => {
@@ -590,18 +625,22 @@ describe('domainWorld helpers', () => {
     expect(cards[0]?.variable.variable_id).toBe('cash_balance');
     expect(cards[0]?.delta?.applied_delta).toBe('-800');
     expect(cards.length).toBeLessThanOrEqual(6);
+    expect(selectStripVariables(activeProjection, 'branch-not-hydrated')).toEqual([]);
   });
 
-  it('applies world_state_committed while preserving §8 projections', () => {
+  it('applies world_state_committed and invalidates stale Stage 2 projections', () => {
     const next = applyWorldStateCommitted(activeProjection, {
       version: 1,
       scenario_id: 'scenario-1',
       branch_id: 'branch-a',
       round_number: 4,
-      schema_hash: 'sha256:abc',
-      state_revision: 'sha256:new',
-      semantic_state_hash: 'sha256:sem',
-      values: [{ variable_id: 'cash_balance', value: '7000' }],
+      schema_hash: SHA_A,
+      state_revision: SHA_C,
+      semantic_state_hash: SHA_D,
+      values: [
+        { variable_id: 'cash_balance', value: '7000' },
+        { variable_id: 'morale', value: '48' },
+      ],
       domain_state_deltas: [
         {
           variable_id: 'cash_balance',
@@ -610,6 +649,19 @@ describe('domainWorld helpers', () => {
           before: '7200',
           after: '7000',
           applied_delta: '-200',
+          effect_code: null,
+          rule_ids: ['spend_budget'],
+          state_revision_before: SHA_B,
+          state_revision_after: SHA_C,
+          sources: [{
+            agent_id: 'agent-1',
+            message_id: 'message-4',
+            action_id: 'action-43',
+            action_sequence: 43,
+            action_type: 'POST',
+            proposal_index: 0,
+            rule_id: 'spend_budget',
+          }],
         },
       ],
     });
@@ -617,9 +669,128 @@ describe('domainWorld helpers', () => {
     expect(branch?.as_of_round).toBe(4);
     expect(branch?.values[0]?.value).toBe('7000');
     expect(branch?.latest_round_deltas[0]?.applied_delta).toBe('-200');
-    expect(branch?.opportunity_thresholds?.rules).toHaveLength(2);
-    expect(branch?.latest_domain_idle_reason_count).toBe(1);
+    expect(branch?.opportunity_thresholds).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'round_incomplete',
+      rules: [],
+    });
+    expect(branch?.latest_domain_idle_reason_count).toBe(0);
+    expect(branch?.latest_domain_idle_reasons).toEqual([]);
     expect(next.as_of_round).toBe(4);
+  });
+
+  it('rejects late/same-coordinate commits and malformed active coordinates', () => {
+    const late = applyWorldStateCommitted(activeProjection, {
+      version: 1,
+      scenario_id: 'scenario-1',
+      branch_id: 'branch-a',
+      round_number: 2,
+      schema_hash: SHA_A,
+      state_revision: SHA_C,
+      semantic_state_hash: SHA_D,
+      values: [
+        { variable_id: 'cash_balance', value: '9999' },
+        { variable_id: 'morale', value: '10' },
+      ],
+      domain_state_deltas: [],
+    });
+    expect(late).toBe(activeProjection);
+
+    const sameRoundConflict = applyWorldStateCommitted(activeProjection, {
+      version: 1,
+      scenario_id: 'scenario-1',
+      branch_id: 'branch-a',
+      round_number: 3,
+      schema_hash: SHA_A,
+      state_revision: SHA_C,
+      semantic_state_hash: SHA_D,
+      values: [
+        { variable_id: 'cash_balance', value: '9999' },
+        { variable_id: 'morale', value: '10' },
+      ],
+      domain_state_deltas: [],
+    });
+    expect(sameRoundConflict).toBe(activeProjection);
+
+    const unknownStatus = normalizeDomainWorldProjection({
+      ...activeProjection,
+      status: 'mystery',
+    } as never);
+    expect(unknownStatus).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+      branch_states: [],
+    });
+
+    const missingRevision = normalizeDomainWorldProjection({
+      ...activeProjection,
+      branch_states: [{
+        ...activeProjection.branch_states[0],
+        state_revision: null,
+      }],
+    } as never);
+    expect(missingRevision).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+      branch_states: [],
+    });
+
+    const malformedSchema = normalizeDomainWorldProjection({
+      ...activeProjection,
+      variables: [null],
+    });
+    expect(malformedSchema).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+      variables: [],
+      branch_states: [],
+    });
+
+    const mismatchedTopRound = normalizeDomainWorldProjection({
+      ...activeProjection,
+      as_of_round: 2,
+    } as never);
+    expect(mismatchedTopRound).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+    });
+  });
+
+  it('fails closed on string booleans and inconsistent threshold reason codes', () => {
+    const stringBoolean = normalizeOpportunityThresholds({
+      ...activeProjection.branch_states[0].opportunity_thresholds!,
+      rules: [{
+        ...activeProjection.branch_states[0].opportunity_thresholds!.rules[0],
+        preconditions_met: 'false',
+      }],
+    } as never);
+    expect(stringBoolean).toMatchObject({
+      status: 'unavailable',
+      reason_code: 'rebuild_failed',
+      rules: [],
+    });
+
+    const stringPredicateBoolean = normalizeOpportunityThresholds({
+      ...activeProjection.branch_states[0].opportunity_thresholds!,
+      rules: [{
+        ...activeProjection.branch_states[0].opportunity_thresholds!.rules[0],
+        preconditions: [{
+          ...activeProjection.branch_states[0].opportunity_thresholds!.rules[0].preconditions[0],
+          met: 'false',
+        }],
+      }],
+    } as never);
+    expect(stringPredicateBoolean.status).toBe('unavailable');
+
+    const inconsistentReason = normalizeOpportunityThresholds({
+      ...activeProjection.branch_states[0].opportunity_thresholds!,
+      rules: [{
+        ...activeProjection.branch_states[0].opportunity_thresholds!.rules[0],
+        preconditions_met: true,
+        reason_code: 'OPPORTUNITY_DOMAIN_PRECONDITION_NOT_MET',
+      }],
+    } as never);
+    expect(inconsistentReason.status).toBe('unavailable');
   });
 
   it('uses max(text, domain) for divergence display score', () => {

@@ -1,16 +1,45 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  domainVariableLabel,
   domainReasonI18nKey,
+  formatDomainUnitValue,
   isTruncatedRefFamily,
   normalizeWorldOutcomesProjection,
 } from '../../lib/domainWorld';
-import type { WorldOutcomesProjection } from '../../types';
+import type { WorldOutcomeItem, WorldOutcomesProjection } from '../../types';
 import './WorldOutcomesSection.css';
 
 export interface WorldOutcomesSectionProps {
   worldOutcomes?: WorldOutcomesProjection | null;
   branchTitles?: Record<string, string>;
+}
+
+function formatOutcomeSummary(outcome: WorldOutcomeItem, isZh: boolean): string {
+  const label = domainVariableLabel(outcome, isZh);
+  const initial = formatDomainUnitValue(
+    outcome.initial_value,
+    outcome.unit,
+    outcome.scale,
+    isZh,
+  );
+  const final = formatDomainUnitValue(
+    outcome.final_value,
+    outcome.unit,
+    outcome.scale,
+    isZh,
+  );
+  const delta = formatDomainUnitValue(
+    outcome.net_delta,
+    outcome.unit,
+    outcome.scale,
+    isZh,
+  );
+  const transition = `${initial || '—'} → ${final || '—'}`;
+  if (!delta) return isZh ? `${label}：${transition}` : `${label}: ${transition}`;
+  return isZh
+    ? `${label}：${transition}（Δ ${delta}）`
+    : `${label}: ${transition} (Δ ${delta})`;
 }
 
 function RefTruncationNote({
@@ -107,7 +136,7 @@ export function WorldOutcomesSection({
             {!empty && (
               <ul className="world-outcomes__list">
                 {branch.outcomes.slice(0, 8).map((outcome) => {
-                  const summary = isZh ? outcome.summary.zh : outcome.summary.en;
+                  const summary = formatOutcomeSummary(outcome, isZh);
                   const actionShown = outcome.source_action_ids.length;
                   const ruleShown = outcome.source_rule_ids.length;
                   const claimShown = outcome.related_claim_ids.length;

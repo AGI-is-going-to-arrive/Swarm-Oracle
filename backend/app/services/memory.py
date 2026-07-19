@@ -2070,6 +2070,11 @@ def build_verified_memory_promotions_v1(
         )
         deltas = tuple(_normalize_delta_v1(item) for item in raw_deltas)
         reducer_actions: list[DomainActionInputV1] = []
+        action_authorities: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+        actions_by_source_coordinate: dict[
+            tuple[str, str, str, int, str],
+            list[tuple[Mapping[str, Any], Mapping[str, Any]]],
+        ] = {}
         for raw_entry in raw_actions:
             reducer_entry = _mapping_v1(raw_entry, label="reducer action authority")
             reducer_action = _mapping_v1(
@@ -2077,47 +2082,67 @@ def build_verified_memory_promotions_v1(
             )
             if reducer_entry.get("history_origin") != "live":
                 raise _MemoryPromotionCoordinateError("history origin")
+            reducer_scenario_id = _required_text_v1(
+                reducer_action.get("scenario_id"), label="reducer.scenario_id"
+            )
+            reducer_branch_id = _required_text_v1(
+                reducer_action.get("branch_id"), label="reducer.branch_id"
+            )
+            reducer_round_id = _required_text_v1(
+                reducer_action.get("round_id"), label="reducer.round_id"
+            )
+            reducer_round_number = _exact_int_v1(
+                reducer_action.get("round_number"),
+                label="reducer.round_number",
+                minimum=1,
+            )
+            reducer_agent_id = _required_text_v1(
+                reducer_action.get("agent_id"), label="reducer.agent_id"
+            )
+            reducer_message_id = _required_text_v1(
+                reducer_action.get("message_id"), label="reducer.message_id"
+            )
+            reducer_action_id = _required_text_v1(
+                reducer_action.get("action_id"), label="reducer.action_id"
+            )
+            reducer_action_sequence = _exact_int_v1(
+                reducer_action.get("action_sequence"),
+                label="reducer.action_sequence",
+                minimum=1,
+            )
+            reducer_action_type = _required_text_v1(
+                reducer_action.get("action_type"), label="reducer.action_type"
+            )
+            reducer_action_status = _required_text_v1(
+                reducer_action.get("action_status"), label="reducer.action_status"
+            )
             reducer_actions.append(
                 DomainActionInputV1(
-                    scenario_id=_required_text_v1(
-                        reducer_action.get("scenario_id"),
-                        label="reducer.scenario_id",
-                    ),
-                    branch_id=_required_text_v1(
-                        reducer_action.get("branch_id"), label="reducer.branch_id"
-                    ),
-                    round_id=_required_text_v1(
-                        reducer_action.get("round_id"), label="reducer.round_id"
-                    ),
-                    round_number=_exact_int_v1(
-                        reducer_action.get("round_number"),
-                        label="reducer.round_number",
-                        minimum=1,
-                    ),
-                    agent_id=_required_text_v1(
-                        reducer_action.get("agent_id"), label="reducer.agent_id"
-                    ),
-                    message_id=_required_text_v1(
-                        reducer_action.get("message_id"), label="reducer.message_id"
-                    ),
-                    action_id=_required_text_v1(
-                        reducer_action.get("action_id"), label="reducer.action_id"
-                    ),
-                    action_sequence=_exact_int_v1(
-                        reducer_action.get("action_sequence"),
-                        label="reducer.action_sequence",
-                        minimum=1,
-                    ),
-                    action_type=_required_text_v1(
-                        reducer_action.get("action_type"), label="reducer.action_type"
-                    ),
-                    action_status=_required_text_v1(
-                        reducer_action.get("action_status"),
-                        label="reducer.action_status",
-                    ),
+                    scenario_id=reducer_scenario_id,
+                    branch_id=reducer_branch_id,
+                    round_id=reducer_round_id,
+                    round_number=reducer_round_number,
+                    agent_id=reducer_agent_id,
+                    message_id=reducer_message_id,
+                    action_id=reducer_action_id,
+                    action_sequence=reducer_action_sequence,
+                    action_type=reducer_action_type,
+                    action_status=reducer_action_status,
                     payload=cast(Any, reducer_action.get("payload")),
                 )
             )
+            authority_row = (reducer_entry, reducer_action)
+            action_authorities.append(authority_row)
+            actions_by_source_coordinate.setdefault(
+                (
+                    reducer_agent_id,
+                    reducer_message_id,
+                    reducer_action_id,
+                    reducer_action_sequence,
+                    reducer_action_type,
+                ),
+                [],
+            ).append(authority_row)
         reduce_result = reduce_domain_round_v1(
             config=config,
             state_before=round_before,
@@ -2151,10 +2176,249 @@ def build_verified_memory_promotions_v1(
         ):
             raise _MemoryPromotionCoordinateError("durable reducer projection")
 
+        adjudications_by_proposal: dict[
+            tuple[str, int, int], list[Mapping[str, Any]]
+        ] = {}
+        for adjudication in adjudications:
+            adjudications_by_proposal.setdefault(
+                (
+                    _required_text_v1(
+                        adjudication.get("action_id"),
+                        label="adjudication.action_id",
+                    ),
+                    _exact_int_v1(
+                        adjudication.get("action_sequence"),
+                        label="adjudication.action_sequence",
+                        minimum=1,
+                    ),
+                    _exact_int_v1(
+                        adjudication.get("proposal_index"),
+                        label="adjudication.proposal_index",
+                    ),
+                ),
+                [],
+            ).append(adjudication)
+        deltas_by_coordinate: dict[
+            tuple[str, int],
+            list[tuple[Mapping[str, Any], tuple[dict[str, Any], ...]]],
+        ] = {}
+        for delta, sources in deltas:
+            delta_variable_id = delta.get("variable_id")
+            delta_round_number = delta.get("round_number")
+            if type(delta_variable_id) is str and type(delta_round_number) is int:
+                deltas_by_coordinate.setdefault(
+                    (delta_variable_id, delta_round_number), []
+                ).append((delta, sources))
+
+        evaluated_rules = {
+            row["rule_id"]: row for row in opportunity_evaluation["rules"]
+        }
+        eligible_rule_ids_by_action = {
+            action_type: tuple(
+                sorted(
+                    rule_id
+                    for rule_id, row in evaluated_rules.items()
+                    if row["action_type"] == action_type
+                    and row["preconditions_met"] is True
+                )
+            )
+            for action_type in {rule.action_type for rule in rules.values()}
+        }
+        action_coordinate = {
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_id": round_id,
+            "round_number": round_number,
+        }
+        source_authority_cache: dict[
+            tuple[str, str, str, int, str, int, str, str],
+            tuple[Mapping[str, Any], object, object, Mapping[str, Any]],
+        ] = {}
+
+        def resolve_source_authority(
+            source: Mapping[str, Any], variable_id: str
+        ) -> tuple[Mapping[str, Any], object, object, Mapping[str, Any]]:
+            cache_key = (
+                cast(str, source["agent_id"]),
+                cast(str, source["message_id"]),
+                cast(str, source["action_id"]),
+                cast(int, source["action_sequence"]),
+                cast(str, source["action_type"]),
+                cast(int, source["proposal_index"]),
+                cast(str, source["rule_id"]),
+                variable_id,
+            )
+            cached = source_authority_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            matching_source_actions: list[
+                tuple[Mapping[str, Any], object, object]
+            ] = []
+            action_key = cache_key[:5]
+            for source_entry, source_action in actions_by_source_coordinate.get(
+                cast(tuple[str, str, str, int, str], action_key), ()
+            ):
+                if any(
+                    canonical_json_bytes_v1(source_action.get(key))
+                    != canonical_json_bytes_v1(value)
+                    for key, value in action_coordinate.items()
+                ):
+                    continue
+                source_validation = validate_domain_action_payload_v1(
+                    source_action.get("payload"),
+                    action_type=cast(str, source["action_type"]),
+                    is_bootstrap=False,
+                    canonical_outer_payload_bytes=len(
+                        canonical_json_bytes_v1(
+                            {"domain_world_v1": source_action.get("payload")}
+                        )
+                    ),
+                )
+                source_index = cast(int, source["proposal_index"])
+                source_group = source_validation.payload
+                if not (
+                    str(source_action.get("action_status") or "").lower()
+                    == "verified"
+                    and source_group is not None
+                    and source_validation.action_failure_code is None
+                    and source_group["schema_hash"] == schema_hash
+                    and source_group["input_state_revision"] == input_state_revision
+                    and source_index < len(source_group["proposals"])
+                ):
+                    continue
+                source_proposal = source_group["proposals"][source_index]
+                source_rule = rules.get(source_proposal["rule_id"])
+                source_variable = variables.get(source_proposal["variable_id"])
+                if not (
+                    source_proposal["rule_id"] == source["rule_id"]
+                    and source_proposal["variable_id"] == variable_id
+                    and source_rule is not None
+                    and source_variable is not None
+                    and source_rule.variable_id == variable_id
+                    and source_rule.action_type == source["action_type"]
+                    and source_rule.operation == source_proposal["operation"]
+                    and source_rule.unit == source_proposal["unit"]
+                ):
+                    continue
+                source_decision = _mapping_v1(
+                    source_entry.get("decision"), label="source decision"
+                )
+                source_parameters = _mapping_v1(
+                    source_decision.get("action_parameters"),
+                    label="source action parameters",
+                )
+                source_receipt = _mapping_v1(
+                    source_decision.get("opportunity_receipt"),
+                    label="source opportunity receipt",
+                )
+                source_allowed = _sequence_v1(
+                    source_receipt.get("allowed_rule_ids"),
+                    label="source allowed_rule_ids",
+                )
+                source_eligible = eligible_rule_ids_by_action.get(
+                    cast(str, source["action_type"]), ()
+                )
+                source_allowed_for_action = tuple(
+                    sorted(
+                        cast(str, allowed_id)
+                        for allowed_id in source_allowed
+                        if type(allowed_id) is str
+                        and allowed_id in rules
+                        and rules[allowed_id].action_type == source["action_type"]
+                    )
+                )
+                if (
+                    source_decision.get("decision_status") != "verified"
+                    or source_decision.get("selected_action") != source["action_type"]
+                    or source_decision.get("agent_id") != source["agent_id"]
+                    or source_decision.get("branch_id") != branch_id
+                    or type(source_decision.get("round_number")) is not int
+                    or source_decision.get("round_number") != round_number
+                    or source_decision.get("message_id") != source["message_id"]
+                    or source_decision.get("action_id") != source["action_id"]
+                    or canonical_json_bytes_v1(
+                        source_parameters.get("domain_world_v1")
+                    )
+                    != canonical_json_bytes_v1(source_group)
+                    or source_receipt.get("version") != 1
+                    or type(source_receipt.get("version")) is not int
+                    or source_receipt.get("compatibility_mode") != "live"
+                    or type(source_receipt.get("as_of_round")) is not int
+                    or source_receipt.get("as_of_round") != round_number - 1
+                    or source_receipt.get("requested_action_type")
+                    != source["action_type"]
+                    or source_receipt.get("effective_action_type")
+                    != source["action_type"]
+                    or source_receipt.get("domain_state_revision")
+                    != input_state_revision
+                    or source_receipt.get("available") is not True
+                    or source_receipt.get("grounded") is not True
+                    or len(set(source_allowed)) != len(source_allowed)
+                    or source_allowed_for_action != source_eligible
+                    or any(
+                        type(allowed_id) is not str
+                        or allowed_id not in evaluated_rules
+                        or evaluated_rules[allowed_id]["preconditions_met"] is not True
+                        for allowed_id in source_allowed
+                    )
+                    or (
+                        source_rule.opportunity_mode == "allow_when_preconditions_met"
+                        and source["rule_id"] not in source_allowed
+                    )
+                ):
+                    raise _MemoryPromotionCoordinateError(
+                        "delta source decision binding"
+                    )
+                matching_source_actions.append(
+                    (source_proposal, source_rule, source_variable)
+                )
+
+            matching_source_adjudications = [
+                candidate
+                for candidate in adjudications_by_proposal.get(
+                    (
+                        cast(str, source["action_id"]),
+                        cast(int, source["action_sequence"]),
+                        cast(int, source["proposal_index"]),
+                    ),
+                    (),
+                )
+                if candidate.get("status") == "verified"
+                and all(
+                    canonical_json_bytes_v1(candidate.get(key))
+                    == canonical_json_bytes_v1(source[key])
+                    for key in (
+                        "agent_id",
+                        "message_id",
+                        "action_id",
+                        "action_sequence",
+                        "proposal_index",
+                        "rule_id",
+                    )
+                )
+                and candidate.get("variable_id") == variable_id
+            ]
+            if (
+                len(matching_source_actions) != 1
+                or len(matching_source_adjudications) != 1
+            ):
+                raise _MemoryPromotionCoordinateError(
+                    "delta source durable authority"
+                )
+            source_proposal, source_rule, source_variable = matching_source_actions[0]
+            resolved = (
+                source_proposal,
+                source_rule,
+                source_variable,
+                matching_source_adjudications[0],
+            )
+            source_authority_cache[cache_key] = resolved
+            return resolved
+
         drafts: list[dict[str, Any]] = []
-        for raw_entry in raw_actions:
-            entry = _mapping_v1(raw_entry, label="action authority")
-            action = _mapping_v1(entry.get("action"), label="action")
+        validated_delta_sources: set[tuple[str, int]] = set()
+        for entry, action in action_authorities:
             action_status = str(action.get("action_status") or "").lower()
             if action_status != "verified":
                 continue
@@ -2173,12 +2437,6 @@ def build_verified_memory_promotions_v1(
             if entry.get("history_origin") != "live":
                 raise _MemoryPromotionCoordinateError("history origin")
 
-            action_coordinate = {
-                "scenario_id": scenario_id,
-                "branch_id": branch_id,
-                "round_id": round_id,
-                "round_number": round_number,
-            }
             if any(
                 canonical_json_bytes_v1(action.get(key))
                 != canonical_json_bytes_v1(value)
@@ -2258,18 +2516,7 @@ def build_verified_memory_promotions_v1(
                 )
             ):
                 raise _MemoryPromotionCoordinateError("opportunity receipt binding")
-            evaluated_rules = {
-                row["rule_id"]: row
-                for row in opportunity_evaluation["rules"]
-            }
-            eligible_for_action = tuple(
-                sorted(
-                    rule_id
-                    for rule_id, row in evaluated_rules.items()
-                    if row["action_type"] == action_type
-                    and row["preconditions_met"] is True
-                )
-            )
+            eligible_for_action = eligible_rule_ids_by_action.get(action_type, ())
             allowed_for_action = tuple(
                 sorted(
                     cast(str, rule_id)
@@ -2304,12 +2551,10 @@ def build_verified_memory_promotions_v1(
 
                 matching_adjudications = [
                     adjudication
-                    for adjudication in adjudications
+                    for adjudication in adjudications_by_proposal.get(
+                        (action_id, action_sequence, proposal_index), ()
+                    )
                     if adjudication.get("action_id") == action_id
-                    and type(adjudication.get("action_sequence")) is int
-                    and adjudication.get("action_sequence") == action_sequence
-                    and type(adjudication.get("proposal_index")) is int
-                    and adjudication.get("proposal_index") == proposal_index
                     and adjudication.get("rule_id") == rule_id
                     and adjudication.get("variable_id") == variable_id
                 ]
@@ -2357,13 +2602,9 @@ def build_verified_memory_promotions_v1(
                 if effect_status == "noop":
                     continue
 
-                matching_deltas = [
-                    item
-                    for item in deltas
-                    if item[0].get("variable_id") == variable_id
-                    and type(item[0].get("round_number")) is int
-                    and item[0].get("round_number") == round_number
-                ]
+                matching_deltas = deltas_by_coordinate.get(
+                    (variable_id, round_number), ()
+                )
                 if len(matching_deltas) != 1:
                     raise _MemoryPromotionConflictError("delta ambiguity")
                 delta, sources = matching_deltas[0]
@@ -2434,267 +2675,82 @@ def build_verified_memory_promotions_v1(
                 ):
                     raise _MemoryPromotionCoordinateError("round state delta binding")
 
-                source_numeric_total = Decimal(0)
-                for source in sources:
-                    matching_source_actions: list[
-                        tuple[Mapping[str, Any], Mapping[str, Any], object, object]
-                    ] = []
-                    for source_entry_value in raw_actions:
-                        source_entry = _mapping_v1(
-                            source_entry_value, label="source action authority"
-                        )
-                        source_action = _mapping_v1(
-                            source_entry.get("action"), label="source action"
-                        )
+                delta_source_key = (variable_id, round_number)
+                if delta_source_key not in validated_delta_sources:
+                    source_numeric_total = Decimal(0)
+                    for source in sources:
+                        (
+                            source_proposal,
+                            source_rule,
+                            source_variable,
+                            source_adjudication,
+                        ) = resolve_source_authority(source, variable_id)
+                        source_binding = {
+                            "schema_hash": schema_hash,
+                            "scenario_id": scenario_id,
+                            "branch_id": branch_id,
+                            "round_number": round_number,
+                            "agent_id": source["agent_id"],
+                            "message_id": source["message_id"],
+                            "action_id": source["action_id"],
+                            "action_sequence": source["action_sequence"],
+                            "proposal_index": source["proposal_index"],
+                            "rule_id": source["rule_id"],
+                            "variable_id": variable_id,
+                            "operation": source_proposal["operation"],
+                            "requested_value": source_proposal["requested_value"],
+                            "unit": source_proposal["unit"],
+                            "expected_before": source_proposal["expected_before"],
+                            "before": delta["before"],
+                            "after": delta["after"],
+                            "state_revision_before": input_state_revision,
+                            "state_revision_after": state_revision_after,
+                            "epistemic_scope": source_rule.epistemic_scope,
+                        }
                         if any(
-                            canonical_json_bytes_v1(source_action.get(key))
-                            != canonical_json_bytes_v1(source[key])
-                            for key in (
-                                "agent_id",
-                                "message_id",
-                                "action_id",
-                                "action_sequence",
-                                "action_type",
-                            )
+                            canonical_json_bytes_v1(source_adjudication.get(key))
+                            != canonical_json_bytes_v1(value)
+                            for key, value in source_binding.items()
                         ):
-                            continue
+                            raise _MemoryPromotionCoordinateError(
+                                "delta source adjudication binding"
+                            )
+                        source_status = _actual_effect_status_v1(
+                            operation=source_proposal["operation"],
+                            value_type=source_variable.value_type,
+                            scale=source_variable.scale,
+                            before=source_adjudication.get("before"),
+                            after=source_adjudication.get("after"),
+                            applied_delta=source_adjudication.get("applied_delta"),
+                        )
+                        if source_status == "invalid":
+                            raise _MemoryPromotionCoordinateError(
+                                "delta source applied value"
+                            )
+                        event_identity = (
+                            cast(str, source_proposal["rule_id"]),
+                            cast(str, source_proposal["variable_id"]),
+                            cast(str, source_proposal["event_key"]),
+                        )
                         if (
-                            source_entry.get("history_origin") != "live"
-                            or any(
-                                canonical_json_bytes_v1(source_action.get(key))
-                                != canonical_json_bytes_v1(value)
-                                for key, value in action_coordinate.items()
-                            )
+                            event_identity in accepted_before
+                            or event_identity not in accepted_after
                         ):
-                            continue
-                        source_validation = validate_domain_action_payload_v1(
-                            source_action.get("payload"),
-                            action_type=cast(str, source["action_type"]),
-                            is_bootstrap=False,
-                            canonical_outer_payload_bytes=len(
-                                canonical_json_bytes_v1(
-                                    {"domain_world_v1": source_action.get("payload")}
-                                )
-                            ),
-                        )
-                        source_index = cast(int, source["proposal_index"])
-                        source_group = source_validation.payload
-                        if (
-                            str(source_action.get("action_status") or "").lower()
-                            == "verified"
-                            and source_group is not None
-                            and source_validation.action_failure_code is None
-                            and source_group["schema_hash"] == schema_hash
-                            and source_group["input_state_revision"]
-                            == input_state_revision
-                            and source_index < len(source_group["proposals"])
-                        ):
-                            source_proposal = source_group["proposals"][source_index]
-                            source_rule = rules.get(source_proposal["rule_id"])
-                            source_variable = variables.get(
-                                source_proposal["variable_id"]
+                            raise _MemoryPromotionCoordinateError(
+                                "delta source event identity"
                             )
-                            if (
-                                source_proposal["rule_id"] == source["rule_id"]
-                                and source_proposal["variable_id"] == variable_id
-                                and source_rule is not None
-                                and source_variable is not None
-                                and source_rule.variable_id == variable_id
-                                and source_rule.action_type == source["action_type"]
-                                and source_rule.operation
-                                == source_proposal["operation"]
-                                and source_rule.unit == source_proposal["unit"]
-                            ):
-                                source_decision = _mapping_v1(
-                                    source_entry.get("decision"),
-                                    label="source decision",
-                                )
-                                source_parameters = _mapping_v1(
-                                    source_decision.get("action_parameters"),
-                                    label="source action parameters",
-                                )
-                                source_receipt = _mapping_v1(
-                                    source_decision.get("opportunity_receipt"),
-                                    label="source opportunity receipt",
-                                )
-                                source_allowed = _sequence_v1(
-                                    source_receipt.get("allowed_rule_ids"),
-                                    label="source allowed_rule_ids",
-                                )
-                                source_eligible = tuple(
-                                    sorted(
-                                        evaluated_rule_id
-                                        for evaluated_rule_id, row in (
-                                            evaluated_rules.items()
-                                        )
-                                        if row["action_type"]
-                                        == source["action_type"]
-                                        and row["preconditions_met"] is True
-                                    )
-                                )
-                                source_allowed_for_action = tuple(
-                                    sorted(
-                                        cast(str, allowed_id)
-                                        for allowed_id in source_allowed
-                                        if type(allowed_id) is str
-                                        and allowed_id in rules
-                                        and rules[allowed_id].action_type
-                                        == source["action_type"]
-                                    )
-                                )
-                                if (
-                                    source_decision.get("decision_status")
-                                    != "verified"
-                                    or source_decision.get("selected_action")
-                                    != source["action_type"]
-                                    or source_decision.get("agent_id")
-                                    != source["agent_id"]
-                                    or source_decision.get("branch_id") != branch_id
-                                    or type(source_decision.get("round_number"))
-                                    is not int
-                                    or source_decision.get("round_number")
-                                    != round_number
-                                    or source_decision.get("message_id")
-                                    != source["message_id"]
-                                    or source_decision.get("action_id")
-                                    != source["action_id"]
-                                    or canonical_json_bytes_v1(
-                                        source_parameters.get("domain_world_v1")
-                                    )
-                                    != canonical_json_bytes_v1(source_group)
-                                    or source_receipt.get("version") != 1
-                                    or type(source_receipt.get("version")) is not int
-                                    or source_receipt.get("compatibility_mode") != "live"
-                                    or type(source_receipt.get("as_of_round")) is not int
-                                    or source_receipt.get("as_of_round")
-                                    != round_number - 1
-                                    or source_receipt.get("requested_action_type")
-                                    != source["action_type"]
-                                    or source_receipt.get("effective_action_type")
-                                    != source["action_type"]
-                                    or source_receipt.get("domain_state_revision")
-                                    != input_state_revision
-                                    or source_receipt.get("available") is not True
-                                    or source_receipt.get("grounded") is not True
-                                    or len(set(source_allowed)) != len(source_allowed)
-                                    or source_allowed_for_action != source_eligible
-                                    or any(
-                                        type(allowed_id) is not str
-                                        or allowed_id not in evaluated_rules
-                                        or evaluated_rules[allowed_id][
-                                            "preconditions_met"
-                                        ]
-                                        is not True
-                                        for allowed_id in source_allowed
-                                    )
-                                    or (
-                                        source_rule.opportunity_mode
-                                        == "allow_when_preconditions_met"
-                                        and source["rule_id"] not in source_allowed
-                                    )
-                                ):
-                                    raise _MemoryPromotionCoordinateError(
-                                        "delta source decision binding"
-                                    )
-                                matching_source_actions.append(
-                                    (
-                                        source_action,
-                                        source_proposal,
-                                        source_rule,
-                                        source_variable,
-                                    )
-                                )
-                    matching_source_adjudications = [
-                        candidate
-                        for candidate in adjudications
-                        if candidate.get("status") == "verified"
-                        and all(
-                            canonical_json_bytes_v1(candidate.get(key))
-                            == canonical_json_bytes_v1(source[key])
-                            for key in (
-                                "agent_id",
-                                "message_id",
-                                "action_id",
-                                "action_sequence",
-                                "proposal_index",
-                                "rule_id",
+                        if variable.value_type in {"integer", "decimal"}:
+                            source_numeric_total += Decimal(
+                                cast(str, source_adjudication["applied_delta"])
                             )
-                        )
-                        and candidate.get("variable_id") == variable_id
-                    ]
-                    if (
-                        len(matching_source_actions) != 1
-                        or len(matching_source_adjudications) != 1
+                    if variable.value_type in {"integer", "decimal"} and (
+                        source_numeric_total
+                        != Decimal(cast(str, delta["applied_delta"]))
                     ):
                         raise _MemoryPromotionCoordinateError(
-                            "delta source durable authority"
+                            "delta source allocation"
                         )
-                    _, source_proposal, source_rule, source_variable = (
-                        matching_source_actions[0]
-                    )
-                    source_adjudication = matching_source_adjudications[0]
-                    source_binding = {
-                        "schema_hash": schema_hash,
-                        "scenario_id": scenario_id,
-                        "branch_id": branch_id,
-                        "round_number": round_number,
-                        "agent_id": source["agent_id"],
-                        "message_id": source["message_id"],
-                        "action_id": source["action_id"],
-                        "action_sequence": source["action_sequence"],
-                        "proposal_index": source["proposal_index"],
-                        "rule_id": source["rule_id"],
-                        "variable_id": variable_id,
-                        "operation": source_proposal["operation"],
-                        "requested_value": source_proposal["requested_value"],
-                        "unit": source_proposal["unit"],
-                        "expected_before": source_proposal["expected_before"],
-                        "before": delta["before"],
-                        "after": delta["after"],
-                        "state_revision_before": input_state_revision,
-                        "state_revision_after": state_revision_after,
-                        "epistemic_scope": source_rule.epistemic_scope,
-                    }
-                    if any(
-                        canonical_json_bytes_v1(source_adjudication.get(key))
-                        != canonical_json_bytes_v1(value)
-                        for key, value in source_binding.items()
-                    ):
-                        raise _MemoryPromotionCoordinateError(
-                            "delta source adjudication binding"
-                        )
-                    source_status = _actual_effect_status_v1(
-                        operation=source_proposal["operation"],
-                        value_type=source_variable.value_type,
-                        scale=source_variable.scale,
-                        before=source_adjudication.get("before"),
-                        after=source_adjudication.get("after"),
-                        applied_delta=source_adjudication.get("applied_delta"),
-                    )
-                    if source_status == "invalid":
-                        raise _MemoryPromotionCoordinateError(
-                            "delta source applied value"
-                        )
-                    event_identity = (
-                        cast(str, source_proposal["rule_id"]),
-                        cast(str, source_proposal["variable_id"]),
-                        cast(str, source_proposal["event_key"]),
-                    )
-                    if (
-                        event_identity in accepted_before
-                        or event_identity not in accepted_after
-                    ):
-                        raise _MemoryPromotionCoordinateError(
-                            "delta source event identity"
-                        )
-                    if variable.value_type in {"integer", "decimal"}:
-                        source_numeric_total += Decimal(
-                            cast(str, source_adjudication["applied_delta"])
-                        )
-                if variable.value_type in {"integer", "decimal"} and (
-                    source_numeric_total != Decimal(cast(str, delta["applied_delta"]))
-                ):
-                    raise _MemoryPromotionCoordinateError("delta source allocation")
+                    validated_delta_sources.add(delta_source_key)
 
                 drafts.append(
                     {

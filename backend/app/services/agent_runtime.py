@@ -296,6 +296,7 @@ _DOMAIN_RUNTIME_ROUND_FIELDS = (
     "domain_state_revision",
     "semantic_state_hash",
 )
+_DOMAIN_HISTORY_QUERY_CHUNK = 256
 
 
 def _empty_runtime() -> dict[str, Any]:
@@ -1084,6 +1085,22 @@ def _invalid_memory_promotion_context_payload_v1() -> dict[str, Any]:
     ).to_payload()
 
 
+def _is_ordered_subsequence_v1(
+    candidate: Sequence[str],
+    authority: Sequence[str],
+) -> bool:
+    """Return whether candidate preserves the authority's deterministic order."""
+
+    authority_positions = {value: index for index, value in enumerate(authority)}
+    previous_position = -1
+    for value in candidate:
+        position = authority_positions.get(value)
+        if position is None or position <= previous_position:
+            return False
+        previous_position = position
+    return True
+
+
 def normalize_decision_with_memory_promotion_v1(
     raw: object,
     *,
@@ -1135,6 +1152,13 @@ def normalize_decision_with_memory_promotion_v1(
                 ref_mismatch = True
                 break
             seen_refs.add(ref)
+    if not ref_mismatch:
+        offered_set = set(offered_refs)
+        recalled_promotion_refs = [ref for ref in raw_refs if ref in offered_set]
+        ref_mismatch = not _is_ordered_subsequence_v1(
+            recalled_promotion_refs,
+            offered_refs,
+        )
 
     if ref_mismatch:
         normalized_round = max(1, int(round_number))
@@ -1275,6 +1299,7 @@ def _opaque_memory_promotion_recall_receipt_v1(value: object) -> dict[str, Any]:
                 len(raw_offered) == len(set(raw_offered))
                 and len(raw_recalled) == len(set(raw_recalled))
                 and set(raw_recalled).issubset(raw_offered)
+                and _is_ordered_subsequence_v1(raw_recalled, raw_offered)
             )
         if valid:
             valid = _memory_promotion_receipt_union_is_valid_v1(
@@ -1514,11 +1539,66 @@ def _domain_config_from_scenario_v1(scenario: Scenario) -> DomainWorldConfigV1:
     return validate_domain_world_config_v1(raw)
 
 
+@dataclass(frozen=True, slots=True)
+class _PortableDomainJsonNumberV1:
+    token: str
+
+
+def _portable_domain_json_object_v1(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON object key")
+        value[key] = item
+    return value
+
+
+def _portable_domain_json_text_v1(value: object) -> str:
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "true" if value else "false"
+    if type(value) is int:
+        return str(value)
+    if isinstance(value, _PortableDomainJsonNumberV1):
+        return value.token
+    if type(value) is str:
+        return json.dumps(value, ensure_ascii=False, allow_nan=False)
+    if isinstance(value, list):
+        return "[" + ",".join(_portable_domain_json_text_v1(item) for item in value) + "]"
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise TypeError("JSON object keys must be strings")
+        return "{" + ",".join(
+            f"{_portable_domain_json_text_v1(key)}:"
+            f"{_portable_domain_json_text_v1(value[key])}"
+            for key in sorted(value)
+        ) + "}"
+    raise TypeError(f"unsupported JSON value: {type(value).__name__}")
+
+
+def _load_portable_domain_json_v1(raw: str) -> object:
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"JSON constant is not permitted: {value}")
+
+    return json.loads(
+        raw,
+        object_pairs_hook=_portable_domain_json_object_v1,
+        parse_int=lambda value: (
+            _PortableDomainJsonNumberV1(value) if value == "-0" else int(value)
+        ),
+        parse_float=_PortableDomainJsonNumberV1,
+        parse_constant=reject_constant,
+    )
+
+
 def _validated_domain_payload_from_action_v1(
     action: SimulationAction,
 ) -> tuple[Mapping[str, object], DomainActionPayloadV1 | None]:
     try:
-        raw_outer = json.loads(action.payload_json or "{}")
+        raw_outer = _load_portable_domain_json_v1(action.payload_json or "{}")
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT") from exc
     if not isinstance(raw_outer, Mapping) or any(type(key) is not str for key in raw_outer):
@@ -1526,8 +1606,11 @@ def _validated_domain_payload_from_action_v1(
     outer = copy.deepcopy(dict(raw_outer))
     try:
         outer_size = len(canonical_json_bytes_v1(outer))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT") from exc
+    except (TypeError, ValueError):
+        try:
+            outer_size = len(_portable_domain_json_text_v1(outer).encode("utf-8"))
+        except (TypeError, ValueError, UnicodeEncodeError) as generic_exc:
+            raise RuntimeError("DOMAIN_FINALIZATION_LEDGER_CORRUPT") from generic_exc
     validation = validate_domain_action_payload_v1(
         outer.get("domain_world_v1"),
         action_type=_domain_enum_value(action.action_type),
@@ -1547,34 +1630,65 @@ def _read_domain_round_v1(
     round_id: str,
     round_number: int,
     expected_agent_ids: tuple[str, ...],
+    preloaded_round_row: Round | None = None,
+    preloaded_messages: Sequence[AgentMessage] | None = None,
+    preloaded_action_rows: Sequence[SimulationAction] | None = None,
 ) -> _DomainRoundReadV1:
-    round_row = session.get(Round, round_id)
+    round_row = (
+        preloaded_round_row
+        if preloaded_round_row is not None
+        else session.get(Round, round_id)
+    )
     if (
         round_row is None
+        or round_row.id != round_id
         or round_row.branch_id != branch_id
         or round_row.round_number != round_number
     ):
         raise RuntimeError("DOMAIN_FINALIZATION_BRANCH_SCOPE_INVALID")
 
-    messages = tuple(
-        session.exec(
-            select(AgentMessage)
-            .where(AgentMessage.round_id == round_id)
-            .order_by(AgentMessage.id)
-        ).all()
-    )
-    rows = tuple(
-        session.exec(
-            select(SimulationAction)
-            .where(
-                SimulationAction.scenario_id == scenario_id,
-                SimulationAction.branch_id == branch_id,
-                SimulationAction.round_id == round_id,
-                SimulationAction.round_number == round_number,
+    if preloaded_messages is None:
+        messages = tuple(
+            session.exec(
+                select(AgentMessage)
+                .where(AgentMessage.round_id == round_id)
+                .order_by(AgentMessage.id)
+            ).all()
+        )
+    else:
+        messages = tuple(
+            sorted(
+                (message for message in preloaded_messages if message.round_id == round_id),
+                key=lambda message: message.id,
             )
-            .order_by(SimulationAction.sequence, SimulationAction.id)
-        ).all()
-    )
+        )
+    if preloaded_action_rows is None:
+        rows = tuple(
+            session.exec(
+                select(SimulationAction)
+                .where(
+                    SimulationAction.scenario_id == scenario_id,
+                    SimulationAction.branch_id == branch_id,
+                    SimulationAction.round_id == round_id,
+                    SimulationAction.round_number == round_number,
+                )
+                .order_by(SimulationAction.sequence, SimulationAction.id)
+            ).all()
+        )
+    else:
+        rows = tuple(
+            sorted(
+                (
+                    action
+                    for action in preloaded_action_rows
+                    if action.scenario_id == scenario_id
+                    and action.branch_id == branch_id
+                    and action.round_id == round_id
+                    and action.round_number == round_number
+                ),
+                key=lambda action: (action.sequence, action.id),
+            )
+        )
     action_rows = tuple(row for row in rows if row.message_id is not None)
     expected = set(expected_agent_ids)
     message_by_id = {message.id: message for message in messages}
@@ -1670,23 +1784,29 @@ def _domain_input_digest_v1(round_read: _DomainRoundReadV1) -> str:
         round_read.outer_payloads,
         strict=True,
     ):
-        target = None
+        action_digest: dict[str, object] = {
+            "action_id": row.id,
+            "action_sequence": row.sequence,
+            "message_id": row.message_id,
+            "agent_id": row.agent_id,
+            "action_type": _domain_enum_value(row.action_type),
+            "action_status": _domain_enum_value(row.status),
+            "target": None,
+            "parent_action_id": row.parent_action_id,
+            "content": row.content,
+            "payload": outer_payload,
+        }
+        try:
+            canonical_json_bytes_v1(outer_payload)
+        except (TypeError, ValueError):
+            raw_payload = row.payload_json or "{}"
+            action_digest["payload"] = None
+            action_digest["portable_payload_sha256_v1"] = hashlib.sha256(
+                raw_payload.encode("utf-8")
+            ).hexdigest()
         if row.target_type is not None or row.target_id is not None:
-            target = {"type": row.target_type, "id": row.target_id}
-        actions.append(
-            {
-                "action_id": row.id,
-                "action_sequence": row.sequence,
-                "message_id": row.message_id,
-                "agent_id": row.agent_id,
-                "action_type": _domain_enum_value(row.action_type),
-                "action_status": _domain_enum_value(row.status),
-                "target": target,
-                "parent_action_id": row.parent_action_id,
-                "content": row.content,
-                "payload": outer_payload,
-            }
-        )
+            action_digest["target"] = {"type": row.target_type, "id": row.target_id}
+        actions.append(action_digest)
     return _domain_hash_v1(
         {
             "version": 1,
@@ -1784,6 +1904,8 @@ def _rebuild_prior_domain_state_v1(
 ]:
     if config.status != "active" or config.schema is None or config.schema_hash is None:
         raise RuntimeError("DOMAIN_FINALIZATION_SCHEMA_UNAVAILABLE")
+    context = scenario.parsed_context if isinstance(scenario.parsed_context, Mapping) else {}
+    runtime = _coerce_runtime(context.get(RUNTIME_CONTEXT_KEY))
     try:
         from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 
@@ -1811,13 +1933,39 @@ def _rebuild_prior_domain_state_v1(
         state=state,
         accepted_event_identities=accepted,
     )
-    context = scenario.parsed_context if isinstance(scenario.parsed_context, Mapping) else {}
-    runtime = _coerce_runtime(context.get(RUNTIME_CONTEXT_KEY))
     prior_rows = [row for row in selection.rounds if row.round_number < round_number]
     if round_number > 1 and (
         not prior_rows or prior_rows[-1].round_number != round_number - 1
     ):
         raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_INCOMPLETE")
+    prior_round_ids = tuple(row.id for row in prior_rows)
+    messages_by_round: dict[str, list[AgentMessage]] = {
+        round_id: [] for round_id in prior_round_ids
+    }
+    actions_by_round: dict[str, list[SimulationAction]] = {
+        round_id: [] for round_id in prior_round_ids
+    }
+    for offset in range(0, len(prior_round_ids), _DOMAIN_HISTORY_QUERY_CHUNK):
+        round_id_chunk = prior_round_ids[offset : offset + _DOMAIN_HISTORY_QUERY_CHUNK]
+        for message in session.exec(
+            select(AgentMessage)
+            .where(AgentMessage.round_id.in_(round_id_chunk))
+            .order_by(AgentMessage.round_id, AgentMessage.id)
+        ).all():
+            messages_by_round.setdefault(message.round_id, []).append(message)
+        for action in session.exec(
+            select(SimulationAction)
+            .where(
+                SimulationAction.scenario_id == scenario.id,
+                SimulationAction.round_id.in_(round_id_chunk),
+            )
+            .order_by(
+                SimulationAction.round_id,
+                SimulationAction.sequence,
+                SimulationAction.id,
+            )
+        ).all():
+            actions_by_round.setdefault(action.round_id, []).append(action)
     for prior_round in prior_rows:
         payload = _domain_runtime_round_payload_v1(
             runtime,
@@ -1830,13 +1978,7 @@ def _rebuild_prior_domain_state_v1(
         expected_count = finalization.get("expected_agent_count")
         if type(expected_count) is not int or expected_count < 0:
             raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
-        prior_messages = tuple(
-            session.exec(
-                select(AgentMessage)
-                .where(AgentMessage.round_id == prior_round.id)
-                .order_by(AgentMessage.id)
-            ).all()
-        )
+        prior_messages = tuple(messages_by_round.get(prior_round.id, ()))
         prior_expected = tuple(sorted({message.agent_id for message in prior_messages}))
         if len(prior_expected) != expected_count:
             raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
@@ -1847,6 +1989,9 @@ def _rebuild_prior_domain_state_v1(
             round_id=prior_round.id,
             round_number=prior_round.round_number,
             expected_agent_ids=prior_expected,
+            preloaded_round_row=prior_round,
+            preloaded_messages=prior_messages,
+            preloaded_action_rows=actions_by_round.get(prior_round.id, ()),
         )
         if not round_read.complete:
             raise RuntimeError("DOMAIN_FINALIZATION_PRIOR_STATE_CORRUPT")
@@ -3359,37 +3504,80 @@ def _prior_opportunity_receipts_in_session(
     for owner_branch_id, round_number in coordinates:
         payload = _runtime_branch_round_view(runtime, owner_branch_id, round_number)
         raw_decisions = payload.get("decisions")
-        if not isinstance(raw_decisions, list):
-            continue
-        for decision in raw_decisions:
-            if not isinstance(decision, Mapping):
+        decisions_by_action_id: dict[str, list[Mapping[str, Any]]] = {}
+        if isinstance(raw_decisions, list):
+            for decision in raw_decisions:
+                if not isinstance(decision, Mapping):
+                    continue
+                action_id = _bounded_text(decision.get("action_id"), 160)
+                if action_id:
+                    decisions_by_action_id.setdefault(action_id, []).append(decision)
+
+        actions_by_agent: dict[str, list[SimulationAction]] = {}
+        ordered_pending = tuple(sorted(pending))
+        for offset in range(0, len(ordered_pending), _DOMAIN_HISTORY_QUERY_CHUNK):
+            actor_chunk = ordered_pending[offset : offset + _DOMAIN_HISTORY_QUERY_CHUNK]
+            for action in session.exec(
+                select(SimulationAction).where(
+                    SimulationAction.scenario_id == scenario_id,
+                    SimulationAction.branch_id == owner_branch_id,
+                    SimulationAction.round_number == round_number,
+                    SimulationAction.agent_id.in_(actor_chunk),
+                )
+            ).all():
+                actions_by_agent.setdefault(action.agent_id, []).append(action)
+
+        for agent_id in sorted(actions_by_agent):
+            pending.remove(agent_id)
+            actor_actions = sorted(
+                actions_by_agent[agent_id],
+                key=lambda item: (item.sequence, item.id),
+                reverse=True,
+            )
+            newest_action = actor_actions[0]
+            matching_decisions = decisions_by_action_id.get(newest_action.id, ())
+            if len(matching_decisions) != 1:
                 continue
-            agent_id = _bounded_text(decision.get("agent_id"), 160)
-            if agent_id not in pending:
-                continue
-            receipt = decision.get("opportunity_receipt")
-            action_id = _bounded_text(decision.get("action_id"), 160)
+            decision = matching_decisions[0]
+            raw_receipt = decision.get("opportunity_receipt")
             message_id = _bounded_text(decision.get("message_id"), 160)
-            action = session.get(SimulationAction, action_id) if action_id else None
             if (
-                not _opportunity_receipt_is_valid(receipt)
-                or action is None
+                decision.get("agent_id") != agent_id
                 or decision.get("branch_id") != owner_branch_id
                 or decision.get("round_number") != round_number
-                or action.scenario_id != scenario_id
-                or action.branch_id != owner_branch_id
-                or action.round_number != round_number
-                or action.agent_id != agent_id
-                or action.message_id != message_id
-                or receipt["as_of_round"] != max(0, round_number - 1)
-                or receipt["effective_action_type"] != _simulation_action_type(action)
+                or newest_action.message_id != message_id
+                or not _opportunity_receipt_is_valid(raw_receipt)
+                or raw_receipt["as_of_round"] != max(0, round_number - 1)
+                or raw_receipt["effective_action_type"]
+                != _simulation_action_type(newest_action)
             ):
                 continue
+            receipt = cast(OpportunityReceiptV1, raw_receipt)
+            if len(actor_actions) > 1:
+                # Imported corrupt histories can contain duplicate actor-round
+                # actions. The sanitizer emits one decision for the newest
+                # durable action and closes cumulative SEARCH/TREND state. Older
+                # duplicate actions may therefore be unbound, but must not carry
+                # competing decisions. Every less-restrictive shape remains
+                # terminal, as does a newer unbound action.
+                if (
+                    receipt["search_history_complete"]
+                    or receipt["recent_query_fingerprints"]
+                    or receipt["last_trend_signature"]
+                    != receipt["current_trend_signature"]
+                    or any(
+                        decisions_by_action_id.get(action.id)
+                        for action in actor_actions[1:]
+                    )
+                ):
+                    continue
+            # The newest durable action at this physical coordinate is authoritative.
+            # Once found, any malformed runtime join must fail closed instead of
+            # reviving an older SEARCH/TREND receipt.
             receipts[agent_id] = cast(
                 OpportunityReceiptV1,
                 copy.deepcopy(dict(receipt)),
             )
-            pending.remove(agent_id)
         if not pending:
             break
     return receipts
