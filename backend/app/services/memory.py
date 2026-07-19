@@ -8,10 +8,28 @@ L2: ChromaDB vector store (cross-session semantic retrieval)
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import hashlib
+import json
 import logging
-from typing import Any
+import math
+import re
+from collections.abc import Mapping, Sequence
+from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
+from typing import Any, Literal, cast
 
 from app.config import settings
+from app.log_sanitize import contains_credential_material
+from app.services.domain_world import (
+    DomainActionInputV1,
+    canonical_json_bytes_v1,
+    evaluate_domain_opportunities_v1,
+    reduce_domain_round_v1,
+    state_revision_v1,
+    validate_domain_action_payload_v1,
+    validate_domain_world_config_v1,
+)
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
@@ -1354,3 +1372,1718 @@ async def _compress_round_window(
         return fallback
 
     return _validate_compress_result(result)
+
+
+# ── Verified memory promotion V1 (pure builders) ─────────────
+
+
+MemoryPromotionReasonCodeV1 = Literal[
+    "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+    "MEMORY_PROMOTION_OWNER_MISMATCH",
+    "MEMORY_PROMOTION_RECORD_CONFLICT",
+    "MEMORY_PROMOTION_STORE_UNAVAILABLE",
+    "MEMORY_PROMOTION_LOCK_UNAVAILABLE",
+    "MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+    "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST",
+]
+MemoryRecallReasonCodeV1 = Literal[
+    "MEMORY_RECALL_STORE_UNAVAILABLE",
+    "MEMORY_RECALL_RECORD_MISMATCH",
+    "MEMORY_RECALL_REF_MISMATCH",
+    "MEMORY_RECALL_VERSION_IGNORED",
+    "MEMORY_RECALL_OPAQUE_HISTORY",
+]
+MemoryPromotionBuildStatusV1 = Literal["verified", "empty", "unavailable"]
+
+_MEMORY_PROMOTION_REASON_CODES_V1 = frozenset(MemoryPromotionReasonCodeV1.__args__)
+_MEMORY_RECALL_REASON_CODES_V1 = frozenset(MemoryRecallReasonCodeV1.__args__)
+_MEMORY_PROMOTION_RECORD_KEYS_V1 = frozenset(
+    {
+        "record_contract",
+        "promotion_version",
+        "promotion_key",
+        "identity_id",
+        "scenario_id",
+        "branch_id",
+        "round_id",
+        "round_number",
+        "agent_id",
+        "message_id",
+        "action_sequence",
+        "input_digest",
+        "input_state_revision",
+        "state_revision_after",
+        "child_manifest_id",
+        "root_manifest_id",
+        "round_before",
+        "round_after",
+        "components",
+        "co_sources",
+        "unit",
+        "simulation_context",
+        "epistemic_scope",
+        "verification_status",
+    }
+)
+_MEMORY_PROMOTION_COMPONENT_KEYS_V1 = frozenset(
+    {
+        "proposal_index",
+        "before",
+        "after",
+        "state_revision_before",
+        "state_revision_after",
+        "applied_delta",
+        "requested_value",
+        "operation",
+        "effect_code",
+    }
+)
+_MEMORY_PROMOTION_SOURCE_KEYS_V1 = frozenset(
+    {
+        "agent_id",
+        "message_id",
+        "action_id",
+        "action_sequence",
+        "action_type",
+        "proposal_index",
+        "rule_id",
+    }
+)
+_MEMORY_PROMOTION_ADD_OPERATIONS_V1 = frozenset(
+    {
+        "add_constant",
+        "add_requested",
+        "saturating_add_constant",
+        "saturating_add_requested",
+    }
+)
+_MEMORY_PROMOTION_RECORD_CONTRACT_V1 = "memory_promotion_record_v1"
+_MEMORY_PROMOTION_CHILD_CONTRACT_V1 = "memory_promotion_child_manifest_v1"
+_MEMORY_PROMOTION_ROOT_CONTRACT_V1 = "memory_promotion_root_manifest_v1"
+_MEMORY_PROMOTION_VERSION_V1 = "v1"
+_MEMORY_PROMOTION_REF_LENGTH_V1 = 20
+_MEMORY_PROMOTION_SUMMARY_MAX_CHARS_V1 = 640
+_MEMORY_PROMOTION_RECALL_CONTEXT_MAX_CHARS_V1 = 4000
+_MEMORY_PROMOTION_NUMERIC_RE_V1 = re.compile(
+    r"(?P<sign>-?)(?P<integer>0|[1-9][0-9]*)(?:\.(?P<fraction>[0-9]+))?\Z"
+)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class MemoryPromotionDocumentV1:
+    """One immutable, exact Chroma materialization document."""
+
+    document_id: str
+    document: str
+    metadata: tuple[tuple[str, str | int | bool], ...]
+    semantic_hash: str
+    semantic_payload: Mapping[str, Any]
+    memory_ref: str | None = None
+
+    def metadata_dict(self) -> dict[str, str | int | bool]:
+        return dict(self.metadata)
+
+    @property
+    def submitted_document_canonical_bytes(self) -> bytes:
+        return canonical_json_bytes_v1(self.document)
+
+    @property
+    def submitted_metadata_canonical_bytes(self) -> bytes:
+        return canonical_json_bytes_v1(self.metadata_dict())
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class MemoryPromotionBatchV1:
+    """Pure result consumed structurally by the V1 vector-store writer."""
+
+    status: MemoryPromotionBuildStatusV1
+    reason_code: MemoryPromotionReasonCodeV1 | None
+    owner_id: str | None
+    source_authority_snapshot_hash: str | None
+    root_manifest_id: str | None
+    record_documents: tuple[MemoryPromotionDocumentV1, ...]
+    child_manifest_documents: tuple[MemoryPromotionDocumentV1, ...]
+    root_manifest_document: MemoryPromotionDocumentV1 | None
+    refs: tuple[str, ...]
+
+    @property
+    def documents(self) -> tuple[MemoryPromotionDocumentV1, ...]:
+        root = (self.root_manifest_document,) if self.root_manifest_document is not None else ()
+        return self.record_documents + self.child_manifest_documents + root
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RecallContextV1:
+    contract: Literal["memory_promotion_recall_context_v1"]
+    promotion_version: Literal["v1"]
+    status: Literal["verified", "empty", "unavailable"]
+    reason_code: MemoryRecallReasonCodeV1 | MemoryPromotionReasonCodeV1 | None
+    items: tuple[Mapping[str, str], ...]
+    context_hash: str
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "contract": self.contract,
+            "promotion_version": self.promotion_version,
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "items": [_deep_thaw_v1(item) for item in self.items],
+            "context_hash": self.context_hash,
+        }
+
+
+class _MemoryPromotionCoordinateError(ValueError):
+    pass
+
+
+class _MemoryPromotionOwnerError(ValueError):
+    pass
+
+
+class _MemoryPromotionConflictError(ValueError):
+    pass
+
+
+class _MemoryPromotionCredentialError(ValueError):
+    pass
+
+
+def _deep_freeze_v1(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _deep_freeze_v1(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze_v1(item) for item in value)
+    return value
+
+
+def _deep_thaw_v1(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _deep_thaw_v1(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_deep_thaw_v1(item) for item in value]
+    return value
+
+
+def _mapping_v1(value: object, *, label: str) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise _MemoryPromotionCoordinateError(f"{label} keys")
+        return cast(Mapping[str, Any], value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: getattr(value, field.name)
+            for field in dataclasses.fields(value)
+        }
+    raise _MemoryPromotionCoordinateError(label)
+
+
+def _sequence_v1(value: object, *, label: str) -> Sequence[Any]:
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise _MemoryPromotionCoordinateError(label)
+    return cast(Sequence[Any], value)
+
+
+def _required_text_v1(value: object, *, label: str, max_chars: int = 256) -> str:
+    if type(value) is not str or not value or len(value) > max_chars:
+        raise _MemoryPromotionCoordinateError(label)
+    return value
+
+
+def _exact_int_v1(value: object, *, label: str, minimum: int = 0) -> int:
+    if type(value) is not int or value < minimum:
+        raise _MemoryPromotionCoordinateError(label)
+    return value
+
+
+def _required_sha256_v1(value: object, *, label: str) -> str:
+    text = _required_text_v1(value, label=label)
+    if (
+        len(text) != 71
+        or not text.startswith("sha256:")
+        or any(character not in "0123456789abcdef" for character in text[7:])
+    ):
+        raise _MemoryPromotionCoordinateError(label)
+    return text
+
+
+def _canonical_hash_v1(value: object) -> str:
+    return f"sha256:{hashlib.sha256(canonical_json_bytes_v1(value)).hexdigest()}"
+
+
+def memory_promotion_key_bytes_v1(
+    schema_hash: str,
+    action_id: str,
+    rule_id: str,
+    variable_id: str,
+) -> bytes:
+    """Return the exact four-coordinate K canonical bytes."""
+
+    values = (schema_hash, action_id, rule_id, variable_id)
+    if any(type(value) is not str or not value for value in values):
+        raise ValueError("memory promotion key coordinates must be non-empty strings")
+    return canonical_json_bytes_v1(["memory-promotion-key-v1", *values])
+
+
+def memory_promotion_document_id_v1(
+    schema_hash: str,
+    action_id: str,
+    rule_id: str,
+    variable_id: str,
+) -> str:
+    digest = hashlib.sha256(
+        memory_promotion_key_bytes_v1(schema_hash, action_id, rule_id, variable_id)
+    ).hexdigest()
+    return f"identity-promotion-v1-{digest}"
+
+
+def memory_promotion_ref_from_document_id_v1(document_id: str) -> str:
+    if type(document_id) is not str or not document_id:
+        raise ValueError("memory promotion document id must be non-empty")
+    return hashlib.sha256(document_id.encode("utf-8")).hexdigest()[
+        :_MEMORY_PROMOTION_REF_LENGTH_V1
+    ]
+
+
+def _root_manifest_id_v1(
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+) -> str:
+    payload = [
+        "memory-promotion-root-manifest-slot-v1",
+        scenario_id,
+        branch_id,
+        round_id,
+        round_number,
+    ]
+    return "memory-promotion-root-v1-" + hashlib.sha256(
+        canonical_json_bytes_v1(payload)
+    ).hexdigest()
+
+
+def _child_manifest_id_v1(root_manifest_id: str, identity_id: str) -> str:
+    payload = ["memory-promotion-child-manifest-v1", root_manifest_id, identity_id]
+    return "memory-promotion-child-v1-" + hashlib.sha256(
+        canonical_json_bytes_v1(payload)
+    ).hexdigest()
+
+
+def _contains_credential_recursive_v1(value: object) -> bool:
+    if type(value) is str:
+        return contains_credential_material(value)
+    if isinstance(value, Mapping):
+        return any(
+            contains_credential_material(str(key))
+            or _contains_credential_recursive_v1(item)
+            for key, item in value.items()
+        )
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(
+            _contains_credential_recursive_v1(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_credential_recursive_v1(item) for item in value)
+    return False
+
+
+def _unavailable_promotion_batch_v1(
+    reason_code: MemoryPromotionReasonCodeV1,
+) -> MemoryPromotionBatchV1:
+    return MemoryPromotionBatchV1(
+        status="unavailable",
+        reason_code=reason_code,
+        owner_id=None,
+        source_authority_snapshot_hash=None,
+        root_manifest_id=None,
+        record_documents=(),
+        child_manifest_documents=(),
+        root_manifest_document=None,
+        refs=(),
+    )
+
+
+def _empty_promotion_batch_v1(owner_id: str) -> MemoryPromotionBatchV1:
+    return MemoryPromotionBatchV1(
+        status="empty",
+        reason_code=None,
+        owner_id=owner_id,
+        source_authority_snapshot_hash=None,
+        root_manifest_id=None,
+        record_documents=(),
+        child_manifest_documents=(),
+        root_manifest_document=None,
+        refs=(),
+    )
+
+
+def _source_key_v1(source: Mapping[str, Any]) -> tuple[int, str, str, int]:
+    return (
+        _exact_int_v1(source.get("action_sequence"), label="source.action_sequence"),
+        _required_text_v1(source.get("action_id"), label="source.action_id"),
+        _required_text_v1(source.get("rule_id"), label="source.rule_id"),
+        _exact_int_v1(source.get("proposal_index"), label="source.proposal_index"),
+    )
+
+
+def _normalize_source_v1(value: object) -> dict[str, Any]:
+    source = _mapping_v1(value, label="delta source")
+    if frozenset(source) != _MEMORY_PROMOTION_SOURCE_KEYS_V1:
+        raise _MemoryPromotionCoordinateError("delta source shape")
+    normalized = {
+        "agent_id": _required_text_v1(source["agent_id"], label="source.agent_id"),
+        "message_id": _required_text_v1(source["message_id"], label="source.message_id"),
+        "action_id": _required_text_v1(source["action_id"], label="source.action_id"),
+        "action_sequence": _exact_int_v1(
+            source["action_sequence"], label="source.action_sequence", minimum=1
+        ),
+        "action_type": _required_text_v1(source["action_type"], label="source.action_type"),
+        "proposal_index": _exact_int_v1(
+            source["proposal_index"], label="source.proposal_index"
+        ),
+        "rule_id": _required_text_v1(source["rule_id"], label="source.rule_id"),
+    }
+    return normalized
+
+
+def _normalize_adjudication_v1(value: object) -> Mapping[str, Any]:
+    return _mapping_v1(value, label="adjudication")
+
+
+def _normalize_delta_v1(value: object) -> tuple[Mapping[str, Any], tuple[dict[str, Any], ...]]:
+    delta = _mapping_v1(value, label="state delta")
+    raw_sources = _sequence_v1(delta.get("sources"), label="sources")
+    sources = tuple(
+        sorted(
+            (_normalize_source_v1(item) for item in raw_sources),
+            key=_source_key_v1,
+        )
+    )
+    if not sources:
+        raise _MemoryPromotionCoordinateError("empty delta sources")
+    if len({canonical_json_bytes_v1(source) for source in sources}) != len(sources):
+        raise _MemoryPromotionConflictError("duplicate delta source")
+    return delta, sources
+
+
+def _actual_effect_status_v1(
+    *,
+    operation: str,
+    value_type: str,
+    scale: int,
+    before: object,
+    after: object,
+    applied_delta: object,
+) -> Literal["actual", "noop", "invalid"]:
+    if operation in _MEMORY_PROMOTION_ADD_OPERATIONS_V1 or (
+        operation == "set_if_expected" and value_type in {"decimal", "integer"}
+    ):
+        if type(applied_delta) is not str or type(scale) is not int or scale < 0:
+            return "invalid"
+        match = _MEMORY_PROMOTION_NUMERIC_RE_V1.fullmatch(applied_delta)
+        if match is None:
+            return "invalid"
+        fraction = match.group("fraction")
+        if (scale == 0 and fraction is not None) or (
+            scale > 0 and (fraction is None or len(fraction) != scale)
+        ):
+            return "invalid"
+        digits = match.group("integer") + (fraction or "")
+        if match.group("sign") and not digits.strip("0"):
+            return "invalid"
+        try:
+            return "actual" if Decimal(applied_delta) != 0 else "noop"
+        except InvalidOperation:
+            return "invalid"
+    if operation != "set_if_expected" or value_type not in {"boolean", "enum"}:
+        return "invalid"
+    if applied_delta is not None:
+        return "invalid"
+    return (
+        "actual"
+        if canonical_json_bytes_v1(before) != canonical_json_bytes_v1(after)
+        else "noop"
+    )
+
+
+def _state_value_is_exact_v1(value: object, variable: object) -> bool:
+    value_type = getattr(variable, "value_type", None)
+    if value_type in {"integer", "decimal"}:
+        scale = getattr(variable, "scale", None)
+        if type(scale) is not int or type(value) is not str:
+            return False
+        match = _MEMORY_PROMOTION_NUMERIC_RE_V1.fullmatch(value)
+        if match is None:
+            return False
+        fraction = match.group("fraction")
+        if (scale == 0 and fraction is not None) or (
+            scale > 0 and (fraction is None or len(fraction) != scale)
+        ):
+            return False
+        digits = match.group("integer") + (fraction or "")
+        return not match.group("sign") or bool(digits.strip("0"))
+    if value_type == "boolean":
+        return type(value) is bool
+    return type(value) is str and value in getattr(variable, "enum_values", ())
+
+
+def _event_identities_v1(value: object, *, label: str) -> frozenset[tuple[str, str, str]]:
+    rows = _sequence_v1(value, label=label)
+    normalized: list[tuple[str, str, str]] = []
+    for row in rows:
+        coordinates = _sequence_v1(row, label=f"{label} item")
+        if len(coordinates) != 3:
+            raise _MemoryPromotionCoordinateError(label)
+        normalized.append(
+            tuple(
+                _required_text_v1(item, label=label, max_chars=128)
+                for item in coordinates
+            )
+        )
+    if len(set(normalized)) != len(normalized):
+        raise _MemoryPromotionConflictError(f"duplicate {label}")
+    return frozenset(normalized)
+
+
+def _document_v1(
+    *,
+    document_id: str,
+    document: str,
+    payload: Mapping[str, Any],
+    semantic_hash: str,
+    metadata: Mapping[str, str | int | bool],
+    memory_ref: str | None = None,
+) -> MemoryPromotionDocumentV1:
+    canonical_metadata = tuple(sorted(metadata.items()))
+    canonical_json_bytes_v1(dict(canonical_metadata))
+    return MemoryPromotionDocumentV1(
+        document_id=document_id,
+        document=document,
+        metadata=canonical_metadata,
+        semantic_hash=semantic_hash,
+        semantic_payload=cast(Mapping[str, Any], _deep_freeze_v1(payload)),
+        memory_ref=memory_ref,
+    )
+
+
+def _semantic_record_document_v1(
+    *,
+    record: Mapping[str, Any],
+    summary: str,
+    document_id: str,
+    memory_ref: str,
+) -> MemoryPromotionDocumentV1:
+    if frozenset(record) != _MEMORY_PROMOTION_RECORD_KEYS_V1:
+        raise _MemoryPromotionConflictError("record shape")
+    record_bytes = canonical_json_bytes_v1(record)
+    record_hash = f"sha256:{hashlib.sha256(record_bytes).hexdigest()}"
+    metadata: dict[str, str | int | bool] = {
+        "document_contract": _MEMORY_PROMOTION_RECORD_CONTRACT_V1,
+        "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+        "identity_id": cast(str, record["identity_id"]),
+        "scenario_id": cast(str, record["scenario_id"]),
+        "root_manifest_id": cast(str, record["root_manifest_id"]),
+        "child_manifest_id": cast(str, record["child_manifest_id"]),
+        "record_hash": record_hash,
+        "semantic_hash": record_hash,
+        "memory_ref": memory_ref,
+        "canonical_payload": record_bytes.decode("utf-8"),
+    }
+    return _document_v1(
+        document_id=document_id,
+        document=summary,
+        payload=record,
+        semantic_hash=record_hash,
+        metadata=metadata,
+        memory_ref=memory_ref,
+    )
+
+
+def _manifest_document_v1(
+    *,
+    document_id: str,
+    payload: Mapping[str, Any],
+    contract: str,
+    metadata: Mapping[str, str | int | bool],
+) -> MemoryPromotionDocumentV1:
+    payload_bytes = canonical_json_bytes_v1(payload)
+    manifest_hash = f"sha256:{hashlib.sha256(payload_bytes).hexdigest()}"
+    full_metadata = {
+        "document_contract": contract,
+        "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+        "status": "complete",
+        "semantic_hash": manifest_hash,
+        "canonical_payload": payload_bytes.decode("utf-8"),
+        **metadata,
+    }
+    return _document_v1(
+        document_id=document_id,
+        document=payload_bytes.decode("utf-8"),
+        payload=payload,
+        semantic_hash=manifest_hash,
+        metadata=full_metadata,
+    )
+
+
+def build_verified_memory_promotions_v1(
+    authority_snapshot: Mapping[str, Any],
+) -> MemoryPromotionBatchV1:
+    """Build one deterministic promotion tree from one durable authority snapshot."""
+
+    try:
+        snapshot = _mapping_v1(authority_snapshot, label="authority snapshot")
+        if _contains_credential_recursive_v1(snapshot):
+            raise _MemoryPromotionCredentialError
+        owner_id = _required_text_v1(snapshot.get("user_id"), label="user_id")
+        scenario_id = _required_text_v1(snapshot.get("scenario_id"), label="scenario_id")
+        branch_id = _required_text_v1(snapshot.get("branch_id"), label="branch_id")
+        round_id = _required_text_v1(snapshot.get("round_id"), label="round_id")
+        round_number = _exact_int_v1(
+            snapshot.get("round_number"), label="round_number", minimum=1
+        )
+        input_digest = _required_sha256_v1(
+            snapshot.get("input_digest"), label="input_digest"
+        )
+        input_state_revision = _required_text_v1(
+            snapshot.get("input_state_revision"), label="input_state_revision"
+        )
+        state_revision_after = _required_text_v1(
+            snapshot.get("state_revision_after"), label="state_revision_after"
+        )
+        round_before = _mapping_v1(snapshot.get("round_before"), label="round_before")
+        round_after = _mapping_v1(snapshot.get("round_after"), label="round_after")
+
+        config = validate_domain_world_config_v1(snapshot.get("domain_world_config"))
+        if config.status != "active" or config.schema is None or config.schema_hash is None:
+            raise _MemoryPromotionCoordinateError("inactive schema")
+        schema_hash = config.schema_hash
+        variables = {variable.variable_id: variable for variable in config.schema.variables}
+        rules = {rule.rule_id: rule for rule in config.schema.rules}
+        if (
+            set(round_before) != set(variables)
+            or set(round_after) != set(variables)
+            or any(
+                not _state_value_is_exact_v1(round_before[variable_id], variable)
+                or not _state_value_is_exact_v1(round_after[variable_id], variable)
+                for variable_id, variable in variables.items()
+            )
+        ):
+            raise _MemoryPromotionCoordinateError("round state shape")
+        accepted_before = _event_identities_v1(
+            snapshot.get("accepted_event_identities_before"),
+            label="accepted_event_identities_before",
+        )
+        accepted_after = _event_identities_v1(
+            snapshot.get("accepted_event_identities_after"),
+            label="accepted_event_identities_after",
+        )
+        if not accepted_before.issubset(accepted_after):
+            raise _MemoryPromotionCoordinateError("accepted event transition")
+        opportunity_evaluation = evaluate_domain_opportunities_v1(
+            config=config,
+            state=round_before,
+            input_state_revision=input_state_revision,
+            as_of_round=round_number - 1,
+            accepted_event_identities=accepted_before,
+        )
+        if state_revision_v1(
+            schema_hash=schema_hash,
+            as_of_round=round_number,
+            state=round_after,
+            accepted_event_identities=accepted_after,
+        ) != state_revision_after:
+            raise _MemoryPromotionCoordinateError("round state revision after")
+
+        raw_roster = _sequence_v1(snapshot.get("roster"), label="roster")
+        roster: dict[str, tuple[str | None, str | None]] = {}
+        for raw_member in raw_roster:
+            member = _mapping_v1(raw_member, label="roster member")
+            if frozenset(member) != {
+                "agent_id",
+                "identity_id",
+                "identity_owner_id",
+            }:
+                raise _MemoryPromotionCoordinateError("roster member shape")
+            member_agent_id = _required_text_v1(
+                member["agent_id"], label="roster.agent_id"
+            )
+            if member["identity_id"] is None and member["identity_owner_id"] is None:
+                binding: tuple[str | None, str | None] = (None, None)
+            else:
+                binding = (
+                    _required_text_v1(
+                        member["identity_id"], label="roster.identity_id"
+                    ),
+                    _required_text_v1(
+                        member["identity_owner_id"], label="roster.identity_owner_id"
+                    ),
+                )
+            if member_agent_id in roster:
+                raise _MemoryPromotionConflictError("duplicate roster actor")
+            if binding[1] is not None and binding[1] != owner_id:
+                raise _MemoryPromotionOwnerError("roster identity owner")
+            roster[member_agent_id] = binding
+
+        finalization = _mapping_v1(snapshot.get("finalization"), label="finalization")
+        expected_finalization = {
+            "status": "complete",
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_id": round_id,
+            "round_number": round_number,
+            "input_digest": input_digest,
+            "schema_hash": schema_hash,
+            "state_revision_before": input_state_revision,
+            "state_revision_after": state_revision_after,
+        }
+        if any(
+            canonical_json_bytes_v1(finalization.get(key))
+            != canonical_json_bytes_v1(value)
+            for key, value in expected_finalization.items()
+        ):
+            raise _MemoryPromotionCoordinateError("finalization binding")
+
+        raw_actions = _sequence_v1(snapshot.get("actions"), label="actions")
+        raw_adjudications = _sequence_v1(snapshot.get("adjudications"), label="adjudications")
+        raw_deltas = _sequence_v1(snapshot.get("state_deltas"), label="state_deltas")
+        adjudications = tuple(
+            sorted(
+                (_normalize_adjudication_v1(item) for item in raw_adjudications),
+                key=lambda item: (
+                    _exact_int_v1(
+                        item.get("action_sequence"),
+                        label="adjudication.action_sequence",
+                        minimum=1,
+                    ),
+                    _required_text_v1(
+                        item.get("action_id"), label="adjudication.action_id"
+                    ),
+                    _exact_int_v1(
+                        item.get("proposal_index"),
+                        label="adjudication.proposal_index",
+                    ),
+                ),
+            )
+        )
+        deltas = tuple(_normalize_delta_v1(item) for item in raw_deltas)
+        reducer_actions: list[DomainActionInputV1] = []
+        for raw_entry in raw_actions:
+            reducer_entry = _mapping_v1(raw_entry, label="reducer action authority")
+            reducer_action = _mapping_v1(
+                reducer_entry.get("action"), label="reducer action"
+            )
+            if reducer_entry.get("history_origin") != "live":
+                raise _MemoryPromotionCoordinateError("history origin")
+            reducer_actions.append(
+                DomainActionInputV1(
+                    scenario_id=_required_text_v1(
+                        reducer_action.get("scenario_id"),
+                        label="reducer.scenario_id",
+                    ),
+                    branch_id=_required_text_v1(
+                        reducer_action.get("branch_id"), label="reducer.branch_id"
+                    ),
+                    round_id=_required_text_v1(
+                        reducer_action.get("round_id"), label="reducer.round_id"
+                    ),
+                    round_number=_exact_int_v1(
+                        reducer_action.get("round_number"),
+                        label="reducer.round_number",
+                        minimum=1,
+                    ),
+                    agent_id=_required_text_v1(
+                        reducer_action.get("agent_id"), label="reducer.agent_id"
+                    ),
+                    message_id=_required_text_v1(
+                        reducer_action.get("message_id"), label="reducer.message_id"
+                    ),
+                    action_id=_required_text_v1(
+                        reducer_action.get("action_id"), label="reducer.action_id"
+                    ),
+                    action_sequence=_exact_int_v1(
+                        reducer_action.get("action_sequence"),
+                        label="reducer.action_sequence",
+                        minimum=1,
+                    ),
+                    action_type=_required_text_v1(
+                        reducer_action.get("action_type"), label="reducer.action_type"
+                    ),
+                    action_status=_required_text_v1(
+                        reducer_action.get("action_status"),
+                        label="reducer.action_status",
+                    ),
+                    payload=cast(Any, reducer_action.get("payload")),
+                )
+            )
+        reduce_result = reduce_domain_round_v1(
+            config=config,
+            state_before=round_before,
+            state_revision_before=input_state_revision,
+            accepted_event_identities=accepted_before,
+            actions=tuple(reducer_actions),
+            round_number=round_number,
+        )
+        normalized_delta_rows = tuple(
+            {
+                **dict(delta),
+                "sources": list(sources),
+            }
+            for delta, sources in sorted(
+                deltas,
+                key=lambda item: _required_text_v1(
+                    item[0].get("variable_id"), label="delta.variable_id"
+                ),
+            )
+        )
+        if (
+            canonical_json_bytes_v1(adjudications)
+            != canonical_json_bytes_v1(reduce_result.adjudications)
+            or canonical_json_bytes_v1(normalized_delta_rows)
+            != canonical_json_bytes_v1(reduce_result.state_deltas)
+            or canonical_json_bytes_v1(round_after)
+            != canonical_json_bytes_v1(reduce_result.state_after)
+            or tuple(sorted(accepted_after))
+            != tuple(sorted(reduce_result.accepted_event_identities))
+            or reduce_result.state_revision != state_revision_after
+        ):
+            raise _MemoryPromotionCoordinateError("durable reducer projection")
+
+        drafts: list[dict[str, Any]] = []
+        for raw_entry in raw_actions:
+            entry = _mapping_v1(raw_entry, label="action authority")
+            action = _mapping_v1(entry.get("action"), label="action")
+            action_status = str(action.get("action_status") or "").lower()
+            if action_status != "verified":
+                continue
+            agent_id = _required_text_v1(action.get("agent_id"), label="action.agent_id")
+            identity_id_value = entry.get("identity_id")
+            if identity_id_value is None:
+                if (
+                    entry.get("identity_owner_id") is not None
+                    or roster.get(agent_id) != (None, None)
+                ):
+                    raise _MemoryPromotionOwnerError("actor identity binding")
+                continue
+            identity_id = _required_text_v1(identity_id_value, label="identity_id")
+            if entry.get("identity_owner_id") != owner_id:
+                raise _MemoryPromotionOwnerError("identity owner")
+            if entry.get("history_origin") != "live":
+                raise _MemoryPromotionCoordinateError("history origin")
+
+            action_coordinate = {
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_id": round_id,
+                "round_number": round_number,
+            }
+            if any(
+                canonical_json_bytes_v1(action.get(key))
+                != canonical_json_bytes_v1(value)
+                for key, value in action_coordinate.items()
+            ):
+                raise _MemoryPromotionCoordinateError("action round coordinate")
+            if roster.get(agent_id) != (identity_id, owner_id):
+                raise _MemoryPromotionOwnerError("actor identity binding")
+            message_id = _required_text_v1(action.get("message_id"), label="action.message_id")
+            action_id = _required_text_v1(action.get("action_id"), label="action.action_id")
+            action_sequence = _exact_int_v1(
+                action.get("action_sequence"), label="action.action_sequence", minimum=1
+            )
+            action_type = _required_text_v1(action.get("action_type"), label="action.action_type")
+
+            decision = _mapping_v1(entry.get("decision"), label="decision")
+            if (
+                decision.get("decision_status") != "verified"
+                or decision.get("selected_action") != action_type
+                or decision.get("agent_id") != agent_id
+                or decision.get("branch_id") != branch_id
+                or type(decision.get("round_number")) is not int
+                or decision.get("round_number") != round_number
+                or decision.get("message_id") != message_id
+                or decision.get("action_id") != action_id
+            ):
+                raise _MemoryPromotionCoordinateError("decision binding")
+            parameters = _mapping_v1(decision.get("action_parameters"), label="action parameters")
+            action_group = action.get("payload")
+            if canonical_json_bytes_v1(parameters.get("domain_world_v1")) != (
+                canonical_json_bytes_v1(action_group)
+            ):
+                raise _MemoryPromotionCoordinateError("decision proposal binding")
+            validation = validate_domain_action_payload_v1(
+                action_group,
+                action_type=action_type,
+                is_bootstrap=False,
+                canonical_outer_payload_bytes=len(
+                    canonical_json_bytes_v1({"domain_world_v1": action_group})
+                ),
+            )
+            if validation.action_failure_code is not None:
+                raise _MemoryPromotionCoordinateError("action domain payload")
+            if validation.payload is None:
+                continue
+            group = validation.payload
+            if (
+                group["schema_hash"] != schema_hash
+                or group["input_state_revision"] != input_state_revision
+            ):
+                raise _MemoryPromotionCoordinateError("proposal group binding")
+
+            receipt = _mapping_v1(
+                decision.get("opportunity_receipt"), label="opportunity receipt"
+            )
+            allowed_rule_ids = _sequence_v1(
+                receipt.get("allowed_rule_ids"), label="allowed_rule_ids"
+            )
+            if (
+                type(receipt.get("version")) is not int
+                or receipt.get("version") != 1
+                or receipt.get("compatibility_mode") != "live"
+                or type(receipt.get("as_of_round")) is not int
+                or receipt.get("as_of_round") != round_number - 1
+                or receipt.get("requested_action_type") != action_type
+                or receipt.get("effective_action_type") != action_type
+                or receipt.get("domain_state_revision") != input_state_revision
+                or receipt.get("available") is not True
+                or receipt.get("grounded") is not True
+                or len(set(allowed_rule_ids)) != len(allowed_rule_ids)
+                or any(
+                    type(rule_id) is not str
+                    or rule_id not in rules
+                    or rules[rule_id].opportunity_mode
+                    != "allow_when_preconditions_met"
+                    for rule_id in allowed_rule_ids
+                )
+            ):
+                raise _MemoryPromotionCoordinateError("opportunity receipt binding")
+            evaluated_rules = {
+                row["rule_id"]: row
+                for row in opportunity_evaluation["rules"]
+            }
+            eligible_for_action = tuple(
+                sorted(
+                    rule_id
+                    for rule_id, row in evaluated_rules.items()
+                    if row["action_type"] == action_type
+                    and row["preconditions_met"] is True
+                )
+            )
+            allowed_for_action = tuple(
+                sorted(
+                    cast(str, rule_id)
+                    for rule_id in allowed_rule_ids
+                    if rules[cast(str, rule_id)].action_type == action_type
+                )
+            )
+            if allowed_for_action != eligible_for_action or any(
+                evaluated_rules[cast(str, rule_id)]["preconditions_met"] is not True
+                for rule_id in allowed_rule_ids
+            ):
+                raise _MemoryPromotionCoordinateError("opportunity rule set")
+
+            for proposal_index, proposal in enumerate(group["proposals"]):
+                rule_id = proposal["rule_id"]
+                variable_id = proposal["variable_id"]
+                rule = rules.get(rule_id)
+                variable = variables.get(variable_id)
+                if (
+                    rule is None
+                    or variable is None
+                    or rule.variable_id != variable_id
+                    or rule.action_type != action_type
+                    or rule.operation != proposal["operation"]
+                    or rule.unit != proposal["unit"]
+                    or (
+                        rule.opportunity_mode == "allow_when_preconditions_met"
+                        and rule_id not in allowed_rule_ids
+                    )
+                ):
+                    raise _MemoryPromotionCoordinateError("rule eligibility")
+
+                matching_adjudications = [
+                    adjudication
+                    for adjudication in adjudications
+                    if adjudication.get("action_id") == action_id
+                    and type(adjudication.get("action_sequence")) is int
+                    and adjudication.get("action_sequence") == action_sequence
+                    and type(adjudication.get("proposal_index")) is int
+                    and adjudication.get("proposal_index") == proposal_index
+                    and adjudication.get("rule_id") == rule_id
+                    and adjudication.get("variable_id") == variable_id
+                ]
+                if len(matching_adjudications) != 1:
+                    raise _MemoryPromotionConflictError("adjudication ambiguity")
+                adjudication = matching_adjudications[0]
+                if adjudication.get("status") != "verified":
+                    continue
+                adjudication_binding = {
+                    "schema_hash": schema_hash,
+                    "scenario_id": scenario_id,
+                    "branch_id": branch_id,
+                    "round_number": round_number,
+                    "agent_id": agent_id,
+                    "message_id": message_id,
+                    "action_id": action_id,
+                    "action_sequence": action_sequence,
+                    "proposal_index": proposal_index,
+                    "rule_id": rule_id,
+                    "variable_id": variable_id,
+                    "operation": proposal["operation"],
+                    "requested_value": proposal["requested_value"],
+                    "unit": proposal["unit"],
+                    "expected_before": proposal["expected_before"],
+                    "state_revision_before": input_state_revision,
+                    "state_revision_after": state_revision_after,
+                    "epistemic_scope": rule.epistemic_scope,
+                }
+                if any(
+                    canonical_json_bytes_v1(adjudication.get(key))
+                    != canonical_json_bytes_v1(value)
+                    for key, value in adjudication_binding.items()
+                ):
+                    raise _MemoryPromotionCoordinateError("adjudication binding")
+                effect_status = _actual_effect_status_v1(
+                    operation=proposal["operation"],
+                    value_type=variable.value_type,
+                    scale=variable.scale,
+                    before=adjudication.get("before"),
+                    after=adjudication.get("after"),
+                    applied_delta=adjudication.get("applied_delta"),
+                )
+                if effect_status == "invalid":
+                    raise _MemoryPromotionCoordinateError("adjudication applied value")
+                if effect_status == "noop":
+                    continue
+
+                matching_deltas = [
+                    item
+                    for item in deltas
+                    if item[0].get("variable_id") == variable_id
+                    and type(item[0].get("round_number")) is int
+                    and item[0].get("round_number") == round_number
+                ]
+                if len(matching_deltas) != 1:
+                    raise _MemoryPromotionConflictError("delta ambiguity")
+                delta, sources = matching_deltas[0]
+                source_coordinate = {
+                    "agent_id": agent_id,
+                    "message_id": message_id,
+                    "action_id": action_id,
+                    "action_sequence": action_sequence,
+                    "action_type": action_type,
+                    "proposal_index": proposal_index,
+                    "rule_id": rule_id,
+                }
+                if not any(source == source_coordinate for source in sources):
+                    raise _MemoryPromotionCoordinateError("delta source binding")
+                delta_binding = {
+                    "variable_id": variable_id,
+                    "round_number": round_number,
+                    "unit": proposal["unit"],
+                    "before": adjudication.get("before"),
+                    "after": adjudication.get("after"),
+                    "state_revision_before": input_state_revision,
+                    "state_revision_after": state_revision_after,
+                }
+                if any(
+                    canonical_json_bytes_v1(delta.get(key))
+                    != canonical_json_bytes_v1(value)
+                    for key, value in delta_binding.items()
+                ):
+                    raise _MemoryPromotionCoordinateError("delta binding")
+                delta_rule_ids = _sequence_v1(
+                    delta.get("rule_ids"), label="delta.rule_ids"
+                )
+                if (
+                    any(type(item) is not str for item in delta_rule_ids)
+                    or tuple(delta_rule_ids)
+                    != tuple(sorted({cast(str, source["rule_id"]) for source in sources}))
+                ):
+                    raise _MemoryPromotionCoordinateError("delta rule binding")
+                if variable.value_type in {"integer", "decimal"}:
+                    delta_applied = delta.get("applied_delta")
+                    if _actual_effect_status_v1(
+                        operation="set_if_expected",
+                        value_type=variable.value_type,
+                        scale=variable.scale,
+                        before=delta.get("before"),
+                        after=delta.get("after"),
+                        applied_delta=delta_applied,
+                    ) != "actual":
+                        raise _MemoryPromotionCoordinateError("delta applied value")
+                    try:
+                        if Decimal(cast(str, delta["after"])) - Decimal(
+                            cast(str, delta["before"])
+                        ) != Decimal(cast(str, delta_applied)):
+                            raise _MemoryPromotionCoordinateError("delta arithmetic")
+                    except InvalidOperation as exc:
+                        raise _MemoryPromotionCoordinateError("delta arithmetic") from exc
+                elif (
+                    delta.get("applied_delta") is not None
+                    or canonical_json_bytes_v1(delta.get("before"))
+                    == canonical_json_bytes_v1(delta.get("after"))
+                ):
+                    raise _MemoryPromotionCoordinateError("delta applied value")
+                if (
+                    canonical_json_bytes_v1(round_before[variable_id])
+                    != canonical_json_bytes_v1(delta.get("before"))
+                    or canonical_json_bytes_v1(round_after[variable_id])
+                    != canonical_json_bytes_v1(delta.get("after"))
+                ):
+                    raise _MemoryPromotionCoordinateError("round state delta binding")
+
+                source_numeric_total = Decimal(0)
+                for source in sources:
+                    matching_source_actions: list[
+                        tuple[Mapping[str, Any], Mapping[str, Any], object, object]
+                    ] = []
+                    for source_entry_value in raw_actions:
+                        source_entry = _mapping_v1(
+                            source_entry_value, label="source action authority"
+                        )
+                        source_action = _mapping_v1(
+                            source_entry.get("action"), label="source action"
+                        )
+                        if any(
+                            canonical_json_bytes_v1(source_action.get(key))
+                            != canonical_json_bytes_v1(source[key])
+                            for key in (
+                                "agent_id",
+                                "message_id",
+                                "action_id",
+                                "action_sequence",
+                                "action_type",
+                            )
+                        ):
+                            continue
+                        if (
+                            source_entry.get("history_origin") != "live"
+                            or any(
+                                canonical_json_bytes_v1(source_action.get(key))
+                                != canonical_json_bytes_v1(value)
+                                for key, value in action_coordinate.items()
+                            )
+                        ):
+                            continue
+                        source_validation = validate_domain_action_payload_v1(
+                            source_action.get("payload"),
+                            action_type=cast(str, source["action_type"]),
+                            is_bootstrap=False,
+                            canonical_outer_payload_bytes=len(
+                                canonical_json_bytes_v1(
+                                    {"domain_world_v1": source_action.get("payload")}
+                                )
+                            ),
+                        )
+                        source_index = cast(int, source["proposal_index"])
+                        source_group = source_validation.payload
+                        if (
+                            str(source_action.get("action_status") or "").lower()
+                            == "verified"
+                            and source_group is not None
+                            and source_validation.action_failure_code is None
+                            and source_group["schema_hash"] == schema_hash
+                            and source_group["input_state_revision"]
+                            == input_state_revision
+                            and source_index < len(source_group["proposals"])
+                        ):
+                            source_proposal = source_group["proposals"][source_index]
+                            source_rule = rules.get(source_proposal["rule_id"])
+                            source_variable = variables.get(
+                                source_proposal["variable_id"]
+                            )
+                            if (
+                                source_proposal["rule_id"] == source["rule_id"]
+                                and source_proposal["variable_id"] == variable_id
+                                and source_rule is not None
+                                and source_variable is not None
+                                and source_rule.variable_id == variable_id
+                                and source_rule.action_type == source["action_type"]
+                                and source_rule.operation
+                                == source_proposal["operation"]
+                                and source_rule.unit == source_proposal["unit"]
+                            ):
+                                source_decision = _mapping_v1(
+                                    source_entry.get("decision"),
+                                    label="source decision",
+                                )
+                                source_parameters = _mapping_v1(
+                                    source_decision.get("action_parameters"),
+                                    label="source action parameters",
+                                )
+                                source_receipt = _mapping_v1(
+                                    source_decision.get("opportunity_receipt"),
+                                    label="source opportunity receipt",
+                                )
+                                source_allowed = _sequence_v1(
+                                    source_receipt.get("allowed_rule_ids"),
+                                    label="source allowed_rule_ids",
+                                )
+                                source_eligible = tuple(
+                                    sorted(
+                                        evaluated_rule_id
+                                        for evaluated_rule_id, row in (
+                                            evaluated_rules.items()
+                                        )
+                                        if row["action_type"]
+                                        == source["action_type"]
+                                        and row["preconditions_met"] is True
+                                    )
+                                )
+                                source_allowed_for_action = tuple(
+                                    sorted(
+                                        cast(str, allowed_id)
+                                        for allowed_id in source_allowed
+                                        if type(allowed_id) is str
+                                        and allowed_id in rules
+                                        and rules[allowed_id].action_type
+                                        == source["action_type"]
+                                    )
+                                )
+                                if (
+                                    source_decision.get("decision_status")
+                                    != "verified"
+                                    or source_decision.get("selected_action")
+                                    != source["action_type"]
+                                    or source_decision.get("agent_id")
+                                    != source["agent_id"]
+                                    or source_decision.get("branch_id") != branch_id
+                                    or type(source_decision.get("round_number"))
+                                    is not int
+                                    or source_decision.get("round_number")
+                                    != round_number
+                                    or source_decision.get("message_id")
+                                    != source["message_id"]
+                                    or source_decision.get("action_id")
+                                    != source["action_id"]
+                                    or canonical_json_bytes_v1(
+                                        source_parameters.get("domain_world_v1")
+                                    )
+                                    != canonical_json_bytes_v1(source_group)
+                                    or source_receipt.get("version") != 1
+                                    or type(source_receipt.get("version")) is not int
+                                    or source_receipt.get("compatibility_mode") != "live"
+                                    or type(source_receipt.get("as_of_round")) is not int
+                                    or source_receipt.get("as_of_round")
+                                    != round_number - 1
+                                    or source_receipt.get("requested_action_type")
+                                    != source["action_type"]
+                                    or source_receipt.get("effective_action_type")
+                                    != source["action_type"]
+                                    or source_receipt.get("domain_state_revision")
+                                    != input_state_revision
+                                    or source_receipt.get("available") is not True
+                                    or source_receipt.get("grounded") is not True
+                                    or len(set(source_allowed)) != len(source_allowed)
+                                    or source_allowed_for_action != source_eligible
+                                    or any(
+                                        type(allowed_id) is not str
+                                        or allowed_id not in evaluated_rules
+                                        or evaluated_rules[allowed_id][
+                                            "preconditions_met"
+                                        ]
+                                        is not True
+                                        for allowed_id in source_allowed
+                                    )
+                                    or (
+                                        source_rule.opportunity_mode
+                                        == "allow_when_preconditions_met"
+                                        and source["rule_id"] not in source_allowed
+                                    )
+                                ):
+                                    raise _MemoryPromotionCoordinateError(
+                                        "delta source decision binding"
+                                    )
+                                matching_source_actions.append(
+                                    (
+                                        source_action,
+                                        source_proposal,
+                                        source_rule,
+                                        source_variable,
+                                    )
+                                )
+                    matching_source_adjudications = [
+                        candidate
+                        for candidate in adjudications
+                        if candidate.get("status") == "verified"
+                        and all(
+                            canonical_json_bytes_v1(candidate.get(key))
+                            == canonical_json_bytes_v1(source[key])
+                            for key in (
+                                "agent_id",
+                                "message_id",
+                                "action_id",
+                                "action_sequence",
+                                "proposal_index",
+                                "rule_id",
+                            )
+                        )
+                        and candidate.get("variable_id") == variable_id
+                    ]
+                    if (
+                        len(matching_source_actions) != 1
+                        or len(matching_source_adjudications) != 1
+                    ):
+                        raise _MemoryPromotionCoordinateError(
+                            "delta source durable authority"
+                        )
+                    _, source_proposal, source_rule, source_variable = (
+                        matching_source_actions[0]
+                    )
+                    source_adjudication = matching_source_adjudications[0]
+                    source_binding = {
+                        "schema_hash": schema_hash,
+                        "scenario_id": scenario_id,
+                        "branch_id": branch_id,
+                        "round_number": round_number,
+                        "agent_id": source["agent_id"],
+                        "message_id": source["message_id"],
+                        "action_id": source["action_id"],
+                        "action_sequence": source["action_sequence"],
+                        "proposal_index": source["proposal_index"],
+                        "rule_id": source["rule_id"],
+                        "variable_id": variable_id,
+                        "operation": source_proposal["operation"],
+                        "requested_value": source_proposal["requested_value"],
+                        "unit": source_proposal["unit"],
+                        "expected_before": source_proposal["expected_before"],
+                        "before": delta["before"],
+                        "after": delta["after"],
+                        "state_revision_before": input_state_revision,
+                        "state_revision_after": state_revision_after,
+                        "epistemic_scope": source_rule.epistemic_scope,
+                    }
+                    if any(
+                        canonical_json_bytes_v1(source_adjudication.get(key))
+                        != canonical_json_bytes_v1(value)
+                        for key, value in source_binding.items()
+                    ):
+                        raise _MemoryPromotionCoordinateError(
+                            "delta source adjudication binding"
+                        )
+                    source_status = _actual_effect_status_v1(
+                        operation=source_proposal["operation"],
+                        value_type=source_variable.value_type,
+                        scale=source_variable.scale,
+                        before=source_adjudication.get("before"),
+                        after=source_adjudication.get("after"),
+                        applied_delta=source_adjudication.get("applied_delta"),
+                    )
+                    if source_status == "invalid":
+                        raise _MemoryPromotionCoordinateError(
+                            "delta source applied value"
+                        )
+                    event_identity = (
+                        cast(str, source_proposal["rule_id"]),
+                        cast(str, source_proposal["variable_id"]),
+                        cast(str, source_proposal["event_key"]),
+                    )
+                    if (
+                        event_identity in accepted_before
+                        or event_identity not in accepted_after
+                    ):
+                        raise _MemoryPromotionCoordinateError(
+                            "delta source event identity"
+                        )
+                    if variable.value_type in {"integer", "decimal"}:
+                        source_numeric_total += Decimal(
+                            cast(str, source_adjudication["applied_delta"])
+                        )
+                if variable.value_type in {"integer", "decimal"} and (
+                    source_numeric_total != Decimal(cast(str, delta["applied_delta"]))
+                ):
+                    raise _MemoryPromotionCoordinateError("delta source allocation")
+
+                drafts.append(
+                    {
+                        "schema_hash": schema_hash,
+                        "identity_id": identity_id,
+                        "scenario_id": scenario_id,
+                        "branch_id": branch_id,
+                        "round_id": round_id,
+                        "round_number": round_number,
+                        "agent_id": agent_id,
+                        "message_id": message_id,
+                        "action_id": action_id,
+                        "action_sequence": action_sequence,
+                        "input_digest": input_digest,
+                        "input_state_revision": input_state_revision,
+                        "state_revision_after": state_revision_after,
+                        "round_before": dict(round_before),
+                        "round_after": dict(round_after),
+                        "rule_id": rule_id,
+                        "variable_id": variable_id,
+                        "unit": proposal["unit"],
+                        "epistemic_scope": rule.epistemic_scope,
+                        "proposal_index": proposal_index,
+                        "before": adjudication.get("before"),
+                        "after": adjudication.get("after"),
+                        "state_revision_before": input_state_revision,
+                        "applied_delta": adjudication.get("applied_delta"),
+                        "requested_value": proposal["requested_value"],
+                        "operation": proposal["operation"],
+                        "effect_code": adjudication.get("effect_code"),
+                        "co_sources": sources,
+                    }
+                )
+
+        if not drafts:
+            return _empty_promotion_batch_v1(owner_id)
+        if _contains_credential_recursive_v1(drafts):
+            raise _MemoryPromotionCredentialError
+
+        root_manifest_id = _root_manifest_id_v1(
+            scenario_id, branch_id, round_id, round_number
+        )
+        grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+        for draft in drafts:
+            key = (
+                cast(str, draft["schema_hash"]),
+                cast(str, draft["action_id"]),
+                cast(str, draft["rule_id"]),
+                cast(str, draft["variable_id"]),
+            )
+            grouped.setdefault(key, []).append(draft)
+
+        record_documents: list[MemoryPromotionDocumentV1] = []
+        records_by_identity: dict[str, list[MemoryPromotionDocumentV1]] = {}
+        for key in sorted(grouped):
+            group_drafts = sorted(grouped[key], key=lambda item: item["proposal_index"])
+            indexes = [cast(int, item["proposal_index"]) for item in group_drafts]
+            if len(set(indexes)) != len(indexes):
+                raise _MemoryPromotionConflictError("duplicate proposal index")
+            first = group_drafts[0]
+            shared_fields = (
+                "identity_id",
+                "scenario_id",
+                "branch_id",
+                "round_id",
+                "round_number",
+                "agent_id",
+                "message_id",
+                "action_sequence",
+                "input_digest",
+                "input_state_revision",
+                "state_revision_after",
+                "round_before",
+                "round_after",
+                "unit",
+                "epistemic_scope",
+                "before",
+                "after",
+                "state_revision_before",
+                "co_sources",
+            )
+            if any(
+                canonical_json_bytes_v1(item[field]) != canonical_json_bytes_v1(first[field])
+                for item in group_drafts[1:]
+                for field in shared_fields
+            ):
+                raise _MemoryPromotionConflictError("multi-proposal aggregate mismatch")
+
+            identity_id = cast(str, first["identity_id"])
+            child_manifest_id = _child_manifest_id_v1(root_manifest_id, identity_id)
+            components = [
+                {
+                    "proposal_index": item["proposal_index"],
+                    "before": item["before"],
+                    "after": item["after"],
+                    "state_revision_before": item["state_revision_before"],
+                    "state_revision_after": item["state_revision_after"],
+                    "applied_delta": item["applied_delta"],
+                    "requested_value": item["requested_value"],
+                    "operation": item["operation"],
+                    "effect_code": item["effect_code"],
+                }
+                for item in group_drafts
+            ]
+            if any(
+                frozenset(component) != _MEMORY_PROMOTION_COMPONENT_KEYS_V1
+                for component in components
+            ):
+                raise _MemoryPromotionConflictError("component shape")
+            record = {
+                "record_contract": _MEMORY_PROMOTION_RECORD_CONTRACT_V1,
+                "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+                "promotion_key": {
+                    "schema_hash": key[0],
+                    "action_id": key[1],
+                    "rule_id": key[2],
+                    "variable_id": key[3],
+                },
+                "identity_id": identity_id,
+                "scenario_id": first["scenario_id"],
+                "branch_id": first["branch_id"],
+                "round_id": first["round_id"],
+                "round_number": first["round_number"],
+                "agent_id": first["agent_id"],
+                "message_id": first["message_id"],
+                "action_sequence": first["action_sequence"],
+                "input_digest": first["input_digest"],
+                "input_state_revision": first["input_state_revision"],
+                "state_revision_after": first["state_revision_after"],
+                "child_manifest_id": child_manifest_id,
+                "root_manifest_id": root_manifest_id,
+                "round_before": first["round_before"],
+                "round_after": first["round_after"],
+                "components": components,
+                "co_sources": list(first["co_sources"]),
+                "unit": first["unit"],
+                "simulation_context": "simulated_scenario",
+                "epistemic_scope": first["epistemic_scope"],
+                "verification_status": "verified",
+            }
+            document_id = memory_promotion_document_id_v1(*key)
+            memory_ref = memory_promotion_ref_from_document_id_v1(document_id)
+            summary = (
+                f"Prior simulated consequence: action {key[1]}, under rule {key[2]}, "
+                f"was a verified source of the round change in {key[3]} from "
+                f"{first['before']} to {first['after']} {first['unit']}."
+            )
+            if _contains_credential_recursive_v1(record) or contains_credential_material(summary):
+                raise _MemoryPromotionCredentialError
+            if sanitize_untrusted_text(
+                summary, max_chars=_MEMORY_PROMOTION_SUMMARY_MAX_CHARS_V1
+            ) != summary:
+                raise _MemoryPromotionConflictError("summary is not exact sanitized text")
+            document = _semantic_record_document_v1(
+                record=record,
+                summary=summary,
+                document_id=document_id,
+                memory_ref=memory_ref,
+            )
+            record_documents.append(document)
+            records_by_identity.setdefault(identity_id, []).append(document)
+
+        child_documents: list[MemoryPromotionDocumentV1] = []
+        for identity_id in sorted(records_by_identity):
+            records = sorted(records_by_identity[identity_id], key=lambda item: item.document_id)
+            child_manifest_id = _child_manifest_id_v1(root_manifest_id, identity_id)
+            payload = {
+                "manifest_contract": _MEMORY_PROMOTION_CHILD_CONTRACT_V1,
+                "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+                "status": "complete",
+                "root_manifest_id": root_manifest_id,
+                "child_manifest_id": child_manifest_id,
+                "identity_id": identity_id,
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_id": round_id,
+                "round_number": round_number,
+                "input_digest": input_digest,
+                "record_ids": [item.document_id for item in records],
+                "record_hashes": [item.semantic_hash for item in records],
+                "memory_refs": [cast(str, item.memory_ref) for item in records],
+            }
+            child_documents.append(
+                _manifest_document_v1(
+                    document_id=child_manifest_id,
+                    payload=payload,
+                    contract=_MEMORY_PROMOTION_CHILD_CONTRACT_V1,
+                    metadata={
+                        "root_manifest_id": root_manifest_id,
+                        "child_manifest_id": child_manifest_id,
+                        "identity_id": identity_id,
+                        "scenario_id": scenario_id,
+                    },
+                )
+            )
+
+        child_documents.sort(key=lambda item: item.document_id)
+        root_payload = {
+            "manifest_contract": _MEMORY_PROMOTION_ROOT_CONTRACT_V1,
+            "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+            "status": "complete",
+            "root_manifest_id": root_manifest_id,
+            "scenario_id": scenario_id,
+            "branch_id": branch_id,
+            "round_id": round_id,
+            "round_number": round_number,
+            "input_digest": input_digest,
+            "child_manifest_ids": [item.document_id for item in child_documents],
+            "child_manifest_hashes": [item.semantic_hash for item in child_documents],
+            "record_count": len(record_documents),
+        }
+        root_document = _manifest_document_v1(
+            document_id=root_manifest_id,
+            payload=root_payload,
+            contract=_MEMORY_PROMOTION_ROOT_CONTRACT_V1,
+            metadata={
+                "root_manifest_id": root_manifest_id,
+                "scenario_id": scenario_id,
+                "input_digest": input_digest,
+            },
+        )
+        normalized_authority = _deep_thaw_v1(snapshot)
+        normalized_authority["roster"] = sorted(
+            (_deep_thaw_v1(item) for item in raw_roster),
+            key=lambda item: item["agent_id"],
+        )
+        normalized_authority["actions"] = sorted(
+            (_deep_thaw_v1(item) for item in raw_actions),
+            key=lambda item: (
+                item["action"]["action_sequence"],
+                item["action"]["action_id"],
+            ),
+        )
+        normalized_authority["adjudications"] = [
+            _deep_thaw_v1(item) for item in adjudications
+        ]
+        normalized_authority["state_deltas"] = [
+            _deep_thaw_v1(item) for item in normalized_delta_rows
+        ]
+        normalized_authority["accepted_event_identities_before"] = [
+            list(item) for item in sorted(accepted_before)
+        ]
+        normalized_authority["accepted_event_identities_after"] = [
+            list(item) for item in sorted(accepted_after)
+        ]
+        source_hash = _canonical_hash_v1(
+            ["memory-promotion-authority-snapshot-v1", normalized_authority]
+        )
+        sorted_records = tuple(sorted(record_documents, key=lambda item: item.document_id))
+        refs = tuple(sorted(cast(str, item.memory_ref) for item in sorted_records))
+        return MemoryPromotionBatchV1(
+            status="verified",
+            reason_code=None,
+            owner_id=owner_id,
+            source_authority_snapshot_hash=source_hash,
+            root_manifest_id=root_manifest_id,
+            record_documents=sorted_records,
+            child_manifest_documents=tuple(child_documents),
+            root_manifest_document=root_document,
+            refs=refs,
+        )
+    except _MemoryPromotionCredentialError:
+        return _unavailable_promotion_batch_v1(
+            "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        )
+    except _MemoryPromotionOwnerError:
+        return _unavailable_promotion_batch_v1("MEMORY_PROMOTION_OWNER_MISMATCH")
+    except _MemoryPromotionConflictError:
+        return _unavailable_promotion_batch_v1("MEMORY_PROMOTION_RECORD_CONFLICT")
+    except (TypeError, ValueError, InvalidOperation, json.JSONDecodeError):
+        return _unavailable_promotion_batch_v1(
+            "MEMORY_PROMOTION_COORDINATE_MISMATCH"
+        )
+
+
+def build_recall_context_v1(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    status: Literal["verified", "empty", "unavailable"] = "verified",
+    reason_code: MemoryRecallReasonCodeV1 | MemoryPromotionReasonCodeV1 | None = None,
+) -> RecallContextV1:
+    """Build the immutable, byte-deterministic recall context shared by Batch B."""
+
+    if status not in {"verified", "empty", "unavailable"}:
+        raise ValueError("invalid memory recall status")
+    if status == "empty":
+        if reason_code is not None or items:
+            raise ValueError("empty recall context must have no reason or items")
+        normalized: list[dict[str, str]] = []
+    elif status == "unavailable":
+        if reason_code not in _MEMORY_RECALL_REASON_CODES_V1 | _MEMORY_PROMOTION_REASON_CODES_V1:
+            raise ValueError("unavailable recall context requires a known reason")
+        if items:
+            raise ValueError("unavailable recall context must have no items")
+        normalized = []
+    else:
+        if reason_code is not None:
+            raise ValueError("verified recall context cannot have a reason")
+        required_keys = frozenset(
+            {
+                "memory_ref",
+                "summary",
+                "source_scenario_id",
+                "schema_hash",
+                "action_id",
+                "rule_id",
+                "variable_id",
+                "input_state_revision",
+            }
+        )
+        ranked: list[tuple[float, str, dict[str, str]]] = []
+        seen_refs: set[str] = set()
+        for raw in items:
+            item = _mapping_v1(raw, label="recall item")
+            if not required_keys.issubset(item) or set(item) - required_keys - {"distance"}:
+                raise ValueError("invalid recall item shape")
+            if _contains_credential_recursive_v1(item):
+                return build_recall_context_v1(
+                    (),
+                    status="unavailable",
+                    reason_code="MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+                )
+            memory_ref = _required_text_v1(item["memory_ref"], label="memory_ref")
+            if (
+                len(memory_ref) != _MEMORY_PROMOTION_REF_LENGTH_V1
+                or any(char not in "0123456789abcdef" for char in memory_ref)
+                or memory_ref in seen_refs
+            ):
+                raise ValueError("invalid or duplicate memory ref")
+            seen_refs.add(memory_ref)
+            summary = _required_text_v1(
+                item["summary"],
+                label="summary",
+                max_chars=_MEMORY_PROMOTION_SUMMARY_MAX_CHARS_V1,
+            )
+            if contains_credential_material(summary):
+                return build_recall_context_v1(
+                    (),
+                    status="unavailable",
+                    reason_code="MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+                )
+            if sanitize_untrusted_text(
+                summary, max_chars=_MEMORY_PROMOTION_SUMMARY_MAX_CHARS_V1
+            ) != summary:
+                raise ValueError("recall summary is not exact sanitized text")
+            output = {
+                key: _required_text_v1(item[key], label=f"recall.{key}", max_chars=640)
+                for key in required_keys
+            }
+            distance = item.get("distance", 0)
+            if type(distance) not in {int, float} or isinstance(distance, bool):
+                raise ValueError("invalid recall distance")
+            if not math.isfinite(float(distance)):
+                raise ValueError("invalid recall distance")
+            ranked.append((float(distance), memory_ref, output))
+        ranked.sort(key=lambda row: (row[0], row[1]))
+        normalized = [row[2] for row in ranked[:3]]
+        if not normalized:
+            return build_recall_context_v1((), status="empty")
+
+    hash_payload = {
+        "contract": "memory_promotion_recall_context_v1",
+        "promotion_version": "v1",
+        "status": status,
+        "reason_code": reason_code,
+        "items": normalized,
+    }
+    context_hash = _canonical_hash_v1(hash_payload)
+    context = RecallContextV1(
+        contract="memory_promotion_recall_context_v1",
+        promotion_version="v1",
+        status=status,
+        reason_code=reason_code,
+        items=tuple(cast(Mapping[str, str], _deep_freeze_v1(item)) for item in normalized),
+        context_hash=context_hash,
+    )
+    if len(canonical_json_bytes_v1(context.to_payload()).decode("utf-8")) > (
+        _MEMORY_PROMOTION_RECALL_CONTEXT_MAX_CHARS_V1
+    ):
+        raise ValueError("memory recall context exceeds canonical size limit")
+    return context
+
+
+def format_recall_context_for_prompt_v1(context: RecallContextV1) -> str:
+    serialized = canonical_json_bytes_v1(context.to_payload()).decode("utf-8")
+    if len(serialized) > _MEMORY_PROMOTION_RECALL_CONTEXT_MAX_CHARS_V1:
+        raise ValueError("memory recall context exceeds canonical size limit")
+    return format_untrusted_text_block(
+        "Prior verified consequence memories",
+        serialized,
+        max_chars=_MEMORY_PROMOTION_RECALL_CONTEXT_MAX_CHARS_V1,
+    )

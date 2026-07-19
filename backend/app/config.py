@@ -206,6 +206,7 @@ class Settings(BaseSettings):
     FEATURE_ARGUMENT_MAP: bool = True
     ARGUMENT_MAP_LLM_ENRICHMENT: bool = True
     FEATURE_IDENTITY_COMPACTION: bool = False
+    FEATURE_MEMORY_PROMOTION: bool = Field(default=False)
     FEATURE_REPLAY_TRACE: bool = Field(default=True)
     FEATURE_AGENT_CONVERSATION: bool = Field(default=True)
     FEATURE_ROUNDTABLE_SURVEY: bool = Field(default=True)

@@ -8,10 +8,14 @@ import ast
 import asyncio
 import copy
 import dataclasses
+import hashlib
 import inspect
+import io
 import json
 import logging
+import threading
 import time
+import zipfile
 
 import pytest
 from fastapi import HTTPException
@@ -12356,3 +12360,2699 @@ def test_domain_finalizer_first_survives_post_commit_cancel_check():
     runtime = _domain_runtime_round(engine, scenario_id, branch_id, 1)
     assert runtime["domain_finalization"]["status"] == "complete"
     assert runtime["domain_state_after"] == {"balance": "6"}
+
+
+# ── Stage 3 verified memory promotion integration ────────────
+
+
+def _memory_promotion_live_round_fixture(engine, *, owner_id: str = "user-a"):
+    from app.models import AgentIdentity
+    from app.services.agent_runtime import (
+        _load_domain_decision_context_v1,
+        decision_to_action,
+        finalize_domain_round_v1,
+        normalize_decision_envelope,
+    )
+    from app.services.runtime_lock import release_runtime_lock
+
+    scenario_id, branch_id, agent_ids, config = _domain_finalizer_setup(engine)
+    agent_id = agent_ids[0]
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        agent = session.get(Agent, agent_id)
+        assert scenario is not None and agent is not None
+        identity = AgentIdentity(
+            user_id=owner_id,
+            kind="generated",
+            display_name="Promotion Agent",
+            continuity_key=f"promotion:{scenario_id}:{agent_id}",
+        )
+        session.add(identity)
+        session.flush()
+        scenario.user_id = owner_id
+        agent.agent_identity_id = identity.id
+        session.add(scenario)
+        session.add(agent)
+        session.commit()
+        identity_id = identity.id
+
+    round_id = _create_round(engine, branch_id, 1)
+    domain_context = _load_domain_decision_context_v1(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_number=1,
+    )
+    assert domain_context is not None
+    revision = str(domain_context["input_state_revision"])
+    snapshot = _opportunity_snapshot_fixture(
+        actor_id=agent_id,
+        as_of_round=0,
+        domain_state_revision=revision,
+        allowed_rule_ids=(),
+        action_overrides={
+            "POST": {
+                "domain_reason_codes": ("OPPORTUNITY_DOMAIN_RULE_ALLOWED",),
+            }
+        },
+    )
+    content = "publish the verified balance consequence"
+    group = _domain_action_group(
+        config,
+        revision=revision,
+        event_key="promotion-live-effect",
+    )
+    raw_decision = _decision_envelope_fixture(
+        selected_action="POST",
+        candidate_actions=["IDLE", "POST"],
+        idle_reason=None,
+        idle_reason_code=None,
+        action_content=content,
+    )
+    raw_decision["action_parameters"]["domain_world_v1"] = group
+    decision = normalize_decision_envelope(
+        raw_decision,
+        agent_id=agent_id,
+        branch_id=branch_id,
+        round_number=1,
+        fallback_goal="Publish one verified domain effect",
+        opportunity_snapshot=snapshot,
+        domain_world_context=domain_context,
+        compatibility_mode="live",
+    )
+    assert decision["decision_status"] == "verified"
+    action = decision_to_action(decision, content)
+    message_ids = _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": agent_id,
+                "content": content,
+                "emotion": "focused",
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_number": 1,
+                "action": action,
+                "decision_envelope": decision,
+                "fallback_goal": "Publish one verified domain effect",
+                "idempotency_key": f"promotion:{round_id}:{agent_id}",
+            }
+        ],
+        opportunity_snapshots_by_actor={agent_id: snapshot},
+        domain_world_context=domain_context,
+        compatibility_mode="live",
+    )
+    assert len(message_ids) == 1
+    lease = _process_domain_lease(scenario_id)
+    try:
+        result = finalize_domain_round_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+            expected_agent_ids=agent_ids,
+            current_runtime_lease=lambda: lease,
+        )
+    finally:
+        release_runtime_lock(lease)
+    assert result.status == "committed"
+    return scenario_id, branch_id, round_id, agent_id, identity_id
+
+
+def _verified_promotion_recall_context():
+    from app.services.memory import build_recall_context_v1
+
+    return build_recall_context_v1(
+        [
+            {
+                "memory_ref": "0123456789abcdef0123",
+                "summary": "Prior simulated consequence: balance increased by one.",
+                "source_scenario_id": "scenario-source",
+                "schema_hash": f"sha256:{'1' * 64}",
+                "action_id": "action-source",
+                "rule_id": "change_balance",
+                "variable_id": "balance",
+                "input_state_revision": f"sha256:{'2' * 64}",
+                "distance": 0.1,
+            }
+        ]
+    )
+
+
+def _three_item_promotion_recall_context():
+    from app.services.memory import build_recall_context_v1
+
+    sources = ("scenario-a", "scenario-b", "scenario-a")
+    return build_recall_context_v1(
+        [
+            {
+                "memory_ref": f"{index + 1:020x}",
+                "summary": f"Prior verified consequence {index + 1}.",
+                "source_scenario_id": sources[index],
+                "schema_hash": f"sha256:{'1' * 64}",
+                "action_id": f"action-{index + 1}",
+                "rule_id": "change_balance",
+                "variable_id": "balance",
+                "input_state_revision": f"sha256:{'2' * 64}",
+                "distance": 0.1,
+            }
+            for index in range(3)
+        ]
+    )
+
+
+def _persist_memory_promotion_recall_decision(
+    engine,
+    monkeypatch,
+    *,
+    context,
+    recalled_refs,
+):
+    from app.services.agent_runtime import (
+        decision_to_action,
+        load_agent_runtime,
+        normalize_decision_with_memory_promotion_v1,
+    )
+
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Recall binding")
+    agent_id = _make_agent(engine, scenario_id, name="RecallBindingAgent")
+    round_id = _create_round(engine, branch_id, 1)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+    raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+    raw["recalled_memory_refs"] = list(recalled_refs)
+    decision = normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=context,
+        agent_id=agent_id,
+        branch_id=branch_id,
+        round_number=1,
+        fallback_goal="Wait for verified evidence",
+    )
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    saved = _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": agent_id,
+                "content": "Wait for verified evidence.",
+                "emotion": "neutral",
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_number": 1,
+                "action": decision_to_action(decision, ""),
+                "decision_envelope": decision,
+                "fallback_goal": "Wait for verified evidence",
+                "idempotency_key": f"recall-binding:{scenario_id}:{agent_id}",
+                "_memory_promotion_context": context,
+                "_memory_promotion_legacy_refs": (),
+            }
+        ],
+        compatibility_mode="live",
+    )
+    assert len(saved) == 1
+    durable = load_agent_runtime(engine, scenario_id)["branches"][branch_id]["rounds"]["1"][
+        "decisions"
+    ][0]
+    return decision, durable
+
+
+def _install_memory_promotion_test_store(monkeypatch):
+    import app.services.vector_store as vector_store_module
+    from tests.test_vector_store import (
+        _install_file_backed_promotion_lease,
+        _PromotionWriterClient,
+        _PromotionWriterCollection,
+        _vector_store_with_client,
+    )
+
+    collection = _PromotionWriterCollection("user-a")
+    store = _vector_store_with_client(_PromotionWriterClient(collection))
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    _install_file_backed_promotion_lease(monkeypatch)
+    monkeypatch.setattr(vector_store_module, "get_vector_store", lambda: store)
+    return collection, store
+
+
+def _promotion_tree_fingerprint(rows):
+    payload = [
+        [document_id, document, metadata]
+        for document_id, (document, metadata) in sorted(rows.items())
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _promotion_tree_contract_sets(rows):
+    by_contract = {
+        "record": set(),
+        "child": set(),
+        "root": set(),
+        "ref": set(),
+    }
+    contract_keys = {
+        "memory_promotion_record_v1": "record",
+        "memory_promotion_child_manifest_v1": "child",
+        "memory_promotion_root_manifest_v1": "root",
+    }
+    for document_id, (_document, metadata) in rows.items():
+        key = contract_keys.get(metadata.get("document_contract"))
+        if key is not None:
+            by_contract[key].add(document_id)
+        if key == "record" and isinstance(metadata.get("memory_ref"), str):
+            by_contract["ref"].add(metadata["memory_ref"])
+    return by_contract
+
+
+def test_memory_promotion_scanner_revalidator_and_current_claims_are_raw_durable():
+    import app.services.agent_runtime as runtime_module
+    from app.models import AgentIdentity
+    from app.services.memory import build_verified_memory_promotions_v1
+
+    engine = get_engine()
+    scenario_id, branch_id, round_id, _agent_id, identity_id = _memory_promotion_live_round_fixture(
+        engine
+    )
+    snapshots = runtime_module.scan_verified_memory_promotion_authority_v1(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=1,
+    )
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    with pytest.raises(TypeError):
+        snapshot["scenario_id"] = "forged"
+    with pytest.raises(TypeError):
+        snapshot["actions"][0]["action"]["payload"]["proposals"].append({})
+    batch = build_verified_memory_promotions_v1(snapshot)
+    assert batch.status == "verified"
+    assert len(batch.record_documents) == 1
+    assert runtime_module.revalidate_verified_memory_promotion_authority_v1(engine, snapshot)
+    claims = runtime_module.load_current_memory_promotion_claims_v1(engine, user_id="user-a")
+    assert claims.complete is True
+    assert {claim.document_id for claim in claims.claims} == {
+        document.document_id for document in batch.documents
+    }
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        clean_context = copy.deepcopy(dict(scenario.parsed_context or {}))
+        forged_context = copy.deepcopy(clean_context)
+        forged_context["agent_runtime_v1"]["branches"][branch_id]["rounds"]["1"]["decisions"][0][
+            "opportunity_receipt"
+        ]["forged_extra"] = True
+        scenario.parsed_context = forged_context
+        session.add(scenario)
+        session.commit()
+    with pytest.raises(RuntimeError, match="AUTHORITY_RECEIPT_INVALID"):
+        runtime_module.scan_verified_memory_promotion_authority_v1(
+            engine, scenario_id=scenario_id, branch_id=branch_id, round_id=round_id
+        )
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        forged_context = copy.deepcopy(clean_context)
+        forged_context["agent_runtime_v1"]["branches"][branch_id]["rounds"]["1"][
+            "domain_finalization"
+        ]["forged_extra"] = True
+        scenario.parsed_context = forged_context
+        session.add(scenario)
+        session.commit()
+    with pytest.raises(RuntimeError, match="AUTHORITY_FINALIZATION_INVALID"):
+        runtime_module.scan_verified_memory_promotion_authority_v1(
+            engine, scenario_id=scenario_id, branch_id=branch_id, round_id=round_id
+        )
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        identity = session.get(AgentIdentity, identity_id)
+        assert scenario is not None and identity is not None
+        scenario.parsed_context = clean_context
+        identity.user_id = "different-owner"
+        session.add(scenario)
+        session.add(identity)
+        session.commit()
+    assert not runtime_module.revalidate_verified_memory_promotion_authority_v1(engine, snapshot)
+    assert (
+        runtime_module.load_current_memory_promotion_claims_v1(engine, user_id="user-a").complete
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_g2_all_coordinate_and_negative_mutants_are_atomic(
+    monkeypatch,
+):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+    from tests.test_memory import (
+        _promotion_authority,
+        _reproject_promotion_authority,
+    )
+    from tests.test_vector_store import (
+        _PromotionWriterClient,
+        _PromotionWriterCollection,
+    )
+
+    engine = get_engine()
+    scenario_id, branch_id, round_id, _agent_id, _identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    scan_authority = runtime_module.scan_verified_memory_promotion_authority_v1
+    immutable = scan_authority(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=1,
+    )[0]
+
+    def canonical(value):
+        return json.loads(memory_module.canonical_json_bytes_v1(value))
+
+    clean = canonical(immutable)
+    positive = memory_module.build_verified_memory_promotions_v1(clean)
+    assert positive.status == "verified"
+    assert positive.record_documents and positive.refs
+
+    collection = _PromotionWriterCollection("user-a")
+    client = _PromotionWriterClient(collection)
+    for document in positive.documents:
+        collection.rows[document.document_id] = (
+            document.document,
+            document.metadata_dict(),
+        )
+    before_rows = copy.deepcopy(collection.rows)
+    before_hash = _promotion_tree_fingerprint(before_rows)
+    before_sets = _promotion_tree_contract_sets(before_rows)
+    before_truth = memory_module.canonical_json_bytes_v1(
+        scan_authority(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+        )[0]
+    )
+    current = clean
+    store_calls = 0
+
+    async def forbidden_store(**_kwargs):
+        nonlocal store_calls
+        store_calls += 1
+        raise AssertionError("negative promotion batch reached Chroma writer")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "scan_verified_memory_promotion_authority_v1",
+        lambda *_args, **_kwargs: (current,),
+    )
+    monkeypatch.setattr(
+        vector_store_module,
+        "store_verified_memory_promotions_v1",
+        forbidden_store,
+    )
+
+    coordinate_mutants = (
+        ("schema_hash", ("actions", 0, "action", "payload", "schema_hash"), "sha256:" + "f" * 64),
+        (
+            "input_state_revision",
+            ("actions", 0, "action", "payload", "input_state_revision"),
+            "sha256:" + "f" * 64,
+        ),
+        ("input_digest", ("input_digest",), "sha256:" + "f" * 64),
+        ("scenario", ("actions", 0, "action", "scenario_id"), "scenario-mutant"),
+        ("branch", ("actions", 0, "action", "branch_id"), "branch-mutant"),
+        ("round_id", ("actions", 0, "action", "round_id"), "round-mutant"),
+        ("round_number", ("actions", 0, "action", "round_number"), 2),
+        ("actor", ("actions", 0, "action", "agent_id"), "agent-mutant"),
+        ("message", ("actions", 0, "action", "message_id"), "message-mutant"),
+        ("action", ("actions", 0, "action", "action_id"), "action-mutant"),
+        ("sequence", ("actions", 0, "action", "action_sequence"), 2),
+        ("rule", ("actions", 0, "action", "payload", "proposals", 0, "rule_id"), "rule-mutant"),
+        (
+            "variable",
+            ("actions", 0, "action", "payload", "proposals", 0, "variable_id"),
+            "variable-mutant",
+        ),
+        ("proposal", ("adjudications", 0, "proposal_index"), 1),
+        ("identity_owner", ("actions", 0, "identity_owner_id"), "user-mutant"),
+        (
+            "compatibility_mode",
+            ("actions", 0, "decision", "opportunity_receipt", "compatibility_mode"),
+            "legacy_import",
+        ),
+        ("as_of_round", ("actions", 0, "decision", "opportunity_receipt", "as_of_round"), 1),
+        (
+            "requested_action",
+            ("actions", 0, "decision", "opportunity_receipt", "requested_action_type"),
+            "COMMENT",
+        ),
+        (
+            "effective_action",
+            ("actions", 0, "decision", "opportunity_receipt", "effective_action_type"),
+            "COMMENT",
+        ),
+    )
+    negative_authorities = []
+    for status in ("failed", "unavailable"):
+        candidate = _promotion_authority()
+        candidate["actions"][0]["action"]["action_status"] = status
+        candidate["actions"][0]["decision"]["decision_status"] = "unavailable"
+        negative_authorities.append((status, _reproject_promotion_authority(candidate)))
+    duplicate = _promotion_authority()
+    duplicate["accepted_event_identities_before"] = [
+        ("change_balance", "balance", "event-1")
+    ]
+    negative_authorities.append(("duplicate", _reproject_promotion_authority(duplicate)))
+    noop = _promotion_authority()
+    noop["actions"][0]["action"]["payload"]["proposals"][0]["requested_value"] = "0"
+    noop["actions"][0]["decision"]["action_parameters"]["domain_world_v1"]["proposals"][0][
+        "requested_value"
+    ] = "0"
+    negative_authorities.append(("verified_noop", _reproject_promotion_authority(noop)))
+    saturated = _promotion_authority()
+    saturated["domain_world_config"]["schema"]["variables"][0]["maximum"] = "5"
+    saturated["domain_world_config"]["schema"]["rules"][0]["operation"] = "saturating_add_requested"
+    saturated["actions"][0]["action"]["payload"]["proposals"][0]["operation"] = (
+        "saturating_add_requested"
+    )
+    saturated["actions"][0]["decision"]["action_parameters"]["domain_world_v1"]["proposals"][0][
+        "operation"
+    ] = "saturating_add_requested"
+    negative_authorities.append(
+        ("zero_allocation_saturation", _reproject_promotion_authority(saturated))
+    )
+    credential = _promotion_authority(proposal_count=2)
+    credential["actions"][0]["action"]["payload"]["proposals"][1]["event_key"] = "event:sk-xxxxxx"
+    credential["actions"][0]["decision"]["action_parameters"] = {
+        "domain_world_v1": copy.deepcopy(credential["actions"][0]["action"]["payload"])
+    }
+    negative_authorities.append(("credential_hit", credential))
+
+    async def assert_atomic(case_name, candidate):
+        nonlocal current
+        current = candidate
+        call_count = store_calls
+        result = await simulator_module.attempt_verified_memory_promotion_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+        )
+        assert len(result) == 1, case_name
+        assert result[0].status in {"empty", "unavailable"}, case_name
+        assert tuple(result[0].refs) == (), case_name
+        assert store_calls == call_count, case_name
+        assert collection.rows == before_rows, case_name
+        assert _promotion_tree_fingerprint(collection.rows) == before_hash, case_name
+        after_sets = _promotion_tree_contract_sets(collection.rows)
+        for kind in ("record", "child", "root", "ref"):
+            assert after_sets[kind] - before_sets[kind] == set(), (case_name, kind)
+        assert collection.add_calls == [], case_name
+        assert collection.delete_calls == [], case_name
+        assert collection.query_calls == [], case_name
+        assert client.calls == [], case_name
+        assert (
+            memory_module.canonical_json_bytes_v1(
+                scan_authority(
+                    engine,
+                    scenario_id=scenario_id,
+                    branch_id=branch_id,
+                    round_id=round_id,
+                    round_number=1,
+                )[0]
+            )
+            == before_truth
+        ), case_name
+
+    for case_name, path, value in coordinate_mutants:
+        candidate = copy.deepcopy(clean)
+        target = candidate
+        for coordinate in path[:-1]:
+            target = target[coordinate]
+        target[path[-1]] = value
+        await assert_atomic(case_name, candidate)
+    for case_name, candidate in negative_authorities:
+        await assert_atomic(case_name, candidate)
+
+
+def test_memory_promotion_normalizer_binds_exact_receipt_and_rejects_ref_mutants():
+    from app.services.agent_runtime import normalize_decision_with_memory_promotion_v1
+
+    context = _verified_promotion_recall_context()
+    promotion_ref = context.items[0]["memory_ref"]
+    legacy_ref = "abcdef0123456789abcd"
+    raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+    raw["recalled_memory_refs"] = [legacy_ref, promotion_ref]
+    decision = normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=context,
+        legacy_allowed_memory_refs=(legacy_ref,),
+        agent_id="agent-a",
+        branch_id="branch-a",
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    assert decision["decision_status"] == "verified"
+    assert decision["recalled_memory_refs"] == [legacy_ref, promotion_ref]
+    receipt = decision["memory_promotion_recall_v1"]
+    assert tuple(receipt) == (
+        "version",
+        "promotion_version",
+        "status",
+        "reason_code",
+        "promotion_reason_code",
+        "context_hash",
+        "offered_refs",
+        "recalled_refs",
+        "source_scenario_ids",
+    )
+    assert receipt == {
+        "version": 1,
+        "promotion_version": "v1",
+        "status": "verified",
+        "reason_code": None,
+        "promotion_reason_code": None,
+        "context_hash": context.context_hash,
+        "offered_refs": [promotion_ref],
+        "recalled_refs": [promotion_ref],
+        "source_scenario_ids": ["scenario-source"],
+    }
+
+    mutants = (
+        [promotion_ref, promotion_ref],
+        ["not-a-ref"],
+        ["f" * 20],
+    )
+    for refs in mutants:
+        failed = normalize_decision_with_memory_promotion_v1(
+            {**raw, "recalled_memory_refs": refs},
+            recall_context=context,
+            legacy_allowed_memory_refs=(legacy_ref,),
+            agent_id="agent-a",
+            branch_id="branch-a",
+            round_number=1,
+            fallback_goal="Wait for evidence",
+        )
+        assert failed["decision_status"] == "unavailable"
+        assert failed["failure_code"] == "DECISION_UNAVAILABLE"
+        assert failed["recalled_memory_refs"] == []
+        failed_receipt = failed["memory_promotion_recall_v1"]
+        assert failed_receipt["status"] == "unavailable"
+        assert failed_receipt["reason_code"] == "MEMORY_RECALL_REF_MISMATCH"
+        assert failed_receipt["context_hash"] == context.context_hash
+        assert failed_receipt["offered_refs"] == [promotion_ref]
+        assert failed_receipt["recalled_refs"] == []
+
+    forged_context = dataclasses.replace(
+        context,
+        context_hash=f"sha256:{'f' * 64}",
+    )
+    failed = normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=forged_context,
+        legacy_allowed_memory_refs=(legacy_ref,),
+        agent_id="agent-a",
+        branch_id="branch-a",
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    assert failed["failure_code"] == "DECISION_UNAVAILABLE"
+    assert failed["memory_promotion_recall_v1"]["reason_code"] == ("MEMORY_RECALL_REF_MISMATCH")
+
+    malformed_context = dataclasses.replace(context, items=None)
+    malformed = normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=malformed_context,
+        legacy_allowed_memory_refs=(legacy_ref,),
+        agent_id="agent-a",
+        branch_id="branch-a",
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    assert malformed["failure_code"] == "DECISION_UNAVAILABLE"
+    assert malformed["memory_promotion_recall_v1"]["reason_code"] == ("MEMORY_RECALL_REF_MISMATCH")
+
+
+def test_memory_promotion_receipt_seven_field_binding_by_context_state():
+    from app.services.agent_runtime import normalize_decision_with_memory_promotion_v1
+    from app.services.memory import build_recall_context_v1
+
+    verified = _three_item_promotion_recall_context()
+    contexts = (
+        ("verified", verified, [verified.items[0]["memory_ref"], verified.items[2]["memory_ref"]]),
+        ("empty", build_recall_context_v1((), status="empty"), []),
+        (
+            "store",
+            build_recall_context_v1(
+                (),
+                status="unavailable",
+                reason_code="MEMORY_RECALL_STORE_UNAVAILABLE",
+            ),
+            [],
+        ),
+        (
+            "record",
+            build_recall_context_v1(
+                (),
+                status="unavailable",
+                reason_code="MEMORY_RECALL_RECORD_MISMATCH",
+            ),
+            [],
+        ),
+    )
+    exact_keys = (
+        "version",
+        "promotion_version",
+        "status",
+        "reason_code",
+        "promotion_reason_code",
+        "context_hash",
+        "offered_refs",
+        "recalled_refs",
+        "source_scenario_ids",
+    )
+    for case_name, context, claimed in contexts:
+        raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+        raw["recalled_memory_refs"] = claimed
+        decision = normalize_decision_with_memory_promotion_v1(
+            raw,
+            recall_context=context,
+            agent_id="agent-a",
+            branch_id="branch-a",
+            round_number=1,
+            fallback_goal="Wait for evidence",
+        )
+        receipt = decision["memory_promotion_recall_v1"]
+        offered = [item["memory_ref"] for item in context.items]
+        stable_sources = list(dict.fromkeys(item["source_scenario_id"] for item in context.items))
+        assert tuple(receipt) == exact_keys, case_name
+        assert receipt["version"] == 1, case_name
+        assert receipt["promotion_version"] == context.promotion_version, case_name
+        assert receipt["status"] == context.status, case_name
+        assert receipt["reason_code"] == context.reason_code, case_name
+        assert receipt["context_hash"] == context.context_hash, case_name
+        assert receipt["offered_refs"] == offered, case_name
+        assert receipt["source_scenario_ids"] == stable_sources, case_name
+        assert receipt["recalled_refs"] == claimed, case_name
+        assert receipt["promotion_reason_code"] is None, case_name
+
+    raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+    raw["recalled_memory_refs"] = ["f" * 20]
+    mismatch = normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=verified,
+        agent_id="agent-a",
+        branch_id="branch-a",
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    receipt = mismatch["memory_promotion_recall_v1"]
+    assert mismatch["failure_code"] == "DECISION_UNAVAILABLE"
+    assert tuple(receipt) == exact_keys
+    assert receipt["status"] == "unavailable"
+    assert receipt["reason_code"] == "MEMORY_RECALL_REF_MISMATCH"
+    assert receipt["context_hash"] == verified.context_hash
+    assert receipt["offered_refs"] == [item["memory_ref"] for item in verified.items]
+    assert receipt["source_scenario_ids"] == ["scenario-a", "scenario-b"]
+    assert receipt["recalled_refs"] == []
+    assert receipt["promotion_reason_code"] is None
+
+
+def test_memory_promotion_credential_reason_binds_through_durable_receipt(
+    monkeypatch, caplog
+):
+    from app.services.memory import build_recall_context_v1
+    from tests.test_memory import _SYNTHETIC_CREDENTIAL_CORPUS_V1
+
+    engine = get_engine()
+    benign = {
+        "memory_ref": "0123456789abcdef0123",
+        "summary": "Prior simulated consequence: balance increased by one.",
+        "source_scenario_id": "scenario-benign",
+        "schema_hash": f"sha256:{'1' * 64}",
+        "action_id": "action-benign",
+        "rule_id": "change_balance",
+        "variable_id": "balance",
+        "input_state_revision": f"sha256:{'2' * 64}",
+        "distance": 0.1,
+    }
+    for index, synthetic_shape in enumerate(_SYNTHETIC_CREDENTIAL_CORPUS_V1):
+        unsafe = {
+            **benign,
+            "memory_ref": f"{index + 2:020x}",
+            "summary": f"Synthetic credential boundary: {synthetic_shape}",
+            "source_scenario_id": f"scenario-unsafe-{index}",
+            "action_id": f"action-unsafe-{index}",
+            "distance": 0.2,
+        }
+        with caplog.at_level("WARNING"):
+            context = build_recall_context_v1([benign, unsafe])
+            decision, durable = _persist_memory_promotion_recall_decision(
+                engine,
+                monkeypatch,
+                context=context,
+                recalled_refs=[],
+            )
+
+        assert context.status == "unavailable", synthetic_shape
+        assert context.reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED", synthetic_shape
+        assert context.items == (), synthetic_shape
+        encoded_probe = json.dumps(synthetic_shape, ensure_ascii=False)[1:-1]
+        for candidate in (decision, durable):
+            serialized = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
+            receipt = candidate["memory_promotion_recall_v1"]
+            assert synthetic_shape not in serialized, synthetic_shape
+            assert encoded_probe not in serialized, synthetic_shape
+            assert receipt["status"] == "unavailable", synthetic_shape
+            assert receipt["reason_code"] == "MEMORY_PROMOTION_CREDENTIAL_REJECTED", (
+                synthetic_shape
+            )
+            assert receipt["promotion_reason_code"] == (
+                "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+            ), synthetic_shape
+            assert receipt["context_hash"] == context.context_hash, synthetic_shape
+            assert receipt["offered_refs"] == [], synthetic_shape
+            assert receipt["recalled_refs"] == [], synthetic_shape
+            assert receipt["source_scenario_ids"] == [], synthetic_shape
+        assert synthetic_shape not in caplog.text, synthetic_shape
+        assert encoded_probe not in caplog.text, synthetic_shape
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_v2_only_reader_reason_survives_full_durable_chain(
+    monkeypatch,
+):
+    import app.services.vector_store as vector_store_module
+    from tests.test_vector_store import (
+        _promotion_batch,
+        _PromotionWriterClient,
+        _PromotionWriterCollection,
+        _vector_store_with_client,
+    )
+
+    batch = _promotion_batch()
+    collection = _PromotionWriterCollection()
+    collection.metadata = {**collection.metadata, "promotion_version": "v2"}
+    for document in batch.documents:
+        collection.rows[document.document_id] = (
+            document.document,
+            document.metadata_dict(),
+        )
+    monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    context = await vector_store_module.recall_verified_memory_promotions_v1(
+        user_id="user-a",
+        identity_id="identity-1",
+        current_scenario_id="different-scenario",
+        query_text="verified consequence",
+        store=_vector_store_with_client(_PromotionWriterClient(collection)),
+    )
+    decision, durable = _persist_memory_promotion_recall_decision(
+        get_engine(),
+        monkeypatch,
+        context=context,
+        recalled_refs=[],
+    )
+
+    assert context.status == "unavailable"
+    assert context.reason_code == "MEMORY_RECALL_VERSION_IGNORED"
+    assert collection.query_calls == []
+    for candidate in (decision, durable):
+        receipt = candidate["memory_promotion_recall_v1"]
+        assert candidate["decision_status"] == "verified"
+        assert receipt == {
+            "version": 1,
+            "promotion_version": "v1",
+            "status": "unavailable",
+            "reason_code": "MEMORY_RECALL_VERSION_IGNORED",
+            "promotion_reason_code": None,
+            "context_hash": context.context_hash,
+            "offered_refs": [],
+            "recalled_refs": [],
+            "source_scenario_ids": [],
+        }
+
+
+@pytest.mark.parametrize(
+    "mutant",
+    [
+        "offered_order",
+        "offered_count",
+        "source_order",
+        "wrong_version",
+        "wrong_manifest",
+        "wrong_record",
+        "malformed",
+        "duplicate",
+        "not_offered",
+    ],
+)
+@pytest.mark.asyncio
+async def test_memory_promotion_g6_mutants_fail_whole_durable_decision(monkeypatch, mutant):
+    engine = get_engine()
+    valid = _three_item_promotion_recall_context()
+    context = valid
+    valid_ref = valid.items[0]["memory_ref"]
+    recalled = [valid_ref]
+    if mutant == "offered_order":
+        context = dataclasses.replace(valid, items=tuple(reversed(valid.items)))
+    elif mutant == "offered_count":
+        context = dataclasses.replace(valid, items=valid.items[:-1])
+    elif mutant == "source_order":
+        items = [dict(item) for item in valid.items]
+        items[0]["source_scenario_id"], items[1]["source_scenario_id"] = (
+            items[1]["source_scenario_id"],
+            items[0]["source_scenario_id"],
+        )
+        context = dataclasses.replace(valid, items=tuple(items))
+    elif mutant == "wrong_version":
+        context = dataclasses.replace(valid, promotion_version="v2")
+    elif mutant in {"wrong_manifest", "wrong_record"}:
+        import app.services.vector_store as vector_store_module
+        from tests.test_vector_store import (
+            _promotion_batch,
+            _PromotionWriterClient,
+            _PromotionWriterCollection,
+            _vector_store_with_client,
+        )
+
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        for document in batch.documents:
+            collection.rows[document.document_id] = (
+                document.document,
+                document.metadata_dict(),
+            )
+        if mutant == "wrong_manifest":
+            collection.rows.pop(batch.child_manifest_documents[0].document_id)
+        else:
+            record_id = batch.record_documents[0].document_id
+            _document, metadata = collection.rows[record_id]
+            collection.rows[record_id] = ("mutated record bytes", metadata)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        context = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=_vector_store_with_client(_PromotionWriterClient(collection)),
+        )
+        assert context.status == "unavailable"
+        assert context.reason_code == "MEMORY_RECALL_RECORD_MISMATCH"
+    elif mutant == "malformed":
+        recalled = [valid_ref, "not-a-ref"]
+    elif mutant == "duplicate":
+        recalled = [valid_ref, valid_ref]
+    else:
+        recalled = [valid_ref, "f" * 20]
+
+    decision, durable = _persist_memory_promotion_recall_decision(
+        engine,
+        monkeypatch,
+        context=context,
+        recalled_refs=recalled,
+    )
+
+    for candidate in (decision, durable):
+        assert candidate["decision_status"] == "unavailable", mutant
+        assert candidate["failure_code"] == "DECISION_UNAVAILABLE", mutant
+        assert candidate["recalled_memory_refs"] == [], mutant
+        receipt = candidate["memory_promotion_recall_v1"]
+        assert receipt["status"] == "unavailable", mutant
+        assert receipt["reason_code"] == "MEMORY_RECALL_REF_MISMATCH", mutant
+        assert receipt["recalled_refs"] == [], mutant
+        assert valid_ref not in candidate["recalled_memory_refs"], mutant
+
+
+def test_memory_promotion_ref_mismatch_receipt_survives_durable_renormalization(
+    monkeypatch,
+):
+    from app.services.agent_runtime import (
+        decision_to_action,
+        load_agent_runtime,
+        normalize_decision_with_memory_promotion_v1,
+    )
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Recall mismatch")
+    agent_id = _make_agent(engine, scenario_id, name="RecallMismatchAgent")
+    round_id = _create_round(engine, branch_id, 1)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+    context = _verified_promotion_recall_context()
+    raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+    raw["recalled_memory_refs"] = ["f" * 20]
+    decision = normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=context,
+        agent_id=agent_id,
+        branch_id=branch_id,
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    action = decision_to_action(decision, "")
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    saved = _save_messages(
+        engine,
+        [
+            {
+                "round_id": round_id,
+                "agent_id": agent_id,
+                "content": "Decision unavailable because the recall ref was untrusted.",
+                "emotion": "neutral",
+                "scenario_id": scenario_id,
+                "branch_id": branch_id,
+                "round_number": 1,
+                "action": action,
+                "decision_envelope": decision,
+                "fallback_goal": "Wait for evidence",
+                "idempotency_key": f"recall-mismatch:{round_id}:{agent_id}",
+                "_memory_promotion_context": context,
+                "_memory_promotion_legacy_refs": (),
+            }
+        ],
+        compatibility_mode="live",
+    )
+    assert len(saved) == 1
+    durable = load_agent_runtime(engine, scenario_id)["branches"][branch_id]["rounds"]["1"][
+        "decisions"
+    ][0]
+    assert durable["decision_status"] == "unavailable"
+    assert durable["failure_code"] == "DECISION_UNAVAILABLE"
+    assert durable["recalled_memory_refs"] == []
+    receipt = durable["memory_promotion_recall_v1"]
+    assert receipt["status"] == "unavailable"
+    assert receipt["reason_code"] == "MEMORY_RECALL_REF_MISMATCH"
+    assert receipt["context_hash"] == context.context_hash
+    assert receipt["offered_refs"] == [context.items[0]["memory_ref"]]
+    assert receipt["recalled_refs"] == []
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_reconciler_credential_corpus_stops_before_builder_and_store(
+    monkeypatch, caplog
+):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+    from tests.test_memory import _SYNTHETIC_CREDENTIAL_CORPUS_V1
+
+    engine = get_engine()
+    scenario_id, branch_id, round_id, _agent_id, _identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    scan_authority = runtime_module.scan_verified_memory_promotion_authority_v1
+    immutable = scan_authority(
+        engine,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=1,
+    )[0]
+    current = None
+    builder_calls = 0
+    store_calls = 0
+
+    def forbidden_builder(_snapshot):
+        nonlocal builder_calls
+        builder_calls += 1
+        raise AssertionError("credential-bearing history reached the builder")
+
+    async def forbidden_store(**_kwargs):
+        nonlocal store_calls
+        store_calls += 1
+        raise AssertionError("credential-bearing history reached Chroma")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "scan_verified_memory_promotion_authority_v1",
+        lambda *_args, **_kwargs: (current,),
+    )
+    monkeypatch.setattr(memory_module, "build_verified_memory_promotions_v1", forbidden_builder)
+    monkeypatch.setattr(
+        vector_store_module,
+        "store_verified_memory_promotions_v1",
+        forbidden_store,
+    )
+
+    for synthetic_shape in _SYNTHETIC_CREDENTIAL_CORPUS_V1:
+        current = json.loads(memory_module.canonical_json_bytes_v1(immutable))
+        group = current["actions"][0]["action"]["payload"]
+        group["proposals"].append(
+            {
+                "variable_id": "balance",
+                "rule_id": "change_balance",
+                "operation": "add_requested",
+                "requested_value": "1",
+                "unit": "count",
+                "expected_before": None,
+                "event_key": f"event:{synthetic_shape}",
+            }
+        )
+        current["actions"][0]["decision"]["action_parameters"] = {
+            "domain_world_v1": copy.deepcopy(group)
+        }
+        with caplog.at_level("WARNING"):
+            result = await simulator_module.reconcile_verified_memory_promotions_v1(
+                engine, user_id="user-a"
+            )
+
+        assert len(result) == 1, synthetic_shape
+        assert result[0].status == "unavailable", synthetic_shape
+        assert result[0].reason_code == ("MEMORY_PROMOTION_CREDENTIAL_REJECTED"), synthetic_shape
+        assert result[0].refs == (), synthetic_shape
+        assert builder_calls == 0, synthetic_shape
+        assert store_calls == 0, synthetic_shape
+        assert synthetic_shape not in repr(result), synthetic_shape
+        assert synthetic_shape not in caplog.text, synthetic_shape
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_reconciler_repairs_real_complete_root(monkeypatch):
+    import app.services.vector_store as vector_store_module
+
+    engine = get_engine()
+    scenario_id, _branch_id, _round_id, _agent_id, identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    collection, store = _install_memory_promotion_test_store(monkeypatch)
+
+    first = await simulator_module.reconcile_verified_memory_promotions_v1(engine, user_id="user-a")
+    assert first and first[0].status == "stored"
+    root_ids = [
+        document_id
+        for document_id, (_document, metadata) in collection.rows.items()
+        if metadata.get("document_contract") == "memory_promotion_root_manifest_v1"
+    ]
+    assert len(root_ids) == 1
+    root_id = root_ids[0]
+    root_row = collection.rows.pop(root_id)
+    repaired = await simulator_module.reconcile_verified_memory_promotions_v1(
+        engine, user_id="user-a"
+    )
+    assert repaired and repaired[0].status == "stored"
+    assert collection.rows[root_id] == root_row
+
+    context = await vector_store_module.recall_verified_memory_promotions_v1(
+        user_id="user-a",
+        identity_id=identity_id,
+        current_scenario_id=f"different-{scenario_id}",
+        query_text="verified balance consequence",
+        store=store,
+    )
+    assert context.status == "verified"
+    assert len(context.items) == 1
+
+    recall_scenario_id = _make_scenario(engine)
+    recall_agent_id = _make_agent(engine, recall_scenario_id, name="DurablePromotionRecallAgent")
+    with Session(engine) as session:
+        recall_scenario = session.get(Scenario, recall_scenario_id)
+        recall_agent = session.get(Agent, recall_agent_id)
+        assert recall_scenario is not None and recall_agent is not None
+        recall_scenario.user_id = "user-a"
+        recall_agent.agent_identity_id = identity_id
+        session.add(recall_scenario)
+        session.add(recall_agent)
+        session.commit()
+    bound = await simulator_module._recall_memory_promotion_context_v1(
+        engine,
+        scenario_id=recall_scenario_id,
+        agent_id=recall_agent_id,
+        query_text="verified balance consequence",
+    )
+    assert bound.status == "verified"
+    assert bound.items[0]["memory_ref"] == context.items[0]["memory_ref"]
+
+    query_count = len(collection.query_calls)
+    with Session(engine) as session:
+        recall_scenario = session.get(Scenario, recall_scenario_id)
+        assert recall_scenario is not None
+        recall_scenario.user_id = "different-owner"
+        session.add(recall_scenario)
+        session.commit()
+    owner_mismatch = await simulator_module._recall_memory_promotion_context_v1(
+        engine,
+        scenario_id=recall_scenario_id,
+        agent_id=recall_agent_id,
+        query_text="verified balance consequence",
+    )
+    assert owner_mismatch.status == "unavailable"
+    assert owner_mismatch.reason_code == "MEMORY_RECALL_RECORD_MISMATCH"
+    assert len(collection.query_calls) == query_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["startup", "pre_gather", "pre_terminal"])
+async def test_memory_promotion_real_reconciliation_entries_repair_crash_window(
+    monkeypatch,
+    entry,
+):
+    from app.services.runtime_lock import release_runtime_lock
+
+    engine = get_engine()
+    scenario_id, branch_id, _round_id, _agent_id, _identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    collection, _store = _install_memory_promotion_test_store(monkeypatch)
+
+    def root_ids():
+        return [
+            document_id
+            for document_id, (_document, metadata) in collection.rows.items()
+            if metadata.get("document_contract") == "memory_promotion_root_manifest_v1"
+        ]
+
+    assert root_ids() == []
+    if entry == "startup":
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.DONE
+            session.add(scenario)
+            session.commit()
+        assert simulator_module.reconcile_orphaned_running_scenarios(engine) == 0
+    elif entry == "pre_terminal":
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            branch = session.get(Branch, branch_id)
+            assert scenario is not None and branch is not None
+            scenario.status = ScenarioStatus.NARRATING
+            branch.status = BranchStatus.COMPLETED
+            branch.story = "The durable round completed before the writer crash."
+            branch.insight = "Reconciliation must restore the exact missing tree."
+            session.add(scenario)
+            session.add(branch)
+            session.commit()
+        assert reconcile_scenario_done_if_complete(engine, scenario_id, ignore_runtime_lock=True)
+    else:
+        target_scenario_id, target_branch_id, _agents, _config = _domain_finalizer_setup(engine)
+        _configure_domain_production_run(
+            engine,
+            scenario_id=target_scenario_id,
+            hierarchical=False,
+        )
+        _install_domain_production_run_fakes(monkeypatch)
+        with Session(engine) as session:
+            target = session.get(Scenario, target_scenario_id)
+            assert target is not None
+            target.user_id = "user-a"
+            session.add(target)
+            session.commit()
+
+        async def stop_after_pre_gather_repair(*_args, **_kwargs):
+            assert len(root_ids()) == 1
+            raise simulator_module.SimulationCancelled(target_scenario_id)
+
+        monkeypatch.setattr(
+            simulator_module,
+            "_gather_agent_messages",
+            stop_after_pre_gather_repair,
+        )
+        lease = _process_domain_lease(target_scenario_id)
+        try:
+            with pytest.raises(simulator_module.SimulationCancelled):
+                await simulator_module._run_simulation_impl(
+                    target_scenario_id,
+                    branch_id=target_branch_id,
+                    runtime_lease=lease,
+                    current_runtime_lease=lambda: lease,
+                )
+        finally:
+            release_runtime_lock(lease)
+
+    # This assertion intentionally kills an empty-reconciler implementation.
+    assert len(root_ids()) == 1
+
+
+def test_memory_promotion_store_unavailable_does_not_block_terminal(monkeypatch):
+    import app.services.vector_store as vector_store_module
+
+    engine = get_engine()
+    scenario_id, branch_id, _round_id, _agent_id, _identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    monkeypatch.setattr(vector_store_module, "get_vector_store", lambda: None)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.get(Branch, branch_id)
+        assert scenario is not None and branch is not None
+        scenario.status = ScenarioStatus.NARRATING
+        branch.status = BranchStatus.COMPLETED
+        branch.story = "The domain commit remains durable."
+        branch.insight = "Promotion storage is explicitly non-blocking."
+        session.add(scenario)
+        session.add(branch)
+        session.commit()
+
+    assert reconcile_scenario_done_if_complete(engine, scenario_id, ignore_runtime_lock=True)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert scenario.status == ScenarioStatus.DONE
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_aba_fresh_sql_claim_wins_end_to_end(monkeypatch):
+    import app.services.vector_store as vector_store_module
+    from tests.test_vector_store import _settle_promotion_quarantine_tasks
+
+    engine = get_engine()
+    scenario_id, branch_id, round_id, _agent_id, identity_id = _memory_promotion_live_round_fixture(
+        engine
+    )
+    collection, store = _install_memory_promotion_test_store(monkeypatch)
+    original_refresh = vector_store_module.refresh_runtime_lock
+    add_entered = threading.Event()
+    release_add = threading.Event()
+
+    def block_first_native_add(_collection):
+        add_entered.set()
+        release_add.wait(timeout=1)
+
+    def expire_generation_a_lease(lease, *, lease_seconds):
+        if lease.owner_id == "owner-1" and add_entered.is_set():
+            return None
+        return original_refresh(lease, lease_seconds=lease_seconds)
+
+    collection.add_hook = block_first_native_add
+    monkeypatch.setattr(
+        vector_store_module,
+        "refresh_runtime_lock",
+        expire_generation_a_lease,
+    )
+    attempt = asyncio.create_task(
+        simulator_module.attempt_verified_memory_promotion_v1(
+            engine,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=1,
+        )
+    )
+    assert await asyncio.to_thread(add_entered.wait, 1)
+
+    # Generation B keeps the same K but changes the raw durable Decision bytes.
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        context = copy.deepcopy(dict(scenario.parsed_context or {}))
+        decision = context["agent_runtime_v1"]["branches"][branch_id]["rounds"]["1"]["decisions"][0]
+        decision["decision_basis"] = ["Generation B retained the verified effect."]
+        scenario.parsed_context = context
+        session.add(scenario)
+        session.commit()
+    release_add.set()
+    generation_a = await attempt
+    await _settle_promotion_quarantine_tasks()
+
+    assert generation_a[0].reason_code == "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST"
+    assert generation_a[0].refs == ()
+    assert collection.delete_calls == []
+    assert collection.rows
+
+    collection.add_hook = None
+    generation_b = await simulator_module.reconcile_verified_memory_promotions_v1(
+        engine, user_id="user-a"
+    )
+    assert generation_b and generation_b[0].status == "stored"
+    roots = [
+        document_id
+        for document_id, (_document, metadata) in collection.rows.items()
+        if metadata.get("document_contract") == "memory_promotion_root_manifest_v1"
+    ]
+    assert len(roots) == 1
+    recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+        user_id="user-a",
+        identity_id=identity_id,
+        current_scenario_id=f"different-{scenario_id}",
+        query_text="verified balance consequence",
+        store=store,
+    )
+    assert recalled.status == "verified"
+    assert len(recalled.items) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("identity_enabled", "promotion_enabled"),
+    [(True, False), (False, True)],
+)
+async def test_memory_promotion_gate_off_calls_no_new_integration_helper(
+    monkeypatch,
+    identity_enabled,
+    promotion_enabled,
+):
+    from app.services.runtime_lock import release_runtime_lock
+
+    engine = get_engine()
+    scenario_id, branch_id, _agent_ids, config = _domain_finalizer_setup(engine)
+    _configure_domain_production_run(
+        engine,
+        scenario_id=scenario_id,
+        hierarchical=False,
+    )
+    _install_domain_production_run_fakes(monkeypatch)
+    normal_gather, _hierarchical = _domain_production_gather(
+        engine,
+        config=config,
+        mixed_failure=False,
+    )
+    monkeypatch.setattr(simulator_module, "_gather_agent_messages", normal_gather)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", identity_enabled)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", promotion_enabled)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Stage 3 helper executed while gate was OFF")
+
+    async def forbidden_async(*_args, **_kwargs):
+        forbidden()
+
+    monkeypatch.setattr(
+        simulator_module,
+        "attempt_verified_memory_promotion_v1",
+        forbidden_async,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "reconcile_verified_memory_promotions_v1",
+        forbidden_async,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "_recall_memory_promotion_context_v1",
+        forbidden_async,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "_run_memory_promotion_reconciliation_sync_v1",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_runtime._opaque_memory_promotion_recall_receipt_v1",
+        forbidden,
+    )
+    world_commits: list[dict] = []
+
+    async def ws_callback(_scenario_id, event):
+        if event.get("type") == "world_state_committed":
+            world_commits.append(event)
+
+    lease = _process_domain_lease(scenario_id)
+    try:
+        await simulator_module._run_simulation_impl(
+            scenario_id,
+            ws_callback=ws_callback,
+            branch_id=branch_id,
+            runtime_lease=lease,
+            current_runtime_lease=lambda: lease,
+        )
+    finally:
+        release_runtime_lock(lease)
+    assert len(world_commits) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("identity_enabled", "promotion_enabled"),
+    [(True, False), (False, True)],
+)
+async def test_memory_promotion_gate_off_real_gather_has_no_recall_or_receipt(
+    monkeypatch,
+    identity_enabled,
+    promotion_enabled,
+):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+    from app.models import AgentIdentity
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Promotion gate off")
+    agent_id = _make_agent(engine, scenario_id, name="GateOffPromotionAgent")
+    round_id = _create_round(engine, branch_id, 1)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        agent = session.get(Agent, agent_id)
+        assert scenario is not None and agent is not None
+        identity = AgentIdentity(
+            user_id="user-a",
+            kind="generated",
+            display_name="Gate Off Promotion Agent",
+            continuity_key=f"gate-off:{scenario_id}:{agent_id}",
+        )
+        session.add(identity)
+        session.flush()
+        scenario.user_id = "user-a"
+        scenario.status = ScenarioStatus.SIMULATING
+        agent.agent_identity_id = identity.id
+        session.add(scenario)
+        session.add(agent)
+        session.commit()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Stage 3 recall helper executed while gate was OFF")
+
+    async def forbidden_async(*_args, **_kwargs):
+        forbidden()
+
+    async def fake_decision(*_args, **_kwargs):
+        return {
+            **_decision_envelope_fixture(candidate_actions=["IDLE"]),
+            "emotion": "focused",
+            "diverge": None,
+        }
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", identity_enabled)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", promotion_enabled)
+    monkeypatch.setattr(
+        simulator_module,
+        "_recall_memory_promotion_context_v1",
+        forbidden_async,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "normalize_decision_with_memory_promotion_v1",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        memory_module,
+        "format_recall_context_for_prompt_v1",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        vector_store_module,
+        "recall_verified_memory_promotions_v1",
+        forbidden_async,
+    )
+    monkeypatch.setattr(
+        vector_store_module,
+        "retrieve_identity_memories",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_decision)
+    monkeypatch.setattr(
+        simulator_module,
+        "llm_call",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result="I will wait for durable evidence."),
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "retrieve_relevant_memories",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "store_memory",
+        lambda *_args, **_kwargs: None,
+    )
+
+    messages = await _gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        round_id,
+        1,
+        [_load_agent_dict(engine, agent_id)],
+        "setting",
+        "wait for durable evidence",
+        language="English",
+        scenario_user_id="user-a",
+    )
+    assert len(messages) == 1
+    runtime = runtime_module.load_agent_runtime(engine, scenario_id)
+    decision = runtime["branches"][branch_id]["rounds"]["1"]["decisions"][0]
+    assert "memory_promotion_recall_v1" not in decision
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", ["lease_reconfirm", "writer"])
+async def test_memory_promotion_failure_after_commit_does_not_block_broadcast(
+    monkeypatch,
+    failure_point,
+):
+    from app.services.runtime_lock import release_runtime_lock
+
+    engine = get_engine()
+    scenario_id, branch_id, _agent_ids, config = _domain_finalizer_setup(engine)
+    _configure_domain_production_run(
+        engine,
+        scenario_id=scenario_id,
+        hierarchical=False,
+    )
+    _install_domain_production_run_fakes(monkeypatch)
+    normal_gather, _hierarchical = _domain_production_gather(
+        engine,
+        config=config,
+        mixed_failure=False,
+    )
+    monkeypatch.setattr(simulator_module, "_gather_agent_messages", normal_gather)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+
+    async def no_reconcile(*_args, **_kwargs):
+        return ()
+
+    promotion_calls: list[tuple[str, str, int]] = []
+
+    async def fail_promotion(_engine, **kwargs):
+        runtime = _domain_runtime_round(engine, scenario_id, branch_id, 1)
+        assert runtime["domain_finalization"]["status"] == "complete"
+        promotion_calls.append((kwargs["branch_id"], kwargs["round_id"], kwargs["round_number"]))
+        raise RuntimeError("simulated promotion outage")
+
+    monkeypatch.setattr(
+        simulator_module,
+        "reconcile_verified_memory_promotions_v1",
+        no_reconcile,
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "attempt_verified_memory_promotion_v1",
+        fail_promotion,
+    )
+    if failure_point == "lease_reconfirm":
+        original_lease_check = simulator_module._ensure_bootstrap_runtime_lease
+        lease_check_count = 0
+
+        def fail_post_commit_lease_check(*args, **kwargs):
+            nonlocal lease_check_count
+            lease_check_count += 1
+            if lease_check_count == 4:
+                raise OSError("simulated post-commit lease read failure")
+            return original_lease_check(*args, **kwargs)
+
+        monkeypatch.setattr(
+            simulator_module,
+            "_ensure_bootstrap_runtime_lease",
+            fail_post_commit_lease_check,
+        )
+    world_commits: list[dict] = []
+
+    async def ws_callback(_scenario_id, event):
+        if event.get("type") == "world_state_committed":
+            world_commits.append(event)
+
+    lease = _process_domain_lease(scenario_id)
+    try:
+        await simulator_module._run_simulation_impl(
+            scenario_id,
+            ws_callback=ws_callback,
+            branch_id=branch_id,
+            runtime_lease=lease,
+            current_runtime_lease=lambda: lease,
+        )
+    finally:
+        release_runtime_lock(lease)
+    assert len(promotion_calls) == (0 if failure_point == "lease_reconfirm" else 1)
+    assert len(world_commits) == 1
+    runtime = _domain_runtime_round(engine, scenario_id, branch_id, 1)
+    assert runtime["domain_finalization"]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_already_committed_redrives_helper_and_converges_exactly(
+    monkeypatch,
+):
+    import app.services.agent_runtime as runtime_module
+    from app.models import AgentIdentity
+    from app.services.runtime_lock import release_runtime_lock
+
+    engine = get_engine()
+    scenario_id, branch_id, agent_ids, config = _domain_finalizer_setup(engine)
+    agent_id = agent_ids[0]
+    _configure_domain_production_run(
+        engine,
+        scenario_id=scenario_id,
+        hierarchical=False,
+    )
+    _install_domain_production_run_fakes(monkeypatch)
+    collection, _store = _install_memory_promotion_test_store(monkeypatch)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        agent = session.get(Agent, agent_id)
+        assert scenario is not None and agent is not None
+        identity = AgentIdentity(
+            user_id="user-a",
+            kind="generated",
+            display_name="Already Committed Promotion Agent",
+            continuity_key=f"already-committed:{scenario_id}:{agent_id}",
+        )
+        session.add(identity)
+        session.flush()
+        scenario.user_id = "user-a"
+        agent.agent_identity_id = identity.id
+        session.add(scenario)
+        session.add(agent)
+        session.commit()
+
+    async def no_reconcile(*_args, **_kwargs):
+        return ()
+
+    monkeypatch.setattr(
+        simulator_module,
+        "reconcile_verified_memory_promotions_v1",
+        no_reconcile,
+    )
+    original_finalizer = runtime_module.finalize_domain_round_v1
+    original_attempt = simulator_module.attempt_verified_memory_promotion_v1
+    first_results = []
+    first_fingerprint = None
+    first_add_calls = None
+
+    async def gather_and_publish_first_generation(
+        _engine,
+        run_scenario_id,
+        run_branch_id,
+        round_id,
+        round_number,
+        actors,
+        *_args,
+        **_kwargs,
+    ):
+        nonlocal first_fingerprint, first_add_calls
+        domain_context = runtime_module._load_domain_decision_context_v1(
+            engine,
+            scenario_id=run_scenario_id,
+            branch_id=run_branch_id,
+            round_number=round_number,
+        )
+        assert domain_context is not None
+        revision = str(domain_context["input_state_revision"])
+        snapshot = _opportunity_snapshot_fixture(
+            actor_id=agent_id,
+            as_of_round=0,
+            domain_state_revision=revision,
+            allowed_rule_ids=(),
+            action_overrides={
+                "POST": {
+                    "domain_reason_codes": ("OPPORTUNITY_DOMAIN_RULE_ALLOWED",),
+                }
+            },
+        )
+        content = "publish the already committed verified consequence"
+        raw = _decision_envelope_fixture(
+            selected_action="POST",
+            candidate_actions=["IDLE", "POST"],
+            idle_reason=None,
+            idle_reason_code=None,
+            action_content=content,
+        )
+        raw["action_parameters"]["domain_world_v1"] = _domain_action_group(
+            config,
+            revision=revision,
+            event_key="already-committed-promotion",
+        )
+        decision = runtime_module.normalize_decision_envelope(
+            raw,
+            agent_id=agent_id,
+            branch_id=run_branch_id,
+            round_number=round_number,
+            fallback_goal="Publish one verified consequence",
+            opportunity_snapshot=snapshot,
+            domain_world_context=domain_context,
+            compatibility_mode="live",
+        )
+        saved = _save_messages(
+            engine,
+            [
+                {
+                    "round_id": round_id,
+                    "agent_id": agent_id,
+                    "content": content,
+                    "emotion": "focused",
+                    "scenario_id": run_scenario_id,
+                    "branch_id": run_branch_id,
+                    "round_number": round_number,
+                    "action": runtime_module.decision_to_action(decision, content),
+                    "decision_envelope": decision,
+                    "fallback_goal": "Publish one verified consequence",
+                    "idempotency_key": f"already-committed:{round_id}:{agent_id}",
+                }
+            ],
+            opportunity_snapshots_by_actor={agent_id: snapshot},
+            domain_world_context=domain_context,
+            compatibility_mode="live",
+        )
+        assert len(saved) == 1
+        first_finalization = original_finalizer(
+            engine,
+            scenario_id=run_scenario_id,
+            branch_id=run_branch_id,
+            round_id=round_id,
+            round_number=round_number,
+            expected_agent_ids=tuple(sorted(str(actor["id"]) for actor in actors)),
+            current_runtime_lease=lambda: lease,
+        )
+        assert first_finalization.status == "committed"
+        first_results.extend(
+            await original_attempt(
+                engine,
+                scenario_id=run_scenario_id,
+                branch_id=run_branch_id,
+                round_id=round_id,
+                round_number=round_number,
+            )
+        )
+        assert first_results and first_results[0].status == "stored"
+        first_fingerprint = _promotion_tree_fingerprint(collection.rows)
+        first_add_calls = list(collection.add_calls)
+        return [
+            {
+                "id": saved[0],
+                "agent_id": agent_id,
+                "agent_name": "Already Committed Promotion Agent",
+                "content": content,
+                "emotion": "focused",
+                "diverge": None,
+            }
+        ]
+
+    finalizer_statuses = []
+
+    def tracked_finalizer(*args, **kwargs):
+        result = original_finalizer(*args, **kwargs)
+        finalizer_statuses.append(result.status)
+        return result
+
+    trigger_results = []
+
+    async def tracked_attempt(*args, **kwargs):
+        result = await original_attempt(*args, **kwargs)
+        trigger_results.extend(result)
+        return result
+
+    monkeypatch.setattr(
+        simulator_module,
+        "_gather_agent_messages",
+        gather_and_publish_first_generation,
+    )
+    monkeypatch.setattr(runtime_module, "finalize_domain_round_v1", tracked_finalizer)
+    monkeypatch.setattr(
+        simulator_module,
+        "attempt_verified_memory_promotion_v1",
+        tracked_attempt,
+    )
+    lease = _process_domain_lease(scenario_id)
+    try:
+        await simulator_module._run_simulation_impl(
+            scenario_id,
+            branch_id=branch_id,
+            runtime_lease=lease,
+            current_runtime_lease=lambda: lease,
+        )
+    finally:
+        release_runtime_lock(lease)
+
+    assert finalizer_statuses == ["already_committed"]
+    assert len(trigger_results) == 1
+    assert trigger_results[0].status == "already_present"
+    assert trigger_results[0].refs == first_results[0].refs
+    assert _promotion_tree_fingerprint(collection.rows) == first_fingerprint
+    assert collection.add_calls == first_add_calls
+
+
+@pytest.mark.asyncio
+async def test_sibling_completion_order_preserves_exact_refs_context_and_receipt(monkeypatch):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+    from tests.test_vector_store import (
+        _empty_current_claims,
+        _install_file_backed_promotion_lease,
+        _promotion_batch_for_source,
+        _PromotionWriterClient,
+        _PromotionWriterCollection,
+        _vector_store_with_client,
+    )
+
+    class EqualDistanceCollection(_PromotionWriterCollection):
+        def query(self, **kwargs):
+            result = super().query(**kwargs)
+            result["distances"] = [[0.25] * len(result["ids"][0])]
+            return result
+
+    monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    _install_file_backed_promotion_lease(monkeypatch)
+    batches = (_promotion_batch_for_source(0), _promotion_batch_for_source(1))
+    expected_refs = sorted(batch.refs[0] for batch in batches)
+    observed: list[tuple[bytes, bytes]] = []
+
+    for order in ((0, 1), (1, 0)):
+        collection = EqualDistanceCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        for index in order:
+            result = await vector_store_module.store_verified_memory_promotions_v1(
+                user_id="user-a",
+                batch=batches[index],
+                expected_authority_snapshot={},
+                revalidate_authority=lambda _value: True,
+                load_current_claims=_empty_current_claims,
+                store=store,
+            )
+            assert result.status == "stored"
+        context = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="current-scenario",
+            query_text="verified consequence",
+            store=store,
+        )
+        raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+        raw["recalled_memory_refs"] = list(expected_refs)
+        decision = runtime_module.normalize_decision_with_memory_promotion_v1(
+            raw,
+            recall_context=context,
+            agent_id="agent-a",
+            branch_id="branch-a",
+            round_number=1,
+            fallback_goal="Wait for evidence",
+        )
+
+        assert context.status == "verified"
+        assert [item["memory_ref"] for item in context.items] == expected_refs
+        observed.append(
+            (
+                memory_module.canonical_json_bytes_v1(context.to_payload()),
+                memory_module.canonical_json_bytes_v1(
+                    decision["memory_promotion_recall_v1"]
+                ),
+            )
+        )
+
+    assert observed[0] == observed[1]
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_one_recall_context_flows_prompt_replan_and_receipt(
+    monkeypatch,
+):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+    from app.models import AgentIdentity
+
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Promotion recall identity")
+    agent_id = _make_agent(engine, scenario_id, name="PromotionRecallAgent")
+    prior_round_id = _create_round(engine, branch_id, 1)
+    repeated_speech = "I will wait for verified evidence."
+    _save_message(
+        engine,
+        prior_round_id,
+        agent_id,
+        repeated_speech,
+        "focused",
+        None,
+    )
+    current_round_id = _create_round(engine, branch_id, 2)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        agent = session.get(Agent, agent_id)
+        assert scenario is not None and agent is not None
+        identity = AgentIdentity(
+            user_id="user-a",
+            kind="generated",
+            display_name="Promotion Recall Agent",
+            continuity_key=f"recall:{scenario_id}:{agent_id}",
+        )
+        session.add(identity)
+        session.flush()
+        scenario.user_id = "user-a"
+        scenario.status = ScenarioStatus.SIMULATING
+        agent.agent_identity_id = identity.id
+        session.add(scenario)
+        session.add(agent)
+        session.commit()
+    agent = _load_agent_dict(engine, agent_id)
+    context = _verified_promotion_recall_context()
+    promotion_ref = context.items[0]["memory_ref"]
+    recalled_objects: list[object] = []
+    formatted_objects: list[object] = []
+    normalized_objects: list[object] = []
+    persisted_objects: list[object] = []
+    decision_prompts: list[str] = []
+
+    async def recall_once(*_args, **_kwargs):
+        recalled_objects.append(context)
+        return context
+
+    original_format = memory_module.format_recall_context_for_prompt_v1
+
+    def capture_format(candidate):
+        formatted_objects.append(candidate)
+        return original_format(candidate)
+
+    original_normalize = runtime_module.normalize_decision_with_memory_promotion_v1
+
+    def capture_normalize(*args, **kwargs):
+        normalized_objects.append(kwargs["recall_context"])
+        return original_normalize(*args, **kwargs)
+
+    original_persist = runtime_module.persist_round_runtime_in_session
+
+    def capture_persist(*args, **kwargs):
+        persisted_objects.extend((kwargs.get("memory_promotion_contexts_by_actor") or {}).values())
+        return original_persist(*args, **kwargs)
+
+    async def fake_decision(prompt, *_args, **_kwargs):
+        decision_prompts.append(prompt)
+        raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+        raw["recalled_memory_refs"] = [promotion_ref]
+        return {**raw, "emotion": "focused", "diverge": None}
+
+    speech_outputs = [
+        repeated_speech,
+        "After replanning, I will continue to wait for verified evidence.",
+    ]
+
+    async def fake_speech(*_args, **_kwargs):
+        return speech_outputs.pop(0)
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    monkeypatch.setattr(
+        simulator_module,
+        "_recall_memory_promotion_context_v1",
+        recall_once,
+    )
+    monkeypatch.setattr(memory_module, "format_recall_context_for_prompt_v1", capture_format)
+    monkeypatch.setattr(
+        runtime_module,
+        "normalize_decision_with_memory_promotion_v1",
+        capture_normalize,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "persist_round_runtime_in_session",
+        capture_persist,
+    )
+    monkeypatch.setattr(
+        vector_store_module,
+        "retrieve_identity_memories",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(simulator_module, "llm_call_json", fake_decision)
+    monkeypatch.setattr(simulator_module, "llm_call", fake_speech)
+    monkeypatch.setattr(
+        simulator_module,
+        "retrieve_relevant_memories",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        simulator_module,
+        "store_memory",
+        lambda *_args, **_kwargs: None,
+    )
+
+    await _gather_agent_messages(
+        engine,
+        scenario_id,
+        branch_id,
+        current_round_id,
+        2,
+        [agent],
+        "setting",
+        "verify the balance consequence",
+        language="English",
+        scenario_user_id="user-a",
+    )
+
+    assert len(recalled_objects) == 1 and recalled_objects[0] is context
+    assert len(formatted_objects) == 1 and formatted_objects[0] is context
+    assert len(decision_prompts) == 2
+    assert all(context.context_hash in prompt for prompt in decision_prompts)
+    assert len(normalized_objects) >= 3
+    assert all(candidate is context for candidate in normalized_objects)
+    assert len(persisted_objects) == 1 and persisted_objects[0] is context
+    runtime = runtime_module.load_agent_runtime(engine, scenario_id)
+    decision = runtime["branches"][branch_id]["rounds"]["2"]["decisions"][0]
+    receipt = decision["memory_promotion_recall_v1"]
+    assert receipt["context_hash"] == context.context_hash
+    assert receipt["offered_refs"] == [promotion_ref]
+    assert receipt["recalled_refs"] == [promotion_ref]
+
+
+def test_memory_promotion_opaque_clone_is_bounded_only_when_gate_on(monkeypatch):
+    from app.services.agent_runtime import clone_runtime_history
+
+    refs = [f"{index:020x}" for index in range(4)]
+    receipt = {
+        "version": 1,
+        "promotion_version": "v1",
+        "status": "verified",
+        "reason_code": None,
+        "promotion_reason_code": None,
+        "context_hash": f"sha256:{'a' * 64}",
+        "offered_refs": refs,
+        "recalled_refs": [refs[1], refs[0]],
+        "source_scenario_ids": ["source-scenario"],
+    }
+    runtime = {
+        "version": "1.0",
+        "branches": {
+            "source": {
+                "rounds": {
+                    "1": {
+                        "decisions": [
+                            {
+                                "agent_id": "agent-a",
+                                "memory_promotion_recall_v1": receipt,
+                            }
+                        ],
+                        "transitions": [],
+                    }
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    on = clone_runtime_history(
+        runtime,
+        source_branch_id="source",
+        target_branch_id="target-on",
+        through_round=1,
+    )
+    opaque = on["branches"]["target-on"]["rounds"]["1"]["decisions"][0][
+        "memory_promotion_recall_v1"
+    ]
+    assert opaque["status"] == "unavailable"
+    assert opaque["reason_code"] == "MEMORY_RECALL_OPAQUE_HISTORY"
+    assert opaque["offered_refs"] == refs[:3]
+    assert opaque["recalled_refs"] == [refs[1], refs[0]]
+    assert opaque["source_scenario_ids"] == []
+
+    malformed_runtime = copy.deepcopy(runtime)
+    malformed_receipt = malformed_runtime["branches"]["source"]["rounds"]["1"]["decisions"][0][
+        "memory_promotion_recall_v1"
+    ]
+    malformed_receipt["recalled_refs"] = [refs[0], refs[0]]
+    malformed = clone_runtime_history(
+        malformed_runtime,
+        source_branch_id="source",
+        target_branch_id="target-malformed",
+        through_round=1,
+    )["branches"]["target-malformed"]["rounds"]["1"]["decisions"][0]["memory_promotion_recall_v1"]
+    assert malformed["offered_refs"] == []
+    assert malformed["recalled_refs"] == []
+    assert malformed["source_scenario_ids"] == []
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", False)
+    off = clone_runtime_history(
+        runtime,
+        source_branch_id="source",
+        target_branch_id="target-off",
+        through_round=1,
+    )
+    assert (
+        off["branches"]["target-off"]["rounds"]["1"]["decisions"][0]["memory_promotion_recall_v1"]
+        == receipt
+    )
+
+
+@pytest.mark.parametrize(
+    "receipt_overrides",
+    [
+        pytest.param(
+            {
+                "status": "verified",
+                "reason_code": "MEMORY_RECALL_STORE_UNAVAILABLE",
+            },
+            id="status-reason-mismatch",
+        ),
+        pytest.param(
+            {
+                "status": "unavailable",
+                "reason_code": "MEMORY_RECALL_STORE_UNAVAILABLE",
+            },
+            id="unavailable-reason-with-impossible-refs",
+        ),
+        pytest.param(
+            {"status": "empty", "reason_code": None},
+            id="empty-status-with-refs",
+        ),
+        pytest.param({"status": []}, id="unhashable-status"),
+        pytest.param({"reason_code": {}}, id="unhashable-reason-code"),
+        pytest.param(
+            {"promotion_reason_code": []},
+            id="unhashable-promotion-reason-code",
+        ),
+        pytest.param(
+            {"source_scenario_ids": [{}]},
+            id="unhashable-source-scenario-id",
+        ),
+    ],
+)
+def test_memory_promotion_malformed_receipt_refs_clear_on_import_and_clone(
+    monkeypatch, receipt_overrides
+):
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+    scenario_id, branch_id, _round_id, _agent_id, _identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    runtime = runtime_module.load_agent_runtime(engine, scenario_id)
+    ref = "0123456789abcdef0123"
+    receipt = {
+        "version": 1,
+        "promotion_version": "v1",
+        "status": "verified",
+        "reason_code": None,
+        "promotion_reason_code": None,
+        "context_hash": f"sha256:{'a' * 64}",
+        "offered_refs": [ref],
+        "recalled_refs": [ref],
+        "source_scenario_ids": ["source-scenario"],
+    }
+    receipt.update(receipt_overrides)
+    runtime["branches"][branch_id]["rounds"]["1"]["decisions"][0][
+        "memory_promotion_recall_v1"
+    ] = receipt
+    expected = {
+        "version": 1,
+        "promotion_version": "v1",
+        "status": "unavailable",
+        "reason_code": "MEMORY_RECALL_OPAQUE_HISTORY",
+        "promotion_reason_code": None,
+        "context_hash": None,
+        "offered_refs": [],
+        "recalled_refs": [],
+        "source_scenario_ids": [],
+    }
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+
+    cloned = runtime_module.clone_runtime_history(
+        runtime,
+        source_branch_id=branch_id,
+        target_branch_id="target-malformed-receipt",
+        through_round=1,
+    )
+    cloned_receipt = cloned["branches"]["target-malformed-receipt"]["rounds"]["1"]["decisions"][0][
+        "memory_promotion_recall_v1"
+    ]
+
+    with Session(engine) as session:
+        imported = runtime_module.sanitize_imported_agent_runtime_in_session(
+            session,
+            scenario_id,
+            runtime,
+        )
+        session.commit()
+    imported_receipt = imported["branches"][branch_id]["rounds"]["1"]["decisions"][0][
+        "memory_promotion_recall_v1"
+    ]
+
+    assert cloned_receipt == expected
+    assert imported_receipt == expected
+
+
+def test_memory_promotion_snapshot_golden_and_opaque_round_trip_exact_one_sibling(
+    monkeypatch,
+):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.snapshot_export as snapshot_module
+    import app.services.vector_store as vector_store_module
+
+    engine = get_engine()
+    scenario_id, branch_id, _round_id, agent_id, _identity_id = (
+        _memory_promotion_live_round_fixture(engine)
+    )
+    monkeypatch.setattr(snapshot_module, "_now_iso", lambda: "2026-01-02T03:04:05+00:00")
+
+    def members(blob):
+        with zipfile.ZipFile(io.BytesIO(blob), "r") as archive:
+            return {name: archive.read(name) for name in archive.namelist()}
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", False)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", False)
+    with Session(engine) as session:
+        gate_off_head_blob = snapshot_module.export_snapshot_zip(scenario_id, session).getvalue()
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    with Session(engine) as session:
+        baseline_blob = snapshot_module.export_snapshot_zip(scenario_id, session).getvalue()
+    assert gate_off_head_blob == baseline_blob
+
+    context = _verified_promotion_recall_context()
+    raw = _decision_envelope_fixture(candidate_actions=["IDLE"])
+    raw["recalled_memory_refs"] = [context.items[0]["memory_ref"]]
+    normalized = runtime_module.normalize_decision_with_memory_promotion_v1(
+        raw,
+        recall_context=context,
+        agent_id=agent_id,
+        branch_id=branch_id,
+        round_number=1,
+        fallback_goal="Wait for evidence",
+    )
+    receipt = normalized["memory_promotion_recall_v1"]
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed_context = copy.deepcopy(dict(scenario.parsed_context or {}))
+        parsed_context["agent_runtime_v1"]["branches"][branch_id]["rounds"]["1"]["decisions"][0][
+            "memory_promotion_recall_v1"
+        ] = copy.deepcopy(receipt)
+        scenario.parsed_context = parsed_context
+        session.add(scenario)
+        session.commit()
+    with Session(engine) as session:
+        promoted_blob = snapshot_module.export_snapshot_zip(scenario_id, session).getvalue()
+
+    baseline = members(baseline_blob)
+    promoted = members(promoted_blob)
+    assert tuple(baseline) == tuple(promoted)
+    baseline_scenario = json.loads(baseline["scenario.json"])
+    promoted_scenario = json.loads(promoted["scenario.json"])
+
+    def diff_paths(left, right, path=()):
+        if type(left) is not type(right):
+            return {path}
+        if isinstance(left, dict):
+            paths = {path + (key,) for key in set(left) ^ set(right)}
+            for key in set(left) & set(right):
+                paths.update(diff_paths(left[key], right[key], path + (key,)))
+            return paths
+        if isinstance(left, list):
+            if len(left) != len(right):
+                return {path}
+            paths = set()
+            for index, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
+                paths.update(diff_paths(left_item, right_item, path + (str(index),)))
+            return paths
+        return set() if left == right else {path}
+
+    receipt_path = (
+        "parsed_context",
+        "agent_runtime_v1",
+        "branches",
+        branch_id,
+        "rounds",
+        "1",
+        "decisions",
+        "0",
+        "memory_promotion_recall_v1",
+    )
+    assert diff_paths(baseline_scenario, promoted_scenario) == {receipt_path}
+    promoted_decision = promoted_scenario["parsed_context"]["agent_runtime_v1"]["branches"][
+        branch_id
+    ]["rounds"]["1"]["decisions"][0]
+    assert promoted_decision.pop("memory_promotion_recall_v1") == receipt
+    reconstructed_scenario = json.dumps(promoted_scenario, ensure_ascii=False, default=str).encode(
+        "utf-8"
+    )
+    assert reconstructed_scenario == baseline["scenario.json"]
+
+    reconstructed_manifest = json.loads(promoted["manifest.json"])
+    reconstructed_manifest["files"]["scenario.json"] = {
+        "sha256": hashlib.sha256(reconstructed_scenario).hexdigest(),
+        "size": len(reconstructed_scenario),
+    }
+    reconstructed_manifest_bytes = json.dumps(
+        reconstructed_manifest, ensure_ascii=False, default=str
+    ).encode("utf-8")
+    assert reconstructed_manifest_bytes == baseline["manifest.json"]
+    reconstructed_checksums = "\n".join(
+        f"{metadata['sha256']}  {name}"
+        for name, metadata in reconstructed_manifest["files"].items()
+    ).encode()
+    assert reconstructed_checksums == baseline["checksums.sha256"]
+    for name in baseline:
+        if name not in {"scenario.json", "manifest.json", "checksums.sha256"}:
+            assert promoted[name] == baseline[name], name
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("opaque Snapshot history touched live memory services")
+
+    monkeypatch.setattr(vector_store_module, "get_vector_store", forbidden)
+    monkeypatch.setattr(vector_store_module, "recall_verified_memory_promotions_v1", forbidden)
+    monkeypatch.setattr(memory_module, "format_recall_context_for_prompt_v1", forbidden)
+    with Session(engine) as session:
+        imported_id = snapshot_module.import_snapshot_zip(
+            promoted_blob, "snapshot-import-owner", session
+        )
+        session.commit()
+    imported_runtime = runtime_module.load_agent_runtime(engine, imported_id)
+    imported_decisions = [
+        decision
+        for branch in imported_runtime["branches"].values()
+        for round_data in branch["rounds"].values()
+        for decision in round_data.get("decisions", [])
+        if "memory_promotion_recall_v1" in decision
+    ]
+    assert len(imported_decisions) == 1
+    opaque = imported_decisions[0]["memory_promotion_recall_v1"]
+    assert tuple(opaque) == tuple(receipt)
+    assert opaque["status"] == "unavailable"
+    assert opaque["reason_code"] == "MEMORY_RECALL_OPAQUE_HISTORY"
+    assert opaque["recalled_refs"] == receipt["recalled_refs"]
+    assert opaque["source_scenario_ids"] == []
+
+
+def test_memory_promotion_ast_security_namespaces_and_closed_sets_are_frozen():
+    from typing import get_args
+
+    import app.services.action_opportunities as opportunities_module
+    import app.services.agent_runtime as runtime_module
+    import app.services.domain_world as domain_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+
+    assert runtime_module._STATE_DELTA_KINDS == frozenset(
+        {
+            "post_presence",
+            "comment_presence",
+            "reaction_value",
+            "following_membership",
+            "muted_membership",
+            "search_receipt",
+            "trend_receipt",
+            "refresh_receipt",
+        }
+    )
+    assert set(get_args(domain_module.DomainFailureCodeV1)) == {
+        "DOMAIN_SCHEMA_UNAVAILABLE",
+        "DOMAIN_SCHEMA_HASH_MISMATCH",
+        "DOMAIN_STATE_REVISION_STALE",
+        "DOMAIN_VARIABLE_UNKNOWN",
+        "DOMAIN_RULE_UNKNOWN",
+        "DOMAIN_RULE_ACTION_MISMATCH",
+        "DOMAIN_SOURCE_ACTION_UNVERIFIED",
+        "DOMAIN_TYPE_MISMATCH",
+        "DOMAIN_UNIT_MISMATCH",
+        "DOMAIN_SCALE_INVALID",
+        "DOMAIN_PRECONDITION_STALE",
+        "DOMAIN_CONFLICT",
+        "DOMAIN_BOUNDS_EXCEEDED",
+        "DOMAIN_DUPLICATE_PROPOSAL",
+        "DOMAIN_DUPLICATE_EVENT",
+        "DOMAIN_BRANCH_SCOPE_INVALID",
+        "DOMAIN_ROUND_INCOMPLETE",
+    }
+    expected_decision = {
+        "DECISION_INVALID_SHAPE",
+        "DECISION_FORBIDDEN_FIELD",
+        "DECISION_UNAVAILABLE",
+        "DECISION_INVALID_ACTION_TYPE",
+        "DECISION_SELECTED_ACTION_NOT_CANDIDATE",
+        "DECISION_IDLE_REASON_REQUIRED",
+        "DECISION_INVALID_IDLE_REASON_CODE",
+        "DECISION_INVALID_ACTION_TARGET",
+        "DECISION_INVALID_ACTION_PARAMETER",
+        "DECISION_TARGET_NOT_IN_CATALOG",
+        "DECISION_TARGET_NOT_ELIGIBLE",
+        "DECISION_OPPORTUNITY_UNAVAILABLE",
+        "DECISION_REACTION_NO_OP",
+        "DECISION_SEARCH_NO_OP",
+    }
+    expected_idle = {
+        "IDLE_NO_ACTION_NEEDED",
+        "IDLE_INSUFFICIENT_EVIDENCE",
+        "IDLE_WAITING_FOR_NEW_INFORMATION",
+        "IDLE_CONSTRAINT_BLOCKED",
+        "IDLE_STRATEGIC_HOLD",
+        "IDLE_OPPORTUNITY_UNAVAILABLE",
+        "IDLE_DECISION_UNAVAILABLE",
+        "IDLE_LEGACY_UNSPECIFIED",
+    }
+    expected_opportunity = {
+        "IDLE_ALWAYS_AVAILABLE",
+        "POST_ALWAYS_AVAILABLE",
+        "COMMENT_ELIGIBLE_TARGET_AVAILABLE",
+        "COMMENT_NO_ELIGIBLE_TARGET",
+        "FOLLOW_ELIGIBLE_TARGET_AVAILABLE",
+        "FOLLOW_NO_ELIGIBLE_TARGET",
+        "REACTION_ELIGIBLE_TARGET_AVAILABLE",
+        "REACTION_NO_ELIGIBLE_TARGET",
+        "MUTE_FILTER_EFFECT_AVAILABLE",
+        "MUTE_NO_FILTER_EFFECT",
+        "REFRESH_UNSEEN_POSTS_AVAILABLE",
+        "REFRESH_NO_UNSEEN_POSTS",
+        "TREND_INITIAL_VOLUME_AVAILABLE",
+        "TREND_INITIAL_INTERACTION_AVAILABLE",
+        "TREND_SIGNATURE_CHANGED",
+        "TREND_NO_NEW_ACTIVITY",
+        "SEARCH_CORPUS_AVAILABLE",
+        "SEARCH_CORPUS_EMPTY",
+        "SEARCH_HISTORY_UNAVAILABLE",
+        "OPPORTUNITY_SNAPSHOT_UNAVAILABLE",
+    }
+    assert set(get_args(opportunities_module.DecisionFailureCodeV1)) == expected_decision
+    assert set(get_args(opportunities_module.IdleReasonCodeV1)) == expected_idle
+    assert set(get_args(opportunities_module.OpportunityReasonCodeV1)) == (expected_opportunity)
+    assert not any(
+        value.startswith("MEMORY_")
+        for values in (expected_decision, expected_idle, expected_opportunity)
+        for value in values
+    )
+
+    expected_promotion = {
+        "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+        "MEMORY_PROMOTION_OWNER_MISMATCH",
+        "MEMORY_PROMOTION_RECORD_CONFLICT",
+        "MEMORY_PROMOTION_STORE_UNAVAILABLE",
+        "MEMORY_PROMOTION_LOCK_UNAVAILABLE",
+        "MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+        "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST",
+    }
+    expected_recall = {
+        "MEMORY_RECALL_STORE_UNAVAILABLE",
+        "MEMORY_RECALL_RECORD_MISMATCH",
+        "MEMORY_RECALL_REF_MISMATCH",
+        "MEMORY_RECALL_VERSION_IGNORED",
+        "MEMORY_RECALL_OPAQUE_HISTORY",
+    }
+    assert set(get_args(memory_module.MemoryPromotionReasonCodeV1)) == expected_promotion
+    assert set(get_args(memory_module.MemoryRecallReasonCodeV1)) == expected_recall
+    assert runtime_module._MEMORY_PROMOTION_REASON_CODES == expected_promotion
+    assert runtime_module._MEMORY_RECALL_REASON_CODES == expected_recall
+    assert expected_promotion.isdisjoint(expected_recall)
+    assert all(value.startswith("MEMORY_PROMOTION_") for value in expected_promotion)
+    assert all(value.startswith("MEMORY_RECALL_") for value in expected_recall)
+
+    allowed_namespace_assignments = {
+        "MemoryPromotionReasonCodeV1": expected_promotion,
+        "MemoryRecallReasonCodeV1": expected_recall,
+        "_MEMORY_PROMOTION_REASON_CODES": expected_promotion,
+        "_MEMORY_RECALL_REASON_CODES": expected_recall,
+    }
+    observed = {}
+    for module in (memory_module, runtime_module):
+        tree = ast.parse(inspect.getsource(module))
+        for statement in tree.body:
+            if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                continue
+            target_nodes = (
+                statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            )
+            targets = [node.id for node in target_nodes if isinstance(node, ast.Name)]
+            values = {
+                node.value
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.startswith("MEMORY_")
+            }
+            if values:
+                assert len(targets) == 1
+                observed[targets[0]] = values
+    assert observed == allowed_namespace_assignments
+
+    for module in (
+        memory_module,
+        runtime_module,
+        simulator_module,
+        vector_store_module,
+    ):
+        source = inspect.getsource(module)
+        assert "_PROVIDER_KEY_RE" not in source
+        assert "_UNLABELLED_CREDENTIAL_RE" not in source
+    assert "_contains_credential_recursive_v1" in inspect.getsource(
+        memory_module.build_verified_memory_promotions_v1
+    )
+    assert "contains_credential_material" in inspect.getsource(
+        memory_module._contains_credential_recursive_v1
+    )
+    assert "_contains_credential_recursive_v1" in inspect.getsource(
+        memory_module.build_recall_context_v1
+    )
+    assert "contains_credential_material" in inspect.getsource(
+        simulator_module._memory_promotion_snapshot_has_credential_v1
+    )
+    reader_source = inspect.getsource(vector_store_module.recall_verified_memory_promotions_v1)
+    assert "contains_credential_material" in reader_source
+    prompt_source = inspect.getsource(memory_module.format_recall_context_for_prompt_v1)
+    assert "format_untrusted_text_block" in prompt_source
+    assert not any(
+        forbidden in prompt_source
+        for forbidden in ("get_vector_store", "query(", "llm_call", "provider")
+    )
+
+
+def test_memory_promotion_terminal_and_startup_reconciliation_entries(monkeypatch):
+    engine = get_engine()
+    scenario_id = _make_scenario(engine)
+    branch_id = _create_branch(engine, scenario_id, title="Terminal promotion repair")
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.get(Branch, branch_id)
+        assert scenario is not None and branch is not None
+        scenario.status = ScenarioStatus.NARRATING
+        scenario.user_id = "user-a"
+        branch.status = BranchStatus.COMPLETED
+        branch.story = "The terminal branch has a durable story."
+        branch.insight = "The terminal branch has a durable insight."
+        session.add(scenario)
+        session.add(branch)
+        session.commit()
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_AGENT_IDENTITY", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+    calls: list[str | None] = []
+
+    def reconcile(_engine, *, user_id=None):
+        calls.append(user_id)
+        return True
+
+    monkeypatch.setattr(
+        simulator_module,
+        "_run_memory_promotion_reconciliation_sync_v1",
+        reconcile,
+    )
+    assert reconcile_scenario_done_if_complete(engine, scenario_id, ignore_runtime_lock=True)
+    assert calls == ["user-a"]
+    assert simulator_module.reconcile_orphaned_running_scenarios(engine) == 0
+    assert calls == ["user-a", None]
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_scanner_cancel_and_baseexception_are_not_swallowed(
+    monkeypatch,
+):
+    import app.services.agent_runtime as runtime_module
+
+    engine = get_engine()
+
+    def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        runtime_module,
+        "scan_verified_memory_promotion_authority_v1",
+        cancelled,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await simulator_module.reconcile_verified_memory_promotions_v1(engine)
+
+    class PromotionAbort(BaseException):
+        pass
+
+    def abort(*_args, **_kwargs):
+        raise PromotionAbort
+
+    monkeypatch.setattr(
+        runtime_module,
+        "scan_verified_memory_promotion_authority_v1",
+        abort,
+    )
+    with pytest.raises(PromotionAbort):
+        await simulator_module.reconcile_verified_memory_promotions_v1(engine)
+
+
+@pytest.mark.asyncio
+async def test_memory_promotion_blocked_scanner_times_out_into_quarantine(monkeypatch):
+    import app.services.agent_runtime as runtime_module
+    import app.services.memory as memory_module
+    import app.services.vector_store as vector_store_module
+
+    engine = get_engine()
+    scanner_entered = threading.Event()
+    release_scanner = threading.Event()
+    builder_calls = 0
+
+    def blocked_scanner(*_args, **_kwargs):
+        scanner_entered.set()
+        release_scanner.wait(timeout=1)
+        return ()
+
+    def forbidden_builder(*_args, **_kwargs):
+        nonlocal builder_calls
+        builder_calls += 1
+        raise AssertionError("builder ran after scanner timeout")
+
+    monkeypatch.setattr(
+        vector_store_module,
+        "MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1",
+        0.01,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "scan_verified_memory_promotion_authority_v1",
+        blocked_scanner,
+    )
+    monkeypatch.setattr(
+        memory_module,
+        "build_verified_memory_promotions_v1",
+        forbidden_builder,
+    )
+    result = await asyncio.wait_for(
+        simulator_module.reconcile_verified_memory_promotions_v1(engine),
+        timeout=0.2,
+    )
+    assert scanner_entered.is_set()
+    assert result[0].reason_code == "MEMORY_PROMOTION_STORE_UNAVAILABLE"
+    assert builder_calls == 0
+    assert simulator_module._MEMORY_PROMOTION_SYNC_QUARANTINE_TASKS_V1
+
+    release_scanner.set()
+    while simulator_module._MEMORY_PROMOTION_SYNC_QUARANTINE_TASKS_V1:
+        await asyncio.gather(
+            *tuple(simulator_module._MEMORY_PROMOTION_SYNC_QUARANTINE_TASKS_V1),
+            return_exceptions=True,
+        )
+    assert builder_calls == 0
+
+
+def test_memory_promotion_trigger_source_order_is_frozen():
+    source = inspect.getsource(simulator_module._run_simulation_impl)
+    finalizer = source.index("domain_result = finalize_domain_round_v1")
+    second_cancel = source.index("_check_cancelled(scenario_id)", finalizer)
+    lease_reconfirm = source.index(
+        "_ensure_bootstrap_runtime_lease,",
+        second_cancel,
+    )
+    promotion = source.index("await attempt_verified_memory_promotion_v1", lease_reconfirm)
+    broadcast = source.index('"type": "world_state_committed"', promotion)
+    assert finalizer < second_cancel < lease_reconfirm < promotion < broadcast

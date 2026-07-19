@@ -1,11 +1,16 @@
 """Tests for app.services.memory — Memory management."""
 
 import asyncio
+import copy
+import hashlib
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import app.services.memory as memory_module
+from app.log_sanitize import contains_credential_material
+from app.services.domain_world import freeze_domain_schema_v1, state_revision_v1
 from app.services.memory import (
     _COMPRESS_DEFAULTS,
     _TIER_MAX_RECENT,
@@ -1176,3 +1181,925 @@ class TestBuildCrowdContextEdgeCases:
         ctx = _build_crowd_context(agent, bg, "topic", "msgs")
         assert bg not in ctx
         assert "B" * 250 + "…" in ctx
+
+
+# ── Verified memory promotion V1 ─────────────────────────────
+
+
+def _promotion_digest(character: str) -> str:
+    return f"sha256:{character * 64}"
+
+
+_SYNTHETIC_CREDENTIAL_CORPUS_V1 = (
+    "Bearer " + "A1" * 8,
+    "authorization=Basic QUJDREVGR0g=",
+    "sk-" + "x" * 6,
+    "ghp_" + "Aa" * 10,
+    "AKIA" + "A" * 16,
+    "xoxb-" + "a1" * 6,
+    "glpat-" + "a1" * 5,
+    "AIza" + "A1" * 17 + "A",
+    "https://fixture:fixture-value@example.invalid/path",
+    "client_secret=fixture-value",
+    "Aa1+" * 8,
+)
+
+
+def _promotion_authority(
+    *, proposal_count: int = 1, include_blocked_allow_rule: bool = False
+) -> dict:
+    config = freeze_domain_schema_v1(
+        {
+            "variables": [
+                {
+                    "variable_id": "balance",
+                    "label_en": "Balance",
+                    "label_zh": "余额",
+                    "value_type": "integer",
+                    "semantic_role": "stock",
+                    "unit": "count",
+                    "scale": 0,
+                    "minimum": "0",
+                    "maximum": "10",
+                    "initial_value": "5",
+                    "enum_values": [],
+                }
+            ],
+            "rules": [
+                {
+                    "rule_id": "change_balance",
+                    "variable_id": "balance",
+                    "action_type": "POST",
+                    "operation": "add_requested",
+                    "unit": "count",
+                    "constant_value": None,
+                    "requested_minimum": "-10",
+                    "requested_maximum": "10",
+                    "preconditions": [],
+                    "opportunity_mode": "effect_only",
+                    "epistemic_scope": "scenario_assumption",
+                },
+                *(
+                    [
+                        {
+                            "rule_id": "blocked_balance",
+                            "variable_id": "balance",
+                            "action_type": "POST",
+                            "operation": "add_constant",
+                            "unit": "count",
+                            "constant_value": "1",
+                            "requested_minimum": None,
+                            "requested_maximum": None,
+                            "preconditions": [
+                                {
+                                    "variable_id": "balance",
+                                    "comparator": "gt",
+                                    "value": "9",
+                                    "unit": "count",
+                                }
+                            ],
+                            "opportunity_mode": "allow_when_preconditions_met",
+                            "epistemic_scope": "scenario_assumption",
+                        }
+                    ]
+                    if include_blocked_allow_rule
+                    else []
+                ),
+            ],
+        }
+    )
+    assert config.status == "active"
+    assert config.schema_hash is not None
+    accepted_before: list[tuple[str, str, str]] = []
+    accepted_after = [
+        ("change_balance", "balance", f"event-{index + 1}") for index in range(proposal_count)
+    ]
+    input_revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=0,
+        state={"balance": "5"},
+        accepted_event_identities=accepted_before,
+    )
+    output_revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=1,
+        state={"balance": str(5 + proposal_count)},
+        accepted_event_identities=accepted_after,
+    )
+    proposals = [
+        {
+            "variable_id": "balance",
+            "rule_id": "change_balance",
+            "operation": "add_requested",
+            "requested_value": "1",
+            "unit": "count",
+            "expected_before": None,
+            "event_key": f"event-{index + 1}",
+        }
+        for index in range(proposal_count)
+    ]
+    group = {
+        "schema_hash": config.schema_hash,
+        "input_state_revision": input_revision,
+        "proposals": proposals,
+    }
+    sources = [
+        {
+            "agent_id": "agent-1",
+            "message_id": "message-1",
+            "action_id": "action-1",
+            "action_sequence": 1,
+            "action_type": "POST",
+            "proposal_index": index,
+            "rule_id": "change_balance",
+        }
+        for index in range(proposal_count)
+    ]
+    after = str(5 + proposal_count)
+    adjudications = [
+        {
+            "schema_hash": config.schema_hash,
+            "status": "verified",
+            "failure_code": None,
+            "effect_code": None,
+            "rule_id": "change_balance",
+            "variable_id": "balance",
+            "operation": "add_requested",
+            "requested_value": "1",
+            "unit": "count",
+            "expected_before": None,
+            "before": "5",
+            "after": after,
+            "applied_delta": "1",
+            "scenario_id": "scenario-1",
+            "branch_id": "branch-1",
+            "round_number": 1,
+            "agent_id": "agent-1",
+            "message_id": "message-1",
+            "action_id": "action-1",
+            "action_sequence": 1,
+            "proposal_index": index,
+            "state_revision_before": input_revision,
+            "state_revision_after": output_revision,
+            "calculation_confidence": "deterministic",
+            "epistemic_scope": "scenario_assumption",
+        }
+        for index in range(proposal_count)
+    ]
+    return {
+        "domain_world_config": json.loads(memory_module.canonical_json_bytes_v1(config)),
+        "user_id": "user-a",
+        "scenario_id": "scenario-1",
+        "branch_id": "branch-1",
+        "round_id": "round-1",
+        "round_number": 1,
+        "input_digest": _promotion_digest("d"),
+        "input_state_revision": input_revision,
+        "state_revision_after": output_revision,
+        "round_before": {"balance": "5"},
+        "round_after": {"balance": after},
+        "accepted_event_identities_before": accepted_before,
+        "accepted_event_identities_after": accepted_after,
+        "roster": [
+            {
+                "agent_id": "agent-1",
+                "identity_id": "identity-1",
+                "identity_owner_id": "user-a",
+            }
+        ],
+        "finalization": {
+            "status": "complete",
+            "scenario_id": "scenario-1",
+            "branch_id": "branch-1",
+            "round_id": "round-1",
+            "round_number": 1,
+            "input_digest": _promotion_digest("d"),
+            "schema_hash": config.schema_hash,
+            "state_revision_before": input_revision,
+            "state_revision_after": output_revision,
+        },
+        "actions": [
+            {
+                "identity_id": "identity-1",
+                "identity_owner_id": "user-a",
+                "history_origin": "live",
+                "action": {
+                    "scenario_id": "scenario-1",
+                    "branch_id": "branch-1",
+                    "round_id": "round-1",
+                    "round_number": 1,
+                    "agent_id": "agent-1",
+                    "message_id": "message-1",
+                    "action_id": "action-1",
+                    "action_sequence": 1,
+                    "action_type": "POST",
+                    "action_status": "verified",
+                    "payload": group,
+                },
+                "decision": {
+                    "decision_status": "verified",
+                    "selected_action": "POST",
+                    "agent_id": "agent-1",
+                    "branch_id": "branch-1",
+                    "round_number": 1,
+                    "message_id": "message-1",
+                    "action_id": "action-1",
+                    "action_parameters": {"domain_world_v1": copy.deepcopy(group)},
+                    "opportunity_receipt": {
+                        "version": 1,
+                        "compatibility_mode": "live",
+                        "as_of_round": 0,
+                        "requested_action_type": "POST",
+                        "effective_action_type": "POST",
+                        "domain_state_revision": input_revision,
+                        "allowed_rule_ids": [],
+                        "available": True,
+                        "grounded": True,
+                    },
+                },
+            }
+        ],
+        "adjudications": adjudications,
+        "state_deltas": [
+            {
+                "variable_id": "balance",
+                "round_number": 1,
+                "unit": "count",
+                "before": "5",
+                "after": after,
+                "applied_delta": str(proposal_count),
+                "effect_code": None,
+                "rule_ids": ["change_balance"],
+                "sources": sources,
+                "state_revision_before": input_revision,
+                "state_revision_after": output_revision,
+            }
+        ],
+    }
+
+
+def _reproject_promotion_authority(authority: dict) -> dict:
+    """Rebuild all reducer-owned projections after a valid fixture mutation."""
+
+    config = freeze_domain_schema_v1(authority["domain_world_config"]["schema"])
+    assert config.status == "active"
+    assert config.schema_hash is not None
+    round_number = authority["round_number"]
+    input_revision = state_revision_v1(
+        schema_hash=config.schema_hash,
+        as_of_round=round_number - 1,
+        state=authority["round_before"],
+        accepted_event_identities=authority["accepted_event_identities_before"],
+    )
+    actions = []
+    for wrapper in authority["actions"]:
+        action = wrapper["action"]
+        payload = action.get("payload")
+        if isinstance(payload, dict):
+            payload["schema_hash"] = config.schema_hash
+            payload["input_state_revision"] = input_revision
+        decision_group = wrapper["decision"].get("action_parameters", {}).get("domain_world_v1")
+        if isinstance(decision_group, dict):
+            decision_group["schema_hash"] = config.schema_hash
+            decision_group["input_state_revision"] = input_revision
+        receipt = wrapper["decision"].get("opportunity_receipt")
+        if isinstance(receipt, dict):
+            receipt["domain_state_revision"] = input_revision
+        actions.append(
+            memory_module.DomainActionInputV1(
+                scenario_id=action["scenario_id"],
+                branch_id=action["branch_id"],
+                round_id=action["round_id"],
+                round_number=action["round_number"],
+                agent_id=action["agent_id"],
+                message_id=action["message_id"],
+                action_id=action["action_id"],
+                action_sequence=action["action_sequence"],
+                action_type=action["action_type"],
+                action_status=action["action_status"],
+                payload=payload,
+            )
+        )
+    reduced = memory_module.reduce_domain_round_v1(
+        config=config,
+        state_before=authority["round_before"],
+        state_revision_before=input_revision,
+        accepted_event_identities=authority["accepted_event_identities_before"],
+        actions=tuple(actions),
+        round_number=round_number,
+    )
+    authority.update(
+        {
+            "domain_world_config": json.loads(memory_module.canonical_json_bytes_v1(config)),
+            "input_state_revision": input_revision,
+            "state_revision_after": reduced.state_revision,
+            "round_after": dict(reduced.state_after),
+            "accepted_event_identities_after": json.loads(
+                memory_module.canonical_json_bytes_v1(reduced.accepted_event_identities)
+            ),
+            "adjudications": json.loads(
+                memory_module.canonical_json_bytes_v1(reduced.adjudications)
+            ),
+            "state_deltas": json.loads(memory_module.canonical_json_bytes_v1(reduced.state_deltas)),
+        }
+    )
+    authority["finalization"].update(
+        {
+            "schema_hash": config.schema_hash,
+            "state_revision_before": input_revision,
+            "state_revision_after": reduced.state_revision,
+        }
+    )
+    return authority
+
+
+def _promotion_two_identity_authority() -> dict:
+    authority = _promotion_authority()
+    second = copy.deepcopy(authority["actions"][0])
+    second.update({"identity_id": "identity-2", "identity_owner_id": "user-a"})
+    second["action"].update(
+        {
+            "agent_id": "agent-2",
+            "message_id": "message-2",
+            "action_id": "action-2",
+            "action_sequence": 2,
+        }
+    )
+    second["action"]["payload"]["proposals"][0]["event_key"] = "event-2"
+    second["decision"].update(
+        {
+            "agent_id": "agent-2",
+            "message_id": "message-2",
+            "action_id": "action-2",
+        }
+    )
+    second["decision"]["action_parameters"]["domain_world_v1"]["proposals"][0]["event_key"] = (
+        "event-2"
+    )
+    authority["roster"].append(
+        {
+            "agent_id": "agent-2",
+            "identity_id": "identity-2",
+            "identity_owner_id": "user-a",
+        }
+    )
+    authority["actions"].append(second)
+    return _reproject_promotion_authority(authority)
+
+
+class TestVerifiedMemoryPromotionBuildersV1:
+    def test_key_document_id_ref_and_record_bytes_use_independent_oracle(self):
+        authority = _promotion_authority()
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "verified"
+        assert result.reason_code is None
+        assert len(result.record_documents) == 1
+        record_document = result.record_documents[0]
+        schema_hash = authority["domain_world_config"]["schema_hash"]
+        expected_key_bytes = json.dumps(
+            [
+                "memory-promotion-key-v1",
+                schema_hash,
+                "action-1",
+                "change_balance",
+                "balance",
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        expected_id = "identity-promotion-v1-" + hashlib.sha256(expected_key_bytes).hexdigest()
+        expected_ref = hashlib.sha256(expected_id.encode()).hexdigest()[:20]
+
+        assert (
+            memory_module.memory_promotion_key_bytes_v1(
+                schema_hash, "action-1", "change_balance", "balance"
+            )
+            == expected_key_bytes
+        )
+        assert record_document.document_id == expected_id
+        assert record_document.memory_ref == expected_ref
+        assert result.refs == (expected_ref,)
+        record = json.loads(record_document.metadata_dict()["canonical_payload"])
+        assert set(record) == memory_module._MEMORY_PROMOTION_RECORD_KEYS_V1
+        assert set(record["promotion_key"]) == {
+            "schema_hash",
+            "action_id",
+            "rule_id",
+            "variable_id",
+        }
+        expected_hash = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        )
+        assert record_document.semantic_hash == expected_hash
+        assert record_document.metadata_dict()["record_hash"] == expected_hash
+        assert "user-a" not in json.dumps(record_document.metadata_dict())
+
+    def test_builder_is_pure_and_never_calls_provider_or_store(self, monkeypatch):
+        authority = _promotion_authority()
+        original = copy.deepcopy(authority)
+        monkeypatch.setattr(
+            memory_module,
+            "get_vector_store",
+            lambda: (_ for _ in ()).throw(AssertionError("store called")),
+        )
+        monkeypatch.setattr(
+            memory_module,
+            "llm_call_json_with_stream_fallback",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provider called")),
+        )
+
+        first = memory_module.build_verified_memory_promotions_v1(authority)
+        second = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert authority == original
+        assert first == second
+        assert first.documents == second.documents
+
+    def test_multi_proposal_uses_proposal_order_and_complete_sorted_sources(self):
+        authority = _promotion_authority(proposal_count=2)
+        authority["state_deltas"][0]["sources"].reverse()
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "verified"
+        record = result.record_documents[0].semantic_payload
+        assert [item["proposal_index"] for item in record["components"]] == [0, 1]
+        assert [item["proposal_index"] for item in record["co_sources"]] == [0, 1]
+        assert all(item["before"] == "5" for item in record["components"])
+        assert all(item["after"] == "7" for item in record["components"])
+        assert len(result.child_manifest_documents) == 1
+        assert result.root_manifest_document is not None
+
+    def test_authority_sequence_permutation_is_byte_deterministic(self):
+        authority = _promotion_authority(proposal_count=2)
+        permuted = copy.deepcopy(authority)
+        permuted["actions"].reverse()
+        permuted["adjudications"].reverse()
+        permuted["state_deltas"].reverse()
+        permuted["state_deltas"][0]["sources"].reverse()
+        permuted["roster"].reverse()
+
+        first = memory_module.build_verified_memory_promotions_v1(authority)
+        second = memory_module.build_verified_memory_promotions_v1(permuted)
+
+        assert first == second
+        assert first.source_authority_snapshot_hash == (second.source_authority_snapshot_hash)
+        assert [item.submitted_document_canonical_bytes for item in first.documents] == [
+            item.submitted_document_canonical_bytes for item in second.documents
+        ]
+
+    @pytest.mark.parametrize(
+        ("mutate", "reason"),
+        [
+            (
+                lambda row: row["actions"][0]["action"].update({"scenario_id": "scenario-other"}),
+                "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+            ),
+            (
+                lambda row: row["actions"][0]["decision"].update({"selected_action": "COMMENT"}),
+                "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+            ),
+            (
+                lambda row: row["actions"][0]["decision"]["opportunity_receipt"].update(
+                    {"compatibility_mode": "legacy_import"}
+                ),
+                "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+            ),
+            (
+                lambda row: row["finalization"].update({"input_digest": _promotion_digest("e")}),
+                "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+            ),
+            (
+                lambda row: row["actions"][0].update({"identity_owner_id": "user-other"}),
+                "MEMORY_PROMOTION_OWNER_MISMATCH",
+            ),
+            (
+                lambda row: row["state_deltas"][0].update({"sources": []}),
+                "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+            ),
+        ],
+    )
+    def test_coordinate_and_owner_mutants_fail_the_entire_batch(self, mutate, reason):
+        authority = _promotion_authority()
+        mutate(authority)
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "unavailable"
+        assert result.reason_code == reason
+        assert result.documents == ()
+        assert result.refs == ()
+
+    @pytest.mark.parametrize("applied_delta", ["2", "NaN", "1e0"])
+    def test_component_allocation_and_numeric_lexical_mutants_fail_closed(self, applied_delta):
+        authority = _promotion_authority()
+        authority["adjudications"][0]["applied_delta"] = applied_delta
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_PROMOTION_COORDINATE_MISMATCH"
+        assert result.documents == ()
+
+    def test_phantom_delta_source_and_unused_foreign_roster_fail_the_whole_batch(self):
+        phantom = _promotion_authority()
+        phantom["state_deltas"][0]["sources"].append(
+            {
+                "agent_id": "agent-phantom",
+                "message_id": "message-phantom",
+                "action_id": "action-phantom",
+                "action_sequence": 2,
+                "action_type": "POST",
+                "proposal_index": 0,
+                "rule_id": "change_balance",
+            }
+        )
+        foreign_roster = _promotion_authority()
+        foreign_roster["roster"].append(
+            {
+                "agent_id": "agent-unused",
+                "identity_id": "identity-foreign",
+                "identity_owner_id": "user-other",
+            }
+        )
+
+        phantom_result = memory_module.build_verified_memory_promotions_v1(phantom)
+        roster_result = memory_module.build_verified_memory_promotions_v1(foreign_roster)
+
+        assert phantom_result.reason_code == "MEMORY_PROMOTION_COORDINATE_MISMATCH"
+        assert phantom_result.documents == ()
+        assert roster_result.reason_code == "MEMORY_PROMOTION_OWNER_MISMATCH"
+        assert roster_result.documents == ()
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            lambda row: row["finalization"].update({"round_number": True}),
+            lambda row: row["actions"][0]["decision"].update({"round_number": True}),
+            lambda row: row["actions"][0]["decision"]["opportunity_receipt"].update(
+                {"as_of_round": False}
+            ),
+            lambda row: row["adjudications"][0].update({"round_number": True}),
+        ],
+    )
+    def test_json_boolean_cannot_impersonate_integer_coordinates(self, mutate):
+        authority = _promotion_authority()
+        mutate(authority)
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_PROMOTION_COORDINATE_MISMATCH"
+        assert result.documents == ()
+
+    def test_out_of_bounds_state_and_actor_identity_rebinding_fail_closed(self):
+        out_of_bounds = _promotion_authority()
+        out_of_bounds["round_before"]["balance"] = "100"
+        rebound = _promotion_authority()
+        rebound["actions"][0]["identity_id"] = "identity-other"
+
+        state_result = memory_module.build_verified_memory_promotions_v1(out_of_bounds)
+        rebound_result = memory_module.build_verified_memory_promotions_v1(rebound)
+
+        assert state_result.reason_code == "MEMORY_PROMOTION_COORDINATE_MISMATCH"
+        assert state_result.documents == ()
+        assert rebound_result.reason_code == "MEMORY_PROMOTION_OWNER_MISMATCH"
+        assert rebound_result.documents == ()
+
+    def test_false_precondition_rule_cannot_be_forged_into_allowed_set(self):
+        authority = _promotion_authority(include_blocked_allow_rule=True)
+        authority["actions"][0]["decision"]["opportunity_receipt"]["allowed_rule_ids"] = [
+            "blocked_balance"
+        ]
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_PROMOTION_COORDINATE_MISMATCH"
+        assert result.documents == ()
+
+    def test_optional_domain_group_absence_does_not_hide_verified_effect(self):
+        authority = _promotion_authority()
+        authority["roster"].append(
+            {
+                "agent_id": "agent-2",
+                "identity_id": "identity-2",
+                "identity_owner_id": "user-a",
+            }
+        )
+        authority["actions"].append(
+            {
+                "identity_id": "identity-2",
+                "identity_owner_id": "user-a",
+                "history_origin": "live",
+                "action": {
+                    "scenario_id": "scenario-1",
+                    "branch_id": "branch-1",
+                    "round_id": "round-1",
+                    "round_number": 1,
+                    "agent_id": "agent-2",
+                    "message_id": "message-2",
+                    "action_id": "action-2",
+                    "action_sequence": 2,
+                    "action_type": "COMMENT",
+                    "action_status": "verified",
+                    "payload": None,
+                },
+                "decision": {
+                    "decision_status": "verified",
+                    "selected_action": "COMMENT",
+                    "agent_id": "agent-2",
+                    "branch_id": "branch-1",
+                    "round_number": 1,
+                    "message_id": "message-2",
+                    "action_id": "action-2",
+                    "action_parameters": {},
+                },
+            }
+        )
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "verified"
+        assert len(result.record_documents) == 1
+        assert (
+            result.record_documents[0].semantic_payload["promotion_key"]["action_id"] == "action-1"
+        )
+
+    def test_saturated_zero_allocation_is_co_source_but_not_component(self):
+        authority = _promotion_authority(proposal_count=2)
+        schema = copy.deepcopy(authority["domain_world_config"]["schema"])
+        schema["variables"][0]["maximum"] = "6"
+        schema["rules"][0]["operation"] = "saturating_add_requested"
+        config = freeze_domain_schema_v1(schema)
+        assert config.status == "active"
+        assert config.schema_hash is not None
+        input_revision = state_revision_v1(
+            schema_hash=config.schema_hash,
+            as_of_round=0,
+            state={"balance": "5"},
+            accepted_event_identities=(),
+        )
+        group = copy.deepcopy(authority["actions"][0]["action"]["payload"])
+        group["schema_hash"] = config.schema_hash
+        group["input_state_revision"] = input_revision
+        for proposal in group["proposals"]:
+            proposal["operation"] = "saturating_add_requested"
+        reduced = memory_module.reduce_domain_round_v1(
+            config=config,
+            state_before={"balance": "5"},
+            state_revision_before=input_revision,
+            accepted_event_identities=(),
+            actions=(
+                memory_module.DomainActionInputV1(
+                    scenario_id="scenario-1",
+                    branch_id="branch-1",
+                    round_id="round-1",
+                    round_number=1,
+                    agent_id="agent-1",
+                    message_id="message-1",
+                    action_id="action-1",
+                    action_sequence=1,
+                    action_type="POST",
+                    action_status="verified",
+                    payload=group,
+                ),
+            ),
+            round_number=1,
+        )
+        authority.update(
+            {
+                "domain_world_config": json.loads(memory_module.canonical_json_bytes_v1(config)),
+                "input_state_revision": input_revision,
+                "state_revision_after": reduced.state_revision,
+                "round_after": dict(reduced.state_after),
+                "accepted_event_identities_after": list(reduced.accepted_event_identities),
+                "adjudications": json.loads(
+                    memory_module.canonical_json_bytes_v1(reduced.adjudications)
+                ),
+                "state_deltas": json.loads(
+                    memory_module.canonical_json_bytes_v1(reduced.state_deltas)
+                ),
+            }
+        )
+        authority["finalization"].update(
+            {
+                "schema_hash": config.schema_hash,
+                "state_revision_before": input_revision,
+                "state_revision_after": reduced.state_revision,
+            }
+        )
+        authority["actions"][0]["action"]["payload"] = group
+        authority["actions"][0]["decision"]["action_parameters"] = {
+            "domain_world_v1": copy.deepcopy(group)
+        }
+        authority["actions"][0]["decision"]["opportunity_receipt"]["domain_state_revision"] = (
+            input_revision
+        )
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "verified"
+        assert len(result.record_documents) == 1
+        record = result.record_documents[0].semantic_payload
+        assert [row["proposal_index"] for row in record["components"]] == [0]
+        assert [row["proposal_index"] for row in record["co_sources"]] == [0, 1]
+
+    def test_verified_noop_and_missing_identity_produce_explicit_empty(self):
+        noop = _promotion_authority()
+        noop_after_revision = state_revision_v1(
+            schema_hash=noop["domain_world_config"]["schema_hash"],
+            as_of_round=1,
+            state={"balance": "5"},
+            accepted_event_identities=noop["accepted_event_identities_after"],
+        )
+        noop["actions"][0]["action"]["payload"]["proposals"][0]["requested_value"] = "0"
+        noop["actions"][0]["decision"]["action_parameters"]["domain_world_v1"]["proposals"][0][
+            "requested_value"
+        ] = "0"
+        noop["adjudications"][0].update(
+            {
+                "requested_value": "0",
+                "before": "5",
+                "after": "5",
+                "applied_delta": "0",
+                "state_revision_after": noop_after_revision,
+            }
+        )
+        noop["round_after"] = {"balance": "5"}
+        noop["state_revision_after"] = noop_after_revision
+        noop["finalization"]["state_revision_after"] = noop_after_revision
+        noop["state_deltas"] = []
+        no_identity = _promotion_authority()
+        no_identity["actions"][0].update({"identity_id": None, "identity_owner_id": None})
+        no_identity["roster"][0].update({"identity_id": None, "identity_owner_id": None})
+
+        noop_result = memory_module.build_verified_memory_promotions_v1(noop)
+        identity_result = memory_module.build_verified_memory_promotions_v1(no_identity)
+
+        assert (noop_result.status, noop_result.reason_code, noop_result.refs) == (
+            "empty",
+            None,
+            (),
+        )
+        assert (identity_result.status, identity_result.reason_code) == ("empty", None)
+
+    def test_credential_hit_rejects_benign_sibling_as_one_batch(self):
+        authority = _promotion_authority(proposal_count=2)
+        synthetic_shape = "sk-" + "x" * 6
+        authority["actions"][0]["action"]["payload"]["proposals"][1]["event_key"] = (
+            f"event:{synthetic_shape}"
+        )
+        authority["actions"][0]["decision"]["action_parameters"] = {
+            "domain_world_v1": copy.deepcopy(authority["actions"][0]["action"]["payload"])
+        }
+
+        result = memory_module.build_verified_memory_promotions_v1(authority)
+
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        assert result.documents == ()
+        assert result.refs == ()
+
+    def test_memory_promotion_builder_credential_corpus_rejects_whole_batch(self):
+        for synthetic_shape in _SYNTHETIC_CREDENTIAL_CORPUS_V1:
+            authority = _promotion_authority(proposal_count=2)
+            authority["actions"][0]["action"]["payload"]["proposals"][1]["event_key"] = (
+                f"event:{synthetic_shape}"
+            )
+            authority["actions"][0]["decision"]["action_parameters"] = {
+                "domain_world_v1": copy.deepcopy(authority["actions"][0]["action"]["payload"])
+            }
+            original = copy.deepcopy(authority)
+
+            result = memory_module.build_verified_memory_promotions_v1(authority)
+
+            assert authority == original, synthetic_shape
+            assert result.status == "unavailable", synthetic_shape
+            assert result.reason_code == ("MEMORY_PROMOTION_CREDENTIAL_REJECTED"), synthetic_shape
+            assert result.record_documents == (), synthetic_shape
+            assert result.child_manifest_documents == (), synthetic_shape
+            assert result.root_manifest_document is None, synthetic_shape
+            assert result.root_manifest_id is None, synthetic_shape
+            assert result.source_authority_snapshot_hash is None, synthetic_shape
+            assert result.refs == (), synthetic_shape
+            assert synthetic_shape not in repr(result), synthetic_shape
+
+    def test_benign_identifiers_hashes_and_prose_do_not_trigger_policy(self):
+        assert contains_credential_material("api_key") is False
+        assert contains_credential_material(_promotion_digest("a")) is False
+        assert contains_credential_material("identity-promotion-v1-" + "a" * 64) is False
+        assert contains_credential_material("tokenization is ordinary prose") is False
+        assert contains_credential_material("sk-" + "x" * 6) is True
+
+    @pytest.mark.parametrize(
+        "synthetic_shape",
+        [
+            "Bearer " + "A1" * 8,
+            "api_key=" + "fixture-value",
+            "ghp_" + "A" * 20,
+            "AKIA" + "A" * 16,
+            "https://fixture:password@example.invalid/path",
+            "Aa1+" * 8,
+        ],
+    )
+    def test_central_credential_predicate_covers_synthetic_policy_classes(self, synthetic_shape):
+        assert contains_credential_material(synthetic_shape) is True
+
+
+class TestRecallContextBuilderV1:
+    @staticmethod
+    def _item(index: int, *, distance: float) -> dict:
+        return {
+            "memory_ref": f"{index:020x}",
+            "summary": f"Prior simulated consequence number {index}.",
+            "source_scenario_id": f"scenario-{index}",
+            "schema_hash": _promotion_digest("a"),
+            "action_id": f"action-{index}",
+            "rule_id": "change_balance",
+            "variable_id": "balance",
+            "input_state_revision": _promotion_digest("b"),
+            "distance": distance,
+        }
+
+    def test_verified_context_ranks_caps_and_hashes_exact_payload(self):
+        items = [
+            self._item(4, distance=0.4),
+            self._item(2, distance=0.1),
+            self._item(1, distance=0.1),
+            self._item(3, distance=0.3),
+        ]
+
+        context = memory_module.build_recall_context_v1(items)
+        payload = context.to_payload()
+        hash_input = {key: value for key, value in payload.items() if key != "context_hash"}
+        expected_hash = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    hash_input,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        )
+
+        assert context.status == "verified"
+        assert [item["memory_ref"] for item in context.items] == [
+            f"{1:020x}",
+            f"{2:020x}",
+            f"{3:020x}",
+        ]
+        assert context.context_hash == expected_hash
+        assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) <= 4000
+        prompt = memory_module.format_recall_context_for_prompt_v1(context)
+        assert "Prior verified consequence memories / UNTRUSTED DATA" in prompt
+
+    def test_empty_unavailable_and_credential_contexts_are_explicit(self):
+        empty = memory_module.build_recall_context_v1((), status="empty")
+        unavailable = memory_module.build_recall_context_v1(
+            (),
+            status="unavailable",
+            reason_code="MEMORY_RECALL_STORE_UNAVAILABLE",
+        )
+        item = self._item(1, distance=0.1)
+        item["summary"] = "header " + "sk-" + "x" * 6
+        credential = memory_module.build_recall_context_v1((item,))
+
+        assert (empty.status, empty.reason_code, empty.items) == ("empty", None, ())
+        assert unavailable.status == "unavailable"
+        assert unavailable.items == ()
+        assert credential.status == "unavailable"
+        assert credential.reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        assert credential.items == ()
+
+    def test_memory_promotion_summary_credential_corpus_rejects_whole_context(self):
+        benign = self._item(1, distance=0.1)
+        clean = memory_module.build_recall_context_v1((benign,))
+        assert clean.status == "verified"
+
+        for index, synthetic_shape in enumerate(_SYNTHETIC_CREDENTIAL_CORPUS_V1, start=2):
+            unsafe = self._item(index, distance=0.2)
+            unsafe["summary"] = f"Synthetic boundary probe: {synthetic_shape}"
+
+            context = memory_module.build_recall_context_v1((benign, unsafe))
+            prompt = memory_module.format_recall_context_for_prompt_v1(context)
+
+            assert context.status == "unavailable", synthetic_shape
+            assert context.reason_code == ("MEMORY_PROMOTION_CREDENTIAL_REJECTED"), synthetic_shape
+            assert context.items == (), synthetic_shape
+            assert synthetic_shape not in json.dumps(context.to_payload(), ensure_ascii=False), (
+                synthetic_shape
+            )
+            assert synthetic_shape not in prompt, synthetic_shape

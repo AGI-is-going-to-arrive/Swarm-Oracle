@@ -234,6 +234,323 @@ _ROLE_MARKER_LINE_RE = re.compile(
     r"^\s*(?:system|assistant|user|tool)\s*[:：]",
     re.IGNORECASE | re.MULTILINE,
 )
+_MEMORY_PROMOTION_SYNC_QUARANTINE_TASKS_V1: set[asyncio.Task[Any]] = set()
+
+
+def _memory_promotion_snapshot_has_credential_v1(value: object) -> bool:
+    from app.log_sanitize import contains_credential_material
+
+    if isinstance(value, str):
+        return contains_credential_material(value)
+    if isinstance(value, Mapping):
+        return any(
+            _memory_promotion_snapshot_has_credential_v1(key)
+            or _memory_promotion_snapshot_has_credential_v1(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_memory_promotion_snapshot_has_credential_v1(item) for item in value)
+    return False
+
+
+async def _bounded_memory_promotion_thread_call_v1(
+    function: Callable[..., Any],
+    /,
+    *args: Any,
+    deadline: float,
+    **kwargs: Any,
+) -> Any:
+    from app.services.vector_store import (
+        MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1,
+        Stage3QuarantineOwnershipV1,
+    )
+
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    capsule = Stage3QuarantineOwnershipV1()
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    capsule.task = task
+    capsule.task_kind = "integration_sync_call"
+    try:
+        result = await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=min(MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1, remaining),
+        )
+    except BaseException:
+        if capsule.transfer_to_quarantine():
+            cleanup = asyncio.create_task(
+                _settle_memory_promotion_sync_quarantine_v1(capsule)
+            )
+            capsule.cleanup_task = cleanup
+            _MEMORY_PROMOTION_SYNC_QUARANTINE_TASKS_V1.add(cleanup)
+            cleanup.add_done_callback(
+                _MEMORY_PROMOTION_SYNC_QUARANTINE_TASKS_V1.discard
+            )
+        raise
+    capsule.task = None
+    capsule.task_kind = None
+    capsule.mark_released()
+    return result
+
+
+async def _settle_memory_promotion_sync_quarantine_v1(capsule: Any) -> None:
+    task = capsule.task
+    try:
+        while task is not None and not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        if task is not None and task.done():
+            try:
+                task.result()
+            except BaseException:
+                pass
+    finally:
+        capsule.task = None
+        capsule.task_kind = None
+        capsule.mark_released()
+
+
+async def _drive_verified_memory_promotion_v1(
+    engine,
+    *,
+    historical_reconciliation: bool,
+    user_id: str | None = None,
+    scenario_id: str | None = None,
+    branch_id: str | None = None,
+    round_id: str | None = None,
+    round_number: int | None = None,
+    deadline: float | None = None,
+) -> tuple[object, ...]:
+    from app.services.agent_runtime import (
+        load_current_memory_promotion_claims_v1,
+        revalidate_verified_memory_promotion_authority_v1,
+        scan_verified_memory_promotion_authority_v1,
+    )
+    from app.services.memory import build_verified_memory_promotions_v1
+    from app.services.vector_store import (
+        MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1,
+        MemoryPromotionStoreResultV1,
+        store_verified_memory_promotions_v1,
+    )
+
+    def unavailable(reason: str) -> MemoryPromotionStoreResultV1:
+        return MemoryPromotionStoreResultV1(
+            status="unavailable",
+            reason_code=reason,
+            refs=(),
+        )
+    active_deadline = (
+        deadline
+        if deadline is not None
+        else monotonic() + MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1
+    )
+    try:
+        snapshots = await _bounded_memory_promotion_thread_call_v1(
+            scan_verified_memory_promotion_authority_v1,
+            engine,
+            deadline=active_deadline,
+            user_id=user_id,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_id=round_id,
+            round_number=round_number,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return (unavailable("MEMORY_PROMOTION_STORE_UNAVAILABLE"),)
+
+    results: list[object] = []
+    for snapshot in snapshots:
+        if active_deadline - monotonic() <= 0:
+            results.append(unavailable("MEMORY_PROMOTION_STORE_UNAVAILABLE"))
+            break
+        try:
+            credential_hit = historical_reconciliation and bool(
+                await _bounded_memory_promotion_thread_call_v1(
+                    _memory_promotion_snapshot_has_credential_v1,
+                    snapshot,
+                    deadline=active_deadline,
+                )
+            )
+            if credential_hit:
+                results.append(unavailable("MEMORY_PROMOTION_CREDENTIAL_REJECTED"))
+                continue
+            batch = await _bounded_memory_promotion_thread_call_v1(
+                build_verified_memory_promotions_v1,
+                snapshot,
+                deadline=active_deadline,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            results.append(unavailable("MEMORY_PROMOTION_STORE_UNAVAILABLE"))
+            break
+        except Exception:
+            results.append(unavailable("MEMORY_PROMOTION_RECORD_CONFLICT"))
+            continue
+        if batch.status != "verified":
+            results.append(batch)
+            continue
+        owner_id = str(batch.owner_id or "")
+        remaining = active_deadline - monotonic()
+        if remaining <= 0:
+            results.append(unavailable("MEMORY_PROMOTION_STORE_UNAVAILABLE"))
+            break
+        try:
+            result = await asyncio.wait_for(
+                store_verified_memory_promotions_v1(
+                    user_id=owner_id,
+                    batch=batch,
+                    expected_authority_snapshot=snapshot,
+                    revalidate_authority=lambda expected, _engine=engine: (
+                        revalidate_verified_memory_promotion_authority_v1(
+                            _engine, expected
+                        )
+                    ),
+                    load_current_claims=lambda _engine=engine, _owner=owner_id: (
+                        load_current_memory_promotion_claims_v1(
+                            _engine, user_id=_owner
+                        )
+                    ),
+                ),
+                timeout=remaining,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            result = unavailable("MEMORY_PROMOTION_STORE_UNAVAILABLE")
+        results.append(result)
+    return tuple(results)
+
+
+async def attempt_verified_memory_promotion_v1(
+    engine,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+    deadline: float | None = None,
+) -> tuple[object, ...]:
+    return await _drive_verified_memory_promotion_v1(
+        engine,
+        historical_reconciliation=False,
+        scenario_id=scenario_id,
+        branch_id=branch_id,
+        round_id=round_id,
+        round_number=round_number,
+        deadline=deadline,
+    )
+
+
+async def reconcile_verified_memory_promotions_v1(
+    engine,
+    *,
+    user_id: str | None = None,
+) -> tuple[object, ...]:
+    return await _drive_verified_memory_promotion_v1(
+        engine,
+        historical_reconciliation=True,
+        user_id=user_id,
+    )
+
+
+def _run_memory_promotion_reconciliation_sync_v1(
+    engine,
+    *,
+    user_id: str | None = None,
+) -> bool:
+    import threading
+
+    from app.services.vector_store import MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1
+
+    failures: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            asyncio.run(
+                reconcile_verified_memory_promotions_v1(engine, user_id=user_id)
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = threading.Thread(
+        target=run,
+        name="memory-promotion-reconciliation-v1",
+        daemon=True,
+    )
+    worker.start()
+    worker.join(MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1)
+    if worker.is_alive():
+        return False
+    if failures:
+        raise failures[0]
+    return True
+
+
+async def _recall_memory_promotion_context_v1(
+    engine,
+    *,
+    scenario_id: str,
+    agent_id: str,
+    query_text: str,
+):
+    from app.services.agent_runtime import load_memory_promotion_recall_binding_v1
+    from app.services.memory import build_recall_context_v1
+    from app.services.vector_store import (
+        MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1,
+        recall_verified_memory_promotions_v1,
+    )
+
+    deadline = monotonic() + MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1
+    try:
+        binding = await _bounded_memory_promotion_thread_call_v1(
+            load_memory_promotion_recall_binding_v1,
+            engine,
+            deadline=deadline,
+            scenario_id=scenario_id,
+            agent_id=agent_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
+        )
+    if binding is None:
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
+        )
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+        )
+    try:
+        context = await asyncio.wait_for(
+            recall_verified_memory_promotions_v1(
+                user_id=binding.user_id,
+                identity_id=binding.identity_id,
+                current_scenario_id=scenario_id,
+                query_text=query_text,
+            ),
+            timeout=remaining,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+        )
+    return context or build_recall_context_v1(
+        (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+    )
 
 
 def _llm_scope_kwargs(
@@ -1272,6 +1589,16 @@ def reconcile_scenario_done_if_complete(
         ):
             return False
 
+        if settings.FEATURE_AGENT_IDENTITY and settings.FEATURE_MEMORY_PROMOTION:
+            try:
+                _run_memory_promotion_reconciliation_sync_v1(
+                    engine,
+                    user_id=str(scenario.user_id or ""),
+                )
+            except Exception:
+                logger.warning(
+                    "Verified memory promotion pre-terminal reconciliation unavailable"
+                )
         scenario.status = ScenarioStatus.DONE
         session.add(scenario)
         session.commit()
@@ -1415,6 +1742,11 @@ def reconcile_orphaned_running_scenarios(engine) -> int:
                     errored += 1
         finally:
             release_runtime_lock(sweep_lease)
+    if settings.FEATURE_AGENT_IDENTITY and settings.FEATURE_MEMORY_PROMOTION:
+        try:
+            _run_memory_promotion_reconciliation_sync_v1(engine)
+        except Exception:
+            logger.warning("Verified memory promotion startup reconciliation unavailable")
     return errored
 
 
@@ -3400,6 +3732,16 @@ async def _run_simulation_impl(
                         bootstrap_session.commit()
                     _check_cancelled(scenario_id)
                     _ensure_bootstrap_runtime_lease(runtime_lease, scenario_id)
+                if settings.FEATURE_AGENT_IDENTITY and settings.FEATURE_MEMORY_PROMOTION:
+                    try:
+                        await reconcile_verified_memory_promotions_v1(
+                            engine,
+                            user_id=scenario_owner_user_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Verified memory promotion pre-gather reconciliation unavailable"
+                        )
                 bb = blackboards.get(current_branch_id)
                 if bb is None:
                     bb = Blackboard()  # ephemeral — discarded each round in RAW mode
@@ -3508,6 +3850,38 @@ async def _run_simulation_impl(
                 or domain_finalization_status in {"incomplete", "unavailable"}
             ):
                 return
+            if (
+                settings.FEATURE_AGENT_IDENTITY
+                and settings.FEATURE_MEMORY_PROMOTION
+                and domain_result.status in {"committed", "already_committed"}
+                and domain_finalization_status == "complete"
+            ):
+                from app.services.vector_store import (
+                    MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1,
+                )
+
+                promotion_deadline = (
+                    monotonic() + MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1
+                )
+                try:
+                    await _bounded_memory_promotion_thread_call_v1(
+                        _ensure_bootstrap_runtime_lease,
+                        runtime_lease,
+                        scenario_id,
+                        deadline=promotion_deadline,
+                    )
+                    await attempt_verified_memory_promotion_v1(
+                        engine,
+                        scenario_id=scenario_id,
+                        branch_id=current_branch_id,
+                        round_id=round_id,
+                        round_number=round_num,
+                        deadline=promotion_deadline,
+                    )
+                except (SimulationCancelled, asyncio.CancelledError):
+                    raise
+                except Exception:
+                    logger.warning("Verified memory promotion attempt unavailable")
             if domain_result.should_broadcast:
                 if domain_result.event_data is None:
                     raise RuntimeError("DOMAIN_FINALIZATION_EVENT_DATA_MISSING")
@@ -5309,6 +5683,8 @@ async def _gather_agent_messages(
             cross_hint = ""
             cross_memories: list[dict[str, Any]] = []
             identity_memory_status = "unavailable"
+            memory_promotion_context = None
+            memory_promotion_prompt_block = ""
             if (
                 settings.FEATURE_AGENT_IDENTITY
                 and agent.get("agent_identity_id")
@@ -5343,6 +5719,23 @@ async def _gather_agent_messages(
                         agent.get("name", "?"),
                         exc_info=True,
                     )
+            if (
+                settings.FEATURE_AGENT_IDENTITY
+                and settings.FEATURE_MEMORY_PROMOTION
+                and agent.get("agent_identity_id")
+                and scenario_user_id
+            ):
+                memory_promotion_context = await _recall_memory_promotion_context_v1(
+                    engine,
+                    scenario_id=scenario_id,
+                    agent_id=agent_id,
+                    query_text=effective_topic,
+                )
+                from app.services.memory import format_recall_context_for_prompt_v1
+
+                memory_promotion_prompt_block = format_recall_context_for_prompt_v1(
+                    memory_promotion_context
+                )
 
             # Build context: Blackboard shared briefing + DB fallback
             if has_usable_shared_briefing:
@@ -5494,6 +5887,10 @@ async def _gather_agent_messages(
                         language=language,
                         replan_reason=replan_reason,
                     )
+                    if memory_promotion_context is not None:
+                        decision_prompt = (
+                            f"{decision_prompt}\n\n{memory_promotion_prompt_block}"
+                        )
                     _check_cancelled(scenario_id)
                     remaining = _agent_turn_remaining(turn_deadline)
                     with llm_request_scope(
@@ -5517,31 +5914,61 @@ async def _gather_agent_messages(
                         )
                     _check_cancelled(scenario_id)
                     companion = raw_decision if isinstance(raw_decision, dict) else {}
-                    normalized = normalize_decision_envelope(
-                        _decision_payload_with_legacy_compat(
-                            raw_decision,
-                            fallback_goal=fallback_goal,
-                        ),
-                        agent_id=agent_id,
-                        branch_id=branch_id,
-                        round_number=round_num,
+                    normalized_raw = _decision_payload_with_legacy_compat(
+                        raw_decision,
                         fallback_goal=fallback_goal,
-                        allowed_memory_refs=allowed_memory_refs,
-                        allowed_world_changes=allowed_world_changes,
-                        allowed_action_target_ids=[
-                            str(item.get("id") or "").strip()
-                            for item in projected_action_targets.get("actions", [])
-                            if str(item.get("id") or "").strip()
-                        ],
-                        allowed_agent_target_ids=[
-                            str(item.get("id") or "").strip()
-                            for item in projected_action_targets.get("agents", [])
-                            if str(item.get("id") or "").strip()
-                        ],
-                        opportunity_snapshot=opportunity_snapshot,
-                        domain_world_context=domain_world_context,
-                        compatibility_mode="live",
                     )
+                    if memory_promotion_context is None:
+                        normalized = normalize_decision_envelope(
+                            normalized_raw,
+                            agent_id=agent_id,
+                            branch_id=branch_id,
+                            round_number=round_num,
+                            fallback_goal=fallback_goal,
+                            allowed_memory_refs=allowed_memory_refs,
+                            allowed_world_changes=allowed_world_changes,
+                            allowed_action_target_ids=[
+                                str(item.get("id") or "").strip()
+                                for item in projected_action_targets.get("actions", [])
+                                if str(item.get("id") or "").strip()
+                            ],
+                            allowed_agent_target_ids=[
+                                str(item.get("id") or "").strip()
+                                for item in projected_action_targets.get("agents", [])
+                                if str(item.get("id") or "").strip()
+                            ],
+                            opportunity_snapshot=opportunity_snapshot,
+                            domain_world_context=domain_world_context,
+                            compatibility_mode="live",
+                        )
+                    else:
+                        from app.services.agent_runtime import (
+                            normalize_decision_with_memory_promotion_v1,
+                        )
+
+                        normalized = normalize_decision_with_memory_promotion_v1(
+                            normalized_raw,
+                            recall_context=memory_promotion_context,
+                            legacy_allowed_memory_refs=allowed_memory_refs,
+                            agent_id=agent_id,
+                            branch_id=branch_id,
+                            round_number=round_num,
+                            fallback_goal=fallback_goal,
+                            allowed_world_changes=allowed_world_changes,
+                            allowed_action_target_ids=[
+                                str(item.get("id") or "").strip()
+                                for item in projected_action_targets.get("actions", [])
+                                if str(item.get("id") or "").strip()
+                            ],
+                            allowed_agent_target_ids=[
+                                str(item.get("id") or "").strip()
+                                for item in projected_action_targets.get("agents", [])
+                                if str(item.get("id") or "").strip()
+                            ],
+                            opportunity_snapshot=opportunity_snapshot,
+                            domain_world_context=domain_world_context,
+                            compatibility_mode="live",
+                        )
                     normalized = _bind_authoritative_goal_progress(
                         normalized,
                         prior_transition,
@@ -5570,16 +5997,34 @@ async def _gather_agent_messages(
                         type(exc).__name__,
                         _scrub_sensitive_text(str(exc)),
                     )
-                    decision_envelope = normalize_decision_envelope(
-                        None,
-                        agent_id=agent_id,
-                        branch_id=branch_id,
-                        round_number=round_num,
-                        fallback_goal=fallback_goal,
-                        opportunity_snapshot=opportunity_snapshot,
-                        domain_world_context=domain_world_context,
-                        compatibility_mode="live",
-                    )
+                    if memory_promotion_context is None:
+                        decision_envelope = normalize_decision_envelope(
+                            None,
+                            agent_id=agent_id,
+                            branch_id=branch_id,
+                            round_number=round_num,
+                            fallback_goal=fallback_goal,
+                            opportunity_snapshot=opportunity_snapshot,
+                            domain_world_context=domain_world_context,
+                            compatibility_mode="live",
+                        )
+                    else:
+                        from app.services.agent_runtime import (
+                            normalize_decision_with_memory_promotion_v1,
+                        )
+
+                        decision_envelope = normalize_decision_with_memory_promotion_v1(
+                            None,
+                            recall_context=memory_promotion_context,
+                            legacy_allowed_memory_refs=allowed_memory_refs,
+                            agent_id=agent_id,
+                            branch_id=branch_id,
+                            round_number=round_num,
+                            fallback_goal=fallback_goal,
+                            opportunity_snapshot=opportunity_snapshot,
+                            domain_world_context=domain_world_context,
+                            compatibility_mode="live",
+                        )
                     decision_envelope["decision_status"] = "unavailable"
                     decision_envelope["failure_code"] = decision_failure_code
                     metadata_failure_code = decision_failure_code
@@ -5707,16 +6152,36 @@ async def _gather_agent_messages(
                                 classify_llm_error_code(exc) or "LLM_FAILED"
                             )
                     if repetition_failure_code:
-                        unavailable_decision = normalize_decision_envelope(
-                            None,
-                            agent_id=agent_id,
-                            branch_id=branch_id,
-                            round_number=round_num,
-                            fallback_goal=fallback_goal,
-                            opportunity_snapshot=opportunity_snapshot,
-                            domain_world_context=domain_world_context,
-                            compatibility_mode="live",
-                        )
+                        if memory_promotion_context is None:
+                            unavailable_decision = normalize_decision_envelope(
+                                None,
+                                agent_id=agent_id,
+                                branch_id=branch_id,
+                                round_number=round_num,
+                                fallback_goal=fallback_goal,
+                                opportunity_snapshot=opportunity_snapshot,
+                                domain_world_context=domain_world_context,
+                                compatibility_mode="live",
+                            )
+                        else:
+                            from app.services.agent_runtime import (
+                                normalize_decision_with_memory_promotion_v1,
+                            )
+
+                            unavailable_decision = (
+                                normalize_decision_with_memory_promotion_v1(
+                                    None,
+                                    recall_context=memory_promotion_context,
+                                    legacy_allowed_memory_refs=allowed_memory_refs,
+                                    agent_id=agent_id,
+                                    branch_id=branch_id,
+                                    round_number=round_num,
+                                    fallback_goal=fallback_goal,
+                                    opportunity_snapshot=opportunity_snapshot,
+                                    domain_world_context=domain_world_context,
+                                    compatibility_mode="live",
+                                )
+                            )
                         unavailable_decision.update({
                             "decision_status": "unavailable",
                             "failure_code": repetition_failure_code,
@@ -5838,6 +6303,9 @@ async def _gather_agent_messages(
                     ][:3],
                 },
             }
+            if memory_promotion_context is not None:
+                msg["_memory_promotion_context"] = memory_promotion_context
+                msg["_memory_promotion_legacy_refs"] = tuple(allowed_memory_refs)
             if turn_failure_code:
                 msg["_turn_failure_code"] = turn_failure_code
             if metadata_failure_code:
@@ -5870,6 +6338,18 @@ async def _gather_agent_messages(
                             "fallback_goal": fallback_goal,
                             "context_receipt": msg.get("_context_receipt") or {},
                             "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
+                            **(
+                                {
+                                    "_memory_promotion_context": msg[
+                                        "_memory_promotion_context"
+                                    ],
+                                    "_memory_promotion_legacy_refs": msg[
+                                        "_memory_promotion_legacy_refs"
+                                    ],
+                                }
+                                if "_memory_promotion_context" in msg
+                                else {}
+                            ),
                         }
                     ],
                     opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
@@ -6011,6 +6491,18 @@ async def _gather_agent_messages(
                             ),
                             "context_receipt": msg.get("_context_receipt") or {},
                             "idempotency_key": f"turn:{round_id}:{msg['agent_id']}",
+                            **(
+                                {
+                                    "_memory_promotion_context": msg[
+                                        "_memory_promotion_context"
+                                    ],
+                                    "_memory_promotion_legacy_refs": msg[
+                                        "_memory_promotion_legacy_refs"
+                                    ],
+                                }
+                                if "_memory_promotion_context" in msg
+                                else {}
+                            ),
                         }
                     ],
                     opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
@@ -8100,6 +8592,20 @@ def _save_messages(
                     if source.get("world_state_transition") is not None
                     else {}
                 ),
+                **(
+                    {
+                        "_memory_promotion_context": source[
+                            "_memory_promotion_context"
+                        ],
+                        "_memory_promotion_legacy_refs": source.get(
+                            "_memory_promotion_legacy_refs", ()
+                        ),
+                    }
+                    if settings.FEATURE_AGENT_IDENTITY
+                    and settings.FEATURE_MEMORY_PROMOTION
+                    and "_memory_promotion_context" in source
+                    else {}
+                ),
             })
 
         if runtime_sources:
@@ -8117,17 +8623,53 @@ def _save_messages(
                 grouped_runtime_sources.items()
             ):
                 try:
-                    persist_round_runtime_in_session(
-                        session,
-                        scenario_id,
-                        branch_id,
-                        round_number,
-                        runtime_rows,
-                        opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
-                        domain_world_context=domain_world_context,
-                        compatibility_mode=compatibility_mode,
-                        runtime_lease=runtime_lease,
-                    )
+                    if (
+                        settings.FEATURE_AGENT_IDENTITY
+                        and settings.FEATURE_MEMORY_PROMOTION
+                    ):
+                        memory_promotion_contexts_by_actor = {
+                            str(row["agent_id"]): row["_memory_promotion_context"]
+                            for row in runtime_rows
+                            if "_memory_promotion_context" in row
+                        }
+                        legacy_memory_refs_by_actor = {
+                            str(row["agent_id"]): tuple(
+                                row.get("_memory_promotion_legacy_refs", ())
+                            )
+                            for row in runtime_rows
+                            if "_memory_promotion_context" in row
+                        }
+                        persist_round_runtime_in_session(
+                            session,
+                            scenario_id,
+                            branch_id,
+                            round_number,
+                            runtime_rows,
+                            opportunity_snapshots_by_actor=(
+                                opportunity_snapshots_by_actor
+                            ),
+                            domain_world_context=domain_world_context,
+                            compatibility_mode=compatibility_mode,
+                            runtime_lease=runtime_lease,
+                            memory_promotion_contexts_by_actor=(
+                                memory_promotion_contexts_by_actor
+                            ),
+                            legacy_memory_refs_by_actor=legacy_memory_refs_by_actor,
+                        )
+                    else:
+                        persist_round_runtime_in_session(
+                            session,
+                            scenario_id,
+                            branch_id,
+                            round_number,
+                            runtime_rows,
+                            opportunity_snapshots_by_actor=(
+                                opportunity_snapshots_by_actor
+                            ),
+                            domain_world_context=domain_world_context,
+                            compatibility_mode=compatibility_mode,
+                            runtime_lease=runtime_lease,
+                        )
                 except ValueError as exc:
                     if str(exc) == "AGENT_RUNTIME_LEASE_LOST":
                         raise SimulationCancelled(scenario_id) from exc

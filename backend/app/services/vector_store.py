@@ -6,19 +6,28 @@ memory retrieval. Gracefully degrades when ChromaDB is unavailable.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import math
 import threading
+import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, cast
 
 from app.config import settings
-from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
+from app.log_sanitize import contains_credential_material
+from app.services.domain_world import canonical_json_bytes_v1
+from app.services.runtime_lock import (
+    RuntimeLockLease,
+    acquire_runtime_lock,
+    refresh_runtime_lock,
+    release_runtime_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +69,118 @@ _IDENTITY_MEMORY_PROVENANCE_LIMITS = {
 _IDENTITY_MEMORY_SOURCE_ID_LIMIT = 32
 _IDENTITY_MEMORY_SOURCE_ID_LENGTH = 128
 _IDENTITY_MEMORY_REF_LENGTH = 20
+
+MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1 = 5.0
+MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1 = 20.0
+MEMORY_PROMOTION_PURGE_COLLECTION_PAGE_SIZE_V1 = 64
+MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1 = 128
+MEMORY_PROMOTION_PURGE_DELETE_BATCH_SIZE_V1 = 64
+MEMORY_PROMOTION_PURGE_MAX_COLLECTION_PAGES_V1 = 16
+MEMORY_PROMOTION_PURGE_MAX_COLLECTION_HANDLES_V1 = 1024
+MEMORY_PROMOTION_PURGE_MAX_DOCUMENT_PAGES_V1 = 256
+MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1 = 4096
+MEMORY_PROMOTION_PURGE_MAX_DELETE_BATCHES_V1 = 64
+MEMORY_PROMOTION_PURGE_MAX_CLIENT_CALLS_V1 = 1280
+
+_MEMORY_PROMOTION_COLLECTION_CONTRACT_V1 = "identity_promotion_collection_v1"
+_MEMORY_PROMOTION_VERSION_V1 = "v1"
+_MEMORY_PROMOTION_RECORD_CONTRACT_V1 = "memory_promotion_record_v1"
+_MEMORY_PROMOTION_CHILD_CONTRACT_V1 = "memory_promotion_child_manifest_v1"
+_MEMORY_PROMOTION_ROOT_CONTRACT_V1 = "memory_promotion_root_manifest_v1"
+_MEMORY_PROMOTION_DOCUMENT_CONTRACTS_V1 = frozenset(
+    {
+        _MEMORY_PROMOTION_RECORD_CONTRACT_V1,
+        _MEMORY_PROMOTION_CHILD_CONTRACT_V1,
+        _MEMORY_PROMOTION_ROOT_CONTRACT_V1,
+    }
+)
+_MEMORY_PROMOTION_RECORD_KEYS_V1 = frozenset(
+    {
+        "record_contract",
+        "promotion_version",
+        "promotion_key",
+        "identity_id",
+        "scenario_id",
+        "branch_id",
+        "round_id",
+        "round_number",
+        "agent_id",
+        "message_id",
+        "action_sequence",
+        "input_digest",
+        "input_state_revision",
+        "state_revision_after",
+        "child_manifest_id",
+        "root_manifest_id",
+        "round_before",
+        "round_after",
+        "components",
+        "co_sources",
+        "unit",
+        "simulation_context",
+        "epistemic_scope",
+        "verification_status",
+    }
+)
+_MEMORY_PROMOTION_COMPONENT_KEYS_V1 = frozenset(
+    {
+        "proposal_index",
+        "before",
+        "after",
+        "state_revision_before",
+        "state_revision_after",
+        "applied_delta",
+        "requested_value",
+        "operation",
+        "effect_code",
+    }
+)
+_MEMORY_PROMOTION_SOURCE_KEYS_V1 = frozenset(
+    {
+        "agent_id",
+        "message_id",
+        "action_id",
+        "action_sequence",
+        "action_type",
+        "proposal_index",
+        "rule_id",
+    }
+)
+_MEMORY_PROMOTION_CHILD_KEYS_V1 = frozenset(
+    {
+        "manifest_contract",
+        "promotion_version",
+        "status",
+        "root_manifest_id",
+        "child_manifest_id",
+        "identity_id",
+        "scenario_id",
+        "branch_id",
+        "round_id",
+        "round_number",
+        "input_digest",
+        "record_ids",
+        "record_hashes",
+        "memory_refs",
+    }
+)
+_MEMORY_PROMOTION_ROOT_KEYS_V1 = frozenset(
+    {
+        "manifest_contract",
+        "promotion_version",
+        "status",
+        "root_manifest_id",
+        "scenario_id",
+        "branch_id",
+        "round_id",
+        "round_number",
+        "input_digest",
+        "child_manifest_ids",
+        "child_manifest_hashes",
+        "record_count",
+    }
+)
+_MEMORY_PROMOTION_QUARANTINE_TASKS_V1: set[asyncio.Task[Any]] = set()
 
 
 class IdentityMemoryPinLimitError(ValueError):
@@ -1186,6 +1307,10 @@ def purge_identity_memories(user_id: str) -> None:
                 user_id,
                 exc,
             )
+    try:
+        _purge_memory_promotion_v1(store._client, user_id)
+    except Exception:
+        logger.warning("memory promotion V1 purge preserved residual after internal failure")
 
 
 # ── Identity Profile Embedding (L2 matching) ────────────────
@@ -1931,3 +2056,2301 @@ Produce a single compacted summary under these strict epistemic rules:
 Output strict JSON:
 {{"compacted_summary": "A single paragraph (max 500 chars) preserving \
 the most important information from all memories above."}}"""
+
+
+# ── Verified memory promotion V1 ─────────────────────────────
+
+
+MemoryPromotionStoreReasonCodeV1 = Literal[
+    "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+    "MEMORY_PROMOTION_OWNER_MISMATCH",
+    "MEMORY_PROMOTION_RECORD_CONFLICT",
+    "MEMORY_PROMOTION_STORE_UNAVAILABLE",
+    "MEMORY_PROMOTION_LOCK_UNAVAILABLE",
+    "MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+    "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryPromotionStoreResultV1:
+    status: Literal["stored", "already_present", "empty", "unavailable"]
+    reason_code: MemoryPromotionStoreReasonCodeV1 | None
+    refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializationOwnershipProofV1:
+    document_id: str
+    preflight_missing: Literal[True]
+    native_call_membership: Literal[True]
+    submitted_document_canonical_bytes: bytes
+    submitted_metadata_canonical_bytes: bytes
+    submitted_semantic_hash: str
+    source_authority_snapshot_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryPromotionCurrentClaimV1:
+    document_id: str
+    document_canonical_bytes: bytes
+    metadata_canonical_bytes: bytes
+    semantic_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryPromotionCurrentClaimsV1:
+    complete: bool
+    claims: tuple[MemoryPromotionCurrentClaimV1, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryPromotionMaterializationV1:
+    document_id: str
+    document: str
+    metadata: tuple[tuple[str, str | int | bool], ...]
+    document_canonical_bytes: bytes
+    metadata_canonical_bytes: bytes
+    semantic_hash: str
+    semantic_payload: Mapping[str, Any]
+    memory_ref: str | None
+
+    def metadata_dict(self) -> dict[str, str | int | bool]:
+        return dict(self.metadata)
+
+
+@dataclass(slots=True)
+class Stage3QuarantineOwnershipV1:
+    task: asyncio.Task[Any] | None = None
+    task_kind: str | None = None
+    heartbeat: asyncio.Task[Any] | None = None
+    heartbeat_native_task: asyncio.Task[Any] | None = None
+    cleanup_task: asyncio.Task[Any] | None = None
+    release_native_task: asyncio.Task[Any] | None = None
+    lease: RuntimeLockLease | None = None
+    global_lock_state: Literal["pending", "held", "not_acquired"] = "not_acquired"
+    ownership_proofs: list[MaterializationOwnershipProofV1] = field(default_factory=list)
+    ownership_state: Literal["foreground", "quarantine", "released"] = "foreground"
+    heartbeat_lost: bool = False
+    state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def transfer_to_quarantine(self) -> bool:
+        with self.state_lock:
+            if self.ownership_state != "foreground":
+                return False
+            self.ownership_state = "quarantine"
+            return True
+
+    def owns_release(self, *, quarantine: bool) -> bool:
+        with self.state_lock:
+            expected = "quarantine" if quarantine else "foreground"
+            return self.ownership_state == expected
+
+    def mark_released(self) -> None:
+        with self.state_lock:
+            if self.ownership_state == "released":
+                return
+            self.ownership_state = "released"
+
+    def current_lease(self) -> RuntimeLockLease | None:
+        with self.state_lock:
+            return self.lease
+
+    def replace_lease(self, lease: RuntimeLockLease) -> None:
+        with self.state_lock:
+            self.lease = lease
+
+    def clear_lease(self, lease: RuntimeLockLease) -> None:
+        with self.state_lock:
+            if self.lease == lease:
+                self.lease = None
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryPromotionDeadlineV1:
+    expires_at: float
+
+    @classmethod
+    def start(cls, seconds: float = MEMORY_PROMOTION_ATTEMPT_TIMEOUT_SECONDS_V1):
+        return cls(time.monotonic() + max(0.001, float(seconds)))
+
+    def remaining(self) -> float:
+        return max(0.0, self.expires_at - time.monotonic())
+
+    def call_timeout(self) -> float:
+        return min(
+            MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1,
+            self.remaining(),
+        )
+
+
+class _MemoryPromotionCallTimeoutV1(TimeoutError):
+    pass
+
+
+class _MemoryPromotionPostWriteAuthorityLostV1(RuntimeError):
+    pass
+
+
+class _MemoryPromotionStoreConflictV1(RuntimeError):
+    pass
+
+
+class _MemoryPromotionStoreUnavailableV1(RuntimeError):
+    pass
+
+
+def memory_promotion_collection_name_v1(user_id: str) -> str:
+    """Return the OS-independent, collision-resistant owner namespace."""
+
+    if type(user_id) is not str or not user_id:
+        raise ValueError("memory promotion owner must be non-empty")
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
+    return f"identity_promotion_v1_{digest}"
+
+
+def memory_promotion_owner_binding_hash_v1(user_id: str) -> str:
+    if type(user_id) is not str or not user_id:
+        raise ValueError("memory promotion owner must be non-empty")
+    preimage = canonical_json_bytes_v1(["memory-promotion-owner-v1", user_id])
+    return f"sha256:{hashlib.sha256(preimage).hexdigest()}"
+
+
+def memory_promotion_collection_metadata_v1(
+    user_id: str,
+) -> dict[str, str]:
+    return {
+        "collection_contract": _MEMORY_PROMOTION_COLLECTION_CONTRACT_V1,
+        "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+        "owner_binding_hash": memory_promotion_owner_binding_hash_v1(user_id),
+    }
+
+
+def _exact_collection_metadata_v1(value: object, user_id: str) -> bool:
+    return isinstance(value, Mapping) and dict(value) == (
+        memory_promotion_collection_metadata_v1(user_id)
+    )
+
+
+def _sha256_digest_v1(value: object) -> str:
+    return f"sha256:{hashlib.sha256(canonical_json_bytes_v1(value)).hexdigest()}"
+
+
+def _is_sha256_digest_v1(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _root_manifest_id_v1(
+    scenario_id: str,
+    branch_id: str,
+    round_id: str,
+    round_number: int,
+) -> str:
+    digest = hashlib.sha256(
+        canonical_json_bytes_v1(
+            [
+                "memory-promotion-root-manifest-slot-v1",
+                scenario_id,
+                branch_id,
+                round_id,
+                round_number,
+            ]
+        )
+    ).hexdigest()
+    return f"memory-promotion-root-v1-{digest}"
+
+
+def _child_manifest_id_v1(root_manifest_id: str, identity_id: str) -> str:
+    digest = hashlib.sha256(
+        canonical_json_bytes_v1(
+            ["memory-promotion-child-manifest-v1", root_manifest_id, identity_id]
+        )
+    ).hexdigest()
+    return f"memory-promotion-child-v1-{digest}"
+
+
+def _record_document_id_v1(promotion_key: Mapping[str, Any]) -> str:
+    if frozenset(promotion_key) != {
+        "schema_hash",
+        "action_id",
+        "rule_id",
+        "variable_id",
+    } or any(
+        type(promotion_key[key]) is not str or not promotion_key[key]
+        for key in promotion_key
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    digest = hashlib.sha256(
+        canonical_json_bytes_v1(
+            [
+                "memory-promotion-key-v1",
+                promotion_key["schema_hash"],
+                promotion_key["action_id"],
+                promotion_key["rule_id"],
+                promotion_key["variable_id"],
+            ]
+        )
+    ).hexdigest()
+    return f"identity-promotion-v1-{digest}"
+
+
+def _contains_credential_recursive_v1(value: object) -> bool:
+    if type(value) is str:
+        return contains_credential_material(value)
+    if isinstance(value, Mapping):
+        return any(
+            contains_credential_material(str(key))
+            or _contains_credential_recursive_v1(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_credential_recursive_v1(item) for item in value)
+    return False
+
+
+def _materialization_from_document_v1(value: object) -> _MemoryPromotionMaterializationV1:
+    document_id = getattr(value, "document_id", None)
+    document = getattr(value, "document", None)
+    semantic_hash = getattr(value, "semantic_hash", None)
+    memory_ref = getattr(value, "memory_ref", None)
+    metadata_value = getattr(value, "metadata", None)
+    semantic_payload_value = getattr(value, "semantic_payload", None)
+    if (
+        type(document_id) is not str
+        or not document_id
+        or type(document) is not str
+        or not document
+        or type(semantic_hash) is not str
+        or not _is_sha256_digest_v1(semantic_hash)
+        or not isinstance(semantic_payload_value, Mapping)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    semantic_payload = dict(semantic_payload_value)
+    if any(type(key) is not str for key in semantic_payload):
+        raise _MemoryPromotionStoreConflictV1
+    if isinstance(metadata_value, Mapping):
+        metadata = dict(metadata_value)
+    elif isinstance(metadata_value, Sequence) and not isinstance(
+        metadata_value, (str, bytes, bytearray)
+    ):
+        try:
+            metadata = dict(metadata_value)
+        except (TypeError, ValueError) as exc:
+            raise _MemoryPromotionStoreConflictV1 from exc
+    else:
+        raise _MemoryPromotionStoreConflictV1
+    if any(
+        type(key) is not str or type(item) not in {str, int, bool}
+        for key, item in metadata.items()
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    if (
+        metadata.get("promotion_version") != _MEMORY_PROMOTION_VERSION_V1
+        or metadata.get("document_contract") not in _MEMORY_PROMOTION_DOCUMENT_CONTRACTS_V1
+        or metadata.get("semantic_hash") != semantic_hash
+        or metadata.get("canonical_payload")
+        != canonical_json_bytes_v1(semantic_payload).decode("utf-8")
+        or semantic_hash != _sha256_digest_v1(semantic_payload)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    if memory_ref is not None:
+        if (
+            type(memory_ref) is not str
+            or len(memory_ref) != _IDENTITY_MEMORY_REF_LENGTH
+            or any(char not in "0123456789abcdef" for char in memory_ref)
+            or metadata.get("memory_ref") != memory_ref
+        ):
+            raise _MemoryPromotionStoreConflictV1
+    canonical_metadata = tuple(sorted(metadata.items()))
+    return _MemoryPromotionMaterializationV1(
+        document_id=document_id,
+        document=document,
+        metadata=canonical_metadata,
+        document_canonical_bytes=canonical_json_bytes_v1(document),
+        metadata_canonical_bytes=canonical_json_bytes_v1(dict(canonical_metadata)),
+        semantic_hash=semantic_hash,
+        semantic_payload=semantic_payload,
+        memory_ref=memory_ref,
+    )
+
+
+def _validate_memory_promotion_tree_v1(
+    *,
+    records: tuple[_MemoryPromotionMaterializationV1, ...],
+    children: tuple[_MemoryPromotionMaterializationV1, ...],
+    root: _MemoryPromotionMaterializationV1,
+) -> None:
+    root_payload = root.semantic_payload
+    if (
+        frozenset(root_payload) != _MEMORY_PROMOTION_ROOT_KEYS_V1
+        or root_payload.get("manifest_contract") != _MEMORY_PROMOTION_ROOT_CONTRACT_V1
+        or root_payload.get("promotion_version") != _MEMORY_PROMOTION_VERSION_V1
+        or root_payload.get("status") != "complete"
+        or type(root_payload.get("scenario_id")) is not str
+        or not root_payload["scenario_id"]
+        or type(root_payload.get("branch_id")) is not str
+        or not root_payload["branch_id"]
+        or type(root_payload.get("round_id")) is not str
+        or not root_payload["round_id"]
+        or type(root_payload.get("round_number")) is not int
+        or root_payload["round_number"] < 1
+        or not _is_sha256_digest_v1(root_payload.get("input_digest"))
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    expected_root_id = _root_manifest_id_v1(
+        cast(str, root_payload["scenario_id"]),
+        cast(str, root_payload["branch_id"]),
+        cast(str, root_payload["round_id"]),
+        cast(int, root_payload["round_number"]),
+    )
+    root_metadata = root.metadata_dict()
+    if (
+        root.document_id != expected_root_id
+        or root_payload.get("root_manifest_id") != expected_root_id
+        or root.document != canonical_json_bytes_v1(root_payload).decode("utf-8")
+        or root_metadata
+        != {
+            "document_contract": _MEMORY_PROMOTION_ROOT_CONTRACT_V1,
+            "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+            "status": "complete",
+            "semantic_hash": root.semantic_hash,
+            "canonical_payload": root.document,
+            "root_manifest_id": expected_root_id,
+            "scenario_id": root_payload["scenario_id"],
+            "input_digest": root_payload["input_digest"],
+        }
+        or root.memory_ref is not None
+    ):
+        raise _MemoryPromotionStoreConflictV1
+
+    record_groups: dict[str, list[_MemoryPromotionMaterializationV1]] = {}
+    for record in records:
+        payload = record.semantic_payload
+        promotion_key = payload.get("promotion_key")
+        components = payload.get("components")
+        sources = payload.get("co_sources")
+        if (
+            frozenset(payload) != _MEMORY_PROMOTION_RECORD_KEYS_V1
+            or payload.get("record_contract") != _MEMORY_PROMOTION_RECORD_CONTRACT_V1
+            or payload.get("promotion_version") != _MEMORY_PROMOTION_VERSION_V1
+            or payload.get("simulation_context") != "simulated_scenario"
+            or payload.get("verification_status") != "verified"
+            or not isinstance(promotion_key, Mapping)
+            or not isinstance(components, Sequence)
+            or isinstance(components, (str, bytes, bytearray))
+            or not components
+            or not isinstance(sources, Sequence)
+            or isinstance(sources, (str, bytes, bytearray))
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        expected_document_id = _record_document_id_v1(promotion_key)
+        expected_ref = hashlib.sha256(expected_document_id.encode("utf-8")).hexdigest()[
+            :_IDENTITY_MEMORY_REF_LENGTH
+        ]
+        identity_id = payload.get("identity_id")
+        if type(identity_id) is not str or not identity_id:
+            raise _MemoryPromotionStoreConflictV1
+        expected_child_id = _child_manifest_id_v1(expected_root_id, identity_id)
+        if (
+            record.document_id != expected_document_id
+            or record.memory_ref != expected_ref
+            or payload.get("root_manifest_id") != expected_root_id
+            or payload.get("child_manifest_id") != expected_child_id
+            or any(
+                payload.get(key) != root_payload.get(key)
+                for key in ("scenario_id", "branch_id", "round_id", "round_number", "input_digest")
+            )
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        normalized_components = []
+        for component in components:
+            if (
+                not isinstance(component, Mapping)
+                or frozenset(component) != _MEMORY_PROMOTION_COMPONENT_KEYS_V1
+                or type(component.get("proposal_index")) is not int
+                or component["proposal_index"] < 0
+            ):
+                raise _MemoryPromotionStoreConflictV1
+            normalized_components.append(component)
+        indexes = [cast(int, item["proposal_index"]) for item in normalized_components]
+        if indexes != sorted(indexes) or len(set(indexes)) != len(indexes):
+            raise _MemoryPromotionStoreConflictV1
+        normalized_sources = []
+        for source in sources:
+            if (
+                not isinstance(source, Mapping)
+                or frozenset(source) != _MEMORY_PROMOTION_SOURCE_KEYS_V1
+                or type(source.get("action_sequence")) is not int
+                or source["action_sequence"] < 1
+                or type(source.get("proposal_index")) is not int
+                or source["proposal_index"] < 0
+            ):
+                raise _MemoryPromotionStoreConflictV1
+            normalized_sources.append(source)
+        source_keys = [
+            (
+                source["action_sequence"],
+                source["action_id"],
+                source["rule_id"],
+                source["proposal_index"],
+            )
+            for source in normalized_sources
+        ]
+        if (
+            not normalized_sources
+            or source_keys != sorted(source_keys)
+            or len({canonical_json_bytes_v1(item) for item in normalized_sources})
+            != len(normalized_sources)
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        first_component = normalized_components[0]
+        expected_summary = (
+            f"Prior simulated consequence: action {promotion_key['action_id']}, under rule "
+            f"{promotion_key['rule_id']}, was a verified source of the round change in "
+            f"{promotion_key['variable_id']} from {first_component['before']} to "
+            f"{first_component['after']} {payload.get('unit')}."
+        )
+        metadata = record.metadata_dict()
+        if (
+            record.document != expected_summary
+            or metadata
+            != {
+                "document_contract": _MEMORY_PROMOTION_RECORD_CONTRACT_V1,
+                "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+                "identity_id": identity_id,
+                "scenario_id": payload["scenario_id"],
+                "root_manifest_id": expected_root_id,
+                "child_manifest_id": expected_child_id,
+                "record_hash": record.semantic_hash,
+                "semantic_hash": record.semantic_hash,
+                "memory_ref": expected_ref,
+                "canonical_payload": canonical_json_bytes_v1(payload).decode("utf-8"),
+            }
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        record_groups.setdefault(identity_id, []).append(record)
+
+    children_by_id: dict[str, _MemoryPromotionMaterializationV1] = {}
+    for child in children:
+        payload = child.semantic_payload
+        identity_id = payload.get("identity_id")
+        if (
+            frozenset(payload) != _MEMORY_PROMOTION_CHILD_KEYS_V1
+            or payload.get("manifest_contract") != _MEMORY_PROMOTION_CHILD_CONTRACT_V1
+            or payload.get("promotion_version") != _MEMORY_PROMOTION_VERSION_V1
+            or payload.get("status") != "complete"
+            or type(identity_id) is not str
+            or not identity_id
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        expected_child_id = _child_manifest_id_v1(expected_root_id, identity_id)
+        grouped_records = sorted(
+            record_groups.get(identity_id, ()), key=lambda item: item.document_id
+        )
+        expected_record_ids = [item.document_id for item in grouped_records]
+        expected_record_hashes = [item.semantic_hash for item in grouped_records]
+        expected_refs = [cast(str, item.memory_ref) for item in grouped_records]
+        if (
+            not grouped_records
+            or child.document_id != expected_child_id
+            or child.document != canonical_json_bytes_v1(payload).decode("utf-8")
+            or payload.get("root_manifest_id") != expected_root_id
+            or payload.get("child_manifest_id") != expected_child_id
+            or canonical_json_bytes_v1(payload.get("record_ids"))
+            != canonical_json_bytes_v1(expected_record_ids)
+            or canonical_json_bytes_v1(payload.get("record_hashes"))
+            != canonical_json_bytes_v1(expected_record_hashes)
+            or canonical_json_bytes_v1(payload.get("memory_refs"))
+            != canonical_json_bytes_v1(expected_refs)
+            or any(
+                payload.get(key) != root_payload.get(key)
+                for key in ("scenario_id", "branch_id", "round_id", "round_number", "input_digest")
+            )
+            or child.metadata_dict()
+            != {
+                "document_contract": _MEMORY_PROMOTION_CHILD_CONTRACT_V1,
+                "promotion_version": _MEMORY_PROMOTION_VERSION_V1,
+                "status": "complete",
+                "semantic_hash": child.semantic_hash,
+                "canonical_payload": child.document,
+                "root_manifest_id": expected_root_id,
+                "child_manifest_id": expected_child_id,
+                "identity_id": identity_id,
+                "scenario_id": root_payload["scenario_id"],
+            }
+            or expected_child_id in children_by_id
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        children_by_id[expected_child_id] = child
+
+    expected_children = sorted(children_by_id.values(), key=lambda item: item.document_id)
+    if (
+        set(record_groups) != {item.semantic_payload["identity_id"] for item in children}
+        or list(root_payload.get("child_manifest_ids", ()))
+        != [item.document_id for item in expected_children]
+        or list(root_payload.get("child_manifest_hashes", ()))
+        != [item.semantic_hash for item in expected_children]
+        or type(root_payload.get("record_count")) is not int
+        or root_payload["record_count"] != len(records)
+        or list(records) != sorted(records, key=lambda item: item.document_id)
+        or list(children) != expected_children
+    ):
+        raise _MemoryPromotionStoreConflictV1
+
+
+def _normalize_memory_promotion_batch_v1(
+    batch: object,
+    *,
+    user_id: str,
+) -> tuple[
+    tuple[_MemoryPromotionMaterializationV1, ...],
+    tuple[_MemoryPromotionMaterializationV1, ...],
+    _MemoryPromotionMaterializationV1,
+    str,
+    tuple[str, ...],
+]:
+    if getattr(batch, "status", None) != "verified":
+        raise _MemoryPromotionStoreConflictV1
+    if getattr(batch, "owner_id", None) != user_id:
+        raise _MemoryPromotionStoreConflictV1
+    source_hash = getattr(batch, "source_authority_snapshot_hash", None)
+    root_manifest_id = getattr(batch, "root_manifest_id", None)
+    root_value = getattr(batch, "root_manifest_document", None)
+    refs = getattr(batch, "refs", None)
+    if (
+        not _is_sha256_digest_v1(source_hash)
+        or type(root_manifest_id) is not str
+        or not root_manifest_id
+        or not isinstance(refs, tuple)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    records = tuple(
+        _materialization_from_document_v1(item)
+        for item in getattr(batch, "record_documents", ())
+    )
+    children = tuple(
+        _materialization_from_document_v1(item)
+        for item in getattr(batch, "child_manifest_documents", ())
+    )
+    root = _materialization_from_document_v1(root_value)
+    if (
+        not records
+        or not children
+        or root.document_id != root_manifest_id
+        or root.metadata_dict().get("document_contract")
+        != _MEMORY_PROMOTION_ROOT_CONTRACT_V1
+        or any(
+            item.metadata_dict().get("document_contract")
+            != _MEMORY_PROMOTION_RECORD_CONTRACT_V1
+            for item in records
+        )
+        or any(
+            item.metadata_dict().get("document_contract")
+            != _MEMORY_PROMOTION_CHILD_CONTRACT_V1
+            for item in children
+        )
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    all_documents = records + children + (root,)
+    if len({item.document_id for item in all_documents}) != len(all_documents):
+        raise _MemoryPromotionStoreConflictV1
+    expected_refs = tuple(
+        sorted(cast(str, item.memory_ref) for item in records)
+    )
+    if tuple(refs) != expected_refs or len(set(refs)) != len(refs):
+        raise _MemoryPromotionStoreConflictV1
+    for item in all_documents:
+        if (
+            contains_credential_material(item.document)
+            or _contains_credential_recursive_v1(item.semantic_payload)
+            or any(
+            contains_credential_material(key)
+            or (type(metadata_value) is str and contains_credential_material(metadata_value))
+            for key, metadata_value in item.metadata
+            )
+        ):
+            raise ValueError("credential")
+    _validate_memory_promotion_tree_v1(records=records, children=children, root=root)
+    return records, children, root, source_hash, expected_refs
+
+
+def classify_memory_promotion_compensation_v1(
+    proof: MaterializationOwnershipProofV1,
+    *,
+    current_claim: MemoryPromotionCurrentClaimV1 | None,
+    physical_document_canonical_bytes: bytes | None,
+    physical_metadata_canonical_bytes: bytes | None,
+    physical_semantic_hash: str | None,
+) -> Literal[
+    "current_claim",
+    "owned_stale_write",
+    "physical_missing",
+    "preserved_ambiguous",
+]:
+    """Apply the frozen fresh-claim-first M-T1 discriminator."""
+
+    if current_claim is not None:
+        return "current_claim"
+    if (
+        physical_document_canonical_bytes is None
+        and physical_metadata_canonical_bytes is None
+        and physical_semantic_hash is None
+    ):
+        return "physical_missing"
+    if (
+        proof.preflight_missing is True
+        and proof.native_call_membership is True
+        and physical_document_canonical_bytes == proof.submitted_document_canonical_bytes
+        and physical_metadata_canonical_bytes == proof.submitted_metadata_canonical_bytes
+        and physical_semantic_hash == proof.submitted_semantic_hash
+    ):
+        return "owned_stale_write"
+    return "preserved_ambiguous"
+
+
+def _preserve_fresh_memory_promotion_claim_v1(
+    proof: MaterializationOwnershipProofV1,
+    claim: MemoryPromotionCurrentClaimV1,
+) -> None:
+    if (
+        claim.document_canonical_bytes != proof.submitted_document_canonical_bytes
+        or claim.metadata_canonical_bytes != proof.submitted_metadata_canonical_bytes
+        or claim.semantic_hash != proof.submitted_semantic_hash
+    ):
+        logger.warning(
+            "memory promotion compensation preserved conflicting fresh claimant"
+        )
+
+
+async def _bounded_memory_promotion_call_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    kind: str,
+    call: Callable[[], Any],
+) -> Any:
+    timeout = deadline.call_timeout()
+    if timeout <= 0:
+        raise _MemoryPromotionCallTimeoutV1
+    task = asyncio.create_task(asyncio.to_thread(call))
+    capsule.task = task
+    capsule.task_kind = kind
+    try:
+        result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+    except TimeoutError as exc:
+        raise _MemoryPromotionCallTimeoutV1 from exc
+    if kind == "lease_acquire" and isinstance(result, RuntimeLockLease):
+        capsule.replace_lease(result)
+    elif kind == "global_lock_acquire":
+        capsule.global_lock_state = "held" if result is True else "not_acquired"
+    capsule.task = None
+    capsule.task_kind = None
+    return result
+
+
+def _memory_promotion_store_unavailable_v1(
+    reason_code: MemoryPromotionStoreReasonCodeV1,
+) -> MemoryPromotionStoreResultV1:
+    return MemoryPromotionStoreResultV1(
+        status="unavailable",
+        reason_code=reason_code,
+        refs=(),
+    )
+
+
+def _physical_rows_v1(result: object) -> dict[str, tuple[str, dict[str, Any]]]:
+    if not isinstance(result, Mapping):
+        raise _MemoryPromotionStoreUnavailableV1
+    ids = result.get("ids") or []
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    if (
+        not isinstance(ids, list)
+        or not isinstance(documents, list)
+        or not isinstance(metadatas, list)
+        or len(ids) != len(documents)
+        or len(ids) != len(metadatas)
+    ):
+        raise _MemoryPromotionStoreUnavailableV1
+    rows: dict[str, tuple[str, dict[str, Any]]] = {}
+    for document_id, document, metadata in zip(ids, documents, metadatas, strict=True):
+        if (
+            type(document_id) is not str
+            or not document_id
+            or type(document) is not str
+            or not isinstance(metadata, Mapping)
+            or document_id in rows
+        ):
+            raise _MemoryPromotionStoreUnavailableV1
+        normalized_metadata = dict(metadata)
+        if any(type(key) is not str for key in normalized_metadata):
+            raise _MemoryPromotionStoreUnavailableV1
+        rows[document_id] = (document, normalized_metadata)
+    return rows
+
+
+def _physical_matches_materialization_v1(
+    physical: tuple[str, Mapping[str, Any]],
+    expected: _MemoryPromotionMaterializationV1,
+) -> bool:
+    document, metadata = physical
+    try:
+        return (
+            canonical_json_bytes_v1(document) == expected.document_canonical_bytes
+            and canonical_json_bytes_v1(dict(metadata))
+            == expected.metadata_canonical_bytes
+            and metadata.get("semantic_hash") == expected.semantic_hash
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+async def _get_materializations_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    collection: Any,
+    document_ids: Sequence[str],
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    if not document_ids:
+        return {}
+    result = await _bounded_memory_promotion_call_v1(
+        capsule,
+        deadline,
+        "chroma_get",
+        lambda: collection.get(
+            ids=list(document_ids),
+            include=["documents", "metadatas"],
+        ),
+    )
+    return _physical_rows_v1(result)
+
+
+async def _fence_memory_promotion_authority_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    *,
+    expected_lock_key: str,
+    expected_authority_snapshot: object,
+    revalidate_authority: Callable[[object], bool],
+) -> bool:
+    if capsule.heartbeat_lost:
+        return False
+    lease = capsule.current_lease()
+    if (
+        lease is None
+        or lease.db_path is None
+        or lease.lock_key != expected_lock_key
+        or not lease.owner_id
+    ):
+        return False
+    try:
+        refreshed = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "lease_refresh",
+            lambda: refresh_runtime_lock(
+                lease,
+                lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+            ),
+        )
+    except (_MemoryPromotionCallTimeoutV1, asyncio.CancelledError):
+        raise
+    except Exception:
+        return False
+    if (
+        not isinstance(refreshed, RuntimeLockLease)
+        or refreshed.lock_key != lease.lock_key
+        or refreshed.owner_id != lease.owner_id
+        or refreshed.db_path != lease.db_path
+    ):
+        return False
+    capsule.replace_lease(refreshed)
+    try:
+        valid = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "authority_revalidate",
+            lambda: revalidate_authority(expected_authority_snapshot),
+        )
+    except (_MemoryPromotionCallTimeoutV1, asyncio.CancelledError):
+        raise
+    except Exception:
+        return False
+    return valid is True
+
+
+async def _memory_promotion_heartbeat_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+) -> None:
+    interval = max(0.25, _CHROMA_WRITE_LOCK_LEASE_SECONDS / 3)
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            lease = capsule.current_lease()
+            if lease is None or lease.db_path is None:
+                capsule.heartbeat_lost = True
+                return
+            timeout = deadline.call_timeout()
+            if timeout <= 0:
+                capsule.heartbeat_lost = True
+                return
+            native_task = asyncio.create_task(
+                asyncio.to_thread(
+                    refresh_runtime_lock,
+                    lease,
+                    lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+                )
+            )
+            capsule.heartbeat_native_task = native_task
+            try:
+                refreshed = await asyncio.wait_for(
+                    asyncio.shield(native_task),
+                    timeout=timeout,
+                )
+            except Exception:
+                capsule.heartbeat_lost = True
+                return
+            finally:
+                if native_task.done():
+                    capsule.heartbeat_native_task = None
+            if (
+                not isinstance(refreshed, RuntimeLockLease)
+                or refreshed.lock_key != lease.lock_key
+                or refreshed.owner_id != lease.owner_id
+                or refreshed.db_path != lease.db_path
+            ):
+                capsule.heartbeat_lost = True
+                return
+            capsule.replace_lease(refreshed)
+    except asyncio.CancelledError:
+        raise
+
+
+async def _finish_memory_promotion_resource_release_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+) -> None:
+    heartbeat = capsule.heartbeat
+    capsule.heartbeat = None
+    if heartbeat is not None:
+        heartbeat.cancel()
+        with suppress(BaseException):
+            await asyncio.shield(heartbeat)
+    heartbeat_native_task = capsule.heartbeat_native_task
+    capsule.heartbeat_native_task = None
+    if heartbeat_native_task is not None:
+        with suppress(BaseException):
+            await asyncio.shield(heartbeat_native_task)
+    if capsule.global_lock_state == "held":
+        capsule.global_lock_state = "not_acquired"
+        with suppress(RuntimeError):
+            _CHROMA_WRITE_LOCK.release()
+    elif capsule.global_lock_state == "pending":
+        capsule.global_lock_state = "not_acquired"
+    lease = capsule.current_lease()
+    if lease is not None:
+        release_task = capsule.release_native_task
+        if release_task is None:
+            release_task = asyncio.create_task(
+                asyncio.to_thread(release_runtime_lock, lease)
+            )
+            capsule.release_native_task = release_task
+        with suppress(BaseException):
+            await asyncio.shield(release_task)
+        if release_task.done():
+            capsule.release_native_task = None
+            capsule.clear_lease(lease)
+    capsule.mark_released()
+
+
+def _track_memory_promotion_cleanup_task_v1(task: asyncio.Task[Any]) -> None:
+    _MEMORY_PROMOTION_QUARANTINE_TASKS_V1.add(task)
+    task.add_done_callback(_MEMORY_PROMOTION_QUARANTINE_TASKS_V1.discard)
+
+
+async def _release_memory_promotion_resources_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    *,
+    quarantine: bool,
+    deadline: _MemoryPromotionDeadlineV1 | None = None,
+) -> None:
+    if not capsule.owns_release(quarantine=quarantine):
+        return
+    cleanup_task = capsule.cleanup_task
+    if cleanup_task is None:
+        cleanup_task = asyncio.create_task(
+            _finish_memory_promotion_resource_release_v1(capsule)
+        )
+        capsule.cleanup_task = cleanup_task
+    if quarantine:
+        with suppress(BaseException):
+            await asyncio.shield(cleanup_task)
+        return
+    timeout = (
+        deadline.call_timeout()
+        if deadline is not None
+        else MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1
+    )
+    try:
+        if timeout <= 0:
+            raise TimeoutError
+        await asyncio.wait_for(asyncio.shield(cleanup_task), timeout=timeout)
+    except TimeoutError:
+        if capsule.transfer_to_quarantine():
+            _track_memory_promotion_cleanup_task_v1(cleanup_task)
+    except BaseException:
+        if capsule.transfer_to_quarantine():
+            _track_memory_promotion_cleanup_task_v1(cleanup_task)
+        raise
+
+
+def _normalize_current_claims_v1(
+    value: object,
+) -> dict[str, MemoryPromotionCurrentClaimV1]:
+    if not isinstance(value, MemoryPromotionCurrentClaimsV1) or value.complete is not True:
+        raise _MemoryPromotionStoreUnavailableV1
+    claims: dict[str, MemoryPromotionCurrentClaimV1] = {}
+    for claim in value.claims:
+        if (
+            not isinstance(claim, MemoryPromotionCurrentClaimV1)
+            or not claim.document_id
+            or claim.document_id in claims
+        ):
+            raise _MemoryPromotionStoreUnavailableV1
+        claims[claim.document_id] = claim
+    return claims
+
+
+async def _fresh_compensation_claims_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    *,
+    expected_lock_key: str,
+    load_current_claims: Callable[[], MemoryPromotionCurrentClaimsV1],
+) -> dict[str, MemoryPromotionCurrentClaimV1]:
+    if capsule.heartbeat_lost:
+        raise _MemoryPromotionStoreUnavailableV1
+    lease = capsule.current_lease()
+    if (
+        lease is None
+        or lease.db_path is None
+        or lease.lock_key != expected_lock_key
+        or not lease.owner_id
+    ):
+        raise _MemoryPromotionStoreUnavailableV1
+    refreshed = await _bounded_memory_promotion_call_v1(
+        capsule,
+        deadline,
+        "lease_refresh",
+        lambda: refresh_runtime_lock(
+            lease,
+            lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        ),
+    )
+    if (
+        not isinstance(refreshed, RuntimeLockLease)
+        or refreshed.owner_id != lease.owner_id
+        or refreshed.lock_key != expected_lock_key
+        or refreshed.db_path != lease.db_path
+        or capsule.heartbeat_lost
+    ):
+        raise _MemoryPromotionStoreUnavailableV1
+    capsule.replace_lease(refreshed)
+    claims = _normalize_current_claims_v1(
+        await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "authority_scan",
+            load_current_claims,
+        )
+    )
+    if capsule.heartbeat_lost:
+        raise _MemoryPromotionStoreUnavailableV1
+    return claims
+
+
+async def _compensate_memory_promotion_writes_v1(
+    *,
+    user_id: str,
+    proofs: Sequence[MaterializationOwnershipProofV1],
+    load_current_claims: Callable[[], MemoryPromotionCurrentClaimsV1],
+    store: VectorStore | None,
+    deadline: _MemoryPromotionDeadlineV1 | None = None,
+) -> None:
+    if not proofs:
+        return
+    active_deadline = deadline or _MemoryPromotionDeadlineV1.start()
+    capsule = Stage3QuarantineOwnershipV1()
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    try:
+        lease = await _bounded_memory_promotion_call_v1(
+            capsule,
+            active_deadline,
+            "lease_acquire",
+            lambda: acquire_runtime_lock(
+                lock_key,
+                lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+            ),
+        )
+        if (
+            not isinstance(lease, RuntimeLockLease)
+            or lease.db_path is None
+            or lease.lock_key != lock_key
+        ):
+            return
+        capsule.replace_lease(lease)
+        capsule.global_lock_state = "pending"
+        acquired = await _bounded_memory_promotion_call_v1(
+            capsule,
+            active_deadline,
+            "global_lock_acquire",
+            lambda: _CHROMA_WRITE_LOCK.acquire(timeout=active_deadline.call_timeout()),
+        )
+        if acquired is not True:
+            capsule.global_lock_state = "not_acquired"
+            return
+        capsule.global_lock_state = "held"
+        capsule.heartbeat = asyncio.create_task(
+            _memory_promotion_heartbeat_v1(capsule, active_deadline)
+        )
+        await _fresh_compensation_claims_v1(
+            capsule,
+            active_deadline,
+            expected_lock_key=lock_key,
+            load_current_claims=load_current_claims,
+        )
+        active_store = store
+        if active_store is None:
+            active_store = await _bounded_memory_promotion_call_v1(
+                capsule,
+                active_deadline,
+                "store_lookup",
+                get_vector_store,
+            )
+        if not isinstance(active_store, VectorStore) or not active_store.available:
+            return
+        try:
+            collection = await _bounded_memory_promotion_call_v1(
+                capsule,
+                active_deadline,
+                "chroma_get_collection",
+                lambda: active_store._client.get_collection(
+                    name=memory_promotion_collection_name_v1(user_id)
+                ),
+            )
+        except (_MemoryPromotionCallTimeoutV1, asyncio.CancelledError):
+            raise
+        except Exception:
+            return
+        if not _exact_collection_metadata_v1(
+            getattr(collection, "metadata", None), user_id
+        ):
+            return
+        for proof in proofs:
+            current_claims = await _fresh_compensation_claims_v1(
+                capsule,
+                active_deadline,
+                expected_lock_key=lock_key,
+                load_current_claims=load_current_claims,
+            )
+            claim = current_claims.get(proof.document_id)
+            if claim is not None:
+                _preserve_fresh_memory_promotion_claim_v1(proof, claim)
+                continue
+            try:
+                physical_rows = await _get_materializations_v1(
+                    capsule,
+                    active_deadline,
+                    collection,
+                    [proof.document_id],
+                )
+            except (_MemoryPromotionCallTimeoutV1, asyncio.CancelledError):
+                raise
+            except Exception:
+                continue
+            current_claims = await _fresh_compensation_claims_v1(
+                capsule,
+                active_deadline,
+                expected_lock_key=lock_key,
+                load_current_claims=load_current_claims,
+            )
+            claim = current_claims.get(proof.document_id)
+            if claim is not None:
+                _preserve_fresh_memory_promotion_claim_v1(proof, claim)
+                continue
+            physical = physical_rows.get(proof.document_id)
+            if physical is None:
+                classification = classify_memory_promotion_compensation_v1(
+                    proof,
+                    current_claim=None,
+                    physical_document_canonical_bytes=None,
+                    physical_metadata_canonical_bytes=None,
+                    physical_semantic_hash=None,
+                )
+            else:
+                document, metadata = physical
+                try:
+                    document_bytes = canonical_json_bytes_v1(document)
+                    metadata_bytes = canonical_json_bytes_v1(metadata)
+                except (TypeError, ValueError):
+                    continue
+                classification = classify_memory_promotion_compensation_v1(
+                    proof,
+                    current_claim=None,
+                    physical_document_canonical_bytes=document_bytes,
+                    physical_metadata_canonical_bytes=metadata_bytes,
+                    physical_semantic_hash=cast(str | None, metadata.get("semantic_hash")),
+                )
+            if classification != "owned_stale_write":
+                continue
+            try:
+                await _bounded_memory_promotion_call_v1(
+                    capsule,
+                    active_deadline,
+                    "chroma_delete",
+                    lambda document_id=proof.document_id: collection.delete(ids=[document_id]),
+                )
+                readback = await _get_materializations_v1(
+                    capsule,
+                    active_deadline,
+                    collection,
+                    [proof.document_id],
+                )
+                if proof.document_id in readback:
+                    logger.warning(
+                        "memory promotion compensation preserved ambiguous residual"
+                    )
+            except (_MemoryPromotionCallTimeoutV1, asyncio.CancelledError):
+                raise
+            except Exception:
+                continue
+    except asyncio.CancelledError:
+        _schedule_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=store,
+        )
+        raise
+    except BaseException:
+        _schedule_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=store,
+        )
+        return
+    finally:
+        await _release_memory_promotion_resources_v1(
+            capsule, quarantine=False, deadline=active_deadline
+        )
+
+
+async def _quarantine_memory_promotion_attempt_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    *,
+    user_id: str,
+    load_current_claims: Callable[[], MemoryPromotionCurrentClaimsV1],
+    store: VectorStore | None,
+) -> None:
+    pending = capsule.task
+    pending_kind = capsule.task_kind
+    if pending is not None:
+        with suppress(BaseException):
+            result = await asyncio.shield(pending)
+            if pending_kind == "lease_acquire" and isinstance(result, RuntimeLockLease):
+                capsule.replace_lease(result)
+            elif pending_kind == "global_lock_acquire" and result is True:
+                capsule.global_lock_state = "held"
+    proofs = tuple(capsule.ownership_proofs)
+    compensation_deadline = (
+        _MemoryPromotionDeadlineV1.start() if proofs else None
+    )
+    await _release_memory_promotion_resources_v1(
+        capsule, quarantine=True, deadline=compensation_deadline
+    )
+    if proofs:
+        await _compensate_memory_promotion_writes_v1(
+            user_id=user_id,
+            proofs=proofs,
+            load_current_claims=load_current_claims,
+            store=store,
+            deadline=compensation_deadline,
+        )
+
+
+def _schedule_memory_promotion_quarantine_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    *,
+    user_id: str,
+    load_current_claims: Callable[[], MemoryPromotionCurrentClaimsV1],
+    store: VectorStore | None,
+) -> None:
+    if not capsule.transfer_to_quarantine():
+        return
+    task = asyncio.create_task(
+        _quarantine_memory_promotion_attempt_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=store,
+        )
+    )
+    _MEMORY_PROMOTION_QUARANTINE_TASKS_V1.add(task)
+    task.add_done_callback(_MEMORY_PROMOTION_QUARANTINE_TASKS_V1.discard)
+
+
+def _handoff_memory_promotion_quarantine_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    *,
+    user_id: str,
+    load_current_claims: Callable[[], MemoryPromotionCurrentClaimsV1],
+    store: VectorStore | None,
+) -> None:
+    _schedule_memory_promotion_quarantine_v1(
+        capsule,
+        user_id=user_id,
+        load_current_claims=load_current_claims,
+        store=store,
+    )
+
+
+async def _verify_memory_promotion_documents_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    collection: Any,
+    expected: Sequence[_MemoryPromotionMaterializationV1],
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    rows = await _get_materializations_v1(
+        capsule,
+        deadline,
+        collection,
+        [item.document_id for item in expected],
+    )
+    for item in expected:
+        physical = rows.get(item.document_id)
+        if physical is None:
+            raise _MemoryPromotionStoreUnavailableV1
+        if not _physical_matches_materialization_v1(physical, item):
+            raise _MemoryPromotionStoreConflictV1
+    return rows
+
+
+async def _add_memory_promotion_stage_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    *,
+    collection: Any,
+    missing: Sequence[_MemoryPromotionMaterializationV1],
+    expected_lock_key: str,
+    expected_authority_snapshot: object,
+    revalidate_authority: Callable[[object], bool],
+    source_authority_snapshot_hash: str,
+) -> None:
+    if not missing:
+        return
+    proofs = tuple(
+        MaterializationOwnershipProofV1(
+            document_id=item.document_id,
+            preflight_missing=True,
+            native_call_membership=True,
+            submitted_document_canonical_bytes=item.document_canonical_bytes,
+            submitted_metadata_canonical_bytes=item.metadata_canonical_bytes,
+            submitted_semantic_hash=item.semantic_hash,
+            source_authority_snapshot_hash=source_authority_snapshot_hash,
+        )
+        for item in missing
+    )
+    capsule.ownership_proofs.extend(proofs)
+    add_error: Exception | None = None
+    try:
+        await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "chroma_add",
+            lambda: collection.add(
+                ids=[item.document_id for item in missing],
+                documents=[item.document for item in missing],
+                metadatas=[item.metadata_dict() for item in missing],
+            ),
+        )
+    except _MemoryPromotionCallTimeoutV1:
+        raise
+    except Exception as exc:
+        add_error = exc
+    try:
+        fence_valid = await _fence_memory_promotion_authority_v1(
+            capsule,
+            deadline,
+            expected_lock_key=expected_lock_key,
+            expected_authority_snapshot=expected_authority_snapshot,
+            revalidate_authority=revalidate_authority,
+        )
+    except _MemoryPromotionCallTimeoutV1 as exc:
+        raise _MemoryPromotionPostWriteAuthorityLostV1 from exc
+    if not fence_valid:
+        raise _MemoryPromotionPostWriteAuthorityLostV1
+    try:
+        await _verify_memory_promotion_documents_v1(
+            capsule,
+            deadline,
+            collection,
+            missing,
+        )
+    except _MemoryPromotionStoreUnavailableV1:
+        if add_error is not None:
+            raise _MemoryPromotionStoreUnavailableV1 from add_error
+        raise
+
+
+async def store_verified_memory_promotions_v1(
+    *,
+    user_id: str,
+    batch: object,
+    expected_authority_snapshot: object,
+    revalidate_authority: Callable[[object], bool],
+    load_current_claims: Callable[[], MemoryPromotionCurrentClaimsV1],
+    store: VectorStore | None = None,
+) -> MemoryPromotionStoreResultV1:
+    """Materialize one prevalidated tree with root-last visibility and ABA fencing."""
+
+    if getattr(batch, "status", None) == "empty":
+        return MemoryPromotionStoreResultV1(status="empty", reason_code=None, refs=())
+    if (
+        getattr(batch, "status", None) == "verified"
+        and getattr(batch, "owner_id", None) != user_id
+    ):
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_OWNER_MISMATCH"
+        )
+    try:
+        records, children, root, source_hash, refs = _normalize_memory_promotion_batch_v1(
+            batch,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        if exc.args == ("credential",):
+            return _memory_promotion_store_unavailable_v1(
+                "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+            )
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_RECORD_CONFLICT"
+        )
+    except Exception:
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_RECORD_CONFLICT"
+        )
+
+    deadline = _MemoryPromotionDeadlineV1.start()
+    capsule = Stage3QuarantineOwnershipV1()
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    collection: Any | None = None
+    active_store = store
+    wrote_any = False
+    try:
+        lease = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "lease_acquire",
+            lambda: acquire_runtime_lock(
+                lock_key,
+                lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+            ),
+        )
+        if (
+            not isinstance(lease, RuntimeLockLease)
+            or lease.db_path is None
+            or lease.lock_key != lock_key
+            or not lease.owner_id
+        ):
+            return _memory_promotion_store_unavailable_v1(
+                "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+            )
+        capsule.replace_lease(lease)
+        capsule.global_lock_state = "pending"
+        acquired = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "global_lock_acquire",
+            lambda: _CHROMA_WRITE_LOCK.acquire(timeout=deadline.call_timeout()),
+        )
+        if acquired is not True:
+            capsule.global_lock_state = "not_acquired"
+            return _memory_promotion_store_unavailable_v1(
+                "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+            )
+        capsule.global_lock_state = "held"
+        capsule.heartbeat = asyncio.create_task(
+            _memory_promotion_heartbeat_v1(capsule, deadline)
+        )
+        if not await _fence_memory_promotion_authority_v1(
+            capsule,
+            deadline,
+            expected_lock_key=lock_key,
+            expected_authority_snapshot=expected_authority_snapshot,
+            revalidate_authority=revalidate_authority,
+        ):
+            return _memory_promotion_store_unavailable_v1(
+                "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+            )
+
+        if active_store is None:
+            active_store = await _bounded_memory_promotion_call_v1(
+                capsule,
+                deadline,
+                "store_lookup",
+                get_vector_store,
+            )
+        if not isinstance(active_store, VectorStore) or not active_store.available:
+            return _memory_promotion_store_unavailable_v1(
+                "MEMORY_PROMOTION_STORE_UNAVAILABLE"
+            )
+        collection = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "chroma_get_or_create_collection",
+            lambda: active_store._client.get_or_create_collection(
+                name=memory_promotion_collection_name_v1(user_id),
+                metadata=memory_promotion_collection_metadata_v1(user_id),
+            ),
+        )
+        if not _exact_collection_metadata_v1(getattr(collection, "metadata", None), user_id):
+            raise _MemoryPromotionStoreConflictV1
+
+        all_documents = (root,) + children + records
+        preflight = await _get_materializations_v1(
+            capsule,
+            deadline,
+            collection,
+            [item.document_id for item in all_documents],
+        )
+        for item in all_documents:
+            physical = preflight.get(item.document_id)
+            if physical is not None and not _physical_matches_materialization_v1(
+                physical, item
+            ):
+                raise _MemoryPromotionStoreConflictV1
+
+        for item in records:
+            reverse = await _bounded_memory_promotion_call_v1(
+                capsule,
+                deadline,
+                "chroma_get_ref_reverse",
+                lambda memory_ref=item.memory_ref: collection.get(
+                    where={"memory_ref": memory_ref},
+                    include=["documents", "metadatas"],
+                ),
+            )
+            reverse_rows = _physical_rows_v1(reverse)
+            if any(document_id != item.document_id for document_id in reverse_rows):
+                raise _MemoryPromotionStoreConflictV1
+            if item.document_id in reverse_rows and not _physical_matches_materialization_v1(
+                reverse_rows[item.document_id], item
+            ):
+                raise _MemoryPromotionStoreConflictV1
+
+        for stage in (records, children, (root,)):
+            missing = tuple(
+                item for item in stage if item.document_id not in preflight
+            )
+            if not missing:
+                continue
+            wrote_any = True
+            await _add_memory_promotion_stage_v1(
+                capsule,
+                deadline,
+                collection=collection,
+                missing=missing,
+                expected_lock_key=lock_key,
+                expected_authority_snapshot=expected_authority_snapshot,
+                revalidate_authority=revalidate_authority,
+                source_authority_snapshot_hash=source_hash,
+            )
+            preflight.update(
+                await _verify_memory_promotion_documents_v1(
+                    capsule,
+                    deadline,
+                    collection,
+                    missing,
+                )
+            )
+
+        await _verify_memory_promotion_documents_v1(
+            capsule,
+            deadline,
+            collection,
+            all_documents,
+        )
+        try:
+            final_fence_valid = await _fence_memory_promotion_authority_v1(
+                capsule,
+                deadline,
+                expected_lock_key=lock_key,
+                expected_authority_snapshot=expected_authority_snapshot,
+                revalidate_authority=revalidate_authority,
+            )
+        except _MemoryPromotionCallTimeoutV1 as exc:
+            if wrote_any:
+                raise _MemoryPromotionPostWriteAuthorityLostV1 from exc
+            raise
+        if not final_fence_valid:
+            if wrote_any:
+                raise _MemoryPromotionPostWriteAuthorityLostV1
+            return _memory_promotion_store_unavailable_v1(
+                "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+            )
+        return MemoryPromotionStoreResultV1(
+            status="stored" if wrote_any else "already_present",
+            reason_code=None,
+            refs=refs,
+        )
+    except _MemoryPromotionPostWriteAuthorityLostV1:
+        _handoff_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=active_store,
+        )
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST"
+        )
+    except _MemoryPromotionStoreConflictV1:
+        _handoff_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=active_store,
+        )
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_RECORD_CONFLICT"
+        )
+    except _MemoryPromotionCallTimeoutV1:
+        timeout_kind = capsule.task_kind
+        _handoff_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=active_store,
+        )
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+            if timeout_kind
+            in {
+                "lease_acquire",
+                "global_lock_acquire",
+                "lease_refresh",
+                "authority_revalidate",
+            }
+            and not capsule.ownership_proofs
+            else "MEMORY_PROMOTION_STORE_UNAVAILABLE"
+        )
+    except asyncio.CancelledError:
+        _schedule_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=active_store,
+        )
+        raise
+    except Exception:
+        _handoff_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=active_store,
+        )
+        return _memory_promotion_store_unavailable_v1(
+            "MEMORY_PROMOTION_STORE_UNAVAILABLE"
+        )
+    except BaseException:
+        _schedule_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=load_current_claims,
+            store=active_store,
+        )
+        raise
+    finally:
+        await _release_memory_promotion_resources_v1(
+            capsule, quarantine=False, deadline=deadline
+        )
+
+
+def _materialization_from_physical_v1(
+    document_id: object,
+    document: object,
+    metadata_value: object,
+) -> _MemoryPromotionMaterializationV1:
+    if (
+        type(document_id) is not str
+        or not document_id
+        or type(document) is not str
+        or not isinstance(metadata_value, Mapping)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    metadata = dict(metadata_value)
+    if any(
+        type(key) is not str or type(value) not in {str, int, bool}
+        for key, value in metadata.items()
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    canonical_payload = metadata.get("canonical_payload")
+    if type(canonical_payload) is not str:
+        raise _MemoryPromotionStoreConflictV1
+    try:
+        semantic_payload = json.loads(canonical_payload)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _MemoryPromotionStoreConflictV1 from exc
+    if not isinstance(semantic_payload, Mapping):
+        raise _MemoryPromotionStoreConflictV1
+    semantic_hash = metadata.get("semantic_hash")
+    contract = metadata.get("document_contract")
+    memory_ref = (
+        metadata.get("memory_ref")
+        if contract == _MEMORY_PROMOTION_RECORD_CONTRACT_V1
+        else None
+    )
+    if (
+        contract not in _MEMORY_PROMOTION_DOCUMENT_CONTRACTS_V1
+        or not _is_sha256_digest_v1(semantic_hash)
+        or semantic_hash != _sha256_digest_v1(semantic_payload)
+        or canonical_payload != canonical_json_bytes_v1(semantic_payload).decode("utf-8")
+        or (
+            memory_ref is not None
+            and (
+                type(memory_ref) is not str
+                or len(memory_ref) != _IDENTITY_MEMORY_REF_LENGTH
+                or any(character not in "0123456789abcdef" for character in memory_ref)
+            )
+        )
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    canonical_metadata = tuple(sorted(metadata.items()))
+    return _MemoryPromotionMaterializationV1(
+        document_id=document_id,
+        document=document,
+        metadata=canonical_metadata,
+        document_canonical_bytes=canonical_json_bytes_v1(document),
+        metadata_canonical_bytes=canonical_json_bytes_v1(metadata),
+        semantic_hash=cast(str, semantic_hash),
+        semantic_payload=cast(Mapping[str, Any], semantic_payload),
+        memory_ref=cast(str | None, memory_ref),
+    )
+
+
+def _physical_query_rows_v1(
+    result: object,
+) -> list[tuple[_MemoryPromotionMaterializationV1, float]]:
+    if not isinstance(result, Mapping):
+        raise _MemoryPromotionStoreConflictV1
+    outer_ids = result.get("ids")
+    outer_documents = result.get("documents")
+    outer_metadatas = result.get("metadatas")
+    outer_distances = result.get("distances")
+    if not all(
+        isinstance(value, list) and len(value) == 1
+        for value in (outer_ids, outer_documents, outer_metadatas, outer_distances)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    ids = outer_ids[0]
+    documents = outer_documents[0]
+    metadatas = outer_metadatas[0]
+    distances = outer_distances[0]
+    if (
+        not all(isinstance(value, list) for value in (ids, documents, metadatas, distances))
+        or not len(ids) == len(documents) == len(metadatas) == len(distances)
+        or len(ids) > MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    rows: list[tuple[_MemoryPromotionMaterializationV1, float]] = []
+    for document_id, document, metadata, distance in zip(
+        ids, documents, metadatas, distances, strict=True
+    ):
+        if type(distance) not in {int, float} or not math.isfinite(float(distance)):
+            raise _MemoryPromotionStoreConflictV1
+        rows.append(
+            (
+                _materialization_from_physical_v1(document_id, document, metadata),
+                float(distance),
+            )
+        )
+    return rows
+
+
+def _physical_candidate_ids_v1(result: object) -> list[str]:
+    if not isinstance(result, Mapping):
+        raise _MemoryPromotionStoreConflictV1
+    document_ids = result.get("ids")
+    if (
+        not isinstance(document_ids, list)
+        or len(document_ids) > MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1
+        or any(type(document_id) is not str or not document_id for document_id in document_ids)
+        or len(set(document_ids)) != len(document_ids)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    return document_ids
+
+
+async def _physical_documents_by_id_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    collection: Any,
+    document_ids: Sequence[str],
+    budget: _MemoryPromotionPurgeBudgetV1,
+) -> tuple[_MemoryPromotionMaterializationV1, ...]:
+    if not document_ids or len(set(document_ids)) != len(document_ids):
+        raise _MemoryPromotionStoreConflictV1
+    _purge_require_client_call_v1(budget)
+    result = await _bounded_memory_promotion_call_v1(
+        capsule,
+        deadline,
+        "chroma_get",
+        lambda: collection.get(
+            ids=list(document_ids),
+            include=["documents", "metadatas"],
+        ),
+    )
+    if not isinstance(result, Mapping):
+        raise _MemoryPromotionStoreConflictV1
+    ids = result.get("ids")
+    documents = result.get("documents")
+    metadatas = result.get("metadatas")
+    if (
+        not isinstance(ids, list)
+        or not isinstance(documents, list)
+        or not isinstance(metadatas, list)
+        or not len(ids) == len(documents) == len(metadatas) == len(document_ids)
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    rows = {
+        item.document_id: item
+        for item in (
+            _materialization_from_physical_v1(document_id, document, metadata)
+            for document_id, document, metadata in zip(
+                ids, documents, metadatas, strict=True
+            )
+        )
+    }
+    if len(rows) != len(document_ids) or set(rows) != set(document_ids):
+        raise _MemoryPromotionStoreConflictV1
+    return tuple(rows[document_id] for document_id in document_ids)
+
+
+async def _load_complete_memory_promotion_tree_v1(
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    collection: Any,
+    root_manifest_id: str,
+    budget: _MemoryPromotionPurgeBudgetV1,
+) -> tuple[_MemoryPromotionMaterializationV1, ...]:
+    (root,) = await _physical_documents_by_id_v1(
+        capsule, deadline, collection, [root_manifest_id], budget
+    )
+    child_ids_value = root.semantic_payload.get("child_manifest_ids")
+    if not isinstance(child_ids_value, list) or not child_ids_value or any(
+        type(item) is not str or not item for item in child_ids_value
+    ):
+        raise _MemoryPromotionStoreConflictV1
+    children = await _physical_documents_by_id_v1(
+        capsule, deadline, collection, cast(list[str], child_ids_value), budget
+    )
+    record_ids: list[str] = []
+    for child in children:
+        child_record_ids = child.semantic_payload.get("record_ids")
+        if not isinstance(child_record_ids, list) or not child_record_ids or any(
+            type(item) is not str or not item for item in child_record_ids
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        record_ids.extend(cast(list[str], child_record_ids))
+    records = await _physical_documents_by_id_v1(
+        capsule, deadline, collection, record_ids, budget
+    )
+    if any(
+        contains_credential_material(item.document)
+        or _contains_credential_recursive_v1(item.semantic_payload)
+        or _contains_credential_recursive_v1(item.metadata_dict())
+        for item in records + children + (root,)
+    ):
+        raise ValueError("credential")
+    _validate_memory_promotion_tree_v1(records=records, children=children, root=root)
+    return records
+
+
+async def _all_memory_promotion_query_rows_v1(
+    *,
+    capsule: Stage3QuarantineOwnershipV1,
+    deadline: _MemoryPromotionDeadlineV1,
+    collection: Any,
+    identity_id: str,
+    current_scenario_id: str,
+    query_text: str,
+    budget: _MemoryPromotionPurgeBudgetV1,
+) -> list[tuple[_MemoryPromotionMaterializationV1, float]]:
+    where = {
+        "$and": [
+            {"identity_id": {"$eq": identity_id}},
+            {"scenario_id": {"$ne": current_scenario_id}},
+            {
+                "document_contract": {
+                    "$eq": _MEMORY_PROMOTION_RECORD_CONTRACT_V1
+                }
+            },
+        ]
+    }
+    candidate_pages: list[tuple[str, ...]] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    while True:
+        if budget.document_pages >= MEMORY_PROMOTION_PURGE_MAX_DOCUMENT_PAGES_V1:
+            raise _MemoryPromotionPurgeCapReachedV1
+        _purge_require_client_call_v1(budget)
+        budget.document_pages += 1
+        page_result = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "chroma_get",
+            lambda: collection.get(
+                where=where,
+                limit=MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1,
+                offset=offset,
+                include=[],
+            ),
+        )
+        page_ids = _physical_candidate_ids_v1(page_result)
+        if seen_ids.intersection(page_ids):
+            raise _MemoryPromotionStoreConflictV1
+        seen_ids.update(page_ids)
+        budget.documents += len(page_ids)
+        if budget.documents > MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1:
+            raise _MemoryPromotionPurgeCapReachedV1
+        if page_ids:
+            candidate_pages.append(tuple(page_ids))
+        if len(page_ids) < MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1:
+            break
+        if budget.documents >= MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1:
+            raise _MemoryPromotionPurgeCapReachedV1
+        offset += len(page_ids)
+
+    query_rows: list[tuple[_MemoryPromotionMaterializationV1, float]] = []
+    for page_ids in candidate_pages:
+        _purge_require_client_call_v1(budget)
+        query_result = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "chroma_query",
+            lambda: collection.query(
+                ids=list(page_ids),
+                query_texts=[query_text],
+                n_results=len(page_ids),
+                where=where,
+                include=["documents", "metadatas", "distances"],
+            ),
+        )
+        page_rows = _physical_query_rows_v1(query_result)
+        if (
+            len(page_rows) != len(page_ids)
+            or {row.document_id for row, _distance in page_rows} != set(page_ids)
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        query_rows.extend(page_rows)
+    return query_rows
+
+
+async def recall_verified_memory_promotions_v1(
+    *,
+    user_id: str,
+    identity_id: str,
+    current_scenario_id: str,
+    query_text: str,
+    store: VectorStore | None = None,
+) -> Any | None:
+    """Return one manifest-verified V1 RecallContext, or None for the legacy selector."""
+
+    if not (
+        settings.FEATURE_AGENT_IDENTITY and settings.FEATURE_MEMORY_PROMOTION
+    ):
+        return None
+    from app.services.memory import build_recall_context_v1
+
+    if any(
+        type(value) is not str or not value
+        for value in (user_id, identity_id, current_scenario_id, query_text)
+    ):
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
+        )
+    deadline = _MemoryPromotionDeadlineV1.start()
+    capsule = Stage3QuarantineOwnershipV1()
+    budget = _MemoryPromotionPurgeBudgetV1()
+    active_store = store
+    try:
+        if active_store is None:
+            active_store = await _bounded_memory_promotion_call_v1(
+                capsule, deadline, "store_lookup", get_vector_store
+            )
+        if not isinstance(active_store, VectorStore) or not active_store.available:
+            return build_recall_context_v1(
+                (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+            )
+        collection_name = memory_promotion_collection_name_v1(user_id)
+        _purge_require_client_call_v1(budget)
+        listed = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "chroma_list_collections",
+            active_store._client.list_collections,
+        )
+        if not isinstance(listed, Sequence) or isinstance(
+            listed, (str, bytes, bytearray)
+        ):
+            raise _MemoryPromotionStoreConflictV1
+        matching_names = [
+            _listed_collection_name_v1(item)
+            for item in listed
+            if _listed_collection_name_v1(item) == collection_name
+        ]
+        if not matching_names:
+            return build_recall_context_v1((), status="empty")
+        if len(matching_names) != 1:
+            raise _MemoryPromotionStoreConflictV1
+        _purge_require_client_call_v1(budget)
+        collection = await _bounded_memory_promotion_call_v1(
+            capsule,
+            deadline,
+            "chroma_get_collection",
+            lambda: active_store._client.get_collection(name=collection_name),
+        )
+        if not _exact_collection_metadata_v1(
+            getattr(collection, "metadata", None), user_id
+        ):
+            return build_recall_context_v1(
+                (), status="unavailable", reason_code="MEMORY_RECALL_VERSION_IGNORED"
+            )
+        query_rows = await _all_memory_promotion_query_rows_v1(
+            capsule=capsule,
+            deadline=deadline,
+            collection=collection,
+            identity_id=identity_id,
+            current_scenario_id=current_scenario_id,
+            query_text=query_text,
+            budget=budget,
+        )
+        if not query_rows:
+            return build_recall_context_v1((), status="empty")
+        tree_cache: dict[str, tuple[_MemoryPromotionMaterializationV1, ...]] = {}
+        items: list[dict[str, Any]] = []
+        seen_refs: set[str] = set()
+        for queried, distance in query_rows:
+            if (
+                contains_credential_material(queried.document)
+                or _contains_credential_recursive_v1(queried.semantic_payload)
+                or _contains_credential_recursive_v1(queried.metadata_dict())
+            ):
+                raise ValueError("credential")
+            payload = queried.semantic_payload
+            if (
+                payload.get("identity_id") != identity_id
+                or payload.get("scenario_id") == current_scenario_id
+                or payload.get("record_contract") != _MEMORY_PROMOTION_RECORD_CONTRACT_V1
+                or type(payload.get("root_manifest_id")) is not str
+            ):
+                raise _MemoryPromotionStoreConflictV1
+            root_manifest_id = cast(str, payload["root_manifest_id"])
+            tree_records = tree_cache.get(root_manifest_id)
+            if tree_records is None:
+                tree_records = await _load_complete_memory_promotion_tree_v1(
+                    capsule, deadline, collection, root_manifest_id, budget
+                )
+                tree_cache[root_manifest_id] = tree_records
+            records_by_id = {item.document_id: item for item in tree_records}
+            durable = records_by_id.get(queried.document_id)
+            if (
+                durable is None
+                or durable.document_canonical_bytes != queried.document_canonical_bytes
+                or durable.metadata_canonical_bytes != queried.metadata_canonical_bytes
+                or queried.memory_ref is None
+                or queried.memory_ref in seen_refs
+            ):
+                raise _MemoryPromotionStoreConflictV1
+            seen_refs.add(queried.memory_ref)
+            promotion_key = payload["promotion_key"]
+            items.append(
+                {
+                    "memory_ref": queried.memory_ref,
+                    "summary": queried.document,
+                    "source_scenario_id": payload["scenario_id"],
+                    "schema_hash": promotion_key["schema_hash"],
+                    "action_id": promotion_key["action_id"],
+                    "rule_id": promotion_key["rule_id"],
+                    "variable_id": promotion_key["variable_id"],
+                    "input_state_revision": payload["input_state_revision"],
+                    "distance": distance,
+                }
+            )
+        return build_recall_context_v1(items)
+    except ValueError as exc:
+        if exc.args == ("credential",):
+            return build_recall_context_v1(
+                (),
+                status="unavailable",
+                reason_code="MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+            )
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
+        )
+    except _MemoryPromotionPurgeCapReachedV1:
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+        )
+    except _MemoryPromotionStoreConflictV1:
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_RECORD_MISMATCH"
+        )
+    except _MemoryPromotionCallTimeoutV1:
+        _handoff_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=lambda: MemoryPromotionCurrentClaimsV1(
+                complete=True, claims=()
+            ),
+            store=active_store,
+        )
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+        )
+    except asyncio.CancelledError:
+        _schedule_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=lambda: MemoryPromotionCurrentClaimsV1(
+                complete=True, claims=()
+            ),
+            store=active_store,
+        )
+        raise
+    except Exception:
+        _handoff_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=lambda: MemoryPromotionCurrentClaimsV1(
+                complete=True, claims=()
+            ),
+            store=active_store,
+        )
+        return build_recall_context_v1(
+            (), status="unavailable", reason_code="MEMORY_RECALL_STORE_UNAVAILABLE"
+        )
+    except BaseException:
+        _schedule_memory_promotion_quarantine_v1(
+            capsule,
+            user_id=user_id,
+            load_current_claims=lambda: MemoryPromotionCurrentClaimsV1(
+                complete=True, claims=()
+            ),
+            store=active_store,
+        )
+        raise
+    finally:
+        await _release_memory_promotion_resources_v1(
+            capsule, quarantine=False, deadline=deadline
+        )
+
+
+@dataclass(slots=True)
+class _MemoryPromotionPurgeBudgetV1:
+    collection_pages: int = 0
+    collection_handles: int = 0
+    document_pages: int = 0
+    documents: int = 0
+    delete_batches: int = 0
+    client_calls: int = 0
+    warning_emitted: bool = False
+
+
+class _MemoryPromotionPurgeCapReachedV1(RuntimeError):
+    pass
+
+
+class _MemoryPromotionPurgeFailureV1(RuntimeError):
+    pass
+
+
+def _purge_cap_warning_v1(budget: _MemoryPromotionPurgeBudgetV1) -> None:
+    if budget.warning_emitted:
+        return
+    budget.warning_emitted = True
+    logger.warning(
+        "reason=memory_promotion_v1_purge_cap_reached residual=true "
+        "collection_pages=%d collection_handles=%d document_pages=%d "
+        "documents=%d delete_batches=%d client_calls=%d",
+        budget.collection_pages,
+        budget.collection_handles,
+        budget.document_pages,
+        budget.documents,
+        budget.delete_batches,
+        budget.client_calls,
+    )
+
+
+def _purge_require_client_call_v1(budget: _MemoryPromotionPurgeBudgetV1) -> None:
+    if budget.client_calls >= MEMORY_PROMOTION_PURGE_MAX_CLIENT_CALLS_V1:
+        raise _MemoryPromotionPurgeCapReachedV1
+    budget.client_calls += 1
+
+
+def _purge_require_client_calls_available_v1(
+    budget: _MemoryPromotionPurgeBudgetV1, count: int
+) -> None:
+    if count < 1 or (
+        budget.client_calls + count
+        > MEMORY_PROMOTION_PURGE_MAX_CLIENT_CALLS_V1
+    ):
+        raise _MemoryPromotionPurgeCapReachedV1
+
+
+def _listed_collection_name_v1(item: object) -> str:
+    if type(item) is str:
+        name = item
+    else:
+        name = getattr(item, "name", None)
+    if type(name) is not str or not name:
+        raise _MemoryPromotionPurgeFailureV1
+    return name
+
+
+def _purge_document_ids_v1(result: object) -> list[str]:
+    if not isinstance(result, Mapping):
+        raise _MemoryPromotionPurgeFailureV1
+    ids = result.get("ids")
+    if ids is None:
+        return []
+    if not isinstance(ids, list) or len(ids) > MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1:
+        raise _MemoryPromotionPurgeFailureV1
+    if any(type(document_id) is not str or not document_id for document_id in ids):
+        raise _MemoryPromotionPurgeFailureV1
+    if len(set(ids)) != len(ids):
+        raise _MemoryPromotionPurgeFailureV1
+    return ids
+
+
+def _purge_returned_document_count_v1(result: object) -> int:
+    if not isinstance(result, Mapping):
+        raise _MemoryPromotionPurgeFailureV1
+    ids = result.get("ids")
+    if ids is None:
+        return 0
+    if not isinstance(ids, list):
+        raise _MemoryPromotionPurgeFailureV1
+    return len(ids)
+
+
+def _purge_one_memory_promotion_collection_v1(
+    collection: Any,
+    budget: _MemoryPromotionPurgeBudgetV1,
+) -> None:
+    while True:
+        if budget.document_pages >= MEMORY_PROMOTION_PURGE_MAX_DOCUMENT_PAGES_V1:
+            raise _MemoryPromotionPurgeCapReachedV1
+        if budget.documents >= MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1:
+            raise _MemoryPromotionPurgeCapReachedV1
+        if budget.delete_batches >= MEMORY_PROMOTION_PURGE_MAX_DELETE_BATCHES_V1:
+            raise _MemoryPromotionPurgeCapReachedV1
+        _purge_require_client_call_v1(budget)
+        budget.document_pages += 1
+        try:
+            page = collection.get(
+                limit=MEMORY_PROMOTION_PURGE_DOCUMENT_PAGE_SIZE_V1,
+                offset=0,
+                include=[],
+            )
+        except Exception as exc:
+            raise _MemoryPromotionPurgeFailureV1 from exc
+        returned_count = _purge_returned_document_count_v1(page)
+        if budget.documents + returned_count > MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1:
+            budget.documents = MEMORY_PROMOTION_PURGE_MAX_DOCUMENTS_V1
+            raise _MemoryPromotionPurgeCapReachedV1
+        budget.documents += returned_count
+        document_ids = _purge_document_ids_v1(page)
+        if not document_ids:
+            return
+        for start in range(0, len(document_ids), MEMORY_PROMOTION_PURGE_DELETE_BATCH_SIZE_V1):
+            if budget.delete_batches >= MEMORY_PROMOTION_PURGE_MAX_DELETE_BATCHES_V1:
+                raise _MemoryPromotionPurgeCapReachedV1
+            batch = document_ids[
+                start : start + MEMORY_PROMOTION_PURGE_DELETE_BATCH_SIZE_V1
+            ]
+            _purge_require_client_calls_available_v1(budget, 2)
+            _purge_require_client_call_v1(budget)
+            budget.delete_batches += 1
+            try:
+                collection.delete(ids=batch)
+            except Exception as exc:
+                raise _MemoryPromotionPurgeFailureV1 from exc
+            _purge_require_client_call_v1(budget)
+            try:
+                readback = collection.get(ids=batch, include=[])
+            except Exception as exc:
+                raise _MemoryPromotionPurgeFailureV1 from exc
+            if _purge_document_ids_v1(readback):
+                raise _MemoryPromotionPurgeFailureV1
+
+
+def _purge_memory_promotion_v1(client: Any, user_id: str) -> None:
+    """Best-effort owner-wide V1 purge; never reconstructs a collection name."""
+
+    budget = _MemoryPromotionPurgeBudgetV1()
+    expected_metadata = memory_promotion_collection_metadata_v1(user_id)
+    seen_names: set[str] = set()
+    offset = 0
+    try:
+        while True:
+            if budget.collection_pages >= MEMORY_PROMOTION_PURGE_MAX_COLLECTION_PAGES_V1:
+                raise _MemoryPromotionPurgeCapReachedV1
+            _purge_require_client_call_v1(budget)
+            budget.collection_pages += 1
+            try:
+                page = client.list_collections(
+                    limit=MEMORY_PROMOTION_PURGE_COLLECTION_PAGE_SIZE_V1,
+                    offset=offset,
+                )
+            except Exception as exc:
+                raise _MemoryPromotionPurgeFailureV1 from exc
+            if not isinstance(page, Sequence) or isinstance(
+                page, (str, bytes, bytearray)
+            ):
+                raise _MemoryPromotionPurgeFailureV1
+            handles = list(page)
+            if (
+                budget.collection_handles + len(handles)
+                > MEMORY_PROMOTION_PURGE_MAX_COLLECTION_HANDLES_V1
+            ):
+                budget.collection_handles = MEMORY_PROMOTION_PURGE_MAX_COLLECTION_HANDLES_V1
+                raise _MemoryPromotionPurgeCapReachedV1
+            budget.collection_handles += len(handles)
+            if len(handles) > MEMORY_PROMOTION_PURGE_COLLECTION_PAGE_SIZE_V1:
+                raise _MemoryPromotionPurgeFailureV1
+            for handle in handles:
+                name = _listed_collection_name_v1(handle)
+                if name in seen_names:
+                    raise _MemoryPromotionPurgeFailureV1
+                seen_names.add(name)
+                _purge_require_client_call_v1(budget)
+                try:
+                    collection = client.get_collection(name=name)
+                except Exception as exc:
+                    raise _MemoryPromotionPurgeFailureV1 from exc
+                metadata = getattr(collection, "metadata", None)
+                if not isinstance(metadata, Mapping) or dict(metadata) != expected_metadata:
+                    continue
+                _purge_one_memory_promotion_collection_v1(collection, budget)
+            if len(handles) < MEMORY_PROMOTION_PURGE_COLLECTION_PAGE_SIZE_V1:
+                return
+            offset += len(handles)
+    except _MemoryPromotionPurgeCapReachedV1:
+        _purge_cap_warning_v1(budget)
+    except _MemoryPromotionPurgeFailureV1:
+        logger.warning("memory promotion V1 purge preserved residual after sanitized failure")

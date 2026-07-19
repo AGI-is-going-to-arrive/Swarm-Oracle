@@ -1,16 +1,23 @@
 """Tests for app.services.vector_store — ChromaDB vector memory L2."""
 
+import asyncio
+import copy
+import dataclasses
+import hashlib
+import itertools
 import json
 import shutil
 import tempfile
 import threading
 import time
 from collections import OrderedDict
+from pathlib import PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
 
 from app.services import vector_store as vector_store_module
+from app.services.memory import build_verified_memory_promotions_v1
 from app.services.vector_store import (
     VectorStore,
     _identity_collection_name,
@@ -25,6 +32,12 @@ from app.services.vector_store import (
     search_identity_candidates,
     store_identity_memory,
     store_identity_profile,
+)
+from tests.test_memory import (
+    _SYNTHETIC_CREDENTIAL_CORPUS_V1,
+    _promotion_authority,
+    _promotion_two_identity_authority,
+    _reproject_promotion_authority,
 )
 
 
@@ -1358,3 +1371,1913 @@ class TestIdentityMemory:
             n_results=5,
         )
         assert len(memories) == 1
+
+
+# ── Verified memory promotion V1 ─────────────────────────────
+
+
+def _promotion_semantic_hash(label: str) -> str:
+    return "sha256:" + hashlib.sha256(label.encode()).hexdigest()
+
+
+def _promotion_tree_hash(rows) -> str:
+    payload = [
+        [document_id, document, metadata]
+        for document_id, (document, metadata) in sorted(rows.items())
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _promotion_batch(user_id: str = "user-a"):
+    authority = _promotion_authority()
+    authority["user_id"] = user_id
+    authority["roster"][0]["identity_owner_id"] = user_id
+    authority["actions"][0]["identity_owner_id"] = user_id
+    batch = build_verified_memory_promotions_v1(authority)
+    assert batch.status == "verified"
+    return batch
+
+
+def _promotion_batch_for_source(index: int):
+    replacements = {
+        "scenario-1": f"source-scenario-{index}",
+        "branch-1": f"source-branch-{index}",
+        "round-1": f"source-round-{index}",
+        "message-1": f"source-message-{index}",
+        "action-1": f"source-action-{index}",
+    }
+
+    def remap(value):
+        if isinstance(value, dict):
+            return {key: remap(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [remap(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(remap(item) for item in value)
+        return replacements.get(value, value) if isinstance(value, str) else value
+
+    batch = build_verified_memory_promotions_v1(remap(_promotion_authority()))
+    assert batch.status == "verified"
+    assert len(batch.record_documents) == 1
+    return batch
+
+
+class _PromotionWriterCollection:
+    def __init__(self, user_id: str = "user-a"):
+        self.metadata = vector_store_module.memory_promotion_collection_metadata_v1(user_id)
+        self.rows: dict[str, tuple[str, dict]] = {}
+        self.add_calls: list[tuple[str, ...]] = []
+        self.delete_calls: list[tuple[str, ...]] = []
+        self.get_calls: list[dict] = []
+        self.query_calls: list[dict] = []
+        self.add_hook = None
+        self.delete_hook = None
+
+    @staticmethod
+    def _matches_where(metadata, where):
+        clauses = where.get("$and") if isinstance(where, dict) else None
+        if clauses is None:
+            return all(metadata.get(key) == value for key, value in (where or {}).items())
+        for clause in clauses:
+            key, condition = next(iter(clause.items()))
+            if "$eq" in condition and metadata.get(key) != condition["$eq"]:
+                return False
+            if "$ne" in condition and metadata.get(key) == condition["$ne"]:
+                return False
+        return True
+
+    def get(self, *, ids=None, where=None, include=None, limit=None, offset=None, **kwargs):
+        del kwargs
+        self.get_calls.append(
+            {
+                "ids": ids,
+                "where": where,
+                "include": include,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+        if ids is not None:
+            selected = [document_id for document_id in ids if document_id in self.rows]
+        elif where is not None:
+            selected = [
+                document_id
+                for document_id, (_document, metadata) in self.rows.items()
+                if self._matches_where(metadata, where)
+            ]
+        else:
+            selected = list(self.rows)
+        if ids is None:
+            start = offset or 0
+            selected = selected[start : None if limit is None else start + limit]
+        return {
+            "ids": selected,
+            "documents": [self.rows[document_id][0] for document_id in selected],
+            "metadatas": [self.rows[document_id][1] for document_id in selected],
+        }
+
+    def add(self, *, ids, documents, metadatas):
+        self.add_calls.append(tuple(ids))
+        for document_id, document, metadata in zip(ids, documents, metadatas, strict=True):
+            if document_id in self.rows:
+                raise RuntimeError("duplicate")
+            self.rows[document_id] = (document, dict(metadata))
+        if self.add_hook is not None:
+            self.add_hook(self)
+
+    def delete(self, *, ids):
+        self.delete_calls.append(tuple(ids))
+        if self.delete_hook is not None:
+            self.delete_hook(self)
+        for document_id in ids:
+            self.rows.pop(document_id, None)
+
+    def query(self, *, query_texts, n_results, where, include, ids=None):
+        self.query_calls.append(
+            {
+                "ids": ids,
+                "query_texts": query_texts,
+                "n_results": n_results,
+                "where": where,
+                "include": include,
+            }
+        )
+        identity_id = where["$and"][0]["identity_id"]["$eq"]
+        current_scenario_id = where["$and"][1]["scenario_id"]["$ne"]
+        document_contract = where["$and"][2]["document_contract"]["$eq"]
+        selected = [
+            (document_id, document, metadata)
+            for document_id, (document, metadata) in self.rows.items()
+            if (ids is None or document_id in ids)
+            and metadata.get("document_contract") == document_contract
+            and metadata.get("identity_id") == identity_id
+            and metadata.get("scenario_id") != current_scenario_id
+        ][:n_results]
+        return {
+            "ids": [[item[0] for item in selected]],
+            "documents": [[item[1] for item in selected]],
+            "metadatas": [[item[2] for item in selected]],
+            "distances": [[index / 10 for index in range(len(selected))]],
+        }
+
+
+class _PermutingPromotionWriterCollection(_PromotionWriterCollection):
+    def __init__(self, *, reverse: bool):
+        super().__init__()
+        self.reverse = reverse
+
+    def add(self, *, ids, documents, metadatas):
+        triples = list(zip(ids, documents, metadatas, strict=True))
+        if self.reverse:
+            triples.reverse()
+        super().add(
+            ids=[row[0] for row in triples],
+            documents=[row[1] for row in triples],
+            metadatas=[row[2] for row in triples],
+        )
+
+
+class _FaultInjectingPromotionCollection(_PromotionWriterCollection):
+    def __init__(self, *, layer: str, response_loss: bool):
+        super().__init__()
+        self.layer = layer
+        self.response_loss = response_loss
+        self.reached = threading.Event()
+        self.release = threading.Event()
+        self.injected = False
+
+    def add(self, *, ids, documents, metadatas):
+        contract = metadatas[0]["document_contract"]
+        layer = {
+            "memory_promotion_record_v1": "record",
+            "memory_promotion_child_manifest_v1": "child",
+            "memory_promotion_root_manifest_v1": "root",
+        }[contract]
+        if layer == self.layer and not self.injected:
+            self.injected = True
+            self.reached.set()
+            if not self.release.wait(timeout=5):
+                raise AssertionError("fault injection was not released")
+            if self.response_loss:
+                super().add(ids=ids, documents=documents, metadatas=metadatas)
+            else:
+                self.add_calls.append(tuple(ids))
+            raise RuntimeError("synthetic Chroma response failure")
+        return super().add(ids=ids, documents=documents, metadatas=metadatas)
+
+
+class _PromotionWriterClient:
+    def __init__(self, collection: _PromotionWriterCollection):
+        self.collection = collection
+        self.calls: list[str] = []
+        self.collection_name = vector_store_module.memory_promotion_collection_name_v1("user-a")
+
+    def get_or_create_collection(self, *, name, metadata):
+        self.calls.append("get_or_create")
+        assert name.startswith("identity_promotion_v1_")
+        assert metadata == self.collection.metadata
+        self.collection_name = name
+        return self.collection
+
+    def get_collection(self, *, name):
+        self.calls.append("get_collection")
+        assert name.startswith("identity_promotion_v1_")
+        return self.collection
+
+    def list_collections(self):
+        self.calls.append("list_collections")
+        return [SimpleNamespace(name=self.collection_name)]
+
+
+def _vector_store_with_client(client) -> VectorStore:
+    store = VectorStore.__new__(VectorStore)
+    store._client = client
+    store._persist_dir = "/test/chroma"
+    store._collection_cache_size = 2
+    store._collections = OrderedDict()
+    store._client_init_thread = None
+    store._client_init_holder = None
+    store._client_init_state_lock = threading.Lock()
+    return store
+
+
+def _install_file_backed_promotion_lease(monkeypatch):
+    acquired: list[object] = []
+    released: list[object] = []
+
+    def acquire(lock_key, *, lease_seconds):
+        del lease_seconds
+        lease = vector_store_module.RuntimeLockLease(
+            lock_key=lock_key,
+            owner_id=f"owner-{len(acquired) + 1}",
+            db_path="/test/runtime.db",
+            expires_at=time.time() + 60,
+        )
+        acquired.append(lease)
+        return lease
+
+    def refresh(lease, *, lease_seconds):
+        del lease_seconds
+        return vector_store_module.RuntimeLockLease(
+            lock_key=lease.lock_key,
+            owner_id=lease.owner_id,
+            db_path=lease.db_path,
+            expires_at=time.time() + 60,
+        )
+
+    def release(lease):
+        released.append(lease)
+        return True
+
+    monkeypatch.setattr(vector_store_module, "acquire_runtime_lock", acquire)
+    monkeypatch.setattr(vector_store_module, "refresh_runtime_lock", refresh)
+    monkeypatch.setattr(vector_store_module, "release_runtime_lock", release)
+    return acquired, released
+
+
+def _empty_current_claims():
+    return vector_store_module.MemoryPromotionCurrentClaimsV1(complete=True, claims=())
+
+
+async def _settle_promotion_quarantine_tasks():
+    while vector_store_module._MEMORY_PROMOTION_QUARANTINE_TASKS_V1:
+        tasks = tuple(vector_store_module._MEMORY_PROMOTION_QUARANTINE_TASKS_V1)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+class TestVerifiedMemoryPromotionStoreV1:
+    @pytest.fixture(autouse=True)
+    async def _settle_background_cleanup(self):
+        yield
+        await _settle_promotion_quarantine_tasks()
+
+    @pytest.mark.asyncio
+    async def test_root_last_store_retry_and_exact_refs_are_idempotent(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        validations: list[object] = []
+
+        first = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"generation": 1},
+            revalidate_authority=lambda value: validations.append(value) is None,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        second = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"generation": 1},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        assert first.status == "stored"
+        assert second.status == "already_present"
+        assert first.refs == batch.refs == second.refs
+        assert collection.add_calls == [
+            (batch.record_documents[0].document_id,),
+            (batch.child_manifest_documents[0].document_id,),
+            (batch.root_manifest_document.document_id,),
+        ]
+        assert list(collection.rows)[-1] == batch.root_manifest_id
+        assert len(validations) == 5
+
+    @pytest.mark.asyncio
+    async def test_store_write_order_permutations_preserve_exact_tree_bytes_hashes_and_refs(
+        self, monkeypatch
+    ):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = build_verified_memory_promotions_v1(_promotion_two_identity_authority())
+        assert batch.status == "verified"
+        assert len(batch.record_documents) == 2
+        assert len(batch.child_manifest_documents) == 2
+        expected_rows = {
+            document.document_id: (document.document, document.metadata_dict())
+            for document in batch.documents
+        }
+        outcomes = []
+
+        for reverse in (False, True):
+            collection = _PermutingPromotionWriterCollection(reverse=reverse)
+            store = _vector_store_with_client(_PromotionWriterClient(collection))
+            first = await vector_store_module.store_verified_memory_promotions_v1(
+                user_id="user-a",
+                batch=batch,
+                expected_authority_snapshot={"order": reverse},
+                revalidate_authority=lambda _value: True,
+                load_current_claims=_empty_current_claims,
+                store=store,
+            )
+            retry = await vector_store_module.store_verified_memory_promotions_v1(
+                user_id="user-a",
+                batch=batch,
+                expected_authority_snapshot={"order": reverse},
+                revalidate_authority=lambda _value: True,
+                load_current_claims=_empty_current_claims,
+                store=store,
+            )
+            assert (first.status, retry.status) == ("stored", "already_present")
+            assert first.refs == retry.refs == batch.refs
+            assert collection.rows == expected_rows
+            outcomes.append(
+                (
+                    _promotion_tree_hash(collection.rows),
+                    first.refs,
+                    tuple(sorted(collection.rows)),
+                )
+            )
+
+        assert outcomes[0] == outcomes[1]
+
+    @pytest.mark.asyncio
+    async def test_dual_worker_same_root_slot_converges_to_one_exact_tree(self, monkeypatch):
+        acquired, released = _install_file_backed_promotion_lease(monkeypatch)
+        batch = build_verified_memory_promotions_v1(_promotion_two_identity_authority())
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+
+        async def write(worker):
+            return await vector_store_module.store_verified_memory_promotions_v1(
+                user_id="user-a",
+                batch=batch,
+                expected_authority_snapshot={"worker": worker},
+                revalidate_authority=lambda _value: True,
+                load_current_claims=_empty_current_claims,
+                store=store,
+            )
+
+        results = await asyncio.gather(write("a"), write("b"))
+
+        assert {result.status for result in results} == {"stored", "already_present"}
+        assert all(result.refs == batch.refs for result in results)
+        assert len(acquired) == len(released) == 2
+        assert {lease.owner_id for lease in acquired} == {lease.owner_id for lease in released}
+        assert collection.rows == {
+            document.document_id: (document.document, document.metadata_dict())
+            for document in batch.documents
+        }
+
+    @pytest.mark.asyncio
+    async def test_gate_on_off_on_preserves_same_keys_refs_and_never_rewrites(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        client = _PromotionWriterClient(collection)
+        store = _vector_store_with_client(client)
+        first = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"generation": 1},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        before_rows = copy.deepcopy(collection.rows)
+        before_adds = tuple(collection.add_calls)
+        before_calls = tuple(client.calls)
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", False)
+        disabled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=store,
+        )
+        assert disabled is None
+        assert collection.rows == before_rows
+        assert tuple(collection.add_calls) == before_adds
+        assert tuple(client.calls) == before_calls
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        reenabled = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"generation": 1},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=store,
+        )
+        assert first.status == "stored"
+        assert reenabled.status == "already_present"
+        assert first.refs == reenabled.refs == batch.refs
+        assert tuple(collection.add_calls) == before_adds
+        assert collection.rows == before_rows
+        assert recalled.status == "verified"
+        assert tuple(item["memory_ref"] for item in recalled.items) == batch.refs
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("layer", ["record", "child", "root"])
+    @pytest.mark.parametrize("response_loss", [False, True])
+    async def test_each_store_layer_fault_or_response_loss_converges_exactly(
+        self, monkeypatch, layer, response_loss
+    ):
+        _install_file_backed_promotion_lease(monkeypatch)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        batch = build_verified_memory_promotions_v1(_promotion_two_identity_authority())
+        collection = _FaultInjectingPromotionCollection(layer=layer, response_loss=response_loss)
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+
+        first_task = asyncio.create_task(
+            vector_store_module.store_verified_memory_promotions_v1(
+                user_id="user-a",
+                batch=batch,
+                expected_authority_snapshot={"layer": layer},
+                revalidate_authority=lambda _value: True,
+                load_current_claims=_empty_current_claims,
+                store=store,
+            )
+        )
+        assert await asyncio.to_thread(collection.reached.wait, 3)
+        before_root = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=store,
+        )
+        assert before_root.items == ()
+        assert batch.root_manifest_id not in collection.rows
+        collection.release.set()
+        first = await first_task
+        await _settle_promotion_quarantine_tasks()
+
+        if response_loss:
+            assert first.status == "stored"
+        else:
+            assert first.status == "unavailable"
+        retry = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"layer": layer},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        assert retry.status in {"stored", "already_present"}
+        assert retry.refs == batch.refs
+        assert collection.rows == {
+            document.document_id: (document.document, document.metadata_dict())
+            for document in batch.documents
+        }
+        recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=store,
+        )
+        assert recalled.status == "verified"
+        assert recalled.items
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("variant", ["input_digest", "identity", "revision", "payload"])
+    async def test_same_root_slot_or_same_key_conflict_preserves_old_tree(
+        self, monkeypatch, variant
+    ):
+        _install_file_backed_promotion_lease(monkeypatch)
+        original_batch = _promotion_batch()
+        authority = _promotion_authority()
+        if variant == "input_digest":
+            digest = "sha256:" + "e" * 64
+            authority["input_digest"] = digest
+            authority["finalization"]["input_digest"] = digest
+        elif variant == "identity":
+            authority["roster"][0]["identity_id"] = "identity-other"
+            authority["actions"][0]["identity_id"] = "identity-other"
+        elif variant == "revision":
+            authority["round_before"] = {"balance": "4"}
+            _reproject_promotion_authority(authority)
+        else:
+            authority["actions"][0]["action"]["payload"]["proposals"][0]["requested_value"] = "2"
+            authority["actions"][0]["decision"]["action_parameters"]["domain_world_v1"][
+                "proposals"
+            ][0]["requested_value"] = "2"
+            _reproject_promotion_authority(authority)
+        candidate = build_verified_memory_promotions_v1(authority)
+        assert candidate.status == "verified"
+        assert candidate.root_manifest_id == original_batch.root_manifest_id
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        first = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=original_batch,
+            expected_authority_snapshot={"generation": 1},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        before = copy.deepcopy(collection.rows)
+        before_hash = _promotion_tree_hash(before)
+        before_adds = tuple(collection.add_calls)
+
+        conflict = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=candidate,
+            expected_authority_snapshot={"generation": 2},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        await _settle_promotion_quarantine_tasks()
+
+        assert first.status == "stored"
+        assert conflict.status == "unavailable"
+        assert conflict.reason_code == "MEMORY_PROMOTION_RECORD_CONFLICT"
+        assert conflict.refs == ()
+        assert tuple(collection.add_calls) == before_adds
+        assert collection.rows == before
+        assert _promotion_tree_hash(collection.rows) == before_hash
+
+    @pytest.mark.asyncio
+    async def test_existing_same_id_with_different_bytes_is_atomic_conflict(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        first = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        before = copy_rows = dict(collection.rows)
+        record_id = batch.record_documents[0].document_id
+        collection.rows[record_id] = ("different semantic bytes", collection.rows[record_id][1])
+
+        conflict = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        assert first.status == "stored"
+        assert conflict.status == "unavailable"
+        assert conflict.reason_code == "MEMORY_PROMOTION_RECORD_CONFLICT"
+        assert conflict.refs == ()
+        assert set(collection.rows) == set(before)
+        assert collection.add_calls == [
+            (batch.record_documents[0].document_id,),
+            (batch.child_manifest_documents[0].document_id,),
+            (batch.root_manifest_document.document_id,),
+        ]
+        assert copy_rows[record_id][0] != collection.rows[record_id][0]
+
+    @pytest.mark.asyncio
+    async def test_ref_reverse_collision_rejects_before_any_add(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        record = batch.record_documents[0]
+        collision_metadata = dict(record.metadata)
+        collision_metadata["semantic_hash"] = _promotion_semantic_hash("collision")
+        collection.rows["foreign-document"] = (
+            "foreign",
+            collision_metadata,
+        )
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        before = copy.deepcopy(collection.rows)
+        before_hash = _promotion_tree_hash(before)
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_PROMOTION_RECORD_CONFLICT"
+        assert result.refs == ()
+        assert collection.add_calls == []
+        assert collection.rows == before
+        assert _promotion_tree_hash(collection.rows) == before_hash
+
+    @pytest.mark.asyncio
+    async def test_file_backing_and_store_degradation_fail_closed_before_write(self, monkeypatch):
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        client = _PromotionWriterClient(collection)
+        store = _vector_store_with_client(client)
+        monkeypatch.setattr(
+            vector_store_module,
+            "acquire_runtime_lock",
+            lambda lock_key, lease_seconds: vector_store_module.RuntimeLockLease(
+                lock_key=lock_key,
+                owner_id="process-only",
+                db_path=None,
+                expires_at=time.time() + 60,
+            ),
+        )
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        assert result.reason_code == "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+        assert client.calls == []
+        assert collection.add_calls == []
+
+    @pytest.mark.asyncio
+    async def test_post_write_fresh_current_claim_always_wins_aba(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        validation_count = 0
+
+        def revalidate(_value):
+            nonlocal validation_count
+            validation_count += 1
+            return validation_count == 1
+
+        record_id = batch.record_documents[0].document_id
+        current_claim = vector_store_module.MemoryPromotionCurrentClaimV1(
+            document_id=record_id,
+            document_canonical_bytes=b"different-current-document",
+            metadata_canonical_bytes=b"different-current-metadata",
+            semantic_hash=_promotion_semantic_hash("different-current"),
+        )
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"generation": "old"},
+            revalidate_authority=revalidate,
+            load_current_claims=lambda: vector_store_module.MemoryPromotionCurrentClaimsV1(
+                complete=True,
+                claims=(current_claim,),
+            ),
+            store=store,
+        )
+        await _settle_promotion_quarantine_tasks()
+
+        assert result.reason_code == "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST"
+        assert result.refs == ()
+        assert record_id in collection.rows
+        assert collection.delete_calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mutate_physical", [False, True])
+    async def test_absent_authority_deletes_only_exact_owned_stale_write(
+        self, monkeypatch, mutate_physical
+    ):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        validation_count = 0
+
+        def revalidate(_value):
+            nonlocal validation_count
+            validation_count += 1
+            return validation_count == 1
+
+        def claims():
+            if mutate_physical:
+                record_id = batch.record_documents[0].document_id
+                document, metadata = collection.rows[record_id]
+                collection.rows[record_id] = (document + " changed", metadata)
+            return _empty_current_claims()
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={"generation": "old"},
+            revalidate_authority=revalidate,
+            load_current_claims=claims,
+            store=store,
+        )
+        await _settle_promotion_quarantine_tasks()
+
+        record_id = batch.record_documents[0].document_id
+        assert result.reason_code == "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST"
+        assert (record_id in collection.rows) is mutate_physical
+        assert bool(collection.delete_calls) is (not mutate_physical)
+
+    def test_m_t1_discriminator_mutants_are_fail_closed(self):
+        proof = vector_store_module.MaterializationOwnershipProofV1(
+            document_id="doc-1",
+            preflight_missing=True,
+            native_call_membership=True,
+            submitted_document_canonical_bytes=b"document",
+            submitted_metadata_canonical_bytes=b"metadata",
+            submitted_semantic_hash=_promotion_semantic_hash("doc-1"),
+            source_authority_snapshot_hash=_promotion_semantic_hash("authority"),
+        )
+        claim = vector_store_module.MemoryPromotionCurrentClaimV1(
+            document_id="doc-1",
+            document_canonical_bytes=b"other",
+            metadata_canonical_bytes=b"other",
+            semantic_hash=_promotion_semantic_hash("other"),
+        )
+
+        assert (
+            vector_store_module.classify_memory_promotion_compensation_v1(
+                proof,
+                current_claim=claim,
+                physical_document_canonical_bytes=b"document",
+                physical_metadata_canonical_bytes=b"metadata",
+                physical_semantic_hash=proof.submitted_semantic_hash,
+            )
+            == "current_claim"
+        )
+        assert (
+            vector_store_module.classify_memory_promotion_compensation_v1(
+                proof,
+                current_claim=None,
+                physical_document_canonical_bytes=b"document",
+                physical_metadata_canonical_bytes=b"metadata",
+                physical_semantic_hash=proof.submitted_semantic_hash,
+            )
+            == "owned_stale_write"
+        )
+        assert (
+            vector_store_module.classify_memory_promotion_compensation_v1(
+                proof,
+                current_claim=None,
+                physical_document_canonical_bytes=b"changed",
+                physical_metadata_canonical_bytes=b"metadata",
+                physical_semantic_hash=proof.submitted_semantic_hash,
+            )
+            == "preserved_ambiguous"
+        )
+
+    @pytest.mark.asyncio
+    async def test_blocked_native_add_times_out_without_root_or_ref(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        monkeypatch.setattr(
+            vector_store_module,
+            "MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1",
+            0.01,
+        )
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        release_add = threading.Event()
+        collection.add_hook = lambda _collection: release_add.wait(timeout=1)
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        release_add.set()
+        await asyncio.sleep(0.1)
+
+        assert result.reason_code == "MEMORY_PROMOTION_STORE_UNAVAILABLE"
+        assert result.refs == ()
+        assert batch.root_manifest_id not in collection.rows
+
+    @pytest.mark.asyncio
+    async def test_post_write_handoff_does_not_wait_for_compensation(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        validation_count = 0
+        claims_entered = threading.Event()
+        release_claims = threading.Event()
+
+        def revalidate(_value):
+            nonlocal validation_count
+            validation_count += 1
+            return validation_count == 1
+
+        def claims():
+            claims_entered.set()
+            release_claims.wait(timeout=1)
+            return _empty_current_claims()
+
+        try:
+            result = await asyncio.wait_for(
+                vector_store_module.store_verified_memory_promotions_v1(
+                    user_id="user-a",
+                    batch=batch,
+                    expected_authority_snapshot={"generation": "old"},
+                    revalidate_authority=revalidate,
+                    load_current_claims=claims,
+                    store=store,
+                ),
+                timeout=0.5,
+            )
+
+            assert result.reason_code == "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST"
+            for _ in range(50):
+                if claims_entered.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert claims_entered.is_set()
+        finally:
+            release_claims.set()
+            await _settle_promotion_quarantine_tasks()
+
+    @pytest.mark.asyncio
+    async def test_blocked_lease_release_remains_capsule_owned_until_settle(self, monkeypatch):
+        monkeypatch.setattr(
+            vector_store_module,
+            "MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1",
+            0.01,
+        )
+        release_started = threading.Event()
+        release_lease = threading.Event()
+        release_calls: list[object] = []
+        _install_file_backed_promotion_lease(monkeypatch)
+
+        def release(lease):
+            release_calls.append(lease)
+            release_started.set()
+            release_lease.wait(timeout=1)
+            return True
+
+        monkeypatch.setattr(vector_store_module, "release_runtime_lock", release)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+
+        try:
+            result = await vector_store_module.store_verified_memory_promotions_v1(
+                user_id="user-a",
+                batch=batch,
+                expected_authority_snapshot={},
+                revalidate_authority=lambda _value: True,
+                load_current_claims=_empty_current_claims,
+                store=store,
+            )
+
+            assert result.status == "stored"
+            assert release_started.is_set()
+            assert len(release_calls) == 1
+            assert vector_store_module._MEMORY_PROMOTION_QUARANTINE_TASKS_V1
+        finally:
+            release_lease.set()
+            await _settle_promotion_quarantine_tasks()
+        assert len(release_calls) == 1
+        assert vector_store_module._CHROMA_WRITE_LOCK.locked() is False
+
+    @pytest.mark.asyncio
+    async def test_late_lease_acquire_is_quarantined_and_released_once(self, monkeypatch):
+        monkeypatch.setattr(
+            vector_store_module,
+            "MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1",
+            0.01,
+        )
+        release_acquire = threading.Event()
+        released: list[object] = []
+
+        def acquire(lock_key, *, lease_seconds):
+            del lease_seconds
+            release_acquire.wait(timeout=1)
+            return vector_store_module.RuntimeLockLease(
+                lock_key=lock_key,
+                owner_id="late-owner",
+                db_path="/test/runtime.db",
+                expires_at=time.time() + 60,
+            )
+
+        monkeypatch.setattr(vector_store_module, "acquire_runtime_lock", acquire)
+        monkeypatch.setattr(
+            vector_store_module,
+            "release_runtime_lock",
+            lambda lease: released.append(lease) is None,
+        )
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        client = _PromotionWriterClient(collection)
+        store = _vector_store_with_client(client)
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        assert result.reason_code == "MEMORY_PROMOTION_LOCK_UNAVAILABLE"
+        assert released == []
+        assert client.calls == []
+
+        release_acquire.set()
+        await asyncio.sleep(0.1)
+
+        assert len(released) == 1
+        assert released[0].owner_id == "late-owner"
+
+    @pytest.mark.asyncio
+    async def test_blocked_compensation_delete_keeps_lock_until_late_settle(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        monkeypatch.setattr(
+            vector_store_module,
+            "MEMORY_PROMOTION_CHROMA_CALL_TIMEOUT_SECONDS_V1",
+            0.01,
+        )
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        release_delete = threading.Event()
+        collection.delete_hook = lambda _collection: release_delete.wait(timeout=1)
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        validations = 0
+
+        def revalidate(_value):
+            nonlocal validations
+            validations += 1
+            return validations == 1
+
+        result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=revalidate,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        assert result.reason_code == "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST"
+        assert vector_store_module._CHROMA_WRITE_LOCK.locked() is True
+        release_delete.set()
+        await asyncio.sleep(0.1)
+        assert vector_store_module._CHROMA_WRITE_LOCK.locked() is False
+
+    @pytest.mark.asyncio
+    async def test_owner_and_semantic_tree_mutants_fail_before_chroma(self, monkeypatch):
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        client = _PromotionWriterClient(collection)
+        store = _vector_store_with_client(client)
+
+        owner_result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-other",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        record = batch.record_documents[0]
+        malformed_record = dataclasses.replace(record, memory_ref="0" * 20)
+        malformed_batch = dataclasses.replace(
+            batch,
+            record_documents=(malformed_record,),
+            refs=("0" * 20,),
+        )
+        tree_result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=malformed_batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        credential_record = dataclasses.replace(record, document="sk-" + "x" * 6)
+        credential_batch = dataclasses.replace(batch, record_documents=(credential_record,))
+        credential_result = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=credential_batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        assert owner_result.reason_code == "MEMORY_PROMOTION_OWNER_MISMATCH"
+        assert tree_result.reason_code == "MEMORY_PROMOTION_RECORD_CONFLICT"
+        assert credential_result.reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        assert client.calls == []
+
+
+class TestVerifiedMemoryPromotionReaderV1:
+    @pytest.fixture(autouse=True)
+    async def _settle_background_cleanup(self):
+        yield
+        await _settle_promotion_quarantine_tasks()
+
+    @pytest.mark.asyncio
+    async def test_gate_off_returns_legacy_selector_before_store_io(self, monkeypatch):
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", False)
+        collection = _PromotionWriterCollection()
+        client = _PromotionWriterClient(collection)
+        store = _vector_store_with_client(client)
+
+        result = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="scenario-2",
+            query_text="prior consequence",
+            store=store,
+        )
+
+        assert result is None
+        assert client.calls == []
+        assert collection.query_calls == []
+
+    @pytest.mark.asyncio
+    async def test_complete_tree_recalls_once_and_current_scenario_is_excluded(self, monkeypatch):
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        client = _PromotionWriterClient(collection)
+        store = _vector_store_with_client(client)
+        stored = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+
+        recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="scenario-2",
+            query_text="balance consequence",
+            store=store,
+        )
+        same_scenario = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="scenario-1",
+            query_text="balance consequence",
+            store=store,
+        )
+
+        assert stored.status == "stored"
+        assert recalled.status == "verified"
+        assert tuple(item["memory_ref"] for item in recalled.items) == batch.refs
+        assert recalled.items[0]["source_scenario_id"] == "scenario-1"
+        assert same_scenario.status == "empty"
+        assert len(collection.query_calls) == 1
+        assert collection.query_calls[0]["where"]["$and"][2] == {
+            "document_contract": {"$eq": "memory_promotion_record_v1"}
+        }
+
+    @pytest.mark.asyncio
+    async def test_unknown_v2_collection_is_ignored_without_lookup_or_query(self, monkeypatch):
+        class VersionListingClient(_PromotionWriterClient):
+            def __init__(self, collection):
+                super().__init__(collection)
+                self.requested_names = []
+                self.unknown_v2_name = self.collection_name.replace(
+                    "identity_promotion_v1_", "identity_promotion_v2_"
+                )
+
+            def list_collections(self):
+                self.calls.append("list_collections")
+                return [
+                    SimpleNamespace(name=self.unknown_v2_name),
+                    SimpleNamespace(name=self.collection_name),
+                ]
+
+            def get_collection(self, *, name):
+                self.requested_names.append(name)
+                assert name != self.unknown_v2_name
+                return super().get_collection(name=name)
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        for document in batch.documents:
+            collection.rows[document.document_id] = (
+                document.document,
+                document.metadata_dict(),
+            )
+        client = VersionListingClient(collection)
+        context = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=_vector_store_with_client(client),
+        )
+
+        assert context.status == "verified"
+        assert context.items
+        assert client.requested_names == [client.collection_name]
+        assert client.unknown_v2_name not in client.requested_names
+
+    @pytest.mark.asyncio
+    async def test_equal_distance_tie_break_precedes_three_item_cutoff(self, monkeypatch):
+        class EqualDistanceCollection(_PromotionWriterCollection):
+            def query(self, **kwargs):
+                result = super().query(**kwargs)
+                result["distances"] = [[0.25] * len(result["ids"][0])]
+                return result
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        batches = tuple(_promotion_batch_for_source(index) for index in range(4))
+        expected_refs = sorted(batch.refs[0] for batch in batches)[:3]
+        context_hashes: set[str] = set()
+
+        for order in itertools.permutations(range(4)):
+            collection = EqualDistanceCollection()
+            for index in order:
+                for document in batches[index].documents:
+                    collection.rows[document.document_id] = (
+                        document.document,
+                        document.metadata_dict(),
+                    )
+            store = _vector_store_with_client(_PromotionWriterClient(collection))
+
+            recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+                user_id="user-a",
+                identity_id="identity-1",
+                current_scenario_id="current-scenario",
+                query_text="balance consequence",
+                store=store,
+            )
+
+            assert recalled.status == "verified"
+            assert [item["memory_ref"] for item in recalled.items] == expected_refs
+            assert collection.query_calls[0]["n_results"] == len(batches)
+            context_hashes.add(recalled.context_hash)
+
+        assert len(context_hashes) == 1
+
+    @pytest.mark.asyncio
+    async def test_129_equal_distance_candidates_use_global_ref_tie_break(self, monkeypatch):
+        class EqualDistanceCollection(_PromotionWriterCollection):
+            def query(self, **kwargs):
+                result = super().query(**kwargs)
+                result["distances"] = [[0.25] * len(result["ids"][0])]
+                return result
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        batches = tuple(_promotion_batch_for_source(index) for index in range(129))
+        insertion_order = sorted(
+            range(len(batches)), key=lambda index: batches[index].refs[0], reverse=True
+        )
+        expected_refs = sorted(batch.refs[0] for batch in batches)[:3]
+        collection = EqualDistanceCollection()
+        for index in insertion_order:
+            for document in batches[index].documents:
+                collection.rows[document.document_id] = (
+                    document.document,
+                    document.metadata_dict(),
+                )
+
+        recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="current-scenario",
+            query_text="balance consequence",
+            store=_vector_store_with_client(_PromotionWriterClient(collection)),
+        )
+
+        candidate_gets = [
+            call
+            for call in collection.get_calls
+            if call["ids"] is None and isinstance(call["where"], dict)
+        ]
+        assert recalled.status == "verified"
+        assert [item["memory_ref"] for item in recalled.items] == expected_refs
+        assert insertion_order[-1] == next(
+            index for index, batch in enumerate(batches) if batch.refs[0] == expected_refs[0]
+        )
+        assert [call["offset"] for call in candidate_gets] == [0, 128]
+        assert [call["n_results"] for call in collection.query_calls] == [128, 1]
+
+    @pytest.mark.asyncio
+    async def test_recall_candidate_cap_is_unavailable_without_truncated_query(
+        self, monkeypatch
+    ):
+        class ExhaustedCandidateCollection(_PromotionWriterCollection):
+            def get(
+                self,
+                *,
+                ids=None,
+                where=None,
+                include=None,
+                limit=None,
+                offset=None,
+                **kwargs,
+            ):
+                if ids is not None:
+                    raise AssertionError("tree lookup must not start after candidate cap")
+                del kwargs
+                self.get_calls.append(
+                    {
+                        "ids": ids,
+                        "where": where,
+                        "include": include,
+                        "limit": limit,
+                        "offset": offset,
+                    }
+                )
+                assert limit == 128
+                start = offset or 0
+                return {
+                    "ids": [f"candidate-{index:04d}" for index in range(start, start + limit)]
+                }
+
+            def query(self, **kwargs):
+                raise AssertionError("query must not start from a truncated candidate set")
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        collection = ExhaustedCandidateCollection()
+
+        recalled = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="current-scenario",
+            query_text="balance consequence",
+            store=_vector_store_with_client(_PromotionWriterClient(collection)),
+        )
+
+        assert recalled.status == "unavailable"
+        assert recalled.reason_code == "MEMORY_RECALL_STORE_UNAVAILABLE"
+        assert recalled.items == ()
+        assert len(collection.get_calls) == 32
+        assert collection.get_calls[-1]["offset"] == 3968
+        assert collection.query_calls == []
+
+    @pytest.mark.asyncio
+    async def test_custom_base_exception_is_re_raised_after_reader_handoff(self, monkeypatch):
+        class FatalRecall(BaseException):
+            pass
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        stored = await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        assert stored.status == "stored"
+        monkeypatch.setattr(
+            collection,
+            "query",
+            lambda **_kwargs: (_ for _ in ()).throw(FatalRecall()),
+        )
+
+        with pytest.raises(FatalRecall):
+            await vector_store_module.recall_verified_memory_promotions_v1(
+                user_id="user-a",
+                identity_id="identity-1",
+                current_scenario_id="scenario-2",
+                query_text="balance consequence",
+                store=store,
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mutation", ["missing_child", "credential"])
+    async def test_incomplete_or_credential_tree_fails_closed(self, monkeypatch, mutation):
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        _install_file_backed_promotion_lease(monkeypatch)
+        batch = _promotion_batch()
+        collection = _PromotionWriterCollection()
+        store = _vector_store_with_client(_PromotionWriterClient(collection))
+        await vector_store_module.store_verified_memory_promotions_v1(
+            user_id="user-a",
+            batch=batch,
+            expected_authority_snapshot={},
+            revalidate_authority=lambda _value: True,
+            load_current_claims=_empty_current_claims,
+            store=store,
+        )
+        if mutation == "missing_child":
+            collection.rows.pop(batch.child_manifest_documents[0].document_id)
+        else:
+            record_id = batch.record_documents[0].document_id
+            _, metadata = collection.rows[record_id]
+            collection.rows[record_id] = ("sk-" + "x" * 6, metadata)
+
+        result = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id="identity-1",
+            current_scenario_id="scenario-2",
+            query_text="balance consequence",
+            store=store,
+        )
+
+        expected = (
+            "MEMORY_RECALL_RECORD_MISMATCH"
+            if mutation == "missing_child"
+            else "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        )
+        assert result.status == "unavailable"
+        assert result.reason_code == expected
+        assert result.items == ()
+
+    @pytest.mark.asyncio
+    async def test_complete_root_missing_record_is_whole_tree_invisible(self, monkeypatch):
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        batch = build_verified_memory_promotions_v1(_promotion_two_identity_authority())
+        assert batch.status == "verified"
+        assert len(batch.record_documents) == 2
+        collection = _PromotionWriterCollection()
+        for document in batch.documents:
+            collection.rows[document.document_id] = (
+                document.document,
+                document.metadata_dict(),
+            )
+        queried = batch.record_documents[0]
+        missing = batch.record_documents[1]
+        collection.rows.pop(missing.document_id)
+
+        result = await vector_store_module.recall_verified_memory_promotions_v1(
+            user_id="user-a",
+            identity_id=queried.metadata_dict()["identity_id"],
+            current_scenario_id="different-scenario",
+            query_text="verified consequence",
+            store=_vector_store_with_client(_PromotionWriterClient(collection)),
+        )
+
+        assert collection.query_calls
+        assert queried.document_id in collection.query_calls[0]["ids"]
+        assert batch.root_manifest_document.document_id in collection.rows
+        assert all(
+            document.document_id in collection.rows
+            for document in batch.child_manifest_documents
+        )
+        assert result.status == "unavailable"
+        assert result.reason_code == "MEMORY_RECALL_RECORD_MISMATCH"
+        assert result.items == ()
+
+    @pytest.mark.asyncio
+    async def test_memory_promotion_reader_credential_corpus_discards_good_subset(
+        self, monkeypatch, caplog
+    ):
+        from app.services.memory import format_recall_context_for_prompt_v1
+
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", True)
+        clean_batch = _promotion_batch_for_source(0)
+        unsafe_batch = _promotion_batch_for_source(1)
+
+        for synthetic_shape in _SYNTHETIC_CREDENTIAL_CORPUS_V1:
+            collection = _PromotionWriterCollection()
+            for batch in (clean_batch, unsafe_batch):
+                for document in batch.documents:
+                    collection.rows[document.document_id] = (
+                        document.document,
+                        document.metadata_dict(),
+                    )
+            unsafe_id = unsafe_batch.record_documents[0].document_id
+            _document, metadata = collection.rows[unsafe_id]
+            collection.rows[unsafe_id] = (
+                f"Synthetic reader boundary: {synthetic_shape}",
+                metadata,
+            )
+            with caplog.at_level("WARNING"):
+                context = await vector_store_module.recall_verified_memory_promotions_v1(
+                    user_id="user-a",
+                    identity_id="identity-1",
+                    current_scenario_id="current-scenario",
+                    query_text="verified consequence",
+                    store=_vector_store_with_client(_PromotionWriterClient(collection)),
+                )
+            prompt = format_recall_context_for_prompt_v1(context)
+
+            assert context.status == "unavailable", synthetic_shape
+            assert context.reason_code == ("MEMORY_PROMOTION_CREDENTIAL_REJECTED"), synthetic_shape
+            assert context.items == (), synthetic_shape
+            assert clean_batch.refs[0] not in context.context_hash, synthetic_shape
+            assert synthetic_shape not in json.dumps(context.to_payload(), ensure_ascii=False), (
+                synthetic_shape
+            )
+            assert synthetic_shape not in prompt, synthetic_shape
+            assert synthetic_shape not in caplog.text, synthetic_shape
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            PureWindowsPath("C:/Stage 3/记忆"),
+            PurePosixPath("/tmp/Stage 3/记忆"),
+        ],
+    )
+    def test_collection_name_is_platform_independent_for_path_shaped_owner(self, path):
+        user_id = str(path)
+        expected = (
+            "identity_promotion_v1_" + hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:32]
+        )
+
+        assert vector_store_module.memory_promotion_collection_name_v1(user_id) == expected
+
+
+class _PromotionPurgeCollection:
+    def __init__(self, metadata, document_ids=()):
+        self.metadata = metadata
+        self.document_ids = list(document_ids)
+        self.delete_calls: list[tuple[str, ...]] = []
+        self.get_calls = 0
+        self.operations: list[tuple] = []
+
+    def get(self, *, ids=None, limit=None, offset=0, include=None):
+        del include
+        self.get_calls += 1
+        self.operations.append(("get", tuple(ids) if ids is not None else None, limit, offset))
+        if ids is not None:
+            selected = [document_id for document_id in ids if document_id in self.document_ids]
+        else:
+            selected = self.document_ids[offset : offset + limit]
+        return {"ids": list(selected)}
+
+    def delete(self, *, ids):
+        self.delete_calls.append(tuple(ids))
+        self.operations.append(("delete", tuple(ids)))
+        deleted = set(ids)
+        self.document_ids = [item for item in self.document_ids if item not in deleted]
+
+
+class _PromotionPurgeClient:
+    def __init__(self, collections: dict[str, _PromotionPurgeCollection]):
+        self.collections = collections
+        self.names = list(collections)
+        self.delete_collection_calls: list[str] = []
+        self.get_collection_calls: list[str] = []
+        self.list_calls = 0
+        self.operations: list[tuple] = []
+
+    def delete_collection(self, name):
+        self.delete_collection_calls.append(name)
+        self.operations.append(("delete_collection", name))
+
+    def list_collections(self, *, limit, offset):
+        self.list_calls += 1
+        self.operations.append(("list_collections", limit, offset))
+        return self.names[offset : offset + limit]
+
+    def get_collection(self, *, name):
+        self.get_collection_calls.append(name)
+        self.operations.append(("get_collection", name))
+        return self.collections[name]
+
+
+def _install_purge_client(monkeypatch, client):
+    store = _vector_store_with_client(client)
+    monkeypatch.setattr(vector_store_module, "_vector_store", store)
+    return store
+
+
+def _cap_warning_records(caplog):
+    return [
+        record
+        for record in caplog.records
+        if "reason=memory_promotion_v1_purge_cap_reached" in record.getMessage()
+    ]
+
+
+def _forbid_purge_lifecycle_helpers(monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("purge called a promotion lifecycle helper")
+
+    for name in (
+        "acquire_runtime_lock",
+        "refresh_runtime_lock",
+        "release_runtime_lock",
+        "_schedule_memory_promotion_quarantine_v1",
+        "_handoff_memory_promotion_quarantine_v1",
+    ):
+        monkeypatch.setattr(vector_store_module, name, forbidden)
+    for name in (
+        "_memory_promotion_purge_cursor_v1",
+        "_memory_promotion_purge_hmac_v1",
+        "_complete_memory_promotion_purge_v1",
+    ):
+        monkeypatch.setattr(vector_store_module, name, forbidden, raising=False)
+    assert not any(
+        token in name.lower()
+        for name in vector_store_module._purge_memory_promotion_v1.__code__.co_names
+        for token in ("cursor", "hmac", "completion")
+    )
+
+
+def _assert_cap_hit_contract(
+    *,
+    result,
+    client,
+    collections,
+    caplog,
+    expected_counters,
+):
+    assert result is None
+    legacy_names = [
+        _identity_collection_name("user-a"),
+        _identity_profile_collection_name("user-a"),
+    ]
+    assert client.delete_collection_calls == legacy_names
+    assert client.operations[:2] == [
+        ("delete_collection", legacy_names[0]),
+        ("delete_collection", legacy_names[1]),
+    ]
+    completed_batches = [
+        batch
+        for collection in collections
+        for batch in collection.delete_calls
+        if batch
+    ]
+    assert completed_batches
+    assert all(
+        document_id not in collection.document_ids
+        for collection in collections
+        for batch in collection.delete_calls
+        for document_id in batch
+    )
+    warnings = _cap_warning_records(caplog)
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "residual=true" in message
+    for key, value in expected_counters.items():
+        assert f"{key}={value}" in message
+    assert "user-a" not in message
+    assert "handle-" not in message
+    assert "sentinel" not in message
+    assert "doc-" not in message
+
+
+class TestMemoryPromotionPurgeV1:
+    def test_cap_warning_reason_survives_central_sanitizer_exactly(self):
+        from app.log_sanitize import _scrub_sensitive_text, contains_credential_material
+
+        reason = "reason=memory_promotion_v1_purge_cap_reached"
+
+        assert _scrub_sensitive_text(reason) == reason
+        assert contains_credential_material(reason) is False
+        assert _scrub_sensitive_text(f"{reason}_extra") == "[redacted-secret]"
+        assert contains_credential_material(f"{reason}_extra") is True
+
+    def test_delete_is_not_started_without_budget_for_exact_readback(self):
+        metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        collection = _PromotionPurgeCollection(metadata, ["sentinel"])
+        budget = vector_store_module._MemoryPromotionPurgeBudgetV1(
+            client_calls=(vector_store_module.MEMORY_PROMOTION_PURGE_MAX_CLIENT_CALLS_V1 - 2)
+        )
+
+        with pytest.raises(vector_store_module._MemoryPromotionPurgeCapReachedV1):
+            vector_store_module._purge_one_memory_promotion_collection_v1(collection, budget)
+
+        assert budget.client_calls == 1279
+        assert budget.document_pages == 1
+        assert budget.documents == 1
+        assert budget.delete_batches == 0
+        assert collection.delete_calls == []
+        assert collection.document_ids == ["sentinel"]
+
+    def test_malformed_returned_ids_consume_document_quota_before_validation(self):
+        class _DuplicatePage:
+            def get(self, **_kwargs):
+                return {"ids": ["duplicate", "duplicate"]}
+
+        budget = vector_store_module._MemoryPromotionPurgeBudgetV1(documents=4095)
+
+        with pytest.raises(vector_store_module._MemoryPromotionPurgeCapReachedV1):
+            vector_store_module._purge_one_memory_promotion_collection_v1(_DuplicatePage(), budget)
+
+        assert budget.document_pages == 1
+        assert budget.documents == 4096
+        assert budget.delete_batches == 0
+        assert budget.client_calls == 1
+
+    def test_exact_listing_owner_hash_avoids_user_name_collision(self, monkeypatch):
+        owner_metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        foreign_metadata = vector_store_module.memory_promotion_collection_metadata_v1("user_a")
+        owner = _PromotionPurgeCollection(owner_metadata, ["owner-doc"])
+        foreign = _PromotionPurgeCollection(foreign_metadata, ["foreign-doc"])
+        malformed = _PromotionPurgeCollection(
+            {**owner_metadata, "unexpected": "value"},
+            ["malformed-doc"],
+        )
+        client = _PromotionPurgeClient(
+            {
+                "opaque-owner-handle": owner,
+                "opaque-foreign-handle": foreign,
+                "opaque-malformed-handle": malformed,
+            }
+        )
+        _install_purge_client(monkeypatch, client)
+        monkeypatch.setattr(
+            vector_store_module,
+            "memory_promotion_collection_name_v1",
+            lambda _user_id: (_ for _ in ()).throw(AssertionError("name reconstructed")),
+        )
+
+        result = purge_identity_memories("user-a")
+
+        assert result is None
+        assert client.delete_collection_calls == [
+            _identity_collection_name("user-a"),
+            _identity_profile_collection_name("user-a"),
+        ]
+        assert owner.document_ids == []
+        assert foreign.document_ids == ["foreign-doc"]
+        assert malformed.document_ids == ["malformed-doc"]
+
+    def test_all_feature_flags_off_still_runs_exact_owner_purge(self, monkeypatch):
+        metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        owner = _PromotionPurgeCollection(metadata, ["owner-doc"])
+        client = _PromotionPurgeClient({"opaque-owner-handle": owner})
+        _install_purge_client(monkeypatch, client)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_AGENT_IDENTITY", False)
+        monkeypatch.setattr(vector_store_module.settings, "FEATURE_MEMORY_PROMOTION", False)
+        monkeypatch.setattr(
+            vector_store_module,
+            "memory_promotion_collection_name_v1",
+            lambda _user_id: (_ for _ in ()).throw(AssertionError("name reconstructed")),
+        )
+
+        result = purge_identity_memories("user-a")
+
+        legacy_names = [
+            _identity_collection_name("user-a"),
+            _identity_profile_collection_name("user-a"),
+        ]
+        assert result is None
+        assert client.operations[:3] == [
+            ("delete_collection", legacy_names[0]),
+            ("delete_collection", legacy_names[1]),
+            ("list_collections", 64, 0),
+        ]
+        assert client.delete_collection_calls == legacy_names
+        assert owner.operations == [
+            ("get", None, 128, 0),
+            ("delete", ("owner-doc",)),
+            ("get", ("owner-doc",), None, 0),
+            ("get", None, 128, 0),
+        ]
+        assert owner.document_ids == []
+
+    def test_1025_handles_stops_before_1025th_lookup(self, monkeypatch, caplog):
+        foreign_metadata = vector_store_module.memory_promotion_collection_metadata_v1("foreign")
+        owner_metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        collections = {
+            f"handle-{index:04d}": _PromotionPurgeCollection(foreign_metadata)
+            for index in range(1025)
+        }
+        completed = _PromotionPurgeCollection(owner_metadata, ["completed-delete"])
+        collections["handle-0000"] = completed
+        collections["handle-1024"] = _PromotionPurgeCollection(
+            owner_metadata,
+            ["target-sentinel"],
+        )
+        client = _PromotionPurgeClient(collections)
+        _install_purge_client(monkeypatch, client)
+        _forbid_purge_lifecycle_helpers(monkeypatch)
+
+        with caplog.at_level("WARNING"):
+            result = purge_identity_memories("user-a")
+
+        assert client.list_calls == 16
+        assert len(client.get_collection_calls) == 1024
+        assert "handle-1024" not in client.get_collection_calls
+        assert completed.document_ids == []
+        assert collections["handle-1024"].document_ids == ["target-sentinel"]
+        _assert_cap_hit_contract(
+            result=result,
+            client=client,
+            collections=collections.values(),
+            caplog=caplog,
+            expected_counters={
+                "collection_pages": 16,
+                "collection_handles": 1024,
+                "document_pages": 2,
+                "documents": 1,
+                "delete_batches": 1,
+                "client_calls": 1044,
+            },
+        )
+
+    def test_4097_documents_keeps_sentinel_after_4096_exact_deletes(self, monkeypatch, caplog):
+        metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        collection = _PromotionPurgeCollection(
+            metadata,
+            [f"doc-{index:04d}" for index in range(4097)],
+        )
+        client = _PromotionPurgeClient({"opaque-owner": collection})
+        _install_purge_client(monkeypatch, client)
+        _forbid_purge_lifecycle_helpers(monkeypatch)
+
+        with caplog.at_level("WARNING"):
+            result = purge_identity_memories("user-a")
+
+        assert collection.document_ids == ["doc-4096"]
+        assert len(collection.delete_calls) == 64
+        assert all(len(batch) <= 64 for batch in collection.delete_calls)
+        _assert_cap_hit_contract(
+            result=result,
+            client=client,
+            collections=[collection],
+            caplog=caplog,
+            expected_counters={
+                "collection_pages": 1,
+                "collection_handles": 1,
+                "document_pages": 32,
+                "documents": 4096,
+                "delete_batches": 64,
+                "client_calls": 162,
+            },
+        )
+
+    def test_1281st_client_call_is_never_scheduled(self, monkeypatch, caplog):
+        owner_metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        foreign_metadata = vector_store_module.memory_promotion_collection_metadata_v1("foreign")
+        collections: dict[str, _PromotionPurgeCollection] = {}
+        for index in range(253):
+            collections[f"owner-empty-{index:04d}"] = _PromotionPurgeCollection(owner_metadata)
+        completed = _PromotionPurgeCollection(owner_metadata, ["completed-delete"])
+        collections["owner-empty-0000"] = completed
+        for index in range(756):
+            collections[f"foreign-{index:04d}"] = _PromotionPurgeCollection(foreign_metadata)
+        sentinel = _PromotionPurgeCollection(owner_metadata, ["sentinel"])
+        collections["owner-last-sentinel"] = sentinel
+        client = _PromotionPurgeClient(collections)
+        _install_purge_client(monkeypatch, client)
+        _forbid_purge_lifecycle_helpers(monkeypatch)
+
+        with caplog.at_level("WARNING"):
+            result = purge_identity_memories("user-a")
+
+        assert completed.document_ids == []
+        assert sentinel.document_ids == ["sentinel"]
+        assert sentinel.delete_calls == []
+        assert len(client.get_collection_calls) == 1008
+        assert client.list_calls == 16
+        _assert_cap_hit_contract(
+            result=result,
+            client=client,
+            collections=collections.values(),
+            caplog=caplog,
+            expected_counters={
+                "collection_pages": 16,
+                "collection_handles": 1010,
+                "document_pages": 254,
+                "documents": 1,
+                "delete_batches": 1,
+                "client_calls": 1280,
+            },
+        )
+
+    def test_catalog_churn_preserves_residual_and_warns_once(self, monkeypatch, caplog):
+        owner_metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        foreign_metadata = vector_store_module.memory_promotion_collection_metadata_v1("foreign")
+        completed = _PromotionPurgeCollection(owner_metadata, ["completed-delete"])
+        target = _PromotionPurgeCollection(owner_metadata, ["target-sentinel"])
+        collections = {
+            "handle-0000": completed,
+            **{
+                f"handle-{index:04d}": _PromotionPurgeCollection(foreign_metadata)
+                for index in range(1, 64)
+            },
+            "target-after-churn": target,
+        }
+
+        class ChurningClient(_PromotionPurgeClient):
+            def list_collections(self, *, limit, offset):
+                self.list_calls += 1
+                self.operations.append(("list_collections", limit, offset))
+                if offset == 0:
+                    return self.names[:64]
+                return [self.names[0], "target-after-churn"]
+
+        client = ChurningClient(collections)
+        _install_purge_client(monkeypatch, client)
+
+        with caplog.at_level("WARNING"):
+            result = purge_identity_memories("user-a")
+
+        warnings = [
+            record
+            for record in caplog.records
+            if "memory promotion V1 purge preserved residual" in record.getMessage()
+        ]
+        assert result is None
+        assert completed.document_ids == []
+        assert target.document_ids == ["target-sentinel"]
+        assert "target-after-churn" not in client.get_collection_calls
+        assert len(warnings) == 1
+        assert "target-after-churn" not in warnings[0].getMessage()
+        assert "target-sentinel" not in warnings[0].getMessage()
+        assert client.operations[:2] == [
+            ("delete_collection", _identity_collection_name("user-a")),
+            ("delete_collection", _identity_profile_collection_name("user-a")),
+        ]
+
+    @pytest.mark.parametrize("fault", ["list", "lookup", "document_get", "delete"])
+    def test_v1_faults_preserve_legacy_order_and_return_none(self, monkeypatch, fault):
+        metadata = vector_store_module.memory_promotion_collection_metadata_v1("user-a")
+        collection = _PromotionPurgeCollection(metadata, ["owner-doc"])
+        client = _PromotionPurgeClient({"opaque-owner": collection})
+        _install_purge_client(monkeypatch, client)
+
+        if fault == "list":
+            monkeypatch.setattr(
+                client,
+                "list_collections",
+                lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("list failed")),
+            )
+        elif fault == "lookup":
+            monkeypatch.setattr(
+                client,
+                "get_collection",
+                lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("lookup failed")),
+            )
+        elif fault == "document_get":
+            monkeypatch.setattr(
+                collection,
+                "get",
+                lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("get failed")),
+            )
+        else:
+            monkeypatch.setattr(
+                collection,
+                "delete",
+                lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("delete failed")),
+            )
+
+        result = purge_identity_memories("user-a")
+
+        assert result is None
+        assert client.delete_collection_calls == [
+            _identity_collection_name("user-a"),
+            _identity_profile_collection_name("user-a"),
+        ]
+        assert collection.document_ids == ["owner-doc"]

@@ -54,6 +54,9 @@ _SAFE_UUID_ROUTE_SEGMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _SAFE_STAGE_PROSE_RE = re.compile(r"early/middle/late-stage-cross-validation")
+_SAFE_MEMORY_PROMOTION_PURGE_REASON = (
+    "reason=memory_promotion_v1_purge_cap_reached"
+)
 _ROUTE_UUID = "{uuid}"
 _SCENARIO_ROUTE_SUFFIXES = frozenset(
     {
@@ -186,9 +189,46 @@ def _redact_long_secret(match: re.Match[str]) -> str:
     candidate = match.group(0)
     if candidate.startswith("/"):
         return _redact_long_route(candidate)
-    if _SAFE_STAGE_PROSE_RE.fullmatch(candidate):
+    if (
+        _SAFE_STAGE_PROSE_RE.fullmatch(candidate)
+        or candidate == _SAFE_MEMORY_PROMOTION_PURGE_REASON
+    ):
         return candidate
     return "[redacted-secret]"
+
+
+def _long_secret_is_sensitive(candidate: str) -> bool:
+    if candidate.startswith("/"):
+        return _redact_long_route(candidate) == "[redacted-secret]"
+    return (
+        _SAFE_STAGE_PROSE_RE.fullmatch(candidate) is None
+        and candidate != _SAFE_MEMORY_PROMOTION_PURGE_REASON
+    )
+
+
+def contains_credential_material(value: str | None) -> bool:
+    """Return whether text contains credential material owned by this policy."""
+
+    candidate = str(value or "")
+    direct_patterns = (
+        _URL_USERINFO_RE,
+        _BEARER_TOKEN_RE,
+        _BASIC_AUTH_RE,
+        _PROVIDER_KEY_RE,
+        _UNLABELLED_CREDENTIAL_RE,
+    )
+    if any(pattern.search(candidate) is not None for pattern in direct_patterns):
+        return True
+    for pattern in (_API_KEY_ASSIGNMENT_RE, _LABELED_CREDENTIAL_ASSIGNMENT_RE):
+        if any(
+            not _credential_value_is_already_redacted(match.group("value"))
+            for match in pattern.finditer(candidate)
+        ):
+            return True
+    return any(
+        _long_secret_is_sensitive(match.group(0))
+        for match in _LONG_SECRET_RE.finditer(candidate)
+    )
 
 
 def _scrub_sensitive_text(value: str | None) -> str:

@@ -17,6 +17,7 @@ import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
+from types import MappingProxyType
 from typing import Any, Literal, cast, get_args
 
 from sqlalchemy import case, func, text, update
@@ -24,7 +25,15 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
 from app.config import settings
-from app.models import AgentMessage, Branch, Round, Scenario, ScenarioStatus
+from app.models import (
+    Agent,
+    AgentIdentity,
+    AgentMessage,
+    Branch,
+    Round,
+    Scenario,
+    ScenarioStatus,
+)
 from app.models.simulation_action import (
     SimulationAction,
     SimulationActionStatus,
@@ -151,6 +160,62 @@ _REASON_CODES_BY_ACTION = {
     ),
 }
 _SHA256_REVISION_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_MEMORY_PROMOTION_REF_RE = re.compile(r"[0-9a-f]{20}\Z")
+_MEMORY_PROMOTION_RECALL_RECEIPT_KEY = "memory_promotion_recall_v1"
+_MEMORY_PROMOTION_RECALL_RECEIPT_KEYS = frozenset(
+    {
+        "version",
+        "promotion_version",
+        "status",
+        "reason_code",
+        "promotion_reason_code",
+        "context_hash",
+        "offered_refs",
+        "recalled_refs",
+        "source_scenario_ids",
+    }
+)
+_MEMORY_RECALL_REASON_CODES = frozenset(
+    {
+        "MEMORY_RECALL_STORE_UNAVAILABLE",
+        "MEMORY_RECALL_RECORD_MISMATCH",
+        "MEMORY_RECALL_REF_MISMATCH",
+        "MEMORY_RECALL_VERSION_IGNORED",
+        "MEMORY_RECALL_OPAQUE_HISTORY",
+    }
+)
+_MEMORY_PROMOTION_REASON_CODES = frozenset(
+    {
+        "MEMORY_PROMOTION_COORDINATE_MISMATCH",
+        "MEMORY_PROMOTION_OWNER_MISMATCH",
+        "MEMORY_PROMOTION_RECORD_CONFLICT",
+        "MEMORY_PROMOTION_STORE_UNAVAILABLE",
+        "MEMORY_PROMOTION_LOCK_UNAVAILABLE",
+        "MEMORY_PROMOTION_CREDENTIAL_REJECTED",
+        "MEMORY_PROMOTION_POST_WRITE_AUTHORITY_LOST",
+    }
+)
+_MEMORY_PROMOTION_COMPLETE_FINALIZATION_KEYS = frozenset(
+    {
+        "version",
+        "status",
+        "failure_code",
+        "scenario_id",
+        "branch_id",
+        "round_id",
+        "round_number",
+        "expected_agent_count",
+        "action_count",
+        "missing_agent_ids",
+        "duplicate_agent_ids",
+        "unexpected_agent_ids",
+        "input_digest",
+        "schema_hash",
+        "state_revision_before",
+        "state_revision_after",
+        "semantic_state_hash",
+    }
+)
 _FORBIDDEN_REASONING_KEYS = frozenset(
     {
         "analysis",
@@ -887,6 +952,356 @@ def normalize_decision_envelope(
         "round_number": normalized_round,
         "decision_status": "verified",
         "failure_code": None,
+    }
+
+
+def _memory_promotion_context_payload_v1(
+    context: object,
+) -> dict[str, Any] | None:
+    from app.services.memory import RecallContextV1
+
+    if not isinstance(context, RecallContextV1):
+        return None
+    try:
+        payload = context.to_payload()
+    except Exception:
+        return None
+    if set(payload) != {
+        "contract",
+        "promotion_version",
+        "status",
+        "reason_code",
+        "items",
+        "context_hash",
+    }:
+        return None
+    status = payload.get("status")
+    reason_code = payload.get("reason_code")
+    items = payload.get("items")
+    if (
+        payload.get("contract") != "memory_promotion_recall_context_v1"
+        or payload.get("promotion_version") != "v1"
+        or status not in {"verified", "empty", "unavailable"}
+        or not isinstance(items, list)
+        or len(items) > 3
+        or not _SHA256_REVISION_RE.fullmatch(str(payload.get("context_hash") or ""))
+    ):
+        return None
+    if (
+        (status == "verified" and (reason_code is not None or not items))
+        or (status == "empty" and (reason_code is not None or items))
+        or (
+            status == "unavailable"
+            and (
+                reason_code not in _MEMORY_RECALL_REASON_CODES
+                | _MEMORY_PROMOTION_REASON_CODES
+                or items
+            )
+        )
+    ):
+        return None
+    item_keys = {
+        "memory_ref",
+        "summary",
+        "source_scenario_id",
+        "schema_hash",
+        "action_id",
+        "rule_id",
+        "variable_id",
+        "input_state_revision",
+    }
+    seen_refs: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping) or set(item) != item_keys:
+            return None
+        if any(type(value) is not str or not value for value in item.values()):
+            return None
+        memory_ref = cast(str, item["memory_ref"])
+        if not _MEMORY_PROMOTION_REF_RE.fullmatch(memory_ref) or memory_ref in seen_refs:
+            return None
+        seen_refs.add(memory_ref)
+    expected_hash = _domain_hash_v1(
+        {
+            "contract": payload["contract"],
+            "promotion_version": payload["promotion_version"],
+            "status": status,
+            "reason_code": reason_code,
+            "items": items,
+        }
+    )
+    return payload if payload["context_hash"] == expected_hash else None
+
+
+def _memory_promotion_recall_receipt_v1(
+    context_payload: Mapping[str, Any],
+    *,
+    normalized_memory_refs: Sequence[str],
+    ref_mismatch: bool,
+) -> dict[str, Any]:
+    items = cast(Sequence[Mapping[str, str]], context_payload["items"])
+    offered_refs = [item["memory_ref"] for item in items]
+    offered_set = set(offered_refs)
+    source_scenario_ids: list[str] = []
+    for item in items:
+        source_id = item["source_scenario_id"]
+        if source_id not in source_scenario_ids:
+            source_scenario_ids.append(source_id)
+    recalled_refs = (
+        []
+        if ref_mismatch
+        else [ref for ref in normalized_memory_refs if ref in offered_set]
+    )
+    reason_code = context_payload["reason_code"]
+    receipt = {
+        "version": 1,
+        "promotion_version": "v1",
+        "status": "unavailable" if ref_mismatch else context_payload["status"],
+        "reason_code": (
+            "MEMORY_RECALL_REF_MISMATCH" if ref_mismatch else reason_code
+        ),
+        "promotion_reason_code": (
+            "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+            if reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+            else None
+        ),
+        "context_hash": context_payload["context_hash"],
+        "offered_refs": offered_refs,
+        "recalled_refs": recalled_refs,
+        "source_scenario_ids": source_scenario_ids,
+    }
+    if set(receipt) != _MEMORY_PROMOTION_RECALL_RECEIPT_KEYS:
+        raise RuntimeError("MEMORY_PROMOTION_RECEIPT_SHAPE_INVALID")
+    return receipt
+
+
+def _invalid_memory_promotion_context_payload_v1() -> dict[str, Any]:
+    from app.services.memory import build_recall_context_v1
+
+    return build_recall_context_v1(
+        (),
+        status="unavailable",
+        reason_code="MEMORY_RECALL_REF_MISMATCH",
+    ).to_payload()
+
+
+def normalize_decision_with_memory_promotion_v1(
+    raw: object,
+    *,
+    recall_context: object,
+    legacy_allowed_memory_refs: Sequence[str] = (),
+    agent_id: str,
+    branch_id: str,
+    round_number: int,
+    fallback_goal: str,
+    allowed_world_changes: Sequence[str] = (),
+    allowed_action_target_ids: Sequence[str] | None = None,
+    allowed_agent_target_ids: Sequence[str] | None = None,
+    opportunity_snapshot: OpportunitySnapshotV1 | None = None,
+    domain_world_context: Mapping[str, object] | None = None,
+    compatibility_mode: Literal["live", "legacy_import"] = "live",
+) -> dict[str, Any]:
+    """Bind one Decision to the exact rendered promotion RecallContext."""
+
+    context_payload = _memory_promotion_context_payload_v1(recall_context)
+    context_invalid = context_payload is None
+    if context_payload is None:
+        context_payload = _invalid_memory_promotion_context_payload_v1()
+    offered_refs = [
+        cast(str, item["memory_ref"])
+        for item in cast(Sequence[Mapping[str, str]], context_payload["items"])
+    ]
+    trusted_refs = {
+        ref
+        for ref in legacy_allowed_memory_refs
+        if type(ref) is str and _MEMORY_PROMOTION_REF_RE.fullmatch(ref)
+    } | set(offered_refs)
+    raw_refs_value = raw.get("recalled_memory_refs", ()) if isinstance(raw, Mapping) else ()
+    if raw_refs_value is None:
+        raw_refs_value = ()
+    raw_refs_valid = isinstance(raw_refs_value, Sequence) and not isinstance(
+        raw_refs_value, (str, bytes, bytearray)
+    )
+    raw_refs = list(raw_refs_value) if raw_refs_valid else []
+    ref_mismatch = context_invalid or not raw_refs_valid
+    if not ref_mismatch:
+        seen_refs: set[str] = set()
+        for ref in raw_refs:
+            if (
+                type(ref) is not str
+                or not _MEMORY_PROMOTION_REF_RE.fullmatch(ref)
+                or ref in seen_refs
+                or ref not in trusted_refs
+            ):
+                ref_mismatch = True
+                break
+            seen_refs.add(ref)
+
+    if ref_mismatch:
+        normalized_round = max(1, int(round_number))
+        requested = None
+        if isinstance(raw, Mapping):
+            selected = _bounded_text(raw.get("selected_action"), 20).upper()
+            requested = cast(ActionTypeV1, selected) if selected in _ACTION_TYPES else None
+        decision = _fail_closed_decision(
+            code="DECISION_UNAVAILABLE",
+            agent_id=_bounded_text(agent_id, 160),
+            branch_id=_bounded_text(branch_id, 160),
+            round_number=normalized_round,
+            fallback_goal=fallback_goal,
+            constraints=raw.get("constraints") or () if isinstance(raw, Mapping) else (),
+            requested_action_type=requested,
+        )
+    else:
+        decision = normalize_decision_envelope(
+            raw,
+            agent_id=agent_id,
+            branch_id=branch_id,
+            round_number=round_number,
+            fallback_goal=fallback_goal,
+            allowed_memory_refs=tuple(trusted_refs),
+            allowed_world_changes=allowed_world_changes,
+            allowed_action_target_ids=allowed_action_target_ids,
+            allowed_agent_target_ids=allowed_agent_target_ids,
+            opportunity_snapshot=opportunity_snapshot,
+            domain_world_context=domain_world_context,
+            compatibility_mode=compatibility_mode,
+        )
+    normalized_refs = decision.get("recalled_memory_refs")
+    decision[_MEMORY_PROMOTION_RECALL_RECEIPT_KEY] = (
+        _memory_promotion_recall_receipt_v1(
+            context_payload,
+            normalized_memory_refs=(
+                cast(Sequence[str], normalized_refs)
+                if isinstance(normalized_refs, list)
+                else ()
+            ),
+            ref_mismatch=ref_mismatch,
+        )
+    )
+    return decision
+
+
+def _memory_promotion_receipt_union_is_valid_v1(
+    *,
+    status: object,
+    reason_code: object,
+    promotion_reason_code: object,
+    offered_refs: Sequence[str],
+    recalled_refs: Sequence[str],
+    source_scenario_ids: Sequence[str],
+) -> bool:
+    arrays_empty = not offered_refs and not recalled_refs and not source_scenario_ids
+    if status == "verified":
+        return (
+            reason_code is None
+            and promotion_reason_code is None
+            and bool(offered_refs)
+            and bool(source_scenario_ids)
+            and len(source_scenario_ids) <= len(offered_refs)
+        )
+    if status == "empty":
+        return reason_code is None and promotion_reason_code is None and arrays_empty
+    if status != "unavailable" or reason_code not in (
+        _MEMORY_RECALL_REASON_CODES | _MEMORY_PROMOTION_REASON_CODES
+    ):
+        return False
+    if reason_code == "MEMORY_RECALL_OPAQUE_HISTORY":
+        return promotion_reason_code is None and not source_scenario_ids
+    if reason_code == "MEMORY_RECALL_REF_MISMATCH":
+        if recalled_refs:
+            return False
+        if promotion_reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED":
+            return not offered_refs and not source_scenario_ids
+        return (
+            promotion_reason_code is None
+            and bool(offered_refs) == bool(source_scenario_ids)
+            and len(source_scenario_ids) <= len(offered_refs)
+        )
+    if reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED":
+        return promotion_reason_code == reason_code and arrays_empty
+    return promotion_reason_code is None and arrays_empty
+
+
+def _opaque_memory_promotion_recall_receipt_v1(value: object) -> dict[str, Any]:
+    offered_refs: list[str] = []
+    recalled_refs: list[str] = []
+    context_hash: str | None = None
+    valid = isinstance(value, Mapping) and set(value) == _MEMORY_PROMOTION_RECALL_RECEIPT_KEYS
+    if valid:
+        raw_offered = value.get("offered_refs")
+        raw_recalled = value.get("recalled_refs")
+        raw_sources = value.get("source_scenario_ids")
+        context_hash_value = value.get("context_hash")
+        status = value.get("status")
+        reason_code = value.get("reason_code")
+        promotion_reason_code = value.get("promotion_reason_code")
+        status_valid = isinstance(status, str) and status in {
+            "verified",
+            "empty",
+            "unavailable",
+        }
+        reason_valid = reason_code is None or (
+            isinstance(reason_code, str)
+            and reason_code
+            in _MEMORY_RECALL_REASON_CODES | _MEMORY_PROMOTION_REASON_CODES
+        )
+        promotion_reason_valid = promotion_reason_code is None or (
+            isinstance(promotion_reason_code, str)
+            and promotion_reason_code == "MEMORY_PROMOTION_CREDENTIAL_REJECTED"
+        )
+        sources_valid = isinstance(raw_sources, list) and all(
+            isinstance(source_id, str) and source_id for source_id in raw_sources
+        )
+        valid = (
+            value.get("version") == 1
+            and type(value.get("version")) is int
+            and value.get("promotion_version") == "v1"
+            and status_valid
+            and reason_valid
+            and promotion_reason_valid
+            and isinstance(raw_offered, list)
+            and isinstance(raw_recalled, list)
+            and sources_valid
+            and len(raw_sources) == len(set(raw_sources))
+            and isinstance(context_hash_value, str)
+            and bool(_SHA256_REVISION_RE.fullmatch(context_hash_value))
+        )
+        if valid:
+            all_refs = [*raw_offered, *raw_recalled]
+            valid = all(
+                type(ref) is str and bool(_MEMORY_PROMOTION_REF_RE.fullmatch(ref))
+                for ref in all_refs
+            ) and (
+                len(raw_offered) == len(set(raw_offered))
+                and len(raw_recalled) == len(set(raw_recalled))
+                and set(raw_recalled).issubset(raw_offered)
+            )
+        if valid:
+            valid = _memory_promotion_receipt_union_is_valid_v1(
+                status=status,
+                reason_code=reason_code,
+                promotion_reason_code=promotion_reason_code,
+                offered_refs=raw_offered,
+                recalled_refs=raw_recalled,
+                source_scenario_ids=raw_sources,
+            )
+        if valid:
+            offered_refs = list(raw_offered[:3])
+            offered_set = set(offered_refs)
+            for ref in raw_recalled:
+                if ref in offered_set and ref not in recalled_refs:
+                    recalled_refs.append(ref)
+            context_hash = context_hash_value
+    return {
+        "version": 1,
+        "promotion_version": "v1",
+        "status": "unavailable",
+        "reason_code": "MEMORY_RECALL_OPAQUE_HISTORY",
+        "promotion_reason_code": None,
+        "context_hash": context_hash,
+        "offered_refs": offered_refs,
+        "recalled_refs": recalled_refs,
+        "source_scenario_ids": [],
     }
 
 
@@ -2322,6 +2737,424 @@ def finalize_domain_round_v1(
         config=config,
         reduce_result=reduce_result,
     )
+
+
+class _FrozenMemoryPromotionListV1(list[Any]):
+    """Preserve JSON-list validation semantics while rejecting every mutation."""
+
+    def _immutable(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("memory promotion authority is immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    __iadd__ = _immutable
+    __imul__ = _immutable
+    append = _immutable
+    clear = _immutable
+    extend = _immutable
+    insert = _immutable
+    pop = _immutable
+    remove = _immutable
+    reverse = _immutable
+    sort = _immutable
+
+
+def _freeze_memory_promotion_authority_v1(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {
+                str(key): _freeze_memory_promotion_authority_v1(item)
+                for key, item in value.items()
+            }
+        )
+    if isinstance(value, (list, tuple)):
+        return _FrozenMemoryPromotionListV1(
+            _freeze_memory_promotion_authority_v1(item) for item in value
+        )
+    return value
+
+
+def _memory_promotion_history_is_live_v1(branch: Branch, round_number: int) -> bool:
+    replay_kind = str(branch.replay_kind or "").strip()
+    if not replay_kind:
+        return True
+    replay_cutoff = branch.replay_source_round
+    return type(replay_cutoff) is int and round_number > replay_cutoff
+
+
+def _memory_promotion_authority_for_round_v1(
+    session: Session,
+    round_row: Round,
+) -> Mapping[str, Any] | None:
+    branch = session.get(Branch, round_row.branch_id)
+    if branch is None or not _memory_promotion_history_is_live_v1(
+        branch, round_row.round_number
+    ):
+        return None
+    scenario = session.get(Scenario, branch.scenario_id)
+    if scenario is None or not str(scenario.user_id or "").strip():
+        return None
+    raw_context = scenario.parsed_context
+    if not isinstance(raw_context, Mapping):
+        return None
+    runtime = _coerce_runtime(raw_context.get(RUNTIME_CONTEXT_KEY))
+    round_payload = _domain_runtime_round_payload_v1(
+        runtime,
+        branch_id=branch.id,
+        round_number=round_row.round_number,
+    )
+    finalization = round_payload.get("domain_finalization")
+    if not isinstance(finalization, Mapping) or finalization.get("status") != "complete":
+        return None
+    config = _domain_config_from_scenario_v1(scenario)
+    if config.status != "active" or config.schema is None or config.schema_hash is None:
+        return None
+    if not (
+        set(finalization) == _MEMORY_PROMOTION_COMPLETE_FINALIZATION_KEYS
+        and type(finalization.get("version")) is int
+        and finalization.get("version") == 1
+        and finalization.get("status") == "complete"
+        and finalization.get("failure_code") is None
+        and finalization.get("scenario_id") == scenario.id
+        and finalization.get("branch_id") == branch.id
+        and finalization.get("round_id") == round_row.id
+        and type(finalization.get("round_number")) is int
+        and finalization.get("round_number") == round_row.round_number
+        and type(finalization.get("expected_agent_count")) is int
+        and type(finalization.get("action_count")) is int
+        and finalization.get("expected_agent_count")
+        == finalization.get("action_count")
+        and finalization.get("missing_agent_ids") == []
+        and finalization.get("duplicate_agent_ids") == []
+        and finalization.get("unexpected_agent_ids") == []
+        and finalization.get("schema_hash") == config.schema_hash
+        and all(
+            _SHA256_REVISION_RE.fullmatch(str(finalization.get(key) or ""))
+            for key in (
+                "input_digest",
+                "state_revision_before",
+                "state_revision_after",
+                "semantic_state_hash",
+            )
+        )
+    ):
+        raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_FINALIZATION_INVALID")
+
+    messages = tuple(
+        session.exec(
+            select(AgentMessage)
+            .where(AgentMessage.round_id == round_row.id)
+            .order_by(AgentMessage.id)
+        ).all()
+    )
+    expected_agent_ids = tuple(sorted({message.agent_id for message in messages}))
+    if (
+        not expected_agent_ids
+        or len(messages) != len(expected_agent_ids)
+        or cast(int, finalization.get("expected_agent_count"))
+        != len(expected_agent_ids)
+    ):
+        raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_INCOMPLETE")
+    round_read = _read_domain_round_v1(
+        session,
+        scenario_id=scenario.id,
+        branch_id=branch.id,
+        round_id=round_row.id,
+        round_number=round_row.round_number,
+        expected_agent_ids=expected_agent_ids,
+    )
+    if not round_read.complete:
+        raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_INCOMPLETE")
+    state_before, revision_before, accepted_before = _rebuild_prior_domain_state_v1(
+        session,
+        scenario=scenario,
+        branch_id=branch.id,
+        round_number=round_row.round_number,
+        config=config,
+    )
+    input_digest = _domain_input_digest_v1(round_read)
+    reduce_result = reduce_domain_round_v1(
+        config=config,
+        state_before=state_before,
+        state_revision_before=revision_before,
+        accepted_event_identities=accepted_before,
+        actions=round_read.action_inputs,
+        round_number=round_row.round_number,
+    )
+    _validate_prior_domain_projection_v1(
+        payload=round_payload,
+        finalization=finalization,
+        scenario_id=scenario.id,
+        round_read=round_read,
+        schema_hash=config.schema_hash,
+        input_digest=input_digest,
+        state_revision_before=revision_before,
+        reduce_result=reduce_result,
+    )
+
+    agents = tuple(
+        session.exec(select(Agent).where(Agent.id.in_(expected_agent_ids))).all()
+    )
+    agents_by_id = {agent.id: agent for agent in agents}
+    if set(agents_by_id) != set(expected_agent_ids) or any(
+        agent.scenario_id != scenario.id for agent in agents
+    ):
+        raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_OWNER_MISMATCH")
+    roster: list[dict[str, object]] = []
+    actor_bindings: dict[str, tuple[str | None, str | None]] = {}
+    for agent_id in expected_agent_ids:
+        agent = agents_by_id[agent_id]
+        identity_id = str(agent.agent_identity_id or "").strip() or None
+        identity_owner_id: str | None = None
+        if identity_id is not None:
+            identity = session.get(AgentIdentity, identity_id)
+            identity_owner_id = (
+                str(identity.user_id or "").strip() if identity is not None else None
+            ) or None
+        actor_bindings[agent_id] = (identity_id, identity_owner_id)
+        roster.append(
+            {
+                "agent_id": agent_id,
+                "identity_id": identity_id,
+                "identity_owner_id": identity_owner_id,
+            }
+        )
+
+    raw_decisions = round_payload.get("decisions")
+    if (
+        not isinstance(raw_decisions, list)
+        or len(raw_decisions) != len(round_read.action_rows)
+        or any(not isinstance(decision, Mapping) for decision in raw_decisions)
+    ):
+        raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_DECISION_MISSING")
+    actions: list[dict[str, object]] = []
+    for action, outer_payload in zip(
+        round_read.action_rows,
+        round_read.outer_payloads,
+        strict=True,
+    ):
+        matching_decisions = [
+            decision
+            for decision in raw_decisions
+            if isinstance(decision, Mapping)
+            and decision.get("agent_id") == action.agent_id
+            and decision.get("message_id") == action.message_id
+            and decision.get("action_id") == action.id
+        ]
+        if len(matching_decisions) != 1:
+            raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_DECISION_MISSING")
+        raw_decision = cast(Mapping[str, Any], matching_decisions[0])
+        if not _opportunity_receipt_is_valid(raw_decision.get("opportunity_receipt")):
+            raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_RECEIPT_INVALID")
+        identity_id, identity_owner_id = actor_bindings[action.agent_id]
+        actions.append(
+            {
+                "identity_id": identity_id,
+                "identity_owner_id": identity_owner_id,
+                "history_origin": "live",
+                "action": {
+                    "scenario_id": action.scenario_id,
+                    "branch_id": action.branch_id,
+                    "round_id": action.round_id,
+                    "round_number": action.round_number,
+                    "agent_id": action.agent_id,
+                    "message_id": action.message_id,
+                    "action_id": action.id,
+                    "action_sequence": action.sequence,
+                    "action_type": _domain_enum_value(action.action_type),
+                    "action_status": _domain_enum_value(action.status),
+                    "payload": copy.deepcopy(outer_payload.get("domain_world_v1")),
+                },
+                "decision": copy.deepcopy(dict(raw_decision)),
+            }
+        )
+    raw_domain_config = raw_context.get("domain_world_v1")
+    if not isinstance(raw_domain_config, Mapping):
+        raise RuntimeError("MEMORY_PROMOTION_AUTHORITY_SCHEMA_MISSING")
+    snapshot = {
+        "domain_world_config": copy.deepcopy(dict(raw_domain_config)),
+        "user_id": str(scenario.user_id),
+        "scenario_id": scenario.id,
+        "branch_id": branch.id,
+        "round_id": round_row.id,
+        "round_number": round_row.round_number,
+        "input_digest": input_digest,
+        "input_state_revision": revision_before,
+        "state_revision_after": reduce_result.state_revision,
+        "round_before": copy.deepcopy(dict(state_before)),
+        "round_after": copy.deepcopy(dict(reduce_result.state_after)),
+        "accepted_event_identities_before": [
+            list(item) for item in sorted(accepted_before)
+        ],
+        "accepted_event_identities_after": [
+            list(item) for item in sorted(reduce_result.accepted_event_identities)
+        ],
+        "roster": roster,
+        "finalization": copy.deepcopy(dict(finalization)),
+        "actions": actions,
+        "adjudications": copy.deepcopy(round_payload.get("domain_adjudications")),
+        "state_deltas": copy.deepcopy(round_payload.get("domain_state_deltas")),
+    }
+    return cast(
+        Mapping[str, Any],
+        _freeze_memory_promotion_authority_v1(snapshot),
+    )
+
+
+def scan_verified_memory_promotion_authority_v1(
+    engine: Engine,
+    *,
+    user_id: str | None = None,
+    scenario_id: str | None = None,
+    branch_id: str | None = None,
+    round_id: str | None = None,
+    round_number: int | None = None,
+) -> tuple[Mapping[str, Any], ...]:
+    """Read every matching complete live authority row through a fresh Session."""
+
+    snapshots: list[Mapping[str, Any]] = []
+    offset = 0
+    page_size = 64
+    with Session(engine) as session:
+        while True:
+            statement = (
+                select(Round)
+                .join(Branch, Round.branch_id == Branch.id)
+                .join(Scenario, Branch.scenario_id == Scenario.id)
+            )
+            if user_id is not None:
+                statement = statement.where(Scenario.user_id == user_id)
+            if scenario_id is not None:
+                statement = statement.where(Scenario.id == scenario_id)
+            if branch_id is not None:
+                statement = statement.where(Branch.id == branch_id)
+            if round_id is not None:
+                statement = statement.where(Round.id == round_id)
+            if round_number is not None:
+                statement = statement.where(Round.round_number == round_number)
+            page = tuple(
+                session.exec(
+                    statement.order_by(
+                        Scenario.id,
+                        Branch.id,
+                        Round.round_number,
+                        Round.id,
+                    )
+                    .offset(offset)
+                    .limit(page_size)
+                ).all()
+            )
+            for row in page:
+                snapshot = _memory_promotion_authority_for_round_v1(session, row)
+                if snapshot is not None:
+                    snapshots.append(snapshot)
+            if len(page) < page_size:
+                break
+            offset += len(page)
+    return tuple(snapshots)
+
+
+def revalidate_verified_memory_promotion_authority_v1(
+    engine: Engine,
+    expected_snapshot: object,
+) -> bool:
+    """Freshly re-read one exact authority coordinate for writer fencing."""
+
+    if not isinstance(expected_snapshot, Mapping):
+        return False
+    try:
+        round_number = expected_snapshot.get("round_number")
+        if type(round_number) is not int:
+            return False
+        current = scan_verified_memory_promotion_authority_v1(
+            engine,
+            user_id=cast(str, expected_snapshot.get("user_id")),
+            scenario_id=cast(str, expected_snapshot.get("scenario_id")),
+            branch_id=cast(str, expected_snapshot.get("branch_id")),
+            round_id=cast(str, expected_snapshot.get("round_id")),
+            round_number=round_number,
+        )
+        return len(current) == 1 and canonical_json_bytes_v1(
+            current[0]
+        ) == canonical_json_bytes_v1(expected_snapshot)
+    except Exception:
+        return False
+
+
+def load_current_memory_promotion_claims_v1(
+    engine: Engine,
+    *,
+    user_id: str,
+):
+    """Rebuild the complete current owner claim set from fresh durable SQL."""
+
+    from app.services.memory import build_verified_memory_promotions_v1
+    from app.services.vector_store import (
+        MemoryPromotionCurrentClaimsV1,
+        MemoryPromotionCurrentClaimV1,
+    )
+
+    claims: dict[str, MemoryPromotionCurrentClaimV1] = {}
+    try:
+        for snapshot in scan_verified_memory_promotion_authority_v1(
+            engine, user_id=user_id
+        ):
+            batch = build_verified_memory_promotions_v1(snapshot)
+            if batch.status == "empty":
+                continue
+            if batch.status != "verified" or batch.owner_id != user_id:
+                raise RuntimeError("MEMORY_PROMOTION_CURRENT_CLAIM_INVALID")
+            for document in batch.documents:
+                claim = MemoryPromotionCurrentClaimV1(
+                    document_id=document.document_id,
+                    document_canonical_bytes=document.submitted_document_canonical_bytes,
+                    metadata_canonical_bytes=document.submitted_metadata_canonical_bytes,
+                    semantic_hash=document.semantic_hash,
+                )
+                existing = claims.get(claim.document_id)
+                if existing is not None and existing != claim:
+                    raise RuntimeError("MEMORY_PROMOTION_CURRENT_CLAIM_CONFLICT")
+                claims[claim.document_id] = claim
+    except Exception:
+        return MemoryPromotionCurrentClaimsV1(complete=False, claims=())
+    return MemoryPromotionCurrentClaimsV1(
+        complete=True,
+        claims=tuple(claims[key] for key in sorted(claims)),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryPromotionRecallBindingV1:
+    user_id: str
+    identity_id: str
+
+
+def load_memory_promotion_recall_binding_v1(
+    engine: Engine,
+    *,
+    scenario_id: str,
+    agent_id: str,
+) -> MemoryPromotionRecallBindingV1 | None:
+    """Resolve recall owner coordinates from durable Agent and Identity rows."""
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        agent = session.get(Agent, agent_id)
+        if (
+            scenario is None
+            or agent is None
+            or agent.scenario_id != scenario_id
+            or not str(scenario.user_id or "").strip()
+            or not str(agent.agent_identity_id or "").strip()
+        ):
+            return None
+        identity = session.get(AgentIdentity, cast(str, agent.agent_identity_id))
+        if identity is None or identity.user_id != scenario.user_id:
+            return None
+        return MemoryPromotionRecallBindingV1(
+            user_id=cast(str, scenario.user_id),
+            identity_id=identity.id,
+        )
 
 
 def _previous_decision(
@@ -4153,6 +4986,8 @@ def persist_round_runtime_in_session(
     compatibility_mode: CompatibilityModeV1,
     domain_world_context: Mapping[str, object] | None = None,
     runtime_lease: object | None = None,
+    memory_promotion_contexts_by_actor: Mapping[str, object] | None = None,
+    legacy_memory_refs_by_actor: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Merge a branch-round into the caller's uncommitted transaction."""
     normalized_round = max(1, int(round_number))
@@ -4293,18 +5128,74 @@ def persist_round_runtime_in_session(
                     )[agent_id]
                 except Exception:
                     cumulative_snapshot = None
-        decision = normalize_decision_envelope(
-            raw_decision,
-            agent_id=agent_id,
-            branch_id=branch_id,
-            round_number=normalized_round,
-            fallback_goal=_bounded_text(message.get("fallback_goal"))
-            or "Continue the current evidence-based goal",
-            allowed_memory_refs=tuple(raw_memory_refs),
-            allowed_world_changes=tuple(raw_world_changes),
-            opportunity_snapshot=trusted_snapshot,
-            domain_world_context=domain_world_context,
-            compatibility_mode=compatibility_mode,
+        memory_promotion_context = (
+            memory_promotion_contexts_by_actor.get(agent_id)
+            if memory_promotion_contexts_by_actor is not None
+            else None
+        )
+        incoming_memory_promotion_ref_mismatch = False
+        if memory_promotion_context is not None and isinstance(raw_decision, Mapping):
+            incoming_context_payload = _memory_promotion_context_payload_v1(
+                memory_promotion_context
+            )
+            if incoming_context_payload is not None:
+                expected_mismatch_receipt = _memory_promotion_recall_receipt_v1(
+                    incoming_context_payload,
+                    normalized_memory_refs=(),
+                    ref_mismatch=True,
+                )
+                try:
+                    incoming_memory_promotion_ref_mismatch = (
+                        canonical_json_bytes_v1(
+                            raw_decision.get(_MEMORY_PROMOTION_RECALL_RECEIPT_KEY)
+                        )
+                        == canonical_json_bytes_v1(expected_mismatch_receipt)
+                    )
+                except (TypeError, ValueError):
+                    incoming_memory_promotion_ref_mismatch = False
+        if memory_promotion_context is None:
+            decision = normalize_decision_envelope(
+                raw_decision,
+                agent_id=agent_id,
+                branch_id=branch_id,
+                round_number=normalized_round,
+                fallback_goal=_bounded_text(message.get("fallback_goal"))
+                or "Continue the current evidence-based goal",
+                allowed_memory_refs=tuple(raw_memory_refs),
+                allowed_world_changes=tuple(raw_world_changes),
+                opportunity_snapshot=trusted_snapshot,
+                domain_world_context=domain_world_context,
+                compatibility_mode=compatibility_mode,
+            )
+        else:
+            decision = normalize_decision_with_memory_promotion_v1(
+                raw_decision,
+                recall_context=memory_promotion_context,
+                legacy_allowed_memory_refs=(
+                    legacy_memory_refs_by_actor.get(agent_id, ())
+                    if legacy_memory_refs_by_actor is not None
+                    else ()
+                ),
+                agent_id=agent_id,
+                branch_id=branch_id,
+                round_number=normalized_round,
+                fallback_goal=_bounded_text(message.get("fallback_goal"))
+                or "Continue the current evidence-based goal",
+                allowed_world_changes=tuple(raw_world_changes),
+                opportunity_snapshot=trusted_snapshot,
+                domain_world_context=domain_world_context,
+                compatibility_mode=compatibility_mode,
+            )
+        memory_promotion_ref_mismatch = bool(
+            incoming_memory_promotion_ref_mismatch
+            or (
+                memory_promotion_context is not None
+                and isinstance(
+                    decision.get(_MEMORY_PROMOTION_RECALL_RECEIPT_KEY), Mapping
+                )
+                and decision[_MEMORY_PROMOTION_RECALL_RECEIPT_KEY].get("reason_code")
+                == "MEMORY_RECALL_REF_MISMATCH"
+            )
         )
         if not _decision_matches_action(decision, action):
             decision = _fail_closed_decision(
@@ -4351,6 +5242,25 @@ def persist_round_runtime_in_session(
         )
         decision.pop("requested_action_type", None)
         decision["opportunity_receipt"] = opportunity_receipt
+        if memory_promotion_context is not None:
+            context_payload = _memory_promotion_context_payload_v1(
+                memory_promotion_context
+            )
+            if context_payload is None:
+                context_payload = _invalid_memory_promotion_context_payload_v1()
+                memory_promotion_ref_mismatch = True
+            normalized_memory_refs = decision.get("recalled_memory_refs")
+            decision[_MEMORY_PROMOTION_RECALL_RECEIPT_KEY] = (
+                _memory_promotion_recall_receipt_v1(
+                    context_payload,
+                    normalized_memory_refs=(
+                        cast(Sequence[str], normalized_memory_refs)
+                        if isinstance(normalized_memory_refs, list)
+                        else ()
+                    ),
+                    ref_mismatch=memory_promotion_ref_mismatch,
+                )
+            )
         utterance = _bounded_text(
             message.get("content") or message.get("speech"),
             _MAX_ACTION_CONTENT,
@@ -4557,6 +5467,8 @@ def persist_round_runtime(
     compatibility_mode: CompatibilityModeV1 = "legacy_import",
     domain_world_context: Mapping[str, object] | None = None,
     runtime_lease: object | None = None,
+    memory_promotion_contexts_by_actor: Mapping[str, object] | None = None,
+    legacy_memory_refs_by_actor: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Persist one branch-round in an owned transaction."""
     with Session(engine) as session:
@@ -4570,6 +5482,8 @@ def persist_round_runtime(
             compatibility_mode=compatibility_mode,
             domain_world_context=domain_world_context,
             runtime_lease=runtime_lease,
+            memory_promotion_contexts_by_actor=memory_promotion_contexts_by_actor,
+            legacy_memory_refs_by_actor=legacy_memory_refs_by_actor,
         )
         if not _runtime_lease_is_held(session, runtime_lease):
             raise ValueError("AGENT_RUNTIME_LEASE_LOST")
@@ -4910,8 +5824,22 @@ def sanitize_imported_agent_runtime_in_session(
                     if isinstance(decision, Mapping)
                     else None
                 )
+                opaque_memory_promotion_receipt = None
                 if sanitized_decision is not None:
                     sanitized_decision.pop("opportunity_receipt", None)
+                    if (
+                        settings.FEATURE_AGENT_IDENTITY
+                        and settings.FEATURE_MEMORY_PROMOTION
+                        and _MEMORY_PROMOTION_RECALL_RECEIPT_KEY
+                        in sanitized_decision
+                    ):
+                        opaque_memory_promotion_receipt = (
+                            _opaque_memory_promotion_recall_receipt_v1(
+                                sanitized_decision.pop(
+                                    _MEMORY_PROMOTION_RECALL_RECEIPT_KEY
+                                )
+                            )
+                        )
                 records.append({
                     "agent_id": agent_id,
                     "message_id": message.id,
@@ -4923,6 +5851,15 @@ def sanitize_imported_agent_runtime_in_session(
                         else None
                     ),
                     "decision_envelope": sanitized_decision,
+                    **(
+                        {
+                            "_opaque_memory_promotion_receipt": (
+                                opaque_memory_promotion_receipt
+                            )
+                        }
+                        if opaque_memory_promotion_receipt is not None
+                        else {}
+                    ),
                 })
             if not records:
                 continue
@@ -4955,6 +5892,27 @@ def sanitize_imported_agent_runtime_in_session(
                 .get("rounds", {})
                 .get(str(round_number), {})
             )
+            if (
+                settings.FEATURE_AGENT_IDENTITY
+                and settings.FEATURE_MEMORY_PROMOTION
+            ):
+                opaque_receipts_by_action = {
+                    str(record["action_id"]): record[
+                        "_opaque_memory_promotion_receipt"
+                    ]
+                    for record in records
+                    if "_opaque_memory_promotion_receipt" in record
+                }
+                for generated in generated_round.get("decisions", []):
+                    if not isinstance(generated, dict):
+                        continue
+                    opaque_receipt = opaque_receipts_by_action.get(
+                        str(generated.get("action_id") or "")
+                    )
+                    if opaque_receipt is not None:
+                        generated[_MEMORY_PROMOTION_RECALL_RECEIPT_KEY] = copy.deepcopy(
+                            opaque_receipt
+                        )
             for generated in generated_round.get("decisions", []):
                 if (
                     not isinstance(generated, dict)
@@ -5311,6 +6269,16 @@ def clone_runtime_history(
                 for decision in cloned_payload.get("decisions", []):
                     if isinstance(decision, dict):
                         decision.pop("opportunity_receipt", None)
+                        if (
+                            settings.FEATURE_AGENT_IDENTITY
+                            and settings.FEATURE_MEMORY_PROMOTION
+                            and _MEMORY_PROMOTION_RECALL_RECEIPT_KEY in decision
+                        ):
+                            decision[_MEMORY_PROMOTION_RECALL_RECEIPT_KEY] = (
+                                _opaque_memory_promotion_recall_receipt_v1(
+                                    decision[_MEMORY_PROMOTION_RECALL_RECEIPT_KEY]
+                                )
+                            )
             selected_rounds[str(number)] = cloned_payload
     fragment = {
         "version": RUNTIME_VERSION,
@@ -5335,19 +6303,25 @@ __all__ = [
     "RUNTIME_CONTEXT_KEY",
     "RUNTIME_VERSION",
     "DomainRoundFinalizationResultV1",
+    "MemoryPromotionRecallBindingV1",
     "clone_runtime_history",
     "decision_to_action",
     "finalize_domain_round_v1",
     "get_runtime_branch_round",
     "load_agent_runtime",
+    "load_current_memory_promotion_claims_v1",
+    "load_memory_promotion_recall_binding_v1",
     "load_prior_agent_decision",
     "load_prior_agent_transition",
     "load_prior_opportunity_receipt",
     "normalize_decision_envelope",
+    "normalize_decision_with_memory_promotion_v1",
     "persist_round_runtime",
     "persist_round_runtime_in_session",
+    "revalidate_verified_memory_promotion_authority_v1",
     "remap_agent_runtime_coordinates",
     "render_agent_transition_context",
     "sanitize_imported_agent_runtime_in_session",
+    "scan_verified_memory_promotion_authority_v1",
     "utterance_similarity",
 ]
