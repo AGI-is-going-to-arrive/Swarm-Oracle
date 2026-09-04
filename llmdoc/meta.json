@@ -1,27 +1,27 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "e2c33f626c0ec204062296d7799b9a83a2d17735",
-    "verifiedAt": "2026-09-04T19:42:40.776Z"
+    "revision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e",
+    "verifiedAt": "2026-09-04T19:43:19.456Z"
   },
   "documents": {
     "architecture.mdx": {
-      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
     },
     "backend/architecture.mdx": {
-      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
     },
     "config/runtime.mdx": {
-      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
     },
     "development/local-workflow.mdx": {
-      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
     },
     "frontend/architecture.mdx": {
-      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
     },
     "http-api/contracts.mdx": {
-      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
     }
   },
   "convergence": {
