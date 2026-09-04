@@ -1,0 +1,33 @@
+{
+  "schema": "llmdoc.meta/v3",
+  "baseline": {
+    "revision": "e2c33f626c0ec204062296d7799b9a83a2d17735",
+    "verifiedAt": "2026-09-04T19:42:40.776Z"
+  },
+  "documents": {
+    "architecture.mdx": {
+      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+    },
+    "backend/architecture.mdx": {
+      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+    },
+    "config/runtime.mdx": {
+      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+    },
+    "development/local-workflow.mdx": {
+      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+    },
+    "frontend/architecture.mdx": {
+      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+    },
+    "http-api/contracts.mdx": {
+      "validatedRevision": "e2c33f626c0ec204062296d7799b9a83a2d17735"
+    }
+  },
+  "convergence": {
+    "capturedAt": "2026-09-04T19:41:55Z",
+    "source": "init",
+    "documentCount": 6,
+    "totalEstimatedTokens": 3546
+  }
+}
