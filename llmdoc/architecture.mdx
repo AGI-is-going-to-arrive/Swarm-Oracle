@@ -1,0 +1,59 @@
+---
+description: SwarmOracle 产品定位、交付边界、产品域划分，以及不得把未交付能力当成已上线合同的限制。
+kind: architecture
+relations:
+  related:
+    - backend/architecture.mdx
+    - frontend/architecture.mdx
+code:
+  paths:
+    - README.md
+    - frontend/src/App.tsx
+    - backend/app/main.py
+---
+
+# SwarmOracle 整体架构
+
+SwarmOracle 是 browser-first 的 AI What-If 推演工具。用户提交历史或假设问题；后端组织多 Agent 推演、世界线分叉和结局叙事；前端展示过程、证据和可继续操作的结果。不包含原生桌面或移动壳。本地 / self-hosted 是主运行方式；公开部署要单独配置鉴权、CORS、密钥和网络暴露。
+
+## 产品闭环
+
+1. 用户选择问题、Agent 数、轮数、推演模式、模型配置和可选搜索增强，也可配置初始世界事件 Feed。
+2. 后端解析场景并启动带持久化状态的异步推演。
+3. 前端通过 REST 与 WebSocket 展示轮次、发言、观测、世界事件、分支、干预和取消；Agent 只在真实机会快照允许时执行原生社交动作，回执可审查。
+4. 运行页与结果页展示有界领域状态、动作阈值和 IDLE 归因；结果页汇总终局叶分支、领域结局、预测、因果与阵营代理、证据、结构化 premortem 和可选深读报告。
+5. 用户可分享只读 replay、挑战链接或脱敏 Public Artifact；也可从结局继续反事实、续跑、对话和圆桌分析。
+
+## 产品域
+
+| 域 | 用户入口 | 范围 |
+|---|---|---|
+| Scenario | `/`、`/sim/:id`、`/result/:id` | 主推演、分支、干预、押注、社交世界、领域状态、Action Ledger、取消、结果 |
+| Replay 与图谱 | `/replay/*`、`/workbench/:id` | 只读回放、因果图、知识图、分支比较和续跑 |
+| Agent | `/agents`、`/agents/new` | 自建 Agent、身份、记忆、PDF、备份和 Agent Pack |
+| Debate | `/debate/*` | 双方辩论、裁决、预测、论证图和 replay |
+| Oracle | 结果页、圆桌页 | 结局会客厅、世界线圆桌、追问和分析工具 |
+| Campaign | 首页、推演页、结果页 | 每日挑战、玩法卡、成长、徽章和结算 |
+| Prediction | 结果页、`/me/journal`、leaderboard | 预测、评分、个人日志和校准 |
+| Search | 首页 opt-in | 服务端搜索、自带搜索配置和模型原生引用 |
+| Model profiles | `/admin/setup`、`/model-profiles` | 本地 provider 配置、连接测试和 profile 复用 |
+| Local content 与分享 | Local Packs、官方样例、Snapshot、`gallery.html` | 有界模板、零 LLM 样例和脱敏离线分享 |
+
+## 稳定合同
+
+- replay、分享和 snapshot 只携带展示或导入所需数据，不能成为凭据或 owner authority。
+- 功能开关控制入口和后端路由。前端 capability 探针失败必须与功能关闭分开显示。
+- Local Pack 只原子填充有界问题、设置和不可信世界背景；角色预览不创建持久化 Agent 身份。
+- 初始世界事件 Feed 是不可信推演输入；来源名称和事件内容不构成 persona 或 identity authority。
+- Action Ledger 回执是可审查的模拟事实，不是现实世界事实或因果证明。
+- `domain_world_v1` 由模型提议、再由固定代码校验冻结；状态与结局来自 durable 动作的确定性重放，不是现实测量值。
+- Agent Pack 只携带脱敏 persona 字段；不携带 owner、identity ID、记忆、对话或凭据。
+- Public Artifact、挑战链接和 Gallery 是本地/离线分享；hash 链接不上传，也不构成 hosted marketplace。
+- LLM、搜索和 ChromaDB 都可能降级；业务路径必须给出错误、重试或确定性 fallback。
+
+## 明确未交付
+
+- Session gate 只提供本地 hardening；完整 JWT/OAuth2 与逐资源授权尚未交付。
+- Verified memory promotion v1 是默认关闭的后端核心，没有 capability、REST 或 UI 激活面。不得把它呈现成用户可操作功能。
+- 图谱持久化边可提供有界 evidence，但不能解释成已验证现实因果。
+- SQLite WAL / runtime lock 适合本地共享文件，不等同于分布式数据库协调。

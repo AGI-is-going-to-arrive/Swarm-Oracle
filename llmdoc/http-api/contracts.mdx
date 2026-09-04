@@ -1,0 +1,63 @@
+---
+description: REST 错误形状、session/owner 鉴权、Scenario 生命周期、SSE 终态和 WebSocket 首帧认证合同。
+kind: reference
+relations:
+  requires:
+    - backend/architecture.mdx
+  related:
+    - config/runtime.mdx
+    - frontend/architecture.mdx
+code:
+  paths:
+    - backend/app/api/schemas.py
+    - backend/app/api/ws.py
+    - backend/app/api/scenarios.py
+    - backend/app/api/ending_rooms.py
+---
+
+# REST、SSE 与 WebSocket 合同
+
+后端默认地址是 `http://127.0.0.1:18927`。完整字段以 `backend/app/api/`、`backend/app/api/schemas.py` 和 OpenAPI 为准。`/docs`、`/redoc`、`/openapi.json` 默认关闭；本地设置 `EXPOSE_API_DOCS=true` 后可读完整 schema。
+
+## 错误与功能开关
+
+业务错误使用 `{ "detail": { "code", "message" } }`。Pydantic 参数错误保留框架 `422`。未知服务端错误收口为安全通用错误，响应不能包含 stack、密钥或 provider 原文。功能关闭时受 gate 的 endpoint 返回 `404 FEATURE_DISABLED` 或域内等价错误，不执行副作用。
+
+## 鉴权与 owner
+
+- `SESSION_SECRET=""` 时本地业务路由跳过 session gate。
+- 配置后业务 REST 要求 `X-Session-Token`。裸 secret 只通过全局 gate，不携带用户身份。
+- signed principal 为 `v1.<payload>.<signature>`；payload `sub` 是 owner subject。owner-sensitive 路由要求 signed principal，否则 `SESSION_PRINCIPAL_REQUIRED`。
+- body/query `user_id` 与 `sub` 不一致返回 `SESSION_PRINCIPAL_MISMATCH`。
+- 不存在和跨 owner 资源使用同一 404。
+- `X-Session-Token` 只用于 REST。WebSocket 使用首帧 auth。`/` 公开；`/metrics` 接受 admin token，或已启用 session gate 时的 session token。
+
+## Scenario 生命周期
+
+- `POST /api/scenario` 校验问题、运行参数、BYOK、profile、自定义 Agent、可选搜索和 `initial_social_feed`，再启动后台任务。
+- `GET /api/scenario/{id}` 返回 durable status 和 always-shaped `domain_world`。
+- `GET /story` 在 `full_report.status` 为 `complete/partial` 且 headline 可用时，用报告编译结论覆盖旧模型自评。`failed/generating` 不是 Claim-validated verdict authority。
+- `POST /cancel` 只接受 `parsing/simulating/narrating/cancelled`。先持久化 `cancelled` 再取消本进程 task。`done/error` 返回 `409 SIMULATION_NOT_RUNNING`。
+- 删除 scenario 清理运行数据和 replay artifact；个人 journal 保留，关联 `scenario_id` 置空。
+
+## BYOK
+
+远端业务请求显式传 `llm_base_url` 时必须同时传 API key；精确本地 provider 可免 key。profile id 按当前 owner 解析，响应不回显 API key。partial override fail-closed。hostname allowlist 与 scheme 规则见 `config/runtime.mdx`。
+
+## SSE
+
+| Endpoint | 终态约束 |
+|---|---|
+| conversation turn | abort、delete 和 provider failure 都必须产生明确终态；客户端断开后不得用迟到 delta 恢复完成态 |
+| report generate | 自动路径 fail-soft，不能阻断 scenario `done` |
+| survey | 单个代表失败写入该 response，不升级整个流 |
+
+## WebSocket
+
+路径：`/ws/scenario/{id}`、`/ws/debate/{id}`、`/ws/agent-conversation/{thread_id}`、`/ws/ending-room/{room_id}`。
+
+启用 `SESSION_SECRET` 时：accept 前预留 pending-auth；客户端 10 秒内发送不超过 64 KiB 的 `{"type":"auth","token"}`；验证资源和 owner 后发送 `auth_ok` 再注册连接。失败用 `4001`，资源/owner/feature 用 `4404`；两者不重连。`1006` 可重连。所有入站文本 64 KiB UTF-8 上限。`cancelled` 是粘性终态。
+
+## Snapshot 输入
+
+`POST /api/scenario/import-snapshot` fail-closed：上传不超过 50 MiB，member 路径安全，manifest/checksum 一致，外键 remap 失败则整包失败。pending intervention 不随 snapshot 恢复；凭据、token、base URL 和 owner 数据不导出。

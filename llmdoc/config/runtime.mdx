@@ -1,0 +1,53 @@
+---
+description: 本地默认 LLM 哨兵、BYOK URL 校验、session/admin 安全默认值，以及功能开关与限流层的独立语义。
+kind: reference
+relations:
+  related:
+    - http-api/contracts.mdx
+    - development/local-workflow.mdx
+code:
+  paths:
+    - backend/app/config.py
+    - .env.example
+    - .env.docker.example
+---
+
+# 运行时配置
+
+`backend/app/config.py` 定义类型、默认值和校验器。`.env.example` 是本地模板，`.env.docker.example` 是 Compose 模板。不要在文档、日志、replay、snapshot 或测试工件中记录真实密钥。字段范围直接查 `config.py`。
+
+## 公开默认 LLM 哨兵
+
+根目录 `.env.example` 默认 `LLM_RESPONSES_URL=http://127.0.0.1:8317/v1`，`LLM_API_KEY` 为占位值，`LLM_MODEL_NAME=gpt-5.4-mini`。该 loopback 与占位 key 组合只保证应用和官方样例能启动，不证明存在可用 LLM。实际部署把模板复制为 `backend/.env` 后再改。
+
+## BYOK URL
+
+请求可覆盖 `llm_api_key`、`llm_base_url`、`llm_model`、RPM 和 TPM，只影响当前请求。
+
+- 远端显式传 base URL 时必须同时传 API key；精确本地 provider 可免 key。
+- scheme 只允许 `http/https`。官方托管 host 必须 `https`。
+- 精确本地 host 只包括 `localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal` 和 `::1`。
+- `http` 只允许已启用的精确本地 host，或显式 allowlist 且启用 private-host 选项的 self-hosted 边界。
+- URL userinfo、params、query 和 fragment 一律拒绝。
+- 精确本地 URL 未提供 key 时不发送 `Authorization`，也不会回退泄露服务端默认 key。
+- request-scoped RPM/TPM 为 `0` 时，不增加该请求层限流。
+
+RPM、TPM、并发和 pending 是独立限流层。对应层设为 `0` 关闭该层；`LLM_CONCURRENCY=0` 还会关闭由它派生的 purpose-lane semaphore。
+
+## 服务与安全
+
+- 默认 `HOST=127.0.0.1`、`PORT=18927`；frontend dev/Compose 为 `127.0.0.1:18928`。
+- file-backed SQLite 使用 WAL 与 `busy_timeout=5000`。内存 SQLite 跳过 WAL。
+- `SESSION_SECRET` 空值关闭本地 session gate；非空启用 REST 与 WS 认证。
+- `ADMIN_TOKEN` 保护 `/api/admin/*` 与 `/metrics`。
+- `ENV=production/prod` 启用生产 fail-fast：要求非空且唯一的 `SESSION_SECRET` 和 `ADMIN_TOKEN`；生产 admin LLM test 拒绝本地 base URL。
+- `EXPOSE_API_DOCS` 默认 false。
+- Model profile 的 key 以本地 SQLite 明文保存，适用于单用户 self-hosted；API 只返回 `has_api_key`。key、Base URL 与 model 是一个 provider 绑定。
+
+## 搜索与功能开关
+
+- `ENABLE_WEB_SEARCH` 默认 opt-in。搜索失败必须 fail-soft，不能阻断 simulation。
+- 模型原生搜索不由 `WEB_SEARCH_PROVIDER=native` 开启；取决于 Responses provider、profile capability 和 native upstream 声明。
+- 后端 gate 关闭通常返回 404；前端通过 `/api/capabilities` 隐藏或禁用入口。
+- `FEATURE_MEMORY_PROMOTION` 默认 false，且须与 `FEATURE_AGENT_IDENTITY=true` 同时满足才启用 v1 writer/reader。它没有 capability key、REST 激活面或 UI，也未写入公开 env 模板。改回 false 是非破坏回滚：reader 忽略 v1，物理记录不删除。
+- 修改功能开关后重启 backend。

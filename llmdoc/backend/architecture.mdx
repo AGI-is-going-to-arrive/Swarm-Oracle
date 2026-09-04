@@ -1,0 +1,70 @@
+---
+description: 后端模块所有权、durable authority、分支谱系、runtime lock、取消终态，以及社交动作与有界领域世界的失败语义。
+kind: architecture
+relations:
+  requires:
+    - architecture.mdx
+  related:
+    - http-api/contracts.mdx
+    - config/runtime.mdx
+code:
+  paths:
+    - backend/app/main.py
+    - backend/app/api
+    - backend/app/services/simulator.py
+    - backend/app/services/runtime_lock.py
+    - backend/app/services/simulation_cancel.py
+    - backend/app/services/branch_lineage.py
+    - backend/app/services/domain_world.py
+    - backend/app/services/simulation_actions.py
+    - backend/app/services/action_ledger.py
+    - backend/app/models
+---
+
+# 后端运行时架构
+
+后端使用 FastAPI、SQLModel、SQLite、Alembic、ChromaDB 和 OpenAI-compatible LLM。`backend/app/main.py` 创建应用、挂载 router、配置日志与启动恢复。
+
+## 所有权
+
+| 表面 | 责任 |
+|---|---|
+| `backend/app/api/` | REST、SSE、WebSocket、请求 schema、session 与 owner 校验 |
+| `services/simulator.py` | scenario 主循环、分支、叙事、进度和终态 |
+| `services/branch_lineage.py` | native 根到叶轮次谱系、fork 边界、cutoff 与 replay 边界的唯一 authority |
+| `services/runtime_lock.py` | SQLite shared lease、续租和跨 worker 防重入 |
+| `services/simulation_cancel.py` | 进程内取消信号与 DB `cancelled` 回查 |
+| `services/llm_client.py` | provider 调用、流式解析、限流、并发、熔断 |
+| `services/simulation_actions.py` | 社交动作校验、幂等追加、owner-facing 投影 |
+| `services/domain_world.py` | `domain_world_v1` schema、阈值求值器和确定性 reducer |
+| `services/action_ledger.py` | 发言、观察、领域裁决和身份记忆回执的只读投影 |
+| `services/result_report/` | 报告 IR、Claim 编译、premortem、工具轨迹和 SSE |
+| `services/memory.py`、`vector_store.py` | Chroma 记忆与默认关闭的 verified promotion v1 |
+| `backend/app/models/` | SQLModel 表与状态枚举 |
+| `backend/alembic/` | schema 与数据迁移 |
+
+## Durable authority
+
+| 数据 | Authority | 规则 |
+|---|---|---|
+| Scenario 生命周期 | `Scenario.status` | `parsing/simulating/narrating` 运行；`done/error/cancelled` 终态 |
+| 世界线 | `Branch`、`Round`、`Message` | DB 是恢复、replay 和结果生成的 durable truth |
+| 社交动作 | `SimulationAction` | append-only；状态 `verified/unavailable/failed` |
+| 有界领域 schema | `parsed_context.domain_world_v1` | 只有固定 validator 冻结的 v1；后续模型文本不能改写 |
+| 导演 / 玩法 | `director_state_json` / `gameplay_state_json` | campaign API 用 revision 做乐观并发 |
+| 深读报告 | `parsed_context.full_report` | 合法 `complete/partial` 的 Claim 是 `/story` 更强 authority；`failed/generating` 不是 |
+| Agent identity | SQLite identity + Chroma memory | owner 在 SQLite；Agent Pack 不是 owner 或记忆 authority |
+| Replay 分享 | `ReplayArtifact` | 只读、脱敏，不承担 owner 或凭据 |
+
+## 运行时不变量
+
+- native 分支按 fork 边界物化不重叠轮次段。self-contained replay 不跨越 replay 边界拼接源分支。谱系非法必须 fail-closed。causal、report、compare、clone 和 checkpoint 使用同一有效轮次选择。
+- 主推演、replay branch、Debate、Ending Room 和 Result Report 使用带租期的 runtime lock。lease 丢失或续租失败时 worker fail-closed。SQLite 短暂 busy 只在原 lease 仍有效时重试。
+- cancel 先把 DB 写成 `cancelled`，再通知本进程 task。worker 同时检查本地 token 和 DB。迟到 stage 不得覆盖 `cancelled/done/error`。`done/error` 不接受 cancel。
+- 发言正文是 durable truth；companion emotion 元数据失败时保留正文并标记 unavailable，不得回填 `neutral`。faction 的 stance/trust 等字段是 affect proxy，不是已验证关系。
+- Decision Envelope 必须来自候选集。IDLE 合法但要有 `idle_reason`。只有 `verified + post_action_v1 + derived_from_durable_actions` 可以绑定目标进度。
+- parser 可让 LLM 提议领域变量，代码只接受最多 8 变量 / 16 规则的 v1 元语言。无合法 schema 时保存显式 unavailable。每轮从同一 N−1 状态确定性裁决 verified durable action。
+- `FEATURE_MEMORY_PROMOTION` 默认 false。gate OFF 时普通推演不读写 v1 Chroma 命名空间。gate ON 时只有与 verified action 精确绑定的结果可晋升。当前没有 capability、REST 或 UI。
+- 用户问题、干预、PDF、persona、网页和历史消息都是不可信数据；prompt 必须用 `format_untrusted_text_block()` 包裹。
+- snapshot、replay、Agent Pack、分享和日志不能携带 API key、Bearer、session secret 或 raw credential URL。
+- 终局分布只使用 completed terminal leaf branches；fork parent 不参与概率归一。Result Report 自动生成失败不能阻断 `simulation_done`。

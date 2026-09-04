@@ -1,0 +1,66 @@
+---
+description: 本地初始化、双进程启动、最小验证、真实 LLM probe 和 release signoff 的触发条件与停止规则。
+kind: guide
+relations:
+  requires:
+    - config/runtime.mdx
+  related:
+    - frontend/architecture.mdx
+code:
+  paths:
+    - Makefile
+    - backend/pyproject.toml
+    - frontend/package.json
+    - frontend/scripts
+    - scripts/validate_samples.py
+---
+
+# 本地开发与验证
+
+命令以仓库根目录为起点。Python 使用 `backend/.venv`，前端使用 npm 与 `frontend/package-lock.json`。需要 Python 3.11+、Node.js 20+；npm 版本以 `frontend/package.json#packageManager` 为准。本地默认 backend `127.0.0.1:18927`，frontend `127.0.0.1:18928`。
+
+不要把真实 API key 写进命令历史、文档、测试工件或 replay。
+
+## 初始化
+
+```bash
+cp .env.example backend/.env
+cd backend
+test -d .venv || python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+cd ../frontend
+npm ci
+```
+
+## 启动
+
+终端 1：`cd backend && source .venv/bin/activate && uvicorn --app-dir . app.main:app --host 127.0.0.1 --port 18927`
+
+终端 2：`cd frontend && SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run dev -- --host 127.0.0.1 --port 18928`
+
+仓库根也可 `make preflight`、`make dev-backend`、`make dev-frontend`。`make preflight` 的 `fail` 返回非零；可选能力缺失用 `warn`。LLM 检查会实测精确本地 URL，空/占位 key 不发送 `Authorization`。`make dev-backend` 按 Makefile 监听 `0.0.0.0`，只应在可信网络使用；本机回环用上方显式 `127.0.0.1`。
+
+配置 `SESSION_SECRET` 后业务 API 需要 `X-Session-Token`。
+
+Preview：`cd frontend && npm run build && SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run preview -- --host 127.0.0.1 --port 18930`。dev 和 preview 都代理 `/api` 与 `/ws`。
+
+Docker：`docker compose up --build -d`。Compose 把 18927/18928 绑定到 `127.0.0.1`。公开部署前设置 `ENV=production`、唯一 `SESSION_SECRET`、唯一 `ADMIN_TOKEN` 和正确 CORS。
+
+## 最小验证
+
+先跑与改动直接相关的测试，再扩大范围。不要顺手修复无关失败。
+
+Backend：`cd backend && source .venv/bin/activate && python -m pytest -q tests/<target_test.py> && ruff check app/ tests/<target_test.py>`
+
+Frontend：`cd frontend && npm test -- --run src/<target_test> && npm run lint && npx tsc -b`。`npx tsc -b` 是类型门禁；`npm run build` 也会先执行它。不要用 `tsc --noEmit` 替代。
+
+样例与资产：`python scripts/validate_samples.py`；`cd frontend && npm run assets:provenance:check`。
+
+真实 provider 测试不进入默认单元测试。确认本地兼容网关时：`RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_llm_gateway_probe.py -v -s`。HTTP 2xx 中的 error envelope、无可见正文或未形成终态的 stream 都是 provider 失败，不能用本地 fallback 代替上游能力结论。
+
+## 发布签收
+
+先启动 backend 和 preview，再 `cd frontend && npm run release:signoff -- --url http://127.0.0.1:18930 --headless`。fixture 必须拦截 API、Node backend helper 和同源 WS；未命中 allowlist 的请求应使 suite 失败。`--dry-run` 只记 `planned`，不能作为已执行通过。
+
+浏览器工件只证明对应 URL、commit、provider 和浏览器组合。不要把旧工件当作当前 HEAD 的签收结果。session 级测试数量、日期、截图目录和修复过程不写入 llmdoc。

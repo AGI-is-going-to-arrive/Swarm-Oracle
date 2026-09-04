@@ -1,0 +1,68 @@
+---
+description: 前端页面所有权、后端权威与本地状态分界、WebSocket/SSE 终态合同，以及 Theater、图谱和分享的失败语义。
+kind: architecture
+relations:
+  requires:
+    - architecture.mdx
+  related:
+    - backend/architecture.mdx
+    - http-api/contracts.mdx
+    - development/local-workflow.mdx
+code:
+  paths:
+    - frontend/src/App.tsx
+    - frontend/package.json
+    - frontend/src/lib/scenarioAuthority.ts
+    - frontend/src/stores/simulationStore.ts
+    - frontend/src/hooks/useSimulationWS.ts
+    - frontend/src/api/client.ts
+    - frontend/src/lib/domainWorld.ts
+---
+
+# 前端运行时架构
+
+前端使用 React 19、TypeScript 5.9、Vite 7、Zustand、i18next、Phaser、React Flow、G6 和 Radix UI。JS 工具链是 npm；`frontend/package-lock.json` 与 `packageManager: npm@11.12.1` 是安装依据。`npm run build` 先执行 `tsc -b`，不要用单项目 `tsc --noEmit` 代替项目引用构建。
+
+## 入口
+
+| 页面或域 | 主要文件 | 责任 |
+|---|---|---|
+| 路由壳 | `frontend/src/App.tsx` | route、lazy page、全局错误与 capability 边界 |
+| 首页 | `pages/InputView.tsx` | scenario 创建、搜索、BYOK、Local Pack、初始 Feed |
+| Setup / profiles | `SetupWizardView.tsx`、`ModelProfilesView.tsx` | provider 验证与 profile 管理 |
+| Simulation | `pages/SimulationView.tsx` | live 状态、Theater、领域阈值、干预、取消 |
+| Result / Report | `pages/ResultView.tsx`、`pages/ResultReportView.tsx` | 结局、world outcomes、深读报告 |
+| Gallery | `gallery.html`、`gallery/GalleryApp.tsx` | 离线脱敏 artifact 阅读 |
+| Workbench / Replay | `WorkbenchView.tsx`、`ReplayView.tsx` | 图面、只读 trace、分支恢复 |
+| Agent / Journal / Debate / Oracle | 对应 pages 与 EndingChat / Roundtable | 身份、预测、辩论、会客厅 |
+
+## Durable vs 本地状态
+
+Durable truth 来自后端：scenario、branches、messages、status、story、report、`director_state`、`gameplay_state`、Action Ledger、`domain_world` 和 `world_outcomes`。后端显式空数组是 authoritative empty，前端不能用本地旧值回填。director/gameplay 写入使用 revision；冲突时先回读再合并本次增量。
+
+本地状态只包括 `scenarioMeta` 缓存、thinking/planning skeleton、stream draft、selection、disclosure、报告 SSE 当前章节，以及 localStorage 偏好。这些值不能成为 owner 或结算 authority。sessionStorage 中的 Organization ID 只生成 `X-Org-Id`，不替代 signed principal。
+
+合流入口：`lib/scenarioAuthority.ts`、`stores/simulationStore.ts`、`stores/endingRoomStore.ts`、`api/client.ts`、`lib/domainWorld.ts`。
+
+## 实时合同
+
+- WebSocket 收到 `auth_ok` 后才能 resync。
+- `sequence/event_id` 用于去重和 gap 恢复；旧事件不能覆盖新 phase 或终态。
+- `cancelled` 是粘性终态。迟到 status 不得恢复连接或改回运行态。
+- `4001` 和 `4404` 不自动重连；`1006` 可按退避重连。
+- WS host 使用当前页面同源 host，由 dev/preview proxy 转发，不写死 backend 端口。
+- SSE 解析支持多行 `data:`，并在 unmount、切换目标或用户取消时 abort。终态后忽略迟到 delta；错误必须落到可见状态。
+
+## 分享、Theater 与图谱
+
+- 新 replay 只保留展示字段，剥离 persona、`agent_identity_id`、凭据和 owner 数据。replay 页不开放 live-only 的 conversation、counterfactual、resume 或 report generation。
+- Public artifact 由后端白名单产生；Gallery 不上传、发布或形成市场。
+- Theater 在 live、replay 和 skip-replay 路径保留 metadata unavailable，不回填 `neutral`。capture 选择器 `.theater-panel` 与 `.phaser-game-container` 是稳定自动化合同。
+- 工作台 graph/KG 读取 scenario 全图；独立 CausalReview 传 `branch_id` 时请求有效根到叶谱系。节点、边和 evidence tier 不能只靠颜色或 tooltip。
+- Verified memory promotion v1 没有前端 capability、开关或证据面。
+
+## 安全与构建
+
+- API 错误先经 `sanitizeErrorText`。persona、网页、graph、replay 和 provider 文本用文本节点或 SafeMarkdown。
+- capability `loading/error/disabled/enabled` 必须分开；探针失败不能当成功能关闭。
+- `frontend/package.json` 是命令真值。production 生成 modern 与 legacy 入口。E2E fixture 必须 fail-closed。
