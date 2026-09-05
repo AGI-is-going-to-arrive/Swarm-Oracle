@@ -1,4 +1,11 @@
-FROM python:3.13-slim AS builder
+FROM python:3.13-slim AS python-base
+
+# Share patched tooling so copying builder packages cannot leave the runtime
+# base's older pip metadata alongside the upgraded distribution.
+RUN python -m pip install --no-cache-dir --only-binary=:all: --upgrade \
+    pip==26.2.1 setuptools==83.0.0
+
+FROM python-base AS builder
 
 WORKDIR /app/backend
 
@@ -21,7 +28,7 @@ COPY shared/ /app/shared/
 
 RUN pip install --no-cache-dir .
 
-FROM python:3.13-slim AS runtime
+FROM python-base AS runtime
 
 WORKDIR /app/backend
 
