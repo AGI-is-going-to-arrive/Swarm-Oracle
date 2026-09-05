@@ -7,6 +7,8 @@ import {
   createMultiRun,
   createReplayArtifact,
   createScenario,
+  deleteAgent,
+  deleteScenario,
   exportAgentPack,
   exportScenario,
   exportScenarioSnapshot,
@@ -70,6 +72,38 @@ describe('api client request parsing', () => {
     }));
 
     await expect(getScenario('scenario-1')).resolves.toEqual({ id: 'scenario-1' });
+  });
+
+  it.each([false, true])('preserves scenario deletion cleanup_pending=%s', async (pending) => {
+    const result = {
+      status: 'deleted',
+      scenario_id: 'scenario-1',
+      ...(pending ? { cleanup_pending: true } : {}),
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), {
+      status: pending ? 202 : 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteScenario('scenario-1')).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith('/api/scenario/scenario-1', expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('preserves undefined for an Agent deletion with a clean 204 response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+
+    await expect(deleteAgent('identity-1')).resolves.toBeUndefined();
+  });
+
+  it('returns the pending cleanup payload for an Agent deletion accepted with 202', async () => {
+    const result = { status: 'deleted', identity_id: 'identity-1', cleanup_pending: true };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(result), {
+      status: 202,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+
+    await expect(deleteAgent('identity-1')).resolves.toEqual(result);
   });
 
   it('wraps invalid json responses with path context', async () => {

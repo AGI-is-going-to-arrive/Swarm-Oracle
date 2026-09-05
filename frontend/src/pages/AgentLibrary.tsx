@@ -47,6 +47,9 @@ export function AgentLibrary() {
   const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [favoritesError, setFavoritesError] = useState<string | null>(null);
   const [pendingFavoriteId, setPendingFavoriteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState(false);
+  const [deleteCleanupPending, setDeleteCleanupPending] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [agentPackOpen, setAgentPackOpen] = useState(false);
   const [agentPackExportOpen, setAgentPackExportOpen] = useState(false);
@@ -127,20 +130,31 @@ export function AgentLibrary() {
 
   const handleDelete = useCallback(
     async (identity: AgentIdentityInfo) => {
-      if (identity.kind === 'generated') return;
+      if (identity.kind === 'generated' || deletingId !== null) return;
       if (!confirm(t('agents.delete_confirm', 'Delete this agent?'))) return;
-      await deleteAgent(identity.id);
-      const userId = getSessionBoundUserId();
-      fetchIdentities(userId);
-      // also drop from favorites map if present
-      setFavoriteIds((prev) => {
-        if (!prev.has(identity.id)) return prev;
-        const next = new Set(prev);
-        next.delete(identity.id);
-        return next;
-      });
+      setDeletingId(identity.id);
+      setDeleteError(false);
+      try {
+        const response = await deleteAgent(identity.id);
+        if (response?.cleanup_pending) setDeleteCleanupPending(true);
+        // fetchIdentities can return its same-user cache. Remove the successful
+        // deletion from current authority, also pruning any selected identity.
+        setIdentities(useAgentStore.getState().identities.filter((agent) => agent.id !== identity.id));
+        setProfileAgent((current) => current?.id === identity.id ? null : current);
+        // also drop from favorites map if present
+        setFavoriteIds((prev) => {
+          if (!prev.has(identity.id)) return prev;
+          const next = new Set(prev);
+          next.delete(identity.id);
+          return next;
+        });
+      } catch {
+        setDeleteError(true);
+      } finally {
+        setDeletingId(null);
+      }
     },
-    [fetchIdentities, t],
+    [deletingId, setIdentities, t],
   );
 
   const handleImported = useCallback(
@@ -240,6 +254,8 @@ export function AgentLibrary() {
             type="button"
             className="agent-card__action agent-card__action--danger"
             onClick={() => void handleDelete(agent)}
+            disabled={deletingId !== null}
+            aria-busy={deletingId === agent.id}
             aria-label={t('agents.delete_agent_aria', {
               name: agent.display_name,
               defaultValue: 'Delete {{name}}',
@@ -358,6 +374,16 @@ export function AgentLibrary() {
 
       {(loading || favoritesLoading) && <p>{t('common.loading', 'Loading...')}</p>}
       {error && <p role="alert" className="agent-form__error">{error}</p>}
+      {deleteError && (
+        <p role="alert" className="agent-form__error">
+          {t('agent_library.delete_error')}
+        </p>
+      )}
+      {deleteCleanupPending && (
+        <p role="status" className="agent-library-backup-hint">
+          {t('agent_library.delete_cleanup_pending')}
+        </p>
+      )}
       {favoritesError && (
         <p role="alert" className="agent-form__error">
           {favoritesError === 'agent_library.favorites_error_generic'

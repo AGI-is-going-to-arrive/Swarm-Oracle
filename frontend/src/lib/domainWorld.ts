@@ -1284,6 +1284,11 @@ export function localizeDomainUnit(unit: string, isZh: boolean): string {
   const safe = typeof unit === 'string' ? unit.trim() : '';
   if (!safe || safe === 'unitless') return '';
   if (safe === 'count') return isZh ? '个' : '';
+  if (safe === 'second') return isZh ? '秒' : 's';
+  if (safe === 'basis_point') return isZh ? '基点' : 'bp';
+  if (DOMAIN_CUSTOM_COUNT_RE.test(safe)) {
+    return safe.slice('custom_count:'.length).replace(/_/g, ' ');
+  }
   const minor = safe.match(/^currency:([A-Za-z]{3}):minor$/i);
   if (minor) {
     const code = minor[1].toUpperCase();

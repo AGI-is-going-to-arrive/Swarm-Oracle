@@ -7,25 +7,30 @@ requires-python = ">=3.11"
 dependencies = [
     # 0.137+ changed router inclusion to destructive nesting, which is
     # incompatible with the app's isolated config-reload regression tests.
-    "fastapi>=0.115,<0.137",
+    "fastapi>=0.136.3,<0.137",
+    # Instrumentator 8.x supports the patched Starlette 1.x form parser.
+    "starlette>=1.3.1,<1.4",
     "uvicorn[standard]>=0.34",
     "sqlmodel>=0.0.22",
     "pydantic>=2.7",
-    "pydantic-settings>=2.7",
+    "pydantic-settings>=2.14.2,<3",
     "sqlalchemy>=2.0",
     "httpx>=0.28",
+    # Security floors for HTTP transport dependencies.
+    "idna>=3.15,<4",
+    "urllib3>=2.7.0,<3",
     "chromadb>=0.6",
     "python-dotenv>=1.0",
     "websockets>=14.0",
     "alembic>=1.14",
-    "prometheus-fastapi-instrumentator>=7.0",
-    "pypdf>=4.0",
-    "python-multipart>=0.0.9",
+    "prometheus-fastapi-instrumentator>=8.1.0,<9",
+    "pypdf>=6.16.1,<7",
+    "python-multipart>=0.0.31,<0.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.0.3,<10",
     "pytest-asyncio>=0.25",
     "httpx",        # for TestClient
     "ruff>=0.9",

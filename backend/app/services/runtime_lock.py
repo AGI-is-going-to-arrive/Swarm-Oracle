@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import random
 import sqlite3
 import threading
@@ -191,6 +192,47 @@ def runtime_lock_error_is_transient_busy(exc: BaseException) -> bool:
 
 def runtime_lock_lease_is_alive(lease: RuntimeLockLease | None) -> bool:
     return lease is not None and lease.expires_at > time.time()
+
+
+def begin_serialized_write(session) -> None:
+    """Reserve SQLite's writer before reading the authority for a mutation."""
+    connection = session.connection()
+    if connection.dialect.name == "sqlite":
+        driver_connection = connection.connection.driver_connection
+        if not driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def runtime_lease_owned_in_session(
+    session,
+    lease: RuntimeLockLease | None,
+    *,
+    lock_key: str,
+) -> bool:
+    """Check exact ownership inside the caller's serialized write transaction."""
+    if lease is None or lease.lock_key != lock_key:
+        return False
+    session_path = _sqlite_db_path_from_url(str(session.get_bind().url))
+    if (session_path is None) != (lease.db_path is None):
+        return False
+    if (
+        session_path is not None
+        and os.path.realpath(session_path) != os.path.realpath(lease.db_path)
+    ):
+        return False
+    if lease.db_path is None:
+        with _INPROCESS_LOCKS_GUARD:
+            current = _INPROCESS_LOCKS.get(lock_key)
+            return bool(current and current[0] == lease.owner_id and current[1] > time.time())
+    from sqlalchemy import text
+
+    return session.execute(
+        text(
+            "SELECT 1 FROM runtime_lock "
+            "WHERE lock_key=:lock_key AND owner_id=:owner_id AND expires_at>:now"
+        ),
+        {"lock_key": lock_key, "owner_id": lease.owner_id, "now": time.time()},
+    ).first() is not None
 
 
 def _discard_ensured_schema_cache(db_path: str | None) -> None:

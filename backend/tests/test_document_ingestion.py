@@ -72,6 +72,40 @@ async def client():
         yield ac
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/api/agents/from-document",
+        "/api/agents/document-seed",
+        "/api/scenario/import-snapshot",
+    ],
+)
+@pytest.mark.parametrize("limit", ["fields", "field_size"])
+async def test_upload_routes_bound_urlencoded_forms_before_processing(
+    client: AsyncClient,
+    route: str,
+    limit: str,
+):
+    # File routes also enter request.form() for urlencoded content. Keep that
+    # pre-handler parser bounded, even though this is not a valid file upload.
+    if limit == "fields":
+        body = "&".join(f"field{i}=x" for i in range(1001))
+        expected_detail = "Too many fields. Maximum number of fields is 1000."
+    else:
+        body = "field=" + "x" * (1024 * 1024 + 1)
+        expected_detail = "Field exceeded maximum size of 1024KB."
+
+    response = await client.post(
+        route,
+        params={"user_id": TEST_USER},
+        content=body,
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": expected_detail}
+
+
 async def test_extract_pdf_text_valid_pdf_returns_expected_text():
     from app.services.document_ingestion import extract_pdf_text
 

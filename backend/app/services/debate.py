@@ -1677,23 +1677,35 @@ async def _generate_judge_analysis(
                 "native_search_upstream_override"
             ),
         ):
-            result = await llm_call_json_with_stream_fallback(
-                prompt,
-                reasoning_effort=overrides.get("reasoning_effort") or "medium",
-                model=overrides.get("model"),
-                api_key=overrides.get("api_key"),
-                base_url=overrides.get("base_url"),
-            )
-        if not _judge_analysis_has_usable_signal(
-            result,
-            language=debate.language,
-            debate=debate,
-            turns=turns,
-        ):
-            raise LLMError(
-                "Debate judge returned no usable signals",
-                code="LLM_INVALID_OUTPUT",
-            )
+            for attempt in range(2):
+                result = await llm_call_json_with_stream_fallback(
+                    prompt,
+                    reasoning_effort=overrides.get("reasoning_effort") or "medium",
+                    model=overrides.get("model"),
+                    api_key=overrides.get("api_key"),
+                    base_url=overrides.get("base_url"),
+                )
+                if _judge_analysis_has_usable_signal(
+                    result,
+                    language=debate.language,
+                    debate=debate,
+                    turns=turns,
+                ):
+                    break
+                if attempt == 1:
+                    raise LLMError(
+                        "Debate judge returned no usable signals",
+                        code="LLM_INVALID_OUTPUT",
+                    )
+                logger.warning("Retrying debate judge after invalid structured output")
+                prompt += (
+                    "\n上一份回答没有可用裁决字段。请返回上述完整 JSON 对象，"
+                    "包含 summary 和 adjudication；不要只返回嵌套的维度对象。\n"
+                    if debate.language == "zh" else
+                    "\nThe previous response had no usable verdict fields. Return the complete "
+                    "JSON object above, including summary and adjudication; do not return "
+                    "only a nested dimensions object.\n"
+                )
         return _coerce_judge_analysis_payload(
             result,
             fallback,

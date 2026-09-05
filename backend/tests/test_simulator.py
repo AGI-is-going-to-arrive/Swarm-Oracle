@@ -8076,6 +8076,66 @@ class TestCreateBranch:
 
 
 class TestCreateRound:
+    def test_managed_round_requires_lease_even_when_holder_became_none(self):
+        from app.services.simulator import RuntimeLeaseLost
+
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+        with pytest.raises(RuntimeLeaseLost):
+            _create_round(engine, bid, 1, scenario_id=sid, runtime_lease=None)
+        with Session(engine) as session:
+            assert session.exec(select(Round).where(Round.branch_id == bid)).all() == []
+
+    def test_cancelled_round_and_lease_takeover_are_fenced(self):
+        from sqlalchemy import text
+
+        from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
+        from app.services.simulator import RuntimeLeaseLost
+
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+        lease = acquire_runtime_lock(f"simulation:{sid}", lease_seconds=30)
+        assert lease is not None
+        try:
+            with Session(engine) as session:
+                session.exec(text("UPDATE runtime_lock SET owner_id='takeover'"))
+                session.commit()
+            with pytest.raises(RuntimeLeaseLost):
+                _create_round(engine, bid, 1, scenario_id=sid, runtime_lease=lease)
+            with Session(engine) as session:
+                scenario = session.get(Scenario, sid)
+                scenario.status = ScenarioStatus.CANCELLED
+                session.add(scenario)
+                session.commit()
+            with pytest.raises(RuntimeLeaseLost):
+                _create_round(engine, bid, 1)
+            with Session(engine) as session:
+                assert session.exec(select(Round).where(Round.branch_id == bid)).all() == []
+        finally:
+            release_runtime_lock(lease)
+
+    def test_concurrent_get_or_create_is_one_round(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            ids = list(pool.map(lambda _: _create_round(engine, bid, 1), range(8)))
+        assert len(set(ids)) == 1
+
     def test_create_round(self):
         engine = get_engine()
         sid = _make_scenario(engine)

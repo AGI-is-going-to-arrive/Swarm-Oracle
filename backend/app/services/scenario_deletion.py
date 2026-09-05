@@ -32,6 +32,7 @@ from app.models import (
     AgentConversationTurn,
     AgentGroup,
     AgentGroupMember,
+    AgentGrowthEvent,
     AgentMessage,
     AgentRelationEdge,
     AgentStateFrame,
@@ -113,6 +114,12 @@ def delete_scenario_cascade(
     # already verified ownership via ``require_owned_scenario``).
     if owner is not None and owner != user_id:
         return False
+    from app.services.resource_deletion import enqueue_resource_deletion
+
+    enqueue_resource_deletion(session, "scenario", scenario_id, user_id)
+    session.execute(sa_delete(AgentGrowthEvent).where(
+        AgentGrowthEvent.scenario_id == scenario_id,
+    ))
 
     # ── C2: terminalise any mid-flight conversation streams BEFORE the
     # structural DELETE so SSE clients can still observe a

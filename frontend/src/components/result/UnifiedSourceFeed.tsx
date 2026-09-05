@@ -581,22 +581,22 @@ export function UnifiedSourceFeed({ target }: UnifiedSourceFeedProps) {
           state === 'empty'
             ? 'border-border-default bg-surface/30 text-text-secondary'
             : state === 'geo_gated' || state === 'unsupported_provider' || state === 'search_skipped'
-            ? 'border-blue-500/20 bg-blue-500/5 text-blue-400'
-            : 'border-amber-500/20 bg-amber-500/5 text-amber-400'
+            ? 'border-blue-500/20 bg-blue-500/5 text-blue-700'
+            : 'border-amber-500/20 bg-amber-500/5 text-amber-800'
         )}
         data-testid={`unified-feed-status-${el.category}`}
         aria-describedby={reason ? reasonId : undefined}
       >
         <div className="flex items-center gap-1.5 font-medium">
           <span aria-hidden="true">{icon}</span>
-          <span className="font-semibold uppercase tracking-wider text-[10px] opacity-75">
+          <span className="font-semibold uppercase tracking-wider text-[10px]">
             {t(`source.feed.type.${el.category === 'web_snippets' ? 'snippet' : el.category}`)}
           </span>
           {el.isHistorical && renderHistoricalBadge()}
         </div>
         <p className="mt-1 font-medium">{label}</p>
         {reason && (
-          <span id={reasonId} className="text-[11px] opacity-80 italic mt-0.5">
+          <span id={reasonId} className="text-[11px] italic mt-0.5">
             {reason}
           </span>
         )}

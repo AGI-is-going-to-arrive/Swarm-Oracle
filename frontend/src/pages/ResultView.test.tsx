@@ -12,6 +12,7 @@ import type {
   PremortemAnalysis,
   ReportStatus,
   Scenario,
+  StoryData,
   YouVsOracleComparison,
 } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
@@ -113,7 +114,7 @@ const structuredPremortemFixture: PremortemAnalysis = {
   ],
 };
 
-function mockStoryWithFullReport(report: FullReport) {
+function mockStoryWithFullReport(report: FullReport, overrides: Partial<StoryData> = {}) {
   vi.mocked(apiClient.getStory).mockResolvedValueOnce({
     scenario_id: 'scenario-1',
     question: 'What if?',
@@ -130,6 +131,7 @@ function mockStoryWithFullReport(report: FullReport) {
       fork_reason: '',
     }],
     full_report: report,
+    ...overrides,
   });
 }
 
@@ -5607,6 +5609,70 @@ describe('ResultView explore deeper bridge', () => {
 });
 
 describe('ResultView export flow', () => {
+  it('keeps current story authority and labels a stale report export as historical', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+    setMockCapabilities({ result_report: { enabled: true }, result_verdict: { enabled: true } });
+    const currentWorldOutcomes = {
+      version: 1,
+      status: 'available',
+      failure_code: null,
+      reason_code: null,
+      schema_hash: `sha256:${'a'.repeat(64)}`,
+      branches: [{
+        branch_id: 'current-branch',
+        status: 'available',
+        failure_code: null,
+        reason_code: null,
+        as_of_round: 5,
+        state_revision: `sha256:${'b'.repeat(64)}`,
+        empty_reason_code: 'NO_VERIFIED_DOMAIN_CHANGES',
+        outcomes: [],
+      }],
+    };
+    const report = {
+      ...fullReportFixture(),
+      verdict: {
+        ...fullReportFixture().verdict,
+        headline_answer: 'Archived conclusion',
+        analytic_confidence: { level: 'high' as const, basis: 'Archived confidence basis' },
+      },
+      world_outcomes: {
+        ...currentWorldOutcomes,
+        branches: [{ ...currentWorldOutcomes.branches[0], branch_id: 'old-branch' }],
+      },
+    };
+    mockStoryWithFullReport(report, {
+      full_report_stale: true,
+      verdict: 'Current simulation conclusion',
+      verdict_confidence: 'low',
+      verdict_confidence_kind: 'model_self_rating',
+      world_outcomes: currentWorldOutcomes,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes><Route path="/result/:id" element={<ResultView />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('result-verdict-text')).toHaveTextContent('Current simulation conclusion');
+    const confidence = screen.getByTestId('result-verdict-confidence-badge');
+    expect(confidence).toHaveClass('result-verdict-panel__badge--low');
+    expect(confidence).toHaveAttribute('data-confidence-kind', 'model_self_rating');
+    expect(screen.getByTestId('world-outcomes-branch-current-branch')).toBeInTheDocument();
+    expect(screen.queryByTestId('world-outcomes-branch-old-branch')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'result.export' }));
+    await waitFor(() => expect(createObjectURLMock).toHaveBeenCalledTimes(1));
+    const blobText = await readBlobText(createObjectURLMock.mock.calls[0][0] as Blob);
+    expect(blobText).toContain('Saved report snapshot');
+    expect(blobText).toContain('historical and do not replace the current result');
+    expect(blobText).toContain('**Archived verdict**: Archived conclusion');
+    expect(blobText).not.toContain('Archived confidence basis');
+  });
+
   it('downloads exported markdown through the authenticated client helper', async () => {
     const user = userEvent.setup();
     const appendChildSpy = vi.spyOn(document.body, 'appendChild');

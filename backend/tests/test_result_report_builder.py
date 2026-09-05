@@ -4888,6 +4888,109 @@ def test_persist_final_report_payload_preserves_model_result_quality():
     assert parsed["result_quality"]["question_answer"] == "It likely passes with safeguards."
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed_input", ["topology", "probability", "message", "persona", "action"],
+)
+async def test_changed_result_scope_is_stale_and_rejects_late_report_writes(
+    monkeypatch, changed_input,
+):
+    from app.api.scenarios import get_story
+    from app.services.result_report.queries import report_result_fingerprint
+    from app.services.result_report.reducer import resolve_report_lineage_scope
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    monkeypatch.setattr(builder.settings, "FEATURE_RESULT_REPORT", True)
+    payload = _legal_full_report()
+    payload["target_branch_id"] = "branch-a"
+    payload["verdict"]["headline_answer"] = "Old compiled answer"
+    builder._persist_report_payload(scenario_id, payload)
+    scope = resolve_report_lineage_scope(get_engine(), scenario_id, dominant_branch_id="branch-a")
+    assert scope is not None
+    with Session(get_engine()) as session:
+        if changed_input == "topology":
+            session.add(Branch(
+                id="replay", scenario_id=scenario_id, parent_branch_id="branch-b",
+                status=BranchStatus.COMPLETED, probability=0.9, story="New result",
+            ))
+        elif changed_input == "probability":
+            branch = session.get(Branch, "branch-b")
+            branch.probability = 0.91
+            session.add(branch)
+        elif changed_input == "message":
+            message = session.get(AgentMessage, "msg-privacy")
+            message.content = "Evidence changed without adding or removing a row."
+            session.add(message)
+        elif changed_input == "persona":
+            agent = session.get(Agent, "agent-privacy")
+            agent.persona = "Changed interview background"
+            session.add(agent)
+        else:
+            session.add(SimulationAction(
+                scenario_id=scenario_id, branch_id="branch-a", round_id="round-1",
+                round_number=1, sequence=1, agent_id="agent-privacy",
+                action_type=SimulationActionType.POST, content="New verified evidence",
+                idempotency_key="scope-evidence",
+            ))
+        session.commit()
+    with Session(get_engine()) as session:
+        assert report_result_fingerprint(session, scenario_id) != scope.result_fingerprint
+    with builder._report_write_authority(scenario_id, scope):
+        with pytest.raises(builder.ResultReportScopeChangedError):
+            builder._persist_report_payload(scenario_id, payload)
+    story = await get_story(scenario_id, principal=None)
+    assert story["full_report_stale"] is True
+    assert story["full_report"]["verdict"]["headline_answer"] == "Old compiled answer"
+    assert story["verdict"] != "Old compiled answer"
+
+
+def test_report_write_checks_exact_lease_owner_and_source_database():
+    from dataclasses import replace
+
+    from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    lease = acquire_runtime_lock(f"result-report:{scenario_id}", lease_seconds=30)
+    assert lease is not None
+    try:
+        foreign_database_lease = replace(lease, db_path=f"{lease.db_path}.different")
+        with builder._report_write_authority(scenario_id, lease_holder=[foreign_database_lease]):
+            with pytest.raises(builder.ResultReportRuntimeLockLostError):
+                builder._persist_report_payload(scenario_id, _legal_full_report())
+        with Session(get_engine()) as session:
+            session.execute(sql_text(
+                "UPDATE runtime_lock SET owner_id='replacement' WHERE lock_key=:key"
+            ), {"key": lease.lock_key})
+            session.commit()
+        with builder._report_write_authority(scenario_id, lease_holder=[lease]):
+            with pytest.raises(builder.ResultReportRuntimeLockLostError):
+                builder._persist_report_payload(scenario_id, _legal_full_report())
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert (scenario.parsed_context or {}).get("full_report") is None
+    finally:
+        release_runtime_lock(lease)
+
+
+def test_manual_report_scope_does_not_survive_runtime_restart():
+    from app.models import database
+    from app.services.resource_deletion import resume_resource_writes, stop_resource_writes
+    from app.services.result_report.reducer import resolve_report_lineage_scope
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    scope = resolve_report_lineage_scope(get_engine(), scenario_id, dominant_branch_id="branch-a")
+    assert scope is not None
+    stop_resource_writes()
+    database.dispose_engine()
+    resume_resource_writes()
+    with builder._report_write_authority(scenario_id, scope):
+        with pytest.raises(builder.ResultReportRuntimeLockLostError):
+            builder._persist_report_payload(scenario_id, _legal_full_report())
+
+
 @pytest.mark.parametrize(
     ("raw_context", "expected_existing_verdict"),
     [
@@ -4927,19 +5030,19 @@ def test_persist_report_payload_recovers_non_object_raw_json_context(
 @pytest.mark.asyncio
 async def test_build_report_acquires_and_releases_durable_runtime_lock(monkeypatch):
     from app.services.result_report import builder
-    from app.services.runtime_lock import RuntimeLockLease
+    from app.services.runtime_lock import (
+        RuntimeLockLease,
+        acquire_runtime_lock,
+        release_runtime_lock,
+    )
 
     scenario_id = _seed_report_scenario()
     fake_llm = QueuedLlm([
         _outline_payload(["timeline"]),
         _section_payload("timeline"),
     ])
-    lease = RuntimeLockLease(
-        lock_key=f"result-report:{scenario_id}",
-        owner_id="owner-a",
-        db_path=None,
-        expires_at=9999999999.0,
-    )
+    lease = acquire_runtime_lock(f"result-report:{scenario_id}", lease_seconds=30)
+    assert lease is not None
     acquired: list[tuple[str, float]] = []
     released: list[RuntimeLockLease | None] = []
 
@@ -4949,7 +5052,7 @@ async def test_build_report_acquires_and_releases_durable_runtime_lock(monkeypat
 
     def fake_release(next_lease: RuntimeLockLease | None) -> bool:
         released.append(next_lease)
-        return True
+        return release_runtime_lock(next_lease)
 
     monkeypatch.setattr(builder, "llm_call_json", fake_llm)
     monkeypatch.setattr(builder, "acquire_runtime_lock", fake_acquire, raising=False)
@@ -4985,15 +5088,15 @@ async def test_build_report_drops_local_report_lock_after_completion(monkeypatch
 @pytest.mark.asyncio
 async def test_build_report_releases_durable_lock_after_early_failure(monkeypatch):
     from app.services.result_report import builder
-    from app.services.runtime_lock import RuntimeLockLease
+    from app.services.runtime_lock import (
+        RuntimeLockLease,
+        acquire_runtime_lock,
+        release_runtime_lock,
+    )
 
     scenario_id = _seed_report_scenario()
-    lease = RuntimeLockLease(
-        lock_key=f"result-report:{scenario_id}",
-        owner_id="owner-a",
-        db_path=None,
-        expires_at=9999999999.0,
-    )
+    lease = acquire_runtime_lock(f"result-report:{scenario_id}", lease_seconds=30)
+    assert lease is not None
     released: list[RuntimeLockLease | None] = []
 
     async def failing_plan_outline(*_args: Any, **_kwargs: Any) -> Any:
@@ -5009,7 +5112,7 @@ async def test_build_report_releases_durable_lock_after_early_failure(monkeypatc
     monkeypatch.setattr(
         builder,
         "release_runtime_lock",
-        lambda next_lease: released.append(next_lease) or True,
+        lambda next_lease: released.append(next_lease) or release_runtime_lock(next_lease),
         raising=False,
     )
 

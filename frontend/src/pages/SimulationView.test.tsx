@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { useLayoutEffect, type ReactNode } from 'react';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode, useLayoutEffect, type ReactNode } from 'react';
+import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   createMemoryRouter,
@@ -13,6 +13,34 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SimulationView } from './SimulationView';
+import { useSimulationDirectorState } from '../hooks/useSimulationViewState';
+import { getScenarioArchiveKeyMoments, loadScenarioMeta, type ScenarioMeta } from '../lib/scenarioMeta';
+
+function deferredState<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function localDirectorGameplayMeta(branchId: string): ScenarioMeta {
+  const meta = loadScenarioMeta('scenario-1');
+  return {
+    ...meta,
+    commitment: {
+      active: true,
+      branchId,
+      branchTitle: branchId,
+      committedAtRound: 1,
+      committedAt: '2026-09-05T00:00:00Z',
+      outcome: 'pending',
+    },
+    archive: { ...meta.archive, keyMoments: [branchId] },
+  };
+}
 
 function SimulationAutomationCommitProbe({
   onCommit,
@@ -1738,9 +1766,12 @@ describe('SimulationView replay automation output', () => {
     }
   }, TAIL_STATUS_SYNC_INTERVAL_MS * 8);
 
-  it('backfills betting and key moments while preserving authoritative empty branch snapshots', async () => {
+  it('backfills legacy betting and archive data while running when backend authority is missing', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
     mockStore.scenario = {
       ...baseScenario,
+      status: 'simulating',
       gameplay_state: null,
     };
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
@@ -1785,13 +1816,14 @@ describe('SimulationView replay automation output', () => {
       },
     }));
 
-    render(
-      <MemoryRouter initialEntries={['/sim/scenario-1']}>
-        <Routes>
-          <Route path="/sim/:id" element={<SimulationView />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    const { result } = renderHook(() => useSimulationDirectorState({
+      id: 'scenario-1',
+      scenario: mockStore.scenario,
+      isReplayMode: false,
+      replayScenarioMeta: null,
+      activeBranches: [],
+      currentRound: 2,
+    }));
 
     await waitFor(() => {
       expect(upsertScenarioGameplayStateMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
@@ -1806,25 +1838,26 @@ describe('SimulationView replay automation output', () => {
         },
         archive: {
           key_moments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
-          branch_snapshots: [],
+          branch_snapshots: [{ branch_id: 'b1', title: '永世帝国', probability: 1 }],
         },
       }));
     });
 
     await waitFor(() => {
-      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
-      const payload = raw ? JSON.parse(raw) : null;
-      expect(payload?.page?.betting).toMatchObject({
-        bet_count: 1,
-        key_moment_count: 1,
-      });
+      const meta = result.current.scenarioMeta;
+      if (!meta) throw new Error('Scenario meta is unavailable');
+      expect(meta.betting.bets).toHaveLength(1);
+      expect(getScenarioArchiveKeyMoments(meta)).toHaveLength(1);
     });
   });
 
   it('retries gameplay authority backfill with the latest revision after a stale write conflict', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
     mockStore.scenario = {
       ...baseScenario,
+      status: 'simulating',
       gameplay_state: null,
     };
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
@@ -1927,8 +1960,11 @@ describe('SimulationView replay automation output', () => {
 
   it('retries director authority backfill with the latest revision after a stale write conflict', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
     mockStore.scenario = {
       ...baseScenario,
+      status: 'simulating',
       director_state: null,
     };
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
@@ -2023,12 +2059,14 @@ describe('SimulationView replay automation output', () => {
     warnSpy.mockRestore();
   });
 
-  it('does not retry director authority backfill when a terminal scenario rejects writes', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it.each(['done', 'error', 'cancelled', 'narrating'] as const)('does not start automatic state writes when reopening a %s scenario', async (status) => {
+    mockStore.status = status;
+    mockStore.isSimulationComplete = status === 'done';
     mockStore.scenario = {
       ...baseScenario,
-      status: 'done',
+      status,
       director_state: null,
+      gameplay_state: null,
     };
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
       version: 1,
@@ -2053,15 +2091,11 @@ describe('SimulationView replay automation output', () => {
           },
           archive: {
             branchSnapshots: [],
-            keyMoments: [],
+            keyMoments: ['stale local moment'],
           },
         },
       },
     }));
-    upsertScenarioDirectorStateMock.mockRejectedValueOnce(
-      new ApiError(409, 'DIRECTOR_STATE_CLOSED', 'scenario no longer accepts director changes'),
-    );
-
     render(
       <MemoryRouter initialEntries={['/sim/scenario-1']}>
         <Routes>
@@ -2070,19 +2104,145 @@ describe('SimulationView replay automation output', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => {
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[DirectorState] Failed to persist backend state',
-        expect.objectContaining({ code: 'DIRECTOR_STATE_CLOSED' }),
-      );
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
 
-    expect(upsertScenarioDirectorStateMock).toHaveBeenCalledTimes(1);
+    expect(upsertScenarioDirectorStateMock).not.toHaveBeenCalled();
+    expect(upsertScenarioGameplayStateMock).not.toHaveBeenCalled();
     expect(getScenarioDirectorStateMock).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
+    expect(getScenarioGameplayStateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not start automatic state writes when opening done without local metadata', async () => {
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes>
+      </MemoryRouter>,
+    );
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+
+    expect(upsertScenarioDirectorStateMock).not.toHaveBeenCalled();
+    expect(upsertScenarioGameplayStateMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps live default-objective persistence working under StrictMode', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.scenario = { ...baseScenario, status: 'simulating' };
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/sim/scenario-1']}>
+          <Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(upsertScenarioDirectorStateMock).toHaveBeenCalledOnce());
+    const payload = upsertScenarioDirectorStateMock.mock.calls[0][1] as ScenarioDirectorState;
+    expect(payload.objectives.goals.length).toBeGreaterThan(0);
+  });
+
+  it.each(['success', 'conflict'] as const)('drops queued state writes and late %s responses after live becomes done', async (responseKind) => {
+    const directorRequest = deferredState<ScenarioDirectorStateResponse>();
+    const gameplayRequest = deferredState<ScenarioGameplayStateResponse>();
+    upsertScenarioDirectorStateMock.mockReturnValueOnce(directorRequest.promise);
+    upsertScenarioGameplayStateMock.mockReturnValueOnce(gameplayRequest.promise);
+    const liveScenario: Scenario = { ...baseScenario, status: 'simulating' };
+    const props = { id: liveScenario.id, scenario: liveScenario, isReplayMode: false, replayScenarioMeta: null, activeBranches: [] as BranchInfo[], currentRound: 1 };
+    const { result, rerender } = renderHook(useSimulationDirectorState, { initialProps: props });
+    const firstMeta = localDirectorGameplayMeta('b1');
+    const secondMeta = localDirectorGameplayMeta('b2');
+    let writes: Promise<void>[] = [];
+    await act(async () => {
+      writes = [
+        result.current.persistDirectorMeta(firstMeta),
+        result.current.persistDirectorMeta(secondMeta),
+        result.current.handlePlacedBet(firstMeta),
+        result.current.handlePlacedBet(secondMeta),
+      ];
+    });
+    expect(upsertScenarioDirectorStateMock).toHaveBeenCalledOnce();
+    expect(upsertScenarioGameplayStateMock).toHaveBeenCalledOnce();
+    const settledDirector = { ...emptyDirectorState, revision: 9 };
+    const settledGameplay = { ...emptyGameplayState, revision: 9, archive: { key_moments: ['backend settlement'], branch_snapshots: [] } };
+    rerender({ ...props, scenario: { ...liveScenario, status: 'done', director_state: settledDirector, gameplay_state: settledGameplay } });
+
+    await act(async () => {
+      if (responseKind === 'success') {
+        directorRequest.resolve({ ...emptyDirectorState, scenario_id: 'scenario-1', revision: 1 });
+        gameplayRequest.resolve({ ...emptyGameplayState, scenario_id: 'scenario-1', revision: 1 });
+      } else {
+        directorRequest.reject(new ApiError(409, 'DIRECTOR_STATE_CONFLICT', 'late conflict'));
+        gameplayRequest.reject(new ApiError(409, 'GAMEPLAY_STATE_CONFLICT', 'late conflict'));
+      }
+      await Promise.all(writes);
+    });
+
+    expect(upsertScenarioDirectorStateMock).toHaveBeenCalledOnce();
+    expect(upsertScenarioGameplayStateMock).toHaveBeenCalledOnce();
+    expect(getScenarioDirectorStateMock).not.toHaveBeenCalled();
+    expect(getScenarioGameplayStateMock).not.toHaveBeenCalled();
+    expect(result.current.backendDirectorState).toBe(settledDirector);
+    expect(result.current.backendGameplayState).toBe(settledGameplay);
+  });
+
+  it('does not retry state writes when a conflict read finishes after the scenario becomes done', async () => {
+    const directorRead = deferredState<ScenarioDirectorStateResponse>();
+    const gameplayRead = deferredState<ScenarioGameplayStateResponse>();
+    upsertScenarioDirectorStateMock.mockRejectedValueOnce(new ApiError(409, 'DIRECTOR_STATE_CONFLICT', 'revision mismatch'));
+    upsertScenarioGameplayStateMock.mockRejectedValueOnce(new ApiError(409, 'GAMEPLAY_STATE_CONFLICT', 'revision mismatch'));
+    getScenarioDirectorStateMock.mockReturnValueOnce(directorRead.promise);
+    getScenarioGameplayStateMock.mockReturnValueOnce(gameplayRead.promise);
+    const liveScenario: Scenario = { ...baseScenario, status: 'simulating' };
+    const props = { id: liveScenario.id, scenario: liveScenario, isReplayMode: false, replayScenarioMeta: null, activeBranches: [] as BranchInfo[], currentRound: 1 };
+    const { result, rerender } = renderHook(useSimulationDirectorState, { initialProps: props });
+    let writes: Promise<void>[] = [];
+    await act(async () => {
+      const meta = localDirectorGameplayMeta('b1');
+      writes = [result.current.persistDirectorMeta(meta), result.current.handlePlacedBet(meta)];
+    });
+    expect(getScenarioDirectorStateMock).toHaveBeenCalledOnce();
+    expect(getScenarioGameplayStateMock).toHaveBeenCalledOnce();
+    rerender({ ...props, scenario: { ...liveScenario, status: 'done' } });
+    await act(async () => {
+      directorRead.resolve({ ...emptyDirectorState, scenario_id: 'scenario-1', revision: 3 });
+      gameplayRead.resolve({ ...emptyGameplayState, scenario_id: 'scenario-1', revision: 3 });
+      await Promise.all(writes);
+    });
+
+    expect(upsertScenarioDirectorStateMock).toHaveBeenCalledOnce();
+    expect(upsertScenarioGameplayStateMock).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an accepted live revision until a newer terminal settlement snapshot arrives', async () => {
+    const acceptedDirector = { ...emptyDirectorState, scenario_id: 'scenario-1', revision: 5 };
+    const acceptedGameplay = { ...emptyGameplayState, scenario_id: 'scenario-1', revision: 5 };
+    upsertScenarioDirectorStateMock.mockResolvedValueOnce(acceptedDirector);
+    upsertScenarioGameplayStateMock.mockResolvedValueOnce(acceptedGameplay);
+    const liveScenario: Scenario = { ...baseScenario, status: 'simulating' };
+    const props = { id: liveScenario.id, scenario: liveScenario, isReplayMode: false, replayScenarioMeta: null, activeBranches: [] as BranchInfo[], currentRound: 1 };
+    const { result, rerender } = renderHook(useSimulationDirectorState, { initialProps: props });
+    await act(async () => {
+      const meta = localDirectorGameplayMeta('b1');
+      await Promise.all([result.current.persistDirectorMeta(meta), result.current.handlePlacedBet(meta)]);
+    });
+    rerender({ ...props, scenario: { ...liveScenario, status: 'done' } });
+    expect(result.current.backendDirectorState).toBe(acceptedDirector);
+    expect(result.current.backendGameplayState).toBe(acceptedGameplay);
+
+    const settledDirector = { ...emptyDirectorState, revision: 6 };
+    const settledGameplay = { ...emptyGameplayState, revision: 6 };
+    rerender({ ...props, scenario: { ...liveScenario, status: 'done', director_state: settledDirector, gameplay_state: settledGameplay } });
+    expect(result.current.backendDirectorState).toBe(settledDirector);
+    expect(result.current.backendGameplayState).toBe(settledGameplay);
+    expect(upsertScenarioDirectorStateMock).toHaveBeenCalledOnce();
+    expect(upsertScenarioGameplayStateMock).toHaveBeenCalledOnce();
   });
 
   it('stops backfilling stale local gameplay meta once backend gameplay has meaningful authority', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
       version: 1,
       scenarios: {
@@ -2144,6 +2304,7 @@ describe('SimulationView replay automation output', () => {
     }));
     mockStore.scenario = {
       ...baseScenario,
+      status: 'simulating',
       gameplay_state: {
         cards: { usage_log: [] },
         betting: { bets: [] },
@@ -2171,6 +2332,8 @@ describe('SimulationView replay automation output', () => {
   });
 
   it('does not re-upload stale local gameplay when backend authority is explicitly empty', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
     window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
       version: 1,
       scenarios: {
@@ -2232,6 +2395,7 @@ describe('SimulationView replay automation output', () => {
     }));
     mockStore.scenario = {
       ...baseScenario,
+      status: 'simulating',
       gameplay_state: {
         cards: { usage_log: [] },
         betting: { bets: [] },

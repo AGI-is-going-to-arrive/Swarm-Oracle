@@ -27,6 +27,7 @@ def setup_test_db(tmp_path, monkeypatch):
     from app.api.helpers import shutdown_background_tasks_sync
     from app.config import settings
     from app.models.database import dispose_engine, init_db
+    from app.services.resource_deletion import stop_resource_writes
     from app.services.vector_store import reset_vector_store
 
     db_path = tmp_path / "test_swarmoracle.db"
@@ -45,5 +46,6 @@ def setup_test_db(tmp_path, monkeypatch):
     init_db()
     yield
     shutdown_background_tasks_sync(timeout=5.0, reason="test_teardown")
+    stop_resource_writes()
     dispose_engine()
     reset_vector_store()

@@ -31,6 +31,7 @@ from app.services.result_report.queries import (
     load_latest_faction_snapshots,
     load_latest_message_metadata_coverage,
     load_latest_relation_stats,
+    report_result_fingerprint,
 )
 from app.services.result_report.schema import (
     AnalyticConfidence,
@@ -1239,6 +1240,8 @@ def _resolve_report_scope(
         return report_scope
 
     with Session(engine) as session:
+        if session.connection().dialect.name == "sqlite":
+            session.connection().exec_driver_sql("BEGIN")
         selection = select_branch_rounds(
             session,
             scenario_id=scenario_id,
@@ -1255,6 +1258,8 @@ def _resolve_report_scope(
                 )
                 for round_ in selection.rounds
             ),
+            result_fingerprint=report_result_fingerprint(session, scenario_id),
+            runtime_epoch=getattr(engine, "_swarmoracle_resource_epoch", None),
         )
 
 

@@ -690,6 +690,11 @@ async def intervene_retrospective(
 
     engine = get_engine()
 
+    # Conceal foreign/nonexistent scenarios before touching a resource-derived
+    # runtime lock; otherwise lock contention leaks a foreign scenario's state.
+    with Session(engine) as session:
+        require_owned_scenario(session, scenario_id, principal)
+
     use_persisted_queue = _pending_intervention_db_path() is not None
     new_branch_id: str | None = None
     log_id: str | None = None

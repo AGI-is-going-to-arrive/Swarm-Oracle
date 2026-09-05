@@ -379,8 +379,21 @@ def record_growth_event(
     metrics: dict[str, Any] | None = None,
 ) -> None:
     """Record an idempotent notable event in an agent's cross-scenario life."""
+    from app.services.resource_deletion import resource_is_deleted, resource_writes_stopping
+    from app.services.runtime_lock import begin_serialized_write
+
+    if resource_writes_stopping():
+        return
     engine = get_engine()
     with Session(engine) as session:
+        begin_serialized_write(session)
+        if (
+            resource_writes_stopping()
+            or session.get(AgentIdentity, identity_id) is None
+            or resource_is_deleted(session, "identity", identity_id)
+            or resource_is_deleted(session, "scenario", scenario_id)
+        ):
+            return
         existing = session.exec(
             select(AgentGrowthEvent).where(
                 AgentGrowthEvent.identity_id == identity_id,

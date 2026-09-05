@@ -1,7 +1,6 @@
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 import { lookbehindSupported } from '../lib/markdownCompat';
 
@@ -11,15 +10,29 @@ interface SafeMarkdownProps {
 }
 
 function SafeMarkdownImpl({ children, className }: SafeMarkdownProps) {
-  // Without lookbehind (Safari/iOS 16.2–16.3 in targets) remark-gfm's autolink
-  // transform throws at runtime — degrade to plain markdown; rehype-sanitize
-  // stays active on every path.
-  const remarkPlugins = lookbehindSupported() ? [remarkGfm] : [];
+  const [remarkGfm, setRemarkGfm] = useState<typeof import('remark-gfm').default | null>(null);
+
+  useEffect(() => {
+    // GFM contains a lookbehind regex literal. Detect support before importing
+    // it so Safari/iOS 16.2–16.3 can parse and render the plain markdown path.
+    if (!lookbehindSupported()) return;
+    let cancelled = false;
+    void import('remark-gfm')
+      .then(({ default: plugin }) => {
+        if (!cancelled) setRemarkGfm(() => plugin);
+      })
+      .catch(() => {
+        // A failed chunk download must not prevent reading the content.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className={className}>
       <ReactMarkdown
-        remarkPlugins={remarkPlugins}
+        remarkPlugins={remarkGfm ? [remarkGfm] : []}
         rehypePlugins={[rehypeSanitize]}
         disallowedElements={['img']}
         unwrapDisallowed

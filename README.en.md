@@ -64,35 +64,70 @@ Protocol truth boundary: connection checks, provider probes, and core generation
 
 ### Docker Compose
 
+Use Docker Desktop in Linux-container mode on Windows/macOS, or Docker Engine with the Compose plugin on Linux. Run these commands from the repository root.
+
+macOS / Linux:
+
 ```bash
-cp .env.docker.example .env.docker
+test -f .env.docker || cp .env.docker.example .env.docker
+docker compose config --quiet
+docker compose up -d
+```
+
+Windows PowerShell:
+
+```powershell
+if (-not (Test-Path .env.docker)) { Copy-Item .env.docker.example .env.docker }
+docker compose config --quiet
 docker compose up -d
 ```
 
 Open http://127.0.0.1:18928 . Ports publish to loopback by default: frontend `18928`, backend `18927`. The backend image bundles `packs/` and `samples/`, so Local Packs and official samples are available inside the container; bundled pack `demo_snapshots` reference only Snapshots that actually exist and can be imported directly from pack details. To rebuild the images from source, run `docker compose up --build -d`.
 
+When upgrading from an older root-run container, existing data volumes keep their ownership. Complete the [stopped-backend backup and legacy-volume upgrade](deploy/README.md#legacy-data-volume-upgrade) before starting the new version. Fresh volumes do not need that step.
+
 ### Local Development
 
-Backend (Python 3.11+):
+Backend (Python 3.11+), macOS / Linux:
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp ../.env.example .env
+test -f .env || cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Start the frontend in another terminal (Node.js 20.19+ or 22.12+, npm):
+Windows PowerShell uses the virtual environment's interpreter directly; no execution-policy change is needed:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+if (-not (Test-Path .env)) { Copy-Item ..\.env.example .env }
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+```
+
+Start the frontend in another terminal (Node.js 20.19+ within 20.x, or ≥22.12; npm version in `frontend/package.json`). macOS / Linux:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
+Windows PowerShell:
+
+```powershell
+cd frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
 Open http://127.0.0.1:18928 . The frontend proxies `/api` and `/ws` to http://127.0.0.1:18927 .
+
+Before starting services, run preflight from the repository root: `backend/.venv/bin/python backend/scripts/preflight.py` on macOS/Linux, or `.\backend\.venv\Scripts\python.exe backend/scripts/preflight.py` in PowerShell. Preflight probes the configured LLM connection. The `make` targets are conveniences for POSIX terminals.
 
 ## Public Deployment
 

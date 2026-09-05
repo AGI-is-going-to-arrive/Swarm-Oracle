@@ -898,11 +898,14 @@ export function InputView() {
     && webSearchBaseUrl.trim().length > 0
     && inferredCustomProvider == null;
   const handleWebSearchProviderChange = (next: 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng') => {
+    if (next === webSearchProvider) return;
     setWebSearchProvider(next);
-    if (next === 'searxng') {
-      setWebSearchApiKey('');
-      setShowWebSearchEndpoint(true);
-    }
+    // Endpoints and credentials belong to the selected provider. Reusing
+    // either after a switch can reject the run or send a key to another host.
+    setWebSearchApiKey('');
+    setWebSearchBaseUrl('');
+    setWebSearchUrlError('');
+    setShowWebSearchEndpoint(next === 'searxng');
   };
   const selectedWebSearchFamilies = useMemo<WebSearchFamily[]>(() => {
     if (!webSearchEnabled || !supportsDomainFilter) return [];

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -103,5 +104,72 @@ describe('DebateBetModal automation callback', () => {
     await user.click(screen.getByRole('button', { name: 'debate.bet_submit' }));
 
     expect(await screen.findByText('debate.bet_error_locked')).toBeInTheDocument();
+  });
+
+  it('names the dialog, traps keyboard focus, and restores the opener on Escape', async () => {
+    const user = userEvent.setup();
+    function BetDialogHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Open bet</button>
+          {open && <DebateBetModal onClose={() => setOpen(false)} onSubmit={async () => undefined} />}
+        </>
+      );
+    }
+    render(<BetDialogHarness />);
+    const opener = screen.getByRole('button', { name: 'Open bet' });
+    await user.click(opener);
+    const dialog = screen.getByRole('dialog', { name: 'debate.bet_title' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(within(dialog).getByRole('button', { name: 'common.close' })).toHaveFocus();
+    expect(opener).toHaveAttribute('inert');
+    await user.tab({ shift: true });
+    expect(within(dialog).getByRole('button', { name: 'debate.bet_submit' })).toHaveFocus();
+    await user.tab();
+    expect(within(dialog).getByRole('button', { name: 'common.close' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    expect(opener).not.toHaveAttribute('inert');
+  });
+
+  it('prevents duplicate submissions and all close paths until the write settles', async () => {
+    const user = userEvent.setup();
+    let rejectSubmission!: (reason: unknown) => void;
+    const pending = new Promise<void>((_resolve, reject) => { rejectSubmission = reject; });
+    const onSubmit = vi.fn(() => pending);
+    const onClose = vi.fn();
+    render(<DebateBetModal onClose={onClose} onSubmit={onSubmit} />);
+    const dialog = screen.getByRole('dialog');
+    await user.dblClick(screen.getByRole('button', { name: 'debate.bet_submit' }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(dialog).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'common.close' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'common.cancel' })).toBeDisabled();
+    expect(screen.getByLabelText('debate.bet_confidence')).toBeDisabled();
+    await user.keyboard('{Escape}');
+    fireEvent.click(dialog.parentElement!);
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => rejectSubmission({ status: 400, code: 'DEBATE_PREDICTIONS_LOCKED' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('debate.bet_error_locked');
+    expect(screen.getByRole('button', { name: 'debate.bet_submit' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'common.cancel' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a draft when live snapshots refresh supported option objects', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn(async () => undefined);
+    const props = { onClose: () => {}, onSubmit };
+    const view = render(<DebateBetModal {...props} availableOptions={{ winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance'] }} />);
+    await user.click(screen.getByRole('button', { name: 'debate.bet_kind_tone' }));
+    await user.click(screen.getByRole('button', { name: 'debate.tone_balance' }));
+    fireEvent.change(screen.getByLabelText('debate.bet_confidence'), { target: { value: '0.9' } });
+
+    view.rerender(<DebateBetModal {...props} availableOptions={{ winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance'] }} />);
+    await user.click(screen.getByRole('button', { name: 'debate.bet_submit' }));
+    expect(onSubmit).toHaveBeenCalledWith({ kind: 'verdict_tone', targetValue: 'balance', confidence: 0.9 });
   });
 });

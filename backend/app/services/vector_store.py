@@ -15,13 +15,22 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Any, Literal, cast
 
 from app.config import settings
 from app.log_sanitize import contains_credential_material
 from app.services.domain_world import canonical_json_bytes_v1
+from app.services.resource_deletion import (
+    ResourceFileLock,
+    resource_file_lock,
+    resource_is_deleted,
+    resource_vector_write,
+    resource_worker_context,
+    resource_writes_stopping,
+)
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
@@ -471,18 +480,29 @@ class VectorStore:
         scenario_id: str,
         operation: str,
         write_call: Callable[[], None],
-    ) -> None:
+    ) -> bool:
         """Serialize Chroma writes inside one process and across SQLite-backed workers."""
         if not self.available:
-            return
+            return False
+        with resource_vector_write(
+            "scenario", scenario_id, cleanup=operation == "delete_collection",
+        ) as allowed:
+            if not allowed:
+                return False
+            return self._run_lease_serialized_write(scenario_id, operation, write_call)
+
+    def _run_lease_serialized_write(
+        self, scenario_id: str, operation: str, write_call: Callable[[], None],
+    ) -> bool:
 
         lease = self._acquire_write_lease(scenario_id, operation)
         if lease is None:
-            return
+            return False
 
         try:
             with _CHROMA_WRITE_LOCK:
                 write_call()
+            return True
         finally:
             try:
                 release_runtime_lock(lease)
@@ -686,7 +706,7 @@ class VectorStore:
             logger.warning("Vector store retrieval failed (non-fatal): %s", exc)
             return []
 
-    def delete_collection(self, scenario_id: str) -> None:
+    def delete_collection(self, scenario_id: str) -> bool:
         """Delete a scenario collection using the same canonical name as store/retrieve."""
         collection_name = self._collection_name(scenario_id)
 
@@ -696,9 +716,14 @@ class VectorStore:
                 self._client.delete_collection(collection_name)
                 logger.info("Deleted ChromaDB collection %s", collection_name)
             except Exception as exc:
-                logger.warning("Failed to delete collection for %s: %s", scenario_id, exc)
+                if not _is_missing_chroma_collection_v1(exc):
+                    raise
 
-        self._run_serialized_write(scenario_id, "delete_collection", _delete)
+        try:
+            return self._run_serialized_write(scenario_id, "delete_collection", _delete)
+        except Exception as exc:
+            logger.warning("Failed to delete collection for %s: %s", scenario_id, exc)
+            return False
 
     def delete_branch_memories(self, scenario_id: str, branch_id: str) -> bool:
         """Delete only memories whose metadata belongs to one replay branch."""
@@ -845,6 +870,35 @@ def delete_branch_memories(scenario_id: str, branch_id: str) -> bool:
 _IDENTITY_MEMORY_MAX = 200
 
 
+def _guard_identity_mutation(
+    unavailable: Any = None, *, source_scenario: bool = False, compaction: bool = False,
+):
+    """Keep the non-expiring identity barrier outside the existing Chroma locks."""
+    def decorate(function):
+        @wraps(function)
+        def guarded(user_id: str, identity_id: str, *args, **kwargs):
+            scenario_ids = []
+            if source_scenario:
+                scenario_ids = [str(kwargs.get("scenario_id") or args[0])]
+            elif compaction:
+                group = kwargs.get("group") or args[0]
+                scenario_ids = sorted(set(group.scenario_ids))
+            with ExitStack() as stack:
+                resources = [("identity", identity_id)] + [
+                    ("scenario", scenario_id) for scenario_id in scenario_ids
+                ]
+                for kind, resource_id in resources:
+                    if not stack.enter_context(resource_vector_write(kind, resource_id)):
+                        if isinstance(unavailable, Exception):
+                            # A shared exception would retain and accumulate
+                            # traceback frames from previous requests.
+                            raise type(unavailable)(*unavailable.args)
+                        return unavailable
+                return function(user_id, identity_id, *args, **kwargs)
+        return guarded
+    return decorate
+
+
 def _identity_collection_name(user_id: str) -> str:
     """Build the canonical Chroma collection name for identity memories."""
     name = f"identity_{user_id.replace('-', '_')}"
@@ -867,6 +921,7 @@ def is_identity_memory_pinned(metadata: Any) -> bool:
     return str(raw_value or "").strip().lower() == "true"
 
 
+@_guard_identity_mutation(IdentityMemoryNotFoundError("identity_memory_not_found"))
 def set_identity_memory_pin(
     user_id: str,
     identity_id: str,
@@ -1078,6 +1133,7 @@ def identity_memory_ref(
     )
 
 
+@_guard_identity_mutation(False, source_scenario=True)
 def store_identity_memory(
     user_id: str,
     identity_id: str,
@@ -1395,8 +1451,9 @@ def store_identity_profile(
         finally:
             _release_pending_once()
 
+    worker_context = resource_worker_context()
     write_thread = threading.Thread(
-        target=_run_write,
+        target=lambda: worker_context.run(_run_write),
         name=f"chroma-identity-profile-{identity_id[:8]}",
         daemon=True,
     )
@@ -1420,6 +1477,7 @@ def store_identity_profile(
         logger.warning("L2 profile store failed (non-fatal): %s", exc)
 
 
+@_guard_identity_mutation()
 def _store_identity_profile_sync(
     user_id: str,
     identity_id: str,
@@ -1560,6 +1618,105 @@ def delete_identity_profile(user_id: str, identity_id: str) -> None:
             release_runtime_lock(lease)
         except Exception as exc:
             logger.warning("L2 profile delete lock release failed for %s: %s", user_id, exc)
+
+
+def delete_identity_data(user_id: str, identity_id: str) -> bool:
+    """Delete profiles and every raw/compacted memory, confirming each collection."""
+    store = get_vector_store()
+    if not store.available:
+        return False
+    with resource_vector_write("identity", identity_id, cleanup=True) as allowed:
+        if not allowed:
+            return False
+        lease = acquire_runtime_lock(
+            f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}",
+            lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS,
+        )
+        if lease is None:
+            return False
+        try:
+            with _CHROMA_WRITE_LOCK:
+                for name in (
+                    _identity_profile_collection_name(user_id),
+                    _identity_collection_name(user_id),
+                    memory_promotion_collection_name_v1(user_id),
+                ):
+                    try:
+                        collection = store._client.get_collection(name=name)
+                    except Exception as exc:
+                        if _is_missing_chroma_collection_v1(exc):
+                            continue
+                        return False
+                    collection.delete(where={"identity_id": identity_id})
+                    remaining = collection.get(where={"identity_id": identity_id})
+                    if remaining.get("ids"):
+                        return False
+            return True
+        except Exception:
+            logger.warning("Identity data deletion remains pending", exc_info=True)
+            return False
+        finally:
+            release_runtime_lock(lease)
+
+
+def delete_scenario_data(user_id: str, scenario_id: str) -> bool:
+    """Erase a scenario's vector collection and memories derived from that scenario."""
+    store = get_vector_store()
+    if not store.available:
+        return False
+    with resource_vector_write("scenario", scenario_id, cleanup=True) as allowed:
+        if not allowed:
+            return False
+        lock_key = (
+            f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+            if user_id else f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:{scenario_id}"
+        )
+        lease = acquire_runtime_lock(lock_key, lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS)
+        if lease is None:
+            return False
+        try:
+            with _CHROMA_WRITE_LOCK:
+                store._collections.pop(scenario_id, None)
+                try:
+                    store._client.delete_collection(store._collection_name(scenario_id))
+                except Exception as exc:
+                    if not _is_missing_chroma_collection_v1(exc):
+                        return False
+                if user_id:
+                    for name in (
+                        _identity_collection_name(user_id),
+                        memory_promotion_collection_name_v1(user_id),
+                    ):
+                        try:
+                            collection = store._client.get_collection(name=name)
+                        except Exception as exc:
+                            if _is_missing_chroma_collection_v1(exc):
+                                continue
+                            return False
+                        # Compacted multi-scenario summaries contain facts from
+                        # every source. Erase the whole derived summary if one
+                        # source is deleted; never relabel it as another source.
+                        rows = collection.get(include=["metadatas"])
+                        doomed = []
+                        for doc_id, metadata in zip(
+                            rows.get("ids") or [], rows.get("metadatas") or [],
+                        ):
+                            metadata = metadata or {}
+                            sources = _decode_bounded_source_ids(
+                                metadata.get("source_scenario_ids"),
+                            )
+                            if metadata.get("scenario_id") == scenario_id or scenario_id in sources:
+                                doomed.append(doc_id)
+                        if doomed:
+                            collection.delete(ids=doomed)
+                            if collection.get(ids=doomed).get("ids"):
+                                return False
+            return True
+        except Exception:
+            logger.warning("Scenario vector deletion remains pending", exc_info=True)
+            return False
+        finally:
+            release_runtime_lock(lease)
 
 
 def search_identity_candidates(
@@ -1735,6 +1892,7 @@ def check_identity_compaction_needed(user_id: str, identity_id: str) -> bool:
         return False
 
 
+@_guard_identity_mutation(())
 def prepare_compaction_groups(
     user_id: str,
     identity_id: str,
@@ -1833,6 +1991,7 @@ def _prepare_compaction_groups_inner(
     return groups
 
 
+@_guard_identity_mutation(compaction=True)
 def execute_compaction_group(
     user_id: str,
     identity_id: str,
@@ -2136,6 +2295,9 @@ class Stage3QuarantineOwnershipV1:
     ownership_proofs: list[MaterializationOwnershipProofV1] = field(default_factory=list)
     ownership_state: Literal["foreground", "quarantine", "released"] = "foreground"
     heartbeat_lost: bool = False
+    resource_locks: list[ResourceFileLock] = field(default_factory=list)
+    native_global_users: int = 0
+    global_release_requested: bool = False
     state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def transfer_to_quarantine(self) -> bool:
@@ -2740,7 +2902,57 @@ async def _bounded_memory_promotion_call_v1(
     timeout = deadline.call_timeout()
     if timeout <= 0:
         raise _MemoryPromotionCallTimeoutV1
-    task = asyncio.create_task(asyncio.to_thread(call))
+    native_barriers = tuple(capsule.resource_locks)
+
+    def run_native() -> Any:
+        retained = []
+        retained_global = False
+        try:
+            with capsule.state_lock:
+                if capsule.ownership_state == "released":
+                    raise _MemoryPromotionStoreUnavailableV1
+            for barrier in native_barriers:
+                if not barrier.retain_for_native_call():
+                    raise _MemoryPromotionStoreUnavailableV1
+                retained.append(barrier)
+            with capsule.state_lock:
+                if capsule.global_lock_state == "held":
+                    capsule.native_global_users += 1
+                    retained_global = True
+            result = call()
+            if kind == "global_lock_acquire" and result is True:
+                with capsule.state_lock:
+                    abandoned = capsule.ownership_state == "released"
+                    if not abandoned:
+                        capsule.global_lock_state = "held"
+                if abandoned:
+                    _CHROMA_WRITE_LOCK.release()
+                    return False
+            elif kind == "lease_acquire" and isinstance(result, RuntimeLockLease):
+                with capsule.state_lock:
+                    abandoned = capsule.ownership_state == "released"
+                    if not abandoned:
+                        capsule.lease = result
+                if abandoned:
+                    release_runtime_lock(result)
+                    return None
+            return result
+        finally:
+            release_global = False
+            if retained_global:
+                with capsule.state_lock:
+                    capsule.native_global_users -= 1
+                    if capsule.native_global_users == 0 and capsule.global_release_requested:
+                        release_global = capsule.global_lock_state == "held"
+                        capsule.global_lock_state = "not_acquired"
+            if release_global:
+                _CHROMA_WRITE_LOCK.release()
+            # Cancellation of any asyncio wrapper/quarantine cannot release a
+            # barrier while its actual native Chroma function is still running.
+            for barrier in reversed(retained):
+                barrier.release_native_call()
+
+    task = asyncio.create_task(asyncio.to_thread(run_native))
     capsule.task = task
     capsule.task_kind = kind
     try:
@@ -2949,12 +3161,6 @@ async def _finish_memory_promotion_resource_release_v1(
     if heartbeat_native_task is not None:
         with suppress(BaseException):
             await asyncio.shield(heartbeat_native_task)
-    if capsule.global_lock_state == "held":
-        capsule.global_lock_state = "not_acquired"
-        with suppress(RuntimeError):
-            _CHROMA_WRITE_LOCK.release()
-    elif capsule.global_lock_state == "pending":
-        capsule.global_lock_state = "not_acquired"
     lease = capsule.current_lease()
     if lease is not None:
         release_task = capsule.release_native_task
@@ -2968,6 +3174,21 @@ async def _finish_memory_promotion_resource_release_v1(
         if release_task.done():
             capsule.release_native_task = None
             capsule.clear_lease(lease)
+    with capsule.state_lock:
+        capsule.global_release_requested = True
+        global_lock_held = (
+            capsule.global_lock_state == "held" and capsule.native_global_users == 0
+        )
+        if global_lock_held or capsule.global_lock_state == "pending":
+            capsule.global_lock_state = "not_acquired"
+        resource_locks = tuple(capsule.resource_locks)
+        capsule.resource_locks.clear()
+        capsule.ownership_state = "released"
+    if global_lock_held:
+        with suppress(RuntimeError):
+            _CHROMA_WRITE_LOCK.release()
+    for resource_lock in reversed(resource_locks):
+        resource_lock.release()
     capsule.mark_released()
 
 
@@ -3456,6 +3677,33 @@ async def store_verified_memory_promotions_v1(
     active_store = store
     wrote_any = False
     try:
+        def acquire_resource_barriers() -> bool:
+            from sqlmodel import Session
+
+            from app.models.database import get_engine
+
+            identities = sorted({str(item.semantic_payload["identity_id"]) for item in children})
+            resources = [("identity", identity_id) for identity_id in identities]
+            resources.append(("scenario", str(root.semantic_payload["scenario_id"])))
+            for resource_type, resource_id in resources:
+                barrier = resource_file_lock(resource_type, resource_id)
+                with capsule.state_lock:
+                    if capsule.ownership_state == "released":
+                        return False
+                    capsule.resource_locks.append(barrier)
+                barrier.acquire(timeout=min(1.0, deadline.call_timeout()))
+            if resource_writes_stopping():
+                return False
+            with Session(get_engine()) as session:
+                return not any(
+                    resource_is_deleted(session, kind, resource_id)
+                    for kind, resource_id in resources
+                )
+
+        if not await _bounded_memory_promotion_call_v1(
+            capsule, deadline, "resource_barrier_acquire", acquire_resource_barriers,
+        ):
+            return _memory_promotion_store_unavailable_v1("MEMORY_PROMOTION_LOCK_UNAVAILABLE")
         lease = await _bounded_memory_promotion_call_v1(
             capsule,
             deadline,

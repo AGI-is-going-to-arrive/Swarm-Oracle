@@ -1331,7 +1331,9 @@ async def run_sim_background(
 
 def schedule_background_task(coro):
     """Schedule a coroutine as a fire-and-forget background task."""
-    task = asyncio.create_task(coro)
+    from app.services.resource_deletion import resource_worker_context
+
+    task = asyncio.create_task(coro, context=resource_worker_context())
     _background_tasks.add(task)
     task.add_done_callback(_finalize_background_task)
     return task

@@ -2,11 +2,12 @@
    SwarmOracle — HistoryView (Scenario List & Management)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useId, useRef } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { listScenarios, deleteScenario } from '../api/client';
 import { stringifyAutomationPayload } from '../game/automation';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { ScenarioListItem } from '../api/client';
 import './HistoryView.css';
@@ -33,77 +34,130 @@ export default function HistoryView() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState<StatusFilter>('all');
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [loadErrorFallback, setLoadErrorFallback] = useState('');
-  const [loadErrorCode, setLoadErrorCode] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ code: string | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [deleteErrorFallback, setDeleteErrorFallback] = useState('');
-  const [deleteErrorCode, setDeleteErrorCode] = useState<string | null>(null);
-  const loadErrorMessage = loadErrorFallback
-    ? getLocalizedApiErrorMessage({ code: loadErrorCode }, t, loadErrorFallback)
+  const [cleanupPending, setCleanupPending] = useState(false);
+  const [deleteError, setDeleteError] = useState<{ code: string | null } | null>(null);
+  const mountedRef = useRef(false);
+  const requestEpochRef = useRef(0);
+  const deleteInFlightRef = useRef(false);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null);
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const activeFilterRef = useRef<HTMLButtonElement>(null);
+  const deleteTitleId = useId();
+  const deleteDescriptionId = useId();
+  const loadErrorCode = loadError?.code ?? null;
+  const loadErrorMessage = loadError
+    ? getLocalizedApiErrorMessage(loadError, t, t('history.load_error'))
     : '';
-  const deleteErrorMessage = deleteErrorFallback
-    ? getLocalizedApiErrorMessage({ code: deleteErrorCode }, t, deleteErrorFallback)
+  const deleteErrorMessage = deleteError
+    ? getLocalizedApiErrorMessage(deleteError, t, t('history.delete_error'))
     : '';
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setLoadErrorFallback('');
-    setLoadErrorCode(null);
-    try {
-      const statusParam = filter === 'all' ? undefined : filter;
-      const data = await listScenarios(statusParam, PAGE_SIZE, offset);
-      setScenarios(data.scenarios ?? []);
-      setTotal(data.total ?? 0);
-    } catch (err) {
-      setLoadErrorCode(getApiErrorCode(err));
-      setLoadErrorFallback('Failed to load scenarios');
-      setScenarios([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [filter, offset]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const epoch = ++requestEpochRef.current;
+    const load = async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const statusParam = filter === 'all' ? undefined : filter;
+        const data = await listScenarios(statusParam, PAGE_SIZE, offset);
+        if (epoch !== requestEpochRef.current) return;
+        const nextTotal = data.total ?? 0;
+        const lastOffset = Math.max(0, (Math.ceil(nextTotal / PAGE_SIZE) - 1) * PAGE_SIZE);
+        if (offset > lastOffset) {
+          requestEpochRef.current += 1;
+          setOffset(lastOffset);
+          return;
+        }
+        setScenarios(data.scenarios ?? []);
+        setTotal(nextTotal);
+      } catch (err) {
+        if (epoch !== requestEpochRef.current) return;
+        setLoadError({ code: getApiErrorCode(err) });
+        setScenarios([]);
+        setTotal(0);
+      } finally {
+        if (epoch === requestEpochRef.current) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      requestEpochRef.current += 1;
+    };
+  }, [filter, offset, refreshVersion]);
+
+  const refresh = () => {
+    requestEpochRef.current += 1;
+    setLoading(true);
+    setRefreshVersion((version) => version + 1);
+  };
+
+  const closeDelete = useCallback(() => {
+    if (!deleteInFlightRef.current) setDeleteTarget(null);
+  }, []);
+
+  useFocusTrap(deleteDialogRef, deleteTarget !== null, true);
+
+  useEffect(() => {
+    if (deleteTarget) {
+      cancelDeleteRef.current?.focus({ preventScroll: true });
+    } else if (deleteTriggerRef.current) {
+      if (!deleteTriggerRef.current.isConnected) {
+        activeFilterRef.current?.focus({ preventScroll: true });
+      }
+      deleteTriggerRef.current = null;
+    }
+  }, [deleteTarget]);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      closeDelete();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [closeDelete, deleteTarget]);
 
   // Reset to page 1 when filter changes (avoid stale offset)
   const handleFilterChange = (f: StatusFilter) => {
     if (f === filter) return; // no-op
+    requestEpochRef.current += 1;
     setFilter(f);
     setOffset(0);
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || deleteInFlightRef.current) return;
+    deleteInFlightRef.current = true;
     setDeleting(true);
-    setDeleteErrorFallback('');
-    setDeleteErrorCode(null);
+    setDeleteError(null);
     try {
-      await deleteScenario(deleteTarget);
+      const result = await deleteScenario(deleteTarget);
+      if (!mountedRef.current) return;
+      setCleanupPending(result.cleanup_pending === true);
       setDeleteTarget(null);
-      // If we just deleted the last item on the current page, go back one page
-      if (scenarios.length === 1 && offset > 0) {
-        setOffset(Math.max(0, offset - PAGE_SIZE));
-      } else {
-        await load(); // refresh list
-      }
+      // The effect refreshes the latest filter/page, including changes during deletion.
+      refresh();
     } catch (err) {
-      setDeleteErrorCode(getApiErrorCode(err));
-      setDeleteErrorFallback('Delete failed');
+      if (!mountedRef.current) return;
+      setDeleteError({ code: getApiErrorCode(err) });
     } finally {
-      setDeleting(false);
-    }
-  };
-
-  const handleCardClick = (s: ScenarioListItem) => {
-    if (s.status === 'done') {
-      navigate(`/result/${s.id}`);
-    } else {
-      navigate(`/sim/${s.id}`);
+      deleteInFlightRef.current = false;
+      if (mountedRef.current) setDeleting(false);
     }
   };
 
@@ -169,13 +223,17 @@ export default function HistoryView() {
         {STATUS_FILTERS.map((f) => (
           <button
             key={f}
+            ref={filter === f ? activeFilterRef : undefined}
             className={`filter-btn ${filter === f ? 'filter-btn--active' : ''}`}
             onClick={() => handleFilterChange(f)}
+            aria-pressed={filter === f}
           >
             {t(`history.filter_${f}`)}
           </button>
         ))}
       </div>
+
+      {cleanupPending && <p role="status">{t('history.delete_cleanup_pending')}</p>}
 
       {/* Content */}
       {loading ? (
@@ -184,9 +242,9 @@ export default function HistoryView() {
         </div>
       ) : loadErrorMessage ? (
         <div className="history-empty">
-          <p className="result-error">{loadErrorMessage}</p>
-          <button className="btn" onClick={load}>
-            ↺ Retry
+          <p className="result-error" role="alert">{loadErrorMessage}</p>
+          <button className="btn" onClick={refresh}>
+            {t('common.retry')}
           </button>
         </div>
       ) : scenarios.length === 0 ? (
@@ -204,7 +262,6 @@ export default function HistoryView() {
                 key={s.id}
                 className="history-card"
                 style={{ '--card-delay': `${i * 0.05}s` } as React.CSSProperties}
-                onClick={() => handleCardClick(s)}
               >
                 <div className="history-card__top">
                   <span className={`badge ${STATUS_BADGE_MAP[s.status] || 'badge-active'}`}>
@@ -213,17 +270,21 @@ export default function HistoryView() {
                   <button
                     className="history-card__delete"
                     title={t('history.delete')}
+                    aria-label={`${t('history.delete')}: ${s.question}`}
                     onClick={(e) => {
-                      e.stopPropagation();
+                      deleteTriggerRef.current = e.currentTarget;
                       setDeleteTarget(s.id);
-                      setDeleteErrorFallback('');
-                      setDeleteErrorCode(null);
+                      setDeleteError(null);
                     }}
                   >
                     ×
                   </button>
                 </div>
-                <h3 className="history-card__question">{s.question}</h3>
+                <h3 className="history-card__question">
+                  <Link className="history-card__link" to={`/${s.status === 'done' ? 'result' : 'sim'}/${s.id}`}>
+                    {s.question}
+                  </Link>
+                </h3>
                 <div className="history-card__meta">
                   <span>{t('history.agents_count', { count: s.agent_count ?? 0 })}</span>
                   <span>
@@ -241,8 +302,12 @@ export default function HistoryView() {
             <div className="history-pagination">
               <button
                 className="btn btn-ghost"
+                aria-label={t('history.previous_page')}
                 disabled={currentPage <= 1}
-                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                onClick={() => {
+                  requestEpochRef.current += 1;
+                  setOffset(Math.max(0, offset - PAGE_SIZE));
+                }}
               >
                 ←
               </button>
@@ -251,8 +316,12 @@ export default function HistoryView() {
               </span>
               <button
                 className="btn btn-ghost"
+                aria-label={t('history.next_page')}
                 disabled={currentPage >= totalPages}
-                onClick={() => setOffset(offset + PAGE_SIZE)}
+                onClick={() => {
+                  requestEpochRef.current += 1;
+                  setOffset(offset + PAGE_SIZE);
+                }}
               >
                 →
               </button>
@@ -263,24 +332,36 @@ export default function HistoryView() {
 
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
-        <div className="modal-overlay" onClick={() => !deleting && setDeleteTarget(null)}>
-          <div className="modal-content history-delete-modal" onClick={(e) => e.stopPropagation()}>
-            <p className="delete-confirm-text">{t('history.delete_confirm')}</p>
-            {deleteErrorMessage && <p className="modal-error">{deleteErrorMessage}</p>}
+        <div className="modal-overlay" onClick={closeDelete}>
+          <div
+            ref={deleteDialogRef}
+            className="modal-content history-delete-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby={deleteTitleId}
+            aria-describedby={deleteDescriptionId}
+            aria-busy={deleting}
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id={deleteTitleId} className="sr-only">{t('history.delete')}</h2>
+            <p id={deleteDescriptionId} className="delete-confirm-text">{t('history.delete_confirm')}</p>
+            {deleteErrorMessage && <p className="modal-error" role="alert">{deleteErrorMessage}</p>}
             <div className="modal-footer">
               <button
+                ref={cancelDeleteRef}
                 className="btn btn-ghost"
-                onClick={() => setDeleteTarget(null)}
+                onClick={closeDelete}
                 disabled={deleting}
               >
-                {t('intervention.cancel')}
+                {t('common.cancel')}
               </button>
               <button
                 className="btn btn-danger"
                 onClick={handleDelete}
                 disabled={deleting}
               >
-                {deleting ? '...' : t('history.delete')}
+                {deleting ? t('common.submitting') : t('history.delete')}
               </button>
             </div>
           </div>

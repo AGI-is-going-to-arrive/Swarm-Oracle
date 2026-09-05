@@ -64,35 +64,70 @@ SwarmOracle 是一个开源、自托管的 AI 假设推演游乐场。你提出�
 
 ### Docker Compose
 
+Windows/macOS 使用 Docker Desktop 的 Linux 容器模式；Linux 使用 Docker Engine 与 Compose 插件。在仓库根目录执行。
+
+macOS / Linux：
+
 ```bash
-cp .env.docker.example .env.docker
+test -f .env.docker || cp .env.docker.example .env.docker
+docker compose config --quiet
+docker compose up -d
+```
+
+Windows PowerShell：
+
+```powershell
+if (-not (Test-Path .env.docker)) { Copy-Item .env.docker.example .env.docker }
+docker compose config --quiet
 docker compose up -d
 ```
 
 打开 http://127.0.0.1:18928 。默认端口只发布到 loopback：前端 `18928`，后端 `18927`。后端镜像随附 `packs/` 和 `samples/`，容器内可直接使用 Local Packs 与官方样例；随附主题包的 `demo_snapshots` 只引用实际存在的 Snapshot，可从包详情直接导入。如需从源码重建镜像，运行 `docker compose up --build -d`。
 
+从旧版 root 容器升级时，已有数据卷不会自动改变所有者。请先完成[停机备份与旧数据卷升级](deploy/README.md#legacy-data-volume-upgrade)，再启动新版；新建数据卷无需这一步。
+
 ### 本地开发
 
-后端（Python 3.11+）：
+后端（Python 3.11+），macOS / Linux：
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp ../.env.example .env
+test -f .env || cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-另开终端启动前端（Node.js 20.19+ 或 22.12+，npm）：
+Windows PowerShell 使用虚拟环境内的解释器，无需修改脚本执行策略：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+if (-not (Test-Path .env)) { Copy-Item ..\.env.example .env }
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+```
+
+另开终端启动前端（Node.js 20.19+（20.x）或 ≥22.12，npm 版本见 `frontend/package.json`）。macOS / Linux：
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
+Windows PowerShell：
+
+```powershell
+cd frontend
+npm.cmd ci
+npm.cmd run dev
+```
+
 打开 http://127.0.0.1:18928 。前端通过 `/api` 和 `/ws` 代理到 http://127.0.0.1:18927 。
+
+启动服务前，可在仓库根运行预检：macOS/Linux 使用 `backend/.venv/bin/python backend/scripts/preflight.py`，PowerShell 使用 `.\backend\.venv\Scripts\python.exe backend/scripts/preflight.py`。预检会检查所配置的 LLM 连接；`make` 目标仅是 POSIX 终端的便捷入口。
 
 ## 公开部署
 

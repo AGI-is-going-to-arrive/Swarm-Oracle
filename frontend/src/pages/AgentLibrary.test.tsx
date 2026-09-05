@@ -131,13 +131,13 @@ const mockAgentStore = vi.hoisted(() => ({
 }));
 
 vi.mock('../stores/agentStore', () => ({
-  useAgentStore: () => ({
+  useAgentStore: Object.assign(() => ({
     identities: mockAgentStore.identities,
     loading: false,
     error: null,
     fetchIdentities: mockAgentStore.fetchIdentities,
     setIdentities: mockAgentStore.setIdentities,
-  }),
+  }), { getState: () => mockAgentStore }),
 }));
 
 function validAgentPackInput() {
@@ -365,8 +365,11 @@ describe('AgentLibrary', () => {
     mockAgentStore.identities = [];
     mockAgentStore.fetchIdentities.mockClear();
     mockAgentStore.fetchIdentities.mockResolvedValue(undefined);
-    mockAgentStore.setIdentities.mockClear();
-    mockApi.deleteAgent.mockClear();
+    mockAgentStore.setIdentities.mockReset();
+    mockAgentStore.setIdentities.mockImplementation((identities: typeof mockAgentStore.identities) => {
+      mockAgentStore.identities = identities;
+    });
+    mockApi.deleteAgent.mockReset();
     mockApi.exportAgentPack.mockReset();
     mockDownloads.triggerJsonDownload.mockReset();
     mockApi.getAgentFavorites.mockClear();
@@ -476,6 +479,49 @@ describe('AgentLibrary', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Delete Ada' })).toBeInTheDocument();
+  });
+
+  it('removes a deleted Agent from the cache and reports pending cleanup without losing newly loaded Agents', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const ada = libraryAgent('custom-1', 'Ada');
+    const grace = libraryAgent('custom-2', 'Grace');
+    mockAgentStore.identities = [ada];
+    const response = { status: 'deleted', identity_id: ada.id, cleanup_pending: true };
+    let resolveDelete!: (value: typeof response) => void;
+    mockApi.deleteAgent.mockReturnValueOnce(new Promise<typeof response>((resolve) => { resolveDelete = resolve; }));
+    render(<MemoryRouter><AgentLibrary /></MemoryRouter>);
+
+    const deleteButton = screen.getByRole('button', { name: 'Delete Ada' });
+    fireEvent.click(deleteButton);
+    expect(deleteButton).toBeDisabled();
+    fireEvent.click(deleteButton);
+    expect(mockApi.deleteAgent).toHaveBeenCalledOnce();
+    mockAgentStore.identities = [ada, grace];
+    await act(async () => { resolveDelete(response); });
+
+    expect(mockAgentStore.setIdentities).toHaveBeenCalledWith([grace]);
+    expect(screen.queryByRole('button', { name: 'Delete Ada' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete Grace' })).toBeEnabled();
+    expect(screen.getByRole('status')).toHaveTextContent('agent_library.delete_cleanup_pending');
+  });
+
+  it('preserves a failed deletion for retry and clears the error after clean deletion', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockAgentStore.identities = [libraryAgent('custom-1', 'Ada')];
+    mockApi.deleteAgent
+      .mockRejectedValueOnce(new Error('private upstream error'))
+      .mockResolvedValueOnce(undefined);
+    render(<MemoryRouter><AgentLibrary /></MemoryRouter>);
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete Ada' })); });
+    expect(screen.getByRole('alert')).toHaveTextContent('agent_library.delete_error');
+    expect(screen.queryByText('private upstream error')).not.toBeInTheDocument();
+    expect(mockAgentStore.setIdentities).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete Ada' })); });
+    expect(screen.queryByRole('button', { name: 'Delete Ada' })).not.toBeInTheDocument();
+    expect(screen.queryByText('agent_library.delete_error')).not.toBeInTheDocument();
+    expect(screen.queryByText('agent_library.delete_cleanup_pending')).not.toBeInTheDocument();
   });
 
   it('opens an Agent profile from an agent_profile hash deep-link', () => {

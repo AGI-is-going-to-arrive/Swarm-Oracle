@@ -94,6 +94,7 @@ frontend/.playwright-cli/
 # Release audit output (local-only)
 /.release-audit/
 /.ccg/
+/.llmdoc-tmp/
 
 # Dev/internal helper scripts — kept locally, never published.
 # Only these known local helpers are ignored; new repo-level scripts stay visible.

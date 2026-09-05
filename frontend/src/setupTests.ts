@@ -1,10 +1,17 @@
 /* eslint-disable react-hooks/refs */
 import "@testing-library/jest-dom";
+import { transferableAbortController } from 'node:util';
 import { afterEach, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { createPortal } from 'react-dom';
 
 process.env.RTL_SKIP_AUTO_CLEANUP = 'true';
+
+// fetch/Request come from Node, whose newer versions reject jsdom AbortSignals.
+// Keep cancellation in the same realm as those APIs (including React Router).
+const nativeAbortController = transferableAbortController();
+globalThis.AbortController = nativeAbortController.constructor as typeof AbortController;
+globalThis.AbortSignal = nativeAbortController.signal.constructor as typeof AbortSignal;
 
 const LOCIZE_BANNER = 'i18next is made possible by our own product, Locize';
 const originalConsoleLog = console.log.bind(console);

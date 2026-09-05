@@ -726,6 +726,7 @@ export function DebateArenaView() {
       setShowBetModal(false);
     } catch (nextError) {
       setBetNotice(getLocalizedApiErrorMessage(nextError, t, t('debate.bet_error')));
+      throw nextError;
     } finally {
       setBetSubmitting(false);
     }

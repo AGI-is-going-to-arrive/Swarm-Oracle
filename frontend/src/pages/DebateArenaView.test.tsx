@@ -826,7 +826,7 @@ describe('DebateArenaView', () => {
     expect(await screen.findByText('debate.bet_error_locked')).toBeInTheDocument();
   });
 
-  it('surfaces manual bet submission failures as a localized notice', async () => {
+  it('keeps failed manual bets open with an accessible localized error and allows a retry', async () => {
     const user = userEvent.setup();
     mockDebateStore.debate = {
       ...mockDebateStore.debate,
@@ -863,7 +863,15 @@ describe('DebateArenaView', () => {
     await user.click((await screen.findAllByRole('button', { name: 'debate.open_bet' }))[0]);
     await user.click(await screen.findByRole('button', { name: 'debate.bet_submit' }));
 
-    expect(await screen.findByText('common.api_errors.llm_unavailable')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'debate.bet_title' });
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('common.api_errors.llm_unavailable');
+    expect(within(dialog).getByRole('button', { name: 'debate.bet_submit' })).toBeEnabled();
+    expect(predictDebateMock).toHaveBeenCalledTimes(1);
+
+    predictDebateMock.mockResolvedValueOnce({});
+    await user.click(within(dialog).getByRole('button', { name: 'debate.bet_submit' }));
+    expect(predictDebateMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('renders only backend-supported winner options in the bet modal', async () => {

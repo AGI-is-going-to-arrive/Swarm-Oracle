@@ -811,8 +811,11 @@ async def test_generate_judge_analysis_rejects_payload_without_usable_signals(
 ):
     monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
     debate = create_debate_record("Should an empty judge payload still publish a verdict?")
+    attempts = 0
 
     async def _empty_judge_provider(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
         return judge_payload
 
     monkeypatch.setattr(
@@ -829,6 +832,59 @@ async def test_generate_judge_analysis_rejects_payload_without_usable_signals(
         )
 
     assert exc_info.value.code == "LLM_INVALID_OUTPUT"
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["zh", "en"])
+async def test_generate_judge_analysis_recovers_one_invalid_structured_response(
+    monkeypatch, language,
+):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    debate = create_debate_record("Should a malformed final judgment get one repair attempt?")
+    debate.language = language
+    prompts = []
+
+    async def recovering_provider(prompt, **kwargs):
+        prompts.append(prompt)
+        assert kwargs["model"] == "gpt-5.6-luna"
+        if len(prompts) == 1:
+            return {"coherence": {"proposition": 4, "opposition": 3}}
+        return {"winner_reason": "The speaker answered the concrete resource constraint."}
+
+    monkeypatch.setattr(debate_module, "llm_call_json_with_stream_fallback", recovering_provider)
+    result = await debate_module._generate_judge_analysis(
+        debate_id=debate.id,
+        debate=debate,
+        plan=debate_module.build_debate_plan(debate.question),
+        llm_overrides={"model": "gpt-5.6-luna"},
+    )
+
+    assert len(prompts) == 2
+    assert prompts[1].startswith(prompts[0])
+    assert "adjudication" in prompts[1][len(prompts[0]):]
+    assert result["winner_reason"] == "The speaker answered the concrete resource constraint."
+
+
+@pytest.mark.asyncio
+async def test_generate_judge_analysis_does_not_retry_provider_errors(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    debate = create_debate_record("Should a provider rejection trigger more paid calls?")
+    attempts = 0
+
+    async def rejected_provider(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise LLMError("Provider rejected the request", code="LLM_AUTH_ERROR")
+
+    monkeypatch.setattr(debate_module, "llm_call_json_with_stream_fallback", rejected_provider)
+    with pytest.raises(LLMError, match="Provider rejected"):
+        await debate_module._generate_judge_analysis(
+            debate_id=debate.id,
+            debate=debate,
+            plan=debate_module.build_debate_plan(debate.question),
+        )
+    assert attempts == 1
 
 
 @pytest.mark.asyncio

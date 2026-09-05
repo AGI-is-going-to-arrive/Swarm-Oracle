@@ -414,10 +414,12 @@ async function waitForDebateResultCta(
 }
 
 async function setLanguage(page, baseUrl, locale) {
+  // Set the locale before the application mounts. The first-run dialog can
+  // legitimately cover the global switcher, so clicking it here is racy.
+  await page.addInitScript((language) => {
+    window.localStorage.setItem("swarmoracle:language:v1", language);
+  }, locale);
   await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
-  const targetName = locale === "zh" ? "中文" : "En";
-  const button = page.getByRole("button", { name: targetName });
-  await button.click();
 }
 
 async function captureDebateBetModal(page) {

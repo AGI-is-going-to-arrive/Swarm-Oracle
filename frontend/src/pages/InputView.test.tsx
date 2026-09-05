@@ -3500,6 +3500,75 @@ describe('InputView P4-2 provider capability hints', () => {
     expect(screen.getByLabelText('home.web_search_searxng_url_label')).toBeInTheDocument();
   });
 
+  it.each([
+    { from: 'searxng', to: 'tavily', url: 'http://localhost:8888' },
+    { from: 'searxng', to: 'xai', url: 'http://localhost:8888' },
+    { from: 'tavily', to: 'exa', url: 'https://api.tavily.com/search' },
+  ])('clears provider-bound settings when switching from $from to $to', async ({ from, to, url }) => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+    startSimulationMock.mockResolvedValueOnce('scenario-provider-switch');
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+    const providerSelect = screen.getByLabelText('home.web_search_provider_label');
+    await user.selectOptions(providerSelect, from);
+    if (from !== 'searxng') {
+      await user.type(screen.getByLabelText('home.web_search_api_key_label'), 'previous-provider-key');
+      await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
+    }
+    await user.type(screen.getByLabelText(
+      from === 'searxng' ? 'home.web_search_searxng_url_label' : 'home.web_search_base_url_label',
+    ), url);
+
+    await user.selectOptions(providerSelect, to);
+
+    expect(screen.getByLabelText('home.web_search_api_key_label')).toHaveValue('');
+    expect(screen.queryByLabelText('home.web_search_base_url_label')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('iv-inferred-provider-hint')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
+    expect(screen.getByLabelText('home.web_search_base_url_label')).toHaveValue('');
+
+    await user.type(screen.getAllByRole('textbox')[0], 'Test provider switch');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        webSearchEnabled: true,
+        webSearchProvider: to,
+        webSearchBaseUrl: undefined,
+        webSearchApiKey: undefined,
+      }));
+    });
+  });
+
+  it('shows the actionable search URL error returned by the backend', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+    startSimulationMock.mockRejectedValueOnce({ status: 400, code: 'WEB_SEARCH_BASE_URL_NOT_ALLOWED' });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
+    await user.type(screen.getByLabelText('home.web_search_base_url_label'), 'https://search.example.com');
+    await user.type(screen.getAllByRole('textbox')[0], 'Test rejected search URL');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    expect(await screen.findByText('common.api_errors.web_search_base_url_not_allowed')).toBeInTheDocument();
+    expect(screen.queryByText('common.api_errors.simulation_start_failed')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('home.web_search_base_url_label')).toHaveValue('https://search.example.com');
+  });
+
   it('renders inferred-provider hint only when base URL is non-empty', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());

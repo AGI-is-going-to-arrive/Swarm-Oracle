@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import i18n from '../../i18n/config';
 
 import type {
   FullReport,
-  FullReportTruncatedMarker,
   StoryData,
   ToolTraceSummary,
 } from '../../types';
@@ -42,7 +42,8 @@ vi.mock('./ReportSection', () => ({
     <section data-testid={`report-section-${section.id}`} data-language={language} />
   ),
 }));
-vi.mock('../../lib/llmProviderPolicy', () => ({
+vi.mock('../../lib/llmProviderPolicy', async () => ({
+  ...await vi.importActual<typeof import('../../lib/llmProviderPolicy')>('../../lib/llmProviderPolicy'),
   loadLlmProviderPolicy: vi.fn(() => ({
     apiKey: 'mock-key',
     baseUrl: 'mock-url',
@@ -166,7 +167,7 @@ const availablePremortem = {
   ],
 };
 
-function setCtx(storyData: { full_report?: FullReport | FullReportTruncatedMarker | null } | null) {
+function setCtx(storyData: Pick<StoryData, 'full_report' | 'full_report_stale'> | null) {
   mockedCtx.mockReturnValue({
     storyData,
     activeScenarioId: 'sc-1',
@@ -216,6 +217,9 @@ function controlledSseResponse() {
 
   return {
     response,
+    push(payload: string) {
+      controller.enqueue(encoder.encode(payload));
+    },
     finish(payload: string) {
       controller.enqueue(encoder.encode(payload));
       controller.close();
@@ -1276,6 +1280,167 @@ describe('ResultReportPanel — persisted report authority', () => {
 });
 
 describe('ResultReportPanel — partial report rendering', () => {
+  it.each([
+    ['en', 'Saved report snapshot', 'Regenerate Report'],
+    ['zh', '历史报告快照', '重新生成报告'],
+  ])('labels a stale saved report in %s while keeping its sections readable', async (language, title, action) => {
+    await i18n.changeLanguage(language);
+    setCtx({ full_report: makeReport(), full_report_stale: true });
+    setCap({});
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.queryByTestId('report-confidence-badge')).toBeNull();
+    expect(screen.getByRole('button', { name: action })).toBeEnabled();
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stale no-LLM sample readable without offering unsupported generation', () => {
+    setCtx({ full_report: makeReport({ tier: 'static', generation_mode: 'static' }), full_report_stale: true });
+    setCap({ capabilities: { result_report: { enabled: true }, llm_configured: false } as ReturnType<typeof useCapabilityCheck>['capabilities'] });
+    mockedLoadLlmProviderPolicy.mockReturnValue({
+      apiKey: '', baseUrl: '', model: '', reasoningEffort: '', disableUserQuota: false,
+      requestsPerMinute: null, tokensPerMinute: null,
+    });
+
+    render(<ResultReportPanel variant="standalone" />);
+
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.getByText('Saved report snapshot')).toBeInTheDocument();
+    expect(screen.queryByTestId('report-confidence-badge')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Regenerate Report' })).toBeNull();
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit BYOK regeneration and replaces the stale snapshot with fresh authority', async () => {
+    const onRefresh = vi.fn();
+    setCtx({ full_report: makeReport(), full_report_stale: true });
+    setCap({ capabilities: { result_report: { enabled: true }, llm_configured: false } as ReturnType<typeof useCapabilityCheck>['capabilities'] });
+    mockedGenerateReport.mockResolvedValue(responseFromSse('event: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n'));
+    mockedGetStory.mockResolvedValue({
+      full_report: makeReport({ generated_at: '2026-09-05T00:00:00Z' }),
+      full_report_stale: false,
+    } as StoryData);
+
+    render(<ResultReportPanel variant="inline" onRefresh={onRefresh} />);
+    expect(screen.queryByTestId('report-confidence-badge')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Regenerate Report' }));
+    });
+
+    expect(mockedGenerateReport).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(screen.queryByText('Saved report snapshot')).toBeNull();
+    expect(screen.getByTestId('report-confidence-badge')).toBeInTheDocument();
+  });
+
+  it.each(['inline', 'standalone'] as const)(
+    'keeps the %s archive warning and excludes old sections throughout a deferred regeneration',
+    async (variant) => {
+      const provider = deferred<Response>();
+      const freshStory = deferred<StoryData>();
+      const stream = controlledSseResponse();
+      const onRefresh = vi.fn();
+      setCtx({ full_report: makeReport(), full_report_stale: true });
+      setCap({});
+      mockedGenerateReport.mockReturnValue(provider.promise);
+      mockedGetStory.mockReturnValue(freshStory.promise);
+      const { unmount } = render(<ResultReportPanel variant={variant} onRefresh={onRefresh} />);
+
+      try {
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Regenerate Report' }));
+        });
+
+        expect(screen.getByText('Saved report snapshot')).toBeInTheDocument();
+        expect(screen.getByText('Report generation in progress')).toBeInTheDocument();
+        expect(screen.getByLabelText('Report generation progress')).toHaveTextContent('0 sections available');
+        expect(screen.queryByText('2 sections available')).not.toBeInTheDocument();
+        if (variant === 'standalone') {
+          expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+        } else {
+          expect(screen.getByText('Yes.')).toBeInTheDocument();
+        }
+
+        await act(async () => {
+          provider.resolve(stream.response);
+          stream.push('event: report_section_complete\ndata: {"status":"generating","section_id":"new-section","tool_trace":[]}\n\n');
+        });
+        expect(screen.getByText('Saved report snapshot')).toBeInTheDocument();
+        expect(screen.getByLabelText('Report generation progress')).toHaveTextContent('1 sections available');
+
+        await act(async () => {
+          stream.finish('event: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n');
+        });
+        expect(mockedGetStory).toHaveBeenCalledOnce();
+        expect(screen.getByText('Saved report snapshot')).toBeInTheDocument();
+
+        await act(async () => {
+          freshStory.resolve({
+            full_report: makeReport({ generated_at: '2026-09-05T01:00:00Z' }),
+            full_report_stale: false,
+          } as StoryData);
+        });
+        expect(screen.queryByText('Saved report snapshot')).not.toBeInTheDocument();
+        expect(screen.getByTestId('report-confidence-badge')).toBeInTheDocument();
+        expect(onRefresh).toHaveBeenCalledOnce();
+      } finally {
+        unmount();
+        provider.reject(new Error('test cleanup'));
+      }
+    },
+  );
+
+  it('keeps the archive warning when a deferred regeneration status check stalls', async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-09-05T00:00:00Z');
+    vi.setSystemTime(startedAt);
+    const provider = deferred<Response>();
+    setCtx({ full_report: makeReport(), full_report_stale: true });
+    setCap({});
+    mockedGenerateReport.mockReturnValue(provider.promise);
+    const { unmount } = render(<ResultReportPanel variant="standalone" />);
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Regenerate Report' }));
+      });
+      vi.setSystemTime(new Date(startedAt.getTime() + 35 * 60_000));
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+
+      expect(screen.getByText('Saved report snapshot')).toBeInTheDocument();
+      expect(screen.getByText('Report status check stalled')).toBeInTheDocument();
+      expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+      expect(screen.getByLabelText('Report generation progress')).toHaveTextContent('0 sections available');
+    } finally {
+      unmount();
+      await act(async () => { provider.reject(new Error('test cleanup')); });
+    }
+  });
+
+  it('does not poll an old generating snapshot marked stale', async () => {
+    vi.useFakeTimers();
+    setCtx({ full_report: makeReport({ status: 'generating' }), full_report_stale: true });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+
+    expect(screen.getByText('Saved report snapshot')).toBeInTheDocument();
+    expect(mockedGetStory).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Regenerate Report' })).toBeEnabled();
+  });
+
+  it('keeps stale replay content read-only', () => {
+    setCtx({ full_report: makeReport(), full_report_stale: true });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" isReplayMode />);
+
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Regenerate Report' })).toBeNull();
+  });
+
   it('renders the full report + a non-blocking retry banner when partial WITH sections', () => {
     setCtx({ full_report: makeReport({ status: 'partial' }) });
     setCap({});

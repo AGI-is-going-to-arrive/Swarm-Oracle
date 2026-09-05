@@ -5,6 +5,7 @@
 .ccg/**
 .claude/**
 .release-audit/**
+.llmdoc-tmp/**
 .tmp
 .tmp-playwright
 .trae

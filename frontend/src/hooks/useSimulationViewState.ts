@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import {
   getScenarioDirectorState,
@@ -364,13 +364,41 @@ export function useSimulationDirectorState({
   const gameplayPersistChainRef = useRef<Promise<void>>(Promise.resolve());
   const directorBackfillSignatureRef = useRef<string | null>(null);
   const gameplayBackfillSignatureRef = useRef<string | null>(null);
+  const persistenceScopeRef = useRef({ scenarioId: null as string | null, epoch: 0, mounted: false });
+  // This is live-view synchronization. Completed gameplay settlement belongs
+  // to backend authority, not automatic uploads of the browser's cached meta.
+  const persistenceTarget = !isReplayMode && id && scenario?.id === id
+    && (scenario.status === 'parsing' || scenario.status === 'simulating')
+    ? id
+    : null;
+  const isTerminalScenario = scenario?.status === 'done'
+    || scenario?.status === 'error'
+    || scenario?.status === 'cancelled';
 
+  useLayoutEffect(() => {
+    const scope = persistenceScopeRef.current;
+    if (scope.scenarioId !== persistenceTarget) {
+      scope.scenarioId = persistenceTarget;
+      scope.epoch += 1;
+    }
+    scope.mounted = true;
+    return () => { scope.mounted = false; };
+  }, [persistenceTarget]);
+
+  // A status-only terminal event can retain an older scenario snapshot. Keep
+  // accepted backend revisions until the final settlement snapshot catches up.
   const backendDirectorState = isReplayMode
     ? backendDirectorOverrideState
-    : (backendDirectorOverrideState ?? scenario?.director_state ?? null);
+    : isTerminalScenario
+      && getStateRevision(scenario?.director_state) >= getStateRevision(backendDirectorOverrideState)
+      ? scenario?.director_state ?? null
+      : (backendDirectorOverrideState ?? scenario?.director_state ?? null);
   const backendGameplayState = isReplayMode
     ? backendGameplayOverrideState
-    : (backendGameplayOverrideState ?? scenario?.gameplay_state ?? null);
+    : isTerminalScenario
+      && getStateRevision(scenario?.gameplay_state) >= getStateRevision(backendGameplayOverrideState)
+      ? scenario?.gameplay_state ?? null
+      : (backendGameplayOverrideState ?? scenario?.gameplay_state ?? null);
 
   useEffect(() => {
     directorRevisionRef.current = getStateRevision(backendDirectorState);
@@ -411,9 +439,14 @@ export function useSimulationDirectorState({
     nextMeta: NonNullable<typeof scenarioMeta>,
     changedSections: DirectorPersistChangedSections = ALL_DIRECTOR_SECTIONS_CHANGED,
   ) => {
-    if (!id || isReplayMode) return;
+    if (!id || !persistenceTarget) return;
+    const scope = persistenceScopeRef.current;
+    const epoch = scope.epoch;
+    const canPersist = () => scope.mounted && scope.scenarioId === id && scope.epoch === epoch;
+    if (!canPersist()) return;
     const desiredState = scenarioMetaToDirectorState(nextMeta);
     const persistTask = async () => {
+      if (!canPersist()) return;
       const baseState = directorStateRef.current;
       const nextState = withDirectorRevision(
         mergeDirectorStateForPersist(baseState, desiredState, changedSections),
@@ -425,11 +458,13 @@ export function useSimulationDirectorState({
       }
       try {
         const persisted = await upsertScenarioDirectorState(id, nextState);
+        if (!canPersist()) return;
         directorRevisionRef.current = getStateRevision(persisted);
         directorStateRef.current = persisted;
         setBackendDirectorOverrideState(persisted);
         return;
       } catch (err) {
+        if (!canPersist()) return;
         if (!(
           isApiError(err)
           && err.status === 409
@@ -440,6 +475,7 @@ export function useSimulationDirectorState({
         }
 
         const latest = await getScenarioDirectorState(id).catch(() => null);
+        if (!canPersist()) return;
         if (latest) {
           directorRevisionRef.current = getStateRevision(latest);
           directorStateRef.current = latest;
@@ -454,12 +490,15 @@ export function useSimulationDirectorState({
           }
           try {
             const persisted = await upsertScenarioDirectorState(id, retryState);
+            if (!canPersist()) return;
             directorRevisionRef.current = getStateRevision(persisted);
             directorStateRef.current = persisted;
             setBackendDirectorOverrideState(persisted);
             return;
           } catch (retryErr) {
+            if (!canPersist()) return;
             const fallbackLatest = await getScenarioDirectorState(id).catch(() => null);
+            if (!canPersist()) return;
             if (fallbackLatest) {
               directorRevisionRef.current = getStateRevision(fallbackLatest);
               directorStateRef.current = fallbackLatest;
@@ -478,28 +517,36 @@ export function useSimulationDirectorState({
     const queued = directorPersistChainRef.current.then(persistTask, persistTask);
     directorPersistChainRef.current = queued.catch(() => undefined).then(() => undefined);
     await queued;
-  }, [id, isReplayMode]);
+  }, [id, persistenceTarget]);
 
   const persistGameplayState = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
-    if (!id || isReplayMode) return;
+    if (!id || !persistenceTarget) return;
+    const scope = persistenceScopeRef.current;
+    const epoch = scope.epoch;
+    const canPersist = () => scope.mounted && scope.scenarioId === id && scope.epoch === epoch;
+    if (!canPersist()) return;
     const desiredState = scenarioMetaToGameplayState(nextMeta);
     const persistTask = async () => {
+      if (!canPersist()) return;
       const nextState = {
         ...desiredState,
         revision: gameplayRevisionRef.current,
       };
       try {
         const persisted = await upsertScenarioGameplayState(id, nextState);
+        if (!canPersist()) return;
         gameplayRevisionRef.current = getStateRevision(persisted);
         setBackendGameplayOverrideState(persisted);
         return;
       } catch (err) {
+        if (!canPersist()) return;
         if (!(isApiError(err) && err.status === 409)) {
           console.warn('[GameplayState] Failed to persist backend state', err);
           return;
         }
 
         const latest = await getScenarioGameplayState(id).catch(() => null);
+        if (!canPersist()) return;
         if (latest) {
           gameplayRevisionRef.current = getStateRevision(latest);
           if (areScenarioGameplayStatesEquivalent(desiredState, latest)) {
@@ -509,11 +556,14 @@ export function useSimulationDirectorState({
           const retryState = mergeGameplayStateForConflict(desiredState, latest);
           try {
             const persisted = await upsertScenarioGameplayState(id, retryState);
+            if (!canPersist()) return;
             gameplayRevisionRef.current = getStateRevision(persisted);
             setBackendGameplayOverrideState(persisted);
             return;
           } catch (retryErr) {
+            if (!canPersist()) return;
             const fallbackLatest = await getScenarioGameplayState(id).catch(() => null);
+            if (!canPersist()) return;
             if (fallbackLatest) {
               gameplayRevisionRef.current = getStateRevision(fallbackLatest);
               setBackendGameplayOverrideState(fallbackLatest);
@@ -531,10 +581,10 @@ export function useSimulationDirectorState({
     const queued = gameplayPersistChainRef.current.then(persistTask, persistTask);
     gameplayPersistChainRef.current = queued.catch(() => undefined).then(() => undefined);
     await queued;
-  }, [id, isReplayMode]);
+  }, [id, persistenceTarget]);
 
   useEffect(() => {
-    if (isReplayMode) return;
+    if (!persistenceTarget) return;
     if (!id || !storedScenarioMeta) return;
     const desiredState = scenarioMetaToDirectorState(storedScenarioMeta);
     if (!hasMeaningfulScenarioDirectorState(desiredState)) return;
@@ -559,10 +609,10 @@ export function useSimulationDirectorState({
         directorBackfillSignatureRef.current = null;
       }
     };
-  }, [backendDirectorState, id, isReplayMode, persistDirectorMeta, storedScenarioMeta]);
+  }, [backendDirectorState, id, persistenceTarget, persistDirectorMeta, storedScenarioMeta]);
 
   useEffect(() => {
-    if (isReplayMode) return;
+    if (!persistenceTarget) return;
     if (!id || !storedScenarioMeta) return;
     if (hasScenarioGameplayAuthority(backendGameplayState)) {
       gameplayBackfillSignatureRef.current = null;
@@ -586,7 +636,7 @@ export function useSimulationDirectorState({
         gameplayBackfillSignatureRef.current = null;
       }
     };
-  }, [backendGameplayState, id, isReplayMode, persistGameplayState, storedScenarioMeta]);
+  }, [backendGameplayState, id, persistenceTarget, persistGameplayState, storedScenarioMeta]);
 
   const commitmentDraftBranchId = useMemo(() => {
     if (scenarioMeta?.commitment.active && scenarioMeta.commitment.branchId) {

@@ -121,13 +121,10 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
     doc.addEventListener('keydown', handleKeyDown);
     return () => {
       doc.removeEventListener('keydown', handleKeyDown);
+      const wasTopmost = activeTrapsStack[activeTrapsStack.length - 1] === container;
       const idx = activeTrapsStack.indexOf(container);
       if (idx !== -1) {
         activeTrapsStack.splice(idx, 1);
-      }
-      const previous = previouslyFocusedRef.current;
-      if (previous && typeof previous.focus === 'function') {
-        previous.focus();
       }
       for (const { element, inert, ariaHidden } of isolatedSiblings) {
         if (inert) {
@@ -139,6 +136,20 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
           element.removeAttribute('aria-hidden');
         } else {
           element.setAttribute('aria-hidden', ariaHidden);
+        }
+      }
+      // Browsers refuse focus while the opener is still inside an inert subtree.
+      const previous = previouslyFocusedRef.current;
+      const remainingTrap = activeTrapsStack[activeTrapsStack.length - 1];
+      if (wasTopmost) {
+        if (
+          previous?.isConnected
+          && isFocusable(previous)
+          && (!remainingTrap || remainingTrap.contains(previous) || previous.matches(FOCUS_TRAP_EXEMPT_SELECTOR))
+        ) {
+          previous.focus({ preventScroll: true });
+        } else if (remainingTrap?.isConnected) {
+          (getFocusable(remainingTrap, doc)[0] ?? remainingTrap).focus({ preventScroll: true });
         }
       }
       previouslyFocusedRef.current = null;

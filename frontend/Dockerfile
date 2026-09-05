@@ -28,6 +28,11 @@ server {
 
     # Proxy API + WebSocket to backend
     location /api/ {
+        # Snapshot files may be 50 MiB; allow bounded multipart framing too.
+        # Individual endpoints still enforce their narrower file limits.
+        client_max_body_size 51m;
+        # Forward report/conversation SSE progress without proxy buffering.
+        proxy_buffering off;
         proxy_pass         http://backend:18927;
         proxy_set_header   Host $host;
         proxy_set_header   X-Real-IP $remote_addr;

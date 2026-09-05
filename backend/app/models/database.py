@@ -226,6 +226,20 @@ class AgentMessage(SQLModel, table=True):
     round: Optional["Round"] = Relationship(back_populates="messages")
 
 
+class ResourceDeletion(SQLModel, table=True):
+    """Permanent write tombstone and retryable cross-store deletion receipt."""
+
+    __tablename__ = "resource_deletion"
+
+    resource_type: str = Field(primary_key=True)
+    resource_id: str = Field(primary_key=True)
+    user_id: str = ""
+    status: str = Field(default="pending", index=True)
+    attempts: int = 0
+    created_at: datetime = Field(default_factory=_now)
+    completed_at: Optional[datetime] = None
+
+
 class Round(SQLModel, table=True):
     """A single simulation round within a branch."""
 
@@ -383,17 +397,35 @@ _engine = None
 _engine_lock = Lock()
 
 
+@event.listens_for(Session, "before_commit")
+def _fence_runtime_commit(session):
+    from app.services.resource_deletion import begin_database_commit
+
+    begin_database_commit(session)
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _release_runtime_commit_fence(session, transaction):
+    from app.services.resource_deletion import end_database_commit
+
+    end_database_commit(session, transaction)
+
+
 def get_engine():
     global _engine
     if _engine is None:
         from app.config import settings
+        from app.services.resource_deletion import resource_epoch, resource_writes_stopping
 
         with _engine_lock:
             if _engine is None:
+                if resource_writes_stopping():
+                    raise RuntimeError("Database runtime has stopped")
                 extra_kwargs: dict = {}
                 if settings.DATABASE_URL.startswith("sqlite"):
                     extra_kwargs["connect_args"] = {"timeout": 5}
                 _engine = create_engine(settings.DATABASE_URL, echo=False, **extra_kwargs)
+                _engine._swarmoracle_resource_epoch = resource_epoch()
                 if settings.DATABASE_URL.startswith("sqlite"):
                     try:
 
@@ -414,6 +446,8 @@ def dispose_engine():
     global _engine
     with _engine_lock:
         if _engine is not None:
+            # Pool recycling (including init_db) is not a runtime shutdown;
+            # independent connections remain valid until the explicit stop.
             _engine.dispose()
             _engine = None
             logger.info("Database engine disposed.")
@@ -750,6 +784,9 @@ def _init_db_lightweight() -> None:
 def init_db():
     """Apply Alembic migrations when available, otherwise fall back to lightweight sync."""
     from app.config import settings
+    from app.services.resource_deletion import resume_resource_writes
+
+    resume_resource_writes()
 
     alembic_runtime = _load_alembic_runtime()
     if alembic_runtime is None:

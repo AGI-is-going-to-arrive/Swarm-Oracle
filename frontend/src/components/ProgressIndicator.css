@@ -79,11 +79,9 @@
 
 /* ── Active state ──────────────────────────────────────── */
 .progress-indicator__step--active {
-  background: var(--accent-primary, #6366f1);
+  background: var(--color-primary, #c61583);
   color: #ffffff;
-  border-color: var(--accent-primary, #6366f1);
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary, #6366f1) 20%, transparent);
+  border-color: var(--color-primary, #c61583);
 }
 
 .progress-indicator__step--active .progress-indicator__bullet {
@@ -93,13 +91,13 @@
 
 /* ── Completed state ───────────────────────────────────── */
 .progress-indicator__step--completed {
-  color: var(--success-text, #5eead4);
-  background: var(--success-bg, rgba(20, 184, 166, 0.12));
-  border-color: var(--success-border, rgba(20, 184, 166, 0.32));
+  color: var(--color-success-text, #004a12);
+  background: var(--color-success-bg, #c9f1d0);
+  border-color: var(--color-success-border, #88ca95);
 }
 
 .progress-indicator__step--completed .progress-indicator__bullet {
-  background: var(--success-text, #14b8a6);
+  background: var(--color-success-text, #004a12);
   color: #ffffff;
 }
 
@@ -127,7 +125,7 @@
 }
 
 .progress-indicator__connector--completed {
-  background: var(--success-text, #14b8a6);
+  background: var(--color-success-text, #004a12);
   opacity: 0.55;
 }
 

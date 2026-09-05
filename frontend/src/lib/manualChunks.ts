@@ -4,6 +4,16 @@ export function resolveManualChunk(id: string): string | undefined {
   if (id.includes('/phaser/')) return 'phaser';
   if (id.includes('html2canvas')) return 'capture-html';
   if (id.includes('gif.js')) return 'capture-gif';
+  // GFM is imported only after detecting regex lookbehind support. Keeping
+  // its parser extensions in vendor would eagerly parse them on old Safari.
+  // Shared React, core Markdown, and sanitization dependencies stay in vendor.
+  if (
+    id.includes('/remark-gfm/')
+    || id.includes('/mdast-util-gfm')
+    || id.includes('/micromark-extension-gfm')
+  ) {
+    return 'markdown-gfm';
+  }
   // Keep the whole G6 runtime isolated from the eager app shell. Routing only
   // @antv/g6 was insufficient because Rollup still left a large set of direct
   // @antv/* support packages in the shared vendor chunk, which regressed the

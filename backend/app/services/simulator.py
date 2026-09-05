@@ -3718,7 +3718,19 @@ async def _run_simulation_impl(
                             await viz_push(viz_interv)
 
                 # 1) Gather agent messages — each pushed to frontend immediately
-                round_id = _create_round(engine, current_branch_id, round_num)
+                round_id = _create_round(
+                    engine,
+                    current_branch_id,
+                    round_num,
+                    scenario_id=(
+                        scenario_id
+                        if runtime_lease is not None or current_runtime_lease is not None
+                        else None
+                    ),
+                    runtime_lease=(
+                        current_runtime_lease() if current_runtime_lease else runtime_lease
+                    ),
+                )
                 if round_num == 1:
                     from app.services.initial_social_feed import (
                         materialize_initial_social_feed,
@@ -4385,9 +4397,34 @@ async def _run_simulation_impl(
             else:
                 _persist_result_quality_verdict(engine, scenario_id, verdict)
 
-    if branch_id is None and settings.FEATURE_RESULT_REPORT and not verdict_only_multi_run:
+    # ── Done ─────────────────────────────────────────
+    # Cleanup pending interventions for this scenario (prevent memory leak)
+    if branch_id is None:
+        await clear_pending_interventions_for_scenario(scenario_id)
+    else:
+        await clear_pending_interventions_for_branch(scenario_id, branch_id)
+
+    scenario_finished = reconcile_scenario_done_if_complete(
+        engine,
+        scenario_id,
+        ignore_runtime_lock=True,
+    )
+    if scenario_finished and settings.FEATURE_RESULT_REPORT and not verdict_only_multi_run:
         try:
-            chosen_report_branch = _pick_theater_ending_payload(final_branch_payloads)
+            with Session(engine) as report_session:
+                report_branches = [
+                    branch.model_dump(mode="json")
+                    for branch in report_session.exec(
+                        select(Branch).where(Branch.scenario_id == scenario_id)
+                    ).all()
+                ]
+            completed_report_branches = [
+                branch for branch in report_branches
+                if branch["status"] == BranchStatus.COMPLETED.value
+            ]
+            chosen_report_branch = _pick_theater_ending_payload(
+                _terminal_branch_candidates(completed_report_branches, report_branches),
+            )
             report_branch_id = (
                 str(chosen_report_branch.get("id") or "") if chosen_report_branch else ""
             )
@@ -4446,18 +4483,6 @@ async def _run_simulation_impl(
                 _scrub_sensitive_text(str(exc)),
             )
 
-    # ── Done ─────────────────────────────────────────
-    # Cleanup pending interventions for this scenario (prevent memory leak)
-    if branch_id is None:
-        await clear_pending_interventions_for_scenario(scenario_id)
-    else:
-        await clear_pending_interventions_for_branch(scenario_id, branch_id)
-
-    scenario_finished = reconcile_scenario_done_if_complete(
-        engine,
-        scenario_id,
-        ignore_runtime_lock=True,
-    )
     if scenario_finished and viz_mapper is not None:
         chosen_ending = _pick_theater_ending_payload(
             final_branch_payloads,
@@ -8371,8 +8396,39 @@ def _get_or_create_root_branch(engine, scenario_id: str, *, title: str) -> str:
     return _create_branch(engine, scenario_id, title=title, probability=1.0)
 
 
-def _create_round(engine, branch_id, round_number) -> str:
+def _create_round(
+    engine,
+    branch_id: str,
+    round_number: int,
+    *,
+    scenario_id: str | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
+) -> str:
+    from app.services.runtime_lock import begin_serialized_write, runtime_lease_owned_in_session
+
     with Session(engine) as session:
+        # Reserve the writer before the get-or-create read. Lease takeover,
+        # cancellation and competing creators cannot cross this transaction.
+        begin_serialized_write(session)
+        branch = session.get(Branch, branch_id)
+        owner_id = scenario_id or (branch.scenario_id if branch is not None else "")
+        scenario = session.get(Scenario, owner_id)
+        if (
+            scenario is None
+            or branch is None
+            or branch.scenario_id != owner_id
+            or branch.status != BranchStatus.ACTIVE
+            or scenario.status not in {ScenarioStatus.PARSING, ScenarioStatus.SIMULATING}
+            or (scenario_id is not None and scenario.status != ScenarioStatus.SIMULATING)
+        ):
+            raise RuntimeLeaseLost(owner_id)
+        if (
+            (runtime_lease is not None or scenario_id is not None)
+            and not runtime_lease_owned_in_session(
+                session, runtime_lease, lock_key=simulation_lock_key(owner_id),
+            )
+        ):
+            raise RuntimeLeaseLost(owner_id)
         existing = session.exec(
             select(Round).where(
                 Round.branch_id == branch_id,
@@ -8384,7 +8440,6 @@ def _create_round(engine, branch_id, round_number) -> str:
         r = Round(branch_id=branch_id, round_number=round_number)
         session.add(r)
         session.commit()
-        session.refresh(r)
         return r.id
 
 

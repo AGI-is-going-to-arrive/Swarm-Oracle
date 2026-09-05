@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import and_, case, distinct, false, func, or_, tuple_
+from sqlalchemy import String, and_, case, cast, distinct, false, func, or_, tuple_
 from sqlmodel import Session, select
 
 from app.models import (
@@ -16,6 +18,8 @@ from app.models import (
     Branch,
     FactionSnapshot,
     Round,
+    Scenario,
+    SimulationAction,
 )
 from app.services.agent_message_metadata import (
     METADATA_UNAVAILABLE_EMOTION_PREFIX,
@@ -23,6 +27,61 @@ from app.services.agent_message_metadata import (
 )
 
 _REPORT_SCOPE_AUTHORITY = object()
+REPORT_SCOPE_FINGERPRINT_KEY = "full_report_scope_fingerprint"
+
+
+def report_result_fingerprint(session: Session, scenario_id: str) -> str:
+    """Hash the durable inputs used by the reducer and report context.
+
+    Report output, runtime leases, progress and identity lifecycle bookkeeping
+    are excluded so incremental report writes cannot invalidate themselves.
+    Callers needing compare-and-write semantics reserve the SQLite writer first.
+    """
+    row = session.exec(select(
+        Scenario.question, Scenario.web_context_json, cast(Scenario.parsed_context, String),
+    ).where(Scenario.id == scenario_id)).first()
+    if row is None:
+        raise LookupError("Scenario not found while resolving report scope")
+    question, web_context_json, raw_context = row
+    try:
+        parsed = json.loads(raw_context) if raw_context else {}
+    except (TypeError, ValueError):
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    digest = hashlib.sha256()
+
+    def add(value: Any) -> None:
+        digest.update(json.dumps(
+            value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str,
+        ).encode())
+        digest.update(b"\n")
+
+    add({
+        "version": 1, "question": question,
+        "web_context_json": web_context_json,
+        "language": parsed.get("_language"), "result_quality": parsed.get("result_quality"),
+    })
+    branch_ids = select(Branch.id).where(Branch.scenario_id == scenario_id)
+    round_ids = select(Round.id).where(Round.branch_id.in_(branch_ids))
+    for model, predicate in (
+        (Branch, Branch.scenario_id == scenario_id),
+        (Round, Round.branch_id.in_(branch_ids)),
+        (AgentMessage, AgentMessage.round_id.in_(round_ids)),
+        (AgentStateFrame, AgentStateFrame.scenario_id == scenario_id),
+        (AgentRelationEdge, AgentRelationEdge.scenario_id == scenario_id),
+        (FactionSnapshot, FactionSnapshot.scenario_id == scenario_id),
+        (SimulationAction, SimulationAction.scenario_id == scenario_id),
+    ):
+        add(model.__tablename__)
+        for row in session.exec(select(model).where(predicate).order_by(model.id)).all():
+            add(row.model_dump(mode="json"))
+    add("agents")
+    for agent in session.exec(
+        select(Agent).where(Agent.scenario_id == scenario_id).order_by(Agent.id),
+    ).all():
+        add({key: getattr(agent, key) for key in ("id", "name", "role", "tier", "persona")})
+    return f"v1:{digest.hexdigest()}"
 
 
 def _require_nonblank_id(value: object, *, label: str) -> None:
@@ -52,6 +111,8 @@ class ReportLineageScope:
     scenario_id: str
     target_branch_id: str
     rounds: tuple[ReportRoundRef, ...]
+    result_fingerprint: str | None
+    runtime_epoch: int | None
     _authority: object = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -105,11 +166,15 @@ def _create_report_lineage_scope(
     scenario_id: str,
     target_branch_id: str,
     rounds: tuple[ReportRoundRef, ...],
+    result_fingerprint: str | None = None,
+    runtime_epoch: int | None = None,
 ) -> ReportLineageScope:
     scope = object.__new__(ReportLineageScope)
     object.__setattr__(scope, "scenario_id", scenario_id)
     object.__setattr__(scope, "target_branch_id", target_branch_id)
     object.__setattr__(scope, "rounds", rounds)
+    object.__setattr__(scope, "result_fingerprint", result_fingerprint)
+    object.__setattr__(scope, "runtime_epoch", runtime_epoch)
     object.__setattr__(scope, "_authority", _REPORT_SCOPE_AUTHORITY)
     scope.__post_init__()
     return scope

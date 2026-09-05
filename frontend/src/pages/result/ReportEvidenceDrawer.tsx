@@ -48,7 +48,7 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
 
   // useFocusTrap traps Tab/Shift+Tab inside the dialog and restores focus to the
   // previously-focused trigger on close.
-  useFocusTrap(drawerRef, active);
+  useFocusTrap(drawerRef, active, true);
 
   useEffect(() => {
     if (!active) return;
@@ -56,25 +56,15 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
       if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', handleEscape);
+    const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     // Move initial focus into the dialog (the trap restores it to the trigger on close).
     closeButtonRef.current?.focus();
 
-    // Lock background container (#root)
-    const rootEl = document.getElementById('root');
-    if (rootEl) {
-      rootEl.setAttribute('aria-hidden', 'true');
-      rootEl.setAttribute('inert', '');
-    }
-
     return () => {
       document.removeEventListener('keydown', handleEscape);
-      document.body.style.overflow = '';
-      if (rootEl) {
-        rootEl.removeAttribute('aria-hidden');
-        rootEl.removeAttribute('inert');
-      }
+      document.body.style.overflow = previousOverflow;
     };
   }, [active, onClose]);
 
@@ -102,6 +92,8 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
         ref={drawerRef}
         role="dialog"
         aria-modal="true"
+        aria-hidden={!active}
+        inert={!active}
         aria-labelledby="evidence-drawer-title"
         aria-describedby="evidence-drawer-description"
         className={`fixed right-0 top-0 bottom-0 w-full max-w-md bg-[color:var(--bg-elevated)] shadow-2xl z-50 flex flex-col transform transition-transform duration-300 ease-in-out motion-reduce:transition-none forced-colors:border ${

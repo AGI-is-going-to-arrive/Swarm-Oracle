@@ -896,12 +896,19 @@ export default function ResultView() {
           );
           const reportMd = [
             `\n\n# ${title}`,
+            storyData.full_report_stale === true
+              ? `\n> **${translateReportCopy('result.report.staleReportTitle', 'Saved report snapshot')}**: ${translateReportCopy('result.report.staleReportDesc', 'This saved report is not verified against the current simulation. Its conclusions are historical and do not replace the current result.')}`
+              : '',
             `\n**${reportContentIsZh ? '报告状态' : 'Report status'}**: ${statusText}`,
             summary ? `\n**${reportContentIsZh ? '摘要' : 'Summary'}**: ${summary}` : '',
             usesPrimaryReportLanguage
-              ? `\n**${reportContentIsZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`
+              ? `\n**${storyData.full_report_stale === true
+                ? translateReportCopy('result.report.archivedVerdict', 'Archived verdict')
+                : reportContentIsZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`
               : '',
-            `\n**${reportContentIsZh ? '置信度' : 'Confidence'}**: ${confidenceLevel}${confidenceBasis ? ` — ${confidenceBasis}` : ''}`,
+            storyData.full_report_stale !== true
+              ? `\n**${reportContentIsZh ? '置信度' : 'Confidence'}**: ${confidenceLevel}${confidenceBasis ? ` — ${confidenceBasis}` : ''}`
+              : '',
             `\n**${reportContentIsZh ? '免责声明' : 'Disclaimer'}**: ${disclaimerText}`,
             sections.join('\n'),
             evidence.length ? `\n## ${reportContentIsZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',

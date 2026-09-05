@@ -85,10 +85,12 @@ describe('release-signoff round7 checks', () => {
     expect(__test__.commandTimeoutMs).toBeGreaterThanOrEqual(60_000);
     expect(__test__.captureTimeoutMs).toBeGreaterThanOrEqual(5_000);
     expect(__test__.buildSpawnSyncOptions({}, false)).toMatchObject({
+      shell: false,
       timeout: __test__.commandTimeoutMs,
       killSignal: 'SIGKILL',
     });
     expect(__test__.buildSpawnSyncOptions({}, true)).toMatchObject({
+      shell: false,
       timeout: __test__.captureTimeoutMs,
       killSignal: 'SIGKILL',
     });
@@ -105,7 +107,28 @@ describe('release-signoff round7 checks', () => {
     expect(__test__.scriptContractTests).toEqual(expect.arrayContaining([
       'scripts/e2e-prediction-modal.test.mjs',
       'scripts/e2e-result-report-suite.test.mjs',
+      'scripts/release-command-runtime.test.mjs',
     ]));
+  });
+
+  it.each([
+    'frontend/output/e2e',
+    'frontend\\output\\e2e',
+    '.\\frontend\\output\\e2e',
+    './frontend/output/e2e',
+    'output\\e2e',
+  ])('resolves Windows artifact path %s without duplicating frontend', (inputPath) => {
+    expect(__test__.resolveFrontendPath(inputPath, path.win32, 'C:\\repo & space\\frontend'))
+      .toBe('C:\\repo & space\\frontend\\output\\e2e');
+  });
+
+  it('preserves absolute paths and frontend-relative POSIX artifact paths', () => {
+    expect(__test__.resolveFrontendPath('C:\\artifacts & space\\e2e', path.win32, 'C:\\repo\\frontend'))
+      .toBe('C:\\artifacts & space\\e2e');
+    expect(__test__.resolveFrontendPath('./frontend/output/e2e', path.posix, '/repo/frontend'))
+      .toBe('/repo/frontend/output/e2e');
+    expect(__test__.resolveFrontendPath('frontend/../output/e2e', path.posix, '/repo/frontend'))
+      .toBe('/repo/output/e2e');
   });
 
   it('exports the five required round7 check step ids', () => {
@@ -164,9 +187,11 @@ describe('release-signoff round7 checks', () => {
   });
 
   it('builds the late-branches prediction step with the expected command line', () => {
+    const outputRoot = path.join(tmpdir(), 'release-signoff');
+    const artifactDir = path.join(outputRoot, 'predict-late-branches');
     const specs = __test__.buildPredictionFocusedStepSpecs(
       'http://127.0.0.1:18930',
-      '/tmp/release-signoff',
+      outputRoot,
       true,
     );
 
@@ -179,21 +204,23 @@ describe('release-signoff round7 checks', () => {
           '--url',
           'http://127.0.0.1:18930',
           '--output-dir',
-          '/tmp/release-signoff/predict-late-branches',
+          artifactDir,
           '--headless',
         ],
-        artifactDir: '/tmp/release-signoff/predict-late-branches',
-        resultFile: '/tmp/release-signoff/predict-late-branches/result.json',
+        artifactDir,
+        resultFile: path.join(artifactDir, 'result.json'),
       },
     ]);
   });
 
   it('prediction helper can register the late-branches step through a mock runStep', () => {
+    const outputRoot = path.join(tmpdir(), 'release-signoff');
+    const artifactDir = path.join(outputRoot, 'predict-late-branches');
     const seen: Array<{ id: string; commandArgs: string[]; artifactDir?: string | null; resultFile?: string | null }> = [];
 
     __test__.registerPredictionFocusedSteps({
       baseUrl: 'http://127.0.0.1:18930',
-      outputRoot: '/tmp/release-signoff',
+      outputRoot,
       headless: true,
       nodeCommand: 'node',
       runStep: (
@@ -224,11 +251,11 @@ describe('release-signoff round7 checks', () => {
           '--url',
           'http://127.0.0.1:18930',
           '--output-dir',
-          '/tmp/release-signoff/predict-late-branches',
+          artifactDir,
           '--headless',
         ],
-        artifactDir: '/tmp/release-signoff/predict-late-branches',
-        resultFile: '/tmp/release-signoff/predict-late-branches/result.json',
+        artifactDir,
+        resultFile: path.join(artifactDir, 'result.json'),
       },
     ]);
   });

@@ -643,6 +643,8 @@ export interface StoryData {
   verdict_confidence?: 'high' | 'medium' | 'low' | null;
   verdict_confidence_kind?: 'model_self_rating' | null;
   full_report?: FullReport | FullReportTruncatedMarker | null;
+  /** Saved report is readable but not current authority; absent on older servers. */
+  full_report_stale?: boolean;
   /** Stage 1 world outcomes (§8.2); never nested under full_report. */
   world_outcomes?: WorldOutcomesProjection | null;
 }

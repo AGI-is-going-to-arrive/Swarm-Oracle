@@ -9,6 +9,7 @@ Extracted modules:
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import io
 import json
@@ -111,7 +112,6 @@ from app.services.result_report.reducer import resolve_report_lineage_scope
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
 from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
-from app.services.vector_store import get_vector_store
 from app.services.web_context import (
     resolve_web_search_intensity_config,
     validate_web_search_base_url,
@@ -2669,6 +2669,16 @@ async def get_story(
         )
         if isinstance(full_report, dict):
             full_report = _normalize_story_full_report_status(scenario_id, full_report)
+        from app.services.result_report.queries import (
+            REPORT_SCOPE_FINGERPRINT_KEY,
+            report_result_fingerprint,
+        )
+
+        full_report_stale = isinstance(full_report, dict) and (
+            scenario.status not in {ScenarioStatus.NARRATING, ScenarioStatus.DONE}
+            or parsed_context.get(REPORT_SCOPE_FINGERPRINT_KEY)
+            != report_result_fingerprint(session, scenario_id)
+        )
         raw_branch_answers = result_quality.get("branch_question_answers")
         branch_question_answers = raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
         verdict_text = str(result_quality.get("verdict") or "").strip() or None
@@ -2698,6 +2708,7 @@ async def get_story(
         # do not show a conflicting model self-rating above it.
         if (
             isinstance(full_report, dict)
+            and not full_report_stale
             and full_report.get("status") in {"complete", "partial"}
             and full_report.get("target_branch_id") in {branch.id for branch in branches}
         ):
@@ -2734,11 +2745,12 @@ async def get_story(
             "verdict_confidence": verdict_confidence,
             "verdict_confidence_kind": verdict_confidence_kind,
             "full_report": full_report,
+            "full_report_stale": full_report_stale,
             "world_outcomes": project_world_outcomes_v1(
                 session,
                 scenario=scenario,
                 branches=list(branches),
-                full_report=full_report,
+                full_report=full_report if not full_report_stale else None,
             ),
             "branches": [
                 StoryBranch(
@@ -3144,6 +3156,11 @@ async def delete_scenario(
 
     BE-2: orchestration moved to ``app.services.scenario_deletion``.
     """
+    from app.services.resource_deletion import (
+        enqueue_resource_deletion,
+        reconcile_resource_deletion,
+    )
+    from app.services.runtime_lock import begin_serialized_write
     from app.services.scenario_deletion import (
         ScenarioDeleteIntegrityError,
         delete_scenario_cascade,
@@ -3151,6 +3168,7 @@ async def delete_scenario(
 
     engine = get_engine()
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = require_owned_scenario(session, scenario_id, principal)
 
         # M-7 fix: Allow deleting PARSING/ERROR/DONE scenarios
@@ -3181,6 +3199,7 @@ async def delete_scenario(
         # service's ownership check stays deterministic in dev mode (where
         # ``principal`` may be ``None`` because SESSION_SECRET is unset).
         effective_user_id = principal.subject if principal is not None else (scenario.user_id or "")
+        enqueue_resource_deletion(session, "scenario", scenario_id, effective_user_id)
 
         # Campaign artifact cleanup depends on the scenario row still being
         # present, so run it before the service DELETEs it.
@@ -3232,10 +3251,15 @@ async def delete_scenario(
             session.info.pop("scenario_deleted_turn_ids", []),
         )
 
-    # Clean up ChromaDB collection (best-effort, outside the transaction).
-    get_vector_store().delete_collection(scenario_id)
+    cleaned = await asyncio.to_thread(reconcile_resource_deletion, "scenario", scenario_id)
 
     logger.info("Deleted scenario %s and all related data", scenario_id)
+    if not cleaned:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=202, content={
+            "status": "deleted", "scenario_id": scenario_id, "cleanup_pending": True,
+        })
     return {"status": "deleted", "scenario_id": scenario_id}
 
 

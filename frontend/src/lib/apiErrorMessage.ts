@@ -87,6 +87,8 @@ export function getLocalizedApiErrorMessage(
       return t('conversation.error.byok_invalid');
     case 'LLM_GENERATION_FAILED':
       return t('common.api_errors.llm_generation_failed');
+    case 'WEB_SEARCH_BASE_URL_NOT_ALLOWED':
+      return t('common.api_errors.web_search_base_url_not_allowed');
     case 'SIMULATION_TIMEOUT':
     case 'SIMULATION_RUNTIME_FAILED':
     case 'SCENARIO_PARSE_FAILED':

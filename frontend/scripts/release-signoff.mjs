@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveSpawnCommand } from "./lib/commandRuntime.mjs";
 import {
   assertFrontendRoutesReady,
   buildPhase3BatchAPreflightPaths,
@@ -94,6 +95,7 @@ const SCRIPT_CONTRACT_TESTS = [
   "scripts/e2e-prediction-modal.test.mjs",
   "scripts/e2e-result-report-suite.test.mjs",
   "scripts/playwrightTeardown.test.mjs",
+  "scripts/release-command-runtime.test.mjs",
 ];
 const BACKEND_PYTEST_ARGS = ["-m", "pytest", "-q"];
 const BACKEND_RUFF_ARGS = ["-m", "ruff", "check", "app/", "tests/"];
@@ -130,13 +132,17 @@ function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-function resolveFrontendPath(inputPath) {
-  if (path.isAbsolute(inputPath)) return inputPath;
-  const normalized = inputPath.replace(/^\.\/+/, "");
-  if (normalized === "frontend" || normalized.startsWith("frontend/")) {
-    return path.join(REPO_ROOT, normalized);
+function resolveFrontendPath(inputPath, pathApi = path, frontendRoot = FRONTEND_ROOT) {
+  if (pathApi.isAbsolute(inputPath)) return inputPath;
+  const normalized = inputPath.replace(/^(?:\.[\\/])+/u, "");
+  if (
+    normalized === "frontend"
+    || normalized.startsWith("frontend/")
+    || normalized.startsWith(`frontend${pathApi.sep}`)
+  ) {
+    return pathApi.join(pathApi.dirname(frontendRoot), normalized);
   }
-  return path.join(FRONTEND_ROOT, normalized);
+  return pathApi.join(frontendRoot, normalized);
 }
 
 function summaryPathFor(outputRoot) {
@@ -283,9 +289,7 @@ function buildSpawnSyncOptions(options = {}, capture = false) {
   return {
     cwd: options.cwd ?? FRONTEND_ROOT,
     ...(capture ? { encoding: "utf8" } : { stdio: "inherit" }),
-    // Windows needs a shell to resolve npm.cmd/npx.cmd; POSIX keeps shell:false so
-    // argv is never re-parsed by /bin/sh.
-    shell: process.platform === "win32",
+    shell: false,
     env: {
       ...process.env,
       ...options.env,
@@ -309,7 +313,8 @@ function runCommand(command, args, options) {
   if (options.dryRun) return;
 
   const spawnOptions = buildSpawnSyncOptions(options, false);
-  const result = spawnSync(command, args, spawnOptions);
+  const invocation = resolveSpawnCommand(command, args, { env: spawnOptions.env });
+  const result = spawnSync(invocation.command, invocation.args, spawnOptions);
   throwSpawnSyncError(result, rendered, spawnOptions.timeout);
 
   if (result.status !== 0) {
@@ -329,11 +334,12 @@ function serializeError(error) {
 function captureCommand(command, args, options = {}) {
   const rendered = formatCommand(command, args);
   const spawnOptions = buildSpawnSyncOptions(options, true);
-  const result = spawnSync(command, args, spawnOptions);
+  const invocation = resolveSpawnCommand(command, args, { env: spawnOptions.env });
+  const result = spawnSync(invocation.command, invocation.args, spawnOptions);
   throwSpawnSyncError(result, rendered, spawnOptions.timeout);
 
   return {
-    status: result.status ?? 0,
+    status: result.status ?? 1,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
@@ -690,6 +696,9 @@ export const __test__ = {
   buildGraphPreflightPaths,
   buildGraphFocusedVitestArgs,
   buildSpawnSyncOptions,
+  captureCommand,
+  resolveFrontendPath,
+  runCommand,
   buildRound7GraphLiveStepSpecs,
   buildFixtureSuiteStepSpecs,
   buildPredictionFocusedStepSpecs,
@@ -716,8 +725,8 @@ export const __test__ = {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+  const npmCommand = "npm";
+  const npxCommand = "npx";
   const nodeCommand = process.execPath;
 
   const crossBrowserOutput = path.join(args.outputRoot, "cross-browser");
@@ -836,6 +845,12 @@ async function main() {
         "--test",
         ...SCRIPT_CONTRACT_TESTS,
       ],
+      {
+        env: {
+          SWARM_BACKEND_PYTHON: args.backendPython,
+          SWARM_SKIP_BACKEND_CHECKS: args.includeBackendChecks ? "0" : "1",
+        },
+      },
     );
     if (args.includeBackendChecks) {
       runStep(

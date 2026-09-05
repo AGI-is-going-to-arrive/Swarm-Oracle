@@ -48,9 +48,9 @@ COPY packs/ /app/packs/
 COPY samples/ /app/samples/
 
 # W-10: provision a non-root runtime user and grant ownership of the data
-# roots before the volume is mounted, so the container does not run as
-# uid 0.  Compatibility is preserved with the original /data layout used
-# by older deployments.
+# roots before a fresh volume is mounted, so the container does not run as
+# uid 0. Existing root-owned volumes retain their ownership; upgrade them
+# explicitly using the backup-first procedure in deploy/README.md.
 RUN useradd --system --uid 1000 --user-group --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /data/db /data/chroma /data/chroma_data \
     && chown -R appuser:appuser /app /data

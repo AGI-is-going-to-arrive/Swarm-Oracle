@@ -1745,7 +1745,7 @@ async def delete_workshop_agent(
         if identity is None or identity.user_id != effective_user_id:
             raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Agent identity not found")
     try:
-        delete_custom_agent(identity_id)
+        cleaned = await asyncio.to_thread(delete_custom_agent, identity_id)
     except LookupError:
         raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Agent identity not found")
     except PermissionError as exc:
@@ -1755,6 +1755,12 @@ async def delete_workshop_agent(
             "AGENT_NOT_DELETABLE",
             str(exc) or "Generated agents cannot be deleted",
         ) from exc
+    if not cleaned:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=202, content={
+            "status": "deleted", "identity_id": identity_id, "cleanup_pending": True,
+        })
     return None
 
 

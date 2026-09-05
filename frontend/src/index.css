@@ -44,8 +44,8 @@
   --color-text-primary: oklch(20% 0.01 80);
   --color-text-secondary: #58554f;
   --color-text-secondary: oklch(45% 0.01 80);
-  --color-text-muted: #928f88;
-  --color-text-muted: oklch(65% 0.01 80);
+  --color-text-muted: #716e68;
+  --color-text-muted: oklch(54% 0.01 80);
 
   /* Borders — enables border-border-subtle, border-border-default */
   --color-border-subtle: #e1ddd7;
@@ -867,8 +867,8 @@
   --text-primary: oklch(20% 0.01 80);
   --text-secondary: #58554f;
   --text-secondary: oklch(45% 0.01 80);
-  --text-muted: #928f88;
-  --text-muted: oklch(65% 0.01 80);
+  --text-muted: #716e68;
+  --text-muted: oklch(54% 0.01 80);
 
   /* Borders (Extremely thin, minimal, no glassmorphism) */
   --border-subtle: #e1ddd7;
@@ -1508,7 +1508,7 @@ body.has-argument-map .lang-switch--global {
 .badge-pruned {
   background: rgba(215, 71, 69, 0.1);
   background: oklch(60% 0.18 25 / 0.1);
-  color: var(--color-danger);
+  color: var(--color-danger-text);
 }
 
 /* ── Scrollbar ───────────────────────────────────────────── */

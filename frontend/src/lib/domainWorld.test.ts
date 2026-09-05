@@ -249,6 +249,12 @@ describe('domainWorld helpers', () => {
     expect(localizeDomainUnit('count', true)).toBe('个');
     expect(localizeDomainUnit('count', false)).toBe('');
     expect(localizeDomainUnit('unitless', true)).toBe('');
+    expect(localizeDomainUnit('second', true)).toBe('秒');
+    expect(localizeDomainUnit('second', false)).toBe('s');
+    expect(localizeDomainUnit('basis_point', true)).toBe('基点');
+    expect(localizeDomainUnit('basis_point', false)).toBe('bp');
+    expect(localizeDomainUnit('custom_count:staff_hours', true)).toBe('staff hours');
+    expect(localizeDomainUnit('custom_count:opening_hours', false)).toBe('opening hours');
   });
 
   it('formats threshold predicates with labels and scaled currency', () => {

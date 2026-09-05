@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import en from '../i18n/locales/en.json';
+import zh from '../i18n/locales/zh.json';
 
 import {
   getApiErrorCode,
@@ -60,5 +62,23 @@ describe('apiErrorMessage helpers', () => {
 
   it('falls back for unknown errors', () => {
     expect(getLocalizedApiErrorMessage(new Error('boom'), t, 'fallback')).toBe('fallback');
+  });
+
+  it.each([en, zh])('explains a rejected search URL in each supported language', (locale) => {
+    const translate = (key: string): string => {
+      if (key === 'common.api_errors.web_search_base_url_not_allowed') {
+        return locale.translation.common.api_errors.web_search_base_url_not_allowed;
+      }
+      return key;
+    };
+    const message = getLocalizedApiErrorMessage(
+      { status: 400, code: 'WEB_SEARCH_BASE_URL_NOT_ALLOWED' },
+      translate,
+      'fallback',
+    );
+
+    expect(message).toBe(locale.translation.common.api_errors.web_search_base_url_not_allowed);
+    expect(message).not.toBe('fallback');
+    expect(message).not.toContain('common.api_errors.');
   });
 });

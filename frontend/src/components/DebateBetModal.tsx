@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   type DebatePredictionKind,
   getDebateSideLabel,
@@ -73,6 +74,13 @@ export function DebateBetModal({
   onAutomationStateChange,
 }: DebateBetModalProps) {
   const { t } = useTranslation();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const mountedRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+  const appliedPresetRef = useRef(initialSelection);
+  const titleId = useId();
+  const confidenceId = useId();
   const normalizedOptions = useMemo(
     () => normalizeAvailableOptions(availableOptions),
     [availableOptions],
@@ -93,11 +101,47 @@ export function DebateBetModal({
     normalizedOptions,
   ));
   const [confidence, setConfidence] = useState<number>(initialSelection?.confidence ?? 0.7);
-  const [error, setError] = useState<string>('');
+  const [submitError, setSubmitError] = useState<{ code: string | null } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const busy = loading || submitting;
+  const error = submitError
+    ? getLocalizedApiErrorMessage(submitError, t, t('debate.bet_error'))
+    : '';
+
+  useFocusTrap(dialogRef, true, true);
 
   useEffect(() => {
+    mountedRef.current = true;
+    (closeButtonRef.current?.disabled ? dialogRef.current : closeButtonRef.current)?.focus({ preventScroll: true });
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const handleClose = useCallback(() => {
+    if (!loading && !submitInFlightRef.current) onClose();
+  }, [loading, onClose]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      handleClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [handleClose]);
+
+  useEffect(() => {
+    const previous = appliedPresetRef.current;
+    if (
+      previous?.kind === initialSelection?.kind
+      && previous?.targetValue === initialSelection?.targetValue
+      && previous?.confidence === initialSelection?.confidence
+    ) return;
     const nextKind = resolveSupportedKind(initialSelection?.kind ?? 'winner', normalizedOptions);
     const timeoutId = window.setTimeout(() => {
+      appliedPresetRef.current = initialSelection;
       setKind(nextKind);
       setTargetValue(resolveSupportedTarget(nextKind, initialSelection?.targetValue, normalizedOptions));
       setConfidence(initialSelection?.confidence ?? 0.7);
@@ -127,7 +171,7 @@ export function DebateBetModal({
     }
   }, [kind, normalizedOptions, options, targetValue]);
 
-  const submitDisabled = loading || !targetValue || !options.includes(targetValue);
+  const submitDisabled = busy || !targetValue || !options.includes(targetValue);
 
   useEffect(() => {
     onAutomationStateChange?.({
@@ -150,24 +194,40 @@ export function DebateBetModal({
   }, [availableKinds, confidence, error, initialSelection?.kind, initialSelection?.targetValue, kind, onAutomationStateChange, options, submitDisabled, targetValue]);
 
   const handleSubmit = async () => {
-    if (submitDisabled) return;
-    setError('');
+    if (submitDisabled || submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+    setSubmitting(true);
+    setSubmitError(null);
     try {
       await onSubmit({ kind, targetValue, confidence });
     } catch (nextError) {
-      setError(getLocalizedApiErrorMessage(nextError, t, t('debate.bet_error')));
+      if (mountedRef.current) setSubmitError({ code: getApiErrorCode(nextError) });
+    } finally {
+      submitInFlightRef.current = false;
+      if (mountedRef.current) setSubmitting(false);
     }
   };
 
   return (
-    <div className="debate-modal-overlay" onClick={onClose}>
-      <div className="debate-modal" onClick={(event) => event.stopPropagation()}>
+    <div className="debate-modal-overlay" onClick={handleClose}>
+      <div
+        ref={dialogRef}
+        className="debate-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-busy={busy}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="debate-modal__header">
-          <h2>{t('debate.bet_title')}</h2>
+          <h2 id={titleId}>{t('debate.bet_title')}</h2>
           <button
+            ref={closeButtonRef}
             type="button"
             className="debate-modal__close"
-            onClick={onClose}
+            onClick={handleClose}
+            disabled={busy}
             aria-label={t('common.close')}
           >
             ✕
@@ -186,6 +246,8 @@ export function DebateBetModal({
                   key={optionKind}
                   type="button"
                   className={`mode-btn ${kind === optionKind ? 'mode-btn--active' : ''}`}
+                  aria-pressed={kind === optionKind}
+                  disabled={busy}
                   onClick={() => {
                     setKind(optionKind);
                     setTargetValue(resolveSupportedTarget(optionKind, undefined, normalizedOptions));
@@ -210,6 +272,8 @@ export function DebateBetModal({
                   key={option}
                   type="button"
                   className={`mode-btn ${targetValue === option ? 'mode-btn--active' : ''}`}
+                  aria-pressed={targetValue === option}
+                  disabled={busy}
                   onClick={() => setTargetValue(option)}
                 >
                   {kind === 'winner'
@@ -221,12 +285,13 @@ export function DebateBetModal({
           </div>
 
           <div className="debate-modal__group">
-            <label className="debate-modal__label" htmlFor="debate-confidence">
+            <label className="debate-modal__label" htmlFor={confidenceId}>
               {t('debate.bet_confidence')}
             </label>
             <input
-              id="debate-confidence"
+              id={confidenceId}
               type="range"
+              disabled={busy}
               min={0.1}
               max={1}
               step={0.1}
@@ -242,11 +307,11 @@ export function DebateBetModal({
         </div>
 
         <footer className="debate-modal__footer">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={handleClose} disabled={busy}>
             {t('common.cancel')}
           </button>
           <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={submitDisabled}>
-            {loading ? t('debate.bet_submitting') : t('debate.bet_submit')}
+            {busy ? t('debate.bet_submitting') : t('debate.bet_submit')}
           </button>
         </footer>
       </div>

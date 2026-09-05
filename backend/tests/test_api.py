@@ -4952,6 +4952,7 @@ class TestStoryEndpoint:
         assert good["insight"] == "合作很重要"
 
     def test_story_projects_world_outcomes_without_touching_full_report(self, client):
+        from app.services.result_report.builder import _persist_report_payload
         from tests.test_action_ledger import _seed_domain_projection
         from tests.test_result_report_contract import _legal_full_report
 
@@ -4997,11 +4998,16 @@ class TestStoryEndpoint:
         with Session(get_engine()) as session:
             scenario = session.get(Scenario, seeded["scenario_id"])
             assert scenario is not None
+            scenario.status = ScenarioStatus.DONE
+            branch = session.get(Branch, seeded["branch_id"])
+            branch.status = BranchStatus.COMPLETED
+            session.add(branch)
             context = dict(scenario.parsed_context or {})
             context["full_report"] = report
             scenario.parsed_context = context
             session.add(scenario)
             session.commit()
+        _persist_report_payload(seeded["scenario_id"], report)
 
         response = client.get(f"/api/scenario/{seeded['scenario_id']}/story")
 
@@ -5080,6 +5086,7 @@ class TestStoryEndpoint:
         self,
         client,
     ):
+        from app.services.result_report.builder import _persist_report_payload
         from tests.test_result_report_contract import _legal_full_report
 
         engine = get_engine()
@@ -5109,6 +5116,7 @@ class TestStoryEndpoint:
             session.add(scenario)
             session.commit()
 
+        _persist_report_payload(sid, report)
         response = client.get(f"/api/scenario/{sid}/story")
 
         assert response.status_code == 200
@@ -5842,11 +5850,11 @@ class TestDeleteScenario:
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         deleted: dict[str, str] = {}
 
-        class _FakeVectorStore:
-            def delete_collection(self, scenario_id: str) -> None:
-                deleted["scenario_id"] = scenario_id
+        def cleanup(_owner_id: str, scenario_id: str) -> bool:
+            deleted["scenario_id"] = scenario_id
+            return True
 
-        monkeypatch.setattr(scenarios_api, "get_vector_store", lambda: _FakeVectorStore())
+        monkeypatch.setattr("app.services.vector_store.delete_scenario_data", cleanup)
 
         resp = client.delete(f"/api/scenario/{sid}")
 

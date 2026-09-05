@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import logging
 
+from sqlalchemy import delete, update
 from sqlmodel import Session, select
 
-from app.models.agent_identity import AgentIdentity
-from app.models.database import get_engine
+from app.models.agent_identity import AgentGrowthEvent, AgentIdentity, AgentIdentityCampaignMember
+from app.models.database import Agent, get_engine
 from app.services.agent_identity import build_continuity_key as _make_continuity_key
 from app.services.llm_client import sanitize_untrusted_text
-from app.services.vector_store import delete_identity_profile, store_identity_profile
+from app.services.vector_store import store_identity_profile
 
 logger = logging.getLogger(__name__)
 
@@ -287,14 +288,21 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
         logger.info("Updated custom agent %s", identity_id)
 
 
-def delete_custom_agent(identity_id: str) -> None:
+def delete_custom_agent(identity_id: str) -> bool:
     """Delete a custom agent identity.
 
     H2: only identities with ``kind == "custom"`` may be removed via the
     workshop API; generated agents are managed by the simulation pipeline and
     must not be deletable from the user-facing surface.
     """
+    from app.services.resource_deletion import (
+        enqueue_resource_deletion,
+        reconcile_resource_deletion,
+    )
+    from app.services.runtime_lock import begin_serialized_write
+
     with Session(get_engine()) as session:
+        begin_serialized_write(session)
         identity = session.get(AgentIdentity, identity_id)
         if identity is None:
             raise LookupError(f"AgentIdentity {identity_id} not found")
@@ -303,10 +311,21 @@ def delete_custom_agent(identity_id: str) -> None:
                 f"AgentIdentity {identity_id} kind={identity.kind!r} is not deletable"
             )
         user_id = identity.user_id
+        enqueue_resource_deletion(session, "identity", identity_id, user_id)
+        session.exec(delete(AgentIdentityCampaignMember).where(
+            AgentIdentityCampaignMember.identity_id == identity_id,
+        ))
+        session.exec(delete(AgentGrowthEvent).where(AgentGrowthEvent.identity_id == identity_id))
+        # Scenario participants retain their historical name/persona/messages;
+        # the deleted live identity must no longer be a reachable write target.
+        session.exec(update(Agent).where(Agent.agent_identity_id == identity_id).values(
+            agent_identity_id=None,
+        ))
         session.delete(identity)
         session.commit()
-        delete_identity_profile(user_id, identity_id)
-        logger.info("Deleted custom agent %s", identity_id)
+    cleaned = reconcile_resource_deletion("identity", identity_id)
+    logger.info("Deleted custom agent %s (cleanup complete=%s)", identity_id, cleaned)
+    return cleaned
 
 
 def list_custom_agents(user_id: str) -> list[dict]:

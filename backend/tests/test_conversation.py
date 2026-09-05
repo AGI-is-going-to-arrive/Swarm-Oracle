@@ -691,6 +691,13 @@ class TestSSEStream:
         assert events[-1] == "turn_completed"
 
     def test_http_turn_stream_emits_terminal_error_after_scenario_delete(self, client, monkeypatch):
+        from app.models.database import ResourceDeletion
+
+        # Logical deletion must terminate the stream even while vector cleanup
+        # is durably pending; provider availability is independent of SSE state.
+        monkeypatch.setattr(
+            "app.services.vector_store.delete_scenario_data", lambda *_args: False,
+        )
         engine = get_engine()
         sid = _seed_scenario(engine)
         start = client.post(
@@ -741,7 +748,13 @@ class TestSSEStream:
             pytest.fail("conversation stream never entered streaming state")
 
         delete_resp = client.delete(f"/api/scenario/{sid}")
-        assert delete_resp.status_code == 200
+        assert delete_resp.status_code == 202
+        assert delete_resp.json() == {
+            "status": "deleted", "scenario_id": sid, "cleanup_pending": True,
+        }
+        with Session(engine) as session:
+            receipt = session.get(ResourceDeletion, ("scenario", sid))
+            assert receipt is not None and receipt.status == "pending"
         assert stream_done.wait(timeout=1.0), "HTTP SSE stream did not terminate after delete"
         assert "error" not in stream_error
 

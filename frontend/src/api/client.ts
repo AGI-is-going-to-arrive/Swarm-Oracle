@@ -1282,8 +1282,14 @@ export async function listScenarios(
   return safeGet(`/scenarios?${params.toString()}`);
 }
 
-/** DELETE /api/scenario/:id — cascade delete a scenario (P5-A) */
-export async function deleteScenario(id: string): Promise<{ status: string; scenario_id: string }> {
+export interface ScenarioDeletionResponse {
+  status: 'deleted';
+  scenario_id: string;
+  cleanup_pending?: true;
+}
+
+/** DELETE /api/scenario/:id — remove the record; cleanup may continue asynchronously. */
+export async function deleteScenario(id: string): Promise<ScenarioDeletionResponse> {
   return request(`/scenario/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
@@ -2094,9 +2100,15 @@ export async function createAgent<T = unknown>(
   });
 }
 
-/** DELETE /api/agents/workshop/:identityId — delete a custom agent */
-export async function deleteAgent(identityId: string): Promise<void> {
-  await request<void>(withUserIdQuery(`/agents/workshop/${encodeURIComponent(identityId)}`), {
+export interface AgentDeletionPendingResponse {
+  status: 'deleted';
+  identity_id: string;
+  cleanup_pending: true;
+}
+
+/** DELETE /api/agents/workshop/:identityId — 204 when clean, 202 while cleanup is pending. */
+export async function deleteAgent(identityId: string): Promise<AgentDeletionPendingResponse | void> {
+  return request<AgentDeletionPendingResponse | void>(withUserIdQuery(`/agents/workshop/${encodeURIComponent(identityId)}`), {
     method: 'DELETE',
   });
 }

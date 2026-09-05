@@ -9,7 +9,7 @@ import { ReportToc } from './ReportToc';
 import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
 import { PremortemAnalysisBlock } from './PremortemAnalysisBlock';
-import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
+import { isLocalLlmBaseUrl, loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
 import {
   consumeResultReportStream,
@@ -388,9 +388,16 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const rawReport = activeStoryData?.full_report;
   const isTruncatedReport = isTruncatedReportMarker(rawReport);
   const report = isFullReport(rawReport) ? rawReport : null;
+  const isReportStale = activeStoryData?.full_report_stale === true;
   const isEnabled = capabilities?.result_report?.enabled ?? false;
+  const providerPolicy = loadLlmProviderPolicy();
+  const hasByok = Boolean(providerPolicy.apiKey.trim())
+    || (Boolean(providerPolicy.model.trim()) && isLocalLlmBaseUrl(providerPolicy.baseUrl));
+  const canGenerateReport = !isReplayMode && isEnabled
+    && (capabilities?.llm_configured !== false || hasByok);
 
-  const isGenerating = !pollStalled && (report?.status === 'generating' || localGenerating);
+  const isGenerating = !pollStalled
+    && ((!isReportStale && report?.status === 'generating') || localGenerating);
   const preferredContentLanguage: ReportContentLanguage = isZh ? 'zh' : 'en';
   const reportContentLanguage = report
     ? resolveReportContentLanguage(report, preferredContentLanguage)
@@ -579,7 +586,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const handleCloseEvidence = useCallback(() => setEvidenceDrawerOpen(false), []);
 
   const handleRetry = useCallback(async () => {
-    if (isReplayMode) return;
+    if (!canGenerateReport) return;
     if (!activeScenarioId || retrying) return;
 
     const providerPolicy = loadLlmProviderPolicy();
@@ -768,7 +775,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   }, [
     activeScenarioId,
     retrying,
-    isReplayMode,
+    canGenerateReport,
     t,
     report,
     beginAuthorityAttempt,
@@ -817,21 +824,16 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   const missing = !report || !report.verdict;
   const hasSections = sections.length > 0;
+  // An archive can remain readable while its replacement is being generated.
+  // Only current-attempt events count as progress until fresh story authority arrives.
+  const generationSectionCount = isReportStale
+    ? sectionProgress.filter((section) => section.status === 'complete').length
+    : sections.length;
   const emptyStatus = !missing && !hasSections
     ? pollStalled
       ? 'stalled'
-      : report?.status === 'partial'
-        || report?.status === 'failed'
-        || report?.status === 'cancelled'
-        || report?.status === 'skipped'
-        ? report.status
-        : null
-    : null;
-  const reportBannerKind = hasSections
-    ? pollStalled
-      ? 'stalled'
-      : isGenerating
-        ? 'generating'
+      : isReportStale
+        ? 'stale'
         : report?.status === 'partial'
           || report?.status === 'failed'
           || report?.status === 'cancelled'
@@ -839,12 +841,29 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           ? report.status
           : null
     : null;
+  const reportBannerKind = hasSections
+    ? pollStalled
+      ? 'stalled'
+      : isGenerating
+        ? 'generating'
+        : isReportStale
+          ? 'stale'
+          : report?.status === 'partial'
+            || report?.status === 'failed'
+            || report?.status === 'cancelled'
+            || report?.status === 'skipped'
+            ? report.status
+            : null
+    : null;
 
   let reportBannerTitle = '';
   let reportBannerDesc = '';
   if (reportBannerKind === 'generating') {
     reportBannerTitle = t('result.report.generationInProgressTitle');
-    reportBannerDesc = t('result.report.generationInProgressDesc', { count: sections.length });
+    reportBannerDesc = t('result.report.generationInProgressDesc', { count: generationSectionCount });
+  } else if (reportBannerKind === 'stale') {
+    reportBannerTitle = t('result.report.staleReportTitle');
+    reportBannerDesc = t('result.report.staleReportDesc');
   } else if (reportBannerKind === 'partial') {
     reportBannerTitle = t('result.report.reportPartiallyGenerated');
     reportBannerDesc = t('result.report.reportPartiallyGeneratedDesc');
@@ -864,7 +883,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   let emptyStatusTitle = '';
   let emptyStatusDesc = '';
-  if (emptyStatus === 'partial') {
+  if (emptyStatus === 'stale') {
+    emptyStatusTitle = t('result.report.staleReportTitle');
+    emptyStatusDesc = t('result.report.staleReportDesc');
+  } else if (emptyStatus === 'partial') {
     emptyStatusTitle = t('result.report.reportIncomplete');
     emptyStatusDesc = t('result.report.reportIncompleteDesc');
   } else if (emptyStatus === 'failed') {
@@ -963,7 +985,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
           </p>
         )}
-        {!isReplayMode && (
+        {canGenerateReport && (
           <button
             type="button"
             onClick={() => void handleRetry()}
@@ -981,6 +1003,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   if (emptyStatus || (missing && variant === 'standalone')) {
     const isNeutralStatus = emptyStatus === 'cancelled'
       || emptyStatus === 'skipped'
+      || emptyStatus === 'stale'
       || emptyStatus === 'stalled';
     return (
       <div className="report-panel-container report-state-card">
@@ -1009,7 +1032,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
           </p>
         )}
-        {!isReplayMode && (
+        {canGenerateReport && (
           <button
             type="button"
             onClick={() => void handleRetry()}
@@ -1021,7 +1044,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
               ? t('result.report.generating')
               : missing
                 ? t('result.report.generateReport')
-                : t('result.report.retryGeneration')}
+                : isReportStale
+                  ? t('result.report.regenerateReport')
+                  : t('result.report.retryGeneration')}
           </button>
         )}
       </div>
@@ -1030,7 +1055,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   if (missing) {
     if (variant === 'inline') {
-      if (isReplayMode) {
+      if (!canGenerateReport) {
         return null;
       }
       return (
@@ -1056,6 +1081,18 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   return (
     <div className="report-doc report-panel-container report-panel-container--rendered">
+      {isReportStale && reportBannerKind !== 'stale' && (
+        <div className="report-partial-banner report-partial-banner--stale" role="status">
+          <div className="report-partial-banner__copy">
+            <p className="report-partial-banner__title">
+              {t('result.report.staleReportTitle')}
+            </p>
+            <p className="report-partial-banner__desc">
+              {t('result.report.staleReportDesc')}
+            </p>
+          </div>
+        </div>
+      )}
       {reportBannerKind && (
         <div
           className={`report-partial-banner report-partial-banner--${reportBannerKind}`}
@@ -1089,7 +1126,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
               {(isGenerating || pollStalled || sectionProgress.length > 0) && (
                 <div className="report-stream-progress" aria-label={t('result.report.progressLabel')}>
                   <span className="report-stream-progress__summary">
-                    {t('result.report.progressSections', { count: sections.length })}
+                    {t('result.report.progressSections', { count: generationSectionCount })}
                   </span>
                   {activeSectionId && (
                     <span className="report-stream-progress__current">
@@ -1119,7 +1156,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
               )}
             </div>
           </div>
-          {!isReplayMode && reportBannerKind !== 'generating' && reportBannerKind !== 'skipped' && (
+          {canGenerateReport && reportBannerKind !== 'generating' && reportBannerKind !== 'skipped' && (
             <button
               type="button"
               onClick={() => void handleRetry()}
@@ -1129,7 +1166,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             >
               {retrying
                 ? t('result.report.generating')
-                : t('result.report.retryGeneration')}
+                : isReportStale
+                  ? t('result.report.regenerateReport')
+                  : t('result.report.retryGeneration')}
             </button>
           )}
         </div>
@@ -1137,7 +1176,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       <div className="report-panel-body">
         {variant === 'inline' ? (
           <>
-            <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
+            {!isReportStale && (
+              <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
+            )}
 
             {report.status === 'complete' && takeaways.length > 0 && (
               <div className="report-digest">
@@ -1184,7 +1225,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             )}
 
             {/* HERO STAT BAND — probability / confidence / consensus / disclaimer band */}
-            <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
+            {!isReportStale && (
+              <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
+            )}
 
             <ReportToc sections={sections} language={reportContentLanguage} />
 

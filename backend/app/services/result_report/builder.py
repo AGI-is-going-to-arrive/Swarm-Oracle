@@ -12,6 +12,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, get_args
@@ -21,7 +22,7 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.log_sanitize import _scrub_sensitive_text
-from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario
+from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.services.branch_lineage import BranchLineageError
 from app.services.llm_client import (
@@ -31,7 +32,11 @@ from app.services.llm_client import (
     llm_request_scope,
     normalize_native_search_upstream,
 )
-from app.services.result_report.queries import ReportLineageScope
+from app.services.result_report.queries import (
+    REPORT_SCOPE_FINGERPRINT_KEY,
+    ReportLineageScope,
+    report_result_fingerprint,
+)
 from app.services.result_report.reducer import (
     TARGET_BRANCH_SORT,
     ReducerResult,
@@ -69,8 +74,10 @@ from app.services.result_report.schema import (
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
+    begin_serialized_write,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lease_owned_in_session,
     runtime_lock_error_is_transient_busy,
     runtime_lock_is_active,
     runtime_lock_lease_is_alive,
@@ -259,6 +266,66 @@ class ResultReportAlreadyRunningError(ResultReportBuilderError):
 
 class ResultReportRuntimeLockLostError(ResultReportBuilderError):
     """Raised when report generation no longer owns its durable lease."""
+
+
+class ResultReportScopeChangedError(ResultReportRuntimeLockLostError):
+    """The replay/evidence universe changed; this builder must not write again."""
+
+
+@dataclass(frozen=True)
+class _ReportWriteAuthority:
+    scenario_id: str
+    fingerprint: str
+    lease_holder: list[RuntimeLockLease | None]
+    runtime_epoch: int
+
+
+_REPORT_WRITE_AUTHORITY: ContextVar[_ReportWriteAuthority | None] = ContextVar(
+    "result_report_write_authority", default=None,
+)
+
+
+@contextlib.contextmanager
+def _report_write_authority(
+    scenario_id: str,
+    report_scope: ReportLineageScope | None = None,
+    lease_holder: list[RuntimeLockLease | None] | None = None,
+    runtime_epoch: int | None = None,
+):
+    current = _REPORT_WRITE_AUTHORITY.get()
+    if current is not None:
+        if current.scenario_id != scenario_id:
+            raise ResultReportScopeChangedError("Report scenario scope changed")
+        yield current
+        return
+    fingerprint = report_scope.result_fingerprint if report_scope is not None else None
+    if fingerprint is None:
+        with Session(get_engine()) as session:
+            fingerprint = report_result_fingerprint(session, scenario_id)
+    own_lease = lease_holder is None
+    if own_lease:
+        lease = acquire_runtime_lock(
+            _report_runtime_lock_key(scenario_id),
+            lease_seconds=_report_runtime_lock_lease_seconds(),
+        )
+        if lease is None:
+            raise ResultReportAlreadyRunningError("Result report generation is already in progress")
+        lease_holder = [lease]
+    from app.services.resource_deletion import resource_epoch
+
+    if runtime_epoch is None and report_scope is not None:
+        runtime_epoch = report_scope.runtime_epoch
+    authority = _ReportWriteAuthority(
+        scenario_id, fingerprint, lease_holder,
+        resource_epoch() if runtime_epoch is None else runtime_epoch,
+    )
+    token = _REPORT_WRITE_AUTHORITY.set(authority)
+    try:
+        yield authority
+    finally:
+        _REPORT_WRITE_AUTHORITY.reset(token)
+        if own_lease:
+            release_runtime_lock(lease_holder[0])
 
 
 def _classify_section_failure(exc: BaseException | None) -> SectionFailureReason:
@@ -515,6 +582,9 @@ async def build_report(
     report_scope: ReportLineageScope | None = None,
 ) -> FullReport:
     """Build and incrementally persist one full report for a scenario."""
+    from app.services.resource_deletion import resource_epoch
+
+    started_epoch = resource_epoch()
 
     resolved_scope = await _resolve_builder_report_scope(
         scenario_id,
@@ -544,57 +614,64 @@ async def build_report(
                 name=f"result-report-runtime-lock:{scenario_id}",
             )
 
-            try:
-                return await _build_report_unlocked(
-                    scenario_id,
-                    dominant_branch_id,
-                    overrides=normalized_overrides,
-                    progress=progress,
-                    report_lock_holder=lease_holder,
-                    report_scope=resolved_scope,
-                )
-            except asyncio.CancelledError:
-                if _report_runtime_lock_is_alive(lease_holder):
-                    try:
-                        await asyncio.to_thread(
-                            _persist_cancelled_report_if_absent,
-                            scenario_id,
-                            dominant_branch_id,
-                            report_scope=resolved_scope,
-                        )
-                    except Exception:  # noqa: BLE001 - preserve cancellation
-                        logger.warning("Failed to persist result report cancellation marker")
-                else:
-                    logger.warning(
-                        "Skipping result report cancellation marker after runtime lock loss"
-                    )
-                raise
-            except BranchLineageError:
-                raise
-            except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
-                if _report_runtime_lock_is_alive(lease_holder):
-                    try:
-                        await asyncio.to_thread(
-                            _persist_failed_report_if_absent,
-                            scenario_id,
-                            dominant_branch_id,
-                            report_scope=resolved_scope,
-                        )
-                    except Exception:  # noqa: BLE001 - preserve original builder error
-                        logger.warning("Failed to persist result report failure marker")
-                else:
-                    logger.warning(
-                        "Skipping result report failure marker after runtime lock loss"
-                    )
-                raise
-            finally:
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
+            with _report_write_authority(
+                scenario_id, resolved_scope, lease_holder,
+                runtime_epoch=(
+                    resolved_scope.runtime_epoch
+                    if resolved_scope.runtime_epoch is not None else started_epoch
+                ),
+            ):
                 try:
-                    await asyncio.to_thread(release_runtime_lock, lease_holder[0])
-                except Exception:  # noqa: BLE001 - do not mask the report outcome
-                    logger.warning("Failed to release result report runtime lock")
+                    return await _build_report_unlocked(
+                        scenario_id,
+                        dominant_branch_id,
+                        overrides=normalized_overrides,
+                        progress=progress,
+                        report_lock_holder=lease_holder,
+                        report_scope=resolved_scope,
+                    )
+                except asyncio.CancelledError:
+                    if _report_runtime_lock_is_alive(lease_holder):
+                        try:
+                            await asyncio.to_thread(
+                                _persist_cancelled_report_if_absent,
+                                scenario_id,
+                                dominant_branch_id,
+                                report_scope=resolved_scope,
+                            )
+                        except Exception:  # noqa: BLE001 - preserve cancellation
+                            logger.warning("Failed to persist result report cancellation marker")
+                    else:
+                        logger.warning(
+                            "Skipping result report cancellation marker after runtime lock loss"
+                        )
+                    raise
+                except BranchLineageError:
+                    raise
+                except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
+                    if _report_runtime_lock_is_alive(lease_holder):
+                        try:
+                            await asyncio.to_thread(
+                                _persist_failed_report_if_absent,
+                                scenario_id,
+                                dominant_branch_id,
+                                report_scope=resolved_scope,
+                            )
+                        except Exception:  # noqa: BLE001 - preserve original builder error
+                            logger.warning("Failed to persist result report failure marker")
+                    else:
+                        logger.warning(
+                            "Skipping result report failure marker after runtime lock loss"
+                        )
+                    raise
+                finally:
+                    heartbeat_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat_task
+                    try:
+                        await asyncio.to_thread(release_runtime_lock, lease_holder[0])
+                    except Exception:  # noqa: BLE001 - do not mask the report outcome
+                        logger.warning("Failed to release result report runtime lock")
     finally:
         _drop_report_lock_if_idle(scenario_id, lock)
 
@@ -4177,6 +4254,11 @@ def _load_existing_full_report(scenario_id: str) -> FullReport | None:
         scenario = session.get(Scenario, scenario_id)
         if scenario is None or not isinstance(scenario.parsed_context, dict):
             return None
+        authority = _REPORT_WRITE_AUTHORITY.get()
+        if authority is not None and (
+            scenario.parsed_context.get(REPORT_SCOPE_FINGERPRINT_KEY) != authority.fingerprint
+        ):
+            return None
         return _coerce_existing_full_report(scenario.parsed_context.get("full_report"))
 
 
@@ -4379,15 +4461,16 @@ def _persist_generating_report_placeholder_for_retry(
         )
         return _load_existing_full_report(scenario_id)
     try:
-        return _persist_placeholder_report_if_absent(
-            scenario_id,
-            dominant_branch_id,
-            status="generating",
-            replace_failed=True,
-            replace_unenhanced=True,
-            report_scope=report_scope,
-            known_target_branch_id=known_target_branch_id,
-        )
+        with _report_write_authority(scenario_id, report_scope, [lease]):
+            return _persist_placeholder_report_if_absent(
+                scenario_id,
+                dominant_branch_id,
+                status="generating",
+                replace_failed=True,
+                replace_unenhanced=True,
+                report_scope=report_scope,
+                known_target_branch_id=known_target_branch_id,
+            )
     finally:
         release_runtime_lock(lease)
 
@@ -4409,15 +4492,16 @@ def _persist_failed_report_after_auto_retry_exhausted(
         )
         return _load_existing_full_report(scenario_id)
     try:
-        return _persist_placeholder_report_if_absent(
-            scenario_id,
-            dominant_branch_id,
-            status="failed",
-            replace_unenhanced=True,
-            refresh_failed_copy=True,
-            report_scope=report_scope,
-            known_target_branch_id=known_target_branch_id,
-        )
+        with _report_write_authority(scenario_id, report_scope, [lease]):
+            return _persist_placeholder_report_if_absent(
+                scenario_id,
+                dominant_branch_id,
+                status="failed",
+                replace_unenhanced=True,
+                refresh_failed_copy=True,
+                report_scope=report_scope,
+                known_target_branch_id=known_target_branch_id,
+            )
     finally:
         release_runtime_lock(lease)
 
@@ -4434,6 +4518,14 @@ def _persist_placeholder_report_if_absent(
     report_scope: ReportLineageScope | None = None,
     known_target_branch_id: str | None = None,
 ) -> FullReport:
+    if _REPORT_WRITE_AUTHORITY.get() is None:
+        with _report_write_authority(scenario_id, report_scope):
+            return _persist_placeholder_report_if_absent(
+                scenario_id, dominant_branch_id, status=status,
+                replace_failed=replace_failed, replace_unenhanced=replace_unenhanced,
+                replace_cancelled=replace_cancelled, refresh_failed_copy=refresh_failed_copy,
+                report_scope=report_scope, known_target_branch_id=known_target_branch_id,
+            )
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
@@ -4452,6 +4544,9 @@ def _persist_placeholder_report_if_absent(
         )
         branch = _load_failed_report_branch(session, scenario_id, target_branch_id)
         existing = _coerce_existing_full_report(parsed_context.get("full_report"))
+        authority = _REPORT_WRITE_AUTHORITY.get()
+        if parsed_context.get(REPORT_SCOPE_FINGERPRINT_KEY) != authority.fingerprint:
+            existing = None
         if existing is not None and existing.target_branch_id == target_branch_id:
             if status == "failed":
                 should_transition = (
@@ -4674,14 +4769,15 @@ def _persist_failed_report_if_lock_available(
         )
         return _load_existing_full_report(scenario_id)
     try:
-        return _persist_placeholder_report_if_absent(
-            scenario_id,
-            dominant_branch_id,
-            status="failed",
-            replace_cancelled=replace_cancelled,
-            report_scope=report_scope,
-            known_target_branch_id=known_target_branch_id,
-        )
+        with _report_write_authority(scenario_id, report_scope, [lease]):
+            return _persist_placeholder_report_if_absent(
+                scenario_id,
+                dominant_branch_id,
+                status="failed",
+                replace_cancelled=replace_cancelled,
+                report_scope=report_scope,
+                known_target_branch_id=known_target_branch_id,
+            )
     finally:
         release_runtime_lock(lease)
 
@@ -4910,6 +5006,11 @@ def _persist_report_payload(
     scenario_id: str,
     payload: dict[str, Any],
 ) -> None:
+    authority = _REPORT_WRITE_AUTHORITY.get()
+    if authority is None:
+        with _report_write_authority(scenario_id):
+            _persist_report_payload(scenario_id, payload)
+        return
     validate_full_report_payload(
         payload,
         max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
@@ -4918,8 +5019,31 @@ def _persist_report_payload(
     path_value_pairs = [
         "$.full_report",
         func.json(json.dumps(payload, ensure_ascii=False)),
+        f"$.{REPORT_SCOPE_FINGERPRINT_KEY}",
+        authority.fingerprint,
     ]
     with Session(get_engine()) as session:
+        from app.services.resource_deletion import resource_epoch, resource_writes_stopping
+
+        begin_serialized_write(session)
+        if (
+            resource_writes_stopping()
+            or resource_epoch() != authority.runtime_epoch
+            or not runtime_lease_owned_in_session(
+            session,
+            authority.lease_holder[0],
+            lock_key=_report_runtime_lock_key(scenario_id),
+            )
+        ):
+            raise ResultReportRuntimeLockLostError("Result report runtime lock was lost")
+        scenario_status = session.exec(
+            select(Scenario.status).where(Scenario.id == scenario_id),
+        ).first()
+        if (
+            scenario_status not in {ScenarioStatus.NARRATING, ScenarioStatus.DONE}
+            or report_result_fingerprint(session, scenario_id) != authority.fingerprint
+        ):
+            raise ResultReportScopeChangedError("Scenario results changed during report generation")
         result = session.exec(
             update(Scenario)
             .where(Scenario.id == scenario_id)

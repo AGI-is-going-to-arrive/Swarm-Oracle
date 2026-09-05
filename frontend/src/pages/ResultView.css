@@ -1345,7 +1345,8 @@
 .archive-chip--primary {
   background: #f6daeb;
   background: color-mix(in oklab, var(--color-primary) 16%, white);
-  color: var(--color-primary);
+  color: #a91470;
+  color: color-mix(in oklab, var(--color-primary) 85%, black);
 }
 
 .archive-chip--challenge {
@@ -2856,7 +2857,8 @@
   padding: 2px 7px;
   border-radius: 5px;
   white-space: nowrap;
-  color: var(--color-primary);
+  color: #a91470;
+  color: color-mix(in oklab, var(--color-primary) 85%, black);
   background: #fbe6f2;
   background: color-mix(in oklab, var(--color-primary) 12%, var(--bg-surface));
 }

@@ -25,6 +25,29 @@ describe('resolveManualChunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/gif.js/dist/gif.js')).toBe('capture-gif');
   });
 
+  it('isolates the GFM parser from the eager core Markdown and sanitizer chunk', () => {
+    for (const packageName of [
+      'remark-gfm',
+      'mdast-util-gfm',
+      'mdast-util-gfm-autolink-literal',
+      'mdast-util-gfm-table',
+      'micromark-extension-gfm',
+      'micromark-extension-gfm-autolink-literal',
+    ]) {
+      expect(resolveManualChunk(`/repo/frontend/node_modules/${packageName}/index.js`)).toBe('markdown-gfm');
+    }
+    for (const packageName of [
+      'react-markdown',
+      'remark-parse',
+      'rehype-sanitize',
+      'hast-util-sanitize',
+      'mdast-util-from-markdown',
+      'micromark',
+    ]) {
+      expect(resolveManualChunk(`/repo/frontend/node_modules/${packageName}/index.js`)).toBe('vendor');
+    }
+  });
+
   it('splits large UI/support libraries out of the shared vendor chunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/@radix-ui/react-dialog/dist/index.js')).toBe('radix-vendor');
     expect(resolveManualChunk('/repo/frontend/node_modules/@dnd-kit/core/dist/core.esm.js')).toBe('dnd-vendor');

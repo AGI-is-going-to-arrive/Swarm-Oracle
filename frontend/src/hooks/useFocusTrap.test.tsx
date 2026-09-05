@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { render, fireEvent, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import useFocusTrap from './useFocusTrap';
 
 function TrapComponent({ active, id }: { active: boolean; id: string }) {
@@ -140,5 +140,52 @@ describe('useFocusTrap', () => {
     rerender(<IsolatedTrap active={false} />);
     expect(background).not.toHaveAttribute('inert');
     expect(background).not.toHaveAttribute('aria-hidden');
+  });
+
+  it('removes background isolation before restoring focus to the opener', () => {
+    function IsolatedTrap({ active }: { active: boolean }) {
+      const ref = useRef<HTMLDivElement>(null);
+      useFocusTrap(ref, active, true);
+      return (
+        <div>
+          <main><button data-testid="opener">Open</button></main>
+          <div ref={ref}><button data-testid="inside">Inside</button></div>
+        </div>
+      );
+    }
+    const { rerender } = render(<IsolatedTrap active={false} />);
+    const opener = screen.getByTestId('opener');
+    opener.focus();
+    // jsdom does not implement inert focus blocking, so emulate the browser boundary.
+    const restoreFocus = vi.spyOn(opener, 'focus').mockImplementation((options) => {
+      if (opener.closest('[inert], [aria-hidden="true"]')) return;
+      HTMLElement.prototype.focus.call(opener, options);
+    });
+    rerender(<IsolatedTrap active />);
+    screen.getByTestId('inside').focus();
+    expect(opener.closest('[inert]')).not.toBeNull();
+    rerender(<IsolatedTrap active={false} />);
+    expect(opener).toHaveFocus();
+    restoreFocus.mockRestore();
+  });
+
+  it('returns focus to the remaining trap when a nested opener was removed', () => {
+    function RemainingTrap({ nested }: { nested: boolean }) {
+      const parentRef = useRef<HTMLDivElement>(null);
+      useFocusTrap(parentRef, true);
+      return (
+        <div ref={parentRef}>
+          <button data-testid="parent-fallback">Parent fallback</button>
+          {!nested && <button data-testid="removed-opener">Open nested</button>}
+          {nested && <TrapComponent active id="child" />}
+        </div>
+      );
+    }
+    const { rerender } = render(<RemainingTrap nested={false} />);
+    screen.getByTestId('removed-opener').focus();
+    rerender(<RemainingTrap nested />);
+    screen.getByTestId('btn-child-1').focus();
+    rerender(<RemainingTrap nested={false} />);
+    expect(screen.getByTestId('parent-fallback')).toHaveFocus();
   });
 });

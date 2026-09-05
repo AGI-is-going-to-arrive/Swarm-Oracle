@@ -105,6 +105,19 @@ async def lifespan(app: FastAPI):
     """Initialize database on startup; graceful cleanup on shutdown."""
     validate_secure_runtime_settings(settings)
     init_db()
+    from app.services.resource_deletion import (
+        resource_worker_context,
+        retry_pending_resource_deletions,
+        stop_resource_writes,
+        wait_for_resource_writers,
+    )
+
+    resource_cleanup_stop = asyncio.Event()
+    resource_cleanup_task = asyncio.create_task(
+        retry_pending_resource_deletions(resource_cleanup_stop),
+        name="resource-deletion-cleanup",
+        context=resource_worker_context(),
+    )
     # Startup orphan sweep: finalize scenarios left SIMULATING/NARRATING by a process
     # that died mid-run (--reload, SIGKILL, crash, deploy). Wrapped so a sweep failure
     # never blocks startup. Single-worker uvicorn => no single-flight lock needed.
@@ -175,6 +188,14 @@ async def lifespan(app: FastAPI):
         settings.LLM_MODEL_NAME, settings.LLM_RESPONSES_URL,
     )
     yield
+    stop_resource_writes()
+    resource_cleanup_stop.set()
+    done, _ = await asyncio.wait({resource_cleanup_task}, timeout=5.0)
+    if not done:
+        resource_cleanup_task.cancel()
+        # The native writer retains its OS barrier until it actually returns.
+        # A pending receipt survives and no late DB commit is admitted.
+    await asyncio.to_thread(wait_for_resource_writers, 5.0)
     replay_memory_cleanup_stop_event.set()
     if replay_memory_cleanup_retry_task is not None:
         # asyncio cancellation cannot stop a running to_thread worker. Await the
