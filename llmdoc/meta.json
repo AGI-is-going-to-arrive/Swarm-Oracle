@@ -6,22 +6,22 @@
   },
   "documents": {
     "architecture.mdx": {
-      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
+      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
     },
     "backend/architecture.mdx": {
-      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
+      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
     },
     "config/runtime.mdx": {
-      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
+      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
     },
     "development/local-workflow.mdx": {
-      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
+      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
     },
     "frontend/architecture.mdx": {
-      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
+      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
     },
     "http-api/contracts.mdx": {
-      "validatedRevision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e"
+      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
     }
   },
   "convergence": {
