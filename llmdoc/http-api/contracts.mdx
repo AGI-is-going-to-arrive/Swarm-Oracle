@@ -1,5 +1,5 @@
 ---
-description: REST 错误形状、session/owner 鉴权、Scenario 生命周期、SSE 终态和 WebSocket 首帧认证合同。
+description: REST 错误形状、session/owner 鉴权、Scenario 生命周期、stale 报告与 deferred deletion 响应、SSE 终态和 WebSocket 首帧认证合同。
 kind: reference
 relations:
   requires:
@@ -12,6 +12,7 @@ code:
     - backend/app/api/schemas.py
     - backend/app/api/ws.py
     - backend/app/api/scenarios.py
+    - backend/app/api/agents.py
     - backend/app/api/ending_rooms.py
 ---
 
@@ -36,9 +37,10 @@ code:
 
 - `POST /api/scenario` 校验问题、运行参数、BYOK、profile、自定义 Agent、可选搜索和 `initial_social_feed`，再启动后台任务。
 - `GET /api/scenario/{id}` 返回 durable status 和 always-shaped `domain_world`。
-- `GET /story` 在 `full_report.status` 为 `complete/partial` 且 headline 可用时，用报告编译结论覆盖旧模型自评。`failed/generating` 不是 Claim-validated verdict authority。
+- `GET /story` 只有在 `full_report.status` 为 `complete/partial`、headline 可用、scenario 为 `narrating/done`，且保存的结果范围指纹与当前 durable 报告输入一致时，才用报告编译结论覆盖旧模型自评。旧版未绑定或范围已变化的报告以 `full_report_stale: true` 返回，只作可读历史，不提供当前 verdict、confidence 或 world-outcome Claim authority。
 - `POST /cancel` 只接受 `parsing/simulating/narrating/cancelled`。先持久化 `cancelled` 再取消本进程 task。`done/error` 返回 `409 SIMULATION_NOT_RUNNING`。
-- 删除 scenario 清理运行数据和 replay artifact；个人 journal 保留，关联 `scenario_id` 置空。
+- 删除 scenario 先原子移除 SQLite 运行数据并写入永久 deletion receipt，再清理关联 Chroma/identity-source 数据。清理完成返回 200 `{status:"deleted", scenario_id}`；仍待后台重试返回 202，并增加 `cleanup_pending:true`。个人 journal 保留，关联 `scenario_id` 置空。
+- 删除 workshop custom identity 会移除 live identity、campaign/growth 关联并把历史 scenario Agent 快照与 identity 解耦；历史名字、persona 和消息保留。向量清理完成返回 204；仍待后台重试返回 202 `{status:"deleted", identity_id, cleanup_pending:true}`。generated identity 仍不可从该入口删除。
 
 ## BYOK
 

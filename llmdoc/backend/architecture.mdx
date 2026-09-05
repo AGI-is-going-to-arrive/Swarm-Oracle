@@ -1,5 +1,5 @@
 ---
-description: 后端模块所有权、durable authority、分支谱系、runtime lock、取消终态，以及社交动作与有界领域世界的失败语义。
+description: 后端模块所有权、durable authority、分支谱系、精确 lease 与报告范围指纹、跨存储删除、runtime epoch 及停机写入失败语义。
 kind: architecture
 relations:
   requires:
@@ -13,11 +13,16 @@ code:
     - backend/app/api
     - backend/app/services/simulator.py
     - backend/app/services/runtime_lock.py
+    - backend/app/services/resource_deletion.py
+    - backend/app/services/vector_store.py
+    - backend/app/services/result_report/queries.py
+    - backend/app/services/result_report/builder.py
     - backend/app/services/simulation_cancel.py
     - backend/app/services/branch_lineage.py
     - backend/app/services/domain_world.py
     - backend/app/services/simulation_actions.py
     - backend/app/services/action_ledger.py
+    - backend/app/models/database.py
     - backend/app/models
 ---
 
@@ -33,6 +38,7 @@ code:
 | `services/simulator.py` | scenario 主循环、分支、叙事、进度和终态 |
 | `services/branch_lineage.py` | native 根到叶轮次谱系、fork 边界、cutoff 与 replay 边界的唯一 authority |
 | `services/runtime_lock.py` | SQLite shared lease、续租和跨 worker 防重入 |
+| `services/resource_deletion.py` | SQLite 与 Chroma 的永久删除 tombstone、待清理 receipt、跨进程硬锁、后台重试和停机写入栅栏 |
 | `services/simulation_cancel.py` | 进程内取消信号与 DB `cancelled` 回查 |
 | `services/llm_client.py` | provider 调用、流式解析、限流、并发、熔断 |
 | `services/simulation_actions.py` | 社交动作校验、幂等追加、owner-facing 投影 |
@@ -52,7 +58,8 @@ code:
 | 社交动作 | `SimulationAction` | append-only；状态 `verified/unavailable/failed` |
 | 有界领域 schema | `parsed_context.domain_world_v1` | 只有固定 validator 冻结的 v1；后续模型文本不能改写 |
 | 导演 / 玩法 | `director_state_json` / `gameplay_state_json` | campaign API 用 revision 做乐观并发 |
-| 深读报告 | `parsed_context.full_report` | 合法 `complete/partial` 的 Claim 是 `/story` 更强 authority；`failed/generating` 不是 |
+| 深读报告 | `parsed_context.full_report` + `full_report_scope_fingerprint` | `complete/partial` 只有在保存的结果范围指纹仍匹配当前 durable reducer 输入且 scenario 为 `narrating/done` 时才是 `/story` 的更强 authority；不匹配或未绑定的旧报告保留为只读历史，不能覆盖当前 verdict 或 world-outcome Claim |
+| 跨存储删除 | `ResourceDeletion` | 资源删除与永久 tombstone/pending receipt 在同一 SQLite 事务提交；Chroma 清理成功后 receipt 标记 completed 但 tombstone 保留，失败由生命周期 worker 重试 |
 | Agent identity | SQLite identity + Chroma memory | owner 在 SQLite；Agent Pack 不是 owner 或记忆 authority |
 | Replay 分享 | `ReplayArtifact` | 只读、脱敏，不承担 owner 或凭据 |
 
@@ -60,6 +67,10 @@ code:
 
 - native 分支按 fork 边界物化不重叠轮次段。self-contained replay 不跨越 replay 边界拼接源分支。谱系非法必须 fail-closed。causal、report、compare、clone 和 checkpoint 使用同一有效轮次选择。
 - 主推演、replay branch、Debate、Ending Room 和 Result Report 使用带租期的 runtime lock。lease 丢失或续租失败时 worker fail-closed。SQLite 短暂 busy 只在原 lease 仍有效时重试。
+- managed simulation 写入 Round 前先预留 SQLite writer，并在同一事务中验证 scenario/branch 仍可写以及精确 simulation lease 仍归当前 worker；取消、接管或 lease 丢失都必须在插入前失败。
+- Result Report 生成绑定版本化结果范围指纹、精确 report lease 和 runtime epoch。每次 payload 写入都在同一序列化事务内复核这三项及 scenario 状态，并与 `full_report_scope_fingerprint` 原子保存；旧 worker 不得写入 payload、失败或取消标记。
+- scenario/identity 删除先把 SQLite 源数据与永久 tombstone/pending receipt 一起提交，再在不持有 SQLite 事务时清理 Chroma。资源锁文件保持稳定且不删除；Linux/macOS 使用 `fcntl.flock`，Windows 使用 `msvcrt.locking`。新 writer 遇 tombstone 必须拒绝，清理失败保持 pending 并重试。
+- explicit shutdown 从 running 首次转为 stopping 时推进一次 runtime epoch，并等待已接纳 writer；`init_db()` 与普通 `dispose_engine()` 只回收连接池，不改变 runtime identity。全局 Session hook 只约束 app 标记的 Engine/Connection，或显式 managed-worker context 中的 Session；无关 Engine/Connection 与未绑定且未托管的 Session 保持普通 SQLAlchemy 语义。数据库写入在获取停机互斥量前完成 flush，只有获准的实际 COMMIT 持有互斥量到事务结束；原生 Chroma 调用即使 asyncio wrapper 被取消，也继续持有资源锁和全局 Chroma mutex，直到同步调用真实返回。
 - cancel 先把 DB 写成 `cancelled`，再通知本进程 task。worker 同时检查本地 token 和 DB。迟到 stage 不得覆盖 `cancelled/done/error`。`done/error` 不接受 cancel。
 - 发言正文是 durable truth；companion emotion 元数据失败时保留正文并标记 unavailable，不得回填 `neutral`。faction 的 stance/trust 等字段是 affect proxy，不是已验证关系。
 - Decision Envelope 必须来自候选集。IDLE 合法但要有 `idle_reason`。只有 `verified + post_action_v1 + derived_from_durable_actions` 可以绑定目标进度。

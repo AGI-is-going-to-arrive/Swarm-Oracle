@@ -1,5 +1,5 @@
 ---
-description: 本地初始化、双进程启动、最小验证、真实 LLM probe 和 release signoff 的触发条件与停止规则。
+description: 跨平台本地初始化、双进程与 Docker 启动、旧卷安全迁移、依赖升级验证、真实 LLM probe 和 release signoff 的停止规则。
 kind: guide
 relations:
   requires:
@@ -11,8 +11,13 @@ code:
     - Makefile
     - backend/pyproject.toml
     - frontend/package.json
-    - frontend/scripts
+    - frontend/scripts/release-signoff.mjs
+    - frontend/scripts/lib/commandRuntime.mjs
     - scripts/validate_samples.py
+    - .github/workflows/ci.yml
+    - backend/Dockerfile
+    - frontend/Dockerfile
+    - deploy/README.md
 ---
 
 # 本地开发与验证
@@ -45,7 +50,9 @@ npm ci
 
 Preview：`cd frontend && npm run build && SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run preview -- --host 127.0.0.1 --port 18930`。dev 和 preview 都代理 `/api` 与 `/ws`。
 
-Docker：`docker compose up --build -d`。Compose 把 18927/18928 绑定到 `127.0.0.1`。公开部署前设置 `ENV=production`、唯一 `SESSION_SECRET`、唯一 `ADMIN_TOKEN` 和正确 CORS。
+Docker：Windows/macOS 使用 Docker Desktop 的 Linux 容器模式，Linux 使用 Docker Engine 与 Compose 插件。当前 backend 镜像以 UID 1000 非 root 运行；旧 root 容器创建的命名卷必须按 `deploy/README.md` 的停机、完整 `/data` 备份校验、一次性 `chown` 和写入验证流程升级，新卷无需迁移。frontend 反向代理的 `/api` 请求体上限必须容纳后端 50 MiB Snapshot 合同及 multipart framing，并关闭代理缓冲以保持 SSE 增量可见；各 endpoint 仍由后端执行自身的更窄限制。Compose 把 18927/18928 绑定到 `127.0.0.1`。公开部署前设置 `ENV=production`、唯一 `SESSION_SECRET`、唯一 `ADMIN_TOKEN` 和正确 CORS。完整宿主命令以中英文 README 为准，Makefile 只是 POSIX 终端便捷入口。
+
+容器验证只能使用本任务创建且可明确归属的容器、网络和卷；无法创建隔离资源是证据阻断，不能转而复用或改动用户正在运行的服务。
 
 ## 最小验证
 
@@ -57,10 +64,14 @@ Frontend：`cd frontend && npm test -- --run src/<target_test> && npm run lint &
 
 样例与资产：`python scripts/validate_samples.py`；`cd frontend && npm run assets:provenance:check`。
 
+`backend/pyproject.toml` 中的 Web 框架、表单解析与 metrics 集成采用协调的安全/兼容范围：升级时必须整体检查 router 重载、文件上传与表单、WebSocket/SSE、错误响应和 `/metrics`，不能只验证依赖可解析或单独放宽其中一项。PDF、multipart 与 HTTP 传输安全下界不得无理由回退；精确版本范围以该文件为准，稳定文档不复制版本快照。
+
 真实 provider 测试不进入默认单元测试。确认本地兼容网关时：`RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_llm_gateway_probe.py -v -s`。HTTP 2xx 中的 error envelope、无可见正文或未形成终态的 stream 都是 provider 失败，不能用本地 fallback 代替上游能力结论。
 
 ## 发布签收
 
 先启动 backend 和 preview，再 `cd frontend && npm run release:signoff -- --url http://127.0.0.1:18930 --headless`。fixture 必须拦截 API、Node backend helper 和同源 WS；未命中 allowlist 的请求应使 suite 失败。`--dry-run` 只记 `planned`，不能作为已执行通过。
+
+release signoff 的 child process 必须保持 argv 边界并使用 `shell:false`；Windows 的 npm/npx 通过已安装 npm 的 JavaScript CLI 启动，不能把 Python/Node/Git 参数交给 `cmd.exe` 重解析。CI 的精确 OS/runtime 矩阵由 workflow 自身负责，不写入稳定知识。
 
 浏览器工件只证明对应 URL、commit、provider 和浏览器组合。不要把旧工件当作当前 HEAD 的签收结果。session 级测试数量、日期、截图目录和修复过程不写入 llmdoc。
