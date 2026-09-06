@@ -1,0 +1,51 @@
+---
+description: 辩论 Debate 的 UUID 操作身份、终态与取消、只读历史回放、显式新建重启及幂等 provider 确认；删除后旧请求与迟到事件不能恢复运行。
+kind: architecture
+relations:
+  requires:
+    - backend/architecture.mdx
+  related:
+    - providers/confirmation.mdx
+    - frontend/architecture.mdx
+    - http-api/contracts.mdx
+code:
+  paths:
+    - backend/app/api/debate.py
+    - backend/app/api/experiments.py
+    - backend/app/models/debate.py
+    - backend/app/services/debate.py
+    - backend/app/services/debate_lifecycle.py
+    - backend/app/services/debate_argument_map.py
+    - frontend/src/stores/debateStore.ts
+    - frontend/src/hooks/useDebateWS.ts
+    - frontend/src/lib/debateReplay.ts
+    - frontend/src/pages/DebateArenaView.tsx
+    - frontend/src/pages/DebateResultView.tsx
+    - frontend/src/pages/HistoryView.tsx
+    - frontend/src/components/ArgumentMap.tsx
+    - frontend/src/components/DebateShareModal.tsx
+---
+
+# 辩论终态、重启与只读恢复
+
+读取历史、重新打开页面和播放本地 replay 都不启动模型。对终态辩论的“重新开始”创建新的运行并保留源记录；它不是继续被取消的 worker。辩论有独立的操作身份和终态合同，不能把其幂等或取消规则无差别套到 Scenario、Room。
+
+## 不确定请求与幂等
+
+创建或重启的 UUID 对应一次明确意图。请求已接受后，响应丢失的重试先查持久化 receipt，再考虑重新解析 provider；因此后来编辑或删除 profile 不会让已接受意图产生第二个运行。相同 UUID 对应不同请求时拒绝，前端单独生成 nonce 并不足以提供此保证。
+
+重启选项中的名称、模型和确认令牌来自同一配置快照。模型绑定必须明确选择；原 profile 不可用时不能静默回退服务端模型。POST 结果不确定后，前端在当前源辩论的 sessionStorage 保留不含凭据的完整待确认请求，重试沿用 UUID、选项和令牌，不能边重试边切换模型。
+
+## 写入、取消与删除
+
+运行时及论证图写入共同遵守序列化事务、精确 lease、runtime epoch 和永久 deletion tombstone。取消先保存 `cancelled`，再通知本进程任务，保留真实已有发言；未完成的预测和反制不伪造评分。如果 DONE 或 ERROR 先赢得竞态，取消接口返回实际刷新后的终态，不宣称取消已经发生。
+
+删除原子移除运行、图与关联数据，并为辩论及其操作请求留下永久 tombstone。迟到 worker、图增强和同一 UUID 重试都不能重建已删除运行。Debate 没有 Chroma 资源，不应进入 Scenario/identity 的向量清理重试队列。
+
+前端的 cancelled/deleted 状态具有粘性。迟到 phase、turn、score、verdict、error 或 snapshot 不得使运行复活；合法 cancelled snapshot 可以恢复其已保存发言。路由和载入代次隔离不同辩论，不能把旧运行的事件应用到新记录。
+
+## 浏览器本地副本
+
+本地 replay 链接引用浏览器保存的只读副本，不是服务端辩论记录。副本按合法规范化内容去重，并受数量和序列化字符容量（JS 字符串长度）约束；超额淘汰旧副本。损坏缓存不能悄悄覆盖，存储失败也不能伪造有效链接。只重置 replay 副本键须是用户明确操作，不删除服务端记录或其它偏好。
+
+历史显示使用实际保存的 provider 描述；只有当前 profile 可查时必须标明那是当前配置，不能让后来的 profile 编辑重写历史运行使用过的模型。

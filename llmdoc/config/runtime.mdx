@@ -8,6 +8,9 @@ relations:
 code:
   paths:
     - backend/app/config.py
+    - backend/app/api/admin.py
+    - backend/app/services/llm_client.py
+    - backend/app/models/database.py
     - .env.example
     - .env.docker.example
 ---
@@ -40,9 +43,9 @@ RPM、TPM、并发和 pending 是独立限流层。对应层设为 `0` 关闭该
 - file-backed SQLite 使用 WAL 与 `busy_timeout=5000`。内存 SQLite 跳过 WAL。
 - `SESSION_SECRET` 空值关闭本地 session gate；非空启用 REST 与 WS 认证。
 - `ADMIN_TOKEN` 保护 `/api/admin/*` 与 `/metrics`。
-- `ENV=production/prod` 启用生产 fail-fast：要求非空且唯一的 `SESSION_SECRET` 和 `ADMIN_TOKEN`；生产 admin LLM test 拒绝本地 base URL。
+- `ENV=production/prod` 启用启动 fail-fast，程序检查 `SESSION_SECRET` 和 `ADMIN_TOKEN` 非空；生成独立、唯一密钥是部署者义务。admin LLM test 的本地 URL 拒绝条件当前是精确 `ENV=production`，不能推定 `prod` 在该入口有相同效果。
 - `EXPOSE_API_DOCS` 默认 false。
-- Model profile 的 key 以本地 SQLite 明文保存，适用于单用户 self-hosted；API 只返回 `has_api_key`。key、Base URL 与 model 是一个 provider 绑定。
+- Model profile 的 key 以本地 SQLite 明文保存，适用于单用户 self-hosted；密钥字段仅返回 `has_api_key`。key、Base URL 与 model 是一个 provider 绑定。
 
 ## 搜索与功能开关
 

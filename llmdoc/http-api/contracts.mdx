@@ -1,5 +1,5 @@
 ---
-description: REST 错误形状、session/owner 鉴权、Scenario 生命周期、stale 报告与 deferred deletion 响应、SSE 终态和 WebSocket 首帧认证合同。
+description: REST 公共错误、signed-session 与本地 owner 语义、各资源取消和删除差异、报告当前性、只读 snapshot 及 SSE/WebSocket 终态合同。
 kind: reference
 relations:
   requires:
@@ -7,13 +7,21 @@ relations:
   related:
     - config/runtime.mdx
     - frontend/architecture.mdx
+    - providers/confirmation.mdx
+    - results/report-authority.mdx
+    - oracle/saved-analysis.mdx
+    - debate/lifecycle.mdx
 code:
   paths:
     - backend/app/api/schemas.py
+    - backend/app/api/helpers.py
     - backend/app/api/ws.py
     - backend/app/api/scenarios.py
     - backend/app/api/agents.py
     - backend/app/api/ending_rooms.py
+    - backend/app/api/debate.py
+    - backend/app/api/experiments.py
+    - backend/app/api/social.py
 ---
 
 # REST、SSE 与 WebSocket 合同
@@ -26,11 +34,12 @@ code:
 
 ## 鉴权与 owner
 
-- `SESSION_SECRET=""` 时本地业务路由跳过 session gate。
+- `SESSION_SECRET=""` 时本地业务路由跳过 session gate，`user_id` 由本地调用提供；这不提供多用户隔离。
 - 配置后业务 REST 要求 `X-Session-Token`。裸 secret 只通过全局 gate，不携带用户身份。
 - signed principal 为 `v1.<payload>.<signature>`；payload `sub` 是 owner subject。owner-sensitive 路由要求 signed principal，否则 `SESSION_PRINCIPAL_REQUIRED`。
 - body/query `user_id` 与 `sub` 不一致返回 `SESSION_PRINCIPAL_MISMATCH`。
 - 不存在和跨 owner 资源使用同一 404。
+- Room/thread 通过所属 Scenario 校验 owner；报告与保存分析也必须经过该资源边界。Replay、profile 令牌、导入 owner 字段或显示名称均不能取代 principal。
 - `X-Session-Token` 只用于 REST。WebSocket 使用首帧 auth。`/` 公开；`/metrics` 接受 admin token，或已启用 session gate 时的 session token。
 
 ## Scenario 生命周期
@@ -44,14 +53,20 @@ code:
 
 ## BYOK
 
-远端业务请求显式传 `llm_base_url` 时必须同时传 API key；精确本地 provider 可免 key。profile id 按当前 owner 解析，响应不回显 API key。partial override fail-closed。hostname allowlist 与 scheme 规则见 `config/runtime.mdx`。
+远端业务请求显式传 `llm_base_url` 时必须同时传 API key；精确本地 provider 可免 key。profile id 按当前 owner 解析，响应不回显 API key。partial override fail-closed。已提供的确认令牌必须在预检和创建副作用前匹配当前配置，漂移返回 `MODEL_PROFILE_CHANGED`；旧程序接口的可选令牌不等于所有入口都强制确认。绑定和后续继承见 `providers/confirmation.mdx`，URL 规则见 `config/runtime.mdx`。
+
+## 独立操作边界
+
+- 报告请求明确区分 generate 与 translate，以及 brief 与 full；translate 必须提供目标语言并绑定当前可读源报告。新操作要求已完成 Scenario，旧报告的可读性不授予重新生成权限。
+- 保存分析使用有界 `user_saved` 记录和内容一致的结果 ID 幂等，不能把客户端任意 JSON 写成报告或身份记忆。
+- Debate restart 创建新记录，以持久化 UUID receipt 防重复。取消返回实际终态；删除后的请求 tombstone 阻止旧意图复活。Scenario 的取消冲突与向量清理 202 语义保持独立。
 
 ## SSE
 
 | Endpoint | 终态约束 |
 |---|---|
 | conversation turn | abort、delete 和 provider failure 都必须产生明确终态；客户端断开后不得用迟到 delta 恢复完成态 |
-| report generate | 自动路径 fail-soft，不能阻断 scenario `done` |
+| report generate / translate | 本次请求失败与已保存内容分开；迟到写入须通过范围和 lease 检查。自动路径 fail-soft，不能阻断 scenario `done` |
 | survey | 单个代表失败写入该 response，不升级整个流 |
 
 ## WebSocket
@@ -62,4 +77,4 @@ code:
 
 ## Snapshot 输入
 
-`POST /api/scenario/import-snapshot` fail-closed：上传不超过 50 MiB，member 路径安全，manifest/checksum 一致，外键 remap 失败则整包失败。pending intervention 不随 snapshot 恢复；凭据、token、base URL 和 owner 数据不导出。
+`POST /api/scenario/import-snapshot` fail-closed：上传不超过 50 MiB，member 路径安全，manifest/checksum 一致，外键 remap 失败则整包失败。pending intervention 不随 snapshot 恢复；凭据、token、base URL、活跃 profile 指针和 owner 数据不导出。未完成来源导入为停止的只读历史，不安排原 worker；公开 `snapshot_import` 仅投影允许的状态和恢复说明字段。

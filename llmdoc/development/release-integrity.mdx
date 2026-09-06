@@ -1,0 +1,50 @@
+---
+description: immutable image digest pair 晋升与发布完整性；隔离 Nginx SSE/WebSocket 镜像验收、offline backup 原始 WAL/Chroma、新目标恢复及旧版本回滚边界。
+kind: guide
+relations:
+  requires:
+    - config/runtime.mdx
+  related:
+    - development/local-workflow.mdx
+    - backend/architecture.mdx
+code:
+  paths:
+    - .github/workflows/ghcr.yml
+    - .github/workflows/ci.yml
+    - .github/workflows/release-signoff.yml
+    - scripts/promote-ghcr-pair.sh
+    - scripts/container_smoke.py
+    - scripts/backup_restore.py
+    - backend/Dockerfile
+    - frontend/Dockerfile
+    - docker-compose.yml
+    - deploy/README.md
+---
+
+# 发布镜像与实例恢复
+
+此工作流约束候选镜像晋升、实例升级与恢复。精确命令、版本和平台矩阵以 workflow、Dockerfile 与 `deploy/README.md` 为准；本地源码测试、浏览器 preview、最终镜像运行和模型质量是不同证据。
+
+## 候选镜像与晋升
+
+先记录同一源码 revision 的 backend/frontend manifest digest，再让声明的平台实际执行这对镜像。候选验证使用镜像内交付的命令、Nginx 和应用，不以 native Vite preview 替代迁移、非 root 数据写入或容器传输验证。
+
+镜像验收在独立网络与新数据卷中验证样例导入、snapshot 往返、真实 backend WebSocket 心跳、无缓冲报告 SSE、写入、重启和恢复后读取。延迟失败的隔离 provider 只证明流式传输与失败终态；固定 embedding 的 Chroma 读回不依赖模型下载。它们均不证明外部模型质量。
+
+晋升必须等待所需镜像门禁和相同 revision 的发布签收，直接复制已验证的 digest，不能测试后重新解析可能移动的 SHA 标签。backend/frontend 作为一对处理；失败时恢复先前 tag 对，旧 `edge` 候选不能覆盖更晚的 main。若回滚失败，必须显式报错而非宣称发布原子完成。
+
+创建和清理的容器、网络、卷须有本次任务的精确身份与归属标签。不能因为隔离环境不可用就复用现有用户服务；配置了某平台或浏览器也不代表已经观察到该组合通过。
+
+## 完整实例备份
+
+先停止所有可能写入所选实例数据的进程或容器。备份覆盖配置的数据范围，包括 SQLite 的原始 WAL/SHM 及全部 Chroma 状态；脱敏 Scenario snapshot 不能替代实例备份。POSIX 无法核实打开文件时拒绝继续，Windows 保持排他文件句柄，卷备份拒绝仍被运行容器挂载的来源。
+
+备份时不对原 SQLite 做恢复写入。先复制并核对来源一致性，再在临时恢复副本中检查。备份包含私人运行和可能存在的本地凭据，须存入受限位置。
+
+## 恢复、验证与回滚
+
+恢复只写新目标目录或新卷，不清空、不覆盖已有实例。路径穿越、链接或 junction、重复/大小写冲突名称、意外成员和 checksum 不一致都必须拒绝。
+
+能列出压缩包不等于恢复成功。`backup_and_restore_verified` 要求真正展开临时副本并核对文件 hash、SQLite 完整性、迁移版本、表计数及 Chroma SQL 标记；最终镜像门禁另外用 Chroma client 读取恢复的数据。不能把仅有标记检查说成完整应用读回。
+
+升级前保留完整备份及旧 backend/frontend 的确切 digest。相同版本的恢复门禁不证明旧程序能读取新版本写入的数据；即使没有新数据库迁移，枚举和报告 payload 也可能不兼容。未证明向后兼容时，回滚用升级前备份在独立目标恢复，并匹配旧镜像对。

@@ -5,9 +5,15 @@ relations:
   related:
     - backend/architecture.mdx
     - frontend/architecture.mdx
+    - providers/confirmation.mdx
+    - results/report-authority.mdx
+    - oracle/saved-analysis.mdx
+    - debate/lifecycle.mdx
+    - development/release-integrity.mdx
 code:
   paths:
     - README.md
+    - README.en.md
     - frontend/src/App.tsx
     - backend/app/main.py
 ---
@@ -18,11 +24,11 @@ SwarmOracle 是 browser-first 的 AI What-If 推演工具。用户提交历史�
 
 ## 产品闭环
 
-1. 用户选择问题、Agent 数、轮数、推演模式、模型配置和可选搜索增强，也可配置初始世界事件 Feed。
+1. 材料入口准备同一份问题表单；用户核对实际问题、规模、模型配置、搜索和初始世界事件 Feed 后确认启动。
 2. 后端解析场景并启动带持久化状态的异步推演。
 3. 前端通过 REST 与 WebSocket 展示轮次、发言、观测、世界事件、分支、干预和取消；Agent 只在真实机会快照允许时执行原生社交动作，回执可审查。
-4. 运行页与结果页展示有界领域状态、动作阈值和 IDLE 归因；结果页汇总终局叶分支、领域结局、预测、因果与阵营代理、证据、结构化 premortem 和可选深读报告。
-5. 用户可分享只读 replay、挑战链接或脱敏 Public Artifact；也可从结局继续反事实、续跑、对话和圆桌分析。
+4. 结果阅读先给出结论、结局差异和证据；自动简报复用已存结果，完整分析和正文翻译由用户显式触发。社交世界、领域状态、动作回执及深入工具保留自己的能力与数据边界。
+5. 用户可分享只读 replay、挑战链接或脱敏 Public Artifact；也可显式开始后续推演、对话或圆桌分析，并把成功分析保存为独立的 user_saved 笔记。
 
 ## 产品域
 
@@ -42,6 +48,9 @@ SwarmOracle 是 browser-first 的 AI What-If 推演工具。用户提交历史�
 ## 稳定合同
 
 - replay、分享和 snapshot 只携带展示或导入所需数据，不能成为凭据或 owner authority。
+- 导入未完成 snapshot 得到停止的只读历史，不恢复原 worker。Debate 历史重开只读；显式重启创建新的运行。
+- 模型 profile 引用、已确认执行策略与历史模型描述是不同对象；不能用后来修改的 profile 重新标记旧结果。
+- user_saved 只表示用户保存的模拟分析，不能晋升为报告 Claim、已验证事实、动作或身份记忆。
 - 功能开关控制入口和后端路由。前端 capability 探针失败必须与功能关闭分开显示。
 - Local Pack 只原子填充有界问题、设置和不可信世界背景；角色预览不创建持久化 Agent 身份。
 - 初始世界事件 Feed 是不可信推演输入；来源名称和事件内容不构成 persona 或 identity authority。
@@ -51,9 +60,9 @@ SwarmOracle 是 browser-first 的 AI What-If 推演工具。用户提交历史�
 - Public Artifact、挑战链接和 Gallery 是本地/离线分享；hash 链接不上传，也不构成 hosted marketplace。
 - LLM、搜索和 ChromaDB 都可能降级；业务路径必须给出错误、重试或确定性 fallback。
 
-## 明确未交付
+## 交付边界
 
-- Session gate 只提供本地 hardening；完整 JWT/OAuth2 与逐资源授权尚未交付。
+- 已交付 signed-session 下的资源 owner 校验；关闭 `SESSION_SECRET` 的本地模式不提供多用户隔离。当前 session 机制不等同于完整 OAuth2/JWT 身份与授权平台。
 - Verified memory promotion v1 是默认关闭的后端核心，没有 capability、REST 或 UI 激活面。不得把它呈现成用户可操作功能。
 - 图谱持久化边可提供有界 evidence，但不能解释成已验证现实因果。
 - SQLite WAL / runtime lock 适合本地共享文件，不等同于分布式数据库协调。

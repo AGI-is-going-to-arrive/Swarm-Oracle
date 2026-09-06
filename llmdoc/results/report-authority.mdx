@@ -1,0 +1,57 @@
+---
+description: 自动 brief 简报、按需 full 分析、报告翻译及原始证据；当前结果指纹、历史报告、取消和 lease 写入权限的合同。
+kind: architecture
+relations:
+  requires:
+    - backend/architecture.mdx
+  related:
+    - providers/confirmation.mdx
+    - frontend/architecture.mdx
+    - http-api/contracts.mdx
+code:
+  paths:
+    - backend/app/services/result_report/builder.py
+    - backend/app/services/result_report/claims.py
+    - backend/app/services/result_report/schema.py
+    - backend/app/services/result_report/translation.py
+    - backend/app/services/result_report/reducer.py
+    - backend/app/services/result_report/queries.py
+    - backend/app/api/scenarios.py
+    - frontend/src/pages/result/ResultReportPanel.tsx
+    - frontend/src/pages/result/ReportSection.tsx
+    - frontend/src/pages/result/ResultVerdictPanel.tsx
+    - frontend/src/pages/result/ReportEvidenceDrawer.tsx
+    - frontend/src/pages/ResultReportView.tsx
+    - frontend/src/pages/ResultView.tsx
+    - frontend/src/types.ts
+---
+
+# 报告深度、语言与证据权限
+
+报告是对已保存模拟资料的分析，不能反过来改写原始发言、分支或现实发生概率。当前报告与历史快照的区分取决于结果范围绑定，而不是标题、生成时间或前端缓存是否存在。
+
+## 简报与完整分析
+
+自动结束路径明确生成 `detail_level: brief`：使用已有 reducer、当前结论和可追溯证据摘要，不额外执行完整报告的规划、章节、访谈或指标生成。简报的 static tier 是有意选择的低成本路径，不能当成待自动重试的生成失败。
+
+用户可显式生成 full 分析；旧报告未提供深度时仍按 full 解释。深度与各章节的 generation、rewrite、static 层级是不同维度，部分静态章节不意味着整份报告从未生成。自动简报不会覆盖已有可读完整报告；完整升级失败或取消时，已有可读报告继续保留，界面将本次失败与保存内容分别表达。
+
+## 当前结果与历史快照
+
+只有范围指纹与当前 durable reducer 输入一致、状态和目标分支合格的 complete/partial 报告，才可作为 `/story` 当前编译结论与 world-outcome Claim 的 authority。缺少范围绑定或范围已变化的报告仍可阅读，但必须标为 stale，不能替换当前 verdict、模型自评或证据支持度。
+
+生成、重试和翻译共用精确 report lease、runtime epoch 与结果范围检查。最终写入在序列化事务中重新确认权限，并原子保存 payload 和范围绑定；翻译还比较原报告，防止把基于旧文本的结果覆盖到更新后的报告。取消、删除、接管或旧 scope 响应都不能恢复已失去权限的 worker。自动报告失败不能阻断主模拟的完成事件。
+
+## 按需翻译
+
+界面语言与报告正文语言独立。切换界面不代表正文已翻译；缺少完整目标语言时保留可读原文并明确说明。翻译是显式模型操作，遵循与完整分析相同的成本披露、provider 选择和状态边界。
+
+翻译变体保存在 `authored_content_i18n`，只投影报告作者文本；主字段、证据坐标、Claim 身份、原始姓名、精确引文和数值来源保持不变。输出须保留受保护片段；出现新的未保护数值、URL 或代码文本原子、整段非目标语言、超出有界处理能力或来源已改变时，拒绝该输出并保留原报告。这些校验不构成全部语义等价的证明，不能删减来源来制造“完整翻译”。
+
+译文结论必须标明来自当前报告的翻译，并保留原结论入口。历史报告译文没有当前 authority。Markdown 展示和导出选择相同正文语言；证据引用、snapshot 和结构化存档保持原始来源，不能把翻译后的引文冒充原话。
+
+## Claim 与可审查证据
+
+精确引用支持、语义转述支持、弱支持与未获支持必须分别呈现。引用验证仍要求真实说话者、时序、原文与来源坐标；纯参考碎片和非事实套话不进入事实 Claim 分母。零条强引用不等于全部幻觉，也不能把模型自评当作经证据验证的置信度。
+
+证据入口复用保存的证据与原始 Replay 坐标，区分模拟发言、派生证据、历史访谈片段和外部来源。模拟权重与证据层级不构成现实测量或因果证明。降级提示使用独立 Markdown 段落，不能与正文首句粘连而改变含义。

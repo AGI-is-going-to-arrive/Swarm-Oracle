@@ -22,6 +22,21 @@
     },
     "http-api/contracts.mdx": {
       "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
+    },
+    "providers/confirmation.mdx": {
+      "validatedRevision": null
+    },
+    "results/report-authority.mdx": {
+      "validatedRevision": null
+    },
+    "oracle/saved-analysis.mdx": {
+      "validatedRevision": null
+    },
+    "development/release-integrity.mdx": {
+      "validatedRevision": null
+    },
+    "debate/lifecycle.mdx": {
+      "validatedRevision": null
     }
   },
   "convergence": {

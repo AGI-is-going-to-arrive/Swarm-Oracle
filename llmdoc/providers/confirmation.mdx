@@ -1,0 +1,62 @@
+---
+description: 模型配置确认、完整 provider 绑定、请求显式覆盖与历史运行继承；确认后配置漂移、迟到请求和凭据越界的失败规则。
+kind: architecture
+relations:
+  requires:
+    - config/runtime.mdx
+  related:
+    - backend/architecture.mdx
+    - frontend/architecture.mdx
+    - results/report-authority.mdx
+    - oracle/saved-analysis.mdx
+    - debate/lifecycle.mdx
+code:
+  paths:
+    - backend/app/services/model_profiles.py
+    - backend/app/services/llm_resolution.py
+    - backend/app/services/llm_client.py
+    - backend/app/services/provider_telemetry.py
+    - backend/app/api/model_profiles.py
+    - backend/app/api/helpers.py
+    - backend/app/api/scenarios.py
+    - backend/app/api/agents.py
+    - backend/app/services/simulator.py
+    - backend/app/api/debate.py
+    - backend/app/api/experiments.py
+    - backend/app/services/ending_room_service/_utils.py
+    - frontend/src/lib/llmProviderPolicy.ts
+    - frontend/src/api/client.ts
+    - frontend/src/types.ts
+    - frontend/src/pages/InputView.tsx
+    - frontend/src/pages/ModelProfilesView.tsx
+    - frontend/src/pages/RoundtableProviderPicker.tsx
+    - frontend/src/components/ModelSelect.tsx
+---
+
+# 模型绑定与启动确认
+
+Provider 的 key、base URL 和 model 是一个完整绑定。profile ID 是 owner 范围内的配置引用，既不是凭据，也不等于已冻结的运行配置。限速、并发、结构化输出和原生搜索声明属于该绑定的运行策略；更换 provider 时不能顺带继承原 provider 的策略。
+
+## 配置选择与权限
+
+已保存的 profile 由后端按当前 owner 读取，客户端只获得显示信息、密钥是否存在及不透明的 `confirmation_token`。该令牌检测用户查看配置后发生的漂移，不代替 signed principal 或资源授权。profile 密钥保留在本地 SQLite；临时 BYOK 的 key 等凭据只随当前请求在内存中传递，不写入 Scenario、replay、snapshot 或日志。非敏感的模型、base URL 或限速元数据可按各运行合同保存，不能把它们与凭据混为一类。
+
+远端显式覆盖必须提供完整 key、URL、model；精确本地端点可使用完整的免 key URL、model 绑定。只改模型、地址或 key 的部分覆盖不能偷偷借用旧 profile 的凭据。完整 provider 更换会解除旧 profile 归属，只有请求明确提供的运行限制随新绑定生效。
+
+## 确认与后台任务
+
+首页把实际问题、规模、provider 和搜索选项一起保存为待确认请求。使用 profile 时同时保存当时的令牌；缺少令牌不得假定配置可确认。身份预检、单次创建和多次运行创建都验证传入令牌，配置变化返回 `MODEL_PROFILE_CHANGED`，在模型调用、Scenario 插入和任务安排之前停止。刷新只更新可供核对的配置，用户须重新确认后启动。
+
+令牌校验与 provider 解析针对同一份持有的 profile 对象。已接受的确认请求以不可变 `ResolvedProviderPolicy` 贯穿解析、worker 交接和模拟器，不能在下一阶段重新读取同名 profile。显式空值和 false 也属于已确认策略，不得被后续编辑或旧上下文补回。该保证只适用于实际校验并传递确认信息的入口；不能因为一个请求带 profile ID 就推定它有相同保证。
+
+## 后续操作与继承
+
+后续报告、分析、圆桌和恢复操作按本次操作重新解析已保存的 profile 指针，或采用本次完整显式 provider；它们不自动沿用新建运行曾持有的不可变对象。读取历史模型标签不证明今天仍能恢复该绑定；缺失或跨 owner 的 profile 不应静默替换成服务端模型。完整显式 BYOK 可以解除继承，但不能把新的 endpoint 与旧 key 拼接。
+
+历史索引优先显示当时保存的模型描述。只能从当前 profile 回查到的信息标为 `current_profile`，不能把后来编辑的名称或模型声称为旧运行实际使用的绑定。
+
+圆桌、分析与辩论还有自己的操作 scope 和重启规则，分别由对应 owner 文档约束。前端在异步期间切换用户、对象、分支、profile 或语言时，旧请求的返回值不得作为新 scope 的模型状态、导出内容或保存依据。
+
+## 能力与运行结果
+
+RPM、TPM、并发、pending 和 purpose lane 是不同限制；空值继承和零值禁用的精确语义由配置与 LLM client 负责。连接测试、模型目录、HTTP 200 或已开始的遥测记录都不能证明一次真实生成成功。上游正文、合法输出及流终态完成才构成成功；错误与取消必须保留明确失败语义，不能用本地回退冒充上游能力。

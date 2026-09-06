@@ -1,5 +1,5 @@
 ---
-description: 前端页面所有权、后端与历史报告 authority、director/gameplay revision 与终态同步、本地状态边界、provider 凭据归属及 legacy Markdown 失败语义。
+description: 前端 confirmed launch、owner/scope 缓存和迟到响应、Debate 不确定重启、saved-sample 真实导览、当前与历史报告 authority、界面正文导出语言及 legacy Markdown 边界。
 kind: architecture
 relations:
   requires:
@@ -8,17 +8,47 @@ relations:
     - backend/architecture.mdx
     - http-api/contracts.mdx
     - development/local-workflow.mdx
+    - providers/confirmation.mdx
+    - results/report-authority.mdx
+    - oracle/saved-analysis.mdx
+    - debate/lifecycle.mdx
 code:
   paths:
     - frontend/src/App.tsx
     - frontend/package.json
     - frontend/src/lib/scenarioAuthority.ts
     - frontend/src/stores/simulationStore.ts
+    - frontend/src/stores/agentStore.ts
+    - frontend/src/stores/debateStore.ts
+    - frontend/src/stores/endingRoomStore.ts
     - frontend/src/hooks/useSimulationWS.ts
+    - frontend/src/hooks/useDebateWS.ts
     - frontend/src/api/client.ts
     - frontend/src/lib/domainWorld.ts
     - frontend/src/hooks/useSimulationViewState.ts
     - frontend/src/pages/InputView.tsx
+    - frontend/src/pages/SimulationView.tsx
+    - frontend/src/pages/WorkbenchView.tsx
+    - frontend/src/pages/AgentLibrary.tsx
+    - frontend/src/pages/AgentWorkshopView.tsx
+    - frontend/src/pages/DebateArenaView.tsx
+    - frontend/src/pages/DebateResultView.tsx
+    - frontend/src/lib/debateReplay.ts
+    - frontend/src/lib/localPackImport.ts
+    - frontend/src/pages/ResultView.tsx
+    - frontend/src/pages/CompareDigestView.tsx
+    - frontend/src/pages/result/ResultContext.tsx
+    - frontend/src/pages/result/ReportEvidenceDrawer.tsx
+    - frontend/src/pages/result/ResultVerdictPanel.tsx
+    - frontend/src/pages/ResultReportView.tsx
+    - frontend/src/components/Onboarding/OnboardingGuide.tsx
+    - frontend/src/components/QuickStartCards.tsx
+    - frontend/src/components/InterventionModal.tsx
+    - frontend/src/i18n/language.ts
+    - frontend/src/i18n/config.ts
+    - frontend/src/gallery/galleryI18n.ts
+    - frontend/src/gallery/GalleryApp.tsx
+    - frontend/src/lib/apiErrorMessage.ts
     - frontend/src/components/SafeMarkdown.tsx
     - frontend/src/lib/manualChunks.ts
     - frontend/src/pages/result/ResultReportPanel.tsx
@@ -26,20 +56,7 @@ code:
 
 # 前端运行时架构
 
-前端使用 React 19、TypeScript 5.9、Vite 7、Zustand、i18next、Phaser、React Flow、G6 和 Radix UI。JS 工具链是 npm；`frontend/package-lock.json` 与 `packageManager: npm@11.12.1` 是安装依据。`npm run build` 先执行 `tsc -b`，不要用单项目 `tsc --noEmit` 代替项目引用构建。
-
-## 入口
-
-| 页面或域 | 主要文件 | 责任 |
-|---|---|---|
-| 路由壳 | `frontend/src/App.tsx` | route、lazy page、全局错误与 capability 边界 |
-| 首页 | `pages/InputView.tsx` | scenario 创建、搜索、BYOK、Local Pack、初始 Feed |
-| Setup / profiles | `SetupWizardView.tsx`、`ModelProfilesView.tsx` | provider 验证与 profile 管理 |
-| Simulation | `pages/SimulationView.tsx` | live 状态、Theater、领域阈值、干预、取消 |
-| Result / Report | `pages/ResultView.tsx`、`pages/ResultReportView.tsx` | 结局、world outcomes、深读报告 |
-| Gallery | `gallery.html`、`gallery/GalleryApp.tsx` | 离线脱敏 artifact 阅读 |
-| Workbench / Replay | `WorkbenchView.tsx`、`ReplayView.tsx` | 图面、只读 trace、分支恢复 |
-| Agent / Journal / Debate / Oracle | 对应 pages 与 EndingChat / Roundtable | 身份、预测、辩论、会客厅 |
+前端负责把用户操作与服务器 authority 对齐，而不是从缓存或模型文案自行推断结果。路由、依赖和命令以 `App.tsx`、`frontend/package.json` 与 npm lockfile 为准；`npm run build` 使用项目引用的 `tsc -b`，不能用单项目 `tsc --noEmit` 代替完整类型门禁。
 
 ## Durable vs 本地状态
 
@@ -51,15 +68,36 @@ Durable truth 来自后端：scenario、branches、messages、status、story、r
 
 合流入口：`lib/scenarioAuthority.ts`、`stores/simulationStore.ts`、`stores/endingRoomStore.ts`、`api/client.ts`、`lib/domainWorld.ts`。
 
+Agent library 的空数组也是有效缓存结果，不能用列表是否非空判断新鲜度。缓存绑定 session owner 与请求代次；owner 改变时清除数据和 selection，迟到成功与错误都不能覆盖新 owner。创建、导入、修改和删除通过同一 guarded cache 更新或强制刷新，选择项按权威列表及启动容量重新裁剪。
+
+不同运行域各有状态适配器，不能假定所有 store 共享一种实现。共同约束是异步请求携带其目标与代次，离开目标或撤销操作后失去提交权限；只移除 loading UI 不足以撤销迟到响应。
+
+## 准备、确认与真实样例
+
+Quick Start、教学模板、Local Pack 和挑战选择只准备同一表单，不直接发起推演；替换材料清理过期来源与继承的多次运行设置。Local Pack 的作者文字是有界不可信证据，角色预览不创建或选择有权限的持久化身份。
+
+启动摘要保存实际问题、规模、次数、材料、搜索、provider、语言和 profile 确认令牌。确认执行该对象，不从已经变化的表单重新组装请求；配置漂移要求刷新并重新核对。后台是否保持绑定由 `providers/confirmation.mdx` 的服务器合同保证。
+
+样例导览导入已有结果，不调用模型或启动新推演。进度由实际阅读的合法结局、同一场景与分支对的非空比较结果，以及非空证据抽屉推进；缺少资料或能力提供明确 unavailable/skip。关闭首页引导不等于完成结果导览，空抽屉不能伪造证据步骤完成。
+
 ## 实时合同
 
-- WebSocket 收到 `auth_ok` 后才能 resync。
+- 使用首帧认证时 WebSocket 收到 `auth_ok` 后才能 resync；无 token 的本地模式可走其显式恢复分支，不能套用启用认证的前提。
 - `sequence/event_id` 用于去重和 gap 恢复；旧事件不能覆盖新 phase 或终态。
 - `cancelled` 是粘性终态。迟到 status 不得恢复连接或改回运行态。
 - `4001` 和 `4404` 不自动重连；`1006` 可按退避重连。
 - WS host 使用当前页面同源 host，由 dev/preview proxy 转发，不写死 backend 端口。
 - SSE 解析支持多行 `data:`，并在 unmount、切换目标或用户取消时 abort。终态后忽略迟到 delta；错误必须落到可见状态。
 - Simulation live view 只在 `parsing/simulating` 自动同步 director/gameplay；进入终态、replay 或 unmount 必须使排队任务、重试和迟到响应失效，终态展示采用较新的 backend revision，DONE 的 gameplay settlement 继续由 ResultView 与后端 authority 完成。
+- Debate 的停止、删除与事件合流遵守独立粘性终态；读取历史不恢复 worker。不确定 restart 保留原 UUID、选择和令牌后重试，具体持久化与 tombstone 见 `debate/lifecycle.mdx`。
+
+## 结果阅读与语言
+
+结果按结论、结局差异、比较/证据与后续操作组织；任意两个不同且存在的世界线以 branch ID 选择。比较、证据、replay 和继续操作分别检查实际能力与资源，深入工具失败不应使已存结果失去可读性。
+
+报告源对象、当前/历史权限及语言投影分别保存。brief 和旧正文可以直接阅读，不自动触发完整分析或翻译；当前译文结论须有有效当前报告，旧快照不能冒充当前 verdict。完整操作、失败保留与原始证据合同见 `results/report-authority.mdx`。
+
+主应用与独立 Gallery 共享轻量语言偏好和 document language 同步：已存偏好优先于浏览器语言，存储不可用不能阻断切换。只有合法机器日期才本地化，人写日期与异常值原样保留。切换 UI 不重写用户问题、姓名、Claim 或原始引文；Markdown 使用同一正文投影并说明保留的原文，snapshot 保持结构化存档语义。
 
 ## 分享、Theater 与图谱
 
@@ -72,6 +110,7 @@ Durable truth 来自后端：scenario、branches、messages、status、story、r
 ## 安全与构建
 
 - API 错误先经 `sanitizeErrorText`。persona、网页、graph、replay 和 provider 文本用文本节点或 SafeMarkdown。
+- 需要跨语言切换的错误保留公共 status/code，显示时由统一 mapper 本地化；诊断只暴露有界公共字段，不能显示 provider 原文或凭据。
 - capability `loading/error/disabled/enabled` 必须分开；探针失败不能当成功能关闭。
 - Web Search 的 API key 与自定义 endpoint 绑定当前 provider；切换 provider 时清空这两项和旧校验错误，避免把凭据或 endpoint 复用于另一 provider。
 - SafeMarkdown 始终保留 `rehype-sanitize` 和禁用图片的基线。只有先确认 regex lookbehind 可用后才动态加载 GFM；GFM parser extensions 独立成延迟 chunk，使旧 Safari 仍能解析并阅读普通 Markdown。

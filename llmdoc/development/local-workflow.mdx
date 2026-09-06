@@ -1,42 +1,44 @@
 ---
-description: 跨平台本地初始化、双进程与 Docker 启动、旧卷安全迁移、依赖升级验证、真实 LLM probe 和 release signoff 的停止规则。
+description: isolated uv tooling environment 与共享 universal lock 的跨平台初始化、locked wheel-only 同步、loopback 启动、样例 replay 作者约束和 source release signoff。
 kind: guide
 relations:
   requires:
     - config/runtime.mdx
   related:
     - frontend/architecture.mdx
+    - backend/architecture.mdx
+    - development/release-integrity.mdx
 code:
   paths:
     - Makefile
     - backend/pyproject.toml
+    - backend/uv.lock
+    - README.md
+    - README.en.md
     - frontend/package.json
     - frontend/scripts/release-signoff.mjs
     - frontend/scripts/lib/commandRuntime.mjs
     - scripts/validate_samples.py
+    - scripts/build_sample_snapshots.py
     - .github/workflows/ci.yml
+    - .github/workflows/release-signoff.yml
     - backend/Dockerfile
     - frontend/Dockerfile
     - deploy/README.md
+    - docker-compose.yml
 ---
 
 # 本地开发与验证
 
-命令以仓库根目录为起点。Python 使用 `backend/.venv`，前端使用 npm 与 `frontend/package-lock.json`。需要 Python 3.11+、Node.js 20+；npm 版本以 `frontend/package.json#packageManager` 为准。本地默认 backend `127.0.0.1:18927`，frontend `127.0.0.1:18928`。
+命令以仓库根目录为起点。Python 应用使用 `backend/.venv`，前端使用 npm 与 `frontend/package-lock.json`。Python/uv 约束以 `backend/pyproject.toml` 为准，Node 兼容范围与 npm 版本以 `frontend/package.json` 为准。本地默认 backend `127.0.0.1:18927`，frontend `127.0.0.1:18928`。
 
 不要把真实 API key 写进命令历史、文档、测试工件或 replay。
 
 ## 初始化
 
-```bash
-cp .env.example backend/.env
-cd backend
-test -d .venv || python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
-cd ../frontend
-npm ci
-```
+原生环境、CI 和 Docker 消费同一份已提交的 `backend/uv.lock`。使用锁校验的 `uv sync --directory backend --locked --extra dev --no-build`；不能用跳过过期锁检查的选项代替，也不在目标平台临时解析未锁定构建依赖。没有匹配 wheel 时明确失败。
+
+uv 位于独立 tooling environment，与 `backend/.venv` 及用户已有的根 `.venv` 分开。否则同步应用环境可能删除正在运行的工具，尤其会影响 Windows；不能重建用户根环境来避开这个问题。按照中英文 README 的平台命令安装匹配版本，使用 manifest 固定的 npm，不全局替换宿主工具。环境模板只在目标不存在时复制，不能覆盖已有配置。
 
 ## 启动
 
@@ -44,13 +46,15 @@ npm ci
 
 终端 2：`cd frontend && SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run dev -- --host 127.0.0.1 --port 18928`
 
-仓库根也可 `make preflight`、`make dev-backend`、`make dev-frontend`。`make preflight` 的 `fail` 返回非零；可选能力缺失用 `warn`。LLM 检查会实测精确本地 URL，空/占位 key 不发送 `Authorization`。`make dev-backend` 按 Makefile 监听 `0.0.0.0`，只应在可信网络使用；本机回环用上方显式 `127.0.0.1`。
+仓库根也可 `make preflight`、`make dev-backend`、`make dev-frontend`。`make preflight` 的 `fail` 返回非零；可选能力缺失用 `warn`。LLM 检查会实测精确本地 URL，空/占位 key 不发送 `Authorization`。原生 Makefile/dev 入口默认 loopback；容器进程监听容器接口，Compose 默认仅把服务发布到宿主 loopback。
 
 配置 `SESSION_SECRET` 后业务 API 需要 `X-Session-Token`。
 
 Preview：`cd frontend && npm run build && SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run preview -- --host 127.0.0.1 --port 18930`。dev 和 preview 都代理 `/api` 与 `/ws`。
 
 Docker：Windows/macOS 使用 Docker Desktop 的 Linux 容器模式，Linux 使用 Docker Engine 与 Compose 插件。当前 backend 镜像以 UID 1000 非 root 运行；旧 root 容器创建的命名卷必须按 `deploy/README.md` 的停机、完整 `/data` 备份校验、一次性 `chown` 和写入验证流程升级，新卷无需迁移。frontend 反向代理的 `/api` 请求体上限必须容纳后端 50 MiB Snapshot 合同及 multipart framing，并关闭代理缓冲以保持 SSE 增量可见；各 endpoint 仍由后端执行自身的更窄限制。Compose 把 18927/18928 绑定到 `127.0.0.1`。公开部署前设置 `ENV=production`、唯一 `SESSION_SECRET`、唯一 `ADMIN_TOKEN` 和正确 CORS。完整宿主命令以中英文 README 为准，Makefile 只是 POSIX 终端便捷入口。
+
+Linux 的 host gateway 映射只解决容器名称/地址，不保证宿主仅监听 loopback 的 LLM 接受容器连接。`network_mode: host` 也会改变端口与 frontend DNS，不能把单行切换当作完整修复。镜像晋升、实例备份及旧版本恢复的执行边界见 `development/release-integrity.mdx`。
 
 容器验证只能使用本任务创建且可明确归属的容器、网络和卷；无法创建隔离资源是证据阻断，不能转而复用或改动用户正在运行的服务。
 
@@ -63,6 +67,8 @@ Backend：`cd backend && source .venv/bin/activate && python -m pytest -q tests/
 Frontend：`cd frontend && npm test -- --run src/<target_test> && npm run lint && npx tsc -b`。`npx tsc -b` 是类型门禁；`npm run build` 也会先执行它。不要用 `tsc --noEmit` 替代。
 
 样例与资产：`python scripts/validate_samples.py`；`cd frontend && npm run assets:provenance:check`。
+
+官方样例由 catalog 与确定性 generator 产生，必须保留 synthetic provenance，不能声称其中续跑由真实用户或 provider 执行。native 子分支只拥有 fork 后轮次并继承父前缀；replay 则持有自包含前缀，原始消息证据须逐字保留。仅添加 replay metadata 不能修复非法谱系。全分支 resume 不冒充特定角色行动；counterfactual 保留独立 actor 要求。generator 的字节检查和 validator 的语义检查都以正常分支合同为准，不能放宽运行时验证来迎合错误样例。
 
 `backend/pyproject.toml` 中的 Web 框架、表单解析与 metrics 集成采用协调的安全/兼容范围：升级时必须整体检查 router 重载、文件上传与表单、WebSocket/SSE、错误响应和 `/metrics`，不能只验证依赖可解析或单独放宽其中一项。PDF、multipart 与 HTTP 传输安全下界不得无理由回退；精确版本范围以该文件为准，稳定文档不复制版本快照。
 

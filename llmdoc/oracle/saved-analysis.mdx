@@ -1,0 +1,54 @@
+---
+description: 保存调查回答、Analyst 分析与圆桌笔记的 user_saved 归档；生成草稿、owner 和 scope 边界，以及不得升级为身份记忆或推演结论的规则。
+kind: architecture
+relations:
+  requires:
+    - backend/architecture.mdx
+  related:
+    - providers/confirmation.mdx
+    - results/report-authority.mdx
+    - frontend/architecture.mdx
+    - http-api/contracts.mdx
+code:
+  paths:
+    - backend/app/api/ending_rooms.py
+    - backend/app/services/post_verdict_outputs.py
+    - backend/app/services/roundtable_analyst.py
+    - backend/app/services/roundtable_survey.py
+    - backend/app/services/ending_room_service/__init__.py
+    - backend/app/services/ending_room_service/_utils.py
+    - backend/app/services/ending_room_service/_threads.py
+    - backend/app/services/snapshot_export.py
+    - frontend/src/pages/PostVerdictPanel.tsx
+    - frontend/src/pages/postVerdictCaches.ts
+    - frontend/src/pages/AnalystStreamView.tsx
+    - frontend/src/pages/SurveyStreamView.tsx
+    - frontend/src/pages/RoundtableProviderPicker.tsx
+    - frontend/src/pages/SavedAnalysisArchive.tsx
+    - frontend/src/pages/WorldlineRoundtableView.tsx
+    - frontend/src/hooks/useRoundtableSseStream.ts
+---
+
+# 圆桌分析与用户保存归档
+
+Survey 调查回答和 Analyst 分析是模型基于模拟资料产生的输出。实时生成草稿、已有圆桌结果和用户保存归档各有自己的生命周期；其中任意一种存在，都不意味着另一种已经完成或可写。
+
+## 生成 scope 与模型归属
+
+操作先验证 Scenario、Room 和参与者属于同一授权范围。证据使用共享有效分支谱系选择器，不能混入父分支 fork 之后或兄弟分支的消息。显式工具 provider 优先于已保存的 room profile，再继承源 Scenario；没有可恢复绑定时给出可见错误，不能用历史显示标签猜测执行模型。
+
+Room 的 `room_model_profile_id` 是后续操作可重新解析的持久化指针，不是首页确认令牌的永久冻结保证。复用现有 Room 时不允许用另一显式 profile 偷换绑定；实际生成 provider 在进入 LIVE 的序列化转移中记录。读取已完成结果不能覆盖该历史描述。
+
+前端以 Scenario、Room 和结果上下文版本区分草稿与保存状态，切换上下文时清理缓存并使旧操作失效。新的 stream attempt 使用独立请求代次；保存返回也必须匹配发起时的 archive epoch。仅停止 spinner 不等于撤销旧响应的写入资格。切换分析标签可保留同一上下文的草稿，但不能把被中止、报错或没有合法完成响应的内容变成“成功结果”。
+
+## 显式保存
+
+保存是用户单独发起的动作。Analyst 要有成功的最终回答；Survey 的无重复回答必须与选定参与者集合一致，且每项均成功完整。`origin=simulation`、`verification=user_saved` 只说明用户保存了模拟输出，绝不等于外部事实验证、报告 Claim、动作结果或身份记忆。
+
+服务端在序列化写入中重新验证 owner、删除状态、Room 与来源角色/分支/identity 归属。相同结果 ID 只有在脱敏内容相同时才幂等；相同 ID 的不同内容是冲突。每条记录与整个归档有独立大小和数量界限，不能接受任意无限 JSON。
+
+保存只更新新的上下文快照中的归档字段，不用客户端旧的整个 `parsed_context` 覆盖并发报告或模拟写入。保存的 provider 信息仅供显示，活跃 profile 指针被清除；每次读取仍验证结构并脱敏。此归档不会进入 provider 解析、Claim 编译、动作执行、identity hydration 或 memory promotion。
+
+## 导入与重开
+
+刷新、历史页和导出可读取合法保存内容；浏览器草稿不是其 authority。Snapshot 导入复用同一个归档 validator，保留合法文本并标为 archived，同时清除 Room、profile、角色、分支和 identity 的活跃引用，参与者只保留惰性展示标识。保存调查回答不能借导入恢复原工作进程、重绑模型账户或晋升为推演结论。
