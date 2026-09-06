@@ -1,42 +1,42 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "452f9682f8befb65ca872cc4c1690f8ad3c44d6e",
-    "verifiedAt": "2026-09-04T19:43:19.456Z"
+    "revision": "1dd330a9c30807da70c36e4a68980ae31af51097",
+    "verifiedAt": "2026-09-06T01:06:45.847Z"
   },
   "documents": {
     "architecture.mdx": {
-      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "backend/architecture.mdx": {
-      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "config/runtime.mdx": {
-      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "development/local-workflow.mdx": {
-      "validatedRevision": "1d565796895619756aae8547cb4c2f4a1426c749"
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "frontend/architecture.mdx": {
-      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "http-api/contracts.mdx": {
-      "validatedRevision": "7a7bf131a559455d53aa4af88fc31fb3c3ff7eb3"
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "providers/confirmation.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "results/report-authority.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "oracle/saved-analysis.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "development/release-integrity.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     },
     "debate/lifecycle.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
     }
   },
   "convergence": {
