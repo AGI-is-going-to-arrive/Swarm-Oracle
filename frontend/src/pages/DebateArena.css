@@ -1538,3 +1538,50 @@
     box-shadow: 0 0 0 10px rgba(194, 24, 91, 0.06);
   }
 }
+
+.debate-recovery-panel {
+  margin: 1rem 0;
+  padding: clamp(1rem, 2vw, 1.5rem);
+  border: 1px solid var(--border-color, #d9cfc2);
+  border-radius: 1rem;
+  background: var(--bg-surface, #fdfbf7);
+  overflow-wrap: anywhere;
+}
+
+.debate-restart-models {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  border: 0;
+  padding: 1rem 0;
+  margin: 0;
+}
+
+.debate-restart-models label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.debate-restart-models select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem;
+}
+
+.debate-restart-models .debate-restart-server {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+}
+
+.debate-recovery-panel button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 640px) {
+  .debate-restart-models {
+    grid-template-columns: 1fr;
+  }
+}

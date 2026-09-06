@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 
 // ── Mocks ───────────────────────────────────────────────────
 
@@ -68,8 +68,12 @@ import GraphWorkbenchShell from './GraphWorkbenchShell';
 // ── Helpers ─────────────────────────────────────────────────
 
 function renderWorkbench(route = '/workbench/test-id?view=graph') {
+  function LocationProbe() {
+    return <output data-testid="workbench-location">{useLocation().search}</output>;
+  }
   return render(
     <MemoryRouter initialEntries={[route]}>
+      <LocationProbe />
       <Routes>
         <Route path="/workbench/:id" element={<WorkbenchView />} />
       </Routes>
@@ -149,6 +153,9 @@ describe('WorkbenchView', () => {
     renderWorkbench();
     expect(screen.getByText('Workbench feature is not enabled')).toBeTruthy();
     expect(screen.queryByTestId('graph-workbench-shell')).toBeNull();
+    expect(screen.getByRole('tablist')).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').every((tab) => tab.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getByRole('link', { name: /Back to Result/i })).toBeInTheDocument();
   });
 
   it('capability loading → shows loading state', () => {
@@ -165,6 +172,8 @@ describe('WorkbenchView', () => {
     expect(retryBtn).toBeTruthy();
     fireEvent.click(retryBtn);
     expect(mockCapResults.causal_graph.reload).toHaveBeenCalled();
+    expect(screen.getByRole('tablist')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Knowledge Graph' })).toBeEnabled();
   });
 
   it('defaults to graph mode when ?view is absent', async () => {
@@ -175,11 +184,15 @@ describe('WorkbenchView', () => {
 
   // ── H-1: kg_explorer capability gate ──────────────────────
 
-  it('kg_explorer disabled → ?view=kg shows unavailable card', () => {
+  it('kg_explorer disabled → its deep-link keeps controls to return to the causal view', async () => {
     mockCapResults.kg_explorer.enabled = false;
     renderWorkbench('/workbench/abc?view=kg');
     expect(screen.getByText('Workbench feature is not enabled')).toBeTruthy();
     expect(screen.queryByTestId('graph-workbench-shell')).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Knowledge Graph' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: 'Split' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Causal' }));
+    expect(await screen.findByTestId('causal-board')).toBeInTheDocument();
   });
 
   it('both disabled → ?view=split shows unavailable', () => {
@@ -206,6 +219,25 @@ describe('WorkbenchView', () => {
     expect(screen.queryByTestId('causal-board')).toBeNull();
   });
 
+  it.each(['/workbench/abc?branch=branch-7', '/workbench/abc?view=bogus&branch=branch-7'])('uses the available KG default and preserves branch for %s', async (route) => {
+    mockCapResults.causal_graph.enabled = false;
+    renderWorkbench(route);
+    expect(await screen.findByTestId('kg-board')).toBeInTheDocument();
+    expect(screen.getByTestId('workbench-location')).toHaveTextContent('branch=branch-7');
+    expect(screen.queryByTestId('causal-board')).not.toBeInTheDocument();
+  });
+
+  it('can switch to an available view while another capability probe has failed', async () => {
+    mockCapResults.causal_graph.error = new Error('probe failed');
+    renderWorkbench('/workbench/abc?view=graph&branch=b1');
+    fireEvent.click(screen.getByRole('tab', { name: 'Knowledge Graph' }));
+    expect(await screen.findByTestId('kg-board')).toBeInTheDocument();
+    expect(screen.getByTestId('workbench-location')).toHaveTextContent('branch=b1');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(mockCapResults.causal_graph.reload).toHaveBeenCalled();
+    expect(mockCapResults.kg_explorer.reload).toHaveBeenCalled();
+  });
+
   it('kg_explorer and causal_graph both enabled → ?view=kg renders shell', async () => {
     mockCapResults.causal_graph.enabled = true;
     mockCapResults.kg_explorer.enabled = true;
@@ -227,6 +259,16 @@ describe('WorkbenchView', () => {
     Object.defineProperty(window, 'innerWidth', { value: 500, writable: true });
     renderWorkbench('/workbench/abc?view=split');
     expect(await screen.findByTestId('workbench-root')).toBeTruthy();
+    Object.defineProperty(window, 'innerWidth', { value: 1024, writable: true });
+  });
+
+  it('compact split links fall back to KG when it is the only available view', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 500, writable: true });
+    mockCapResults.causal_graph.enabled = false;
+    renderWorkbench('/workbench/abc?view=split&branch=b2');
+    expect(await screen.findByTestId('kg-board')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Split' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('workbench-location')).toHaveTextContent('view=kg&branch=b2');
     Object.defineProperty(window, 'innerWidth', { value: 1024, writable: true });
   });
 });
@@ -325,6 +367,16 @@ describe('GraphWorkbenchShell', () => {
 });
 
 describe('LayoutSwitcher', () => {
+  it('disables unavailable modes and skips them during keyboard navigation', () => {
+    const onChange = vi.fn();
+    render(<LayoutSwitcher mode="graph" onChange={onChange} availableModes={{ graph: true, split: false, kg: true }} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Split' }));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Causal' }), { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenCalledWith('kg');
+    expect(screen.getByRole('tab', { name: 'Knowledge Graph' })).toHaveFocus();
+  });
+
   it('renders tablist with correct aria attributes', () => {
     const onChange = vi.fn();
     render(

@@ -20,7 +20,7 @@ from sqlalchemy import or_, update
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
-from app.api.schemas import ScenarioResponse
+from app.api.schemas import ScenarioResponse, ScenarioSnapshotImport
 from app.config import settings
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
@@ -49,6 +49,7 @@ from app.services.llm_resolution import (
     raise_unresolved_model_profile_provider,
     recover_profile_provider_overrides,
 )
+from app.services.model_profiles import ResolvedProviderPolicy
 from app.services.parser import parse_question
 from app.services.runtime_lock import (
     RuntimeLockLease,
@@ -1011,6 +1012,7 @@ async def run_sim_background(
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
     pre_acquired_lock_lease: RuntimeLockLease | None = None,
+    confirmed_profile_policy: ResolvedProviderPolicy | None = None,
 ):
     """Run simulation as a background task with anti-reentrancy guard.
 
@@ -1075,6 +1077,21 @@ async def run_sim_background(
             )
 
         effective_llm_overrides = dict(llm_overrides or {})
+        if confirmed_profile_policy is not None:
+            effective_llm_overrides.update({
+                "api_key": confirmed_profile_policy.api_key,
+                "base_url": confirmed_profile_policy.base_url,
+                "model": confirmed_profile_policy.model,
+                "model_profile_id": confirmed_profile_policy.model_profile_id,
+                "requests_per_minute": confirmed_profile_policy.requests_per_minute,
+                "tokens_per_minute": confirmed_profile_policy.tokens_per_minute,
+                "concurrency": confirmed_profile_policy.concurrency,
+                "supports_structured_outputs_override": (
+                    confirmed_profile_policy.supports_structured_outputs
+                ),
+                "supports_native_search_override": confirmed_profile_policy.supports_native_search,
+                "native_search_upstream_override": confirmed_profile_policy.native_search_upstream,
+            })
         scope_kwargs: dict[str, object] = {"purpose": "scenario_runtime"}
         with Session(get_engine()) as session:
             scenario = session.get(Scenario, scenario_id)
@@ -1084,9 +1101,10 @@ async def run_sim_background(
                 else {}
             )  # noqa: E501
             recovered_profile_overrides = (
-                recover_profile_provider_overrides(session, scenario) if scenario else None
+                recover_profile_provider_overrides(session, scenario)
+                if scenario and confirmed_profile_policy is None else None
             )
-            if scenario and model_profile_provider_unresolved(
+            if confirmed_profile_policy is None and scenario and model_profile_provider_unresolved(
                 scenario,
                 recovered_profile_overrides,
                 explicit_api_key=effective_llm_overrides.get("api_key"),
@@ -1138,6 +1156,24 @@ async def run_sim_background(
                 if effective_llm_overrides.get("native_search_upstream_override") is not None
                 else parsed_context.get("native_search_upstream")
             )
+            if confirmed_profile_policy is not None:
+                # A confirmed create carries its immutable captured policy. In
+                # particular, explicit None/False values cannot inherit a later
+                # profile edit during parse-to-simulation handoff.
+                scope_kwargs.update({
+                    "requests_per_minute": confirmed_profile_policy.requests_per_minute,
+                    "tokens_per_minute": confirmed_profile_policy.tokens_per_minute,
+                    "concurrency": confirmed_profile_policy.concurrency,
+                    "supports_structured_outputs_override": (
+                        confirmed_profile_policy.supports_structured_outputs
+                    ),
+                    "supports_native_search_override": (
+                        confirmed_profile_policy.supports_native_search
+                    ),
+                    "native_search_upstream_override": (
+                        confirmed_profile_policy.native_search_upstream
+                    ),
+                })
 
         async def _broadcast_with_activity(target_scenario_id: str, event: dict):
             if _is_simulation_activity_event(event):
@@ -1153,6 +1189,8 @@ async def run_sim_background(
         }
         if branch_id is not None:
             sim_kwargs["branch_id"] = branch_id
+        if confirmed_profile_policy is not None:
+            sim_kwargs["confirmed_profile_policy"] = confirmed_profile_policy
 
         async def _run_simulation_with_lock_guard() -> None:
             simulation_task = asyncio.create_task(run_simulation(**sim_kwargs))
@@ -1422,6 +1460,7 @@ async def parse_and_run_background(
     llm_base_url: str | None,
     llm_model: str | None,
     model_profile_id: str | None = None,
+    confirmed_profile_policy: ResolvedProviderPolicy | None = None,
     llm_requests_per_minute: int | None,
     llm_tokens_per_minute: int | None,
     disable_user_quota: bool | None,
@@ -1444,6 +1483,17 @@ async def parse_and_run_background(
     parse -> simulate -> narrate pipeline.
     """
     engine = get_engine()
+    if confirmed_profile_policy is not None:
+        llm_api_key = confirmed_profile_policy.api_key
+        llm_base_url = confirmed_profile_policy.base_url
+        llm_model = confirmed_profile_policy.model
+        model_profile_id = confirmed_profile_policy.model_profile_id
+        llm_requests_per_minute = confirmed_profile_policy.requests_per_minute
+        llm_tokens_per_minute = confirmed_profile_policy.tokens_per_minute
+        concurrency = confirmed_profile_policy.concurrency
+        supports_structured_outputs = confirmed_profile_policy.supports_structured_outputs
+        supports_native_search = confirmed_profile_policy.supports_native_search
+        native_search_upstream = confirmed_profile_policy.native_search_upstream
 
     # H2 fix: register cancel token + mark scenario as "running" before parse
     # begins so cancel requests during parse are observable (no 409, token exists).
@@ -2206,6 +2256,8 @@ async def parse_and_run_background(
                     scenario_id,
                     llm_overrides=llm_overrides,
                     pre_acquired_lock_lease=pre_acquired_lock_lease,
+                    **({"confirmed_profile_policy": confirmed_profile_policy}
+                       if confirmed_profile_policy is not None else {}),
                 )
             finally:
                 _release_parse_runtime_lock_best_effort(
@@ -2494,6 +2546,29 @@ def _load_scenario_additive_graph_fields(
     return causal_graph_id, checkpoints
 
 
+def _public_snapshot_import(context: dict) -> ScenarioSnapshotImport | None:
+    raw = context.get("snapshot_import")
+    if not isinstance(raw, dict):
+        return None
+    source_status = raw.get("source_status")
+    if (
+        not isinstance(source_status, str)
+        or source_status not in {"parsing", "simulating", "narrating", "done", "error", "cancelled"}
+        or raw.get("mode") != "read_only"
+        or raw.get("worker_resumed") is not False
+    ):
+        return None
+    resume_action = raw.get("resume_action")
+    if resume_action is not None and resume_action != "start_new_simulation":
+        return None
+    return ScenarioSnapshotImport(
+        source_status=source_status,
+        resume_action=resume_action,
+        reason_code="SOURCE_EXECUTION_NOT_RESUMED"
+        if source_status in {"parsing", "simulating", "narrating"} else "READ_ONLY_SNAPSHOT",
+    )
+
+
 def load_scenario_response(
     engine,
     scenario_id: str,
@@ -2654,6 +2729,7 @@ def load_scenario_response(
 
         return ScenarioResponse(
             id=s.id,
+            snapshot_import=_public_snapshot_import(ctx),
             question=s.question,
             status=s.status.value,
             run_group_id=s.run_group_id,

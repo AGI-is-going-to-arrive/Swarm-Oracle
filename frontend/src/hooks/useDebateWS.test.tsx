@@ -13,6 +13,9 @@ const storeState = {
   setCounterplay: vi.fn(),
   appendTurn: vi.fn(),
   setVerdict: vi.fn(),
+  setTerminalStatus: vi.fn(),
+  status: 'live',
+  activeDebateId: null as string | null,
   debate: null,
 };
 
@@ -82,16 +85,61 @@ describe('useDebateWS', () => {
       }),
     });
     getDebateMock.mockReset();
+    storeState.status = 'live';
+    storeState.activeDebateId = null;
     Object.values(storeState).forEach((value) => {
       if (typeof value === 'function') {
         value.mockReset();
       }
+    });
+    storeState.setTerminalStatus.mockImplementation((status: string, id: string) => {
+      storeState.status = status;
+      storeState.activeDebateId = id;
     });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('hydrates cancellation and drops late runtime events', async () => {
+    const snapshot = { id: 'debate-1', status: 'cancelled', turns: [] };
+    getDebateMock.mockResolvedValue(snapshot);
+    render(<Harness debateId="debate-1" />);
+    act(() => { vi.advanceTimersByTime(0); });
+    const socket = MockWebSocket.instances[0];
+    await act(async () => {
+      socket.onmessage?.({ data: JSON.stringify({ type: 'status', data: { status: 'cancelled' } }) } as MessageEvent<string>);
+      await Promise.resolve();
+    });
+    act(() => {
+      for (const event of [
+        { type: 'debate_phase_change', data: { phase: 'verdict' } },
+        { type: 'debate_score_update', data: { score: { proposition: 100, opposition: 0 }, audience_meter: 100 } },
+        { type: 'status', data: { status: 'error', error: 'late' } },
+        { type: 'debate_verdict', data: {} },
+      ]) socket.onmessage?.({ data: JSON.stringify(event) } as MessageEvent<string>);
+    });
+    expect(storeState.setTerminalStatus).toHaveBeenCalledWith('cancelled', 'debate-1');
+    expect(storeState.setDebate).toHaveBeenCalledWith(snapshot, 'debate-1');
+    expect(storeState.setPhase).not.toHaveBeenCalled();
+    expect(storeState.setScore).not.toHaveBeenCalled();
+    expect(storeState.setError).not.toHaveBeenCalled();
+    expect(storeState.setVerdict).not.toHaveBeenCalled();
+  });
+
+  it('treats deletion as permanent for the current socket', () => {
+    render(<Harness debateId="debate-1" />);
+    act(() => { vi.advanceTimersByTime(0); });
+    const socket = MockWebSocket.instances[0];
+    act(() => {
+      socket.onmessage?.({ data: JSON.stringify({ type: 'status', data: { status: 'deleted' } }) } as MessageEvent<string>);
+      socket.onmessage?.({ data: JSON.stringify({ type: 'status', data: { status: 'done' } }) } as MessageEvent<string>);
+    });
+    expect(storeState.setTerminalStatus).toHaveBeenCalledOnce();
+    expect(storeState.setTerminalStatus).toHaveBeenCalledWith('deleted', 'debate-1');
+    expect(storeState.setDebate).not.toHaveBeenCalled();
   });
 
   it('clears the delayed initial connect when unmounted before the timer fires', () => {

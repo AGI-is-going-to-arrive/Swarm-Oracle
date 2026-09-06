@@ -5,6 +5,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AgentIdentityInfo } from '../types';
+import { DECISION_BIAS_KEYS } from './Controls/decisionBias';
 import './AgentCard.css';
 
 export interface AgentCardProps {
@@ -56,6 +57,9 @@ export function AgentCard({
   const { t } = useTranslation();
   const tier = (identity.preferred_tier ?? 'IMPORTANT').toUpperCase();
   const tierLower = tier.toLowerCase();
+  const tierKey = tier === 'CORE' ? 'sim.panel.tier_core'
+    : tier === 'IMPORTANT' ? 'agents.tier_important_title'
+      : tier === 'CROWD' ? 'agents.tier_crowd_title' : null;
   const isGenerated = identity.kind === 'generated';
   const biasEntries = useMemo(
     () => readDecisionBias(identity.decision_bias, identity.decision_bias_json),
@@ -121,7 +125,7 @@ export function AgentCard({
 
       <div className="agent-card-tile__meta">
         <span className={`agent-tier-badge agent-tier-badge--${tierLower}`}>
-          {tier}
+          {tierKey ? t(tierKey) : tier}
         </span>
         <span
           className={`agent-card-tile__source agent-card-tile__source--${
@@ -136,17 +140,19 @@ export function AgentCard({
       {biasEntries.length > 0 && (
         <ul className="agent-card-tile__bias" aria-label={t('agent_library.bias_label', 'Decision bias')}>
           {biasEntries.map((entry) => {
+            const knownKey = DECISION_BIAS_KEYS.find((key) => key === entry.label);
+            const label = knownKey ? t(`agents.bias_keys.${knownKey}`) : entry.label;
             const pct = Math.round(((entry.value + 1) / 2) * 100);
             const positive = entry.value >= 0;
             return (
               <li key={entry.label} className="agent-card-tile__bias-row">
-                <span className="agent-card-tile__bias-label">{entry.label}</span>
+                <span className="agent-card-tile__bias-label">{label}</span>
                 <span
                   className={`agent-card-tile__bias-bar agent-card-tile__bias-bar--${
                     positive ? 'pos' : 'neg'
                   }`}
                   role="img"
-                  aria-label={`${entry.label}: ${entry.value.toFixed(2)}`}
+                  aria-label={`${label}: ${entry.value.toFixed(2)}`}
                 >
                   <span
                     className="agent-card-tile__bias-fill"

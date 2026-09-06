@@ -22,11 +22,13 @@ from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
 from app.models.debate import DebateTurn
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.debate_lifecycle import debate_auxiliary_write_allowed
 from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
+from app.services.runtime_lock import RuntimeLockLease, begin_serialized_write
 
 logger = logging.getLogger(__name__)
 _snapshot_index_lock = threading.Lock()
@@ -53,6 +55,7 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|[。！？]|\n+")
 _VALID_UNIT_TYPES = {"claim", "evidence", "rebuttal", "counter"}
 _VALID_STANCES = {"supports_proposition", "supports_opposition", "neutral"}
 _enrichment_tasks: set[asyncio.Task[Any]] = set()
+_enrichment_task_owners: dict[asyncio.Task[Any], str] = {}
 
 
 def _split_sentences(content: str) -> list[str]:
@@ -262,8 +265,15 @@ def _unit_verdict_sort_key(
 def _load_units_for_enrichment_sync(
     debate_id: str,
     turn_id: str,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> list[dict[str, str]]:
     with Session(get_engine()) as session:
+        if not debate_auxiliary_write_allowed(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        ):
+            return []
         units = session.exec(
             select(DebateArgumentUnit).where(
                 DebateArgumentUnit.debate_id == debate_id,
@@ -376,11 +386,14 @@ def _apply_enriched_units_sync(
     speaker_side: str,
     unit_refs_by_text: dict[str, dict[str, str]],
     enriched_units: list[dict[str, Any]],
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> int:
     updated = 0
     snapshot_id: str | None = None
     with _enrichment_apply_lock:
         with Session(get_engine()) as session:
+            begin_serialized_write(session)
             for item in enriched_units:
                 if not isinstance(item, dict):
                     continue
@@ -394,6 +407,11 @@ def _apply_enriched_units_sync(
 
                 unit = session.get(DebateArgumentUnit, original_unit["id"])
                 if unit is None:
+                    continue
+                if not debate_auxiliary_write_allowed(
+                    session, unit.debate_id, runtime_lease=runtime_lease,
+                    require_runtime_lease=require_runtime_lease,
+                ):
                     continue
 
                 next_type = _normalize_unit_type(item.get("type"), unit.unit_type)
@@ -641,6 +659,8 @@ def _get_or_create_snapshot(
 def extract_argument_units(
     debate_id: str, turn_id: str, content: str, speaker_side: str,
     *, turn_sequence: int | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> list[str]:
     """Extract argument units from a debate turn, return created unit IDs.
 
@@ -658,6 +678,11 @@ def extract_argument_units(
     engine = get_engine()
     _ensure_argument_map_snapshot_index(engine)
     with Session(engine) as session:
+        if not debate_auxiliary_write_allowed(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        ):
+            return []
         snapshot = _get_or_create_snapshot(session, debate_id)
 
         # Load existing hashes for dedup within this turn.
@@ -761,6 +786,8 @@ async def enrich_argument_units_for_turn(
     language: str,
     llm_overrides: dict[str, Any] | None = None,
     quota_key: str | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> int:
     """Optionally enrich one turn's argument units with a single LLM call.
 
@@ -775,6 +802,8 @@ async def enrich_argument_units_for_turn(
         _load_units_for_enrichment_sync,
         debate_id,
         turn_id,
+        runtime_lease,
+        require_runtime_lease,
     )
     if not units:
         return 0
@@ -829,6 +858,8 @@ async def enrich_argument_units_for_turn(
         speaker_side=speaker_side,
         unit_refs_by_text=by_text,
         enriched_units=enriched_units,
+        runtime_lease=runtime_lease,
+        require_runtime_lease=require_runtime_lease,
     )
 
     if updated:
@@ -841,8 +872,11 @@ async def enrich_argument_units_for_turn(
 
 def _finalize_enrichment_task(task: asyncio.Task[Any]) -> None:
     _enrichment_tasks.discard(task)
+    _enrichment_task_owners.pop(task, None)
     try:
         task.result()
+    except asyncio.CancelledError:
+        return
     except Exception:
         logger.debug("argument map enrichment failed (non-blocking)", exc_info=True)
 
@@ -855,6 +889,8 @@ def schedule_argument_enrichment_for_turn(
     language: str,
     llm_overrides: dict[str, Any] | None = None,
     quota_key: str | None = None,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> bool:
     """Schedule a fire-and-forget enrichment task for one debate turn."""
     if not settings.ARGUMENT_MAP_LLM_ENRICHMENT:
@@ -872,14 +908,29 @@ def schedule_argument_enrichment_for_turn(
             language=language,
             llm_overrides=llm_overrides,
             quota_key=quota_key,
+            runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
         )
     )
     _enrichment_tasks.add(task)
+    _enrichment_task_owners[task] = debate_id
     task.add_done_callback(_finalize_enrichment_task)
     return True
 
 
-def link_verdict(debate_id: str, verdict_data: dict) -> None:
+def cancel_argument_enrichment_for_debate(debate_id: str) -> None:
+    for task, owner in list(_enrichment_task_owners.items()):
+        if owner == debate_id and not task.done():
+            loop = task.get_loop()
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(task.cancel)
+
+
+def link_verdict(
+    debate_id: str, verdict_data: dict,
+    *, runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
+) -> None:
     """Link a verdict to the argument map — truly idempotent.
 
     Re-queries ALL units (not just standing), resets all statuses,
@@ -901,6 +952,11 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
     engine = get_engine()
     _ensure_argument_map_snapshot_index(engine)
     with _verdict_link_lock, Session(engine) as session:
+        if not debate_auxiliary_write_allowed(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        ):
+            return
         snapshot = _get_or_create_snapshot(session, debate_id)
 
         # Step 1: Re-query ALL units for full re-evaluation

@@ -1,4 +1,4 @@
-import type { SurveySSEEvent } from '../types';
+import type { RoundtableProviderSelection, SurveySSEEvent } from '../types';
 
 export interface AnalystIteration {
   iteration: number;
@@ -16,6 +16,9 @@ export type AnalystStoppedReason =
   | 'stream_failure';
 
 export interface AnalystCacheState {
+  question?: string;
+  resultId?: string;
+  provider?: RoundtableProviderSelection | null;
   iterations: AnalystIteration[];
   finalAnswer: string | null;
   stoppedReason: AnalystStoppedReason | null;
@@ -36,6 +39,9 @@ export function createInitialAnalystCache(): AnalystCacheState {
 }
 
 export interface SurveyCacheState {
+  question?: string;
+  resultId?: string;
+  provider?: RoundtableProviderSelection | null;
   responses: Map<string, SurveySSEEvent>;
   streaming: boolean;
   error: string | null;

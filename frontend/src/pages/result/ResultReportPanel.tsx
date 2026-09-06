@@ -22,6 +22,7 @@ import type {
   ReportEvidence,
   ReportSectionFailureReason,
   ReportTier,
+  Scenario,
   StoryData,
   ToolTraceSummary,
 } from '../../types';
@@ -40,11 +41,15 @@ interface Props {
   activeScenarioId?: string | null;
   isZh?: boolean;
   isReplayMode?: boolean;
+  scenarioStatus?: Scenario['status'];
 }
 
 export type ReportContentLanguage = 'zh' | 'en';
 
 const REPORT_CONTENT_LANGUAGES: readonly ReportContentLanguage[] = ['zh', 'en'];
+const REPORT_PROGRESS_STAGE_IDS = new Set([
+  'timeline', 'factions', 'conflicts', 'premortem', 'indicators', 'sources', 'translation',
+]);
 
 function isReportContentLanguage(value: unknown): value is ReportContentLanguage {
   return value === 'zh' || value === 'en';
@@ -86,6 +91,89 @@ export function resolveReportContentLanguage(
   // Legacy compatibility: old persisted payloads may not carry availability metadata.
   if (isReportContentLanguage(report.language)) return report.language;
   return preferredLanguage;
+}
+
+/** Project translated authored text while leaving the saved report and provenance intact. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function projectReportContentLanguage(
+  report: FullReport,
+  language: ReportContentLanguage,
+): FullReport {
+  const translated = report.authored_content_i18n?.[language];
+  const sectionTexts = translated?.section_texts;
+  const completeVariant = translated
+    && typeof translated.title === 'string' && translated.title.trim()
+    && typeof translated.summary === 'string' && translated.summary.trim()
+    && sectionTexts
+    && Object.keys(sectionTexts).length === report.sections.length
+    && report.sections.every((section) => (
+      typeof sectionTexts[section.id]?.title === 'string'
+      && typeof sectionTexts[section.id]?.body_md === 'string'
+    ));
+  if (!completeVariant || !translated || !sectionTexts) {
+    if (language === report.language) return report;
+    // Legacy reports can have translated chapter bodies without translated
+    // appendices. Keep that core readable; the original remains selectable.
+    return {
+      ...report,
+      limitations: '',
+      follow_ups: [],
+      indicators_to_watch: [],
+      dissenting: null,
+      premortem_analysis: null,
+      interview_status: report.interview_status
+        ? { ...report.interview_status, message: '' }
+        : report.interview_status,
+      verdict: {
+        ...report.verdict,
+        disclaimer: null,
+        analytic_confidence: {
+          ...report.verdict.analytic_confidence,
+          basis: report.verdict.analytic_confidence.basis_i18n?.[language] || '',
+        },
+      },
+    };
+  }
+  const title = translated.title as string;
+  const summary = translated.summary as string;
+  const basis = translated.confidence_basis
+    ?? report.verdict.analytic_confidence.basis_i18n?.[language]
+    ?? '';
+  return {
+    ...report,
+    language,
+    title,
+    title_i18n: { ...report.title_i18n, [language]: title },
+    summary,
+    summary_i18n: { ...report.summary_i18n, [language]: summary },
+    limitations: translated.limitations,
+    follow_ups: translated.follow_ups,
+    indicators_to_watch: translated.indicators_to_watch,
+    dissenting: translated.dissenting,
+    interview_evidence: translated.interview_evidence,
+    interview_status: translated.interview_status,
+    premortem_analysis: translated.premortem_analysis,
+    sections: report.sections.map((section) => ({
+      ...section,
+      title: sectionTexts[section.id].title,
+      title_i18n: { ...section.title_i18n, [language]: sectionTexts[section.id].title },
+      body_md_i18n: { ...section.body_md_i18n, [language]: sectionTexts[section.id].body_md },
+    })),
+    verdict: {
+      ...report.verdict,
+      headline_answer: translated.headline_answer,
+      disclaimer: translated.disclaimer ?? null,
+      analytic_confidence: {
+        ...report.verdict.analytic_confidence,
+        basis,
+        basis_i18n: {
+          zh: report.verdict.analytic_confidence.basis_i18n?.zh || '',
+          en: report.verdict.analytic_confidence.basis_i18n?.en || '',
+          [language]: basis,
+        },
+      },
+    },
+  };
 }
 
 function isTruncatedReportMarker(
@@ -216,6 +304,10 @@ const ALLOWED_SECTION_IDS = ['timeline', 'factions', 'conflicts', 'premortem', '
 const REPORT_GENERATE_TIMEOUT_MS = 35 * 60_000;
 
 type TerminalAuthorityState = 'idle' | 'pending' | 'resolved';
+type ReportAction = { operation: 'generate' } | {
+  operation: 'translate';
+  targetLanguage: ReportContentLanguage;
+};
 
 function reportAttemptFingerprint(
   report: FullReport | FullReportTruncatedMarker | null | undefined,
@@ -226,6 +318,10 @@ function reportAttemptFingerprint(
     status: report.status,
     targetBranchId: report.target_branch_id,
     targetBranchSort: report.target_branch_sort,
+    detailLevel: report.detail_level ?? 'full',
+    availableLanguages: report.available_languages,
+    languageStatus: report.language_status,
+    authoredContent: report.authored_content_i18n,
   });
 }
 
@@ -350,8 +446,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   activeScenarioId,
   isZh,
   isReplayMode,
+  scenarioStatus,
 }: Props & { isZh: boolean; isReplayMode: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const {
     capabilities,
@@ -373,6 +470,8 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
   const [sectionProgress, setSectionProgress] = useState<SectionStreamProgress[]>([]);
   const [pollRevision, setPollRevision] = useState(0);
+  const [requestedLanguage, setRequestedLanguage] = useState<ReportContentLanguage | null>(null);
+  const [activeOperation, setActiveOperation] = useState<ReportAction['operation'] | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
@@ -387,21 +486,39 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const activeStoryData = localStoryData || storyData;
   const rawReport = activeStoryData?.full_report;
   const isTruncatedReport = isTruncatedReportMarker(rawReport);
-  const report = isFullReport(rawReport) ? rawReport : null;
+  const sourceReport = isFullReport(rawReport) ? rawReport : null;
   const isReportStale = activeStoryData?.full_report_stale === true;
   const isEnabled = capabilities?.result_report?.enabled ?? false;
   const providerPolicy = loadLlmProviderPolicy();
   const hasByok = Boolean(providerPolicy.apiKey.trim())
     || (Boolean(providerPolicy.model.trim()) && isLocalLlmBaseUrl(providerPolicy.baseUrl));
   const canGenerateReport = !isReplayMode && isEnabled
+    && (scenarioStatus === undefined || scenarioStatus === 'done')
     && (capabilities?.llm_configured !== false || hasByok);
 
   const isGenerating = !pollStalled
-    && ((!isReportStale && report?.status === 'generating') || localGenerating);
-  const preferredContentLanguage: ReportContentLanguage = isZh ? 'zh' : 'en';
-  const reportContentLanguage = report
-    ? resolveReportContentLanguage(report, preferredContentLanguage)
+    && ((!isReportStale && sourceReport?.status === 'generating') || localGenerating);
+  const preferredContentLanguage: ReportContentLanguage = requestedLanguage ?? (isZh ? 'zh' : 'en');
+  const reportContentLanguage = sourceReport
+    ? resolveReportContentLanguage(sourceReport, preferredContentLanguage)
     : preferredContentLanguage;
+  const report = useMemo(() => sourceReport
+    ? projectReportContentLanguage(sourceReport, reportContentLanguage)
+    : null, [sourceReport, reportContentLanguage]);
+  const isBrief = sourceReport?.detail_level === 'brief';
+  const canTranslateReport = canGenerateReport && !isReportStale
+    && (sourceReport?.status === 'complete' || sourceReport?.status === 'partial');
+  const requestedLanguageReady = reportContentLanguage === preferredContentLanguage
+    && (reportContentLanguage === sourceReport?.language
+      || report?.language === reportContentLanguage);
+  const progressStageLabel = (sectionId: string): string => {
+    const section = sourceReport?.sections.find((item) => item.id === sectionId);
+    return section?.title_i18n[isZh ? 'zh' : 'en']
+      || t(REPORT_PROGRESS_STAGE_IDS.has(sectionId)
+        ? `result.report.progressStage.${sectionId}` : 'result.report.generating');
+  };
+
+  useEffect(() => { setRequestedLanguage(null); }, [isZh]);
 
   const beginAuthorityAttempt = useCallback(() => {
     const epoch = attemptEpochRef.current + 1;
@@ -431,6 +548,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     setLocalGenerating(false);
     setRetrying(false);
     setRetryError(false);
+    setActiveOperation(null);
     const persistedReport = storyData?.full_report;
     setToolTrace(
       isFullReport(persistedReport) ? (persistedReport.tool_trace ?? []) : [],
@@ -585,9 +703,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   const handleCloseEvidence = useCallback(() => setEvidenceDrawerOpen(false), []);
 
-  const handleRetry = useCallback(async () => {
+  const handleRetry = useCallback(async (action: ReportAction = { operation: 'generate' }) => {
     if (!canGenerateReport) return;
     if (!activeScenarioId || retrying) return;
+    if (action.operation === 'translate' && !canTranslateReport) return;
 
     const providerPolicy = loadLlmProviderPolicy();
     const validation = validateByok({
@@ -605,7 +724,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       return;
     }
 
-    const attemptFingerprint = reportAttemptFingerprint(report);
+    const attemptFingerprint = reportAttemptFingerprint(sourceReport);
     const attemptEpoch = beginAuthorityAttempt();
     awaitingFreshAttemptRef.current = {
       epoch: attemptEpoch,
@@ -618,6 +737,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     const isTerminalAuthorityResolved = () => terminalAuthorityRef.current === 'resolved';
     abortControllerRef.current?.abort();
     setRetrying(true);
+    setActiveOperation(action.operation);
     setRetryError(false);
     setToolTrace([]);
     setStreamInterrupted(false);
@@ -637,6 +757,8 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     setLocalGenerating(true);
 
     let terminalAuthorityFetchPending = false;
+    let terminalFailed = false;
+    let terminalFailureCode: string | undefined;
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const res = await generateReport(
@@ -647,19 +769,26 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           llmModel: providerPolicy.model || undefined,
           llmRequestsPerMinute: providerPolicy.requestsPerMinute ?? undefined,
           llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
+          ...(action.operation === 'translate'
+            ? { operation: 'translate' as const, targetLanguage: action.targetLanguage }
+            : { operation: 'generate' as const, detailLevel: 'full' as const }),
         },
         controller.signal
       );
       if (!isCurrentAttempt() || isTerminalAuthorityResolved()) return;
 
       let isAlreadyRunning = false;
-      await consumeResultReportStream(
+      const terminalEvent = await consumeResultReportStream(
         res,
         controller.signal,
         (event) => {
           if (!isCurrentAttempt() || isTerminalAuthorityResolved()) return;
           if (event.data.error_code === 'REPORT_ALREADY_RUNNING') {
             isAlreadyRunning = true;
+          }
+          if (event.event === 'report_failed' && !event.data.section_id
+            && event.data.error_code !== 'REPORT_ALREADY_RUNNING') {
+            terminalFailureCode = event.data.error_code;
           }
           if (event.data.section_id) {
             setActiveSectionId(event.data.section_id);
@@ -693,6 +822,8 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           }
         }
       );
+      terminalFailed = terminalEvent.data.status === 'failed'
+        || terminalEvent.data.status === 'cancelled';
       if (!isCurrentAttempt()) return;
       if (isAlreadyRunning) {
         setLocalGenerating(true);
@@ -718,6 +849,18 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             awaitingFreshAttempt?.epoch === attemptEpoch
             && reportAttemptFingerprint(updatedReport) === awaitingFreshAttempt.fingerprint
           ) {
+            if (terminalFailed || action.operation === 'translate') {
+              terminalAuthorityRef.current = 'resolved';
+              awaitingFreshAttemptRef.current = null;
+              setLocalStoryData(updatedStory);
+              setLocalGenerating(false);
+              setStreamInterrupted(false);
+              setPollStalled(false);
+              setRetryError(terminalFailed
+                ? getLocalizedApiErrorMessage({ code: terminalFailureCode }, t, t('result.report.operationFailedPreserved'))
+                : false);
+              return;
+            }
             terminalAuthorityRef.current = 'idle';
             setLocalGenerating(true);
             setPollRevision((revision) => revision + 1);
@@ -740,7 +883,12 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     } catch (err) {
       const error = err as { code?: string; message?: string; name?: string } | null;
       if (isCurrentAttempt() && !isTerminalAuthorityResolved()) {
-        if (terminalAuthorityFetchPending && terminalAuthorityRef.current === 'pending') {
+        if (terminalFailed) {
+          terminalAuthorityRef.current = 'resolved';
+          awaitingFreshAttemptRef.current = null;
+          setLocalGenerating(false);
+          setRetryError(getLocalizedApiErrorMessage({ code: terminalFailureCode }, t, t('result.report.operationFailedPreserved')));
+        } else if (terminalAuthorityFetchPending && terminalAuthorityRef.current === 'pending') {
           terminalAuthorityRef.current = 'idle';
           setLocalGenerating(true);
           setPollRevision((revision) => revision + 1);
@@ -757,10 +905,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           // The backend ties report generation to the SSE generator; aborting the
           // reader can cancel the in-flight build, so surface a retryable failure.
           setLocalGenerating(false);
-          setRetryError(true);
+          setRetryError(sourceReport?.sections.length ? t('result.report.operationFailedPreserved') : true);
         } else {
           setLocalGenerating(false);
-          setRetryError(true);
+          setRetryError(getLocalizedApiErrorMessage(err, t, t('result.report.operationFailedPreserved')));
         }
       }
     } finally {
@@ -776,8 +924,9 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     activeScenarioId,
     retrying,
     canGenerateReport,
+    canTranslateReport,
     t,
-    report,
+    sourceReport,
     beginAuthorityAttempt,
     notifyRefreshOnce,
   ]);
@@ -859,8 +1008,12 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   let reportBannerTitle = '';
   let reportBannerDesc = '';
   if (reportBannerKind === 'generating') {
-    reportBannerTitle = t('result.report.generationInProgressTitle');
-    reportBannerDesc = t('result.report.generationInProgressDesc', { count: generationSectionCount });
+    reportBannerTitle = t(activeOperation === 'translate'
+      ? 'result.report.translatingTitle'
+      : isBrief && !activeOperation ? 'result.report.preparingBrief' : 'result.report.generationInProgressTitle');
+    reportBannerDesc = activeOperation === 'translate'
+      ? t('result.report.translationInProgress')
+      : t('result.report.generationInProgressDesc', { count: generationSectionCount });
   } else if (reportBannerKind === 'stale') {
     reportBannerTitle = t('result.report.staleReportTitle');
     reportBannerDesc = t('result.report.staleReportDesc');
@@ -916,10 +1069,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           </svg>
         </div>
         <h2 className="report-state-card__title">
-          {t('result.report.generatingTitle')}
+          {t(isBrief ? 'result.report.preparingBrief' : 'result.report.generatingTitle')}
         </h2>
         <p className="report-state-card__desc">
-          {t('result.report.generatingDesc')}
+          {t(isBrief ? 'result.report.briefNoLlm' : 'result.report.generatingDesc')}
         </p>
         {streamInterrupted && (
           <p className="report-state-card__error" role="alert">
@@ -931,15 +1084,15 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             <div className="report-stream-progress" aria-label={t('result.report.progressLabel')}>
               {activeSectionId && (
                 <span className="report-stream-progress__current">
-                  {t('result.report.progressCurrentSection', { section: activeSectionId })}
+                  {t('result.report.progressCurrentSection', { section: progressStageLabel(activeSectionId) })}
                 </span>
               )}
               {sectionProgress.map((item) => (
                 <div key={item.sectionId} className="report-stream-progress__item">
                   <span>
                     {item.status === 'complete'
-                      ? t('result.report.progressSectionComplete', { section: item.sectionId })
-                      : t('result.report.progressSectionFailed', { section: item.sectionId })}
+                      ? t('result.report.progressSectionComplete', { section: progressStageLabel(item.sectionId) })
+                      : t('result.report.progressSectionFailed', { section: progressStageLabel(item.sectionId) })}
                   </span>
                   {item.tier && (
                     <span className={`report-stream-progress__chip report-stream-progress__chip--${item.tier}`}>
@@ -1081,6 +1234,75 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   return (
     <div className="report-doc report-panel-container report-panel-container--rendered">
+      <div className="report-reading-controls">
+        <div>
+          <span className="report-reading-controls__depth">{t(isBrief ? 'result.report.briefTitle' : 'result.report.fullAnalysis')}</span>
+          {isBrief && <p>{t('result.report.briefNoLlm')}</p>}
+        </div>
+        <div className="report-language-choice" role="group" aria-label={t('result.report.contentLanguage')}>
+          {REPORT_CONTENT_LANGUAGES.map((language) => (
+            <button
+              key={language}
+              type="button"
+              className="btn btn-ghost"
+              aria-pressed={preferredContentLanguage === language}
+              disabled={retrying}
+              onClick={() => {
+                setRequestedLanguage(language);
+                void i18n.changeLanguage(language);
+              }}
+            >
+              {language === 'zh' ? '中文' : 'English'}
+            </button>
+          ))}
+        </div>
+      </div>
+      {!requestedLanguageReady && (
+        <p className="report-language-note" role="status">
+          {t('result.report.languageNotReady', {
+            requested: preferredContentLanguage === 'zh' ? '中文' : 'English',
+            current: reportContentLanguage === 'zh' ? '中文' : 'English',
+          })}
+        </p>
+      )}
+      {reportContentLanguage !== sourceReport?.language && (
+        <p className="report-language-note">{t('result.report.originalEvidenceNote')}</p>
+      )}
+      {!isReplayMode && (
+        <details className="report-optional-actions">
+          <summary>{t('result.report.optionalActions')}</summary>
+          <p>{t('result.report.optionalCostUnknown')}</p>
+          <p className="report-optional-actions__model">{providerPolicy.model.trim()
+            ? t('result.report.sessionModel', { model: providerPolicy.model.trim() })
+            : t('result.report.inheritedModel')}</p>
+          <div className="report-optional-actions__buttons">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={!canGenerateReport || retrying || (isGenerating && !streamInterrupted)}
+              onClick={() => void handleRetry()}
+            >
+              {t(isBrief ? 'result.report.generateFullAnalysis' : 'result.report.regenerateFullAnalysis')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={!canTranslateReport || retrying || (isGenerating && !streamInterrupted)}
+              onClick={() => void handleRetry({ operation: 'translate', targetLanguage: preferredContentLanguage })}
+            >
+              {t('result.report.prepareLanguage', { language: preferredContentLanguage === 'zh' ? '中文' : 'English' })}
+            </button>
+          </div>
+          {isReportStale && <p>{t('result.report.translateStaleHint')}</p>}
+          {!canGenerateReport && <p>{t(scenarioStatus !== undefined && scenarioStatus !== 'done'
+            ? 'result.report.completedScenarioRequired' : 'result.report.modelRequired')}</p>}
+        </details>
+      )}
+      {retryError && !reportBannerKind && (
+        <p className="report-operation-error" role="alert">
+          {typeof retryError === 'string' ? retryError : t('result.report.operationFailedPreserved')}
+        </p>
+      )}
       {isReportStale && reportBannerKind !== 'stale' && (
         <div className="report-partial-banner report-partial-banner--stale" role="status">
           <div className="report-partial-banner__copy">
@@ -1130,15 +1352,15 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
                   </span>
                   {activeSectionId && (
                     <span className="report-stream-progress__current">
-                      {t('result.report.progressCurrentSection', { section: activeSectionId })}
+                      {t('result.report.progressCurrentSection', { section: progressStageLabel(activeSectionId) })}
                     </span>
                   )}
                   {sectionProgress.map((item) => (
                     <div key={item.sectionId} className="report-stream-progress__item">
                       <span>
                         {item.status === 'complete'
-                          ? t('result.report.progressSectionComplete', { section: item.sectionId })
-                          : t('result.report.progressSectionFailed', { section: item.sectionId })}
+                          ? t('result.report.progressSectionComplete', { section: progressStageLabel(item.sectionId) })
+                          : t('result.report.progressSectionFailed', { section: progressStageLabel(item.sectionId) })}
                       </span>
                       {item.tier && (
                         <span className={`report-stream-progress__chip report-stream-progress__chip--${item.tier}`}>
@@ -1173,10 +1395,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           )}
         </div>
       )}
-      <div className="report-panel-body">
+      <div className="report-panel-body" lang={reportContentLanguage}>
         {variant === 'inline' ? (
           <>
-            {!isReportStale && (
+            {!isReportStale && !isBrief && (
               <ReportConfidenceBadge verdict={report.verdict} language={reportContentLanguage} />
             )}
 
@@ -1202,12 +1424,17 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
             )}
 
             <div className="report-cta">
-              <p className="report-cta__lead">{t('result.report.readFullReportLead')}</p>
+              <p className="report-cta__lead">{t(isBrief ? 'result.report.readBriefLead' : 'result.report.readFullReportLead')}</p>
+              {isBrief && report.evidence.length > 0 && (
+                <button type="button" className="btn btn-secondary" onClick={() => handleOpenEvidence(report.evidence.map((item) => item.id))}>
+                  {t('result.report.viewCitedEvidence')}
+                </button>
+              )}
               <Link
                 to={`/result/${activeScenarioId}/report`}
                 className="report-cta__btn"
               >
-                {t('result.report.readFullReport')}
+                {t(isBrief ? 'result.report.readBrief' : 'result.report.readFullReport')}
               </Link>
             </div>
           </>
@@ -1239,6 +1466,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
                   index={idx}
                   onOpenEvidence={handleOpenEvidence}
                   language={reportContentLanguage}
+                  intentionalBrief={isBrief}
                 />
               ))}
               {retrying &&
@@ -1286,6 +1514,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
                 {/* §F: honesty intro — these are AI-played roles, not real persons */}
                 <p className="report-personas__intro">{t('result.report.personas_intro')}</p>
+                <p className="report-personas__intro">{t('result.report.originalEvidenceNote')}</p>
 
                 {/* Interview Status Message */}
                 {interviewStatus && interviewStatus.status !== 'complete' && (
@@ -1421,6 +1650,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         onClose={handleCloseEvidence}
         scenarioId={activeScenarioId || ''}
         evidence={currentEvidence}
+        canOpenReplay={capabilities?.replay_trace?.enabled !== false}
       />
     </div>
   );
@@ -1434,6 +1664,7 @@ export const ResultReportPanel = React.memo(function ResultReportPanel(props: Pr
   const activeScenarioId = props.activeScenarioId !== undefined ? props.activeScenarioId : context.activeScenarioId;
   const isZh = props.isZh !== undefined ? props.isZh : context.isZh;
   const isReplayMode = props.isReplayMode !== undefined ? props.isReplayMode : context.isReplayMode;
+  const scenarioStatus = props.scenarioStatus !== undefined ? props.scenarioStatus : context.scenario?.status;
 
   return (
     <ResultReportPanelInner
@@ -1442,6 +1673,7 @@ export const ResultReportPanel = React.memo(function ResultReportPanel(props: Pr
       activeScenarioId={activeScenarioId}
       isZh={isZh}
       isReplayMode={isReplayMode}
+      scenarioStatus={scenarioStatus}
     />
   );
 });

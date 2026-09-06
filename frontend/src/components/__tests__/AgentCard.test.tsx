@@ -6,9 +6,12 @@ import type { AgentIdentityInfo } from '../../types';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, fallback?: string | Record<string, unknown>) => (
-      typeof fallback === 'string' ? fallback : _key
-    ),
+    t: (key: string, fallback?: string | Record<string, unknown>) => ({
+      'agents.tier_important_title': '核心人物',
+      'agents.tier_crowd_title': '围观群众',
+      'agents.bias_keys.caution': '谨慎度',
+      'agents.bias_keys.risk_tolerance': '风险容忍度',
+    }[key] ?? (typeof fallback === 'string' ? fallback : key)),
   }),
 }));
 
@@ -31,6 +34,16 @@ const identity = {
 } as unknown as AgentIdentityInfo;
 
 describe('AgentCard', () => {
+  it('localizes known tiers and biases while preserving names and custom labels', () => {
+    render(<AgentCard identity={{ ...identity, decision_bias: { caution: 0.7, risk_tolerance: 0.3, 'Personal compass': 0.5 } }} isFavorite={false} onToggleFavorite={vi.fn()} />);
+    expect(screen.getByText('核心人物')).toBeInTheDocument();
+    expect(screen.getByText('谨慎度')).toBeInTheDocument();
+    expect(screen.getByText('风险容忍度')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '谨慎度: 0.70' })).toBeInTheDocument();
+    expect(screen.getByText('Personal compass')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Aria' })).toBeInTheDocument();
+    expect(screen.getByText('Strategist')).toBeInTheDocument();
+  });
   it('uses explicit buttons instead of making the whole card interactive', () => {
     render(
       <AgentCard

@@ -322,6 +322,7 @@ class CreateScenarioRequest(BaseModel):
     llm_tokens_per_minute: int | None = None  # Optional token-rate cap for this run; 0 disables the cap  # noqa: E501
     disable_user_quota: bool | None = None  # Local-only: disable user-level fairness cap for this run  # noqa: E501
     model_profile_id: str | None = None  # Optional local ModelProfile id for provider policy
+    model_profile_confirmation_token: str | None = Field(default=None, max_length=128)
     # V2: Pixel visualization
     visualization_enabled: bool | None = None  # Enable pixel theater mode
     # Web Search Enhancement: opt-in per-scenario
@@ -340,6 +341,12 @@ class CreateScenarioRequest(BaseModel):
     initial_social_feed: list[InitialSocialFeedItem] | None = Field(
         default=None, max_length=20
     )
+
+    @model_validator(mode="after")
+    def validate_profile_confirmation_binding(self) -> "CreateScenarioRequest":
+        if self.model_profile_confirmation_token and not self.model_profile_id:
+            raise ValueError("model_profile_confirmation_token requires model_profile_id")
+        return self
 
     @field_validator("custom_agent_identity_ids", mode="before")
     @classmethod
@@ -418,6 +425,7 @@ class CreateScenarioRequest(BaseModel):
         "llm_base_url",
         "llm_model",
         "model_profile_id",
+        "model_profile_confirmation_token",
         "web_search_api_key",
         "web_search_base_url",
     )
@@ -651,6 +659,16 @@ class InterventionTemplateResponse(BaseModel):
     suggested_targets: str | None = None
 
 
+class ScenarioSnapshotImport(BaseModel):
+    """Public import recovery metadata; never exposes arbitrary parsed context."""
+
+    source_status: Literal["parsing", "simulating", "narrating", "done", "error", "cancelled"]
+    mode: Literal["read_only"] = "read_only"
+    worker_resumed: Literal[False] = False
+    resume_action: Literal["start_new_simulation"] | None = None
+    reason_code: Literal["SOURCE_EXECUTION_NOT_RESUMED", "READ_ONLY_SNAPSHOT"]
+
+
 class ScenarioResponse(BaseModel):
     id: str
     question: str
@@ -680,6 +698,7 @@ class ScenarioResponse(BaseModel):
     checkpoints: list | None = None
     faction_timeline_id: str | None = None
     domain_world: dict | None = None
+    snapshot_import: ScenarioSnapshotImport | None = None
 
 
 class StoryBranch(BaseModel):

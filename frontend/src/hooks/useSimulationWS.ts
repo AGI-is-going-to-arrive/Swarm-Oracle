@@ -49,6 +49,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
   ) => {
     const resyncVersion = resyncRequestVersionRef.current + 1;
     resyncRequestVersionRef.current = resyncVersion;
+    useSimulationStore.getState().invalidateInterventionReceipts(currentScenarioId);
     Promise.resolve()
       .then(() => getScenario(currentScenarioId))
       .then((scenario) => {
@@ -266,6 +267,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
       // (e.g. missed simulation_done / status frame, or clean proxy close), poll once
       // so the page flips without a manual refresh. Skip unmount and permanent closes.
       if (!unmounted && !permanentClose) {
+        useSimulationStore.getState().invalidateInterventionReceipts(currentScenarioId);
         const liveStatus = useSimulationStore.getState().status;
         const isTerminal =
           liveStatus === 'done' || liveStatus === 'error' || liveStatus === 'cancelled';

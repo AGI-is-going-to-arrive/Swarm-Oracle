@@ -942,6 +942,11 @@ class InterventionEffectExcerpt(BaseModel):
 
 class InterventionEffectResponse(BaseModel):
     intervention_log_id: str
+    branch_id: str
+    status: Literal["queued", "applied", "expired", "failed"] = "applied"
+    reason: str | None = None
+    refunded_points: int = 0
+    gameplay_usage_refunded: bool = False
     card_id: str | None = None
     card_label: str | None = None
     round_number: int
@@ -1072,9 +1077,23 @@ async def get_intervention_effects(
             round_number_value = int(summary.get("round_number", row.round_number) or 0)
         except (TypeError, ValueError):
             round_number_value = int(row.round_number or 0)
+        try:
+            refunded_points = max(0, int(summary.get("refunded_points", 0) or 0))
+        except (TypeError, ValueError):
+            refunded_points = 0
+        receipt_status = str(summary.get("status") or "applied")
         effects.append(
             InterventionEffectResponse(
                 intervention_log_id=str(row.id),
+                branch_id=str(row.branch_id),
+                status=(
+                    receipt_status
+                    if receipt_status in {"queued", "applied", "expired", "failed"}
+                    else "applied"
+                ),
+                reason=str(summary["reason"]) if summary.get("reason") else None,
+                refunded_points=refunded_points,
+                gameplay_usage_refunded=bool(summary.get("gameplay_usage_refunded", False)),
                 card_id=card_id_str,
                 card_label=_resolve_card_label(card_id_str),
                 round_number=round_number_value,

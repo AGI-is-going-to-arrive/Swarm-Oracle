@@ -57,7 +57,7 @@ import {
   markChallengeStarted,
 } from '../lib/dailyChallenge';
 import { stringifyAutomationPayload } from '../game/automation';
-import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   getGameplayBadgeSrc,
   getGameplayProfileLabel,
@@ -103,6 +103,7 @@ import {
 } from '../lib/llmProviderPolicy';
 import type { MaterializedLocalPackImport } from '../lib/localPackImport';
 import { friendlyProviderName } from './inputProviderName';
+import { createCompatUuid } from '../lib/compatUuid';
 import { StreakIndicator, DifficultyBadge, RefreshCountdown, WeeklyTrackChip, WeeklyTrackDialog, CampaignProgressSheet } from '../components/campaign';
 import './InputView.css';
 
@@ -130,12 +131,34 @@ const BYOK_ESTIMATED_TOKENS_PER_TURN = 1_600;
 
 type HomeLocationState = {
   prefillQuestion?: unknown;
+  prefillSettings?: unknown;
 };
 
 function getPrefillQuestionFromLocationState(state: unknown): string | null {
   if (!state || typeof state !== 'object') return null;
   const value = (state as HomeLocationState).prefillQuestion;
   return typeof value === 'string' ? value : null;
+}
+
+function getPrefillSettingsFromLocationState(state: unknown): {
+  rounds: number;
+  numAgents: number;
+  mode: 'raw' | 'blackboard';
+  visualizationEnabled: boolean;
+  runtimePreset: ScenarioRuntimePresetId;
+} {
+  const input = state && typeof state === 'object'
+    ? (state as HomeLocationState).prefillSettings : null;
+  const settings = input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown> : {};
+  return {
+    rounds: materialSetting(typeof settings.rounds === 'number' ? settings.rounds : undefined, HOME_MAX_ROUNDS, HOME_DEFAULT_ROUNDS),
+    numAgents: materialSetting(typeof settings.numAgents === 'number' ? settings.numAgents : undefined, HOME_MAX_AGENTS, HOME_DEFAULT_AGENTS),
+    mode: settings.mode === 'raw' ? 'raw' : 'blackboard',
+    visualizationEnabled: settings.visualizationEnabled === true,
+    runtimePreset: settings.runtimePreset === 'conservative' || settings.runtimePreset === 'aggressive'
+      ? settings.runtimePreset : 'balanced',
+  };
 }
 
 function parseOptionalRuntimeLimit(value: string): number | undefined {
@@ -341,7 +364,24 @@ type PendingSimulationLaunch = {
   campaignContext?: CampaignContext;
   /** Undefined uses the current seed; null explicitly launches without seed context. */
   worldContext?: WorldContext | null;
+  /** Freeze the reviewed request through credential and continuity preflights. */
+  options?: CreateScenarioOptions;
+  runCount?: number;
+  multiRun?: boolean;
+  modelLabel?: string;
+  profileLabel?: string;
+  searchProviderLabel?: string;
+  runtimePreset?: ScenarioRuntimePresetId;
 };
+
+type MaterialTab = 'quickstart' | 'education' | 'local';
+const MATERIAL_TABS: readonly MaterialTab[] = ['quickstart', 'education', 'local'];
+
+function materialSetting(value: number | undefined, maximum: number, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? Math.min(maximum, Math.max(1, Math.trunc(value)))
+    : fallback;
+}
 
 function normalizeCampaignDifficultyTier(
   value: string | undefined,
@@ -368,9 +408,19 @@ export function InputView() {
   const [continuityError, setContinuityError] = useState<string | null>(null);
   const [webSearchUrlError, setWebSearchUrlError] = useState<string>('');
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [profileRefreshRequired, setProfileRefreshRequired] = useState(false);
+  const [profilesRefreshing, setProfilesRefreshing] = useState(false);
   const clearLaunchError = useCallback(() => {
     setLaunchError(null);
   }, []);
+  const setLaunchFailure = useCallback((error: unknown) => {
+    if (getApiErrorCode(error) === 'MODEL_PROFILE_CHANGED') {
+      setProfileRefreshRequired(true);
+      setLaunchError(t('home.launch_profile_changed'));
+      return;
+    }
+    setLaunchError(getLocalizedApiErrorMessage(error, t, t('common.api_errors.simulation_start_failed')));
+  }, [t]);
   const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
   // FE-5: 4 new source toggles (independent state per family)
   const [newSourceTogglePolymarket, setNewSourceTogglePolymarket] = useState(false);
@@ -390,6 +440,9 @@ export function InputView() {
   const [multiRunEnabled, setMultiRunEnabled] = useState(false);
   const [multiRunCount, setMultiRunCount] = useState(5);
   const [initialSocialFeed, setInitialSocialFeed] = useState<InitialSocialFeedItem[]>([]);
+  const [materialTab, setMaterialTab] = useState<MaterialTab>('quickstart');
+  const [materialReady, setMaterialReady] = useState(false);
+  const [materialLaunchContext, setMaterialLaunchContext] = useState<Pick<PendingSimulationLaunch, 'challengeId' | 'campaignContext'> | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -408,7 +461,12 @@ export function InputView() {
   } = useCapabilityCheck('multi_run');
   const customAgentsEnabled = caps?.custom_agents?.enabled === true;
   const multiRunMaxCount = multiRunCaps?.multi_run?.max_count ?? 10;
-  const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
+  const {
+    enabled: educationTemplatesEnabled,
+    loading: educationTemplatesLoading,
+    error: educationTemplatesError,
+    reload: reloadEducationTemplates,
+  } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
 
   const {
@@ -471,15 +529,17 @@ export function InputView() {
   const submitError = useSimulationStore((s) => s.error);
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
-  const [confirmDialogData, setConfirmDialogData] = useState<{ question: string } | null>(null);
+  const [confirmDialogData, setConfirmDialogData] = useState<PendingSimulationLaunch | null>(null);
   const [weeklyTrackDialogOpen, setWeeklyTrackDialogOpen] = useState(false);
   const [campaignSheetOpen, setCampaignSheetOpen] = useState(false);
   const isComposingRef = useRef(false);
   const launchInFlightRef = useRef(false);
+  const debateLaunchIntentRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const launchInFlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const launchAbortControllerRef = useRef<AbortController | null>(null);
   const launchAbortReasonRef = useRef<WeakMap<AbortSignal, 'timeout'>>(new WeakMap());
   const recommendedSampleControllerRef = useRef<AbortController | null>(null);
+  const guidedSampleImportRef = useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const continuityDialogRef = useRef<HTMLDivElement>(null);
@@ -729,11 +789,12 @@ export function InputView() {
     setShowSnapshotImport(true);
   }, []);
 
-  const handleRecommendedSampleImport = useCallback(async () => {
-    if (showSnapshotImport || recommendedSampleControllerRef.current) return;
+  const handleRecommendedSampleImport = useCallback(async (guided = false) => {
+    if (snapshotImportCapabilityState !== 'enabled' || showSnapshotImport || recommendedSampleControllerRef.current) return;
 
     const controller = new AbortController();
     recommendedSampleControllerRef.current = controller;
+    guidedSampleImportRef.current = guided;
     setRecommendedSampleImporting(true);
     setRecommendedSampleImportError(null);
 
@@ -741,14 +802,19 @@ export function InputView() {
       const catalog = await getOfficialSamples({ signal: controller.signal });
       if (controller.signal.aborted || recommendedSampleControllerRef.current !== controller) return;
 
-      const recommendedSample = catalog.samples[0];
+      const recommendedSample = guided
+        ? catalog.samples.find((sample) => sample.outcome_count >= 2)
+        : catalog.samples[0];
       if (!recommendedSample) {
         throw new Error('Official sample catalog is empty');
       }
 
       const result = await importOfficialSample(recommendedSample.id, { signal: controller.signal });
       if (controller.signal.aborted || recommendedSampleControllerRef.current !== controller) return;
-      navigate(`/result/${encodeURIComponent(result.scenario_id)}`);
+      if (guided) onboarding.complete();
+      navigate(`/result/${encodeURIComponent(result.scenario_id)}`, guided
+        ? { state: { sampleOnboarding: true } }
+        : undefined);
     } catch (error) {
       if (controller.signal.aborted || recommendedSampleControllerRef.current !== controller) return;
       setRecommendedSampleImportError(getLocalizedApiErrorMessage(
@@ -759,10 +825,22 @@ export function InputView() {
     } finally {
       if (recommendedSampleControllerRef.current === controller) {
         recommendedSampleControllerRef.current = null;
+        guidedSampleImportRef.current = false;
         setRecommendedSampleImporting(false);
       }
     }
-  }, [navigate, showSnapshotImport, t]);
+  }, [navigate, onboarding, showSnapshotImport, snapshotImportCapabilityState, t]);
+
+  const handleSkipOnboarding = () => {
+    if (guidedSampleImportRef.current) {
+      recommendedSampleControllerRef.current?.abort();
+      recommendedSampleControllerRef.current = null;
+      guidedSampleImportRef.current = false;
+      setRecommendedSampleImporting(false);
+      setRecommendedSampleImportError(null);
+    }
+    onboarding.complete();
+  };
 
   const {
     campaignProfile,
@@ -787,6 +865,8 @@ export function InputView() {
   const clearScenarioSourceContext = useCallback(() => {
     setWorldContext(null);
     setAgentsPreview(null);
+    setInitialSocialFeed([]);
+    setMaterialLaunchContext(null);
   }, [setAgentsPreview, setWorldContext]);
   const todayChallengeQuestion = todayChallenge
     ? (isZh ? todayChallenge.question : todayChallenge.questionEn)
@@ -1059,10 +1139,18 @@ export function InputView() {
   useEffect(() => {
     const prefillQuestion = getPrefillQuestionFromLocationState(location.state);
     if (prefillQuestion === null) return;
+    const prefillSettings = getPrefillSettingsFromLocationState(location.state);
 
     clearLaunchError();
     clearScenarioSourceContext();
     setQuestion(clampScenarioQuestion(prefillQuestion));
+    setRounds(prefillSettings.rounds);
+    setNumAgents(prefillSettings.numAgents);
+    setMode(prefillSettings.mode);
+    setVizEnabled(prefillSettings.visualizationEnabled);
+    setMultiRunEnabled(false);
+    setRuntimePreset(prefillSettings.runtimePreset);
+    setMaterialReady(true);
     navigate(
       {
         pathname: location.pathname,
@@ -1090,9 +1178,9 @@ export function InputView() {
     setNumAgents(sharedChallenge.numAgents);
     setMode(sharedChallenge.mode);
     setVizEnabled(sharedChallenge.visualizationEnabled);
-    if (sharedChallenge.runtimePreset) {
-      setRuntimePreset(sharedChallenge.runtimePreset);
-    }
+    setRuntimePreset(sharedChallenge.runtimePreset ?? 'balanced');
+    setMultiRunEnabled(false);
+    setMaterialReady(true);
   }, [clearLaunchError, clearScenarioSourceContext, sharedChallenge]);
 
   useEffect(() => {
@@ -1219,6 +1307,11 @@ export function InputView() {
     launch: PendingSimulationLaunch,
     continuityOverrides?: ContinuityOverride[],
   ): CreateScenarioOptions => {
+    if (launch.options) {
+      return continuityOverrides
+        ? { ...launch.options, continuityOverrides }
+        : launch.options;
+    }
     const trimmed = normalizeScenarioQuestionForLaunch(launch.nextQuestion);
     const serverMaxCustomAgents = customAgentsEnabled ? caps?.custom_agents?.max_custom_agents : 0;
     const capLimit =
@@ -1335,6 +1428,9 @@ export function InputView() {
       modelProfileId: profileProviderOverrideRequested
         ? undefined
         : selectedProfileId || undefined,
+      modelProfileConfirmationToken: profileProviderOverrideRequested
+        ? undefined
+        : profile?.confirmation_token,
       language: normalizeLanguage(i18n.language),
     };
   }, [
@@ -1416,7 +1512,7 @@ export function InputView() {
   ) => {
     setIsSubmitting(true);
     setContinuityError(null);
-    const wantsSearch = webSearchEnabled;
+    const wantsSearch = launch.options?.webSearchEnabled ?? webSearchEnabled;
     if (wantsSearch) setWebSearchStatus('searching');
     else setWebSearchStatus('skipped');
     // Pipeline stepper integration: add body class so the stepper spacer
@@ -1424,10 +1520,10 @@ export function InputView() {
     document.body.classList.add('has-pipeline-launching');
     try {
       const options = buildSimulationOptions(launch, continuityOverrides);
-      if (multiRunCaps?.multi_run?.enabled && multiRunEnabled) {
+      if (launch.multiRun) {
         const multiRunResponse = await createMultiRun({
           ...options,
-          runCount: multiRunCount,
+          runCount: launch.runCount ?? 1,
           verdictOnlyRuns: true,
         }, { signal: launchSignal });
         const firstScenarioId = multiRunResponse.runs[0]?.scenario_id;
@@ -1453,8 +1549,7 @@ export function InputView() {
         return;
       }
       console.error('[executeSimulationLaunch] failed:', err);
-      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
-      setLaunchError(errMsg);
+      setLaunchFailure(err);
       setWebSearchStatus('idle');
       setIsSubmitting(false);
       setPendingLaunch(null);
@@ -1471,12 +1566,9 @@ export function InputView() {
     setWebSearchStatus,
     startSimulation,
     webSearchEnabled,
-    multiRunCaps?.multi_run?.enabled,
-    multiRunEnabled,
-    multiRunCount,
     resetLaunchInFlight,
     isLaunchTimeoutAbort,
-    t,
+    setLaunchFailure,
   ]);
 
   const maybeRunContinuityPreflight = useCallback(async (
@@ -1506,6 +1598,10 @@ export function InputView() {
       if (isLaunchTimeoutAbort(launchSignal)) {
         return true;
       }
+      if (getApiErrorCode(error) === 'MODEL_PROFILE_CHANGED') {
+        setLaunchFailure(error);
+        return true;
+      }
       console.warn('[InputView] identity continuity preflight failed', error);
       setContinuityError(continuityPreflightErrorCopy);
       return false;
@@ -1515,6 +1611,7 @@ export function InputView() {
     caps?.agent_identity?.enabled,
     continuityPreflightErrorCopy,
     isLaunchTimeoutAbort,
+    setLaunchFailure,
   ]);
 
   const confirmContinuityLaunch = useCallback(async () => {
@@ -1545,8 +1642,7 @@ export function InputView() {
       await executeSimulationLaunch(pendingLaunch, overrides, launchSignal);
     } catch (err) {
       console.error('[confirmContinuityLaunch] failed:', err);
-      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
-      setLaunchError(errMsg);
+      setLaunchFailure(err);
     } finally {
       resetLaunchInFlight(launchSignal);
     }
@@ -1559,6 +1655,7 @@ export function InputView() {
     markLaunchInFlight,
     pendingLaunch,
     resetLaunchInFlight,
+    setLaunchFailure,
     t,
   ]);
 
@@ -1672,8 +1769,7 @@ export function InputView() {
         return;
       }
       console.error('[launchSimulation] failed:', err);
-      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
-      setLaunchError(errMsg);
+      setLaunchFailure(err);
       setIsSubmitting(false);
       throw err;
     } finally {
@@ -1732,7 +1828,21 @@ export function InputView() {
       const resolvedLlmTokensPerMinute = suppressSharedDebateProvider
         ? undefined
         : Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined;
-      const debate = await createDebate(trimmed, undefined, {
+      const roleProfileIds = [...new Set([
+        effectivePropositionProfileId, effectiveOppositionProfileId, effectiveJudgeProfileId,
+      ].filter(Boolean))];
+      const profileConfirmationTokens: Record<string, string> = {};
+      for (const profileId of roleProfileIds) {
+        const token = profiles.find((profile) => profile.id === profileId)?.confirmation_token;
+        if (!token || profileRefreshRequired || profilesRefreshing) {
+          setProfileRefreshRequired(true);
+          setLaunchError(t('home.launch_profile_unverified'));
+          setIsSubmitting(false);
+          return;
+        }
+        profileConfirmationTokens[profileId] = token;
+      }
+      const debateOptions = {
         llmApiKey: resolvedLlmApiKey,
         llmBaseUrl: resolvedLlmBaseUrl,
         llmModel: resolvedLlmModel,
@@ -1743,29 +1853,39 @@ export function InputView() {
         propositionModelProfileId: effectivePropositionProfileId || undefined,
         oppositionModelProfileId: effectiveOppositionProfileId || undefined,
         judgeModelProfileId: effectiveJudgeProfileId || undefined,
+        ...(roleProfileIds.length > 0 && { profileConfirmationTokens }),
         language: normalizeLanguage(i18n.language),
-      }, propositionAgentId ? {
+      };
+      const debateAgents = propositionAgentId ? {
         proposition: propositionAgentId,
         opposition: oppositionAgentId,
-      } : undefined);
+      } : undefined;
+      // Keep an uncertain retry on the same server-side intent. This ephemeral
+      // fingerprint is never logged, exported, or persisted with credentials.
+      const fingerprint = JSON.stringify({ question: trimmed, options: debateOptions, agents: debateAgents });
+      if (debateLaunchIntentRef.current?.fingerprint !== fingerprint) {
+        debateLaunchIntentRef.current = { fingerprint, requestId: createCompatUuid() };
+      }
+      const debate = await createDebate(trimmed, undefined, {
+        ...debateOptions,
+        clientRequestId: debateLaunchIntentRef.current.requestId,
+      }, debateAgents);
+      debateLaunchIntentRef.current = null;
       navigate(`/debate/${debate.id}`);
     } catch (err) {
       console.error('[launchDebate] failed:', err);
-      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
-      setLaunchError(errMsg);
+      setLaunchFailure(err);
       setIsSubmitting(false);
     }
   };
 
-  const handleSubmit = async (q: string) => {
-    await launchSimulation({
-      nextQuestion: q,
-      nextRounds: rounds,
-      nextAgents: numAgents,
-      nextMode: mode,
-      nextVisualization: vizEnabled,
+  const focusPreparedMaterial = useCallback(() => {
+    setMaterialReady(true);
+    requestAnimationFrame(() => {
+      questionRef.current?.focus();
+      questionRef.current?.scrollIntoView?.({ block: 'center', behavior: 'auto' });
     });
-  };
+  }, []);
 
   const handleEducationTemplateSelect = useCallback((template: EducationTemplate) => {
     const localizedTitle = isZh
@@ -1774,56 +1894,51 @@ export function InputView() {
     clearLaunchError();
     clearScenarioSourceContext();
     setQuestion(clampScenarioQuestion(localizedTitle || ''));
-    if (Number.isFinite(template.suggested_rounds) && template.suggested_rounds > 0) {
-      setRounds(template.suggested_rounds);
-    }
-    if (Number.isFinite(template.suggested_agents) && template.suggested_agents > 0) {
-      setNumAgents(template.suggested_agents);
-    }
+    setRounds(materialSetting(template.suggested_rounds, HOME_MAX_ROUNDS, HOME_DEFAULT_ROUNDS));
+    setNumAgents(materialSetting(template.suggested_agents, HOME_MAX_AGENTS, HOME_DEFAULT_AGENTS));
+    setMode('blackboard');
+    setVizEnabled(false);
+    setRuntimePreset('balanced');
+    setMultiRunEnabled(false);
     setEducationPickerOpen(false);
-    requestAnimationFrame(() => {
-      questionRef.current?.focus();
-    });
-  }, [clearLaunchError, clearScenarioSourceContext, isZh]);
+    focusPreparedMaterial();
+  }, [clearLaunchError, clearScenarioSourceContext, focusPreparedMaterial, isZh]);
 
   const handleImportPack = useCallback((payload: MaterializedLocalPackImport) => {
     clearLaunchError();
+    clearScenarioSourceContext();
     setQuestion(clampScenarioQuestion(payload.question));
     setRounds(payload.suggestedSettings.rounds);
     setNumAgents(payload.suggestedSettings.numAgents);
     setRuntimePreset(payload.suggestedSettings.simulationMode);
+    setMode('blackboard');
+    setVizEnabled(false);
+    setMultiRunEnabled(false);
     setWorldContext(payload.worldContext);
     setAgentsPreview(payload.agentsPreview);
     i18n.changeLanguage(payload.suggestedSettings.language).catch(() => {});
-    requestAnimationFrame(() => {
-      questionRef.current?.focus();
-    });
-  }, [clearLaunchError, i18n, setAgentsPreview, setWorldContext]);
+    focusPreparedMaterial();
+  }, [clearLaunchError, clearScenarioSourceContext, focusPreparedMaterial, i18n, setAgentsPreview, setWorldContext]);
 
   const handleLocalPackDemoImported = useCallback((scenarioId: string) => {
     navigate(`/result/${encodeURIComponent(scenarioId)}`);
   }, [navigate]);
 
-  const handleQuickStartSelect = async (preset: QuickStartPreset) => {
+  const handleQuickStartSelect = (preset: QuickStartPreset) => {
     clearLaunchError();
     clearScenarioSourceContext();
     const nextQuestion = clampScenarioQuestion(preset.question);
     setQuestion(nextQuestion);
-    try {
-      await launchSimulation({
-        nextQuestion,
-        nextRounds: preset.rounds ?? rounds,
-        nextAgents: preset.numAgents ?? numAgents,
-        nextMode: preset.mode ?? mode,
-        nextVisualization: preset.visualizationEnabled ?? vizEnabled,
-        worldContext: null,
-      });
-    } catch (err) {
-      console.error('[handleQuickStartSelect] failed:', err);
-    }
+    setRounds(materialSetting(preset.rounds, HOME_MAX_ROUNDS, HOME_DEFAULT_ROUNDS));
+    setNumAgents(materialSetting(preset.numAgents, HOME_MAX_AGENTS, HOME_DEFAULT_AGENTS));
+    setMode(preset.mode ?? 'blackboard');
+    setVizEnabled(preset.visualizationEnabled ?? false);
+    setRuntimePreset('balanced');
+    setMultiRunEnabled(false);
+    focusPreparedMaterial();
   };
 
-  const handleStartChallenge = async () => {
+  const handleStartChallenge = () => {
     if (!todayChallenge) return;
     if (todayChallengeProgress?.scenarioId) {
       navigate(`/sim/${todayChallengeProgress.scenarioId}`);
@@ -1838,44 +1953,17 @@ export function InputView() {
     setNumAgents(todayChallenge.numAgents);
     setMode(todayChallenge.mode);
     setVizEnabled(todayChallenge.visualizationEnabled);
-    try {
-      await launchSimulation({
-        nextQuestion,
-        nextRounds: todayChallenge.rounds,
-        nextAgents: todayChallenge.numAgents,
-        nextMode: todayChallenge.mode,
-        nextVisualization: todayChallenge.visualizationEnabled,
-        challengeId: todayChallenge.id,
-        worldContext: null,
-      });
-    } catch (err) {
-      console.error('[handleStartChallenge] failed:', err);
-    }
-  };
-
-  const handleDailyCardClick = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('.daily-challenge-card__action') || target.closest('a') || target.closest('button')) {
-      return;
-    }
-    if (todayChallengeQuestion) {
-      clearLaunchError();
-      clearScenarioSourceContext();
-      setQuestion(todayChallengeQuestion);
-      if (todayChallenge) {
-        setRounds(todayChallenge.rounds);
-        setNumAgents(todayChallenge.numAgents);
-        setMode(todayChallenge.mode);
-        setVizEnabled(todayChallenge.visualizationEnabled);
-      }
-    }
+    setRuntimePreset('balanced');
+    setMultiRunEnabled(false);
+    setMaterialLaunchContext({ challengeId: todayChallenge.id });
+    focusPreparedMaterial();
   };
 
   const handleWeeklyChipClick = () => {
     setWeeklyTrackDialogOpen(true);
   };
 
-  const handleWeeklyTrackConfirm = async () => {
+  const handleWeeklyTrackConfirm = () => {
     const track = campaignChallengeRotation?.weekly_track;
     setWeeklyTrackDialogOpen(false);
     if (!track || isSubmitting || launchInFlightRef.current) return;
@@ -1896,27 +1984,18 @@ export function InputView() {
     setNumAgents(recommendedAgents);
     setMode(firstWeekly.mode);
     setVizEnabled(firstWeekly.visualizationEnabled);
-
-    try {
-      await launchSimulation({
-        nextQuestion: trackQuestion,
-        nextRounds: recommendedRounds,
-        nextAgents: recommendedAgents,
-        nextMode: firstWeekly.mode,
-        nextVisualization: firstWeekly.visualizationEnabled,
-        challengeId: firstWeekly.id,
-        campaignContext: {
-          // Phase 2b: ISO YYYY-Wnn form required by backend CampaignContext.
-          week_key: campaignChallengeRotation?.iso_week_key,
-          weekly_track_id: track.id,
-          profile_id: profileId,
-          is_weekly_track: true,
-        },
-        worldContext: null,
-      });
-    } catch (err) {
-      console.error('[handleWeeklyTrackConfirm] failed:', err);
-    }
+    setRuntimePreset('balanced');
+    setMultiRunEnabled(false);
+    setMaterialLaunchContext({
+      challengeId: firstWeekly.id,
+      campaignContext: {
+        week_key: campaignChallengeRotation?.iso_week_key,
+        weekly_track_id: track.id,
+        profile_id: profileId,
+        is_weekly_track: true,
+      },
+    });
+    focusPreparedMaterial();
   };
 
   const handleWeeklyTrackCancel = () => {
@@ -1925,8 +2004,23 @@ export function InputView() {
 
   const handleQuestionChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     clearLaunchError();
+    setMaterialLaunchContext(null);
     syncQuestionFromInputValue(e.target.value);
   }, [clearLaunchError, syncQuestionFromInputValue]);
+
+  const handleMaterialTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: MaterialTab) => {
+    const index = MATERIAL_TABS.indexOf(tab);
+    const nextIndex = event.key === 'ArrowRight'
+      ? (index + 1) % MATERIAL_TABS.length
+      : event.key === 'ArrowLeft'
+        ? (index + MATERIAL_TABS.length - 1) % MATERIAL_TABS.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? MATERIAL_TABS.length - 1 : null;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = MATERIAL_TABS[nextIndex];
+    setMaterialTab(nextTab);
+    document.getElementById(`material-tab-${nextTab}`)?.focus();
+  };
 
   const handleQuestionCompositionStart = useCallback(() => {
     isComposingRef.current = true;
@@ -1979,19 +2073,78 @@ export function InputView() {
     if (sourceQuestion.trim() !== trimmed || question !== trimmed) {
       setQuestion(trimmed);
     }
-    setConfirmDialogData({ question: trimmed });
+    const launch: PendingSimulationLaunch = {
+      nextQuestion: trimmed,
+      nextRounds: rounds,
+      nextAgents: numAgents,
+      nextMode: mode,
+      nextVisualization: vizEnabled,
+      ...materialLaunchContext,
+    };
+    const options = buildSimulationOptions(launch);
+    const usesProfile = Boolean(options.modelProfileId);
+    if (usesProfile && (!options.modelProfileConfirmationToken || profileRefreshRequired || profilesRefreshing)) {
+      setProfileRefreshRequired(true);
+      setLaunchError(t('home.launch_profile_unverified'));
+      return;
+    }
+    const useMultiRun = multiRunCaps?.multi_run?.enabled === true && multiRunEnabled;
+    setConfirmDialogData({
+      ...launch,
+      options,
+      runCount: useMultiRun ? multiRunCount : 1,
+      multiRun: useMultiRun,
+      modelLabel: usesProfile
+        ? activeProfile?.model || t('home.launch_model_unknown')
+        : options.llmModel || caps?.llm_provider?.model || t('home.launch_model_unknown'),
+      profileLabel: usesProfile
+        ? activeProfile?.name || options.modelProfileId
+        : (options.llmApiKey || options.llmBaseUrl || options.llmModel)
+          ? t('home.launch_provider_override')
+          : t('home.launch_provider_server'),
+      searchProviderLabel: webSearchEnabled
+        ? friendlyProviderName(webSearchUsesCustomOverride ? webSearchProvider : webSearchServerProvider, t)
+          ?? t('home.launch_search_unknown')
+        : undefined,
+      runtimePreset,
+    });
   };
 
   const confirmLaunch = () => {
     if (!confirmDialogData) return;
-    const q = confirmDialogData.question;
+    const launch = confirmDialogData;
     setConfirmDialogData(null);
     clearLaunchError();
-    handleSubmit(q).catch((err) => {
+    launchSimulation(launch).catch((err) => {
       console.error('[confirmLaunch] failed:', err);
-      const errMsg = getLocalizedApiErrorMessage(err, t, t('common.api_errors.simulation_start_failed'));
-      setLaunchError(errMsg);
+      setLaunchFailure(err);
     });
+  };
+
+  const refreshLaunchProfiles = async (): Promise<void> => {
+    if (profilesRefreshing) return;
+    setProfilesRefreshing(true);
+    try {
+      const response = await listModelProfiles();
+      const nextProfiles = response.profiles || [];
+      setProfiles(nextProfiles);
+      const nextProfile = nextProfiles.find((profile) => profile.id === selectedProfileId);
+      if (nextProfile && !profileProviderOverrideRequested) {
+        setLlmModel(nextProfile.model);
+        setLlmBaseUrl(nextProfile.base_url || '');
+        setLlmRequestsPerMinute(nextProfile.rpm != null ? String(nextProfile.rpm) : '');
+        setLlmTokensPerMinute(nextProfile.tpm != null ? String(nextProfile.tpm) : '');
+        setLlmApiKey('');
+      }
+      setConfirmDialogData(null);
+      setPendingLaunch(null);
+      setProfileRefreshRequired(false);
+      setLaunchError(t('home.launch_profile_refreshed'));
+    } catch {
+      setLaunchError(t('home.launch_profile_refresh_failed'));
+    } finally {
+      setProfilesRefreshing(false);
+    }
   };
 
   const cancelLaunch = () => {
@@ -2244,7 +2397,12 @@ export function InputView() {
           progress so the loading overlay stays focused. */}
       <OnboardingGuide
         open={!onboarding.completed && !isSubmitting}
-        onComplete={onboarding.complete}
+        onComplete={handleSkipOnboarding}
+        onOpenSample={() => void handleRecommendedSampleImport(true)}
+        sampleCapabilityState={snapshotImportCapabilityState}
+        importing={recommendedSampleImporting}
+        importError={recommendedSampleImportError}
+        onRetryCapability={() => void reloadCapabilities?.()}
       />
       {llmNotConfigured && <LlmNotConfiguredBanner />}
       {/* Loading Overlay */}
@@ -2295,6 +2453,9 @@ export function InputView() {
                   {t('app_title')}
                 </h1>
                 <nav className="input-view__nav">
+                  <button type="button" className="btn btn-ghost" onClick={onboarding.reset}>
+                    {t('onboarding.reopen')}
+                  </button>
                   <button className="btn btn-ghost" onClick={() => navigate('/history')}>
                     {t('home.history')}
                   </button>
@@ -2352,6 +2513,9 @@ export function InputView() {
             </div>
 
             <div className="iv-hero__cta">
+              {materialReady && (
+                <p className="iv-material-ready" role="status">{t('home.materials_ready')}</p>
+              )}
               <div className="input-view__submit-row">
                 <button
                   className="btn btn-primary btn--submit"
@@ -2380,16 +2544,6 @@ export function InputView() {
                 >
                   {t('debate.entry_cta')}
                 </button>
-                {educationTemplatesEnabled && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn--submit edu-template-trigger"
-                    onClick={() => setEducationPickerOpen(true)}
-                    disabled={isSubmitting}
-                  >
-                    {t('education.use_template')}
-                  </button>
-                )}
               </div>
 
               {isSimulationBudgetBlocked && !isSubmitting && mainLaunchDisabledReasonKey !== 'home.byok_budget_blocked' && (
@@ -2444,6 +2598,11 @@ export function InputView() {
                 <div className="iv-hero__launch-error" role="alert">
                   <span className="iv-hero__alert-icon" aria-hidden="true">!</span>
                   <span>{launchError}</span>
+                  {profileRefreshRequired && (
+                    <button type="button" disabled={profilesRefreshing} onClick={() => void refreshLaunchProfiles()}>
+                      {t(profilesRefreshing ? 'home.launch_profile_refreshing' : 'home.launch_profile_refresh')}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -2565,22 +2724,54 @@ export function InputView() {
               </span>
             </div>
 
-            {/* Quick Start (moved up for first-run prominence) */}
-            <div className="quick-start-section">
-              {/* h2 (not h3) so the page heading outline stays continuous after
-                  the h1 page title — avoids an h1 -> h3 skip. Visual style is
-                  unchanged (same `section-title` class). */}
-              <h2 className="section-title">{t('home.quick_starts')}</h2>
-              <p className="quick-start-section__meta">
-                {campaignProfile
-                  ? t('home.campaign_quickstart_unlocks', {
-                      count: campaignBadges.length,
-                      runs: campaignProfile.total_runs,
-                    })
-                  : t('home.campaign_first_run')}
-              </p>
-              <QuickStartCards onSelect={handleQuickStartSelect} />
-            </div>
+            <section className="iv-materials quick-start-section" aria-labelledby="home-materials-title">
+              <h2 className="section-title" id="home-materials-title">{t('home.materials_title')}</h2>
+              <p className="iv-materials__intro">{t('home.materials_intro')}</p>
+              <div className="iv-materials__tabs" role="tablist" aria-label={t('home.materials_title')}>
+                {MATERIAL_TABS.map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    id={`material-tab-${tab}`}
+                    aria-selected={materialTab === tab}
+                    aria-controls={`material-panel-${tab}`}
+                    tabIndex={materialTab === tab ? 0 : -1}
+                    onClick={() => setMaterialTab(tab)}
+                    onKeyDown={(event) => handleMaterialTabKeyDown(event, tab)}
+                  >
+                    {t(`home.materials_tab_${tab}`)}
+                  </button>
+                ))}
+              </div>
+              <p className="iv-materials__replacement">{t('home.materials_replace_note')}</p>
+              <div id="material-panel-quickstart" role="tabpanel" aria-labelledby="material-tab-quickstart" hidden={materialTab !== 'quickstart'} tabIndex={0}>
+                <QuickStartCards onSelect={handleQuickStartSelect} disabled={isSubmitting} />
+              </div>
+              <div id="material-panel-education" role="tabpanel" aria-labelledby="material-tab-education" hidden={materialTab !== 'education'} tabIndex={0}>
+                {educationTemplatesLoading ? (
+                  <p role="status">{t('home.materials_loading')}</p>
+                ) : educationTemplatesError ? (
+                  <div role="status">
+                    <p>{t('home.materials_capability_error')}</p>
+                    <button type="button" className="btn btn-secondary" onClick={() => void reloadEducationTemplates?.()}>{t('snapshot.capability_retry')}</button>
+                  </div>
+                ) : educationTemplatesEnabled ? (
+                  <>
+                    <p className="iv-materials__intro">{t('home.materials_education_note')}</p>
+                    <button type="button" className="btn btn-secondary edu-template-trigger" onClick={() => setEducationPickerOpen(true)} disabled={isSubmitting}>
+                      {t('education.use_template')}
+                    </button>
+                  </>
+                ) : (
+                  <p role="status">{t('home.materials_disabled')}</p>
+                )}
+              </div>
+              <div id="material-panel-local" role="tabpanel" aria-labelledby="material-tab-local" hidden={materialTab !== 'local'} tabIndex={0}>
+                <p className="iv-materials__intro">{t('home.materials_local_note')}</p>
+                <LocalPackPicker onImport={handleImportPack} onDemoImported={handleLocalPackDemoImported} />
+              </div>
+            </section>
 
             {customAgentsEnabled && (
               <AgentSelectionStrip
@@ -3061,6 +3252,7 @@ export function InputView() {
                               <div className="multi-run-count-selector" style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <input
                                   type="number"
+                                  aria-label={t('multi_run.input_label')}
                                   min={1}
                                   max={multiRunMaxCount}
                                   value={multiRunCount}
@@ -3162,18 +3354,14 @@ export function InputView() {
                     setAgentsPreview={setAgentsPreview}
                   />
 
-                  <div className="iv-advanced__divider" style={{ margin: '16px 0', borderTop: '1px solid rgba(64, 48, 40, 0.08)' }} />
-
-                  <LocalPackPicker
-                    onImport={handleImportPack}
-                    onDemoImported={handleLocalPackDemoImported}
-                  />
                 </div>
               </div>
             </div>
           </div>
 
-          {/* ── STAGE 2: Challenges ── */}
+          <details className="iv-practice">
+            <summary>{t('home.practice_title')}</summary>
+            <p className="iv-materials__intro">{t('home.practice_intro')}</p>
           <div className="iv-challenges">
             {sharedChallengeBanner && (
               <section className="shared-challenge-banner" role="status">
@@ -3195,7 +3383,7 @@ export function InputView() {
             )}
 
             {todayChallenge && (
-            <section className="daily-challenge-card" onClick={handleDailyCardClick} style={{ cursor: 'pointer' }}>
+            <section className="daily-challenge-card">
               <img
                 className="daily-challenge-card__art"
                 src="/assets/ui/generated/daily_challenge_panel.png"
@@ -3269,7 +3457,7 @@ export function InputView() {
                   ? t('home.daily_challenge_replay')
                   : todayChallengeProgress
                     ? t('home.daily_challenge_continue')
-                    : t('home.daily_challenge_start')}
+                    : t('home.practice_choose_daily')}
               </button>
             </section>
             )}
@@ -3421,6 +3609,7 @@ export function InputView() {
               </div>
             </section>
           </div>
+          </details>
 
           {/* ── Collapsible BYOK ── */}
           <div className="iv-config">
@@ -3830,39 +4019,82 @@ export function InputView() {
               onOverlayClick={cancelLaunch}
               role="dialog"
               aria-modal="true"
-              aria-label={multiRunCaps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.confirm_launch_title')}
+              aria-label={confirmDialogData?.multiRun ? t('multi_run.launch_btn') : t('home.confirm_launch_title')}
               onClick={(event) => event.stopPropagation()}
             >
               <AlertDialogHeader className="confirm-launch__header">
                 <AlertDialogTitle asChild>
-                  <h3>{multiRunCaps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.confirm_launch_title')}</h3>
+                  <h3>{confirmDialogData?.multiRun ? t('multi_run.launch_btn') : t('home.confirm_launch_title')}</h3>
                 </AlertDialogTitle>
               </AlertDialogHeader>
               <div className="confirm-launch__body">
                 <p className="confirm-launch__question">
-                  {confirmDialogData?.question ?? ''}
+                  {confirmDialogData?.nextQuestion ?? ''}
                 </p>
                 <AlertDialogDescription
                   className="confirm-launch__settings"
                 >
-                  {multiRunCaps?.multi_run?.enabled && multiRunEnabled ? (
+                  {confirmDialogData?.multiRun ? (
                     <>
-                      {t('multi_run.reminder_runs', { count: multiRunCount })}
+                      {t('multi_run.reminder_runs', { count: confirmDialogData.runCount })}
                       {' · '}
                       {t('home.confirm_launch_settings', {
-                        rounds,
-                        agents: numAgents,
-                        mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
+                        rounds: confirmDialogData.nextRounds,
+                        agents: confirmDialogData.nextAgents,
+                        mode: t(confirmDialogData.nextMode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
                       })}
                     </>
                   ) : (
                     t('home.confirm_launch_settings', {
-                      rounds,
-                      agents: numAgents,
-                      mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
+                      rounds: confirmDialogData?.nextRounds,
+                      agents: confirmDialogData?.nextAgents,
+                      mode: t(confirmDialogData?.nextMode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
                     })
                   )}
                 </AlertDialogDescription>
+                {confirmDialogData && (
+                  <>
+                    <dl className="confirm-launch__summary">
+                      <div><dt>{t('home.launch_profile')}</dt><dd data-testid="launch-summary-profile">{confirmDialogData.profileLabel}</dd></div>
+                      <div><dt>{t('home.launch_model')}</dt><dd data-testid="launch-summary-model">{confirmDialogData.modelLabel}</dd></div>
+                      <div>
+                        <dt>{t('home.launch_scale')}</dt>
+                        <dd data-testid="launch-summary-scale">{t('home.launch_scale_value', {
+                          agents: confirmDialogData.nextAgents,
+                          rounds: confirmDialogData.nextRounds,
+                          runs: confirmDialogData.runCount,
+                        })}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('home.runtime_preset_label')}</dt>
+                        <dd>{t(`home.runtime_preset_${confirmDialogData.runtimePreset}`)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('home.launch_search')}</dt>
+                        <dd>{confirmDialogData.options?.webSearchEnabled
+                          ? t('home.launch_search_on', { provider: confirmDialogData.searchProviderLabel })
+                          : t('home.launch_search_off')}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('home.launch_context')}</dt>
+                        <dd>{t('home.launch_context_value', {
+                          sources: confirmDialogData.options?.worldContext ? 1 : 0,
+                          posts: confirmDialogData.options?.initialSocialFeed?.length ?? 0,
+                          agents: confirmDialogData.options?.customAgentIdentityIds?.length ?? 0,
+                        })}</dd>
+                      </div>
+                    </dl>
+                    <p className="confirm-launch__note">{t('home.launch_workload', {
+                      turns: confirmDialogData.nextAgents * confirmDialogData.nextRounds * (confirmDialogData.runCount ?? 1),
+                    })}</p>
+                    <p className="confirm-launch__note">{t('home.launch_eta_estimate', {
+                      minutes: estimateSimulationMinutes(confirmDialogData.nextRounds, confirmDialogData.nextAgents),
+                    })}</p>
+                    <p className="confirm-launch__note">{t('home.launch_llm_use')}</p>
+                    <p className="confirm-launch__cost" data-testid="launch-summary-cost">{t('home.launch_cost_unknown')}</p>
+                    <p className="confirm-launch__note">{t('home.launch_rate_not_cost')}</p>
+                  </>
+                )}
               </div>
               <AlertDialogFooter className="confirm-launch__footer">
                 <AlertDialogCancel
@@ -3876,7 +4108,7 @@ export function InputView() {
                   onClick={confirmLaunch}
                   autoFocus
                 >
-                  {multiRunCaps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.submit')}
+                  {confirmDialogData?.multiRun ? t('multi_run.launch_btn') : t('home.submit')}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

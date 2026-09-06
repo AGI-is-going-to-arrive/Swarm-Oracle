@@ -10,6 +10,7 @@
 .tmp-playwright
 .trae
 .venv
+.swarm-tools
 .playwright-cli
 .playwright-mcp
 **/.DS_Store

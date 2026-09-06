@@ -1,6 +1,7 @@
 import i18n, { normalizeLanguage } from '../i18n/config';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { create } from 'zustand';
+import { createCompatUuid } from '../lib/compatUuid';
 
 import { createDebate, getDebate } from '../api/client';
 import type {
@@ -15,12 +16,15 @@ import type {
 interface DebateState {
   debate: DebateSnapshot | null;
   pendingParticipants: { debateId: string | null; participants: DebateParticipant[] } | null;
-  status: 'idle' | 'loading' | 'live' | 'done' | 'error';
+  status: 'idle' | 'loading' | 'live' | 'done' | 'error' | 'cancelled' | 'deleted';
+  activeDebateId: string | null;
+  deletedDebateId: string | null;
   error: string | null;
   errorCode: string | null;
   startDebate: (question: string) => Promise<string>;
   loadDebate: (id: string) => Promise<void>;
-  setDebate: (debate: DebateSnapshot) => void;
+  setDebate: (debate: DebateSnapshot, expectedDebateId?: string) => void;
+  setTerminalStatus: (status: 'cancelled' | 'deleted', debateId: string) => void;
   appendTurn: (turn: DebateTurn) => void;
   setPhase: (phase: DebateSnapshot['current_phase']) => void;
   setParticipants: (participants: DebateParticipant[], debateId?: string | null) => void;
@@ -33,11 +37,24 @@ interface DebateState {
 
 const initialState = {
   debate: null,
+  activeDebateId: null as string | null,
+  deletedDebateId: null as string | null,
   pendingParticipants: null as { debateId: string | null; participants: DebateParticipant[] } | null,
   status: 'idle' as const,
   error: null as string | null,
   errorCode: null as string | null,
 };
+
+let loadEpoch = 0;
+let pendingStart: { intent: string; requestId: string; promise?: Promise<string> } | null = null;
+
+function uiStatus(status: DebateSnapshot['status']): DebateState['status'] {
+  return status === 'queued' ? 'live' : status;
+}
+
+function runtimeUpdatesClosed(state: DebateState): boolean {
+  return ['deleted', 'cancelled'].includes(state.status) || Boolean(state.debate && ['done', 'error', 'cancelled'].includes(state.debate.status));
+}
 
 const PHASE_ORDER: DebateSnapshot['current_phase'][] = [
   'opening',
@@ -100,6 +117,7 @@ function moreFinalStatus(
     live: 1,
     done: 2,
     error: 3,
+    cancelled: 4,
   };
   return rank[left] >= rank[right] ? left : right;
 }
@@ -117,6 +135,11 @@ function mergeDebateSnapshot(
   if (!current || current.id !== incoming.id) {
     return { ...incoming, participants, turns: sortTurns(incoming.turns) };
   }
+  if (current.status === 'cancelled' && incoming.status !== 'cancelled') return current;
+  if (incoming.status === 'cancelled') {
+    return { ...incoming, participants, turns: sortTurns(incoming.turns), result_ready: false };
+  }
+  if (['done', 'error'].includes(current.status) && incoming.status !== current.status) return current;
 
   return {
     ...incoming,
@@ -136,54 +159,60 @@ function translate(key: string, options?: Record<string, unknown>): string {
   return i18n.t(key, options as never) as unknown as string;
 }
 
-export const useDebateStore = create<DebateState>((set) => ({
+export const useDebateStore = create<DebateState>((set, get) => ({
   ...initialState,
 
   startDebate: async (question: string) => {
+    const language = normalizeLanguage(i18n.language);
+    const intent = JSON.stringify([question.trim(), language]);
+    if (pendingStart?.intent === intent && pendingStart.promise) return pendingStart.promise;
+    const requestId = pendingStart?.intent === intent ? pendingStart.requestId : createCompatUuid();
+    const epoch = ++loadEpoch;
     set({ status: 'loading', error: null });
-    try {
-      const debate = await createDebate(question, undefined, {
-        language: normalizeLanguage(i18n.language),
+    const promise = createDebate(question, undefined, { language, clientRequestId: requestId })
+      .then((debate) => {
+        if (epoch === loadEpoch) set({
+          debate, activeDebateId: debate.id, pendingParticipants: null,
+          status: uiStatus(debate.status), error: null, errorCode: null,
+        });
+        if (pendingStart?.requestId === requestId) pendingStart = null;
+        return debate.id;
+      })
+      .catch((error: unknown) => {
+        if (epoch === loadEpoch) set({
+          status: 'error', errorCode: getApiErrorCode(error),
+          error: getLocalizedApiErrorMessage(error, translate, translate('common.api_errors.debate_start_failed')),
+        });
+        if (pendingStart?.requestId === requestId) pendingStart = { intent, requestId };
+        throw error;
       });
-      set({
-        debate,
-        pendingParticipants: null,
-        status: debate.status === 'done' ? 'done' : debate.status === 'error' ? 'error' : 'live',
-        error: null,
-        errorCode: null,
-      });
-      return debate.id;
-    } catch (error) {
-      set({
-        status: 'error',
-        errorCode: getApiErrorCode(error),
-        error: getLocalizedApiErrorMessage(
-          error,
-          translate,
-          translate('common.api_errors.debate_start_failed'),
-        ),
-      });
-      throw error;
-    }
+    pendingStart = { intent, requestId, promise };
+    return promise;
   },
 
   loadDebate: async (id: string) => {
-    set((state) => ({ status: state.debate?.id === id ? state.status : 'loading', error: null }));
+    const epoch = ++loadEpoch;
+    set((state) => state.activeDebateId === id || state.debate?.id === id
+      ? { activeDebateId: id, error: null }
+      : { ...initialState, activeDebateId: id, status: 'loading' });
     try {
       const debate = await getDebate(id);
+      if (epoch !== loadEpoch || get().activeDebateId !== id) return;
       set((state) => {
+        if (state.deletedDebateId === id) return state;
         const merged = mergeDebateSnapshot(state.debate, debate, state.pendingParticipants);
         return {
           debate: merged,
           pendingParticipants: null,
-          status: merged.status === 'done' ? 'done' : merged.status === 'error' ? 'error' : 'live',
+          status: uiStatus(merged.status),
           error: null,
           errorCode: null,
         };
       });
     } catch (error) {
+      if (epoch !== loadEpoch || get().activeDebateId !== id || get().deletedDebateId === id) return;
       set({
-        status: 'error',
+        status: get().debate?.status === 'cancelled' ? 'cancelled' : 'error',
         errorCode: getApiErrorCode(error),
         error: getLocalizedApiErrorMessage(
           error,
@@ -194,19 +223,37 @@ export const useDebateStore = create<DebateState>((set) => ({
     }
   },
 
-  setDebate: (debate) => set((state) => {
+  setDebate: (debate, expectedDebateId) => set((state) => {
+    if (state.deletedDebateId === debate.id) return state;
+    if (expectedDebateId && state.activeDebateId && state.activeDebateId !== expectedDebateId) return state;
+    if (state.activeDebateId !== debate.id) loadEpoch += 1;
     const merged = mergeDebateSnapshot(state.debate, debate, state.pendingParticipants);
     return {
       debate: merged,
+      activeDebateId: debate.id,
       pendingParticipants: null,
-      status: merged.status === 'done' ? 'done' : merged.status === 'error' ? 'error' : 'live',
+      status: uiStatus(merged.status),
       error: null,
       errorCode: null,
     };
   }),
 
+  setTerminalStatus: (status, debateId) => set((state) => {
+    if (state.activeDebateId && state.activeDebateId !== debateId) return state;
+    if (state.debate && state.debate.id !== debateId) return state;
+    if (state.deletedDebateId === debateId) return state;
+    if (status === 'deleted') {
+      loadEpoch += 1;
+      return { ...initialState, status: 'deleted', activeDebateId: debateId, deletedDebateId: debateId };
+    }
+    return {
+      status: 'cancelled', activeDebateId: debateId, error: null, errorCode: null,
+      debate: state.debate ? { ...state.debate, status: 'cancelled', result_ready: false } : null,
+    };
+  }),
+
   appendTurn: (turn) => set((state) => {
-    if (!state.debate) return state;
+    if (!state.debate || runtimeUpdatesClosed(state)) return state;
     const exists = state.debate.turns.some((item) => item.id === turn.id);
     if (exists) return state;
     return {
@@ -221,7 +268,7 @@ export const useDebateStore = create<DebateState>((set) => ({
   }),
 
   setPhase: (phase) => set((state) => {
-    if (!state.debate) return state;
+    if (!state.debate || runtimeUpdatesClosed(state)) return state;
     return {
       debate: {
         ...state.debate,
@@ -231,6 +278,7 @@ export const useDebateStore = create<DebateState>((set) => ({
   }),
 
   setParticipants: (participants, debateId = null) => set((state) => {
+    if (runtimeUpdatesClosed(state)) return state;
     if (!state.debate) {
       return { pendingParticipants: { debateId, participants } };
     }
@@ -244,7 +292,7 @@ export const useDebateStore = create<DebateState>((set) => ({
   }),
 
   setScore: (score) => set((state) => {
-    if (!state.debate) return state;
+    if (!state.debate || runtimeUpdatesClosed(state)) return state;
     return {
       debate: {
         ...state.debate,
@@ -254,7 +302,7 @@ export const useDebateStore = create<DebateState>((set) => ({
   }),
 
   setCounterplay: (counterplay) => set((state) => {
-    if (!state.debate) return state;
+    if (!state.debate || runtimeUpdatesClosed(state)) return state;
     return {
       debate: {
         ...state.debate,
@@ -264,7 +312,7 @@ export const useDebateStore = create<DebateState>((set) => ({
   }),
 
   setVerdict: (verdict) => set((state) => {
-    if (!state.debate) return state;
+    if (!state.debate || state.status === 'deleted' || ['error', 'cancelled'].includes(state.debate.status)) return state;
     return {
       debate: {
         ...state.debate,
@@ -278,7 +326,7 @@ export const useDebateStore = create<DebateState>((set) => ({
     };
   }),
 
-  setError: (message) => set((state) => ({
+  setError: (message) => set((state) => runtimeUpdatesClosed(state) ? state : ({
     debate: state.debate ? { ...state.debate, status: 'error' } : state.debate,
     status: 'error',
     errorCode: getApiErrorCode(message),
@@ -289,5 +337,9 @@ export const useDebateStore = create<DebateState>((set) => ({
     ),
   })),
 
-  reset: () => set(initialState),
+  reset: () => {
+    loadEpoch += 1;
+    pendingStart = null;
+    set(initialState);
+  },
 }));

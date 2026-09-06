@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
@@ -1893,6 +1893,7 @@ async def generate_social_copy_with_overrides(
 async def export_scenario(
     scenario_id: str,
     principal: SessionPrincipal | None = Depends(require_session_principal),
+    language: Literal["zh", "en"] | None = None,
 ):
     """P4-C: Export scenario results as Markdown."""
     engine = get_engine()
@@ -1914,37 +1915,70 @@ async def export_scenario(
             )
         ).all())
 
-    language = _resolve_social_language(scenario)
+    export_language = (
+        "Chinese" if language == "zh" else "English" if language == "en"
+        else _resolve_social_language(scenario)
+    )
     labels = {
-        "status": "状态" if language == "Chinese" else "Status",
-        "created_at": "创建时间" if language == "Chinese" else "Created",
-        "participants": "参与角色" if language == "Chinese" else "Participants",
-        "role": "角色" if language == "Chinese" else "Role",
-        "name": "名称" if language == "Chinese" else "Name",
-        "stance": "定位" if language == "Chinese" else "Stance",
-        "tier": "层级" if language == "Chinese" else "Tier",
-        "no_branches": "尚无已完成的分支。" if language == "Chinese" else "No completed branches yet.",  # noqa: E501
-        "ending": "结局" if language == "Chinese" else "Ending",
-        "probability": "概率" if language == "Chinese" else "Probability",
-        "fork_reason": "分歧原因" if language == "Chinese" else "Fork Reason",
-        "story": "故事" if language == "Chinese" else "Story",
-        "insight": "洞察" if language == "Chinese" else "Insight",
-        "key_moments": "关键时刻" if language == "Chinese" else "Key Moments",
+        "status": "状态" if export_language == "Chinese" else "Status",
+        "created_at": "创建时间" if export_language == "Chinese" else "Created",
+        "participants": "参与角色" if export_language == "Chinese" else "Participants",
+        "role": "角色" if export_language == "Chinese" else "Role",
+        "name": "名称" if export_language == "Chinese" else "Name",
+        "stance": "定位" if export_language == "Chinese" else "Stance",
+        "tier": "层级" if export_language == "Chinese" else "Tier",
+        "no_branches": "尚无已完成的分支。" if export_language == "Chinese" else "No completed branches yet.",  # noqa: E501
+        "ending": "结局" if export_language == "Chinese" else "Ending",
+        "probability": "模拟权重" if export_language == "Chinese" else "Simulation weight",
+        "fork_reason": "分歧原因" if export_language == "Chinese" else "Fork Reason",
+        "story": "故事" if export_language == "Chinese" else "Story",
+        "insight": "洞察" if export_language == "Chinese" else "Insight",
+        "key_moments": "关键时刻" if export_language == "Chinese" else "Key Moments",
     }
+
+    status_labels = {
+        "parsing": ("准备中", "Preparing"),
+        "simulating": ("推演中", "Simulating"),
+        "narrating": ("叙事中", "Narrating"),
+        "done": ("已完成", "Complete"),
+        "error": ("失败", "Failed"),
+        "cancelled": ("已取消", "Cancelled"),
+    }
+    status_label = status_labels.get(scenario.status.value, (scenario.status.value,) * 2)[
+        0 if export_language == "Chinese" else 1
+    ]
+    original_notice = (
+        "问题、角色名称和推演叙事保留存档原文；此导出仅调整系统标题和状态语言。"
+        "分支权重是模拟结果，不是实测的现实发生概率。"
+        if export_language == "Chinese"
+        else "Questions, role names and simulation narratives keep their original saved text; "
+        "this export localizes system headings and status only. "
+        "Branch weights are simulation outputs, not measured real-world probabilities."
+    )
 
     # Build Markdown
     lines = [
         f"# SwarmOracle — {scenario.question}",
         "",
-        f"> {labels['status']}: {scenario.status.value} | {labels['created_at']}: {scenario.created_at.isoformat()}",  # noqa: E501
+        f"> {labels['status']}: {status_label} | {labels['created_at']}: {scenario.created_at.isoformat()}",  # noqa: E501
+        "",
+        f"> {original_notice}",
         "",
         f"## {labels['participants']}",
         "",
         f"| {labels['role']} | {labels['name']} | {labels['stance']} | {labels['tier']} |",
         "|------|------|------|------|",
     ]
+    tier_labels = {
+        "CORE": ("核心角色", "Core"),
+        "IMPORTANT": ("重要角色", "Important"),
+        "CROWD": ("群体角色", "Crowd"),
+    }
     for a in agents:
-        lines.append(f"| {a.role} | {a.name} | {a.stance} | {a.tier.value} |")
+        tier_label = tier_labels.get(a.tier.value, (a.tier.value,) * 2)[
+            0 if export_language == "Chinese" else 1
+        ]
+        lines.append(f"| {a.role} | {a.name} | {a.stance} | {tier_label} |")
 
     lines.append("")
     lines.append("---")

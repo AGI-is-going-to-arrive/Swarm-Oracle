@@ -138,8 +138,11 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=sha-${{ needs.verify.outputs.target_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.verify.outputs.target_sha }}
 
       - name: Build and push immutable ${{ matrix.component }} image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -149,8 +152,85 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  promote:
+      - name: Record exact built manifest digest
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p .image-digests
+          jq -n --arg image "$IMAGE" --arg digest "$DIGEST" --arg revision "$TARGET_SHA" \
+            '{image: $image, digest: $digest, revision: $revision}' > ".image-digests/${COMPONENT}.json"
+
+      - name: Retain build digest for smoke and promotion
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.component }}-digest-${{ needs.verify.outputs.target_sha }}
+          path: .image-digests/${{ matrix.component }}.json
+          overwrite: true
+
+  image-smoke:
+    name: Final image pair (${{ matrix.platform }})
     needs: [verify, publish]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            artifact: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            artifact: arm64
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.target_sha }}
+      - name: Download exact build digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-digest-${{ needs.verify.outputs.target_sha }}'
+          path: .image-digests
+          merge-multiple: true
+      - name: Log in to GHCR for candidate pulls
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Exercise shipped containers and restore into a new volume
+        env:
+          TARGET_SHA: ${{ needs.verify.outputs.target_sha }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ]
+          for component in backend frontend; do
+            [ "$(jq -r .revision ".image-digests/${component}.json")" = "$TARGET_SHA" ]
+          done
+          python3 scripts/container_smoke.py run \
+            --backend-image "$(jq -r '.image + "@" + .digest' .image-digests/backend.json)" \
+            --frontend-image "$(jq -r '.image + "@" + .digest' .image-digests/frontend.json)" \
+            --platform "$PLATFORM" --output output/container-smoke
+      - name: Retain actual artifact and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-smoke-${{ matrix.artifact }}-${{ needs.verify.outputs.target_sha }}
+          path: output/container-smoke/
+          retention-days: 14
+
+  promote:
+    needs: [verify, publish, image-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -179,6 +259,13 @@ jobs:
           owner_lc="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           echo "backend=ghcr.io/${owner_lc}/swarmoracle-backend" >> "$GITHUB_OUTPUT"
           echo "frontend=ghcr.io/${owner_lc}/swarmoracle-frontend" >> "$GITHUB_OUTPUT"
+
+      - name: Download smoke-tested manifest digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-digest-${{ needs.verify.outputs.target_sha }}'
+          path: .image-digests
+          merge-multiple: true
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -212,4 +299,10 @@ jobs:
           REGCTL_BIN: regctl
         run: |
           set -euo pipefail
+          [ "$(jq -r .revision .image-digests/backend.json)" = "$TARGET_SHA" ]
+          [ "$(jq -r .revision .image-digests/frontend.json)" = "$TARGET_SHA" ]
+          [ "$(jq -r .image .image-digests/backend.json)" = "$BACKEND_IMAGE" ]
+          [ "$(jq -r .image .image-digests/frontend.json)" = "$FRONTEND_IMAGE" ]
+          export BACKEND_DIGEST="$(jq -r .digest .image-digests/backend.json)"
+          export FRONTEND_DIGEST="$(jq -r .digest .image-digests/frontend.json)"
           bash scripts/promote-ghcr-pair.sh

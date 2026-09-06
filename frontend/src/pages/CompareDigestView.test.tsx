@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { act, cleanup, render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { CompareDigestView } from './CompareDigestView';
 
 const {
@@ -190,11 +190,17 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-function renderView(path: string) {
+function GuideReturnProbe() {
+  return <output data-testid="guide-return-state">{JSON.stringify(useLocation().state)}</output>;
+}
+
+function renderView(path: string, state?: unknown) {
+  const url = new URL(path, 'https://example.test');
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={[{ pathname: url.pathname, search: url.search, hash: url.hash, state }]}>
       <Routes>
         <Route path="/result/:id/compare" element={<CompareDigestView />} />
+        <Route path="/result/:id" element={<GuideReturnProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -227,6 +233,50 @@ afterEach(() => {
 });
 
 describe('CompareDigestView', () => {
+  const guideState = { sampleOnboarding: true, sampleOnboardingStep: 'divergence', sampleInspectedEndingIds: ['a', 'b'] };
+  function mockGuideComparison(status = 'done', unfinished = false): void {
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id', question: 'Saved comparison', status, agents: [], messages: [],
+      branches: [{ id: 'a', title: 'First', story: 'Saved first', status: 'COMPLETED' }, { id: 'b', title: 'Second', story: unfinished ? '' : 'Saved second', status: 'COMPLETED', replay_kind: 'counterfactual' }],
+    });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id', branch_a: 'a', branch_b: 'b', common_rounds: 0, intervention: null,
+      rounds: [{ round: 1, branch_a_summary: 'First saved summary', branch_b_summary: 'Second saved summary', branch_a_messages: [], branch_b_messages: [], divergence_score: 0.5, is_identical: false }],
+    });
+  }
+
+  it('returns the guide to evidence only after a real saved comparison has loaded', async () => {
+    mockGuideComparison();
+    const user = userEvent.setup();
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b', guideState);
+    await user.click(await screen.findByRole('link', { name: 'onboarding.sample_compare_continue' }));
+    expect(await screen.findByTestId('guide-return-state')).toHaveTextContent('"sampleOnboardingStep":"evidence"');
+    expect(getCounterfactualCompareMock).toHaveBeenCalledWith('test-id', 'a', 'b');
+    expect(resimulateCounterfactualMock).not.toHaveBeenCalled();
+  });
+
+  it('does not advance the guide when the backend rejects comparison lineage', async () => {
+    mockGuideComparison();
+    const MockApiError = await importMockApiError();
+    getCounterfactualCompareMock.mockRejectedValueOnce(new MockApiError(409, 'BRANCH_LINEAGE_INVALID_FORK_BOUNDARY', 'invalid lineage'));
+    const user = userEvent.setup();
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b', guideState);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load comparison data right now. Please retry.');
+    await user.click(screen.getByRole('link', { name: 'Back to Result' }));
+    expect(await screen.findByTestId('guide-return-state')).toHaveTextContent('"sampleOnboardingStep":"divergence"');
+    expect(screen.queryByText('onboarding.sample_compare_continue')).not.toBeInTheDocument();
+  });
+
+  it.each(['error', 'cancelled'])('does not offer active resimulation for a %s source', async (status) => {
+    mockGuideComparison(status, true);
+    const user = userEvent.setup();
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+    const button = await screen.findByRole('button', { name: 'Simulate Remaining Rounds' });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(resimulateCounterfactualMock).not.toHaveBeenCalled();
+    expect(screen.getByText('compare.resimulate_requires_completed')).toBeInTheDocument();
+  });
   it('surfaces a resimulation failure instead of silently accepting it', async () => {
     const user = userEvent.setup();
     getScenarioMock.mockResolvedValue({

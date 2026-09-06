@@ -2,6 +2,7 @@
    SwarmOracle — QuickStartCards
    ═══════════════════════════════════════════════════════════ */
 
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './QuickStartCards.css';
 
@@ -63,10 +64,12 @@ const PRESETS: QuickStartTemplate[] = [
 
 interface Props {
   onSelect: (preset: QuickStartPreset) => void;
+  disabled?: boolean;
 }
 
-export function QuickStartCards({ onSelect }: Props) {
+export function QuickStartCards({ onSelect, disabled = false }: Props) {
   const { t } = useTranslation();
+  const [showAll, setShowAll] = useState(false);
 
   const presets: QuickStartPreset[] = PRESETS.map((template) => ({
     emoji: template.emoji,
@@ -79,19 +82,32 @@ export function QuickStartCards({ onSelect }: Props) {
   }));
 
   return (
-    <div className="quickstart-cards">
-      {presets.map((preset, i) => (
+    <div className="quickstart-browser">
+      <div className="quickstart-cards" id="quickstart-card-list">
+      {(showAll ? presets : presets.slice(0, 4)).map((preset, i) => (
         <button
           key={i}
+          type="button"
           className="quickstart-card flat-card"
           onClick={() => onSelect(preset)}
+          disabled={disabled}
           style={{ animationDelay: `${i * 80}ms` }}
         >
-          <span className="quickstart-card__emoji">{preset.emoji}</span>
+          <span className="quickstart-card__emoji" aria-hidden="true">{preset.emoji}</span>
           <span className="quickstart-card__question">{preset.question}</span>
           <span className="quickstart-card__subtitle">{preset.subtitle}</span>
         </button>
       ))}
+      </div>
+      <button
+        type="button"
+        className="btn btn-ghost quickstart-browser__more"
+        onClick={() => setShowAll((current) => !current)}
+        aria-expanded={showAll}
+        aria-controls="quickstart-card-list"
+      >
+        {t(showAll ? 'home.materials_show_less' : 'home.materials_show_more')}
+      </button>
     </div>
   );
 }

@@ -59,6 +59,9 @@ const {
   copyTextMock,
   createReplayArtifactMock,
   getActiveEndingRoomMock,
+  getEndingRoomMock,
+  getRoundtableProviderMock,
+  listPostVerdictOutputsMock,
   getCapabilitiesMock,
   createThreadMock,
   getAgentsMock,
@@ -234,6 +237,9 @@ const {
     }),
     createReplayArtifactMock: vi.fn(async () => ({ id: 'artifact-1' })),
     getActiveEndingRoomMock: vi.fn(),
+    getEndingRoomMock: vi.fn(),
+    getRoundtableProviderMock: vi.fn(),
+    listPostVerdictOutputsMock: vi.fn(),
     getCapabilitiesMock: vi.fn(async () => ({
       factions: { enabled: false },
       agent_conversation: { enabled: false },
@@ -507,6 +513,9 @@ vi.mock('../api/client', async () => {
     ...actual,
     createReplayArtifact: createReplayArtifactMock,
     getActiveEndingRoom: getActiveEndingRoomMock,
+    getEndingRoom: getEndingRoomMock,
+    getRoundtableProvider: getRoundtableProviderMock,
+    listPostVerdictOutputs: listPostVerdictOutputsMock,
     getCapabilities: getCapabilitiesMock,
     getAgents: getAgentsMock,
     getReplayArtifact: getReplayArtifactMock,
@@ -570,6 +579,9 @@ beforeEach(() => {
     roundtable_survey: { enabled: false },
   }));
   getActiveEndingRoomMock.mockReset();
+  getEndingRoomMock.mockReset();
+  getRoundtableProviderMock.mockReset().mockResolvedValue({ source: 'server_default', profile_id: null, name: 'Test model', model: 'test-model' });
+  listPostVerdictOutputsMock.mockReset().mockResolvedValue({ outputs: [] });
   getActiveEndingRoomMock.mockImplementation(async () => null);
   getAgentsMock.mockReset();
   getReplayArtifactMock.mockReset();
@@ -1059,6 +1071,41 @@ describe('WorldlineRoundtableView', () => {
       await waitFor(() => expect(wsMock).toHaveBeenLastCalledWith(resolvedRoom.id, false));
       expect(wsMock).not.toHaveBeenCalledWith(resolvedRoom.id, true);
       expect(openRoomMock).not.toHaveBeenCalled();
+    });
+
+    it('opens the exact room selected in experiment history without choosing the latest room', async () => {
+      startWithoutHydratedRoom();
+      const baseState = createBaseStoreState();
+      const room = { ...baseState.snapshot!, id: 'historical-room', status: 'done' as const, result_ready: true };
+      getEndingRoomMock.mockResolvedValue(room);
+      loadRoomMock.mockImplementation(async () => {
+        storeState.snapshot = room;
+        storeState.result = baseState.result;
+        storeState.status = 'done';
+      });
+      render(
+        <MemoryRouter initialEntries={['/roundtable/scenario-1?room_id=historical-room']}>
+          <Routes><Route path="/roundtable/:id" element={<WorldlineRoundtableView />} /></Routes>
+        </MemoryRouter>,
+      );
+      await screen.findByText('The roundtable converged on a single hinge.');
+      expect(getEndingRoomMock).toHaveBeenCalledWith('historical-room');
+      expect(loadRoomMock).toHaveBeenCalledWith('historical-room', { throwOnError: true });
+      expect(getActiveEndingRoomMock).not.toHaveBeenCalled();
+      expect(openRoomMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a history room whose scenario does not match the route', async () => {
+      startWithoutHydratedRoom();
+      getEndingRoomMock.mockResolvedValue({ ...createBaseStoreState().snapshot!, scenario_id: 'another-scene' });
+      render(
+        <MemoryRouter initialEntries={['/roundtable/scenario-1?room_id=other-room']}>
+          <Routes><Route path="/roundtable/:id" element={<WorldlineRoundtableView />} /></Routes>
+        </MemoryRouter>,
+      );
+      expect(await screen.findByText('Could not restore the saved roundtable. Refresh and try again.')).toBeInTheDocument();
+      expect(loadRoomMock).not.toHaveBeenCalled();
+      expect(getActiveEndingRoomMock).not.toHaveBeenCalled();
     });
 
     it('falls back to the picker when no persisted room exists (resolve returns null)', async () => {

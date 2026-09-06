@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   createReplayArtifact,
   getActiveEndingRoom,
+  getEndingRoom,
   getAgents,
   getReplayArtifact,
   getScenario,
@@ -489,10 +490,11 @@ export default function WorldlineRoundtableView() {
         setStoryData(nextStoryData);
         setAgents(nextAgents);
 
-        if (nextScenario.status !== 'done') {
+        const requestedRoomId = searchParams.get('room_id')?.trim() ?? '';
+        if (!requestedRoomId && nextScenario.status !== 'done') {
           throw new Error('roundtable.error_not_done');
         }
-        if ((nextStoryData.branches?.length ?? 0) < 2) {
+        if (!requestedRoomId && (nextStoryData.branches?.length ?? 0) < 2) {
           throw new Error('roundtable.error_too_few_branches');
         }
 
@@ -504,10 +506,15 @@ export default function WorldlineRoundtableView() {
         // completed room cannot be restored, surface a retryable error instead
         // of silently offering to start a duplicate run.
         try {
-          const existingRoom = await getActiveEndingRoom(id, 'worldline_roundtable');
+          const existingRoom = requestedRoomId
+            ? await getEndingRoom(requestedRoomId)
+            : await getActiveEndingRoom(id, 'worldline_roundtable');
           if (cancelled) return;
-          if (existingRoom && (existingRoom.status === 'done' || existingRoom.result_ready)) {
-            setRestoredReadOnlyRoomId(existingRoom.id);
+          if (requestedRoomId && (!existingRoom || existingRoom.scenario_id !== id || existingRoom.room_type !== 'worldline_roundtable')) {
+            throw new Error('roundtable.error_restore_failed');
+          }
+          if (existingRoom && (requestedRoomId || existingRoom.status === 'done' || existingRoom.result_ready)) {
+            if (existingRoom.status === 'done' || existingRoom.result_ready) setRestoredReadOnlyRoomId(existingRoom.id);
             // loadRoom hydrates the snapshot and, when result_ready, the result payload —
             // the same hydration the live completion path performs.
             await loadRoom(existingRoom.id, { throwOnError: true });

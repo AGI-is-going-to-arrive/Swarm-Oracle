@@ -279,6 +279,30 @@ describe('ArgumentMap', () => {
     expect(container.innerHTML).toBe('');
   });
 
+  it.each([
+    { verdict: false, autoTour: true },
+    { verdict: true, autoTour: false },
+  ])('keeps manual graph inspection without a false or suppressed automatic tour: %j', async ({ verdict, autoTour }) => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 'saved-graph',
+        nodes: [
+          { id: 'claim', key: 'claim', type: 'claim', label: 'Saved claim', round: 1, payload: null },
+          ...(verdict ? [{ id: 'verdict', key: 'verdict', type: 'verdict', label: 'Saved verdict', round: 2, payload: null }] : []),
+        ],
+        edges: [],
+        units: [{ id: 'unit', type: 'claim', status: 'standing', text: 'Saved claim', turn_id: 'turn', node_id: 'claim' }],
+      }),
+    } as Response);
+    render(<ArgumentMap debateId="saved-debate" visible autoTour={autoTour} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(screen.getByTestId('reactflow')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Argument map guide' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/This is the verdict/)).not.toBeInTheDocument();
+  });
+
   it('shows loading state while fetching', () => {
     // Never resolve the fetch to keep loading state
     vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(new Promise(() => {}));

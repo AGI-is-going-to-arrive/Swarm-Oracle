@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 : "${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
 : "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}"
+: "${BACKEND_DIGEST:?BACKEND_DIGEST must be the smoke-tested backend manifest}"
+: "${FRONTEND_DIGEST:?FRONTEND_DIGEST must be the smoke-tested frontend manifest}"
 : "${TARGET_SHA:?TARGET_SHA is required}"
 : "${CHANNEL:?CHANNEL is required}"
 
@@ -48,7 +50,7 @@ case "$CHANNEL" in
 esac
 
 images=("$BACKEND_IMAGE" "$FRONTEND_IMAGE")
-source_digests=()
+source_digests=("$BACKEND_DIGEST" "$FRONTEND_DIGEST")
 old_digests=()
 missing_digest="__MISSING__"
 
@@ -56,18 +58,24 @@ list_tags() {
   "$REGCTL_BIN" tag ls "$1" --format '{{ range .Tags }}{{ println . }}{{ end }}'
 }
 
-for image in "${images[@]}"; do
-  source_digest="$($REGCTL_BIN image digest "${image}:sha-${TARGET_SHA}")"
-  [[ "$source_digest" =~ ^sha256:[0-9A-Za-z._-]+$ ]] || {
-    echo "Invalid source digest for ${image}:sha-${TARGET_SHA}: $source_digest" >&2
+for index in "${!images[@]}"; do
+  image="${images[$index]}"
+  source_digest="${source_digests[$index]}"
+  [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Invalid smoke-tested source digest for ${image}: $source_digest" >&2
     exit 1
   }
-  source_digests+=("$source_digest")
+  # Never re-resolve a SHA tag after smoke: another rerun could move that tag.
+  resolved_digest="$($REGCTL_BIN image digest "${image}@${source_digest}")"
+  [ "$resolved_digest" = "$source_digest" ] || {
+    echo "Smoke-tested source digest is unavailable for ${image}" >&2
+    exit 1
+  }
 
   tags="$(list_tags "$image")"
   if grep -Fqx -- "$target_tag" <<<"$tags"; then
     old_digest="$($REGCTL_BIN image digest "${image}:${target_tag}")"
-    [[ "$old_digest" =~ ^sha256:[0-9A-Za-z._-]+$ ]] || {
+    [[ "$old_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
       echo "Invalid existing digest for ${image}:${target_tag}: $old_digest" >&2
       exit 1
     }

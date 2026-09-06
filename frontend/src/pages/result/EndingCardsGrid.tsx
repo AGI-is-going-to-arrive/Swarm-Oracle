@@ -4,6 +4,14 @@
 
 import { useResultContext } from './ResultContext';
 
+function plainNarrativeNotice(value: string): string {
+  return value
+    .replace(/^\*\*Evidence-limited hypothesis:\*\*\s*/, 'Evidence-limited narrative hypothesis: ')
+    .replace(/^\*\*Unverified attribution:\*\*\s*/, 'Evidence-limited narrative hypothesis (unverified attribution): ')
+    .replace(/^\*\*证据有限的假设：\*\*\s*/, '证据有限的叙事假设：')
+    .replace(/^\*\*归因未经验证：\*\*\s*/, '证据有限的叙事假设（归因未经验证）：');
+}
+
 function focusEndingTitle(branchId: string) {
   if (typeof window === 'undefined') return;
   const schedule = window.requestAnimationFrame ?? ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
@@ -27,6 +35,14 @@ export default function EndingCardsGrid() {
     handleOpenEndingRoom,
     isReplayMode,
     scenario,
+    comparisonBranchA,
+    comparisonBranchB,
+    setComparisonBranch,
+    comparisonHref,
+    handleOpenComparison,
+    capabilities,
+    capLoading,
+    capError,
   } = useResultContext();
 
   if (branches.length === 0) {
@@ -38,6 +54,41 @@ export default function EndingCardsGrid() {
   }
 
   return (
+    <section id="result-endings" className="result-endings" aria-labelledby="result-endings-heading">
+      <header className="result-endings__header">
+        <h2 id="result-endings-heading">{t('result.saved_endings_heading')}</h2>
+        <p className="probability-resume-hint" role="note">{t('result.simulation_weight_hint')}</p>
+        {branches.length > 1 && (
+          <fieldset className="result-compare-picker" id="result-compare-picker">
+            <legend>{t('result.compare_choose_two')}</legend>
+            {(['a', 'b'] as const).map((side) => (
+              <label key={side}>
+                <span>{t(side === 'a' ? 'result.compare_first' : 'result.compare_second')}</span>
+                <select
+                  value={(side === 'a' ? comparisonBranchA : comparisonBranchB) ?? ''}
+                  onChange={(event) => setComparisonBranch(side, event.target.value)}
+                >
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id} disabled={branch.id === (side === 'a' ? comparisonBranchB : comparisonBranchA)}>
+                      {branch.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+            <button type="button" className="btn" disabled={!comparisonHref} onClick={handleOpenComparison}>
+              {t('result.compare_selected')}
+            </button>
+            {!comparisonHref && (
+              <p className="result-compare-picker__note" role="status">
+                {t(capLoading ? 'common.loading' : capError ? 'common.capability_error' : isReplayMode
+                  ? 'result.bridge_replay_unavailable' : !capabilities?.counterfactual_replay?.enabled
+                    ? 'result.bridge_not_enabled' : 'result.compare_choose_two')}
+              </p>
+            )}
+          </fieldset>
+        )}
+      </header>
     <div className="endings-grid">
       {branches.map((branch, index) => {
         const isExpanded = expandedBranch === branch.id;
@@ -50,7 +101,7 @@ export default function EndingCardsGrid() {
         const titleId = `ending-title-${branch.id}`;
 
         const branchAnswerRaw = branch.question_answer;
-        const branchAnswerText = typeof branchAnswerRaw === 'string' ? branchAnswerRaw.trim() : '';
+        const branchAnswerText = typeof branchAnswerRaw === 'string' ? plainNarrativeNotice(branchAnswerRaw).trim() : '';
         const hasBranchAnswer = branchAnswerText.length > 0;
 
         return (
@@ -109,7 +160,7 @@ export default function EndingCardsGrid() {
 
             <div className="probability-section">
               <div className="probability-label">
-                <span>{t('result.probability')}</span>
+                <span>{t('result.simulation_weight')}</span>
                 <span className="probability-value">
                   {((branch.probability ?? 0) * 100).toFixed(1)}%
                 </span>
@@ -133,7 +184,7 @@ export default function EndingCardsGrid() {
               <blockquote
                 className={`insight-quote ${hasBranchAnswer ? 'insight-quote--secondary' : ''}`}
               >
-                {branch.insight}
+                {plainNarrativeNotice(branch.insight)}
               </blockquote>
             )}
 
@@ -155,7 +206,7 @@ export default function EndingCardsGrid() {
                   <div className="story-section">
                     <h3 className="section-label">{t('result.story')}</h3>
                     <p className="story-text full">
-                      {branch.story || '—'}
+                      {branch.story ? plainNarrativeNotice(branch.story) : '—'}
                     </p>
                   </div>
 
@@ -164,7 +215,7 @@ export default function EndingCardsGrid() {
                       <h3 className="section-label">{t('result.key_moments')}</h3>
                       <ol className="moments-timeline">
                         {branch.key_moments.map((moment, mi) => (
-                          <li key={mi}>{moment}</li>
+                          <li key={mi}>{plainNarrativeNotice(moment)}</li>
                         ))}
                       </ol>
                     </div>
@@ -224,5 +275,6 @@ export default function EndingCardsGrid() {
         );
       })}
     </div>
+    </section>
   );
 }

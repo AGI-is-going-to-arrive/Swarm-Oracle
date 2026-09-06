@@ -1436,6 +1436,165 @@ class TestScenarioEndpoints:
 
 
 class TestByokValidation:
+    @pytest.mark.asyncio
+    async def test_confirmed_profile_policy_survives_parse_and_worker_handoff(self, monkeypatch):
+        from app.api import helpers as helpers_module
+        from app.services.model_profiles import ResolvedProviderPolicy
+
+        policy = ResolvedProviderPolicy(
+            api_key="sk-confirmed-only", base_url="https://api.openai.com/v1",
+            model="confirmed-model", model_profile_id="confirmed-profile",
+            requests_per_minute=13, tokens_per_minute=None, concurrency=2,
+            supports_structured_outputs=False, supports_native_search=None,
+            native_search_upstream="off",
+        )
+        question = "Preserve the reviewed setup"
+        scenario = Scenario(
+            question=question, status=ScenarioStatus.SIMULATING,
+            user_id="confirmed-owner",
+            parsed_context={"model_profile_id": "confirmed-profile", "user_id": "confirmed-owner"},
+        )
+        with Session(get_engine()) as session:
+            session.add(scenario)
+            session.commit()
+            scenario_id = scenario.id
+            session.add(Branch(scenario_id=scenario_id, title="Initial Branch", probability=1.0))
+            session.commit()
+        captured: dict[str, object] = {}
+
+        async def _fake_parse(*_args, **kwargs):
+            captured["parse"] = kwargs
+            return {"agents": [{
+                "name": "Reviewer", "role": "Analyst", "persona": "Reviews the source.",
+                "tier": "CORE", "stance": "neutral",
+            }], "initial_title": "Reviewed launch", "groups": []}
+
+        async def _fake_simulation(**kwargs):
+            captured["simulation"] = kwargs
+
+        def _no_profile_recovery(*_args, **_kwargs):
+            pytest.fail("Confirmed creates must not recover a later mutable profile")
+
+        monkeypatch.setattr(helpers_module, "parse_question", _fake_parse)
+        monkeypatch.setattr(helpers_module, "run_simulation", _fake_simulation)
+        monkeypatch.setattr(
+            helpers_module, "recover_profile_provider_overrides", _no_profile_recovery,
+        )
+        await helpers_module.parse_and_run_background(
+            scenario_id, question=question, num_agents=3, mode="raw",
+            hierarchical=False, rounds=1, visualization_enabled=False,
+            reasoning_effort=None, temperature=None, branch_sensitivity=None,
+            fork_prompt_variant=None, fork_detector_active_branch_limit=None,
+            user_id="confirmed-owner", llm_api_key="sk-stale-argument",
+            llm_base_url="https://stale.example/v1", llm_model="stale-model",
+            llm_requests_per_minute=99, llm_tokens_per_minute=99,
+            disable_user_quota=None, confirmed_profile_policy=policy,
+        )
+        assert captured["parse"]["model"] == "confirmed-model"
+        assert captured["parse"]["api_key"] == "sk-confirmed-only"
+        assert captured["simulation"]["confirmed_profile_policy"] is policy
+        overrides = captured["simulation"]["llm_overrides"]
+        assert overrides["model"] == "confirmed-model"
+        assert overrides["requests_per_minute"] == 13
+        assert overrides["tokens_per_minute"] is None
+        assert overrides["supports_structured_outputs_override"] is False
+        assert overrides["supports_native_search_override"] is None
+
+    @pytest.mark.parametrize("multi_run", [False, True])
+    def test_confirmed_profile_rejects_patch_before_create_and_freezes_refreshed_policy(
+        self, client, monkeypatch, multi_run,
+    ):
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MODEL_PROFILES", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_AGENT_IDENTITY", True)
+        monkeypatch.setattr(scenarios_api.settings, "FEATURE_MULTI_RUN", True)
+        monkeypatch.setattr(scenarios_api.settings, "MULTI_RUN_MAX_COUNT", 2)
+        profile_response = client.post("/api/model-profiles", json={
+            "user_id": "confirmed-owner", "name": "Reviewed profile",
+            "base_url": "https://api.openai.com/v1", "model": "reviewed-model",
+            "api_key": "sk-reviewed-secret", "rpm": 17, "tpm": 1700,
+            "concurrency": 2, "supports_native_search": False,
+        })
+        assert profile_response.status_code == 201
+        profile_id = profile_response.json()["id"]
+        reviewed = client.get(
+            f"/api/model-profiles/{profile_id}", params={"user_id": "confirmed-owner"},
+        ).json()
+        patch_response = client.patch(
+            f"/api/model-profiles/{profile_id}", params={"user_id": "confirmed-owner"},
+            json={"model": "updated-model", "rpm": 31, "supports_native_search": True},
+        )
+        assert patch_response.status_code == 200
+        refreshed = patch_response.json()
+        assert refreshed["confirmation_token"] != reviewed["confirmation_token"]
+        scheduled: list[object] = []
+        captured: list[dict] = []
+
+        async def _noop():
+            return None
+
+        def _fake_background(*_args, **kwargs):
+            captured.append(kwargs)
+            return _noop()
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", scheduled.append)
+        route = "/api/scenario/multi-run" if multi_run else "/api/scenario"
+        payload = {
+            "question": "Will a confirmed profile stay fixed?",
+            "user_id": "confirmed-owner", "model_profile_id": profile_id,
+            "model_profile_confirmation_token": reviewed["confirmation_token"],
+            "num_agents": 3, "rounds": 1,
+            **({"run_count": 2} if multi_run else {}),
+        }
+        stale = client.post(route, json=payload)
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["code"] == "MODEL_PROFILE_CHANGED"
+        preflight_payload = {
+            key: value for key, value in payload.items()
+            if key not in {"run_count", "verdict_only_runs"}
+        }
+        with patch.object(agents_api, "parse_question", new_callable=AsyncMock) as parse_mock:
+            preflight = client.post("/api/agents/identities/preflight", json=preflight_payload)
+            assert preflight.status_code == 409
+            assert preflight.json()["detail"]["code"] == "MODEL_PROFILE_CHANGED"
+            parse_mock.assert_not_called()
+        assert scheduled == []
+        assert captured == []
+        with Session(get_engine()) as session:
+            assert list(session.exec(select(Scenario)).all()) == []
+
+        try:
+            accepted = client.post(route, json={
+                **payload, "model_profile_confirmation_token": refreshed["confirmation_token"],
+            })
+            assert accepted.status_code == 200
+            assert len(scheduled) == (2 if multi_run else 1)
+            # A further edit after acceptance must not change deferred tasks.
+            changed_again = client.patch(
+                f"/api/model-profiles/{profile_id}", params={"user_id": "confirmed-owner"},
+                json={"model": "too-late-model", "rpm": 99, "api_key": "sk-too-late-secret"},
+            )
+            assert changed_again.status_code == 200
+            for coro in scheduled:
+                asyncio.run(coro)
+        finally:
+            for coro in scheduled:
+                if getattr(coro, "cr_frame", None) is not None:
+                    _close_scheduled_coro(coro)
+        assert len(captured) == (2 if multi_run else 1)
+        for kwargs in captured:
+            policy = kwargs["confirmed_profile_policy"]
+            assert policy.model == "updated-model"
+            assert policy.api_key == "sk-reviewed-secret"
+            assert policy.requests_per_minute == 31
+            assert policy.supports_native_search is True
+        with Session(get_engine()) as session:
+            for scenario in session.exec(select(Scenario)).all():
+                context_json = json.dumps(scenario.parsed_context or {})
+                assert "sk-reviewed-secret" not in context_json
+                assert "sk-too-late-secret" not in context_json
+                assert "confirmation_token" not in context_json
+
     """Regression tests for BYOK boundary checks across all endpoints."""
 
     def test_scenario_base_url_without_key_rejected(self, client):
@@ -4359,7 +4518,7 @@ class TestInterveneEndpoint:
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "applied"
+        assert data["status"] == "queued"
         assert data["branch_id"] == bid
         assert data["round"] == 2  # max round number
         assert data["pending_count"] == 1
@@ -6205,21 +6364,64 @@ class TestDeleteScenario:
 
 
 class TestExportScenario:
+    def test_export_language_override_preserves_original_source_text(self, client, monkeypatch):
+        from app.api import social
+
+        async def no_model_call(*args, **kwargs):
+            pytest.fail("Markdown export must not translate source text through a model")
+
+        monkeypatch.setattr(social, "llm_call", no_model_call)
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="这个方案会通过吗？", status=ScenarioStatus.DONE)
+        _seed_agent(engine, sid, name="原始角色", role="原始职务", tier=AgentTier.CORE)
+        _seed_branch(
+            engine,
+            sid,
+            title="已存结局",
+            status=BranchStatus.COMPLETED,
+            story="这是原始推演叙事，不应在导出时被重写。",
+        )
+        response = client.get(f"/api/scenario/{sid}/export?language=en")
+        assert response.status_code == 200
+        assert "## Participants" in response.text
+        assert "> Status: Complete" in response.text
+        assert "keep their original saved text" in response.text
+        for original in (
+            "这个方案会通过吗？",
+            "原始角色",
+            "原始职务",
+            "已存结局",
+            "这是原始推演叙事，不应在导出时被重写。",
+        ):
+            assert original in response.text
+
+    def test_export_rejects_an_unknown_output_language(self, client):
+        sid = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+        response = client.get(f"/api/scenario/{sid}/export?language=unsupported")
+        assert response.status_code == 422
+
     def test_export_with_branches(self, client):
         """Should export markdown with question, agents, and stories."""
         engine = get_engine()
         sid = _seed_scenario(engine, question="如果诸葛亮多活10年？", status=ScenarioStatus.DONE)
         _seed_agent(engine, sid, name="诸葛亮", role="丞相", tier=AgentTier.CORE)
         _seed_branch(
-            engine, sid, title="北伐成功", probability=0.6,
-            status=BranchStatus.COMPLETED, story="北伐大军一统天下",
+            engine,
+            sid,
+            title="北伐成功",
+            probability=0.6,
+            status=BranchStatus.COMPLETED,
+            story="北伐大军一统天下",
             insight="坚持就是胜利",
         )
 
         resp = client.get(f"/api/scenario/{sid}/export")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/markdown")
-        assert resp.headers["content-disposition"] == f'attachment; filename="swarmoracle-{sid[:8]}.md"'  # noqa: E501
+        assert (
+            resp.headers["content-disposition"]
+            == f'attachment; filename="swarmoracle-{sid[:8]}.md"'
+        )  # noqa: E501
 
         text = resp.text
         assert "如果诸葛亮多活10年？" in text
@@ -6258,7 +6460,10 @@ class TestExportScenario:
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         _seed_branch(
-            engine, sid, title="支线", probability=0.5,
+            engine,
+            sid,
+            title="支线",
+            probability=0.5,
             status=BranchStatus.COMPLETED,
             key_moments=json.dumps(["决战时刻", "转折点"]),
         )
@@ -6291,7 +6496,8 @@ class TestExportScenario:
         assert "## Participants" in resp.text
         assert "| Role | Name | Stance | Tier |" in resp.text
         assert "## Ending 1: Imperial continuity" in resp.text
-        assert "**Probability**: 75.0%" in resp.text
+        assert "**Simulation weight**: 75.0%" in resp.text
+        assert "| Emperor | Augustus |  | Core |" in resp.text
         assert "### Story" in resp.text
         assert "### Insight" in resp.text
 

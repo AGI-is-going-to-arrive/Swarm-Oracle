@@ -49,3 +49,17 @@ it('restores the evidence opener after releasing background isolation and scroll
     document.body.style.overflow = originalOverflow;
   }
 });
+
+it('keeps saved excerpts readable when replay access is unavailable', async () => {
+  const evidence = [
+    { id: 'e1', branch_id: 'b1', round_id: 'r1', round_number: 1, agent_id: 'a1', agent_name: 'Original actor', message_id: 'm1', quote: 'Original stored statement.', kind: 'utterance' as const },
+    { id: 'e2', branch_id: 'b1', round_id: 'r2', round_number: 2, agent_id: 'a1', agent_name: 'Original actor', message_id: 'm2', quote: 'Derived stored evidence.', kind: 'causal_fact' as const },
+  ];
+  render(<MemoryRouter><ReportEvidenceDrawer isOpen onClose={() => {}} scenarioId="saved-report" evidence={evidence} canOpenReplay={false} /></MemoryRouter>);
+  await screen.findByRole('dialog');
+  expect(screen.getByText('Original stored statement.')).toBeInTheDocument();
+  expect(screen.getByText('Derived stored evidence.')).toBeInTheDocument();
+  const disabledReplayActions = screen.getAllByRole('button').filter((button) => button.hasAttribute('disabled'));
+  expect(disabledReplayActions).toHaveLength(2);
+  expect(disabledReplayActions.every((button) => Boolean(button.getAttribute('title')))).toBe(true);
+});

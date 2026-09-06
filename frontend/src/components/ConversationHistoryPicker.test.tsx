@@ -12,9 +12,11 @@ const apiMocks = vi.hoisted(() => ({
   getConversation: vi.fn(),
   getScenarioConversations: vi.fn(),
 }));
+const languageState = vi.hoisted(() => ({ language: 'en' }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: languageState,
     t: (
       key: string,
       options?: Record<string, string | number | undefined>,
@@ -91,10 +93,29 @@ describe('ConversationHistoryPicker', () => {
   beforeEach(() => {
     apiMocks.getConversation.mockReset();
     apiMocks.getScenarioConversations.mockReset();
+    languageState.language = 'en';
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('uses zh-CN interface dates even when the browser language is English', async () => {
+    languageState.language = 'zh-CN';
+    const iso = '2026-05-10T00:00:00Z';
+    apiMocks.getScenarioConversations.mockResolvedValue({ items: [makeItem({ created_at: iso })], cursor: 0, has_more: false });
+    const view = render(<ConversationHistoryPicker alwaysOpen scenarioId="scenario-1" onSelect={vi.fn()} />);
+    expect(await screen.findByText(new Date(iso).toLocaleString('zh-CN'))).toBeInTheDocument();
+    languageState.language = 'en-US';
+    view.rerender(<ConversationHistoryPicker alwaysOpen scenarioId="scenario-1" onSelect={vi.fn()} />);
+    expect(screen.getByText(new Date(iso).toLocaleString('en-US'))).toBeInTheDocument();
+    expect(apiMocks.getScenarioConversations).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a user-provided non-ISO timestamp instead of guessing a date', async () => {
+    apiMocks.getScenarioConversations.mockResolvedValue({ items: [makeItem({ created_at: 'around last summer' })], cursor: 0, has_more: false });
+    render(<ConversationHistoryPicker alwaysOpen scenarioId="scenario-1" onSelect={vi.fn()} />);
+    expect(await screen.findByText('around last summer')).toBeInTheDocument();
   });
 
   it('shows Load More when the filtered current page is empty but more pages exist', async () => {

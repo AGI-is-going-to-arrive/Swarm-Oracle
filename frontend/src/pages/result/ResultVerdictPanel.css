@@ -103,7 +103,7 @@
 /* ── Pending fallback (no verdict yet) ─────────────────── */
 .result-verdict-panel--pending {
   /* lower visual weight to signal incomplete data */
-  opacity: 0.78;
+  opacity: 1;
   /* dashed left border instead of solid to communicate "in progress" */
   border-left-style: dashed;
   /* sRGB fallback */
@@ -348,4 +348,20 @@
   .result-verdict-panel__badge-dot {
     background: currentColor;
   }
+}
+
+.verdict-evidence { border-top: 1px solid var(--border-subtle, #e6dfd5); margin-top: 20px; padding-top: 16px; }
+.verdict-evidence__title { font-size: 0.875rem; font-weight: 600; margin: 0 0 6px; }
+.verdict-evidence__summary, .verdict-evidence__note, .verdict-evidence__details p { font-size: 0.8rem; line-height: 1.55; color: var(--text-secondary, #58554f); }
+.verdict-evidence__summary { margin: 6px 0; }
+.verdict-evidence__note { margin: 8px 0 12px; }
+.verdict-evidence .btn { min-height: 44px; white-space: normal; }
+.verdict-evidence__details { margin-top: 8px; }
+.verdict-evidence__details summary { cursor: pointer; min-height: 44px; padding: 12px 0; font-size: 0.85rem; }
+.verdict-evidence__details summary:focus-visible { outline: 2px solid var(--color-ring, #8a5a3c); outline-offset: 3px; }
+.verdict-evidence__details ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 12px; max-height: 24rem; overflow-y: auto; }
+.verdict-evidence__details li { border-left: 2px solid var(--border-subtle, #e6dfd5); padding-left: 12px; overflow-wrap: anywhere; }
+.verdict-evidence__strength { font-size: 0.75rem; font-weight: 600; }
+@media (forced-colors: active) {
+  .verdict-evidence__summary, .verdict-evidence__note, .verdict-evidence__details p { color: CanvasText; }
 }

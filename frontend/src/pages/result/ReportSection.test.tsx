@@ -453,3 +453,28 @@ describe('ReportSection', () => {
     expect(screen.getByText('Body copy.')).toBeInTheDocument();
   });
 });
+
+describe('report notice and brief-source boundaries', () => {
+  const section: ReportSectionType = {
+    id: 'source-digest', title: 'Evidence', title_i18n: { zh: '证据', en: 'Evidence' },
+    intent: 'Inspect saved source text', evidence_refs: [], charts: [],
+    body_md_i18n: { zh: '', en: '**Evidence-limited hypothesis:** ### Actual heading\n\nSaved content.' },
+    tier: 'static', failure_reason: null,
+  };
+
+  it('restores Markdown paragraph boundaries in historical inline warnings', () => {
+    const { container } = render(<ReportSection section={section} index={0} onOpenEvidence={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Actual heading', level: 4 })).toBeInTheDocument();
+    expect(screen.getByText('Evidence-limited hypothesis:')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('###');
+  });
+
+  it('distinguishes intentional saved evidence from a failed static fallback', () => {
+    const { rerender } = render(<ReportSection section={section} index={0} onOpenEvidence={vi.fn()} intentionalBrief />);
+    expect(screen.getByText('result.report.savedEvidence')).toBeInTheDocument();
+    expect(screen.queryByText('[L10N static fallback source]')).toBeNull();
+    rerender(<ReportSection section={{ ...section, failure_reason: 'unsupported_action' }} index={0} onOpenEvidence={vi.fn()} />);
+    expect(screen.getByText('[L10N static fallback source]')).toBeInTheDocument();
+    expect(screen.getByText('[L10N unsupported action]')).toBeInTheDocument();
+  });
+});

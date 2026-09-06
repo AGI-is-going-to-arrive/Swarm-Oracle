@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listModels } from '../api/client';
 import './ModelSelect.css';
+import { captureApiError, getApiErrorDiagnostic, getLocalizedApiErrorMessage, type ApiErrorState } from '../lib/apiErrorMessage';
 
 export interface ModelSelectProps {
   baseUrl: string;
@@ -26,7 +27,7 @@ export function ModelSelect({
 }: ModelSelectProps) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiErrorState | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [supported, setSupported] = useState<boolean | null>(null);
   const [isManual, setIsManual] = useState<boolean>(true);
@@ -82,7 +83,7 @@ export function ModelSelect({
         }
       } catch (err) {
         if (!active) return;
-        setError(err instanceof Error ? err.message : 'Unknown error');
+        setError(captureApiError(err));
         setModels([]);
         setSupported(false);
         setLoading(false);
@@ -98,6 +99,7 @@ export function ModelSelect({
   }, [baseUrl, apiKey]);
 
   const showDropdown = !isManual && supported && models.length > 0;
+  const errorDiagnostic = getApiErrorDiagnostic(error);
 
   return (
     <div className="model-select">
@@ -155,9 +157,10 @@ export function ModelSelect({
       )}
 
       {!loading && error && (
-        <span className="model-select__hint model-select__hint--error" role="alert">
-          {t('model_select.list_failed')}: {error}
-        </span>
+        <div className="model-select__hint model-select__hint--error" role="alert">
+          {getLocalizedApiErrorMessage(error, t, t('model_select.list_failed'))}
+          {errorDiagnostic && <details><summary>{t('common.error_details')}</summary><code>{errorDiagnostic}</code></details>}
+        </div>
       )}
 
       {!loading && !error && supported === false && baseUrl.trim() !== '' && (

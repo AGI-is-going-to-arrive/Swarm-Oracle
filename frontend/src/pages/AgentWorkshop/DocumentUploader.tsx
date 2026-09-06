@@ -21,7 +21,7 @@ import {
   type DocumentAgentIdentity,
   type DocumentAgentResult,
 } from '../../api/client';
-import { getApiErrorCode, getApiErrorStatus } from '../../lib/apiErrorMessage';
+import { captureApiError, getApiErrorCode, getApiErrorStatus, getApiErrorDiagnostic, type ApiErrorState } from '../../lib/apiErrorMessage';
 import { EntityExtractionProgress, type ExtractionStage } from './EntityExtractionProgress';
 import './DocumentUploader.css';
 
@@ -39,7 +39,12 @@ type UploaderStatus =
   | { kind: 'selected'; file: File }
   | { kind: 'uploading'; file: File; stage: ExtractionStage }
   | { kind: 'success'; file: File; result: DocumentAgentResult }
-  | { kind: 'error'; file: File | null; message: string };
+  | { kind: 'error'; file: File | null; errorKey: DocumentErrorKey; error?: ApiErrorState };
+
+type DocumentErrorKey = `agents.doc_uploader.${
+  | 'error_unsupported_type' | 'error_too_large' | 'error_empty' | 'error_empty_text'
+  | 'error_no_agents_created' | 'error_timeout' | 'error_cancelled'
+  | 'error_extraction_failed' | 'error_unauthorized' | 'error_generic'}`;
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -51,6 +56,34 @@ function isPdfFile(file: File): boolean {
   if (file.type === ACCEPTED_MIME) return true;
   // Some browsers omit the MIME on drag-drop; fall back to extension.
   return file.name.toLowerCase().endsWith(ACCEPTED_EXTENSION);
+}
+
+function validateFile(file: File): DocumentErrorKey | null {
+  if (!isPdfFile(file)) return 'agents.doc_uploader.error_unsupported_type';
+  if (file.size > MAX_BYTES) return 'agents.doc_uploader.error_too_large';
+  if (file.size === 0) return 'agents.doc_uploader.error_empty';
+  return null;
+}
+
+function documentErrorKey(error: unknown): DocumentErrorKey {
+  if (error instanceof DOMException && error.name === 'AbortError') return 'agents.doc_uploader.error_cancelled';
+  switch (getApiErrorCode(error)) {
+    case 'DOCUMENT_FILE_EMPTY': return 'agents.doc_uploader.error_empty';
+    case 'DOCUMENT_TEXT_EMPTY': return 'agents.doc_uploader.error_empty_text';
+    case 'DOCUMENT_AGENT_CREATION_FAILED': return 'agents.doc_uploader.error_no_agents_created';
+    case 'DOCUMENT_PDF_TIMEOUT':
+    case 'DOCUMENT_LLM_TIMEOUT': return 'agents.doc_uploader.error_timeout';
+  }
+  switch (getApiErrorStatus(error)) {
+    case 504: return 'agents.doc_uploader.error_timeout';
+    case 413: return 'agents.doc_uploader.error_too_large';
+    case 415: return 'agents.doc_uploader.error_unsupported_type';
+    case 422: return 'agents.doc_uploader.error_extraction_failed';
+    case 401:
+    case 403: return 'agents.doc_uploader.error_unauthorized';
+  }
+  if (error instanceof Error && error.message.toLowerCase().includes('timed out')) return 'agents.doc_uploader.error_timeout';
+  return 'agents.doc_uploader.error_generic';
 }
 
 export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
@@ -75,116 +108,6 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
       t('agents.doc_uploader.accept_hint', 'PDF only, up to {{max}} MB', {
         max: 25,
       }),
-    [t],
-  );
-
-  const validateFile = useCallback(
-    (file: File): string | null => {
-      if (!isPdfFile(file)) {
-        return t(
-          'agents.doc_uploader.error_unsupported_type',
-          'Only PDF files are supported.',
-        );
-      }
-      if (file.size > MAX_BYTES) {
-        return t(
-          'agents.doc_uploader.error_too_large',
-          'File is larger than {{max}} MB. Please upload a smaller PDF.',
-          { max: 25 },
-        );
-      }
-      if (file.size === 0) {
-        return t(
-          'agents.doc_uploader.error_empty',
-          'File is empty.',
-        );
-      }
-      return null;
-    },
-    [t],
-  );
-
-  const mapApiErrorToMessage = useCallback(
-    (error: unknown, file: File | null): string => {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return t('agents.doc_uploader.error_cancelled', 'Upload cancelled.');
-      }
-      const code = getApiErrorCode(error);
-      switch (code) {
-        case 'DOCUMENT_FILE_EMPTY':
-          return t(
-            'agents.doc_uploader.error_empty',
-            'File is empty.',
-          );
-        case 'DOCUMENT_TEXT_EMPTY':
-          return t(
-            'agents.doc_uploader.error_empty_text',
-            'The PDF contains no extractable text. Try an OCR-readable PDF.',
-          );
-        case 'DOCUMENT_AGENT_CREATION_FAILED':
-          return t(
-            'agents.doc_uploader.error_no_agents_created',
-            'No agents could be created from this PDF. Try a document with clearer named entities.',
-          );
-        case 'DOCUMENT_PDF_TIMEOUT':
-        case 'DOCUMENT_LLM_TIMEOUT':
-          return t(
-            'agents.doc_uploader.error_timeout',
-            'Document processing timed out. Try a smaller PDF or fewer pages.',
-          );
-        default:
-          break;
-      }
-      const status = getApiErrorStatus(error);
-      if (status === 504) {
-        return t(
-          'agents.doc_uploader.error_timeout',
-          'Document processing timed out. Try a smaller PDF or fewer pages.',
-        );
-      }
-      switch (status) {
-        case 413:
-          return t(
-            'agents.doc_uploader.error_too_large',
-            'File is larger than {{max}} MB. Please upload a smaller PDF.',
-            { max: 25 },
-          );
-        case 415:
-          return t(
-            'agents.doc_uploader.error_unsupported_type',
-            'Only PDF files are supported.',
-          );
-        case 422:
-          return t(
-            'agents.doc_uploader.error_extraction_failed',
-            'Could not extract entities from this document. Try a different PDF.',
-          );
-        case 401:
-        case 403:
-          return t(
-            'agents.doc_uploader.error_unauthorized',
-            'You are not authorized to upload documents. Sign in and try again.',
-          );
-        default:
-          break;
-      }
-      const fallback = t(
-        'agents.doc_uploader.error_generic',
-        'Upload failed. Please try again.',
-      );
-      const msg = error instanceof Error ? error.message : '';
-      if (msg.toLowerCase().includes('timed out')) {
-        return t(
-          'agents.doc_uploader.error_timeout',
-          'Document processing timed out. Try a smaller PDF or fewer pages.',
-        );
-      }
-      // If the API returned a typed message, prefer it; otherwise show the
-      // generic localized fallback so we don't leak server-side details.
-      return msg && msg.length < 200 && !file?.name.includes(msg)
-        ? `${fallback} (${msg})`
-        : fallback;
-    },
     [t],
   );
 
@@ -216,7 +139,7 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
     async (file: File) => {
       const validationError = validateFile(file);
       if (validationError) {
-        setStatus({ kind: 'error', file, message: validationError });
+        setStatus({ kind: 'error', file, errorKey: validationError });
         return;
       }
 
@@ -228,6 +151,7 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
 
       try {
         const result = await uploadDocumentForAgents(file, controller.signal);
+        if (abortRef.current !== controller || controller.signal.aborted) return;
         // Clear stage timers and snap to "done".
         stageTimersRef.current.forEach((id) => window.clearTimeout(id));
         stageTimersRef.current = [];
@@ -235,44 +159,36 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
           setStatus({
             kind: 'error',
             file,
-            message: t(
-              'agents.doc_uploader.error_no_agents_created',
-              'No agents could be created from this PDF. Try a document with clearer named entities.',
-            ),
+            errorKey: 'agents.doc_uploader.error_no_agents_created',
           });
           return;
         }
         setStatus({ kind: 'success', file, result });
         onAgentsCreated?.(result);
       } catch (err) {
+        if (abortRef.current !== controller || controller.signal.aborted) return;
         stageTimersRef.current.forEach((id) => window.clearTimeout(id));
         stageTimersRef.current = [];
-        // Suppress UI noise if cancellation was user-initiated.
-        if (controller.signal.aborted) {
-          setStatus({ kind: 'idle' });
-          return;
-        }
-        const message = mapApiErrorToMessage(err, file);
-        setStatus({ kind: 'error', file, message });
+        setStatus({ kind: 'error', file, errorKey: documentErrorKey(err), error: captureApiError(err) });
       } finally {
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
       }
     },
-    [advanceStage, mapApiErrorToMessage, onAgentsCreated, t, validateFile],
+    [advanceStage, onAgentsCreated],
   );
 
   const handleFileChosen = useCallback(
     (file: File) => {
       const validationError = validateFile(file);
       if (validationError) {
-        setStatus({ kind: 'error', file, message: validationError });
+        setStatus({ kind: 'error', file, errorKey: validationError });
         return;
       }
       setStatus({ kind: 'selected', file });
     },
-    [validateFile],
+    [],
   );
 
   const handleInputChange = useCallback(
@@ -384,7 +300,8 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
   }
 
   const selectedFile = status.kind === 'selected' ? status.file : null;
-  const errorMessage = status.kind === 'error' ? status.message : null;
+  const errorMessage = status.kind === 'error' ? t(status.errorKey, { max: 25 }) : null;
+  const errorDiagnostic = status.kind === 'error' ? getApiErrorDiagnostic(status.error) : null;
   const errorFile = status.kind === 'error' ? status.file : null;
 
   return (
@@ -451,6 +368,7 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
       {errorMessage && (
         <div className="doc-uploader-error" role="alert">
           {errorMessage}
+          {errorDiagnostic && <details><summary>{t('common.error_details')}</summary><code>{errorDiagnostic}</code></details>}
         </div>
       )}
 

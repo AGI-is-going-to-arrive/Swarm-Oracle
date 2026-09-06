@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -54,6 +54,8 @@ vi.mock('react-i18next', () => ({
       const labels: Record<string, string> = {
         'sim.panel.agent_list': 'Agent 列表',
         'sim.panel.live_messages': '实时发言',
+        'sim.panel.saved_messages': '已保存的发言',
+        'sim.panel.saved_empty': '这份记录尚无已保存的发言。',
         'sim.panel.waiting': '等待发言...',
         'sim.panel.round': 'R',
         'sim.panel.tier_core': '核心',
@@ -66,6 +68,8 @@ vi.mock('react-i18next', () => ({
         'sim.panel.worldline_round_range': `R${vars?.start ?? ''}-R${vars?.end ?? ''}`,
         'sim.panel.view_agent_profile': `查看 ${vars?.name ?? ''} 的档案`,
         'sim.panel.emotion_metadata_unavailable': '情绪元数据不可用',
+        'sim.panel.new_messages': `${vars?.count ?? 0} 条新消息`,
+        'sim.panel.jump_to_latest': '跳至最新消息',
       };
       return labels[key] ?? key;
     },
@@ -92,6 +96,107 @@ beforeEach(() => {
 });
 
 describe('AgentPanel', () => {
+  function scrollFeed(container: HTMLElement, top: number, height = 1000): HTMLDivElement {
+    const list = container.querySelector<HTMLDivElement>('.message-list')!;
+    Object.defineProperties(list, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: height },
+    });
+    list.scrollTop = top;
+    fireEvent.scroll(list);
+    return list;
+  }
+
+  function appendMessage(agentId = 'zhou'): void {
+    mockState.messages = [...mockState.messages, {
+      agent: agentId === 'zhou' ? '周鸿祎' : 'Sam Altman', agent_id: agentId,
+      branch: 'alpha', round: 6, emotion: 'calm', message: `new ${mockState.messages.length}`,
+    }];
+  }
+
+  it('keeps the reading position and accumulates a jump control for new messages', () => {
+    const view = render(<AgentPanel />);
+    const list = scrollFeed(view.container, 100);
+    appendMessage();
+    view.rerender(<AgentPanel />);
+    appendMessage();
+    view.rerender(<AgentPanel />);
+
+    expect(list.scrollTop).toBe(100);
+    fireEvent.click(screen.getByRole('button', { name: '2 条新消息 跳至最新消息' }));
+    expect(list.scrollTop).toBe(1000);
+    expect(screen.queryByText('2 条新消息')).not.toBeInTheDocument();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('follows additions only while near the bottom and resumes after scrolling back', () => {
+    const view = render(<AgentPanel />);
+    const list = scrollFeed(view.container, 730);
+    appendMessage();
+    view.rerender(<AgentPanel />);
+    expect(list.scrollTop).toBe(1000);
+    scrollFeed(view.container, 100);
+    appendMessage();
+    view.rerender(<AgentPanel />);
+    expect(list.scrollTop).toBe(100);
+    scrollFeed(view.container, 790);
+    expect(screen.queryByText('1 条新消息')).not.toBeInTheDocument();
+    appendMessage();
+    view.rerender(<AgentPanel />);
+    expect(list.scrollTop).toBe(1000);
+  });
+
+  it('detects new messages when a capped feed drops its oldest item', () => {
+    const view = render(<AgentPanel />);
+    const list = scrollFeed(view.container, 100);
+    const originalLength = mockState.messages.length;
+    appendMessage();
+    mockState.messages = mockState.messages.slice(1);
+    view.rerender(<AgentPanel />);
+    expect(mockState.messages.length).toBe(originalLength);
+    expect(list.scrollTop).toBe(100);
+    expect(screen.getByText('1 条新消息')).toBeInTheDocument();
+  });
+
+  it('labels archived messages honestly and never auto-follows refreshes of saved content', () => {
+    const view = render(<AgentPanel live={false} />);
+    const list = scrollFeed(view.container, 780);
+    expect(screen.getByRole('heading', { name: '已保存的发言' })).toBeInTheDocument();
+    appendMessage();
+    view.rerender(<AgentPanel live={false} />);
+    expect(list.scrollTop).toBe(780);
+    expect(screen.queryByText(/条新消息/)).not.toBeInTheDocument();
+    fireEvent.click(view.container.querySelector('.bubble-agent')!);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest' });
+    expect(view.container.querySelector('.agent-card--highlight')).toBeNull();
+  });
+
+  it('does not count messages excluded by the selected agent filter', () => {
+    const view = render(<AgentPanel />);
+    fireEvent.click(screen.getByTitle('筛选 周鸿祎 的消息'));
+    const list = scrollFeed(view.container, 100);
+    appendMessage('sam');
+    view.rerender(<AgentPanel />);
+    expect(list.scrollTop).toBe(100);
+    expect(screen.queryByText(/条新消息/)).not.toBeInTheDocument();
+    appendMessage();
+    view.rerender(<AgentPanel />);
+    expect(screen.getByText('1 条新消息')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'sim.panel.clear_filter' }));
+    expect(screen.queryByText(/条新消息/)).not.toBeInTheDocument();
+  });
+
+  it('uses instant card scrolling without highlight animation for reduced motion', () => {
+    const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList);
+    const view = render(<AgentPanel />);
+    fireEvent.click(view.container.querySelector('.bubble-agent')!);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest' });
+    expect(view.container.querySelector('.agent-card--highlight')).toBeNull();
+    matchMedia.mockRestore();
+  });
+
   it('labels unavailable message emotion instead of rendering it as neutral', () => {
     mockState.messages = [{
       agent: '周鸿祎',

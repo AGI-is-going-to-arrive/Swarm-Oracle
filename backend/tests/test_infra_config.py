@@ -1,8 +1,12 @@
+import json
 import os
 import subprocess
 import textwrap
+import tomllib
 from fnmatch import fnmatchcase
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE_INSTRUCTION_NAMES = frozenset(
@@ -161,7 +165,8 @@ def test_docker_compose_keeps_linux_host_gateway_mapping():
 
     assert "extra_hosts:" in compose
     assert "host.docker.internal:host-gateway" in compose
-    assert "Linux needs host-gateway support or an explicit host IP" in compose
+    assert "DNS mapping only" in compose
+    assert "bound solely to 127.0.0.1" in compose
 
 
 def test_docker_context_excludes_env_files_at_every_depth():
@@ -243,6 +248,8 @@ def test_deploy_readme_documents_native_linux_host_gateway_fallbacks():
     assert "llm_responses_url" in deploy_readme
     assert "host's actual ip" in deploy_readme
     assert "network_mode: host" in deploy_readme
+    assert "do not apply a standalone" in deploy_readme
+    assert "dns/address mapping only" in deploy_readme
 
 
 def test_ghcr_publish_requires_exact_verified_sha():
@@ -274,7 +281,7 @@ def test_ghcr_publish_requires_exact_verified_sha():
     assert "imagetools create" not in publish_block
     assert "concurrency:" not in publish_block
 
-    assert "needs: [verify, publish]" in promote_block
+    assert "needs: [verify, publish, image-smoke]" in promote_block
     assert "matrix.component" not in promote_block
     assert "ghcr-promotion-${{ needs.verify.outputs.channel }}-" in promote_block
     assert "Revalidate freshness and promote verified image pair" in promote_block
@@ -300,6 +307,44 @@ def test_ghcr_publish_requires_exact_verified_sha():
     )
     assert build_index < promotion_index
     assert "pattern={{major}}.{{minor}}" not in workflow
+
+
+def test_final_image_pair_gate_covers_both_architectures_before_digest_promotion():
+    workflow = yaml.safe_load(read_repo_file(".github/workflows/ghcr.yml"))
+    smoke = workflow["jobs"]["image-smoke"]
+    assert smoke["needs"] == ["verify", "publish"]
+    platforms = {entry["platform"] for entry in smoke["strategy"]["matrix"]["include"]}
+    assert platforms == {"linux/amd64", "linux/arm64"}
+    assert "image-smoke" in workflow["jobs"]["promote"]["needs"]
+    smoke_commands = "\n".join(step.get("run", "") for step in smoke["steps"])
+    assert "scripts/container_smoke.py run" in smoke_commands
+    assert '.image + "@" + .digest' in smoke_commands
+    promotion = "\n".join(step.get("run", "") for step in workflow["jobs"]["promote"]["steps"])
+    assert 'export BACKEND_DIGEST="$(jq -r .digest .image-digests/backend.json)"' in promotion
+    assert 'export FRONTEND_DIGEST="$(jq -r .digest .image-digests/frontend.json)"' in promotion
+
+
+def test_dependency_lock_is_universal_and_consumed_without_resolving_build_tools():
+    lock = tomllib.loads(read_repo_file("backend/uv.lock"))
+    project = tomllib.loads(read_repo_file("backend/pyproject.toml"))
+    frontend = json.loads(read_repo_file("frontend/package.json"))
+    assert lock["requires-python"] == project["project"]["requires-python"] == ">=3.11"
+    assert project["tool"]["uv"]["required-version"] == "==0.12.7"
+    assert "constraints" not in lock.get("manifest", {})
+    assert all(
+        package.get("wheels") for package in lock["package"] if "registry" in package["source"]
+    )
+    backend_dockerfile = read_repo_file("backend/Dockerfile")
+    assert "uv sync --locked" in backend_dockerfile
+    assert "--no-build" in backend_dockerfile
+    assert "apt-get" not in backend_dockerfile
+    assert "pip install --no-cache-dir ." not in backend_dockerfile
+    assert "backend/uv.lock" in backend_dockerfile
+    for filename in (".github/workflows/ci.yml", ".github/workflows/release-signoff.yml"):
+        workflow = read_repo_file(filename)
+        assert "uv sync --locked --extra dev --no-build" in workflow
+        assert "npx --yes " + frontend["packageManager"] + " ci" in workflow
+        assert 'node-version: "22.23.2"' in workflow
 
 
 def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
@@ -340,7 +385,9 @@ def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
             if args[:2] == ["image", "digest"]:
                 ref = args[2]
                 if ":sha-" in ref:
-                    print(f"sha256:{image_kind(ref)}-new")
+                    raise SystemExit("Mutable candidate tag resolution is forbidden after smoke")
+                if "@" in ref:
+                    print(ref.rsplit("@", 1)[1])
                     raise SystemExit(0)
                 path = target_path(ref)
                 if not path.exists():
@@ -351,7 +398,7 @@ def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
             if args[:2] == ["image", "copy"]:
                 source, target = args[2], args[3]
                 digest = source.rsplit("@", 1)[1]
-                if image_kind(target) == "frontend" and digest.endswith("frontend-new"):
+                if image_kind(target) == "frontend" and digest == "sha256:" + "c" * 64:
                     raise SystemExit(42)
                 target_path(target).write_text(digest, encoding="utf-8")
                 raise SystemExit(0)
@@ -369,7 +416,7 @@ def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
 
     for case_name, old_digests in (
         ("first-promotion", None),
-        ("existing-promotion", ("sha256:backend-old", "sha256:frontend-old")),
+        ("existing-promotion", ("sha256:" + "d" * 64, "sha256:" + "e" * 64)),
     ):
         state = tmp_path / case_name
         state.mkdir()
@@ -382,6 +429,8 @@ def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
             {
                 "BACKEND_IMAGE": "ghcr.io/acme/backend",
                 "FRONTEND_IMAGE": "ghcr.io/acme/frontend",
+                "BACKEND_DIGEST": "sha256:" + "b" * 64,
+                "FRONTEND_DIGEST": "sha256:" + "c" * 64,
                 "TARGET_SHA": "a" * 40,
                 "CHANNEL": "edge",
                 "VERSION_TAG": "",
@@ -413,14 +462,15 @@ def test_ghcr_pair_promotion_rolls_back_both_images_when_second_update_fails(
             assert frontend_state.read_text(encoding="utf-8") == old_digests[1]
 
         commands = (state / "commands.log").read_text(encoding="utf-8")
-        assert "image copy ghcr.io/acme/backend@sha256:backend-new" in commands
-        assert "image copy ghcr.io/acme/frontend@sha256:frontend-new" in commands
+        assert ":sha-" not in commands
+        assert "image copy ghcr.io/acme/backend@sha256:" + "b" * 64 in commands
+        assert "image copy ghcr.io/acme/frontend@sha256:" + "c" * 64 in commands
         if old_digests is None:
             assert "tag delete --ignore-missing ghcr.io/acme/backend:edge" in commands
             assert "tag delete --ignore-missing ghcr.io/acme/frontend:edge" in commands
         else:
-            assert "image copy ghcr.io/acme/backend@sha256:backend-old" in commands
-            assert "image copy ghcr.io/acme/frontend@sha256:frontend-old" in commands
+            assert "image copy ghcr.io/acme/backend@sha256:" + "d" * 64 in commands
+            assert "image copy ghcr.io/acme/frontend@sha256:" + "e" * 64 in commands
 
 
 def test_ci_executes_wave20_release_regressions_in_one_process_per_stack():
@@ -429,9 +479,9 @@ def test_ci_executes_wave20_release_regressions_in_one_process_per_stack():
 
     assert ".venv/bin/python -m pytest -q" in workflow
     assert ".venv/bin/ruff check app/ tests/" in workflow
-    assert "run: npm test" in workflow
-    assert "run: npm run lint" in workflow
-    assert "npx tsc -b" in workflow
+    assert "run: npx --yes npm@11.12.1 test" in workflow
+    assert "run: npx --yes npm@11.12.1 run lint" in workflow
+    assert "npx --yes npm@11.12.1 exec -- tsc -b" in workflow
     assert "scripts/playwrightTeardown.test.mjs" in workflow
 
     assert 'const BACKEND_PYTEST_ARGS = ["-m", "pytest", "-q"]' in release_signoff

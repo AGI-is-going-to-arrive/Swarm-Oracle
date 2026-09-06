@@ -7,7 +7,11 @@ import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import type { ResultViewMode } from '../../stores/uiPreferencesStore';
 import { useResultContext } from './ResultContext';
 
-export default function ResultHeader() {
+interface ResultHeaderProps {
+  section?: 'heading' | 'tools';
+}
+
+export default function ResultHeader({ section = 'heading' }: ResultHeaderProps) {
   const {
     t,
     id,
@@ -77,7 +81,8 @@ export default function ResultHeader() {
   };
 
   return (
-    <header className="result-header">
+    <header className={section === 'heading' ? 'result-header' : 'result-header-tools'}>
+      {section === 'heading' && <>
       <button
         className="btn btn-ghost result-back"
         onClick={() => (
@@ -95,17 +100,6 @@ export default function ResultHeader() {
       <p className="result-subtitle">
         {t(subtitleKey)} — {t('result.ending_count', { count: branches.length })}
       </p>
-      <div className="result-archive__chips">
-        <span className="archive-chip archive-chip--primary">
-          {t('common.runtime_preset_label')} · {activeRuntimePresetLabel}
-        </span>
-        {activeScenarioId && !isReplayMode && (
-          <>
-            <QuotaBadge scenarioId={activeScenarioId} type="conversation" />
-            <QuotaBadge scenarioId={activeScenarioId} type="replay" />
-          </>
-        )}
-      </div>
       <div className="result-mode-toggle">
         <ToggleGroup
           type="single"
@@ -123,6 +117,19 @@ export default function ResultHeader() {
             {t('result.mode_workbench')}
           </ToggleGroupItem>
         </ToggleGroup>
+      </div>
+      </>}
+      {section === 'tools' && <>
+      <div className="result-archive__chips">
+        <span className="archive-chip archive-chip--primary">
+          {t('common.runtime_preset_label')} · {activeRuntimePresetLabel}
+        </span>
+        {activeScenarioId && !isReplayMode && (
+          <>
+            <QuotaBadge scenarioId={activeScenarioId} type="conversation" />
+            <QuotaBadge scenarioId={activeScenarioId} type="replay" />
+          </>
+        )}
       </div>
       <div className="result-actions">
         <div className="result-actions__primary">
@@ -231,6 +238,7 @@ export default function ResultHeader() {
       </div>
       {exportError && <p className="result-error result-error--spaced">{exportError}</p>}
       {importError && <p className="result-error result-error--spaced">{importError}</p>}
+      </>}
     </header>
   );
 }

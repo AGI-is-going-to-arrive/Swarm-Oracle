@@ -9,7 +9,6 @@ import {
   deleteAgent,
   getAgentFavorites,
   getSessionBoundUserId,
-  listAgentIdentities,
   markAgentFavorite,
   unmarkAgentFavorite,
 } from '../api/client';
@@ -23,6 +22,7 @@ import {
 } from '../components/AgentPackDialog';
 import { ExportButton, ImportDialog } from '../components/PersonaExportImport';
 import type { AgentIdentityInfo } from '../types';
+import { getApiErrorDiagnostic, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 
 type LibraryTab = 'all' | 'favorites';
 
@@ -39,7 +39,9 @@ export function AgentLibrary() {
     enabled: exportEnabled,
     error: exportError,
   } = useCapabilityCheck('persona_export');
-  const { identities, loading, error, fetchIdentities, setIdentities } = useAgentStore();
+  const { identities, loading, error, errorDetails, fetchIdentities, refreshIdentities, setIdentities } = useAgentStore();
+  const errorDiagnostic = getApiErrorDiagnostic(errorDetails);
+  const userId = getSessionBoundUserId();
   const [profileAgent, setProfileAgent] = useState<AgentIdentityInfo | null>(null);
   const [tab, setTab] = useState<LibraryTab>('all');
   const [search, setSearch] = useState('');
@@ -80,10 +82,9 @@ export function AgentLibrary() {
 
   useEffect(() => {
     if (!enabled || capError) return;
-    const userId = getSessionBoundUserId();
     fetchIdentities(userId);
     void refreshFavorites();
-  }, [capError, fetchIdentities, enabled, refreshFavorites]);
+  }, [capError, fetchIdentities, enabled, refreshFavorites, userId]);
 
   const handleToggleFavorite = useCallback(
     async (identity: AgentIdentityInfo) => {
@@ -136,10 +137,11 @@ export function AgentLibrary() {
       setDeleteError(false);
       try {
         const response = await deleteAgent(identity.id);
+        if (getSessionBoundUserId() !== userId) return;
         if (response?.cleanup_pending) setDeleteCleanupPending(true);
         // fetchIdentities can return its same-user cache. Remove the successful
         // deletion from current authority, also pruning any selected identity.
-        setIdentities(useAgentStore.getState().identities.filter((agent) => agent.id !== identity.id));
+        setIdentities(useAgentStore.getState().identities.filter((agent) => agent.id !== identity.id), userId);
         setProfileAgent((current) => current?.id === identity.id ? null : current);
         // also drop from favorites map if present
         setFavoriteIds((prev) => {
@@ -154,22 +156,21 @@ export function AgentLibrary() {
         setDeletingId(null);
       }
     },
-    [deletingId, setIdentities, t],
+    [deletingId, setIdentities, t, userId],
   );
 
   const handleImported = useCallback(
     () => {
-      const userId = getSessionBoundUserId();
-      return fetchIdentities(userId);
+      if (getSessionBoundUserId() !== userId) return;
+      void refreshIdentities(userId).catch(() => undefined);
     },
-    [fetchIdentities],
+    [refreshIdentities, userId],
   );
 
   const handleAgentPackImported = useCallback(async () => {
-    const userId = getSessionBoundUserId();
-    const refreshed = await listAgentIdentities<AgentIdentityInfo[]>(userId);
-    setIdentities(refreshed);
-  }, [setIdentities]);
+    if (getSessionBoundUserId() !== userId) return;
+    await refreshIdentities(userId);
+  }, [refreshIdentities, userId]);
 
   const agentPackAvailable = exportEnabled && !exportLoading && !exportError;
 
@@ -373,7 +374,15 @@ export function AgentLibrary() {
       </div>
 
       {(loading || favoritesLoading) && <p>{t('common.loading', 'Loading...')}</p>}
-      {error && <p role="alert" className="agent-form__error">{error}</p>}
+      {error && (
+        <div role="alert" className="agent-form__error">
+          <p>{getLocalizedApiErrorMessage(errorDetails, t, t('agents.load_error'))}</p>
+          {errorDiagnostic && <details><summary>{t('common.error_details')}</summary><code>{errorDiagnostic}</code></details>}
+          <button type="button" className="agent-button" disabled={loading} onClick={handleImported}>
+            {t('common.retry', 'Retry')}
+          </button>
+        </div>
+      )}
       {deleteError && (
         <p role="alert" className="agent-form__error">
           {t('agent_library.delete_error')}

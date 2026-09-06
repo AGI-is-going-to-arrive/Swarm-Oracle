@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useState, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { EndingRoomParticipant, EndingRoomResult } from '../types';
+import type { EndingRoomParticipant, EndingRoomResult, SavedPostVerdictOutput, SavePostVerdictOutputRequest, SavedSurveyResponse } from '../types';
+import { isApiError, savePostVerdictOutput } from '../api/client';
+import SavedAnalysisArchive from './SavedAnalysisArchive';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import RoundtableAgentChat from './RoundtableAgentChat';
 import type { AnalystCacheState, SurveyCacheState } from './postVerdictCaches';
@@ -38,6 +40,21 @@ export default function PostVerdictPanel({
   contextVersion,
 }: PostVerdictPanelProps) {
   const { t } = useTranslation();
+  const [savedOutputs, setSavedOutputs] = useState<SavedPostVerdictOutput[]>([]);
+  const [newOutput, setNewOutput] = useState<{ scenarioId: string; output: SavedPostVerdictOutput } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const archiveEpochRef = useRef(0);
+  const savePendingRef = useRef(false);
+  useEffect(() => {
+    archiveEpochRef.current += 1;
+    setSavedOutputs([]);
+    setNewOutput(null);
+    setSaveError(null);
+    setSaving(false);
+    savePendingRef.current = false;
+    return () => { archiveEpochRef.current += 1; };
+  }, [scenarioId, roomId, contextVersion]);
   const {
     enabled: conversationEnabled,
     loading: conversationLoading,
@@ -97,6 +114,68 @@ export default function PostVerdictPanel({
   const effectiveActiveTab = tabs.some((tab) => tab.id === activeTab && !tab.disabled)
     ? activeTab
     : (tabs.find((tab) => !tab.disabled)?.id ?? 'agent_chat');
+
+  let savePayload: SavePostVerdictOutputRequest | null = null;
+  if (
+    effectiveActiveTab === 'analyst' && !analystCache.streaming && !analystCache.error
+    && !analystCache.aborted && analystCache.stoppedReason === 'final_response'
+    && analystCache.finalAnswer?.trim() && analystCache.resultId && analystCache.question
+  ) {
+    savePayload = {
+      client_result_id: analystCache.resultId,
+      kind: 'analyst', room_id: roomId, question: analystCache.question,
+      provider: analystCache.provider, answer: analystCache.finalAnswer,
+      stopped_reason: 'final_response',
+    };
+  }
+  if (
+    effectiveActiveTab === 'survey' && !surveyCache.streaming && !surveyCache.error
+    && !surveyCache.aborted && surveyCache.resultId && surveyCache.question
+    && surveyCache.participantOrder.length > 0
+    && surveyCache.participantOrder.every((id) => {
+      const response = surveyCache.responses.get(id);
+      return response && !response.error && Boolean(response.answer.trim());
+    })
+  ) {
+    const responses: SavedSurveyResponse[] = surveyCache.participantOrder.flatMap((id) => {
+      const response = surveyCache.responses.get(id);
+      return response ? [{
+        participant_id: response.participant_id, display_name: response.display_name,
+        role: response.role, source_agent_id: response.source_agent_id,
+        source_branch_id: response.source_branch_id, agent_identity_id: response.agent_identity_id,
+        answer: response.answer, elapsed_ms: response.elapsed_ms,
+      }] : [];
+    });
+    savePayload = {
+      client_result_id: surveyCache.resultId,
+      kind: 'survey', room_id: roomId, question: surveyCache.question,
+      provider: surveyCache.provider, participant_ids: surveyCache.participantOrder, responses,
+    };
+  }
+  const alreadySaved = Boolean(savePayload && savedOutputs.some((item) => item.id === savePayload.client_result_id));
+  const handleSave = async (): Promise<void> => {
+    if (!savePayload || savePendingRef.current || alreadySaved) return;
+    const epoch = archiveEpochRef.current;
+    savePendingRef.current = true;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const output = await savePostVerdictOutput(scenarioId, savePayload);
+      if (archiveEpochRef.current === epoch) {
+        setSavedOutputs((current) => [output, ...current.filter((item) => item.id !== output.id)]);
+        setNewOutput({ scenarioId, output });
+      }
+    } catch (error: unknown) {
+      if (archiveEpochRef.current === epoch) {
+        setSaveError(isApiError(error) && error.code === 'SAVED_OUTPUT_LIMIT_REACHED' ? 'limit' : 'failed');
+      }
+    } finally {
+      if (archiveEpochRef.current === epoch) {
+        savePendingRef.current = false;
+        setSaving(false);
+      }
+    }
+  };
 
   useEffect(() => {
     if (pendingFocusTabRef.current && pendingFocusTabRef.current === effectiveActiveTab) {
@@ -173,6 +252,18 @@ export default function PostVerdictPanel({
           );
         })}
       </div>
+
+      {savePayload && (
+        <div className="roundtable-post-verdict__save" style={{ marginBlock: '0.75rem' }}>
+          <button type="button" className="btn btn--sm" disabled={saving || alreadySaved} onClick={() => void handleSave()}>
+            {saving ? t('roundtable.output_saving') : alreadySaved ? t('roundtable.output_saved') : t('roundtable.output_save')}
+          </button>
+          <p>{t('roundtable.output_origin_notice')}</p>
+        </div>
+      )}
+      {saveError && <p role="alert">{t(saveError === 'limit' ? 'roundtable.output_limit' : 'roundtable.output_save_failed')}</p>}
+      <SavedAnalysisArchive scenarioId={scenarioId} roomId={roomId} refreshKey={contextVersion}
+        newOutput={newOutput} onOutputsChange={setSavedOutputs} />
 
       <div
         id="pvp-panel-agent_chat"

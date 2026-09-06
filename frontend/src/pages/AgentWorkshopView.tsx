@@ -20,6 +20,8 @@ import {
 import { PersonaExportMenu } from '../components/AgentWorkshop/PersonaExportMenu';
 import { KNOWLEDGE_DOMAINS } from '../contracts/agentIdentity';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { useAgentStore } from '../stores/agentStore';
+import { getApiErrorCode, getApiErrorStatus, getApiErrorDiagnostic, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import type { AgentIdentityInfo, KnowledgeDomain } from '../types';
 import { DocumentUploader } from './AgentWorkshop/DocumentUploader';
 
@@ -52,6 +54,8 @@ interface FormState {
   preferredTier: PreferredTier;
   decisionBias: Record<DecisionBiasKey, number>;
 }
+
+type WorkshopError = { kind: 'not_found' } | { kind: 'load' | 'save'; code: string | null; status: number | null };
 
 function normalizeDecisionBias(agent: AgentIdentityInfo): Record<DecisionBiasKey, number> {
   if (agent.decision_bias && typeof agent.decision_bias === 'object') {
@@ -104,6 +108,8 @@ export function AgentWorkshopView() {
     reload: reloadCapability,
   } = useCapabilityCheck('custom_agents');
   const navigate = useNavigate();
+  const userId = getSessionBoundUserId();
+  const refreshIdentities = useAgentStore((state) => state.refreshIdentities);
   const { id: editId } = useParams<{ id: string }>();
   const isEditMode = !!editId;
   const [form, setForm] = useState<FormState>({
@@ -115,10 +121,14 @@ export function AgentWorkshopView() {
     decisionBias: withDecisionBiasDefaults(null),
   });
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<WorkshopError | null>(null);
+  const errorMessage = error?.kind === 'not_found'
+    ? t('agents.not_found', 'Agent not found.')
+    : error ? getLocalizedApiErrorMessage(error, t, t(error.kind === 'load' ? 'agents.load_error' : 'agents.save_error')) : null;
+  const errorDiagnostic = getApiErrorDiagnostic(error);
   const [loadingAgent, setLoadingAgent] = useState(false);
   const [activeTab, setActiveTab] = useState<'manual' | 'document'>('manual');
-  const [importToast, setImportToast] = useState<string | null>(null);
+  const [importToastCount, setImportToastCount] = useState<number | null>(null);
   const importToastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -126,13 +136,12 @@ export function AgentWorkshopView() {
     let cancelled = false;
     setLoadingAgent(true);
     setError(null);
-    const userId = getSessionBoundUserId();
     listAgentIdentities<AgentIdentityInfo[]>(userId)
       .then((list) => {
         if (cancelled) return;
         const agent = list.find((a) => a.id === editId);
         if (!agent) {
-          setError(t('agents.not_found', 'Agent not found.'));
+          setError({ kind: 'not_found' });
           return;
         }
         const domains = normalizeKnowledgeDomains(agent);
@@ -147,13 +156,13 @@ export function AgentWorkshopView() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError((err as Error).message);
+        setError({ kind: 'load', code: getApiErrorCode(err), status: getApiErrorStatus(err) });
       })
       .finally(() => {
         if (!cancelled) setLoadingAgent(false);
       });
     return () => { cancelled = true; };
-  }, [editId, enabled, t]);
+  }, [editId, enabled, userId]);
 
   const toggleDomain = useCallback((domain: KnowledgeDomain) => {
     setForm(prev => {
@@ -188,7 +197,6 @@ export function AgentWorkshopView() {
           decision_bias: { ...form.decisionBias },
         });
       } else {
-        const userId = getSessionBoundUserId();
         await createAgent({
           user_id: userId,
           display_name: form.displayName.trim(),
@@ -199,13 +207,18 @@ export function AgentWorkshopView() {
           decision_bias: { ...form.decisionBias },
         });
       }
+      if (getSessionBoundUserId() !== userId) return;
+      // The write is already committed. A refresh failure belongs to the
+      // library's retry surface and must not offer to create a duplicate.
+      await refreshIdentities(userId).catch(() => undefined);
+      if (getSessionBoundUserId() !== userId) return;
       navigate('/agents');
     } catch (err) {
-      setError((err as Error).message);
+      setError({ kind: 'save', code: getApiErrorCode(err), status: getApiErrorStatus(err) });
     } finally {
       setSaving(false);
     }
-  }, [form, navigate, isEditMode, editId]);
+  }, [form, navigate, isEditMode, editId, refreshIdentities, userId]);
 
   const canSubmit = form.displayName.trim().length > 0 && form.role.trim().length > 0 && !saving && !loadingAgent;
 
@@ -248,20 +261,24 @@ export function AgentWorkshopView() {
   }, []);
 
   const handleAgentsImported = useCallback((result: DocumentAgentResult) => {
-    const message = t(
-      'agents.doc_uploader.toast_success',
-      '{{count}} agents imported from document',
-      { count: result.agents_created },
-    );
-    setImportToast(message);
+    if (getSessionBoundUserId() !== userId) return;
+    void refreshIdentities(userId).catch(() => undefined);
+    setImportToastCount(result.agents_created);
     if (importToastTimerRef.current != null) {
       window.clearTimeout(importToastTimerRef.current);
     }
     importToastTimerRef.current = window.setTimeout(() => {
-      setImportToast(null);
+      setImportToastCount(null);
       importToastTimerRef.current = null;
     }, 4500);
-  }, [t]);
+  }, [refreshIdentities, userId]);
+
+  const handlePersonaImported = useCallback(() => {
+    if (getSessionBoundUserId() !== userId) return;
+    void refreshIdentities(userId).catch(() => undefined).then(() => {
+      if (getSessionBoundUserId() === userId) navigate('/agents');
+    });
+  }, [navigate, refreshIdentities, userId]);
 
   if (capLoading) {
     return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
@@ -301,7 +318,7 @@ export function AgentWorkshopView() {
         <PersonaExportMenu
           identityId={isEditMode ? editId : undefined}
           identityName={isEditMode ? (form.displayName || undefined) : undefined}
-          onImported={() => navigate('/agents')}
+          onImported={handlePersonaImported}
         />
       </div>
 
@@ -340,9 +357,9 @@ export function AgentWorkshopView() {
         </div>
       )}
 
-      {importToast && (
+      {importToastCount !== null && (
         <div className="agent-workshop-toast" role="status" aria-live="polite">
-          {importToast}
+          {t('agents.doc_uploader.toast_success', '{{count}} agents imported from document', { count: importToastCount })}
         </div>
       )}
 
@@ -478,8 +495,11 @@ export function AgentWorkshopView() {
           </div>
         </fieldset>
 
-        {error && (
-          <div role="alert" className="agent-form__error">{error}</div>
+        {errorMessage && (
+          <div role="alert" className="agent-form__error">
+            {errorMessage}
+            {errorDiagnostic && <details><summary>{t('common.error_details')}</summary><code>{errorDiagnostic}</code></details>}
+          </div>
         )}
 
         <div className="agent-actions">

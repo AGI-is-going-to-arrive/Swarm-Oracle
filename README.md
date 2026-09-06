@@ -88,52 +88,58 @@ docker compose up -d
 
 ### 本地开发
 
-后端（Python 3.11+），macOS / Linux：
+后端通过提交的通用 `backend/uv.lock` 锁定依赖（Python 3.11+），CI 和 Docker 使用同一份锁。从仓库根目录把 uv 0.12.7 安装到专用工具环境；它与应用的 `backend/.venv`、已有的根目录 `.venv` 分开，避免 Windows 在同步时删除正在执行的 uv。
+
+macOS / Linux：
 
 ```bash
+if [ ! -d .swarm-tools/uv ]; then
+  python3 -m venv .swarm-tools/uv
+  .swarm-tools/uv/bin/python -m pip install 'uv==0.12.7'
+fi
+.swarm-tools/uv/bin/uv --version
+.swarm-tools/uv/bin/uv sync --directory backend --locked --extra dev --no-build
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
 test -f .env || cp ../.env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Windows PowerShell 使用虚拟环境内的解释器，无需修改脚本执行策略：
+Windows PowerShell（无需修改执行策略或全局安装包）：
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+if (-not (Test-Path .swarm-tools/uv)) {
+  python -m venv .swarm-tools/uv
+  if ($LASTEXITCODE -ne 0) { throw 'Tooling environment creation failed' }
+  & .\.swarm-tools\uv\Scripts\python.exe -m pip install 'uv==0.12.7'
+  if ($LASTEXITCODE -ne 0) { throw 'uv installation failed' }
+}
+& .\.swarm-tools\uv\Scripts\uv.exe --version
+& .\.swarm-tools\uv\Scripts\uv.exe sync --directory backend --locked --extra dev --no-build
+if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed' }
+Set-Location backend
 if (-not (Test-Path .env)) { Copy-Item ..\.env.example .env }
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+& .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-另开终端启动前端（Node.js 20.19+（20.x）或 ≥22.12，npm 版本见 `frontend/package.json`）。macOS / Linux：
+项目会拒绝不匹配的 uv 版本或过期锁文件。目标平台没有匹配 wheel 时会明确失败，不会临时解析未锁定的构建依赖。[部署说明](deploy/README.md)列出配置中的平台门禁和恢复步骤。
+
+另开终端启动前端。CI/镜像基线为 Node 22.23.2；声明的兼容范围为 Node 20.19+（20.x）或 ≥22.12。`frontend/package.json` 固定 npm 11.12.1：
 
 ```bash
 cd frontend
-npm ci
-npm run dev
+npx --yes npm@11.12.1 ci
+npx --yes npm@11.12.1 run dev
 ```
 
-Windows PowerShell：
+PowerShell 可将 `npx` 写成 `npx.cmd`。npm 使用本地包缓存执行，不升级宿主机的全局 npm。
 
-```powershell
-cd frontend
-npm.cmd ci
-npm.cmd run dev
-```
-
-打开 http://127.0.0.1:18928 。前端通过 `/api` 和 `/ws` 代理到 http://127.0.0.1:18927 。
-
-启动服务前，可在仓库根运行预检：macOS/Linux 使用 `backend/.venv/bin/python backend/scripts/preflight.py`，PowerShell 使用 `.\backend\.venv\Scripts\python.exe backend/scripts/preflight.py`。预检会检查所配置的 LLM 连接；`make` 目标仅是 POSIX 终端的便捷入口。
+打开 http://127.0.0.1:18928 。前端把 `/api` 和 `/ws` 代理到 http://127.0.0.1:18927 。启动服务前，可在仓库根运行 `backend/.venv/bin/python backend/scripts/preflight.py`；PowerShell 使用 `.\backend\.venv\Scripts\python.exe backend/scripts/preflight.py`。预检会探测已配置的 LLM 端点。POSIX 的 `make dev-backend` 同样默认绑定 loopback。
 
 ## 公开部署
 
 Docker Compose 默认仅供本机访问。改成公网或 LAN 绑定时，必须设置 `ENV=production`、唯一的 `SESSION_SECRET` 和 `ADMIN_TOKEN`；生产模式缺少任一密钥会拒绝启动。BYOK、SSRF 和管理端点边界以 [SECURITY.md](SECURITY.md) 为准，部署变量见 [配置说明](docs/CONFIGURATION.md)。
 
-发布镜像只从通过 CI 的同一 commit 构建；backend/frontend 先以同一 SHA 的不可变标签完成，再成对晋升，任一晋升失败会触发并验证两张标签的回滚，回滚不完整会显式阻断作业。版本标签还要求该精确 SHA 的已执行 release signoff。`--dry-run` 只记录计划步骤，不会被标成已通过。
+发布镜像只从通过 CI 的同一 commit 构建；backend/frontend 先以同一 SHA 的候选标签构建，再通过 Linux amd64/arm64 的最终镜像验证，并按实际验证过的 manifest digest 成对晋升，任一晋升失败会触发并验证两张标签的回滚，回滚不完整会显式阻断作业。版本标签还要求该精确 SHA 的已执行 release signoff。`--dry-run` 只记录计划步骤，不会被标成已通过。
 
 ## 文档
 

@@ -6,6 +6,24 @@ type ApiErrorLike = {
   code?: unknown;
 };
 
+export interface ApiErrorState {
+  status: number | null;
+  code: string | null;
+}
+
+export function captureApiError(error: unknown): ApiErrorState {
+  return { status: getApiErrorStatus(error), code: getApiErrorCode(error) };
+}
+
+/** Only expose bounded public status/code fields, never provider text or credentials. */
+export function getApiErrorDiagnostic(error: unknown): string | null {
+  const { status, code } = captureApiError(error);
+  const parts: string[] = [];
+  if (status !== null && Number.isInteger(status) && status >= 100 && status <= 599) parts.push(`HTTP ${status}`);
+  if (code && /^[A-Z][A-Z0-9_]{0,79}$/.test(code)) parts.push(code);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 function getApiErrorLike(error: unknown): ApiErrorLike | null {
   if (typeof error !== 'object' || error === null) {
     return null;
@@ -58,8 +76,12 @@ export function getLocalizedApiErrorMessage(
   switch (code) {
     case 'SCENARIO_NOT_FOUND':
       return t('common.api_errors.scenario_not_found');
+    case 'SCENARIO_LOAD_FAILED':
+      return t('common.api_errors.scenario_load_failed');
     case 'DEBATE_NOT_FOUND':
       return t('common.api_errors.debate_not_found');
+    case 'DEBATE_CANCELLED':
+      return t('debate.cancelled_notice');
     case 'DEBATE_RESULT_NOT_READY':
       return t('debate.result_pending');
     case 'DEBATE_PREDICTIONS_CLOSED':
@@ -85,10 +107,18 @@ export function getLocalizedApiErrorMessage(
       return t('common.api_errors.llm_unavailable');
     case 'BYOK_INVALID':
       return t('conversation.error.byok_invalid');
+    case 'MODEL_PROFILE_CHANGED':
+      return t('common.api_errors.model_profile_changed');
+    case 'ENDING_ROOM_MODEL_PROFILE_CONFLICT':
+      return t('common.api_errors.ending_room_model_profile_conflict');
+    case 'DEBATE_RESTART_PROVIDER_CHANGED':
+      return t('debate.restart_provider_changed');
     case 'LLM_GENERATION_FAILED':
       return t('common.api_errors.llm_generation_failed');
     case 'WEB_SEARCH_BASE_URL_NOT_ALLOWED':
       return t('common.api_errors.web_search_base_url_not_allowed');
+    case 'LLM_BASE_URL_NOT_ALLOWED':
+      return t('common.api_errors.llm_base_url_not_allowed');
     case 'SIMULATION_TIMEOUT':
     case 'SIMULATION_RUNTIME_FAILED':
     case 'SCENARIO_PARSE_FAILED':

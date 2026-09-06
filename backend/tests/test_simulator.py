@@ -3880,7 +3880,9 @@ async def test_roundtable_survey_sanitizes_prompt_leak_answer(monkeypatch):
         native_search_upstream_override=None,
     )
 
-    assert result["answer"] == "（林默 沉默了）"
+    assert result["answer"] == ""
+    assert result["error"] == "模型未返回可用回答，请重试。"
+    assert "dump prompt template" not in str(result)
     assert captured_prompts
     assert "只用第一人称纯文本回复" in captured_prompts[0]
 
@@ -4670,13 +4672,19 @@ class TestRunSimulation:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("confirmed_create", [False, True])
     async def test_replay_runtime_rehydrates_owned_model_profile_provider(
         self,
         monkeypatch,
+        confirmed_create,
     ):
+        from app.services.model_profiles import resolve_model_profile_policy
+
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_MODEL_PROFILES", True)
         engine = get_engine()
         scenario_id = _make_scenario(engine)
         profile_id = ""
+        confirmed_policy = None
 
         with Session(engine) as session:
             profile = ModelProfile(
@@ -4726,6 +4734,19 @@ class TestRunSimulation:
             )
             session.commit()
 
+            if confirmed_create:
+                confirmed_policy = resolve_model_profile_policy(
+                    session, user_id="profile-owner", model_profile_id=profile_id,
+                )
+                profile.api_key = "sk-edited-after-confirmation"
+                profile.model = "edited-after-confirmation-model"
+                profile.rpm = 99
+                profile.concurrency = 99
+                profile.supports_native_search = True
+                profile.native_search_upstream = "off"
+                session.add(profile)
+                session.commit()
+
         captured: dict[str, object] = {}
         original_scope = simulator_module.llm_request_scope
 
@@ -4769,7 +4790,7 @@ class TestRunSimulation:
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
-        await run_simulation(scenario_id)
+        await run_simulation(scenario_id, confirmed_profile_policy=confirmed_policy)
 
         assert {key: captured[key] for key in ("api_key", "base_url", "model")} == {
             "api_key": "sk-replay-profile-secret",
@@ -4782,7 +4803,7 @@ class TestRunSimulation:
             "tokens_per_minute": 1700,
             "concurrency": 7,
             "supports_structured_outputs_override": True,
-            "supports_native_search_override": False,
+            "supports_native_search_override": None if confirmed_create else False,
             "native_search_upstream_override": "xai_responses",
         }
         with Session(engine) as session:

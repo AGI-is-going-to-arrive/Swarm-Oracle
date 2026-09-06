@@ -11,6 +11,7 @@ const storeState = {
   setScenario: vi.fn(),
   handleWSEvent: vi.fn(),
   setCancelled: vi.fn(),
+  invalidateInterventionReceipts: vi.fn(),
 };
 
 const { dispatchVizEventMock, getScenarioMock } = vi.hoisted(() => ({
@@ -104,6 +105,7 @@ describe('useSimulationWS', () => {
     storeState.setScenario.mockReset();
     storeState.handleWSEvent.mockReset();
     storeState.setCancelled.mockReset();
+    storeState.invalidateInterventionReceipts.mockReset();
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
     const sessionStore = new Map<string, string>();
     vi.stubGlobal('sessionStorage', {
@@ -209,6 +211,8 @@ describe('useSimulationWS', () => {
     });
 
     expect(storeState.setScenario).toHaveBeenCalledWith(scenario);
+    expect(storeState.invalidateInterventionReceipts).toHaveBeenCalledWith('scenario-1');
+    expect(storeState.invalidateInterventionReceipts).toHaveBeenCalledTimes(3);
   });
 
   it('polls scenario status on clean close while still non-terminal (missed simulation_done safety net)', async () => {

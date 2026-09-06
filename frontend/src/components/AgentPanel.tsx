@@ -5,6 +5,7 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
+import useReducedMotion from '../hooks/useReducedMotion';
 import type { AgentMessage, BranchInfo } from '../types';
 import './AgentPanel.css';
 
@@ -125,6 +126,10 @@ interface AgentMessageGroup {
   messages: Array<{ message: AgentMessage; originalIndex: number }>;
 }
 
+function messageMarker(message: AgentMessage | undefined): string | null {
+  return message ? JSON.stringify([message.agent_id, message.branch, message.round, message.message]) : null;
+}
+
 function groupMessagesByWorldline(
   filteredMessages: AgentMessage[],
   branches: BranchInfo[],
@@ -220,14 +225,23 @@ function MessageText({
 interface AgentPanelProps {
   onBranchDetail?: (branchId: string) => void;
   onViewProfile?: (agentId: string) => void;
+  live?: boolean;
 }
 
-export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
+export function AgentPanel({ onBranchDetail, onViewProfile, live = true }: AgentPanelProps) {
   const { t } = useTranslation();
   const agents = useSimulationStore((s) => s.agents);
   const messages = useSimulationStore((s) => s.messages);
   const branches = useSimulationStore((s) => s.branches);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const followingMessagesRef = useRef(true);
+  const [followingMessages, setFollowingMessages] = useState(true);
+  const [lastReadMessage, setLastReadMessage] = useState(() => messageMarker(messages.at(-1)));
+  const resumeFollowing = useCallback(() => {
+    followingMessagesRef.current = true;
+    setFollowingMessages(true);
+  }, []);
 
   // Filter state: selected agent_id (null = show all)
   const [filterAgentId, setFilterAgentId] = useState<string | null>(null);
@@ -238,12 +252,14 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
   // Scroll to & highlight an agent card
   const scrollToAgent = useCallback((agentId: string) => {
     // Set filter to show that agent's messages
+    resumeFollowing();
     setFilterAgentId((prev) => (prev === agentId ? null : agentId));
 
     // Scroll the card into view and flash-highlight it
     const el = agentCardRefs.current.get(agentId);
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      el.scrollIntoView({ behavior: reducedMotion || !live ? 'auto' : 'smooth', block: 'nearest' });
+      if (reducedMotion || !live) return;
       el.classList.add('agent-card--highlight');
       const onEnd = () => {
         el.classList.remove('agent-card--highlight');
@@ -251,7 +267,7 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
       };
       el.addEventListener('animationend', onEnd);
     }
-  }, []);
+  }, [live, reducedMotion, resumeFollowing]);
 
   // Compute filtered messages
   const filteredMessages = useMemo(() => {
@@ -264,10 +280,30 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
     return groupMessagesByWorldline(filteredMessages, branches);
   }, [branches, filterAgentId, filteredMessages]);
 
-  // Auto-scroll on new messages
+  const jumpToLatest = useCallback(() => {
+    resumeFollowing();
+    setLastReadMessage(messageMarker(filteredMessages.at(-1)));
+    const list = messageListRef.current;
+    // Scroll only the feed. Instant positioning also avoids a stream of
+    // overlapping smooth-scroll animations as messages arrive.
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [filteredMessages, resumeFollowing]);
+
+  const handleMessageScroll = useCallback(() => {
+    const list = messageListRef.current;
+    if (!list) return;
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 80;
+    if (nearBottom || followingMessagesRef.current) setLastReadMessage(messageMarker(filteredMessages.at(-1)));
+    followingMessagesRef.current = nearBottom;
+    setFollowingMessages(nearBottom);
+  }, [filteredMessages]);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [filteredMessages.length]);
+    const list = messageListRef.current;
+    if (live && list && followingMessagesRef.current) list.scrollTop = list.scrollHeight;
+  }, [filterAgentId, filteredMessages, live]);
+  const lastReadIndex = followingMessages ? -1 : filteredMessages.findIndex((message) => messageMarker(message) === lastReadMessage);
+  const newMessageCount = !live || followingMessages ? 0 : filteredMessages.length - lastReadIndex - 1;
 
   const tierLabel = (tier: string) => {
     switch (tier) {
@@ -286,6 +322,7 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
   }, [filterAgentId, agents]);
 
   const handleAgentClick = (agentId: string) => {
+    resumeFollowing();
     setFilterAgentId((prev) => (prev === agentId ? null : agentId));
   };
 
@@ -376,13 +413,13 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
 
       <section className="message-feed">
         <h3 className="panel-heading">
-          {t('sim.panel.live_messages')}
+          {t(live ? 'sim.panel.live_messages' : 'sim.panel.saved_messages')}
           {filterAgentName && (
             <span className="filter-indicator">
               <span className="filter-agent-name">{filterAgentName}</span>
               <button
                 className="filter-clear"
-                onClick={() => setFilterAgentId(null)}
+                onClick={() => { resumeFollowing(); setFilterAgentId(null); }}
                 title={t('sim.panel.show_all')}
                 aria-label={t('sim.panel.clear_filter')}
               >
@@ -391,10 +428,10 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
             </span>
           )}
         </h3>
-        <div className="message-list">
+        <div className="message-list" ref={messageListRef} onScroll={handleMessageScroll}>
           {filteredMessages.length === 0 ? (
-            <p className="waiting-text">
-              {filterAgentId ? t('sim.panel.no_agent_messages') : t('sim.panel.waiting')}
+            <p className="waiting-text" style={live ? undefined : { animation: 'none' }}>
+              {filterAgentId ? t('sim.panel.no_agent_messages') : t(live ? 'sim.panel.waiting' : 'sim.panel.saved_empty')}
             </p>
           ) : filterAgentId ? (
             selectedAgentMessageGroups.map((group) => (
@@ -420,8 +457,14 @@ export function AgentPanel({ onBranchDetail, onViewProfile }: AgentPanelProps) {
           ) : (
             filteredMessages.map((msg, i) => renderSpeechBubble(msg, i))
           )}
-          <div ref={messagesEndRef} />
         </div>
+        {newMessageCount > 0 && (
+          <button type="button" className="message-jump" onClick={jumpToLatest}>
+            <span role="status">{t('sim.panel.new_messages', { count: newMessageCount })}</span>
+            <span aria-hidden="true"> · </span>
+            {t('sim.panel.jump_to_latest')}
+          </button>
+        )}
       </section>
     </aside>
   );

@@ -47,6 +47,42 @@ def test_load_scenario_response_serializes_total_rounds_from_parsed_context():
     assert response.model_dump()["total_rounds"] == 7
 
 
+def test_snapshot_import_response_projects_only_validated_public_metadata():
+    scenario_id = _create_scenario(parsed_context={
+        "llm_api_key": "outer-private-value",
+        "snapshot_import": {
+            "source_status": "simulating", "mode": "read_only", "worker_resumed": False,
+            "resume_action": "start_new_simulation", "reason": "untrusted-private-reason",
+            "api_key": "nested-private-value", "arbitrary": {"secret": "private"},
+        },
+    })
+    response = load_scenario_response(get_engine(), scenario_id)
+    assert response is not None
+    assert response.model_dump()["snapshot_import"] == {
+        "source_status": "simulating", "mode": "read_only", "worker_resumed": False,
+        "resume_action": "start_new_simulation", "reason_code": "SOURCE_EXECUTION_NOT_RESUMED",
+    }
+    assert "private" not in response.model_dump_json()
+
+
+def test_snapshot_import_response_omits_invalid_or_executable_metadata():
+    for invalid in (
+        {"source_status": {"secret": "value"}, "mode": "read_only", "worker_resumed": False},
+        {"source_status": "done", "mode": "read_only", "worker_resumed": True},
+        {
+            "source_status": "done",
+            "mode": "read_only",
+            "worker_resumed": False,
+            "resume_action": "resume_worker",
+        },
+        {"source_status": "done", "mode": "live", "worker_resumed": False},
+    ):
+        scenario_id = _create_scenario(parsed_context={"snapshot_import": invalid})
+        response = load_scenario_response(get_engine(), scenario_id)
+        assert response is not None
+        assert response.snapshot_import is None
+
+
 def test_load_scenario_response_falls_back_to_actual_max_round_number():
     engine = get_engine()
     scenario_id = _create_scenario(parsed_context={})

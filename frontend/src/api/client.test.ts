@@ -19,6 +19,13 @@ import {
   getAgentProfileData,
   getIdentityMemories,
   getInterventionEffects,
+  getDebateRestartOptions,
+  restartDebate,
+  cancelDebate,
+  deleteDebate,
+  getRoundtableProvider,
+  listPostVerdictOutputs,
+  savePostVerdictOutput,
   getReplayTrace,
   getScenarioActions,
   getScenario,
@@ -47,6 +54,81 @@ describe('api client request parsing', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('loads roundtable model and saved outputs using encoded scene and room scope', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response('{}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getRoundtableProvider('scene/id?', 'room#1');
+    await listPostVerdictOutputs('scene/id?', 'room#1');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/scenario/scene%2Fid%3F/roundtable-provider?room_id=room%231');
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/scenario/scene%2Fid%3F/post-verdict-outputs?room_id=room%231');
+  });
+
+  it('saves a result with the stable result id and authenticated JSON request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    localStorage.setItem('swarmoracle_session_token', 'session-token');
+    const payload = {
+      client_result_id: '12345678-1234-4234-8234-123456789012', kind: 'analyst' as const,
+      question: 'Original question', answer: 'Completed analysis', stopped_reason: 'final_response' as const,
+    };
+    await savePostVerdictOutput('scene', payload);
+    const [path, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe('/api/scenario/scene/post-verdict-outputs');
+    expect(options.method).toBe('POST');
+    expect(new Headers(options.headers).get('X-Session-Token')).toBe('session-token');
+    expect(JSON.parse(String(options.body))).toEqual(payload);
+  });
+
+  it('sends report depth and translation options while preserving explicit provider options', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('event: complete\ndata: {}\n\n', {
+      status: 200, headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await generateReport('scene', {
+      detailLevel: 'brief', operation: 'translate', targetLanguage: 'zh',
+      llmApiKey: 'explicit-key', llmBaseUrl: 'http://localhost:1234/v1', llmModel: 'model',
+    });
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toEqual({
+      detail_level: 'brief', operation: 'translate', target_language: 'zh',
+      llm_api_key: 'explicit-key', llm_base_url: 'http://localhost:1234/v1', llm_model: 'model',
+    });
+  });
+
+  it('scopes debate lifecycle requests and preserves the explicit restart receipt', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response('{}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const body = { client_request_id: '12345678-1234-4234-8234-123456789012', use_current_server_provider: true, current_server_token: 'frozen' };
+    await getDebateRestartOptions('a/b');
+    await restartDebate('a/b', body);
+    await cancelDebate('a/b');
+    await deleteDebate('a/b');
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/debate/a%2Fb/restart-options', '/api/debate/a%2Fb/restart',
+      '/api/debate/a%2Fb/cancel', '/api/debate/a%2Fb',
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toEqual(body);
+    expect(fetchMock.mock.calls[3][1].method).toBe('DELETE');
+  });
+
+  it('requests an explicit export language while keeping the old URL when omitted', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response('# Saved scenario', {
+      status: 200, headers: { 'Content-Type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await exportScenario('scene');
+    await exportScenario('scene', { language: 'zh' });
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/scenario/scene/export', '/api/scenario/scene/export?language=zh',
+    ]);
   });
 
   it('rejects a 200 response when the payload is not JSON', async () => {
@@ -627,6 +709,29 @@ describe('language wire-format', () => {
       question: '如果辩题是中文但 UI 是英文？',
       language: 'en',
     }));
+  });
+
+  it('sends the reviewed profile token with a new scenario', async () => {
+    const fetchMock = stubJsonWrite();
+    await createScenario({
+      question: 'Keep this provider choice', modelProfileId: 'profile-a',
+      modelProfileConfirmationToken: 'a'.repeat(64),
+    });
+    expect(getRequestBody(fetchMock)).toMatchObject({
+      model_profile_id: 'profile-a', model_profile_confirmation_token: 'a'.repeat(64),
+    });
+  });
+
+  it('sends exact reviewed role profile tokens with a new debate', async () => {
+    const fetchMock = stubJsonWrite();
+    await createDebate('Keep every role choice', undefined, {
+      profileConfirmationTokens: { 'profile-a': 'a'.repeat(64), 'profile-b': 'b'.repeat(64) },
+      propositionModelProfileId: 'profile-a', oppositionModelProfileId: 'profile-a', judgeModelProfileId: 'profile-b',
+    });
+    expect(getRequestBody(fetchMock)).toMatchObject({
+      proposition_model_profile_id: 'profile-a', opposition_model_profile_id: 'profile-a', judge_model_profile_id: 'profile-b',
+      profile_confirmation_tokens: { 'profile-a': 'a'.repeat(64), 'profile-b': 'b'.repeat(64) },
+    });
   });
 
   it('passes AbortSignal through launch-related write requests', async () => {

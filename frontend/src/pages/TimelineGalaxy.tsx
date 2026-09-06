@@ -16,18 +16,21 @@ import { resolveG6Tokens } from '../lib/graphTokens';
 import { buildKgNodeLabel } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { NodeDetailPanel, type NodeDetail, type NodeDetailEvidence } from '../components/NodeDetailPanel';
 
 interface GalaxyNode {
   id: string;
   label: string;
+  type?: string;
   round: number | null;
   payload?: unknown;
 }
 
-interface GalaxyEdge {
+interface GalaxyEdge extends NodeDetailEvidence {
   id: string;
   source: string;
   target: string;
+  evidence?: NodeDetailEvidence | null;
 }
 
 interface GalaxyPayload {
@@ -53,8 +56,12 @@ export default function TimelineGalaxy() {
     : explorerEnabled;
   const capEnabled = explorerEnabled && causalEnabled;
 
-  const [payload, setPayload] = useState<GalaxyPayload | null>(null);
-  const [error, setError] = useState<{ status: number | null; code: string | null } | null>(null);
+  const [loadedPayload, setLoadedPayload] = useState<{ scenarioId: string; data: GalaxyPayload } | null>(null);
+  const payload = loadedPayload?.scenarioId === scenarioId ? loadedPayload.data : null;
+  const [loadError, setError] = useState<{ scenarioId: string; status: number | null; code: string | null } | null>(null);
+  const error = loadError?.scenarioId === scenarioId ? loadError : null;
+  const [selection, setSelection] = useState<{ scenarioId: string; nodeId: string } | null>(null);
+  const [unavailableNodeScenario, setUnavailableNodeScenario] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -93,16 +100,16 @@ export default function TimelineGalaxy() {
         }, 0);
         if (!cancelled) {
           setError(null);
-          setPayload({ ...data, max_round: maxRound });
+          setLoadedPayload({ scenarioId, data: { ...data, max_round: maxRound } });
         }
       })
       .catch((err) => {
         if (cancelled) return;
         if (err && typeof err === 'object' && ('status' in err || 'code' in err)) {
           const e = err as { status: number | null; code: string | null };
-          setError({ status: e.status, code: e.code });
+          setError({ scenarioId, status: e.status, code: e.code });
         } else {
-          setError({ status: null, code: 'NETWORK_ERROR' });
+          setError({ scenarioId, status: null, code: 'NETWORK_ERROR' });
         }
       });
     return () => {
@@ -115,6 +122,28 @@ export default function TimelineGalaxy() {
       ? 'dark'
       : 'light';
   const tokens = useMemo(() => resolveG6Tokens(theme), [theme]);
+  const nodesById = useMemo(() => new Map((payload?.nodes ?? []).map((node) => [node.id, node])), [payload]);
+  const selectedNode = useMemo<NodeDetail | null>(() => {
+    if (selection?.scenarioId !== scenarioId) return null;
+    const node = nodesById.get(selection.nodeId);
+    if (!node) return null;
+    return {
+      ...node,
+      type: node.type || 'unknown',
+      evidenceList: (payload?.edges ?? [])
+        .filter((edge) => edge.source === node.id || edge.target === node.id)
+        .map((edge) => ({
+          ...edge.evidence,
+          direction: edge.source === node.id ? 'outgoing' : 'incoming',
+          metric_kind: edge.metric_kind,
+          provenance_kind: edge.provenance_kind,
+          synthetic_provenance: edge.synthetic_provenance,
+          evidence_status: edge.evidence_status,
+          evidence_caveat: edge.evidence_caveat,
+          caveat: edge.caveat,
+        })),
+    };
+  }, [nodesById, payload, scenarioId, selection]);
 
   const g6Options = useMemo(() => {
     const nodes = (payload?.nodes ?? []).map((n) => ({
@@ -148,19 +177,18 @@ export default function TimelineGalaxy() {
 
   const handleNodeClick = useCallback(
     (evt: unknown) => {
-      const target = (evt as { target?: { id?: string; type?: string } } | undefined)?.target;
-      if (typeof window === 'undefined') return;
-      window.dispatchEvent(
-        new CustomEvent('kg:openNodeSheet', {
-          detail: {
-            scenarioId,
-            identityId: target?.id ?? '',
-            originContext: { graphNodeType: 'timeline-galaxy' },
-          },
-        }),
-      );
+      const target = (evt as { target?: { id?: unknown; get?: (key: string) => unknown } } | undefined)?.target;
+      const nodeId = target?.id ?? target?.get?.('id');
+      if (typeof nodeId !== 'string' || !nodesById.has(nodeId)) {
+        setSelection(null);
+        setUnavailableNodeScenario(scenarioId);
+        return;
+      }
+      setUnavailableNodeScenario(null);
+      containerRef.current?.focus();
+      setSelection({ scenarioId, nodeId });
     },
-    [scenarioId],
+    [nodesById, scenarioId],
   );
 
   useG6Graph({
@@ -209,18 +237,37 @@ export default function TimelineGalaxy() {
       <h1 style={{ fontSize: '1.125rem', fontWeight: 600 }}>
         {t('timeline_galaxy.title', 'Timeline Galaxy')}
       </h1>
-      <div
-        ref={containerRef}
-        tabIndex={0}
-        role="application"
-        aria-label={t('timeline_galaxy.canvas_aria', 'Timeline graph canvas')}
-        style={{
-          width: '100%',
-          minHeight: 480,
-          background: tokens.background,
-          outline: 'none',
-        }}
-      />
+      <div style={{ position: 'relative' }}>
+        <div
+          ref={containerRef}
+          tabIndex={0}
+          role="application"
+          aria-label={t('timeline_galaxy.canvas_aria', 'Timeline graph canvas')}
+          style={{
+            width: '100%',
+            minHeight: 480,
+            background: tokens.background,
+            outline: 'none',
+          }}
+        />
+        <NodeDetailPanel
+          key={selectedNode?.id ?? 'closed'}
+          panelId="timeline-node-detail"
+          node={selectedNode}
+          onClose={() => setSelection(null)}
+        />
+      </div>
+      {unavailableNodeScenario === scenarioId && (
+        <div role="alert">
+          <p>{t('timeline_galaxy.node_unavailable')}</p>
+          <button type="button" onClick={() => {
+            setUnavailableNodeScenario(null);
+            setRetryNonce((current) => current + 1);
+          }}>
+            {t('common.retry', 'Retry')}
+          </button>
+        </div>
+      )}
       {error && (
         <div role="alert" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem', marginTop: '0.5rem' }}>
           <p style={{ color: 'var(--text-error, #c0392b)', fontSize: '0.8rem', margin: 0 }}>

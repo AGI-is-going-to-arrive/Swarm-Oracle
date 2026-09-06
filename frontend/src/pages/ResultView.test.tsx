@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -133,6 +133,42 @@ function mockStoryWithFullReport(report: FullReport, overrides: Partial<StoryDat
     full_report: report,
     ...overrides,
   });
+}
+
+function mockThreeReadableEndings(withEvidence = true): void {
+  const branches: StoryData['branches'] = [1, 2, 3].map((index) => ({
+    id: `branch-${index}`, title: `Ending ${index}`, probability: index === 1 ? 0.6 : 0.2,
+    status: 'COMPLETED', story: `Saved story ${index}`, insight: `Saved insight ${index}`,
+    key_moments: [], parent_branch_id: null, fork_reason: '',
+  }));
+  const report = fullReportFixture();
+  if (withEvidence) report.evidence = [{
+    id: 'saved-evidence', branch_id: 'branch-1', round_id: 'round-1', round_number: 1,
+    agent_id: 'agent-1', agent_name: 'Saved author', message_id: 'message-1',
+    quote: 'Exact saved evidence text.', kind: 'utterance',
+  }];
+  mockStoryWithFullReport(report, { branches, verdict: 'Current saved conclusion.' });
+  vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+    id: 'scenario-1', question: 'What if?', status: 'done', total_rounds: 3,
+    created_at: '2026-09-05T00:00:00Z', agents: [], groups: [], hierarchical: false, messages: [],
+    branches: branches.map((branch): Scenario['branches'][number] => ({ ...branch, status: 'COMPLETED', fork_round: 0, fork_reason: branch.fork_reason ?? '', summary: '' })),
+  });
+  setMockCapabilities({ ...getMockCapabilities(), result_verdict: { enabled: true }, counterfactual_replay: { enabled: true } });
+}
+
+function ResultLocationProbe() {
+  const location = useLocation();
+  return <output data-testid="result-location">{JSON.stringify({ pathname: location.pathname, search: location.search, state: location.state })}</output>;
+}
+
+function renderReadableResult(state: unknown = null) {
+  return render(<MemoryRouter initialEntries={[{ pathname: '/result/scenario-1', state }]}>
+    <ResultLocationProbe />
+    <Routes>
+      <Route path="/result/:id" element={<ResultView />} />
+      <Route path="/result/:id/compare" element={<div>Comparison destination</div>} />
+    </Routes>
+  </MemoryRouter>);
 }
 
 function readBlobText(blob: Blob): Promise<string> {
@@ -931,6 +967,75 @@ describe('ResultView campaign summary', () => {
     clearPretextCache();
   });
 
+  it('lets the reader compare a third branch while keeping the other selected branch fixed', async () => {
+    mockThreeReadableEndings();
+    const user = userEvent.setup();
+    renderReadableResult();
+    const first = await screen.findByRole('combobox', { name: 'result.compare_first' });
+    const second = screen.getByRole('combobox', { name: 'result.compare_second' });
+    expect(first).toHaveValue('branch-1');
+    expect(second).toHaveValue('branch-2');
+    await user.selectOptions(first, 'branch-3');
+    expect(first).toHaveValue('branch-3');
+    expect(second).toHaveValue('branch-2');
+    await user.click(screen.getByRole('button', { name: 'result.compare_selected' }));
+    expect(await screen.findByText('Comparison destination')).toBeInTheDocument();
+    expect(screen.getByTestId('result-location')).toHaveTextContent('branch_a=branch-3&branch_b=branch-2');
+  });
+
+  it('puts the conclusion and endings before optional report and export tools in reader mode', async () => {
+    mockThreeReadableEndings();
+    useUIPreferencesStore.setState({ resultViewMode: 'reader' });
+    renderReadableResult();
+    const conclusion = await screen.findByTestId('result-verdict-text');
+    const endings = document.getElementById('result-endings')!;
+    const report = document.getElementById('result-full-report')!;
+    expect(conclusion.compareDocumentPosition(endings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(endings.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(report).not.toHaveAttribute('open');
+    expect(screen.getAllByText('result.simulation_weight')).toHaveLength(3);
+    expect(document.querySelector('.result-header .result-actions')).toBeNull();
+  });
+
+  it('advances the sample only after inspecting two actual endings and uses the visible third-ending pair', async () => {
+    mockThreeReadableEndings();
+    const user = userEvent.setup();
+    renderReadableResult({ sampleOnboarding: true });
+    await user.click(await screen.findByRole('button', { name: 'onboarding.sample_endings_action' }));
+    expect(document.getElementById('ending-detail-branch-1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'onboarding.sample_endings_action' })).toBeInTheDocument();
+    const thirdCard = screen.getByRole('heading', { name: 'Ending 3' }).closest('article')!;
+    await user.click(within(thirdCard).getByRole('button', { name: 'result.read_full' }));
+    expect(document.getElementById('ending-detail-branch-3')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'result.compare_first' })).toHaveValue('branch-3');
+    expect(screen.getByRole('combobox', { name: 'result.compare_second' })).toHaveValue('branch-1');
+    await user.click(screen.getByRole('button', { name: 'onboarding.sample_divergence_action' }));
+    expect(await screen.findByText('Comparison destination')).toBeInTheDocument();
+    expect(screen.getByTestId('result-location')).toHaveTextContent('branch_a=branch-3&branch_b=branch-1');
+    expect(screen.getByTestId('result-location')).toHaveTextContent('"sampleOnboardingStep":"divergence"');
+  });
+
+  it('completes the evidence step only after opening nonempty saved evidence', async () => {
+    mockThreeReadableEndings();
+    const user = userEvent.setup();
+    renderReadableResult({ sampleOnboarding: true, sampleOnboardingStep: 'evidence', sampleInspectedEndingIds: ['branch-1', 'branch-2'] });
+    expect(screen.queryByRole('button', { name: 'onboarding.done' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'onboarding.sample_evidence_action' }));
+    const drawer = await screen.findByRole('dialog', { name: 'result.report.citedEvidence' });
+    expect(drawer).toHaveTextContent('Exact saved evidence text.');
+    await user.click(within(drawer).getByRole('button', { name: 'result.report.closeDrawer' }));
+    expect(await screen.findByRole('button', { name: 'onboarding.done' })).toBeInTheDocument();
+  });
+
+  it('keeps an evidence-less sample honest and offers skip without completing the guide', async () => {
+    mockThreeReadableEndings(false);
+    renderReadableResult({ sampleOnboarding: true, sampleOnboardingStep: 'evidence', sampleInspectedEndingIds: ['branch-1', 'branch-2'] });
+    expect(await screen.findByRole('button', { name: 'onboarding.sample_evidence_action' })).toBeDisabled();
+    expect(screen.getByText('onboarding.sample_evidence_unavailable')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'onboarding.done' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'onboarding.skip' })).toBeEnabled();
+  });
+
   it('keeps the current UI language instead of forcing the scenario language on Oracle result pages', async () => {
     setMockLanguage('en');
     vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
@@ -1205,7 +1310,7 @@ describe('ResultView campaign summary', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('ending-chat-modal')).not.toBeInTheDocument();
     });
-    await user.click(within(resultHeader as HTMLElement).getByRole('button', { name: 'Import as Local Run' }));
+    await user.click(within(document.querySelector('.result-header-tools') as HTMLElement).getByRole('button', { name: 'Import as Local Run' }));
 
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
@@ -5690,7 +5795,7 @@ describe('ResultView export flow', () => {
     await user.click(exportButton);
 
     await waitFor(() => {
-      expect(apiClient.exportScenario).toHaveBeenCalledWith('scenario-1');
+      expect(apiClient.exportScenario).toHaveBeenCalledWith('scenario-1', { language: 'en' });
     });
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     expect(appendChildSpy).toHaveBeenCalled();

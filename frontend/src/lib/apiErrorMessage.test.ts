@@ -6,11 +6,24 @@ import {
   getApiErrorCode,
   getApiErrorStatus,
   getLocalizedApiErrorMessage,
+  captureApiError,
+  getApiErrorDiagnostic,
 } from './apiErrorMessage';
 
 const t = (key: string) => key;
 
 describe('apiErrorMessage helpers', () => {
+  it('captures only stable public error fields and excludes raw provider text from diagnostics', () => {
+    const error = { status: 400, code: 'LLM_BASE_URL_NOT_ALLOWED', message: 'sk-private secret endpoint credentials' };
+    expect(captureApiError(error)).toEqual({ status: 400, code: 'LLM_BASE_URL_NOT_ALLOWED' });
+    expect(getApiErrorDiagnostic(error)).toBe('HTTP 400 · LLM_BASE_URL_NOT_ALLOWED');
+    expect(getApiErrorDiagnostic({ status: Number.NaN, code: '<script>private</script>' })).toBeNull();
+    expect(getApiErrorDiagnostic(new Error('secret'))).toBeNull();
+  });
+
+  it('maps provider allowlist failures to a localized primary message', () => {
+    expect(getLocalizedApiErrorMessage({ code: 'LLM_BASE_URL_NOT_ALLOWED' }, t, 'fallback')).toBe('common.api_errors.llm_base_url_not_allowed');
+  });
   it('extracts status and code from ApiError-like objects', () => {
     const error = { status: 409, code: 'GAMEPLAY_STATE_REVISION_MISMATCH' };
 

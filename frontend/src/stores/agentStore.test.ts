@@ -32,7 +32,7 @@ function makeAgent(id: string): AgentIdentityInfo {
 
 describe('agentStore', () => {
   beforeEach(() => {
-    apiMock.getSessionBoundUserId.mockClear();
+    apiMock.getSessionBoundUserId.mockReset().mockImplementation((fallback?: string | null) => fallback?.trim() || 'test_user');
     apiMock.listAgentIdentities.mockReset();
     useAgentStore.setState({
       selectedIds: new Set(),
@@ -42,6 +42,90 @@ describe('agentStore', () => {
       loadedUserId: null,
       loadingUserId: null,
       requestSeq: 0,
+      cacheValid: false,
+    });
+  });
+
+  describe('mutation refresh', () => {
+    it('refreshes a populated cache and keeps valid home selections', async () => {
+      useAgentStore.getState().setIdentities([makeAgent('existing')]);
+      useAgentStore.getState().toggleSelection('existing');
+      apiMock.listAgentIdentities.mockResolvedValue([
+        { ...makeAgent('existing'), display_name: 'Edited name' },
+        makeAgent('created'),
+      ]);
+
+      await useAgentStore.getState().fetchIdentities('test_user');
+      expect(apiMock.listAgentIdentities).not.toHaveBeenCalled();
+      await useAgentStore.getState().refreshIdentities('test_user');
+
+      expect(useAgentStore.getState().identities.map((agent) => agent.display_name)).toEqual(['Edited name', 'created']);
+      expect([...useAgentStore.getState().selectedIds]).toEqual(['existing']);
+      await useAgentStore.getState().fetchIdentities('test_user');
+      expect(apiMock.listAgentIdentities).toHaveBeenCalledTimes(1);
+    });
+
+    it('supersedes a fetch already in flight when an import commits', async () => {
+      let resolveOld!: (identities: AgentIdentityInfo[]) => void;
+      apiMock.listAgentIdentities
+        .mockImplementationOnce(() => new Promise<AgentIdentityInfo[]>((resolve) => { resolveOld = resolve; }))
+        .mockResolvedValueOnce([makeAgent('imported')]);
+
+      const oldFetch = useAgentStore.getState().fetchIdentities('test_user');
+      await useAgentStore.getState().refreshIdentities('test_user');
+      resolveOld([makeAgent('before-import')]);
+      await oldFetch;
+      expect(useAgentStore.getState().identities.map((agent) => agent.id)).toEqual(['imported']);
+      expect(apiMock.listAgentIdentities).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a failed refresh on the next ordinary read of a populated library', async () => {
+      useAgentStore.getState().setIdentities([makeAgent('old')]);
+      apiMock.listAgentIdentities.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([makeAgent('new')]);
+
+      await expect(useAgentStore.getState().refreshIdentities('test_user')).rejects.toThrow('offline');
+      expect(useAgentStore.getState().cacheValid).toBe(false);
+      await useAgentStore.getState().fetchIdentities('test_user');
+      expect(useAgentStore.getState().identities.map((agent) => agent.id)).toEqual(['new']);
+      expect(useAgentStore.getState().error).toBeNull();
+    });
+
+    it('caches an authoritative empty library', async () => {
+      apiMock.listAgentIdentities.mockResolvedValue([]);
+      await useAgentStore.getState().fetchIdentities('test_user');
+      await useAgentStore.getState().fetchIdentities('test_user');
+      expect(apiMock.listAgentIdentities).toHaveBeenCalledTimes(1);
+    });
+
+    it('discards a late response after the session owner changes without a new fetch', async () => {
+      let currentUser = 'owner-a';
+      apiMock.getSessionBoundUserId.mockImplementation(() => currentUser);
+      let resolveOld!: (identities: AgentIdentityInfo[]) => void;
+      apiMock.listAgentIdentities.mockImplementationOnce(() => new Promise<AgentIdentityInfo[]>((resolve) => { resolveOld = resolve; }));
+      const pending = useAgentStore.getState().refreshIdentities('owner-a');
+      currentUser = 'owner-b';
+      resolveOld([makeAgent('private-a')]);
+      await pending;
+
+      expect(useAgentStore.getState().identities).toEqual([]);
+      expect(useAgentStore.getState().loading).toBe(false);
+      expect(useAgentStore.getState().loadedUserId).toBeNull();
+    });
+
+    it('clears old-owner selections and ignores late replacements while another owner loads', async () => {
+      let currentUser = 'owner-a';
+      apiMock.getSessionBoundUserId.mockImplementation(() => currentUser);
+      useAgentStore.getState().setIdentities([makeAgent('a')], 'owner-a');
+      useAgentStore.getState().toggleSelection('a');
+      currentUser = 'owner-b';
+      apiMock.listAgentIdentities.mockResolvedValue([makeAgent('b')]);
+      const pending = useAgentStore.getState().fetchIdentities('owner-b');
+      expect(useAgentStore.getState().identities).toEqual([]);
+      expect(useAgentStore.getState().selectedIds.size).toBe(0);
+      useAgentStore.getState().setIdentities([makeAgent('late-a')], 'owner-a');
+      await pending;
+      expect(useAgentStore.getState().identities.map((agent) => agent.id)).toEqual(['b']);
+      expect(useAgentStore.getState().loadedUserId).toBe('owner-b');
     });
   });
 

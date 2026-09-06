@@ -542,20 +542,21 @@ def test_get_argument_map_populated_after_extraction():
 def test_concurrent_first_extract_reuses_single_snapshot_and_returns_consistent_map(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from app.services import debate_argument_map as argument_map_module
+
     debate_id = "d-concurrent-snapshot"
     barrier = threading.Barrier(2)
-    original_init = GraphSnapshot.__init__
+    original_ensure = argument_map_module._ensure_argument_map_snapshot_index
 
-    def synced_init(self, *args, **kwargs):
-        if (
-            kwargs.get("owner_type") == "debate"
-            and kwargs.get("owner_id") == debate_id
-            and kwargs.get("graph_kind") == "argument_map"
-        ):
-            barrier.wait(timeout=5)
-        original_init(self, *args, **kwargs)
+    def synchronized_entry(engine):
+        original_ensure(engine)
+        # Both callers reach the write boundary together; the snapshot
+        # constructor now correctly runs inside a serialized transaction.
+        barrier.wait(timeout=5)
 
-    monkeypatch.setattr(GraphSnapshot, "__init__", synced_init)
+    monkeypatch.setattr(
+        argument_map_module, "_ensure_argument_map_snapshot_index", synchronized_entry,
+    )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
@@ -576,6 +577,7 @@ def test_concurrent_first_extract_reuses_single_snapshot_and_returns_consistent_
         ]
         created_ids = [future.result(timeout=5) for future in futures]
 
+    monkeypatch.setattr(argument_map_module, "_ensure_argument_map_snapshot_index", original_ensure)
     assert sum(len(ids) for ids in created_ids) == 2
 
     with Session(get_engine()) as session:

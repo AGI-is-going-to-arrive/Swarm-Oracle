@@ -10,11 +10,13 @@ import os
 import subprocess
 import sys
 import zipfile
+from itertools import combinations
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.models import (
@@ -27,6 +29,7 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.branch_lineage import select_branch_rounds
 from app.services.result_report.schema import validate_full_report_payload
 from app.services.snapshot_export import import_snapshot_zip
 
@@ -149,6 +152,7 @@ def _semantic_problems(path: Path) -> list[str]:
     for branch in branches:
         if (
             branch.get("replay_source_branch_id")
+            and branch.get("replay_source_agent_id") is not None
             and branch.get("replay_source_agent_id") not in agent_ids
         ):
             problems.append("branches.jsonl replay source agent is not a bundle agent")
@@ -459,6 +463,7 @@ def _resign_bundle_with_missing_replay_agent(source: Path, target: Path) -> None
         branches = _read_jsonl(members["branches.jsonl"])
         replay_branch = next(branch for branch in branches if branch.get("replay_source_branch_id"))
         replay_branch["replay_source_agent_id"] = None
+        replay_branch["replay_kind"] = "counterfactual"
         members["branches.jsonl"] = "\n".join(
             json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             for row in branches
@@ -573,7 +578,7 @@ def test_validator_rejects_unknown_replay_agent(tmp_path: Path) -> None:
     )
 
 
-def test_validator_requires_replay_agent(tmp_path: Path) -> None:
+def test_validator_requires_actor_for_counterfactual_replay(tmp_path: Path) -> None:
     validator = _load_script(VALIDATOR_PATH, "sample_validator_required_replay_agent")
     invalid_path = tmp_path / "missing-replay-agent.swarm"
     _resign_bundle_with_missing_replay_agent(SAMPLE_PATHS[0], invalid_path)
@@ -699,12 +704,14 @@ def test_production_import_remaps_and_preserves_sample_semantics(
         branch_ids = {branch.id for branch in branches}
         assert any(branch.replay_source_branch_id in branch_ids for branch in branches)
         assert len(agents) == 3
-        agent_ids = {agent.id for agent in agents}
         replay_branches = [
             branch for branch in branches if branch.replay_source_branch_id is not None
         ]
         assert replay_branches
-        assert all(branch.replay_source_agent_id in agent_ids for branch in replay_branches)
+        assert all(
+            branch.replay_kind == "resume" and branch.replay_source_agent_id is None
+            for branch in replay_branches
+        )
         assert all(agent.agent_identity_id is None and agent.persona == "" for agent in agents)
         assert receipts and all(receipt.branch_id in branch_ids for receipt in receipts)
         assert snapshot is not None
@@ -798,3 +805,90 @@ def test_production_import_clears_unknown_replay_agent(tmp_path: Path) -> None:
 
         assert replay_branch is not None
         assert replay_branch.replay_source_agent_id is None
+
+
+@pytest.mark.parametrize("sample_path", SAMPLE_PATHS, ids=lambda path: path.stem)
+def test_every_sample_leaf_has_complete_verbatim_opening_and_all_pairs_compare(
+    sample_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import settings
+    from app.main import app
+
+    monkeypatch.setattr(settings, "FEATURE_COUNTERFACTUAL_REPLAY", True)
+    monkeypatch.setattr(settings, "SESSION_SECRET", "")
+    with Session(get_engine()) as session:
+        scenario_id = import_snapshot_zip(sample_path.read_bytes(), None, session)
+        branches = list(session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all())
+        parent_ids = {branch.parent_branch_id for branch in branches}
+        leaves = [branch for branch in branches if branch.id not in parent_ids]
+        assert len(leaves) == 3
+        assert sum(branch.probability for branch in leaves) == pytest.approx(1.0)
+        openings = []
+        for branch in leaves:
+            selection = select_branch_rounds(session, scenario_id=scenario_id, branch_id=branch.id)
+            assert selection.round_numbers == (1, 2, 3)
+            messages = session.exec(select(AgentMessage).where(
+                AgentMessage.round_id.in_([row.id for row in selection.rounds]),
+            )).all()
+            assert len(messages) == 9
+            openings.append(sorted(
+                (message.agent_id, message.content, message.emotion)
+                for message in messages if message.round_id == selection.rounds[0].id
+            ))
+        assert openings[0] == openings[1] == openings[2]
+        replay = next(branch for branch in leaves if branch.replay_kind)
+        assert replay.replay_kind == "resume"
+        assert replay.replay_source_round == replay.fork_round == 1
+        assert replay.parent_branch_id == replay.replay_source_branch_id
+        assert replay.replay_source_agent_id is None
+        provenance = session.get(Scenario, scenario_id).parsed_context["sample_provenance"]
+        assert provenance["origin"] == "authored_fixture"
+        assert provenance["real_user_resume"] is False
+        leaf_ids = [branch.id for branch in leaves]
+    client = TestClient(app)
+    for first, second in combinations(leaf_ids, 2):
+        response = client.get(f"/api/scenario/{scenario_id}/compare", params={
+            "branch_a": first, "branch_b": second,
+        })
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["common_rounds"] == 1
+        assert [item["round"] for item in payload["rounds"]] == [1, 2, 3]
+
+
+@pytest.mark.parametrize("mutation", [
+    "wrong_native_boundary", "missing_replay_prefix", "altered_prefix",
+])
+def test_sample_validator_rejects_invalid_materialized_lineage(
+    tmp_path: Path, mutation: str,
+) -> None:
+    validator = _load_script(VALIDATOR_PATH, "sample_validator_materialized_lineage")
+    invalid_path = tmp_path / f"{mutation}.swarm"
+
+    def mutate(members: dict[str, bytes]) -> None:
+        branches = _read_jsonl(members["branches.jsonl"])
+        if mutation == "wrong_native_boundary":
+            branch = next(
+                row for row in branches
+                if row.get("parent_branch_id") and not row.get("replay_kind")
+            )
+            branch["fork_round"] = 2
+        else:
+            replay = next(row for row in branches if row.get("replay_kind"))
+            messages = _read_jsonl(members["messages.jsonl"])
+            if mutation == "missing_replay_prefix":
+                messages = [row for row in messages if not (
+                    row["branch_id"] == replay["id"] and row["round_number"] == 1
+                )]
+            else:
+                row = next(
+                    row for row in messages
+                    if row["branch_id"] == replay["id"] and row["round_number"] == 1
+                )
+                row["content"] = "Invented opening that never appeared in the shared source."
+            members["messages.jsonl"] = "\n".join(json.dumps(row) for row in messages).encode()
+        members["branches.jsonl"] = "\n".join(json.dumps(row) for row in branches).encode()
+
+    _resign_bundle(SAMPLE_PATHS[0], invalid_path, mutate)
+    errors = validator.validate_bundle(invalid_path)
+    assert any("materialized round" in error or "shared replay prefix" in error for error in errors)

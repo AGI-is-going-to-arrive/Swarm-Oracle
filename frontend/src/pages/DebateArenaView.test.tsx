@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../api/client';
-import type { DebateSnapshot } from '../types';
+import type { DebateRestartOptions, DebateSnapshot } from '../types';
 import { DebateArenaView } from './DebateArenaView';
 
 const {
@@ -27,6 +27,11 @@ const {
 });
 
 const predictDebateMock = vi.fn();
+const cancelDebateMock = vi.fn();
+const restartDebateMock = vi.fn();
+const getRestartOptionsMock = vi.fn();
+const listModelProfilesMock = vi.fn();
+const setDebateSnapshotMock = vi.fn();
 const captureScreenshotMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
 const argumentMapMock = vi.fn(({
@@ -42,7 +47,7 @@ const argumentMapMock = vi.fn(({
 
 const mockDebateStore: {
   debate: DebateSnapshot;
-  status: 'loading' | 'live' | 'done' | 'error';
+  status: 'loading' | 'live' | 'done' | 'error' | 'cancelled' | 'deleted';
   error: string | null;
   errorCode: string | null;
   loadDebate: ReturnType<typeof vi.fn>;
@@ -171,6 +176,9 @@ const mockDebateStore: {
 function resetMockDebateStore() {
   mockDebateStore.debate = {
     ...mockDebateStore.debate,
+    id: 'debate-1',
+    source_debate_id: null,
+    motion: 'Motion: Should AI run every city?',
     status: 'done',
     current_phase: 'verdict',
     result_ready: true,
@@ -201,6 +209,7 @@ function resetMockDebateStore() {
     ],
   };
   mockDebateStore.status = 'done';
+  mockDebateStore.error = null;
   mockDebateStore.errorCode = null;
 }
 
@@ -222,6 +231,10 @@ vi.mock('../api/client', async () => {
   return {
     ...actual,
     predictDebate: (...args: unknown[]) => predictDebateMock(...args),
+    cancelDebate: (...args: unknown[]) => cancelDebateMock(...args),
+    restartDebate: (...args: unknown[]) => restartDebateMock(...args),
+    getDebateRestartOptions: (...args: unknown[]) => getRestartOptionsMock(...args),
+    listModelProfiles: (...args: unknown[]) => listModelProfilesMock(...args),
   };
 });
 
@@ -238,7 +251,10 @@ vi.mock('../hooks/useDebateWS', () => ({
 }));
 
 vi.mock('../stores/debateStore', () => ({
-  useDebateStore: (selector: (state: typeof mockDebateStore) => unknown) => selector(mockDebateStore),
+  useDebateStore: Object.assign(
+    (selector: (state: typeof mockDebateStore) => unknown) => selector(mockDebateStore),
+    { getState: () => ({ ...mockDebateStore, setDebate: setDebateSnapshotMock }) },
+  ),
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -276,6 +292,24 @@ describe('DebateArenaView', () => {
     setMockLanguage('en');
     changeLanguageMock.mockReset();
     predictDebateMock.mockReset();
+    try { sessionStorage.clear(); } catch { /* Test storage may be unavailable in negative cases. */ }
+    cancelDebateMock.mockReset();
+    restartDebateMock.mockReset();
+    setDebateSnapshotMock.mockReset().mockImplementation((snapshot: DebateSnapshot) => {
+      mockDebateStore.debate = snapshot;
+      mockDebateStore.status = snapshot.status === 'queued' ? 'live' : snapshot.status;
+    });
+    listModelProfilesMock.mockReset().mockResolvedValue({ profiles: [] });
+    const restartOptions: DebateRestartOptions = {
+      debate_id: 'debate-1', question: 'Question', language: 'en', status: 'cancelled',
+      providers: ['proposition', 'opposition', 'judge'].map((role) => ({
+        role: role as 'proposition' | 'opposition' | 'judge', source: 'unknown',
+        profile_id: null, name: '', model: '', available: false,
+      })),
+      can_reuse_original_profiles: false,
+      server_provider: { name: 'Current server model', model: 'server-model', available: true, confirmation_token: 'frozen-token' },
+    };
+    getRestartOptionsMock.mockReset().mockResolvedValue(restartOptions);
     captureScreenshotMock.mockReset();
     captureElementDataUrlMock.mockReset();
     argumentMapMock.mockClear();
@@ -284,6 +318,136 @@ describe('DebateArenaView', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('shows preserved cancelled content without live promises or a nonexistent verdict action', async () => {
+    mockDebateStore.debate = { ...mockDebateStore.debate, status: 'cancelled', result_ready: false, current_phase: 'opening', turns: mockDebateStore.debate.turns.slice(0, 1) };
+    mockDebateStore.status = 'cancelled';
+    render(<MemoryRouter initialEntries={['/debate/debate-1']}><Routes><Route path="/debate/:id" element={<DebateArenaView />} /></Routes></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: 'debate.cancelled_title' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'debate.saved_turns_title' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'debate.skip_to_verdict' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /debate.auto_reveal/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('debate.room_state_floor')).not.toBeInTheDocument();
+    expect(screen.queryByText('debate.room_quote_judge')).not.toBeInTheDocument();
+    expect(screen.getByText('debate.provisional_score_notice')).toBeInTheDocument();
+    expect(document.querySelector('.debate-hero__motion')).not.toHaveTextContent('Motion: Motion:');
+    await waitFor(() => expect(argumentMapMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ autoTour: false })));
+  });
+
+  it('uses the actual completed cancellation response rather than announcing a stop', async () => {
+    const done = { ...mockDebateStore.debate };
+    mockDebateStore.debate = { ...done, status: 'live', result_ready: false, current_phase: 'opening' };
+    mockDebateStore.status = 'live';
+    cancelDebateMock.mockResolvedValue(done);
+    const user = userEvent.setup();
+    const page = <MemoryRouter initialEntries={['/debate/debate-1']}><Routes><Route path="/debate/:id" element={<DebateArenaView />} /></Routes></MemoryRouter>;
+    const view = render(page);
+    await user.click(screen.getByRole('button', { name: 'debate.cancel_run' }));
+    await waitFor(() => expect(setDebateSnapshotMock).toHaveBeenCalledWith(done, 'debate-1'));
+    view.rerender(page);
+    expect(screen.queryByText('debate.cancelled_notice')).not.toBeInTheDocument();
+    expect(mockDebateStore.status).toBe('done');
+  });
+
+  it('requires an explicit server choice and retries an uncertain restart with the same request', async () => {
+    mockDebateStore.debate = { ...mockDebateStore.debate, status: 'cancelled', result_ready: false };
+    mockDebateStore.status = 'cancelled';
+    restartDebateMock.mockRejectedValueOnce(new Error('response lost'));
+    restartDebateMock.mockResolvedValueOnce({ ...mockDebateStore.debate, id: 'new-run', status: 'live', current_phase: 'opening', score: { proposition: 0, opposition: 0, audience_meter: 0 }, turns: [], source_debate_id: 'debate-1' });
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/debate/debate-1']}><Routes><Route path="/debate/:id" element={<DebateArenaView />} /></Routes></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'debate.restart_open' }));
+    const confirm = await screen.findByRole('button', { name: 'debate.restart_confirm' });
+    expect(confirm).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: /debate.restart_use_server/ }));
+    await user.click(confirm);
+    expect(await screen.findByText('debate.restart_uncertain')).toBeInTheDocument();
+    const first = restartDebateMock.mock.calls[0][1];
+    expect(first).toMatchObject({ use_current_server_provider: true, current_server_token: 'frozen-token' });
+    expect(screen.getByRole('group', { name: 'debate.restart_model_choices' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'debate.restart_retry_same' }));
+    await waitFor(() => expect(restartDebateMock).toHaveBeenCalledTimes(2));
+    expect(restartDebateMock.mock.calls[1][1]).toEqual(first);
+    expect(mockDebateStore.debate.id).toBe('new-run');
+    expect(sessionStorage.getItem('swarmoracle:debate-restart:pending:debate-1')).toBeNull();
+  });
+
+  it('binds selected original and alternative profiles to the reviewed choices and requires reload after a change', async () => {
+    mockDebateStore.debate = { ...mockDebateStore.debate, status: 'cancelled', result_ready: false };
+    mockDebateStore.status = 'cancelled';
+    const options: DebateRestartOptions = {
+      debate_id: 'debate-1', question: 'Question', language: 'en', status: 'cancelled',
+      providers: ['proposition', 'opposition', 'judge'].map((role) => ({
+        role: role as 'proposition' | 'opposition' | 'judge', source: 'profile',
+        profile_id: 'original', name: 'Original A', model: 'model-a', available: true,
+        confirmation_token: 'a'.repeat(64),
+      })),
+      can_reuse_original_profiles: true,
+      server_provider: { name: 'Server', model: 'server', available: true, confirmation_token: 'server-token' },
+      owned_profile_choices: [
+        { profile_id: 'original', name: 'Original A', model: 'model-a', confirmation_token: 'a'.repeat(64) },
+        { profile_id: 'alternative', name: 'Alternative A', model: 'alternative-a', confirmation_token: 'b'.repeat(64) },
+      ],
+    };
+    getRestartOptionsMock.mockResolvedValueOnce(options).mockResolvedValue({
+      ...options,
+      owned_profile_choices: [
+        options.owned_profile_choices![0],
+        { profile_id: 'alternative', name: 'Alternative B', model: 'alternative-b', confirmation_token: 'c'.repeat(64) },
+      ],
+    });
+    restartDebateMock.mockRejectedValueOnce(new ApiError(409, 'DEBATE_RESTART_PROVIDER_CHANGED', 'Review choices again'));
+    restartDebateMock.mockRejectedValueOnce(new Error('response lost'));
+    restartDebateMock.mockRejectedValueOnce(new Error('response lost again'));
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/debate/debate-1']}><Routes><Route path="/debate/:id" element={<DebateArenaView />} /></Routes></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'debate.restart_open' }));
+    const confirm = await screen.findByRole('button', { name: 'debate.restart_confirm' });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    const choices = screen.getAllByRole('combobox');
+    await user.selectOptions(choices[2], 'alternative');
+    await user.click(confirm);
+    expect(await screen.findByRole('alert')).toHaveTextContent('debate.restart_provider_changed');
+    expect(confirm).toBeDisabled();
+    expect(getRestartOptionsMock).toHaveBeenCalledTimes(1);
+    expect(listModelProfilesMock).not.toHaveBeenCalled();
+    expect(restartDebateMock.mock.calls[0][1]).toMatchObject({
+      proposition_model_profile_id: 'original', opposition_model_profile_id: 'original',
+      judge_model_profile_id: 'alternative',
+      profile_confirmation_tokens: { original: 'a'.repeat(64), alternative: 'b'.repeat(64) },
+    });
+    await user.click(screen.getByRole('button', { name: 'debate.reload_models' }));
+    await waitFor(() => expect(confirm).toBeEnabled());
+    expect(choices[2]).toHaveValue('alternative');
+    expect(within(choices[2]).getByRole('option', { name: 'Alternative B (alternative-b)' })).toBeInTheDocument();
+    await user.click(confirm);
+    expect(await screen.findByText('debate.restart_uncertain')).toBeInTheDocument();
+    const acceptedIntent = restartDebateMock.mock.calls[1][1];
+    expect(acceptedIntent.profile_confirmation_tokens).toEqual({ original: 'a'.repeat(64), alternative: 'c'.repeat(64) });
+    expect(acceptedIntent.client_request_id).not.toBe(restartDebateMock.mock.calls[0][1].client_request_id);
+    expect(JSON.parse(sessionStorage.getItem('swarmoracle:debate-restart:pending:debate-1')!)).toEqual(acceptedIntent);
+    await user.click(screen.getByRole('button', { name: 'debate.restart_retry_same' }));
+    await waitFor(() => expect(restartDebateMock).toHaveBeenCalledTimes(3));
+    expect(restartDebateMock.mock.calls[2][1]).toEqual(acceptedIntent);
+  });
+
+  it('keeps restart disabled when the reviewed selected profile has no confirmation token', async () => {
+    mockDebateStore.debate = { ...mockDebateStore.debate, status: 'cancelled', result_ready: false };
+    mockDebateStore.status = 'cancelled';
+    getRestartOptionsMock.mockResolvedValue({
+      debate_id: 'debate-1', providers: ['proposition', 'opposition', 'judge'].map((role) => ({
+        role, profile_id: 'old-profile', source: 'profile', name: 'Legacy profile', model: 'legacy-model', available: true,
+      })),
+      can_reuse_original_profiles: true,
+      server_provider: { name: 'Server', model: 'server', available: true, confirmation_token: 'server-token' },
+      owned_profile_choices: [{ profile_id: 'old-profile', name: 'Legacy profile', model: 'legacy-model' }],
+    });
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/debate/debate-1']}><Routes><Route path="/debate/:id" element={<DebateArenaView />} /></Routes></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'debate.restart_open' }));
+    expect(await screen.findByRole('button', { name: 'debate.restart_confirm' })).toBeDisabled();
+    expect(restartDebateMock).not.toHaveBeenCalled();
   });
 
   it('publishes debate automation payload and renders result action', async () => {

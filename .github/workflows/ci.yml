@@ -22,11 +22,20 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Create virtualenv
-        run: python -m venv .venv
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.7"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
 
-      - name: Install backend dependencies
-        run: .venv/bin/pip install -e ".[dev]"
+      - name: Install locked backend dependencies
+        run: uv sync --locked --extra dev --no-build
+
+      - name: Check universal lock and offline backup recovery
+        run: |
+          uv lock --check
+          .venv/bin/python ../scripts/test_backup_restore.py -v
 
       - name: Validate committed sample snapshots
         working-directory: .
@@ -49,7 +58,7 @@ jobs:
             python: "3.11"
             interpreter: ./.venv/bin/python
           - os: ubuntu-latest
-            python: "3.13"
+            python: "3.13.12"
             interpreter: ./.venv/bin/python
           - os: windows-latest
             python: "3.11"
@@ -68,14 +77,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: backend/pyproject.toml
 
-      - name: Create virtualenv
-        run: python -m venv .venv
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.7"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
 
-      - name: Install backend dependencies
-        run: ${{ matrix.interpreter }} -m pip install -e ".[dev]"
+      - name: Install locked backend dependencies
+        run: uv sync --locked --extra dev --no-build
 
       - name: Exercise configuration, startup, local packs, and SQLite boundaries
         run: >-
@@ -94,6 +105,13 @@ jobs:
           tests/test_runtime_lock.py::test_refresh_runtime_lock_retries_after_sqlite_busy_timeout
           tests/test_runtime_lock.py::test_get_engine_initializes_singleton_once_under_thread_race
 
+      - name: Verify native offline backup and restore safety
+        run: ${{ matrix.interpreter }} ../scripts/test_backup_restore.py -v
+
+      - name: Record actual portability runtime
+        run: >-
+          ${{ matrix.interpreter }} -c "import json, platform; print(json.dumps({'python': platform.python_version(), 'os': platform.system(), 'architecture': platform.machine()}))"
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -103,33 +121,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node 20
+      - name: Set up Node 22.23.2
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.23.2"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npx --yes npm@11.12.1 ci
 
       - name: Check asset provenance
-        run: npm run assets:provenance:check
+        run: npx --yes npm@11.12.1 run assets:provenance:check
 
       - name: Run frontend tests
-        run: npm test
+        run: npx --yes npm@11.12.1 test
 
       - name: Lint frontend
-        run: npm run lint
+        run: npx --yes npm@11.12.1 run lint
 
       - name: Type-check frontend project references
-        run: npx tsc -b
+        run: npx --yes npm@11.12.1 exec -- tsc -b
 
       - name: Build frontend
-        run: npm run build
+        run: npx --yes npm@11.12.1 run build
 
       - name: Check performance budgets
-        run: npm run perf:budgets:check
+        run: npx --yes npm@11.12.1 run perf:budgets:check
 
   cross-platform-frontend-smoke:
     runs-on: ${{ matrix.os }}
@@ -152,18 +170,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Node 20
+      - name: Set up Node 22.23.2
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22.23.2"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npx --yes npm@11.12.1 ci
 
       - name: Install Chromium for script smoke
-        run: npx playwright install --with-deps chromium
+        run: npx --yes npm@11.12.1 exec -- playwright install --with-deps chromium
 
       - name: Exercise cross-platform release signoff dry run
         run: node scripts/release-signoff.mjs --dry-run --skip-backend-checks --skip-assets-check --headless --output-root output/e2e/cross-platform-release-smoke
@@ -177,4 +195,4 @@ jobs:
           node --test scripts/release-command-runtime.test.mjs scripts/playwrightTeardown.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2eFixtureNet.test.mjs
 
       - name: Run release signoff contract tests
-        run: npm test -- --run src/scripts/releaseSignoff.test.ts
+        run: npx --yes npm@11.12.1 test -- --run src/scripts/releaseSignoff.test.ts

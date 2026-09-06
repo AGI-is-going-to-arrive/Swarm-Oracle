@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useState, useEffect, useMemo, useCallback, useRef, useId, type FocusEvent } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   createReplayArtifact,
@@ -120,7 +120,9 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
 import { HookSummaryPanel } from '../components/result/HookSummaryPanel';
 import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel';
 import { ProgressIndicator } from '../components/ProgressIndicator';
-import { ResultContextProvider, type ResultViewContextValue } from './result/ResultContext';
+import { ResultContextProvider, readSampleGuideRouteState, type SampleGuideRouteState, type ResultViewContextValue } from './result/ResultContext';
+import { SampleOnboardingGuide } from '../components/Onboarding/OnboardingGuide';
+import { ReportEvidenceDrawer } from './result/ReportEvidenceDrawer';
 import ResultHeader from './result/ResultHeader';
 import SocialFeedPanel from './result/SocialFeedPanel';
 import { MultiRunDistributionPanel } from '../components/result/MultiRunDistributionPanel';
@@ -129,6 +131,7 @@ import ResultVerdictPanel from './result/ResultVerdictPanel';
 import {
   ResultReportPanel,
   resolveReportContentLanguage,
+  projectReportContentLanguage,
 } from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
 import DomainWorldStrip from '../components/domainWorld/DomainWorldStrip';
@@ -151,6 +154,7 @@ type SourceFamilyContext = NonNullable<NonNullable<Scenario['web_search_context'
 
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const replayToken = searchParams.get('replay');
@@ -195,6 +199,12 @@ export default function ResultView() {
   const [predictions, setPredictions] = useState<PredictionInfo[]>([]);
   const [scoreResults, setScoreResults] = useState<ScorePredictionResultItem[]>([]);
   const [expandedBranch, setExpandedBranch] = useState<string | null>(null);
+  const [comparisonSelection, setComparisonSelection] = useState<{ a: string | null; b: string | null }>({ a: null, b: null });
+  const [sampleGuide, setSampleGuide] = useState<(SampleGuideRouteState & { scenarioId: string | null; evidenceViewed: boolean }) | null>(() => {
+    const initial = readSampleGuideRouteState(location.state);
+    return initial ? { ...initial, scenarioId: id ?? null, evidenceViewed: false } : null;
+  });
+  const [evidenceRequest, setEvidenceRequest] = useState<{ scenarioId: string; ids: string[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -828,16 +838,18 @@ export default function ResultView() {
     setExportError('');
     try {
       const filename = `swarmoracle-${id.slice(0, 8)}.md`;
-      let markdown = await exportScenario(id);
+      const storedReport = storyData?.full_report && 'verdict' in storyData.full_report ? storyData.full_report : null;
+      const exportLanguage = storedReport ? resolveReportContentLanguage(storedReport, isZh ? 'zh' : 'en') : isZh ? 'zh' : 'en';
+      let markdown = await exportScenario(id, { language: exportLanguage });
 
-      if (storyData?.full_report && 'verdict' in storyData.full_report) {
-        const report = storyData.full_report;
+      if (storedReport) {
+        const report = projectReportContentLanguage(storedReport, exportLanguage);
         const hasSavedSections = report.sections.length > 0;
         const isExportableTerminal = report.status === 'complete'
           || report.status === 'partial'
           || ((report.status === 'failed' || report.status === 'cancelled') && hasSavedSections);
         if (isExportableTerminal) {
-          const reportContentLanguage = resolveReportContentLanguage(report, isZh ? 'zh' : 'en');
+          const reportContentLanguage = exportLanguage;
           const reportContentIsZh = reportContentLanguage === 'zh';
           const usesPrimaryReportLanguage = reportContentLanguage === report.language;
           const fixedReportT = i18n.getFixedT(reportContentLanguage);
@@ -896,22 +908,22 @@ export default function ResultView() {
           );
           const reportMd = [
             `\n\n# ${title}`,
-            storyData.full_report_stale === true
+            storyData?.full_report_stale === true
               ? `\n> **${translateReportCopy('result.report.staleReportTitle', 'Saved report snapshot')}**: ${translateReportCopy('result.report.staleReportDesc', 'This saved report is not verified against the current simulation. Its conclusions are historical and do not replace the current result.')}`
               : '',
             `\n**${reportContentIsZh ? '报告状态' : 'Report status'}**: ${statusText}`,
             summary ? `\n**${reportContentIsZh ? '摘要' : 'Summary'}**: ${summary}` : '',
             usesPrimaryReportLanguage
-              ? `\n**${storyData.full_report_stale === true
+              ? `\n**${storyData?.full_report_stale === true
                 ? translateReportCopy('result.report.archivedVerdict', 'Archived verdict')
                 : reportContentIsZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`
               : '',
-            storyData.full_report_stale !== true
+            storyData?.full_report_stale !== true
               ? `\n**${reportContentIsZh ? '置信度' : 'Confidence'}**: ${confidenceLevel}${confidenceBasis ? ` — ${confidenceBasis}` : ''}`
               : '',
             `\n**${reportContentIsZh ? '免责声明' : 'Disclaimer'}**: ${disclaimerText}`,
             sections.join('\n'),
-            evidence.length ? `\n## ${reportContentIsZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',
+            evidence.length ? `\n## ${reportContentIsZh ? '证据（原始引文）' : 'Evidence (original quotes)'}\n\n${evidence.join('\n')}` : '',
             indicators.length ? `\n## ${reportContentIsZh ? '观察指标' : 'Indicators to Watch'}\n\n${indicators.join('\n')}` : '',
             `\n${premortem}`,
             usesPrimaryReportLanguage && report.limitations.trim()
@@ -1214,6 +1226,94 @@ export default function ResultView() {
     [branches, dominantBranchFromStory, expandedBranch],
   );
   const analysisBranch = factionTimelineBranch;
+  const savedReport = storyData?.full_report && 'verdict' in storyData.full_report ? storyData.full_report : null;
+  const savedEvidence = useMemo(() => (savedReport?.evidence ?? []).filter((item) => typeof item.quote === 'string' && item.quote.trim().length > 0), [savedReport]);
+  const readableEndings = useMemo(() => branches.filter((branch) => (
+    [branch.story, branch.insight, branch.question_answer, ...(branch.key_moments ?? [])]
+      .some((text) => typeof text === 'string' && text.trim().length > 0)
+  )), [branches]);
+  const hasSavedEvidence = savedEvidence.length > 0;
+  const guideActive = Boolean(sampleGuide && sampleGuide.scenarioId === activeScenarioId && !isReplayMode);
+  const inspectedEndingIds = useMemo(() => guideActive && sampleGuide
+    ? sampleGuide.sampleInspectedEndingIds.filter((branchId) => readableEndings.some((branch) => branch.id === branchId))
+    : [], [guideActive, sampleGuide, readableEndings]);
+  const guideStep = guideActive
+    ? (inspectedEndingIds.length < 2 ? 'endings' : sampleGuide!.sampleOnboardingStep)
+    : null;
+  const comparisonBranchA = branches.some((branch) => branch.id === comparisonSelection.a)
+    ? comparisonSelection.a : analysisBranch?.id ?? branches[0]?.id ?? null;
+  const comparisonBranchB = branches.some((branch) => branch.id === comparisonSelection.b && branch.id !== comparisonBranchA)
+    ? comparisonSelection.b : branches.find((branch) => branch.id !== comparisonBranchA)?.id ?? null;
+  const comparisonHref = activeScenarioId && comparisonBranchA && comparisonBranchB
+    && comparisonBranchA !== comparisonBranchB && !isReplayMode && !capLoading && !capError
+    && capabilities?.counterfactual_replay?.enabled
+    ? `/result/${encodeURIComponent(activeScenarioId)}/compare?branch_a=${encodeURIComponent(comparisonBranchA)}&branch_b=${encodeURIComponent(comparisonBranchB)}`
+    : null;
+
+  const persistSampleGuide = useCallback((next: SampleGuideRouteState | null, evidenceViewed = false) => {
+    setSampleGuide(next ? { ...next, scenarioId: activeScenarioId, evidenceViewed } : null);
+    navigate(`${location.pathname}${location.search}${location.hash}`, { replace: true, state: next });
+  }, [activeScenarioId, location.hash, location.pathname, location.search, navigate]);
+
+  const handleInspectEnding = useCallback((branchId: string | null) => {
+    setExpandedBranch(branchId);
+    if (!guideActive || !sampleGuide || !branchId || !readableEndings.some((branch) => branch.id === branchId)) return;
+    const inspected = [...new Set([...sampleGuide.sampleInspectedEndingIds.filter((candidate) => readableEndings.some((branch) => branch.id === candidate)), branchId])];
+    persistSampleGuide({
+      sampleOnboarding: true,
+      sampleOnboardingStep: inspected.length >= 2 && sampleGuide.sampleOnboardingStep === 'endings' ? 'divergence' : sampleGuide.sampleOnboardingStep,
+      sampleInspectedEndingIds: inspected,
+    }, sampleGuide.evidenceViewed);
+  }, [guideActive, persistSampleGuide, readableEndings, sampleGuide]);
+
+  const setComparisonBranch = useCallback((side: 'a' | 'b', branchId: string) => {
+    const other = side === 'a' ? comparisonBranchB : comparisonBranchA;
+    if (branchId === other || !branches.some((branch) => branch.id === branchId)) return;
+    setComparisonSelection({ a: comparisonBranchA, b: comparisonBranchB, [side]: branchId });
+  }, [branches, comparisonBranchA, comparisonBranchB]);
+
+  const handleOpenComparison = useCallback(() => {
+    if (!comparisonHref) return;
+    navigate(comparisonHref, guideActive && sampleGuide ? { state: {
+      sampleOnboarding: true,
+      sampleOnboardingStep: guideStep,
+      sampleInspectedEndingIds: sampleGuide.sampleInspectedEndingIds,
+    } } : undefined);
+  }, [comparisonHref, guideActive, guideStep, navigate, sampleGuide]);
+
+  const handleOpenEvidence = useCallback((evidenceIds?: string[]) => {
+    if (!activeScenarioId) return;
+    const selected = evidenceIds ? savedEvidence.filter((item) => evidenceIds.includes(item.id)) : savedEvidence;
+    if (selected.length === 0) return;
+    setEvidenceRequest({ scenarioId: activeScenarioId, ids: selected.map((item) => item.id) });
+    if (guideActive && guideStep === 'evidence' && sampleGuide) {
+      persistSampleGuide({
+        sampleOnboarding: true,
+        sampleOnboardingStep: 'evidence',
+        sampleInspectedEndingIds: sampleGuide.sampleInspectedEndingIds,
+      }, true);
+    }
+  }, [activeScenarioId, guideActive, guideStep, persistSampleGuide, sampleGuide, savedEvidence]);
+  const visibleEvidence = evidenceRequest?.scenarioId === activeScenarioId
+    ? savedEvidence.filter((item) => evidenceRequest.ids.includes(item.id)) : [];
+  const handleSampleGuideAction = useCallback(() => {
+    if (guideStep === 'endings') {
+      const next = readableEndings.find((branch) => !inspectedEndingIds.includes(branch.id));
+      if (!next) return;
+      handleInspectEnding(next.id);
+      window.requestAnimationFrame(() => {
+        const title = document.getElementById(`ending-title-${next.id}`);
+        title?.scrollIntoView?.({ behavior: 'auto', block: 'center' });
+        title?.focus({ preventScroll: true });
+      });
+    } else if (guideStep === 'divergence') handleOpenComparison();
+    else if (guideStep === 'evidence') handleOpenEvidence();
+  }, [readableEndings, guideStep, handleInspectEnding, handleOpenComparison, handleOpenEvidence, inspectedEndingIds]);
+  const guideUnavailableReason = guideStep === 'endings' && readableEndings.length < 2
+    ? t('onboarding.sample_endings_unavailable')
+    : guideStep === 'divergence' && !comparisonHref
+      ? t(capLoading ? 'common.loading' : capError ? 'common.capability_error' : 'onboarding.sample_compare_unavailable')
+      : guideStep === 'evidence' && !hasSavedEvidence ? t('onboarding.sample_evidence_unavailable') : null;
   const profileObservation = useMemo(
     () => (
       profileTarget
@@ -2050,7 +2150,14 @@ export default function ResultView() {
     setWebSourcesOpen,
     blurCollapsedPanelFocus,
     expandedBranch,
-    setExpandedBranch,
+    setExpandedBranch: handleInspectEnding,
+    comparisonBranchA,
+    comparisonBranchB,
+    setComparisonBranch,
+    comparisonHref,
+    handleOpenComparison,
+    hasSavedEvidence,
+    handleOpenEvidence,
     exporting,
     exportError,
     importError,
@@ -2115,8 +2222,33 @@ export default function ResultView() {
           confidence={storyData?.verdict_confidence ?? null}
           confidenceKind={storyData?.verdict_confidence_kind}
           question={storyData?.question ?? ''}
+          report={savedReport}
+          reportStale={storyData?.full_report_stale === true}
+          onOpenEvidence={handleOpenEvidence}
         />
       )}
+
+      {guideActive && guideStep && (
+        <SampleOnboardingGuide
+          step={guideStep}
+          onAction={handleSampleGuideAction}
+          onSkip={() => persistSampleGuide(null)}
+          onComplete={sampleGuide?.evidenceViewed ? () => persistSampleGuide(null) : undefined}
+          unavailableReason={guideUnavailableReason}
+        />
+      )}
+
+      <EndingCardsGrid />
+
+      <ExploreDeeperBridge />
+
+      {(storyData?.full_report || capLoading || capError || capabilities?.result_report?.enabled) && <details className="result-optional-section" open={isWorkbenchMode} id="result-full-report">
+        <summary>{t('result.report_details_heading')}</summary>
+        <ResultReportPanel onRefresh={refreshReportData} />
+      </details>}
+
+      <details className="result-optional-section" open={isWorkbenchMode}>
+        <summary>{t('result.run_details_heading')}</summary>
 
       <DomainWorldStrip
         domainWorld={scenario?.domain_world ?? null}
@@ -2140,8 +2272,6 @@ export default function ResultView() {
         <SocialFeedPanel scenarioId={scenario.id} />
       )}
 
-      <ResultReportPanel onRefresh={refreshReportData} />
-
       {/* HOPs probability sampling animation */}
       {branches.length >= 2 && (
         <HOPsAnimation
@@ -2150,9 +2280,20 @@ export default function ResultView() {
         />
       )}
 
-      <EndingCardsGrid />
+      </details>
 
-      <ExploreDeeperBridge />
+      <details className="result-optional-section" open={isWorkbenchMode}>
+        <summary>{t('result.share_export_heading')}</summary>
+        <ResultHeader section="tools" />
+      </details>
+
+      {activeScenarioId && <ReportEvidenceDrawer
+        isOpen={evidenceRequest?.scenarioId === activeScenarioId && visibleEvidence.length > 0}
+        onClose={() => setEvidenceRequest(null)}
+        scenarioId={activeScenarioId}
+        evidence={visibleEvidence}
+        canOpenReplay={!capLoading && !capError && capabilities?.replay_trace?.enabled === true}
+      />}
 
       {/* Hook Summary Panel */}
       {isWorkbenchMode && activeScenarioId && !loading && !capLoading && (

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -123,6 +126,7 @@ def serialize_model_profile(profile: ModelProfile) -> dict[str, Any]:
         "base_url": profile.base_url,
         "model": profile.model,
         "has_api_key": bool(profile.api_key),
+        "confirmation_token": model_profile_confirmation_token(profile),
         "rpm": profile.rpm,
         "tpm": profile.tpm,
         "concurrency": profile.concurrency,
@@ -133,6 +137,25 @@ def serialize_model_profile(profile: ModelProfile) -> dict[str, Any]:
         "created_at": profile.created_at.isoformat(),
         "updated_at": profile.updated_at.isoformat(),
     }
+
+
+def model_profile_confirmation_token(profile: ModelProfile) -> str:
+    """Opaque review token; credentials stay on the server and are never returned."""
+    def text(value: object) -> str | None:
+        return str(value).strip() or None if value is not None else None
+
+    binding = {
+        "id": profile.id, "user_id": profile.user_id, "name": text(profile.name),
+        "provider": text(profile.provider), "base_url": text(profile.base_url),
+        "model": text(profile.model), "api_key": text(profile.api_key),
+        "rpm": profile.rpm, "tpm": profile.tpm, "concurrency": profile.concurrency,
+        "supports_structured_outputs": profile.supports_structured_outputs,
+        "supports_native_search": profile.supports_native_search,
+        "native_search_upstream": profile.native_search_upstream,
+    }
+    return hashlib.sha256(json.dumps(
+        binding, ensure_ascii=False, sort_keys=True, allow_nan=False,
+    ).encode()).hexdigest()
 
 
 def list_model_profiles(session: Session, user_id: str) -> list[ModelProfile]:
@@ -337,6 +360,7 @@ def resolve_model_profile_policy(
     explicit_model: str | None = None,
     explicit_requests_per_minute: int | None = None,
     explicit_tokens_per_minute: int | None = None,
+    expected_confirmation_token: str | None = None,
 ) -> ResolvedProviderPolicy | None:
     if not model_profile_id:
         return None
@@ -350,6 +374,17 @@ def resolve_model_profile_policy(
         )
 
     profile = _profile_or_404(session, model_profile_id, user_id)
+    if expected_confirmation_token is not None and (
+        len(expected_confirmation_token) != 64
+        or any(char not in "0123456789abcdef" for char in expected_confirmation_token)
+        or not hmac.compare_digest(
+            expected_confirmation_token, model_profile_confirmation_token(profile),
+        )
+    ):
+        raise api_error(
+            409, "MODEL_PROFILE_CHANGED",
+            "Model profile changed; reload and review the model choice before starting again",
+        )
     explicit_api_key_normalized = (
         _normalize_api_key(explicit_api_key)
         if explicit_api_key is not None

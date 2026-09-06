@@ -16,6 +16,7 @@ class DebateStatus(str, enum.Enum):
     LIVE = "live"
     DONE = "done"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class DebatePhase(str, enum.Enum):

@@ -1,54 +1,135 @@
 # Deploy Notes / 部署说明
 
-## Host platforms / 宿主系统
+## Reproducible runtimes / 可复现依赖
 
-Use Linux containers with Docker Desktop on Windows/macOS, or Docker Engine and
-the Compose plugin on Linux. Native PowerShell and POSIX development commands are
-in [README.en.md](../README.en.md#local-development) and
-[README.md](../README.md#本地开发). Run `docker compose config --quiet` from the
-repository root before deployment to check that your Compose version accepts the
-configuration. Native Safari is an opt-in release test; a Linux WebKit result is
-not a native Safari result.
+`backend/uv.lock` is the single Python dependency resolution. Use uv **0.12.7** and
+`uv sync --locked --extra dev --no-build` for development/CI. The Docker image uses
+the same lock without the development extra. A missing wheel is an explicit
+installation failure; no unpinned source-build dependencies are installed. The
+lock includes platform markers for Windows and POSIX; it is not a macOS freeze.
 
-Windows/macOS 使用 Docker Desktop 的 Linux 容器模式，Linux 使用 Docker Engine
-与 Compose 插件。原生 PowerShell/POSIX 开发命令见上方中英文 README；部署前先在
-仓库根目录运行 `docker compose config --quiet`。原生 Safari 签收仍需显式开启，
-Linux WebKit 的结果不代表原生 Safari 已验证。
+后端只有一份 `uv.lock` 解析结果。开发/CI 与镜像共同使用它；不要把 `--locked`
+换成绕过过期检查的 `--frozen`，也不要在启动时执行宽范围的 `pip install .`。
+专用 uv 工具环境与应用环境分开，安装命令见中英文 README。升级依赖应单独评审，
+重新解析并测试锁文件，不在部署时临时升级。
 
-## Legacy data volume upgrade
+Docker bases are pinned by multi-platform manifest digest: Python **3.13.12**,
+Node **22.23.2**, Nginx **1.27.5**, and builder uv **0.12.7**. npm **11.12.1** runs
+through `npx --yes npm@11.12.1`; the host's global npm is unchanged. The pinned
+Python base supplies the shared libraries required by the locked wheels, so the
+build does not resolve floating apt packages.
 
-旧版 Docker 数据卷升级：当前镜像以 UID 1000 运行。旧版 root 容器留下的数据卷
-不会因拉取或重建镜像而改变所有者。只对需要升级的 Compose 项目执行下列一次性
-维护流程；新建数据卷无需迁移。整个流程会暂停后端，并改变该项目 `/data` 数据卷
-内的所有者，不修改宿主系统或其它卷的权限。
+## Configured verification matrix / 已配置的门禁
 
-Current images run as UID 1000. Pulling or rebuilding an image does not change
-ownership in a volume created by an older root-run container. Use this one-time
-maintenance procedure only for the Compose project being upgraded. It stops the
-backend and changes ownership within that project's `/data` volume. Fresh volumes
-do not need migration. The application continues to run as a non-root user.
+This table describes executable workflow coverage, not a claim that an unobserved
+CI run or every OS release has passed. Runtime logs record the actual Python,
+OS, and architecture. Read the run conclusions and uploaded evidence for the
+exact commit before release.
 
-在原部署的仓库目录中，使用原来的 Compose 项目名和相同的 `-f` 参数。停止所有共享
-该卷的其它写入进程后再执行。命令从现有 backend 容器的 `/data` 挂载读取真实卷名，
-不会猜测目录前缀；未找到现有容器或命名卷时会停止。不要先运行 `down` 删除旧容器。
+| Surface | Configured gate | Evidence boundary |
+| --- | --- | --- |
+| Linux native | Ubuntu, Python 3.11 full backend suite; Python 3.13.12 portability smoke | Other distributions/versions are not implied |
+| Windows native | `windows-latest`, Python 3.11, frontend scripts, offline backup/restore safety | Windows ARM64 is not validated |
+| macOS native | `macos-latest`, Python 3.11, frontend scripts, offline backup/restore safety | Actual runner architecture is logged; no blanket Intel/ARM claim |
+| Docker | Native `linux/amd64` and `linux/arm64` final-image jobs | Exact backend/frontend manifest digests, not native Vite preview |
+| Frontend runtime | Node 22.23.2 / npm 11.12.1 in CI and image build | Declared Node compatibility is 20.19+ in 20.x or >=22.12 |
+| Browser | Release signoff installs Chromium, Firefox, WebKit | Linux WebKit is not native Safari; build targets are not minimum-version test results |
 
-Run from the original deployment directory with the same Compose project name
-and any original `-f` arguments. Stop any other writers sharing the volume first.
-The commands obtain the actual volume name from the existing backend container's
-`/data` mount and stop if the container or named volume is missing. Keep that
-container until the backup is complete; do not run `down` first.
+Windows/macOS Docker usage requires Docker Desktop in Linux-container mode;
+Linux requires Docker Engine and the Compose plugin. Run
+`docker compose config --quiet` before using a deployment configuration. Compose
+publishes frontend `18928` and backend `18927` on `127.0.0.1` by default.
 
-备份包含整个 `/data`，包括 SQLite 数据库、可能存在的 WAL/SHM 文件和 Chroma 数据。
-流程先验证压缩归档可读取，再更改所有者；引号保留宿主路径中的空格。备份保存到
-Git 已忽略的 `output/backups/`，包含私人推演和可能存储的凭据，应保留在自己的受限存储中。
+## Final-image gate / 最终镜像验证
 
-The archive contains all of `/data`, including SQLite databases, any WAL/SHM
-files, and Chroma data. Archive validation precedes ownership changes, and quoted
-mount arguments preserve spaces in host paths. Backups go in the Git-ignored
-`output/backups/` directory and contain private runs and possibly stored
-credentials; keep them in storage you control.
+GHCR first builds SHA-tagged candidates. Each platform then pulls the **recorded
+manifest digests** and executes `scripts/container_smoke.py` with a fresh internal
+network and new data volumes. The gate checks shipped Nginx assets, official
+sample import, snapshot export/import, the actual backend WebSocket heartbeat,
+unbuffered report SSE, non-root data writes, restart readback, stopped-volume
+backup, restore into a new volume, and readback from the restored application.
+A Chroma collection uses supplied fixed embeddings, so no embedding model is
+downloaded. The provider fixture is isolated and deliberately fails after a delay
+to test the real SSE failure lifecycle. It does not establish model quality.
 
-### macOS / Linux
+晋升作业等待 amd64、arm64 两个镜像作业通过，然后直接复制测试过的 digest。
+它不会在测试后重新解析可能被后续构建移动的 SHA 标签。版本发布仍要求同一 SHA
+的真实 release signoff；容器传输/恢复验证不能代替模型质量验证。
+
+To reproduce with locally built image IDs or registry digests:
+
+```bash
+python3 scripts/container_smoke.py run \
+  --backend-image 'sha256:BACKEND_IMAGE_ID_64_HEX' \
+  --frontend-image 'sha256:FRONTEND_IMAGE_ID_64_HEX' \
+  --platform linux/arm64 --output output/container-smoke-new-run
+```
+
+Replace the placeholders with actual IDs from `docker image inspect`. Registry
+references must use `repository@sha256:...`. The output directory must be new or
+empty. The JSON evidence records input digests, actual platform image IDs, checks,
+and cleanup. The runner deletes only its labeled `swarm-impl-*` resources by ID;
+it never invokes Docker prune or a user's Compose teardown.
+
+## Offline backup and restore / 停机备份与恢复
+
+Use `scripts/backup_restore.py` with Python 3.11+. Stop **all** processes or
+containers that can write the selected data first. Native POSIX backup checks
+open files with `lsof` and refuses to proceed if that check is unavailable;
+Windows uses retained exclusive Win32 file handles. Docker volume backup refuses
+any running container mounting the source volume. Source changes during copying
+also fail the backup. SQLite is opened only in temporary restored copies, so
+original WAL/SHM files and Chroma segments are copied without recovery writes.
+
+`tar -tzf` only proves an archive is readable. This helper reports
+`backup_and_restore_verified` only after extracting a real temporary restore and
+checking file hashes, SQLite integrity, Alembic versions, table counts, and Chroma
+collection/embedding markers. Missing Chroma markers are shown explicitly; verify
+that all configured state directories were selected. Backups include private
+runs and may contain credentials; keep them in restricted storage. Allow roughly
+three times the data size in temporary free space for staging and validation.
+
+### Native paths / 原生目录
+
+For the default native layout, run from the repository root after stopping the
+backend. `--include` avoids copying the virtual environment or source tree and
+includes a selected database's `-wal` and `-shm` files automatically:
+
+```bash
+python3 scripts/backup_restore.py backup --source backend \
+  --include swarmoracle.db --include chroma_data \
+  --archive output/backups/native-20260905.tar.gz
+python3 scripts/backup_restore.py verify --archive output/backups/native-20260905.tar.gz
+python3 scripts/backup_restore.py restore --archive output/backups/native-20260905.tar.gz \
+  --destination /absolute/path/to/NEW-swarmoracle-data
+```
+
+PowerShell uses the same helper without shell-specific archive commands:
+
+```powershell
+python scripts/backup_restore.py backup --source backend --include swarmoracle.db --include chroma_data --archive output/backups/native-20260905.tar.gz
+if ($LASTEXITCODE -ne 0) { throw 'Backup or restore verification failed' }
+python scripts/backup_restore.py restore --archive output/backups/native-20260905.tar.gz --destination 'C:\SwarmOracle-restore-new'
+if ($LASTEXITCODE -ne 0) { throw 'Restore verification failed' }
+```
+
+Use the actual paths from `DATABASE_URL` and `CHROMA_PERSIST_DIR` if customized.
+For a dedicated common data directory, `--source /path/to/data` copies the whole
+directory. A selected component that does not exist is an error; a never-created
+Chroma store may be omitted deliberately. Back up the actual environment file
+separately if it is outside the data directory. After restore, point a stopped
+instance at the **new** database and Chroma paths and inspect its existing runs
+before cutover. Do not overwrite the original files. A failed extraction leaves
+its new partial destination for inspection; retry into another new directory.
+
+### Docker volumes / Docker 数据卷
+
+Use the same Compose project name and `-f` arguments as the original deployment.
+Keep the existing backend container until its image ID and `/data` volume are
+identified. The helper needs the exact old backend image ID, which contains
+Python; it does not pull a floating backup utility image.
+
+macOS / Linux:
 
 ```bash
 (
@@ -59,95 +140,139 @@ SwarmVolume=$(docker inspect --format '{{range .Mounts}}{{if and (eq .Destinatio
 test -n "$SwarmVolume"
 SwarmBackupImage=$(docker inspect --format '{{.Image}}' "$SwarmBackendId")
 docker compose stop backend
-mkdir -p "$(pwd)/output/backups"
-SwarmBackupDir="$(pwd)/output/backups/backend-data-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -m 700 "$SwarmBackupDir"
-docker run --rm --network none --user 0 --entrypoint tar \
-  --mount "type=volume,src=$SwarmVolume,dst=/data,readonly" \
-  --mount "type=bind,src=$SwarmBackupDir,dst=/backup" \
-  "$SwarmBackupImage" -czf /backup/backend-data.tar.gz -C /data .
-docker run --rm --network none --user 0 --entrypoint tar \
-  --mount "type=bind,src=$SwarmBackupDir,dst=/backup,readonly" \
-  "$SwarmBackupImage" -tzf /backup/backend-data.tar.gz > /dev/null
-printf 'Verified backup: %s\n' "$SwarmBackupDir/backend-data.tar.gz"
+SwarmArchive="$(pwd)/output/backups/backend-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+python3 scripts/backup_restore.py backup-volume --volume "$SwarmVolume" --image "$SwarmBackupImage" --archive "$SwarmArchive"
+printf 'Restore-tested backup: %s\n' "$SwarmArchive"
+)
+```
+
+PowerShell checks native exit codes explicitly:
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  function Invoke-SwarmDocker {
+    & docker @args
+    if ($LASTEXITCODE -ne 0) { throw "docker failed: $LASTEXITCODE" }
+  }
+  $SwarmBackendId = Invoke-SwarmDocker compose ps --all --quiet backend
+  if (@($SwarmBackendId).Count -ne 1 -or [string]::IsNullOrWhiteSpace($SwarmBackendId)) { throw 'Expected one backend container' }
+  $SwarmContainer = (Invoke-SwarmDocker inspect $SwarmBackendId | ConvertFrom-Json)[0]
+  $SwarmMounts = @($SwarmContainer.Mounts | Where-Object { $_.Destination -eq '/data' -and $_.Type -eq 'volume' })
+  if ($SwarmMounts.Count -ne 1) { throw 'Expected one named /data volume' }
+  $SwarmVolume = $SwarmMounts[0].Name
+  $SwarmBackupImage = $SwarmContainer.Image
+  Invoke-SwarmDocker compose stop backend
+  $SwarmArchive = Join-Path (Get-Location) ('output/backups/backend-data-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '.tar.gz')
+  python scripts/backup_restore.py backup-volume --volume $SwarmVolume --image $SwarmBackupImage --archive $SwarmArchive
+  if ($LASTEXITCODE -ne 0) { throw 'Backup/restore verification failed; keep backend stopped' }
+  Write-Output "Restore-tested backup: $SwarmArchive"
+}
+```
+
+Restore to a new volume name on either shell:
+
+```bash
+python3 scripts/backup_restore.py restore-volume --archive /absolute/path/backup.tar.gz \
+  --volume swarmoracle-restored-NEW --image 'sha256:EXACT_OLD_BACKEND_IMAGE_ID'
+```
+
+The destination volume must not already exist. Restored files become UID/GID
+1000 for the current non-root runtime. Start the matching image against this
+separate volume, verify health and historical runs, then update the deployment's
+volume selection explicitly. The original volume remains intact. Never use
+`docker compose down -v` as rollback. Older arbitrary tar archives lack this
+helper's manifest; listing them is not restore verification and this helper
+refuses them rather than guessing an extraction layout.
+
+## Legacy data volume upgrade
+
+Current backend images use UID 1000. Existing root-owned volumes retain their
+ownership across image updates. For this maintenance operation use the complete
+flow below: it identifies the original volume, stops the backend, creates and
+restore-tests a new backup, and only then changes ownership. Fresh volumes need
+no ownership repair. No original file contents are deleted.
+
+macOS / Linux:
+
+```bash
+(
+set -eu
+SwarmBackendId=$(docker compose ps --all --quiet backend)
+test -n "$SwarmBackendId"
+SwarmVolume=$(docker inspect --format '{{range .Mounts}}{{if and (eq .Destination "/data") (eq .Type "volume")}}{{.Name}}{{end}}{{end}}' "$SwarmBackendId")
+test -n "$SwarmVolume"
+SwarmBackupImage=$(docker inspect --format '{{.Image}}' "$SwarmBackendId")
+docker compose stop backend
+SwarmArchive="$(pwd)/output/backups/legacy-upgrade-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+python3 scripts/backup_restore.py backup-volume --volume "$SwarmVolume" --image "$SwarmBackupImage" --archive "$SwarmArchive"
 docker run --rm --network none --user 0 --entrypoint chown \
   --mount "type=volume,src=$SwarmVolume,dst=/data" \
   "$SwarmBackupImage" -hR 1000:1000 /data
 docker compose up -d --wait
-docker compose exec -T backend python -c "import os, tempfile; assert os.getuid() == 1000; [tempfile.TemporaryFile(dir=p).close() for p in ('/data', '/data/chroma_data')]; print('Data directories writable as UID 1000')"
+docker compose exec -T backend python -c "import os,tempfile; assert os.getuid()==1000; [tempfile.TemporaryFile(dir=p).close() for p in ('/data','/data/chroma_data')]; print('Data paths writable as UID 1000')"
 )
 ```
 
-### Windows PowerShell
-
-`Invoke-SwarmDocker` checks each native command's exit code, so a failed backup
-cannot be hidden by a later successful command. / 此包装器检查每条 Docker 命令的退出码，
-备份失败后不会继续更改权限。
+PowerShell:
 
 ```powershell
 & {
-    $ErrorActionPreference = 'Stop'
-    function Invoke-SwarmDocker {
-        & docker @args
-        if ($LASTEXITCODE -ne 0) { throw "docker failed with exit code $LASTEXITCODE" }
-    }
-    $SwarmBackendId = Invoke-SwarmDocker compose ps --all --quiet backend
-    if (@($SwarmBackendId).Count -ne 1 -or [string]::IsNullOrWhiteSpace($SwarmBackendId)) {
-        throw 'Expected one existing backend container'
-    }
-    $SwarmContainer = (Invoke-SwarmDocker inspect $SwarmBackendId | ConvertFrom-Json)[0]
-    $SwarmDataMounts = @($SwarmContainer.Mounts | Where-Object { $_.Destination -eq '/data' -and $_.Type -eq 'volume' })
-    if ($SwarmDataMounts.Count -ne 1) { throw 'Expected one named /data volume' }
-    $SwarmVolume = $SwarmDataMounts[0].Name
-    if ([string]::IsNullOrWhiteSpace($SwarmVolume)) { throw 'Expected a named /data volume' }
-    $SwarmBackupImage = $SwarmContainer.Image
-    Invoke-SwarmDocker compose stop backend
-    New-Item -ItemType Directory -Path output/backups -Force | Out-Null
-    $SwarmBackupDir = Join-Path (Resolve-Path output/backups).Path ('backend-data-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
-    New-Item -ItemType Directory -Path $SwarmBackupDir | Out-Null
-    Invoke-SwarmDocker run --rm --network none --user 0 --entrypoint tar `
-        --mount "type=volume,src=$SwarmVolume,dst=/data,readonly" `
-        --mount "type=bind,src=$SwarmBackupDir,dst=/backup" `
-        $SwarmBackupImage -czf /backup/backend-data.tar.gz -C /data .
-    Invoke-SwarmDocker run --rm --network none --user 0 --entrypoint tar `
-        --mount "type=bind,src=$SwarmBackupDir,dst=/backup,readonly" `
-        $SwarmBackupImage -tzf /backup/backend-data.tar.gz | Out-Null
-    Write-Output "Verified backup: $SwarmBackupDir/backend-data.tar.gz"
-    Invoke-SwarmDocker run --rm --network none --user 0 --entrypoint chown `
-        --mount "type=volume,src=$SwarmVolume,dst=/data" `
-        $SwarmBackupImage -hR 1000:1000 /data
-    Invoke-SwarmDocker compose up -d --wait
-    Invoke-SwarmDocker compose exec -T backend python -c "import os, tempfile; assert os.getuid() == 1000; [tempfile.TemporaryFile(dir=p).close() for p in ('/data', '/data/chroma_data')]; print('Data directories writable as UID 1000')"
+  $ErrorActionPreference = 'Stop'
+  function Invoke-SwarmDocker {
+    & docker @args
+    if ($LASTEXITCODE -ne 0) { throw "docker failed: $LASTEXITCODE" }
+  }
+  $SwarmBackendId = Invoke-SwarmDocker compose ps --all --quiet backend
+  if (@($SwarmBackendId).Count -ne 1 -or [string]::IsNullOrWhiteSpace($SwarmBackendId)) { throw 'Expected one backend container' }
+  $SwarmContainer = (Invoke-SwarmDocker inspect $SwarmBackendId | ConvertFrom-Json)[0]
+  $SwarmMounts = @($SwarmContainer.Mounts | Where-Object { $_.Destination -eq '/data' -and $_.Type -eq 'volume' })
+  if ($SwarmMounts.Count -ne 1) { throw 'Expected one named /data volume' }
+  $SwarmVolume = $SwarmMounts[0].Name
+  $SwarmBackupImage = $SwarmContainer.Image
+  Invoke-SwarmDocker compose stop backend
+  $SwarmArchive = Join-Path (Get-Location) ('output/backups/legacy-upgrade-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '.tar.gz')
+  python scripts/backup_restore.py backup-volume --volume $SwarmVolume --image $SwarmBackupImage --archive $SwarmArchive
+  if ($LASTEXITCODE -ne 0) { throw 'Backup/restore verification failed; keep backend stopped' }
+  Invoke-SwarmDocker run --rm --network none --user 0 --entrypoint chown --mount "type=volume,src=$SwarmVolume,dst=/data" $SwarmBackupImage -hR 1000:1000 /data
+  Invoke-SwarmDocker compose up -d --wait
+  Invoke-SwarmDocker compose exec -T backend python -c "import os,tempfile; assert os.getuid()==1000; [tempfile.TemporaryFile(dir=p).close() for p in ('/data','/data/chroma_data')]; print('Data paths writable as UID 1000')"
 }
 ```
 
-若任一步失败，保持后端停止并保留归档；排查后再继续。升级后检查服务健康、原有
-推演和 Agent 资料是否可用。需要恢复时，先将归档恢复到单独的空卷，再让对应旧版
-镜像使用该卷；不要覆盖仍在使用的数据卷，也不要用 `docker compose down -v` 回滚。
+If any step fails, keep the backend stopped and preserve the verified archive.
+Inspect health and historical records after startup. Restore into a separate
+volume with the matching old image if rollback is needed; do not overwrite the
+original volume or use `docker compose down -v`.
 
-If a step fails, keep the backend stopped and retain the archive while diagnosing
-the error. After startup, check health and existing runs and Agent records. For
-recovery, restore the archive into a separate empty volume and attach it to the
-matching previous image; do not overwrite an active volume or use
-`docker compose down -v` as a rollback.
+Keep the **pre-upgrade backup and both exact old image digests together**.
+Rollback to old application code requires that pre-upgrade backup unless backward
+readability has been proved explicitly. A text enum change (for example a new
+cancelled debate state) or a stricter report schema can break old readers even
+without a database migration. The container recovery gate proves restoration
+with the same tested image version; it does not certify that old images can read
+data already written by a newer version.
 
 ## Docker Compose and Host LLM Endpoints on Native Linux
 
-`docker-compose.yml` maps `host.docker.internal` to Docker's `host-gateway` so
-the backend container can reach an LLM gateway running on the host, for example:
+`host.docker.internal:host-gateway` provides **DNS/address mapping only**. On
+native Linux, a host service listening solely on `127.0.0.1` is not reachable
+through the Docker bridge gateway. Successful name resolution does not prove
+that the endpoint accepts container connections.
 
-```env
-LLM_RESPONSES_URL=http://host.docker.internal:8318/v1/chat/completions
+For example, `LLM_RESPONSES_URL=http://host.docker.internal:8318/v1/chat/completions`
+works only when the host gateway is actually reachable on that interface. Check
+DNS and TCP reachability without sending a provider request:
+
+```bash
+docker compose exec -T backend python -c "import socket; print(socket.gethostbyname('host.docker.internal')); c=socket.create_connection(('host.docker.internal',8318),3); c.close(); print('TCP reachable; model/auth not tested')"
 ```
 
-Docker Desktop on macOS and Windows resolves `host.docker.internal` by default.
-On native Linux, Docker must support the `host-gateway` mapping. If
-`host.docker.internal` still does not resolve from inside the container, keep the
-same application settings but point `LLM_RESPONSES_URL` at the host's actual IP,
-or run a Linux-only override with `network_mode: host`.
-
-Note: a host IP is not treated as a local endpoint, so when you switch to one you
-must also set `LLM_API_KEY` in `.env.docker` to a real (non-empty, non-placeholder)
-value — otherwise the backend fails startup with `LLM_API_KEY must be set to a
-non-placeholder value for non-local LLM endpoints`. Any other non-empty value works
-if your gateway does not check keys.
+Docker Desktop supplies its own host-access mechanism. For native Linux, choose
+an explicitly configured host gateway address/interface and appropriate access
+controls, or keep a loopback-only LLM service together with a native backend.
+Using the host's actual IP also requires a valid non-placeholder API key when the
+endpoint is classified as non-local. Do not apply a standalone `network_mode: host`
+override: it changes port publishing, binding behavior, and the frontend's
+`backend` DNS relationship together. This guide does not change the host network
+or open the gateway on every interface.

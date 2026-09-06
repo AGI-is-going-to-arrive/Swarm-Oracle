@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 
 import { intervene } from '../api/client';
+import { useSimulationStore } from '../stores/simulationStore';
 import { dispatchVizEvent } from '../game';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
@@ -481,6 +482,7 @@ export default function GameplayCardsModal({
         profile_id: gameplayProfile.id,
         directive: directiveText,
       });
+      useSimulationStore.getState().invalidateInterventionReceipts(scenarioId);
 
       dispatchVizEvent('viz:event_anim', {
         animation: cardDef.animation,
@@ -847,7 +849,7 @@ export default function GameplayCardsModal({
             {status === 'success' && (
               <>
                 <p className="modal-success">
-                  {t('gameplay.toast_applied')}
+                  {t('gameplay.toast_queued')}
                 </p>
                 {queueNotice && (
                   <p className="template-hint gameplay-modal__hint">{queueNotice}</p>

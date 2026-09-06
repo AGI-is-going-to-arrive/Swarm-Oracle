@@ -96,6 +96,169 @@ def _seed_scenario_with_full_report_snapshot(report: dict) -> str:
         return scenario.id
 
 
+@pytest.mark.parametrize("source_status", [
+    ScenarioStatus.PARSING, ScenarioStatus.SIMULATING,
+    ScenarioStatus.NARRATING, ScenarioStatus.DONE,
+])
+def test_running_snapshot_import_is_stopped_history_without_worker(
+    client, monkeypatch, source_status,
+):
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, child_id = _seed_branch_tree(scenario_id)
+    agent_id, _ = _seed_agents(scenario_id)
+    _seed_messages(root_id, agent_id)
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        scenario.status = source_status
+        scenario.parsed_context = {
+            **scenario.parsed_context,
+            "_post_verdict_outputs": [
+                {
+                    "version": 1, "id": "18c8f2a1-4932-4c43-98c0-d177088a1c01",
+                    "created_at": "2026-09-05T01:00:00+00:00",
+                    "origin": "simulation", "verification": "user_saved", "kind": "analyst",
+                    "room_id": "owner-local-room", "question": "What did the audit show?",
+                    "answer": "The audit showed a public accountability gap.",
+                    "stopped_reason": "final_response", "content_digest": "a" * 64,
+                    "provider": {
+                        "source": "scenario_profile", "profile_id": "private-profile",
+                        "name": "Saved provider", "model": "Saved model",
+                    },
+                },
+                {
+                    "version": 1, "id": "18c8f2a1-4932-4c43-98c0-d177088a1c02",
+                    "created_at": "2026-09-05T01:00:00+00:00",
+                    "origin": "simulation", "verification": "user_saved", "kind": "survey",
+                    "room_id": "owner-local-room", "question": "Would you accept the policy?",
+                    "participant_ids": ["private-participant"], "responses": [{
+                        "participant_id": "private-participant", "display_name": "科学家",
+                        "role": "scientist", "source_agent_id": agent_id,
+                        "source_branch_id": root_id, "agent_identity_id": "private-identity",
+                        "answer": "I would require an independent review.",
+                    }],
+                },
+            ],
+        }
+        child = session.get(Branch, child_id)
+        child.status = (
+            BranchStatus.ACTIVE if source_status != ScenarioStatus.DONE else BranchStatus.COMPLETED
+        )
+        session.add_all([scenario, child])
+        session.commit()
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+
+    def no_worker(_coro):
+        raise AssertionError("Snapshot imports must never schedule a simulation")
+
+    monkeypatch.setattr("app.api.scenarios.schedule_background_task", no_worker)
+    response = client.post(
+        "/api/scenario/import-snapshot", files={"file": ("running.zip", blob, "application/zip")},
+    )
+    assert response.status_code == 200
+    imported_id = response.json()["scenario_id"]
+    expected = (
+        ScenarioStatus.DONE if source_status == ScenarioStatus.DONE else ScenarioStatus.CANCELLED
+    )
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, imported_id)
+        assert scenario.status == expected
+        assert scenario.parsed_context["snapshot_import"]["source_status"] == source_status.value
+        assert scenario.parsed_context["snapshot_import"]["worker_resumed"] is False
+        assert scenario.parsed_context["snapshot_import"]["mode"] == "read_only"
+        notes = scenario.parsed_context["_post_verdict_outputs"]
+        assert len(notes) == 2
+        assert all(note["archived"] and note["verification"] == "user_saved" for note in notes)
+        assert all(note["room_id"] is None and "content_digest" not in note for note in notes)
+        assert notes[0]["answer"] == "The audit showed a public accountability gap."
+        assert notes[0]["provider"]["model"] == "Saved model"
+        assert notes[0]["provider"]["profile_id"] is None
+        response = notes[1]["responses"][0]
+        assert response["answer"] == "I would require an independent review."
+        assert response["participant_id"] == "archived-1"
+        assert notes[1]["participant_ids"] == ["archived-1"]
+        assert response["source_agent_id"] is None
+        assert response["source_branch_id"] is None
+        assert response["agent_identity_id"] is None
+        branches = session.exec(select(Branch).where(Branch.scenario_id == imported_id)).all()
+        assert len(branches) == 2
+        assert all(branch.status != BranchStatus.ACTIVE for branch in branches)
+        rounds = session.exec(select(Round).where(
+            Round.branch_id.in_([branch.id for branch in branches]),
+        )).all()
+        assert sorted(row.round_number for row in rounds) == [1, 2]
+        messages = session.exec(select(AgentMessage).where(
+            AgentMessage.round_id.in_([row.id for row in rounds]),
+        )).all()
+        assert {message.content for message in messages} == {"第一回合发言", "第二回合发言"}
+    readback = client.get(f"/api/scenario/{imported_id}")
+    assert readback.status_code == 200
+    assert readback.json()["status"] == expected.value
+    saved = client.get(f"/api/scenario/{imported_id}/post-verdict-outputs")
+    assert saved.status_code == 200
+    assert len(saved.json()["outputs"]) == 2
+
+
+@pytest.mark.parametrize("saved_outputs", [[{"version": 2}], [{}] * 21])
+def test_snapshot_invalid_saved_analysis_fails_explicitly_without_partial_import(saved_outputs):
+    sid = _seed_scenario(api_key_in_context=False)
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, sid)
+        scenario.parsed_context = {
+            **scenario.parsed_context, "_post_verdict_outputs": saved_outputs,
+        }
+        session.add(scenario)
+        session.commit()
+        blob = export_snapshot_zip(sid, session).getvalue()
+        with pytest.raises(SnapshotImportError, match="Saved analys"):
+            import_snapshot_zip(blob, None, session)
+        assert len(session.exec(select(Scenario)).all()) == 1
+
+
+@pytest.mark.parametrize("has_execution", [False, True])
+def test_snapshot_closes_queued_receipts_without_exporting_runtime_markers(has_execution):
+    sid = _seed_scenario(api_key_in_context=False)
+    bid, _ = _seed_branch_tree(sid)
+    agent_id, _ = _seed_agents(sid)
+    message_id, _ = _seed_messages(bid, agent_id)
+    usage = {
+        "card_id": "human_takeover", "profile_id": "governance", "branch_id": bid,
+        "branch_title": "主线", "round": 1, "cost": 1,
+        "directive": "Audit", "used_at": "2026-09-05T01:00:00+00:00",
+    }
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, sid)
+        scenario.status = ScenarioStatus.SIMULATING
+        scenario.gameplay_state_json = {"revision": 1, "cards": {"usage_log": [usage]}}
+        message = session.get(AgentMessage, message_id)
+        log = InterventionLog(scenario_id=sid, branch_id=bid, user_input="Audit", status="queued")
+        log.effect_summary_json = json.dumps({
+            "intervention_log_id": log.id, "card_id": "human_takeover", "status": "queued",
+            "gameplay_usage": usage, "processing_claim_token": "private-claim-token",
+            "processing_round_id": message.round_id, "processing_round_number": 1,
+            "processing_message_ids": [message_id] if has_execution else [],
+        })
+        session.add_all([scenario, log])
+        session.commit()
+        blob = export_snapshot_zip(sid, session).getvalue()
+        source_receipt = json.loads(session.get(InterventionLog, log.id).effect_summary_json)
+        assert source_receipt["status"] == "queued"
+    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        receipts = archive.read("intervention_receipts.jsonl")
+        assert b"processing_" not in receipts
+        assert b"private-claim-token" not in receipts
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(blob, None, session)
+        scenario = session.get(Scenario, imported_id)
+        imported = session.exec(select(InterventionLog).where(
+            InterventionLog.scenario_id == imported_id,
+        )).one()
+        receipt = json.loads(imported.effect_summary_json)
+        assert receipt["status"] == ("applied" if has_execution else "expired")
+        assert bool(scenario.gameplay_state_json["cards"]["usage_log"]) is has_execution
+        assert receipt.get("refunded_points", 0) == (0 if has_execution else 1)
+        assert scenario.status == ScenarioStatus.CANCELLED
+
+
 def _seed_full_report_coordinate_rows(scenario_id: str) -> None:
     with Session(get_engine()) as session:
         branch = Branch(
@@ -3183,6 +3346,49 @@ def test_redaction_is_case_insensitive_and_separator_insensitive():
         b"pw-leak",
     ):
         assert needle not in raw, f"{needle!r} leaked into export bytes"
+
+
+def test_snapshot_export_and_import_remove_local_model_profile_bindings():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    bindings = {
+        "model_profile_id": "private-scene-profile",
+        "room_model_profile_id": "private-room-profile",
+        "generation_provider": {
+            "model_profile_id": "private-generation-profile",
+            "name": "Historical room model", "model": "recorded-room-model",
+        },
+        "nested_room": {
+            "roomModelProfileId": "private-room-camel-profile",
+            "followup-model-profile-id": "private-followup-profile",
+            "profile_id": "governance",
+        },
+    }
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        scenario.parsed_context = {**scenario.parsed_context, **bindings}
+        session.add(scenario)
+        session.commit()
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        payload = json.loads(archive.read("scenario.json"))
+        assert "private-" not in json.dumps(payload)
+        assert payload["parsed_context"]["nested_room"] == {"profile_id": "governance"}
+        assert payload["parsed_context"]["generation_provider"] == {
+            "name": "Historical room model", "model": "recorded-room-model",
+        }
+
+    # Old or externally authored archives must be scrubbed on import as well.
+    old_archive = _rewrite_snapshot_scenario_json(
+        raw, lambda payload: payload["parsed_context"].update(bindings),
+    )
+    with Session(get_engine()) as session:
+        imported_id = import_snapshot_zip(old_archive, "new-owner", session)
+        imported_context = session.get(Scenario, imported_id).parsed_context
+        assert "private-" not in json.dumps(imported_context)
+        assert imported_context["nested_room"] == {"profile_id": "governance"}
+        assert imported_context["generation_provider"] == {
+            "name": "Historical room model", "model": "recorded-room-model",
+        }
 
 
 def test_redaction_drops_common_secret_key_variants():

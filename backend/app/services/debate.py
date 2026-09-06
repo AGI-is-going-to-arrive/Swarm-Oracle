@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
+from app.api.errors import api_error
 from app.config import settings
 from app.models import (
     Debate,
@@ -31,6 +33,11 @@ from app.models.database import get_engine
 # We import the *module* (not the function) so that test patches against
 # `app.services.hallucination_gate.apply_hallucination_gate` are honored.
 from app.services import hallucination_gate as _hallucination_gate_module
+from app.services.debate_lifecycle import (
+    DebateExecutionStopped,
+    debate_request_key,
+    load_debate_for_write,
+)
 from app.services.debate_prompts import (
     DEBATE_BANNED_TERMS_EN,
     DEBATE_BANNED_TERMS_ZH,
@@ -58,14 +65,18 @@ from app.services.llm_client import (
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
+from app.services.resource_deletion import resource_is_deleted
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
+    begin_serialized_write,
     debate_lock_key,
     refresh_runtime_lock,
     release_runtime_lock,
+    runtime_lease_owned_in_session,
     runtime_lock_error_is_transient_busy,
     runtime_lock_is_active,
+    runtime_lock_is_active_in_session,
     runtime_lock_lease_is_alive,
 )
 
@@ -233,9 +244,12 @@ def _datetime_epoch_seconds(value: datetime | None) -> float:
     return value.timestamp()
 
 
-def _live_debate_has_active_runtime_owner(debate_id: str) -> bool:
-    return _is_debate_running_in_process(debate_id) or runtime_lock_is_active(
-        debate_lock_key(debate_id)
+def _live_debate_has_active_runtime_owner(
+    debate_id: str, session: Session | None = None,
+) -> bool:
+    return _is_debate_running_in_process(debate_id) or (
+        runtime_lock_is_active_in_session(session, debate_lock_key(debate_id))
+        if session is not None else runtime_lock_is_active(debate_lock_key(debate_id))
     )
 
 
@@ -256,6 +270,12 @@ def _mark_loaded_live_debate_orphaned_if_needed(
         return False
     if _live_debate_has_active_runtime_owner(debate.id):
         return False
+    begin_serialized_write(session)
+    session.refresh(debate)
+    if debate.status != DebateStatus.LIVE or _live_debate_has_active_runtime_owner(
+        debate.id, session,
+    ):
+        return False
     debate.status = DebateStatus.ERROR
     debate.updated_at = _now()
     session.add(debate)
@@ -267,11 +287,12 @@ def _mark_loaded_live_debate_orphaned_if_needed(
 def reconcile_orphaned_live_debates(engine) -> int:
     marked = 0
     with Session(engine) as session:
+        begin_serialized_write(session)
         debates = list(
             session.exec(select(Debate).where(Debate.status == DebateStatus.LIVE)).all()
         )
         for debate in debates:
-            if _live_debate_has_active_runtime_owner(debate.id):
+            if _live_debate_has_active_runtime_owner(debate.id, session):
                 continue
             debate.status = DebateStatus.ERROR
             debate.updated_at = _now()
@@ -362,6 +383,30 @@ def _require_debate_runtime_lock_alive(lease_holder: list[RuntimeLockLease | Non
     if lease.expires_at <= time.time():
         lease_holder[0] = None
         raise RuntimeError(_DEBATE_RUNTIME_LOCK_LOST_MESSAGE)
+
+
+def _require_debate_execution_active(
+    debate_id: str,
+    lease_holder: list[RuntimeLockLease | None],
+    *,
+    allow_done: bool = False,
+) -> None:
+    """Stop remote workers between requests as soon as durable state changes."""
+    _require_debate_runtime_lock_alive(lease_holder)
+    from app.services.resource_deletion import resource_is_deleted
+
+    with Session(get_engine()) as session:
+        debate = session.get(Debate, debate_id)
+        if debate is None or resource_is_deleted(session, "debate", debate_id):
+            raise DebateExecutionStopped("deleted")
+        if debate.status not in {DebateStatus.QUEUED, DebateStatus.LIVE} and not (
+            allow_done and debate.status == DebateStatus.DONE
+        ):
+            raise DebateExecutionStopped(debate.status.value)
+        if not runtime_lease_owned_in_session(
+            session, lease_holder[0], lock_key=debate_lock_key(debate_id),
+        ):
+            raise DebateExecutionStopped("runtime_owner_lost")
 
 
 def _now() -> datetime:
@@ -1940,6 +1985,39 @@ async def _generate_turn_content(
     )
 
 
+def _existing_debate_request_in_session(
+    session: Session, *, user_id: str, request_id: str, request_fingerprint: str,
+) -> Debate | None:
+    key = debate_request_key(user_id, request_id)
+    if resource_is_deleted(session, "debate_request", key):
+        raise api_error(409, "DEBATE_REQUEST_DELETED", "This requested run was explicitly deleted")
+    existing = session.exec(select(Debate).where(
+        Debate.user_id == user_id,
+        func.json_extract(Debate.breakdown_json, "$.metadata.creation_request_key") == key,
+    )).first()
+    if existing is not None:
+        metadata = (existing.breakdown_json or {}).get("metadata", {})
+        if metadata.get("creation_request_fingerprint") != request_fingerprint:
+            raise api_error(
+                409, "DEBATE_REQUEST_CONFLICT", "Request id was used for different debate settings",
+            )
+        if resource_is_deleted(session, "debate", existing.id):
+            raise api_error(
+                409, "DEBATE_REQUEST_DELETED", "This requested run was explicitly deleted",
+            )
+    return existing
+
+
+def find_existing_debate_request(
+    *, user_id: str, request_id: str, request_fingerprint: str,
+) -> Debate | None:
+    with Session(get_engine()) as session:
+        return _existing_debate_request_in_session(
+            session, user_id=user_id, request_id=request_id,
+            request_fingerprint=request_fingerprint,
+        )
+
+
 def create_debate_record(
     question: str,
     *,
@@ -1948,6 +2026,25 @@ def create_debate_record(
     custom_agent_overrides: dict | None = None,
     language: str | None = None,
 ) -> Debate:
+    debate, _created = create_debate_record_with_receipt(
+        question, profile_hint=profile_hint, user_id=user_id,
+        custom_agent_overrides=custom_agent_overrides, language=language,
+    )
+    return debate
+
+
+def create_debate_record_with_receipt(
+    question: str,
+    *,
+    profile_hint: str | None = None,
+    user_id: str = "anonymous",
+    custom_agent_overrides: dict | None = None,
+    language: str | None = None,
+    request_id: str | None = None,
+    request_fingerprint: str | None = None,
+    source_debate_id: str | None = None,
+    run_config: dict[str, Any] | None = None,
+) -> tuple[Debate, bool]:
     language = language if language in {"zh", "en"} else resolve_debate_language(question)
     profile_id = profile_hint or infer_debate_profile(question)
     scene_theme = select_debate_scene(profile_id)
@@ -1974,42 +2071,53 @@ def create_debate_record(
         judge_name=cast["judge"]["name"],
         judge_role=cast["judge"]["role"],
     )
-    engine = get_engine()
-    with Session(engine) as session:
+    metadata: dict[str, Any] = {}
+    if run_config:
+        metadata["run_config"] = run_config
+    if request_id:
+        if not request_fingerprint:
+            raise ValueError("request_fingerprint is required with request_id")
+        metadata["creation_request_key"] = debate_request_key(user_id, request_id)
+        metadata["creation_request_fingerprint"] = request_fingerprint
+    if source_debate_id:
+        metadata["source_debate_id"] = source_debate_id
+    if custom_agent_overrides:
+        metadata["personas"] = {
+            side: {
+                "role": override["role"], "persona": override.get("persona", ""),
+                "custom_locked": True, "source_identity_id": override.get("source_identity_id"),
+                "knowledge_domains": override.get("knowledge_domains"),
+                "decision_bias": override.get("decision_bias"),
+            }
+            for side, override in custom_agent_overrides.items()
+        }
+    if metadata:
+        debate.breakdown_json = {"metadata": metadata}
+    with Session(get_engine()) as session:
+        begin_serialized_write(session)
+        if request_id:
+            existing = _existing_debate_request_in_session(
+                session, user_id=user_id, request_id=request_id,
+                request_fingerprint=request_fingerprint or "",
+            )
+            if existing is not None:
+                return existing, False
+        if source_debate_id:
+            source = session.get(Debate, source_debate_id)
+            if (
+                source is None or source.user_id != user_id
+                or resource_is_deleted(session, "debate", source_debate_id)
+            ):
+                raise api_error(404, "DEBATE_NOT_FOUND", "Source debate not found")
+            if source.status not in {DebateStatus.DONE, DebateStatus.ERROR, DebateStatus.CANCELLED}:
+                raise api_error(
+                    409, "DEBATE_RESTART_ACTIVE",
+                    "Stop the active debate before starting a new run",
+                )
         session.add(debate)
         session.commit()
         session.refresh(debate)
-    if custom_agent_overrides:
-        engine_for_meta = get_engine()
-        with Session(engine_for_meta) as meta_session:
-            debate_for_meta = meta_session.get(Debate, debate.id)
-            if debate_for_meta is not None:
-                breakdown = debate_for_meta.breakdown_json
-                if not isinstance(breakdown, dict):
-                    breakdown = {}
-                meta = breakdown.get("metadata")
-                if not isinstance(meta, dict):
-                    meta = {}
-                personas = meta.get("personas")
-                if not isinstance(personas, dict):
-                    personas = {}
-                for side, override in custom_agent_overrides.items():
-                    personas[side] = {
-                        "role": override["role"],
-                        "persona": override.get("persona", ""),
-                        "custom_locked": True,
-                        "source_identity_id": override.get("source_identity_id"),
-                        "knowledge_domains": override.get("knowledge_domains"),
-                        "decision_bias": override.get("decision_bias"),
-                    }
-                meta["personas"] = personas
-                breakdown["metadata"] = meta
-                debate_for_meta.breakdown_json = breakdown
-                from sqlalchemy.orm.attributes import flag_modified
-                flag_modified(debate_for_meta, "breakdown_json")
-                meta_session.add(debate_for_meta)
-                meta_session.commit()
-    return debate
+        return debate, True
 
 
 def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
@@ -2215,14 +2323,15 @@ async def run_debate_background(
             lock_label=f"debate:{debate_id}",
         )
 
-        await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})  # noqa: E501
         engine = get_engine()
         with Session(engine) as session:
-            stored_debate = session.get(Debate, debate_id)
-            if stored_debate is None:
-                return
+            stored_debate = load_debate_for_write(
+                session, debate_id, runtime_lease=lock_lease_holder[0],
+                require_runtime_lease=True,
+            )
             debate = _snapshot_debate_runtime(stored_debate)
             plan = build_debate_plan(debate.question)
+        await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.LIVE.value}})  # noqa: E501
 
         # Upgrade hardcoded template personas to LLM-generated ones tied to the
         # specific debate question. Failure is silent — keep template fallback
@@ -2258,7 +2367,10 @@ async def run_debate_background(
                         llm_overrides=judge_overrides,
                     )
                 with Session(engine) as _persona_session:
-                    persona_debate = _persona_session.get(Debate, debate_id)
+                    persona_debate = load_debate_for_write(
+                        _persona_session, debate_id, runtime_lease=lock_lease_holder[0],
+                        require_runtime_lease=True,
+                    )
                     if persona_debate is not None:
                         breakdown = persona_debate.breakdown_json
                         if not isinstance(breakdown, dict):
@@ -2373,7 +2485,7 @@ async def run_debate_background(
         recent_turns: list[dict[str, str]] = []
         for phase in PHASES_WITH_SPEAKERS:
             for side in (DebateSide.PROPOSITION, DebateSide.OPPOSITION):
-                _require_debate_runtime_lock_alive(lock_lease_holder)
+                _require_debate_execution_active(debate_id, lock_lease_holder)
                 side_overrides = _debate_overrides_for_side(
                     llm_overrides,
                     llm_overrides_by_side,
@@ -2394,11 +2506,11 @@ async def run_debate_background(
                     llm_overrides=side_overrides,
                     quota_key=quota_key,
                 )
-                _require_debate_runtime_lock_alive(lock_lease_holder)
+                _require_debate_execution_active(debate_id, lock_lease_holder)
                 score_delta = plan.phase_deltas[phase][side.value]
                 if phase != current_phase:
                     current_phase = phase
-                    _update_phase(debate_id, phase)
+                    _update_phase(debate_id, phase, runtime_lease=lock_lease_holder[0], require_runtime_lease=True)  # noqa: E501
                     await ws_callback(
                         debate_id,
                         {"type": "debate_phase_change", "data": {"phase": phase.value}},
@@ -2412,6 +2524,7 @@ async def run_debate_background(
                     speaker_name=speaker_name,
                     content=content,
                     score_delta=score_delta,
+                    runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
                 )
                 # Phase 3 F6: Extract argument units (non-blocking)
                 if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
@@ -2423,6 +2536,7 @@ async def run_debate_background(
                             content,
                             side.value,
                             turn_sequence=persisted_turn["sequence"],
+                            runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
                         )
                         _argmap_schedule_enrichment(
                             debate_id=debate_id,
@@ -2431,6 +2545,7 @@ async def run_debate_background(
                             language=debate.language,
                             llm_overrides=side_overrides,
                             quota_key=quota_key,
+                            runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
                         )
                     except Exception:
                         logger.debug("argmap extract failed (non-blocking)", exc_info=True)
@@ -2448,6 +2563,7 @@ async def run_debate_background(
                         debate_id=debate_id,
                         proposition=running_score["proposition"],
                         opposition=running_score["opposition"],
+                        runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
                     )
 
                 await ws_callback(
@@ -2479,7 +2595,7 @@ async def run_debate_background(
                 sequence += 1
                 await asyncio.sleep(0)
 
-        _require_debate_runtime_lock_alive(lock_lease_holder)
+        _require_debate_execution_active(debate_id, lock_lease_holder)
         judge_overrides = _debate_overrides_for_side(
             llm_overrides,
             llm_overrides_by_side,
@@ -2492,7 +2608,7 @@ async def run_debate_background(
             llm_overrides=judge_overrides,
             quota_key=quota_key,
         )
-        _require_debate_runtime_lock_alive(lock_lease_holder)
+        _require_debate_execution_active(debate_id, lock_lease_holder)
         final_plan, adjudication_mode = _build_hybrid_plan(
             plan,
             judge_analysis.get("adjudication"),
@@ -2501,7 +2617,7 @@ async def run_debate_background(
         phase = DebatePhase.VERDICT
         side = DebateSide.JUDGE
         speaker_name = debate.judge_name
-        _require_debate_runtime_lock_alive(lock_lease_holder)
+        _require_debate_execution_active(debate_id, lock_lease_holder)
         content = await _generate_turn_content(
             debate=debate,
             plan=final_plan,
@@ -2512,12 +2628,12 @@ async def run_debate_background(
             llm_overrides=judge_overrides,
             quota_key=quota_key,
         )
-        _require_debate_runtime_lock_alive(lock_lease_holder)
+        _require_debate_execution_active(debate_id, lock_lease_holder)
         score_delta = None
 
         if phase != current_phase:
             current_phase = phase
-            _update_phase(debate_id, phase)
+            _update_phase(debate_id, phase, runtime_lease=lock_lease_holder[0], require_runtime_lease=True)  # noqa: E501
             await ws_callback(
                 debate_id,
                 {"type": "debate_phase_change", "data": {"phase": phase.value}},
@@ -2531,6 +2647,7 @@ async def run_debate_background(
             speaker_name=speaker_name,
             content=content,
             score_delta=score_delta,
+            runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
         )
         # Phase 3 F6: Extract argument units (non-blocking)
         if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
@@ -2542,6 +2659,7 @@ async def run_debate_background(
                     content,
                     side.value,
                     turn_sequence=persisted_turn["sequence"],
+                    runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
                 )
                 _argmap_schedule_enrichment(
                     debate_id=debate_id,
@@ -2550,6 +2668,7 @@ async def run_debate_background(
                     language=debate.language,
                     llm_overrides=judge_overrides,
                     quota_key=quota_key,
+                    runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
                 )
             except Exception:
                 logger.debug("argmap extract failed (non-blocking)", exc_info=True)
@@ -2576,117 +2695,123 @@ async def run_debate_background(
             },
         )
 
-        _require_debate_runtime_lock_alive(lock_lease_holder)
+        _require_debate_execution_active(debate_id, lock_lease_holder)
         finalized = await asyncio.to_thread(
             _finalize_debate,
             debate_id,
             final_plan,
             judge_analysis=judge_analysis,
             adjudication_mode=adjudication_mode,
+            runtime_lease=lock_lease_holder[0], require_runtime_lease=True,
         )
-        _require_debate_runtime_lock_alive(lock_lease_holder)
+        _require_debate_execution_active(debate_id, lock_lease_holder, allow_done=True)
 
-        # LLM-enhance phase insights + supporting turns before broadcasting verdict.
-        # Both run in the same session so we only commit once and the result loader
-        # reads the LLM-enhanced versions from breakdown_json metadata.
+        # Read inputs before remote calls, then merge into a fresh fenced
+        # transaction so cancellation/deletion cannot be overwritten by an
+        # ORM object held across an await.
         try:
             engine = get_engine()
-            with Session(engine) as _enh_session:
-                _enh_debate = _enh_session.get(Debate, debate_id)
-                if _enh_debate:
-                    _enh_turns = list(
-                        _enh_session.exec(
-                            select(DebateTurn)
-                            .where(DebateTurn.debate_id == debate_id)
-                            .order_by(DebateTurn.sequence)
-                        ).all()
-                    )
-                    raw_insights = finalized.get("phase_insights", [])
-                    enhanced = await _enhance_insights_with_llm(
-                        _enh_debate,
-                        raw_insights,
-                        _enh_turns,
-                        llm_overrides=judge_overrides,
-                    )
-                    finalized["phase_insights"] = enhanced
-
-                    enhanced_supporting: list[dict[str, Any]] = []
-                    try:
-                        enhanced_supporting = await _build_supporting_turns(
-                            turns=_enh_turns,
-                            debate=_enh_debate,
-                            plan=final_plan,
-                            llm_overrides=judge_overrides,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "LLM supporting turn enhancement failed for %s",
-                            debate_id, exc_info=True,
-                        )
-
-                    if (
-                        _enh_debate.breakdown_json
-                        and isinstance(_enh_debate.breakdown_json, dict)
-                    ):
-                        meta = _enh_debate.breakdown_json.get("metadata", {})
-                        if not isinstance(meta, dict):
-                            meta = {}
-                        meta["phase_insights"] = enhanced
-                        if enhanced_supporting:
-                            meta["supporting_turns"] = enhanced_supporting
-                        _enh_debate.breakdown_json["metadata"] = meta
-                        flag_modified(_enh_debate, "breakdown_json")
-                        _enh_session.add(_enh_debate)
-                        _enh_session.commit()
+            with Session(engine) as read_session:
+                enhanced_debate = read_session.get(Debate, debate_id)
+                if enhanced_debate is None:
+                    raise DebateExecutionStopped("deleted")
+                enhanced_turns = list(read_session.exec(
+                    select(DebateTurn).where(DebateTurn.debate_id == debate_id)
+                    .order_by(DebateTurn.sequence),
+                ).all())
+            enhanced = await _enhance_insights_with_llm(
+                enhanced_debate, finalized.get("phase_insights", []), enhanced_turns,
+                llm_overrides=judge_overrides,
+            )
+            _require_debate_execution_active(debate_id, lock_lease_holder, allow_done=True)
+            enhanced_supporting: list[dict[str, Any]] = []
+            try:
+                enhanced_supporting = await _build_supporting_turns(
+                    turns=enhanced_turns, debate=enhanced_debate, plan=final_plan,
+                    llm_overrides=judge_overrides,
+                )
+            except Exception:
+                logger.debug(
+                    "LLM supporting turn enhancement failed for %s", debate_id, exc_info=True,
+                )
+            with Session(engine) as write_session:
+                current = load_debate_for_write(
+                    write_session, debate_id, runtime_lease=lock_lease_holder[0],
+                    require_runtime_lease=True, allow_done=True,
+                )
+                breakdown = dict(current.breakdown_json or {})
+                metadata = dict(breakdown.get("metadata") or {})
+                metadata["phase_insights"] = enhanced
+                if enhanced_supporting:
+                    metadata["supporting_turns"] = enhanced_supporting
+                breakdown["metadata"] = metadata
+                current.breakdown_json = breakdown
+                write_session.add(current)
+                write_session.commit()
+        except DebateExecutionStopped:
+            raise
         except Exception:
             logger.debug("LLM phase insight enhancement skipped for %s", debate_id, exc_info=True)
 
+        _require_debate_execution_active(debate_id, lock_lease_holder, allow_done=True)
         result_payload = await asyncio.to_thread(load_debate_result_payload, debate_id)
+        if result_payload is None:
+            with Session(get_engine()) as verify_session:
+                committed = load_debate_for_write(
+                    verify_session, debate_id, runtime_lease=lock_lease_holder[0],
+                    require_runtime_lease=True, allow_done=True,
+                )
+                if committed.status != DebateStatus.DONE:
+                    raise DebateExecutionStopped(committed.status.value)
         await ws_callback(
             debate_id,
             {
                 "type": "debate_verdict",
-                "data": (
-                    {
-                        **result_payload["result"],
-                        "phase_insights": result_payload.get("phase_insights", []),
-                    }
-                    if result_payload is not None
-                    else {
-                        **{key: value for key, value in finalized.items() if key != "phase_insights"},  # noqa: E501
-                        "phase_insights": finalized.get("phase_insights", []),
-                    }
-                ),
+                "data": {
+                    **(result_payload["result"] if result_payload else finalized),
+                    "phase_insights": (
+                        result_payload.get("phase_insights", []) if result_payload
+                        else finalized.get("phase_insights", [])
+                    ),
+                },
             },
         )
         await ws_callback(debate_id, {"type": "status", "data": {"status": DebateStatus.DONE.value}})  # noqa: E501
+    except DebateExecutionStopped as exc:
+        logger.info("Debate %s stopped after durable state changed: %s", debate_id, exc.status)
+        if exc.status == "runtime_owner_lost":
+            if _mark_debate_error(
+                debate_id, runtime_lease=lock_lease_holder[0] or lock_lease,
+                require_runtime_lease=True, allow_unowned=True,
+            ):
+                await ws_callback(debate_id, {
+                    "type": "status",
+                    "data": {"status": DebateStatus.ERROR.value, "error": GENERIC_DEBATE_ERROR},
+                })
+            raise RuntimeError(_DEBATE_RUNTIME_LOCK_LOST_MESSAGE) from exc
+        if exc.status in {"cancelled", "deleted"}:
+            await ws_callback(debate_id, {"type": "status", "data": {"status": exc.status}})
     except asyncio.CancelledError:
         logger.warning("Debate %s was cancelled during execution", debate_id)
-        _mark_debate_error(debate_id)
-        await ws_callback(
-            debate_id,
-            {
+        if _mark_debate_error(
+            debate_id, runtime_lease=lock_lease_holder[0] or lock_lease,
+            require_runtime_lease=True, allow_unowned=True,
+        ):
+            await ws_callback(debate_id, {
                 "type": "status",
-                "data": {
-                    "status": DebateStatus.ERROR.value,
-                    "error": GENERIC_DEBATE_ERROR,
-                },
-            },
-        )
+                "data": {"status": DebateStatus.ERROR.value, "error": GENERIC_DEBATE_ERROR},
+            })
         raise
     except Exception as exc:
         logger.error("Debate %s failed: %s", debate_id, exc, exc_info=True)
-        _mark_debate_error(debate_id)
-        await ws_callback(
-            debate_id,
-            {
+        if _mark_debate_error(
+            debate_id, runtime_lease=lock_lease_holder[0] or lock_lease,
+            require_runtime_lease=True, allow_unowned=True,
+        ):
+            await ws_callback(debate_id, {
                 "type": "status",
-                "data": {
-                    "status": DebateStatus.ERROR.value,
-                    "error": GENERIC_DEBATE_ERROR,
-                },
-            },
-        )
+                "data": {"status": DebateStatus.ERROR.value, "error": GENERIC_DEBATE_ERROR},
+            })
         raise
     finally:
         if lock_heartbeat_stop is not None and lock_heartbeat_thread is not None:
@@ -2728,11 +2853,22 @@ def score_prediction(prediction: DebatePrediction, debate: Debate) -> tuple[floa
     return score, reason
 
 
-def score_existing_predictions(debate_id: str) -> None:
+def score_existing_predictions(
+    debate_id: str,
+    *,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
+) -> None:
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None or debate.status != DebateStatus.DONE:
+        try:
+            debate = load_debate_for_write(
+                session, debate_id, runtime_lease=runtime_lease,
+                require_runtime_lease=require_runtime_lease, allow_done=True,
+            )
+        except DebateExecutionStopped:
+            return
+        if debate.status != DebateStatus.DONE:
             return
         pending = list(
             session.exec(
@@ -2800,6 +2936,8 @@ def _persist_turn(
     speaker_name: str,
     content: str,
     score_delta: dict[str, int] | None,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> dict[str, Any]:
     engine = get_engine()
     turn = DebateTurn(
@@ -2812,6 +2950,10 @@ def _persist_turn(
         score_delta_json=score_delta,
     )
     with Session(engine) as session:
+        load_debate_for_write(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        )
         session.add(turn)
         session.commit()
         session.refresh(turn)
@@ -2826,24 +2968,37 @@ def _persist_turn(
         }
 
 
-def _update_phase(debate_id: str, phase: DebatePhase) -> None:
+def _update_phase(
+    debate_id: str,
+    phase: DebatePhase,
+    *,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
+) -> None:
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            return
+        debate = load_debate_for_write(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        )
         debate.current_phase = phase
         debate.updated_at = _now()
         session.add(debate)
         session.commit()
 
 
-def _update_live_score(*, debate_id: str, proposition: int, opposition: int) -> None:
+def _update_live_score(
+    *,
+    debate_id: str, proposition: int, opposition: int,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
+) -> None:
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            return
+        debate = load_debate_for_write(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        )
         debate.score_proposition = proposition
         debate.score_opposition = opposition
         debate.audience_meter = _audience_meter(
@@ -2902,12 +3057,15 @@ def _finalize_debate(
     *,
     judge_analysis: dict[str, Any] | None = None,
     adjudication_mode: str = "deterministic",
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
 ) -> dict[str, Any]:
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            raise ValueError(f"Debate not found: {debate_id}")
+        debate = load_debate_for_write(
+            session, debate_id, runtime_lease=runtime_lease,
+            require_runtime_lease=require_runtime_lease,
+        )
 
         turns = list(
             session.exec(
@@ -2983,6 +3141,7 @@ def _finalize_debate(
             ),
             counterplay_explanation=latest_counterplay_explanation,
             metadata={
+                **_extract_breakdown_metadata(debate.breakdown_json),
                 "adjudication_mode": adjudication_mode,
                 "phase_insights": persisted_phase_insights,
                 **_extract_persisted_personas_meta(debate.breakdown_json),
@@ -3016,7 +3175,10 @@ def _finalize_debate(
     # Phase 3 F6: Link verdict to argument map (non-blocking)
     if _ARGMAP_AVAILABLE and settings.FEATURE_ARGUMENT_MAP:
         try:
-            _argmap_link_verdict(debate_id, finalized_summary)
+            _argmap_link_verdict(
+                debate_id, finalized_summary, runtime_lease=runtime_lease,
+                require_runtime_lease=require_runtime_lease,
+            )
         except Exception:
             logger.debug("argmap link_verdict failed (non-blocking)", exc_info=True)
 
@@ -3033,6 +3195,10 @@ def _finalize_debate(
             # forward-compat with future ingestion.
             graph_evidence: list[dict[str, Any]] = []
             with Session(get_engine()) as gate_session:
+                debate = load_debate_for_write(
+                    gate_session, debate_id, runtime_lease=runtime_lease,
+                    require_runtime_lease=require_runtime_lease, allow_done=True,
+                )
                 gate_turns = list(
                     gate_session.exec(
                         select(DebateTurn)
@@ -3068,27 +3234,43 @@ def _finalize_debate(
         except Exception:
             logger.debug("hallucination gate hook failed (non-blocking)", exc_info=True)
 
-    score_existing_predictions(debate_id)
+    score_existing_predictions(
+        debate_id, runtime_lease=runtime_lease, require_runtime_lease=require_runtime_lease,
+    )
     return finalized_summary
 
 
-def _mark_debate_error(debate_id: str) -> None:
+def _mark_debate_error(
+    debate_id: str,
+    *,
+    runtime_lease: RuntimeLockLease | None = None,
+    require_runtime_lease: bool = False,
+    allow_unowned: bool = False,
+) -> bool:
     engine = get_engine()
     with Session(engine) as session:
-        debate = session.get(Debate, debate_id)
-        if debate is None:
-            return
-        if debate.status == DebateStatus.DONE and (
-            debate.winner
-            or debate.verdict_tone
-            or debate.judge_summary
-            or debate.breakdown_json
-        ):
-            return
+        try:
+            debate = load_debate_for_write(
+                session, debate_id, runtime_lease=runtime_lease,
+                require_runtime_lease=require_runtime_lease,
+            )
+        except DebateExecutionStopped as exc:
+            if (
+                exc.status != "runtime_owner_lost" or not allow_unowned
+                or runtime_lock_is_active_in_session(session, debate_lock_key(debate_id))
+            ):
+                return False
+            # The serialized transaction proves no replacement worker owns
+            # this still-active row. This is orphan recovery, not a stale
+            # worker using its revoked lease to overwrite another owner.
+            debate = session.get(Debate, debate_id, populate_existing=True)
+            if debate is None or debate.status not in {DebateStatus.LIVE, DebateStatus.QUEUED}:
+                return False
         debate.status = DebateStatus.ERROR
         debate.updated_at = _now()
         session.add(debate)
         session.commit()
+        return True
 
 
 def _serialize_debate(
@@ -3099,6 +3281,8 @@ def _serialize_debate(
     phase_insights: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     effective_plan = plan or build_debate_plan(debate.question)
+    metadata = _extract_breakdown_metadata(debate.breakdown_json)
+    source_debate_id = metadata.get("source_debate_id")
     persisted_personas = _extract_persisted_personas_meta(
         debate.breakdown_json,
     ).get("personas", {})
@@ -3121,6 +3305,7 @@ def _serialize_debate(
 
     return {
         "id": debate.id,
+        "source_debate_id": source_debate_id if isinstance(source_debate_id, str) else None,
         "question": debate.question,
         "motion": debate.motion,
         "language": debate.language,

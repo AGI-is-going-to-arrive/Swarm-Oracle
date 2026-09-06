@@ -82,6 +82,7 @@ import {
 } from './simulationHelpers';
 
 const navigateMock = vi.fn();
+const getRecoveryScenarioMock = vi.hoisted(() => vi.fn());
 const captureScreenshotMock = vi.fn();
 const captureGIFMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
@@ -243,6 +244,7 @@ const mockStore = {
   viewMode: 'theater' as 'classic' | 'theater',
 	  currentRound: 0,
 	  interventionLifecycle: new Map<string, 'queued' | 'injected' | 'observed' | 'receipt_ready'>(),
+  interventionReceiptRevision: 0,
 	  toggleViewMode: vi.fn(),
   setScenario: vi.fn((scenario: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {
     mockStore.activeScenarioId = scenario.id;
@@ -286,6 +288,7 @@ vi.mock('../api/client', async () => {
   return {
     ...actual,
     cancelScenario: cancelScenarioMock,
+    getScenario: getRecoveryScenarioMock,
     createReplayArtifact: createReplayArtifactMock,
     getScenarioDirectorState: getScenarioDirectorStateMock,
     getScenarioGameplayState: getScenarioGameplayStateMock,
@@ -336,8 +339,8 @@ vi.mock('../components/ClassicBranchTree', () => ({
 }));
 
 vi.mock('../components/AgentPanel', () => ({
-  AgentPanel: ({ onViewProfile }: { onViewProfile?: (agentId: string) => void }) => (
-    <div>
+  AgentPanel: ({ onViewProfile, live = true }: { onViewProfile?: (agentId: string) => void; live?: boolean }) => (
+    <div data-testid="agent-panel-mock" data-live={live}>
       agent-panel
       <button type="button" onClick={() => onViewProfile?.('a1')}>open-agent-profile</button>
     </div>
@@ -395,6 +398,7 @@ vi.mock('../components/TimelineBar', () => ({
 	  InterventionReceiptCard: (props: {
 	    scenarioId: string;
 	    enabled: boolean;
+      terminal?: boolean;
 	    refreshKey?: number | string;
 	    interventionLifecycle?: Map<string, string>;
 	  }) => {
@@ -461,6 +465,7 @@ describe('SimulationView replay automation output', () => {
       },
     });
     navigateMock.mockReset();
+    getRecoveryScenarioMock.mockReset().mockResolvedValue({ ...baseScenario });
     captureScreenshotMock.mockReset();
     captureGIFMock.mockReset();
     captureCompositeElementDataUrlMock.mockReset();
@@ -520,6 +525,7 @@ describe('SimulationView replay automation output', () => {
     mockStore.viewMode = 'theater';
 	    mockStore.currentRound = 0;
 	    mockStore.interventionLifecycle = new Map();
+    mockStore.interventionReceiptRevision = 0;
     mockStore.toggleViewMode.mockClear();
     mockStore.agents = [
       { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
@@ -1187,10 +1193,101 @@ describe('SimulationView replay automation output', () => {
     expect(await screen.findByTestId('intervention-receipt-card-mock')).toBeInTheDocument();
     expect(interventionReceiptCardRenderMock).toHaveBeenCalledWith(expect.objectContaining({
       scenarioId: 'scenario-1',
-      enabled: false,
-      refreshKey: 'int-1:queued',
+      enabled: true,
+      terminal: false,
+      refreshKey: 'simulating:0:int-1:queued',
       interventionLifecycle: mockStore.interventionLifecycle,
     }));
+  });
+
+  it.each(['cancelled', 'error'] as const)('keeps final receipts reachable for %s simulations', async (status) => {
+    mockStore.status = status;
+    mockStore.isSimulationComplete = false;
+    mockStore.error = status === 'error' ? 'Runtime failure' : null;
+    mockStore.interventionLifecycle = new Map([['int-1', 'queued']]);
+    render(<MemoryRouter initialEntries={['/sim/scenario-1']}><Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes></MemoryRouter>);
+    expect(await screen.findByTestId('intervention-receipt-card-mock')).toBeInTheDocument();
+    expect(interventionReceiptCardRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true, terminal: true, refreshKey: `${status}:0:int-1:queued`,
+    }));
+  });
+
+  it('hydrates persisted receipts after reconnect even with an empty local intervention map', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.interventionReceiptRevision = 2;
+    render(<MemoryRouter initialEntries={['/sim/scenario-1']}><Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes></MemoryRouter>);
+    expect(await screen.findByTestId('intervention-receipt-card-mock')).toBeInTheDocument();
+    expect(interventionReceiptCardRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true, terminal: false, refreshKey: 'simulating:2:',
+    }));
+  });
+
+  it('renders imported cancelled snapshots as saved history without offering continuation', async () => {
+    mockStore.status = 'cancelled';
+    mockStore.isSimulationComplete = false;
+    mockStore.scenario = { ...baseScenario, status: 'cancelled', snapshot_import: {
+      source_status: 'simulating', mode: 'read_only', worker_resumed: false,
+      resume_action: 'start_new_simulation', reason_code: 'SOURCE_EXECUTION_NOT_RESUMED',
+    }, checkpoints: [{ id: 'old-checkpoint', scenario_id: 'scenario-1', branch_id: 'b1', round_number: 1, created_at: null }] };
+    mockStore.messages = [{ agent: 'A', agent_id: 'a1', branch: 'b1', round: 1, emotion: 'neutral', message: 'Saved original quote' }];
+    render(<MemoryRouter initialEntries={['/sim/scenario-1']}><Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes></MemoryRouter>);
+    expect(screen.getByTestId('simulation-cancelled-banner')).toHaveTextContent('simulation.snapshot_not_resumed');
+    expect(await screen.findByTestId('agent-panel-mock')).toHaveAttribute('data-live', 'false');
+    expect(screen.queryByRole('button', { name: 'simulation.open_checkpoint_recovery' })).not.toBeInTheDocument();
+    expect(mockStore.messages[0].message).toBe('Saved original quote');
+    expect(getRecoveryScenarioMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the source before preparing a new form and copies only question and scale', async () => {
+    const user = userEvent.setup();
+    mockStore.status = 'error';
+    mockStore.error = 'raw private provider details';
+    mockStore.isSimulationComplete = false;
+    const refreshed: Scenario = { ...baseScenario, status: 'error', question: 'Original source question', total_rounds: 8, mode: 'raw', visualization_enabled: false, agents: mockStore.agents };
+    getRecoveryScenarioMock.mockResolvedValueOnce(refreshed);
+    render(<MemoryRouter initialEntries={['/sim/scenario-1']}><Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes></MemoryRouter>);
+    expect(screen.queryByText('raw private provider details')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'simulation.reuse_settings' }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/', { state: {
+      prefillQuestion: 'Original source question',
+      prefillSettings: { rounds: 8, numAgents: refreshed.agents.length, mode: 'raw', visualizationEnabled: false },
+    } }));
+    expect(getRecoveryScenarioMock).toHaveBeenCalledOnce();
+    expect(mockStore.setScenario).toHaveBeenCalledWith(refreshed);
+    expect(cancelScenarioMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps saved content and offers retry when source status cannot be refreshed', async () => {
+    const user = userEvent.setup();
+    mockStore.status = 'cancelled';
+    mockStore.isSimulationComplete = false;
+    getRecoveryScenarioMock.mockRejectedValueOnce(new Error('private upstream error'));
+    render(<MemoryRouter initialEntries={['/sim/scenario-1']}><Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'simulation.reuse_settings' }));
+    expect(await screen.findByText('simulation.recovery_refresh_failed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'simulation.refresh_status' })).toBeEnabled();
+    expect(screen.queryByText('private upstream error')).not.toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('intervention-receipt-card-mock')).toBeInTheDocument();
+  });
+
+  it('checks status without starting a new run and can open the retained transcript', async () => {
+    const user = userEvent.setup();
+    mockStore.status = 'cancelled';
+    mockStore.isSimulationComplete = false;
+    mockStore.messages = [{ agent: 'A', agent_id: 'a1', branch: 'b1', round: 1, emotion: 'neutral', message: 'Saved quote' }];
+    getRecoveryScenarioMock.mockResolvedValueOnce({ ...baseScenario, status: 'cancelled', agents: mockStore.agents, messages: mockStore.messages });
+    const view = render(<MemoryRouter initialEntries={['/sim/scenario-1']}><Routes><Route path="/sim/:id" element={<SimulationView />} /></Routes></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'simulation.refresh_status' }));
+    expect(getRecoveryScenarioMock).toHaveBeenCalledOnce();
+    expect(navigateMock).not.toHaveBeenCalled();
+    const panel = view.container.querySelector<HTMLElement>('[aria-label="simulation.saved_content_region"]')!;
+    panel.scrollIntoView = vi.fn();
+    await user.click(screen.getByRole('button', { name: 'simulation.view_saved_content' }));
+    await waitFor(() => expect(panel).toHaveFocus());
+    expect(panel.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest' });
   });
 
   it('only allows interventions while the live scenario is simulating', async () => {
@@ -1331,6 +1428,7 @@ describe('SimulationView replay automation output', () => {
       scenario: {
         ...mockStore.scenario,
         id: 'scenario-replay',
+        status: 'simulating',
         agents: mockStore.agents,
         branches: mockStore.branches,
         messages: mockStore.messages,
@@ -1380,6 +1478,7 @@ describe('SimulationView replay automation output', () => {
       const payload = raw ? JSON.parse(raw) : null;
       expect(payload?.page?.replay_source).toBe('token');
     });
+    expect(await screen.findByTestId('agent-panel-mock')).toHaveAttribute('data-live', 'false');
     expect(await screen.findByRole('button', { name: 'sim.replay.import_local' })).toBeInTheDocument();
     expect(
       (window as Window & { __swarmGetSceneAutomation?: () => unknown })
@@ -3174,7 +3273,7 @@ describe('SimulationView replay automation output', () => {
     expect(screen.queryByText('推演运行中断，请重试')).toBeNull();
   });
 
-  it('keeps a concrete API error message verbatim (only RUNTIME_ERROR is re-translated)', () => {
+  it('localizes a known API load failure instead of showing the stored server text', () => {
     mockStore.scenario = { ...baseScenario, status: 'error' };
     mockStore.status = 'error';
     mockStore.isSimulationComplete = false;
@@ -3190,7 +3289,8 @@ describe('SimulationView replay automation output', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/Scenario failed to load: 503/)).toBeInTheDocument();
+    expect(screen.queryByText(/Scenario failed to load: 503/)).not.toBeInTheDocument();
+    expect(screen.getByText('common.api_errors.scenario_load_failed')).toBeInTheDocument();
     expect(screen.queryByText(/simulation\.runtime_failed/)).toBeNull();
   });
 });

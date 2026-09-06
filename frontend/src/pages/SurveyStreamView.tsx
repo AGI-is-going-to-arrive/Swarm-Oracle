@@ -9,15 +9,13 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { EndingRoomParticipant, SurveySSEEvent, ModelProfile } from '../types';
+import type { EndingRoomParticipant, SurveySSEEvent } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
-import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import {
   createInitialSurveyCache,
   type SurveyCacheState,
 } from './postVerdictCaches';
-import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
-import { listModelProfiles } from '../api/client';
+import RoundtableProviderPicker from './RoundtableProviderPicker';
 
 interface SurveyStreamViewProps {
   scenarioId: string;
@@ -55,17 +53,8 @@ export default function SurveyStreamView({
   );
   const userAbortedRef = useRef(false);
 
-  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
-  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
-
-  useEffect(() => {
-    if (modelProfilesEnabled) {
-      listModelProfiles()
-        .then((res) => setProfiles(res.profiles || []))
-        .catch(() => {});
-    }
-  }, [modelProfilesEnabled]);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
+  const [providerReady, setProviderReady] = useState(false);
 
   const toggleParticipant = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -105,7 +94,7 @@ export default function SurveyStreamView({
       }
       const responses = new Map(current.responses);
       responses.set(event.participant_id, event);
-      return { ...current, responses, aborted: false };
+      return { ...current, responses, provider: event.provider ?? current.provider, aborted: false };
     });
   }, [setCache, t]);
 
@@ -166,34 +155,29 @@ export default function SurveyStreamView({
 
   useEffect(() => {
     abort();
-  }, [abort, contextVersion]);
+  }, [abort, contextVersion, scenarioId, roomId]);
 
   const handleSubmit = useCallback(() => {
     const normalizedQuestion = question.trim();
-    if (!normalizedQuestion || orderedParticipantIds.length === 0) return;
+    if (!normalizedQuestion || orderedParticipantIds.length === 0 || !providerReady) return;
     userAbortedRef.current = false;
     setCache({
       ...createInitialSurveyCache(),
+      question: normalizedQuestion,
+      resultId: crypto.randomUUID(),
+      provider: null,
       streaming: true,
       participantOrder: orderedParticipantIds,
       aborted: false,
     });
 
-    const policy = loadLlmProviderPolicy();
-    const useProfile = Boolean(selectedProfileId);
     void start({
       question: normalizedQuestion,
       participant_ids: orderedParticipantIds,
       ...(roomId ? { room_id: roomId } : {}),
-      ...(useProfile
-        ? { survey_model_profile_id: selectedProfileId }
-        : {
-            ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
-            ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
-            ...(policy.model ? { llm_model: policy.model } : {}),
-          }),
+      ...(selectedProfileId ? { survey_model_profile_id: selectedProfileId } : {}),
     });
-  }, [orderedParticipantIds, question, roomId, setCache, start, selectedProfileId]);
+  }, [orderedParticipantIds, question, roomId, setCache, start, selectedProfileId, providerReady]);
 
   const displayOrder = cache.participantOrder.length > 0 ? cache.participantOrder : orderedParticipantIds;
 
@@ -219,26 +203,11 @@ export default function SurveyStreamView({
         ))}
       </div>
 
-      {modelProfilesEnabled && (
-        <div className="survey-profile-selector" style={{ marginBottom: '0.75rem' }}>
-          <label htmlFor="survey-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, display: 'block', marginBottom: '0.25rem' }}>
-            {t('model_profiles.placeholder_select')}
-          </label>
-          <select
-            id="survey-profile-select"
-            className="form-control"
-            value={selectedProfileId}
-            onChange={(e) => setSelectedProfileId(e.target.value)}
-            disabled={cache.streaming}
-            style={{ width: '100%', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
-          >
-            <option value="">{t('model_profiles.byok_custom_option')}</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
-            ))}
-          </select>
-        </div>
-      )}
+      <RoundtableProviderPicker
+        scenarioId={scenarioId} roomId={roomId} role="survey"
+        value={selectedProfileId} onChange={setSelectedProfileId}
+        onReadyChange={setProviderReady} disabled={cache.streaming}
+      />
       <div className="survey-stream__input">
         <textarea
           className="survey-stream__textarea"
@@ -252,12 +221,15 @@ export default function SurveyStreamView({
           type="button"
           className="survey-stream__submit btn btn--sm"
           onClick={cache.streaming ? handleAbort : handleSubmit}
-          disabled={!cache.streaming && (!question.trim() || selectedIds.size === 0)}
+          disabled={!cache.streaming && (!question.trim() || selectedIds.size === 0 || !providerReady)}
         >
           {cache.streaming ? t('roundtable.survey_stop') : t('roundtable.survey_ask')}
         </button>
       </div>
 
+      {!cache.streaming && cache.provider && (
+        <p>{t('roundtable.output_model')}: {cache.provider.name}{cache.provider.name !== cache.provider.model ? ` (${cache.provider.model})` : ''}</p>
+      )}
       {(cache.streaming || cache.responses.size > 0) && (
         <div className="survey-stream__grid" aria-live="polite">
           {displayOrder.map((participantId) => {

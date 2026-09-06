@@ -189,10 +189,9 @@
       ],
       "replay": {
         "outcome": "cities",
-        "source": "guilds",
-        "round": 2,
-        "agent": "councilor",
-        "kind": "branch_replay"
+        "source": "root",
+        "round": 1,
+        "kind": "resume"
       },
       "report": {
         "headline": "行会印坊最可能稳定胜出，但大学网络提供更高的长期知识收益。 / Guild presses are the likeliest stable outcome, while the university network offers greater long-run knowledge gains.",
@@ -446,10 +445,9 @@
       ],
       "replay": {
         "outcome": "frontier",
-        "source": "harbor",
-        "round": 2,
-        "agent": "merchant",
-        "kind": "branch_replay"
+        "source": "root",
+        "round": 1,
+        "kind": "resume"
       },
       "report": {
         "headline": "港口联盟最可能形成耐久接触，礼制使团居次；常驻据点收益最高但风险也最集中。 / The harbor league is most likely to sustain contact, followed by court diplomacy; the outpost offers the greatest upside and the most concentrated risk.",
@@ -703,10 +701,9 @@
       ],
       "replay": {
         "outcome": "migration",
-        "source": "ledger",
-        "round": 2,
-        "agent": "envoy",
-        "kind": "branch_replay"
+        "source": "root",
+        "round": 1,
+        "kind": "resume"
       },
       "report": {
         "headline": "水位账本最可能成为盟约核心，联储粮仓提供更直接韧性，迁徙通道则以最高承载压力换取最快救援。 / The river ledger is most likely to anchor the pact, shared granaries provide more direct resilience, and safe passage buys faster relief at the highest hosting cost.",

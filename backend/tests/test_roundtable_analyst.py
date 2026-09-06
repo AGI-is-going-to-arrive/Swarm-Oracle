@@ -314,6 +314,10 @@ def test_analyst_sse_stream_emits_final_response_event(client, monkeypatch):
             {
                 "answer": "The hinge was institutional, not tactical.",
                 "iterations": 1,
+                "provider": {
+                    "source": "server_default", "profile_id": None,
+                    "name": settings.LLM_MODEL_NAME, "model": settings.LLM_MODEL_NAME,
+                },
                 "stopped_reason": "final_response",
             },
         )
@@ -349,6 +353,10 @@ def test_analyst_redacts_llm_error_text_in_response_event(client, monkeypatch):
                 "answer": "",
                 "error": "LLM request failed",
                 "iterations": 1,
+                "provider": {
+                    "source": "server_default", "profile_id": None,
+                    "name": settings.LLM_MODEL_NAME, "model": settings.LLM_MODEL_NAME,
+                },
                 "stopped_reason": "llm_error",
             },
         )
@@ -661,13 +669,17 @@ def test_analyst_unexpected_action_falls_back_to_terminal_response(client, monke
             {
                 "answer": "Stop here.",
                 "iterations": 1,
+                "provider": {
+                    "source": "server_default", "profile_id": None,
+                    "name": settings.LLM_MODEL_NAME, "model": settings.LLM_MODEL_NAME,
+                },
                 "stopped_reason": "unexpected_action",
             },
         )
     ]
 
 
-def test_analyst_empty_final_response_uses_plain_language(client, monkeypatch):
+def test_analyst_empty_final_response_is_an_explicit_failure(client, monkeypatch):
     fixture = _seed_analyst_scenario()
 
     async def _fake_llm_call_json(_prompt: str, **_kwargs) -> dict:
@@ -687,9 +699,9 @@ def test_analyst_empty_final_response_uses_plain_language(client, monkeypatch):
 
     frames = _parse_sse_payload(raw)
     assert response.status_code == 200
-    assert frames[0][1]["stopped_reason"] == "final_response"
-    assert "可用结论" in frames[0][1]["answer"]
-    assert "No final analysis was provided" not in frames[0][1]["answer"]
+    assert frames[0][1]["stopped_reason"] == "llm_error"
+    assert frames[0][1]["answer"] == ""
+    assert "可用结论" in frames[0][1]["error"]
 
 
 def test_analyst_requires_room_id_when_multiple_roundtables_exist(client):
@@ -732,6 +744,10 @@ def test_analyst_handles_non_object_decision_payload(client, monkeypatch):
                 "answer": "",
                 "error": "Analyst decision payload must be a JSON object.",
                 "iterations": 1,
+                "provider": {
+                    "source": "server_default", "profile_id": None,
+                    "name": settings.LLM_MODEL_NAME, "model": settings.LLM_MODEL_NAME,
+                },
                 "stopped_reason": "llm_error",
             },
         )

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   ApiError,
@@ -19,6 +19,8 @@ import { diffChars } from '../lib/textDiff';
 import DomainCompareRows from '../components/domainWorld/DomainCompareRows';
 import type { DivergenceComponents, DomainStateDiff } from '../types';
 import './CompareDigestView.css';
+import '../components/Onboarding/OnboardingGuide.css';
+import { readSampleGuideRouteState } from './result/ResultContext';
 
 interface MessageEntry {
   agent_id: string;
@@ -107,6 +109,8 @@ type CompareErrorState =
 
 export function CompareDigestView() {
   const { t } = useTranslation();
+  const location = useLocation();
+  const sampleGuide = readSampleGuideRouteState(location.state);
   const {
     loading: capLoading,
     enabled,
@@ -143,6 +147,15 @@ export function CompareDigestView() {
   const [resimulating, setResimulating] = useState(false);
   const [resimulateError, setResimulateError] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+  const canContinueSampleGuide = Boolean(sampleGuide && sampleGuide.sampleOnboardingStep !== 'endings'
+    && data && data.scenario_id === id && data.branch_a === branchA && data.branch_b === branchB
+    && data.rounds.length > 0 && !loading && !error && storeScenario?.id === id
+    && sampleGuide.sampleInspectedEndingIds.filter((branchId) => branches.some((branch) => branch.id === branchId)).length >= 2);
+  const guideReturnState = sampleGuide ? {
+    ...sampleGuide,
+    sampleOnboardingStep: canContinueSampleGuide ? 'evidence' : sampleGuide.sampleOnboardingStep,
+  } : undefined;
+  const canResimulate = enabled && !capabilityError && storeScenario?.status === 'done';
   const rootRef = useRef<HTMLDivElement>(null);
   const loadRequestIdRef = useRef(0);
   const resimulateRefreshTimerRef = useRef<number | null>(null);
@@ -255,7 +268,7 @@ export function CompareDigestView() {
   }, [data, branches, branchB]);
 
   const handleResimulate = useCallback(async () => {
-    if (!id || !branchB || resimulating) return;
+    if (!id || !branchB || resimulating || !canResimulate) return;
     const resimulateEpoch = resimulateEpochRef.current + 1;
     resimulateEpochRef.current = resimulateEpoch;
     if (resimulateRefreshTimerRef.current !== null) {
@@ -300,7 +313,7 @@ export function CompareDigestView() {
         setResimulating(false);
       }
     }
-  }, [id, branchB, resimulating, loadCompare, setScenario]);
+  }, [id, branchB, resimulating, canResimulate, loadCompare, setScenario]);
 
   useEffect(() => () => {
     resimulateEpochRef.current += 1;
@@ -519,7 +532,7 @@ export function CompareDigestView() {
           <button type="button" className="btn btn-ghost" onClick={() => void reloadCapability?.()}>
             {t('common.retry', 'Retry')}
           </button>
-          <Link to={resultHref}>{t('common.back_to_result', 'Back to Result')}</Link>
+          <Link to={resultHref} state={guideReturnState}>{t('common.back_to_result', 'Back to Result')}</Link>
         </div>
       </div>
     );
@@ -529,7 +542,7 @@ export function CompareDigestView() {
     return (
       <div className="compare-digest-view compare-digest-view--empty">
         <p>{t('compare.feature_disabled', 'Counterfactual replay feature is not enabled.')}</p>
-        <Link to={resultHref}>{t('common.back_to_result', 'Back to Result')}</Link>
+        <Link to={resultHref} state={guideReturnState}>{t('common.back_to_result', 'Back to Result')}</Link>
       </div>
     );
   }
@@ -549,7 +562,7 @@ export function CompareDigestView() {
               {t('common.retry', 'Retry')}
             </button>
           ) : null}
-          <Link to={resultHref}>{t('common.back_to_result', 'Back to Result')}</Link>
+          <Link to={resultHref} state={guideReturnState}>{t('common.back_to_result', 'Back to Result')}</Link>
         </div>
       </div>
     );
@@ -559,7 +572,7 @@ export function CompareDigestView() {
     <div ref={rootRef} className="compare-digest-view">
       <header className="compare-digest-view__header">
         <div>
-          <Link to={resultHref} className="compare-digest-view__back">
+          <Link to={resultHref} state={guideReturnState} className="compare-digest-view__back">
             ← {t('common.back_to_result', 'Back to Result')}
           </Link>
           <h1>{t('compare.title', 'Compare branches')}</h1>
@@ -578,6 +591,20 @@ export function CompareDigestView() {
         </div>
       </header>
 
+      {sampleGuide && (
+        <section className="sample-onboarding" aria-labelledby="compare-sample-guide-title">
+          <div className="sample-onboarding__copy">
+            <h2 id="compare-sample-guide-title">{t('onboarding.sample_divergence_title')}</h2>
+            <p>{t('onboarding.sample_divergence_desc')}</p>
+          </div>
+          <div className="sample-onboarding__actions">
+            <Link className="btn btn-primary" to={resultHref} state={guideReturnState}>
+              {t(canContinueSampleGuide ? 'onboarding.sample_compare_continue' : 'common.back_to_result')}
+            </Link>
+          </div>
+        </section>
+      )}
+
       {isStale && (
         <div className="compare-digest-view__stale-banner" role="alert">
           <p>{t('compare.stale_notice', 'This counterfactual branch has not been simulated yet. Results only show the intervention round.')}</p>
@@ -585,12 +612,13 @@ export function CompareDigestView() {
             type="button"
             className="btn btn-ghost"
             onClick={handleResimulate}
-            disabled={resimulating}
+            disabled={resimulating || !canResimulate}
           >
             {resimulating
               ? t('compare.resimulating', 'Simulating...')
               : t('compare.resimulate', 'Simulate Remaining Rounds')}
           </button>
+          {!canResimulate && <p>{t('compare.resimulate_requires_completed')}</p>}
           {resimulateError && (
             <p>{t('compare.error_fetch', 'Unable to load comparison data right now. Please retry.')}</p>
           )}

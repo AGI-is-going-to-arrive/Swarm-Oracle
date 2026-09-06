@@ -13,6 +13,7 @@
 **/__pycache__/
 **/*.pyc
 .venv/
+.swarm-tools/
 backend/.venv/
 **/.pytest_cache/
 **/.ruff_cache/

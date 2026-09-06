@@ -13,6 +13,7 @@ interface Props {
   onOpenEvidence: (refs: string[]) => void;
   index: number;
   language?: 'zh' | 'en';
+  intentionalBrief?: boolean;
 }
 
 interface LocalizedChipCopy {
@@ -101,6 +102,10 @@ function stripRedundantLeadingTitle(md: string, title: string): string {
   const lines = md.split('\n');
   let i = 0;
   while (i < lines.length && lines[i].trim() === '') i += 1;
+  if (/^\*\*(?:Evidence-limited hypothesis:|Unverified attribution:|证据有限的假设：|归因未经验证：)\*\*$/.test(lines[i]?.trim() || '')) {
+    i += 1;
+    while (i < lines.length && lines[i].trim() === '') i += 1;
+  }
   if (i >= lines.length) return md;
   const headingMatch = lines[i].trim().match(/^#{1,6}\s+(.*)$/);
   if (headingMatch && normalizeHeadingText(headingMatch[1]) === normalizeHeadingText(title)) {
@@ -111,18 +116,22 @@ function stripRedundantLeadingTitle(md: string, title: string): string {
   return md;
 }
 
-export const ReportSection = React.memo(function ReportSection({ section, onOpenEvidence, index, language }: Props) {
+export const ReportSection = React.memo(function ReportSection({ section, onOpenEvidence, index, language, intentionalBrief = false }: Props) {
   const { t, i18n } = useTranslation();
   const contentLanguage = language ?? (i18n.language.startsWith('zh') ? 'zh' : 'en');
 
   const title = section.title_i18n[contentLanguage] || section.title;
   const content = useMemo(() => {
-    const raw = section.body_md_i18n[contentLanguage] || '';
+    const raw = (section.body_md_i18n[contentLanguage] || '').replace(
+      /^(\*\*(?:Evidence-limited hypothesis:|Unverified attribution:|证据有限的假设：|归因未经验证：)\*\*)\s*/,
+      '$1\n\n',
+    );
     return demoteHeadings(stripRedundantLeadingTitle(raw, title));
   }, [contentLanguage, section.body_md_i18n, title]);
 
   const sectionNumber = String(index + 1).padStart(2, '0');
-  const tier = resolveTier(section.tier);
+  const isSavedDigest = intentionalBrief && section.tier === 'static' && section.failure_reason == null;
+  const tier = isSavedDigest ? null : resolveTier(section.tier);
   const failureReason = resolveFailureReason(section.failure_reason);
 
   return (
@@ -135,8 +144,9 @@ export const ReportSection = React.memo(function ReportSection({ section, onOpen
         <h3 className="report-section__title">
           {title}
         </h3>
-        {(tier || failureReason) && (
+        {(tier || failureReason || isSavedDigest) && (
           <div className="report-section__truth-chips">
+            {isSavedDigest && <span className="report-section__tier-chip">{t('result.report.savedEvidence')}</span>}
             {tier && (
               <span className={`report-section__tier-chip report-section__tier-chip--${tier.tier}`}>
                 {t(tier.copy.key, tier.copy.defaultValue)}

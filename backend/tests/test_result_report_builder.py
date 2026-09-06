@@ -5780,6 +5780,7 @@ async def test_auto_retry_preserves_and_reuses_complementary_sections(monkeypatc
         scenario_id,
         "branch-a",
         overrides=None,
+        detail_level="full",
     )
 
     assert report is not None
@@ -8001,7 +8002,7 @@ async def test_section_no_progress_tool_call_forces_final_not_static(monkeypatch
     assert timeline.tier != "static"
     assert timeline.failure_reason is None
     assert timeline.body_md_i18n.en == (
-        "**Evidence-limited hypothesis:** Forced final on real evidence."
+        "**Evidence-limited hypothesis:**\n\nForced final on real evidence."
     )
     # The forced-final directive actually reached the model.
     assert any(_FORCE_FINAL_MARKER in prompt for prompt in section_prompts)
@@ -8141,5 +8142,412 @@ async def test_slow_section_succeeds_under_longer_timeout(monkeypatch):
     assert timeline.tier != "static"
     assert timeline.failure_reason is None
     assert timeline.body_md_i18n.en == (
-        "**Evidence-limited hypothesis:** Generated despite slow response."
+        "**Evidence-limited hypothesis:**\n\nGenerated despite slow response."
     )
+
+
+def test_automatic_brief_report_uses_saved_evidence_without_extra_llm(monkeypatch):
+    scenario_id = _seed_report_scenario()
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Automatic brief report must not call an LLM or optional appendix builder")
+
+    for name in (
+        "llm_call_json",
+        "plan_outline",
+        "generate_section_react",
+        "_build_interview_evidence",
+        "_build_indicators_llm",
+        "_build_premortem_analysis",
+    ):
+        monkeypatch.setattr(builder, name, forbidden)
+    report = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert report is not None
+    assert report.detail_level == "brief"
+    assert report.status == "complete"
+    assert report.tier == "static"
+    assert len(report.evidence) <= 4
+    assert [section.id for section in report.sections] == ["evidence-digest"]
+    assert report.sections[0].failure_reason is None
+    assert report.indicators_to_watch == []
+    assert report.interview_evidence == []
+    assert _persisted_report(scenario_id)["detail_level"] == "brief"
+    assert all(claim.claim_id == "claim-verdict-001" for claim in report.claims)
+
+
+def test_failed_full_upgrade_preserves_durable_brief_during_every_attempt(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    brief = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert brief is not None
+    original = _persisted_report(scenario_id)
+
+    async def outline(*args, **kwargs):
+        return _cancellation_outline()
+
+    async def fail_section(*args, **kwargs):
+        assert _persisted_report(scenario_id) == original
+        raise RuntimeError("Full analysis failed")
+
+    monkeypatch.setattr(builder, "plan_outline", outline)
+    monkeypatch.setattr(builder, "generate_section_react", fail_section)
+    result = asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None))
+    assert result.status == "failed"
+    assert _persisted_report(scenario_id) == original
+
+
+def test_cancelled_full_upgrade_preserves_saved_report(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    original = _persisted_report(scenario_id)
+
+    async def cancelled(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(builder, "plan_outline", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None))
+    assert _persisted_report(scenario_id) == original
+
+
+def test_automatic_brief_report_preserves_an_existing_full_analysis():
+    scenario_id = _seed_report_scenario()
+    report = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert report is not None
+    full = report.model_copy(update={"detail_level": "full"})
+    builder._persist_report_payload(scenario_id, full.model_dump(mode="json"))
+    original = _persisted_report(scenario_id)
+    result = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert result is not None and result.detail_level == "full"
+    assert _persisted_report(scenario_id) == original
+
+
+def test_claim_reference_only_fragments_and_boilerplate_do_not_inflate_denominator():
+    section = ReportSection(
+        id="reference-fragments", title="Evidence", title_i18n=I18nText(zh="证据", en="Evidence"),
+        intent="Test source coordinates without presentation claims.",
+        body_md_i18n=I18nText(zh="", en=(
+            "[ev-privacy]\n(ev-privacy)\nFurther evidence is required.\n"
+            'Privacy Advocate said “Privacy safeguards make the approval defensible.”'
+        )),
+        evidence_refs=["ev-privacy"], charts=[],
+    )
+    compiled = _compile_claim_test_sections([section], language="en", verdict_headline="")
+    assert len(compiled.claims) == 1
+    assert compiled.claims[0].evidence_strength == "strong"
+    assert compiled.claims[0].speaker == "Privacy Advocate"
+    assert compiled.claims[0].message_ids == ["msg-privacy"]
+
+
+def test_claim_downgrade_notice_preserves_markdown_paragraph_and_heading_boundaries():
+    section = ReportSection(
+        id="markdown-prefix",
+        title="Analysis",
+        title_i18n=I18nText(zh="分析", en="Analysis"),
+        intent="Keep source warning and Markdown body separate.",
+        body_md_i18n=I18nText(
+            zh="### 原标题\n\n市民全体同意了新方案。",
+            en="### Original title\n\nEvery stakeholder approved a permanent alliance.",
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+    compiled = _compile_claim_test_sections([section], language="en", verdict_headline="")
+    assert compiled.sections[0].body_md_i18n.en.startswith(
+        "**Evidence-limited hypothesis:**\n\n### Original title"
+    )
+    assert compiled.sections[0].body_md_i18n.zh.startswith("**证据有限的假设：**\n\n### 原标题")
+
+
+def test_supported_paraphrases_are_distinct_from_missing_exact_quotes():
+    section = ReportSection(
+        id="paraphrase-count", title="Analysis", title_i18n=I18nText(zh="分析", en="Analysis"),
+        intent="A supported paraphrase is not automatically a hallucination.",
+        body_md_i18n=I18nText(zh="", en="Privacy safeguards make the approval defensible."),
+        evidence_refs=["ev-privacy"], charts=[],
+    )
+    compiled = _compile_claim_test_sections([section], language="en", verdict_headline="")
+    assert len(compiled.claims) == 1
+    assert compiled.claims[0].evidence_strength == "moderate"
+    assert "0 exact-quote supported" in compiled.analytic_confidence.basis
+    assert "1 supported paraphrases" in compiled.analytic_confidence.basis
+    assert "0 unsupported" in compiled.analytic_confidence.basis
+
+
+def test_report_language_rejects_a_full_english_section_appended_to_chinese():
+    section = ReportSection(
+        id="mixed-tail",
+        title="Analysis",
+        title_i18n=I18nText(zh="分析", en="Analysis"),
+        intent="Do not let aggregate language ratios hide an untranslated tail.",
+        body_md_i18n=I18nText(
+            zh="保障条款改变了最终表决路线。" * 80
+            + "\n\nThe council approved the proposal after a long public review "
+            "and extensive negotiation.",
+            en="The council approved the proposal after reviewing safeguards.",
+        ),
+        evidence_refs=[],
+        charts=[],
+    )
+    languages, _ = builder._generated_report_language_availability(
+        primary_language="zh",
+        title_i18n=I18nText(zh="政策分析", en="Policy analysis"),
+        summary_i18n=I18nText(
+            zh="这是一份政策变化摘要。", en="This is a summary of policy changes."
+        ),
+        sections=[section],
+    )
+    assert languages == ["en"]
+
+
+def test_report_language_keeps_verified_original_english_quotes_in_chinese():
+    original = (
+        "The council approved the proposal after a long public review and extensive negotiation."
+    )
+    assert builder._surface_has_language_signal(
+        f"关键证据如下。\n\n> {original}",
+        "zh",
+        original_quotes=(original,),
+    )
+    assert not builder._surface_has_language_signal(
+        f"关键证据如下。\n\n{original}",
+        "zh",
+        original_quotes=(original,),
+    )
+
+
+async def _mock_report_translation(prompt: str, **kwargs):
+    import re
+
+    start = prompt.rfind('[{"id": "text_')
+    records, _ = json.JSONDecoder().raw_decode(prompt[start:])
+    return {
+        "translations": [
+            {
+                "id": record["id"],
+                "text": "已翻译的报告内容。 "
+                + " ".join(re.findall(r"\[\[REPORT_KEEP_[^\]\s]+\]\]", record["text"])),
+            }
+            for record in records
+        ]
+    }
+
+
+def test_report_translation_is_on_demand_and_preserves_original_report_and_evidence(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    source = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert source is not None
+    original = _persisted_report(scenario_id)
+    calls = []
+
+    async def translate(prompt, **kwargs):
+        calls.append(kwargs)
+        return await _mock_report_translation(prompt, **kwargs)
+
+    monkeypatch.setattr(builder, "llm_call_json", translate)
+    result = asyncio.run(
+        builder.build_report(
+            scenario_id,
+            "branch-a",
+            overrides={"model": "chosen-translation-model"},
+            target_language="zh",
+        )
+    )
+    assert 1 <= len(calls) <= 8
+    assert all(call["model"] == "chosen-translation-model" for call in calls)
+    assert result.detail_level == "brief"
+    assert result.language == "en"
+    assert result.language_status is not None and result.language_status.zh == "available"
+    assert result.authored_content_i18n["zh"].headline_answer.startswith("已翻译")
+    persisted = _persisted_report(scenario_id)
+    for key, value in original.items():
+        if key not in {"authored_content_i18n", "available_languages", "language_status"}:
+            assert persisted[key] == value
+    assert persisted["claims"] == original["claims"]
+    assert persisted["evidence"] == original["evidence"]
+    assert persisted["sections"] == original["sections"]
+    calls.clear()
+    asyncio.run(builder.build_report(scenario_id, "branch-a", overrides=None, target_language="zh"))
+    assert calls == []
+
+
+def test_report_translation_rejects_missing_protected_quote_and_preserves_source(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    original = _persisted_report(scenario_id)
+
+    async def lose_tokens(prompt, **kwargs):
+        response = await _mock_report_translation(prompt, **kwargs)
+        for row in response["translations"]:
+            row["text"] = "译文删除了原始数字和限定语。"
+        return response
+
+    monkeypatch.setattr(builder, "llm_call_json", lose_tokens)
+    with pytest.raises(builder.ResultReportTranslationError) as raised:
+        asyncio.run(
+            builder.build_report(scenario_id, "branch-a", overrides=None, target_language="zh")
+        )
+    assert raised.value.code == "REPORT_TRANSLATION_INVALID"
+    assert _persisted_report(scenario_id) == original
+
+
+def test_report_translation_rejects_stale_scope_before_any_model_call(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    original = _persisted_report(scenario_id)
+    with Session(get_engine()) as session:
+        branch = session.get(Branch, "branch-a")
+        assert branch is not None
+        branch.probability = 0.61
+        session.add(branch)
+        session.commit()
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("A historical report cannot gain current authority through translation")
+
+    monkeypatch.setattr(builder, "llm_call_json", forbidden)
+    with pytest.raises(builder.ResultReportTranslationError) as raised:
+        asyncio.run(
+            builder.build_report(scenario_id, "branch-a", overrides=None, target_language="zh")
+        )
+    assert raised.value.code == "REPORT_TRANSLATION_STALE"
+    assert _persisted_report(scenario_id) == original
+
+
+def test_report_translation_oversize_preserves_saved_report(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    original = _persisted_report(scenario_id)
+    monkeypatch.setattr(
+        builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", utf8_json_size_bytes(original) + 200
+    )
+    monkeypatch.setattr(builder, "llm_call_json", _mock_report_translation)
+    with pytest.raises(builder.ResultReportTranslationError) as raised:
+        asyncio.run(
+            builder.build_report(scenario_id, "branch-a", overrides=None, target_language="zh")
+        )
+    assert raised.value.code == "REPORT_TRANSLATION_TOO_LARGE"
+    assert _persisted_report(scenario_id) == original
+
+
+def test_report_translation_cannot_overwrite_a_newer_saved_report(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    original = _persisted_report(scenario_id)
+    newer = {**original, "generated_at": "2026-09-06T00:00:00Z"}
+
+    async def concurrent_writer(prompt, **kwargs):
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {**scenario.parsed_context, "full_report": newer}
+            session.add(scenario)
+            session.commit()
+        return await _mock_report_translation(prompt, **kwargs)
+
+    monkeypatch.setattr(builder, "llm_call_json", concurrent_writer)
+    with pytest.raises(builder.ResultReportScopeChangedError):
+        asyncio.run(
+            builder.build_report(scenario_id, "branch-a", overrides=None, target_language="zh")
+        )
+    assert _persisted_report(scenario_id) == newer
+
+
+def test_report_translation_http_binds_the_saved_target_and_validates_operation(monkeypatch):
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        branch = session.get(Branch, "branch-b")
+        assert branch is not None
+        branch.probability = 0.9
+        session.add(branch)
+        session.commit()
+    source = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert source is not None and source.target_branch_id == "branch-a"
+    captured = []
+
+    async def stream(scenario_id, branch_id, **kwargs):
+        captured.append((scenario_id, branch_id, kwargs))
+        yield builder.encode_sse_event(
+            ResultReportSSEEvent(
+                event="report_complete", data={"report_id": scenario_id, "status": "complete"}
+            )
+        )
+
+    monkeypatch.setattr(builder.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(builder, "build_report_sse_stream", stream)
+    with TestClient(app) as client:
+        invalid = client.post(
+            f"/api/scenario/{scenario_id}/report:generate", json={"operation": "translate"}
+        )
+        assert invalid.status_code == 422
+        response = client.post(
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={"operation": "translate", "target_language": "zh"},
+        )
+    assert response.status_code == 200
+    assert captured[0][1] == "branch-a"
+    assert captured[0][2]["report_scope"].target_branch_id == "branch-a"
+    assert captured[0][2]["target_language"] == "zh"
+
+
+def test_report_translation_preserves_cjk_adjacent_figures_in_english_output():
+    import re
+
+    from app.services.result_report.translation import ReportTranslationProtection
+
+    scenario_id = _seed_report_scenario()
+    report = asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    assert report is not None
+    protection = ReportTranslationProtection(report, target_language="en", identity_names=())
+    protected = protection.protect("第3轮增长10%，2026年复核。")
+    tokens = re.findall(r"\[\[REPORT_KEEP_[^\]\s]+\]\]", protected)
+    assert [protection.values[token] for token in tokens] == ["3", "10%", "2026"]
+    translated = f"In round {tokens[0]}, growth was {tokens[1]}; review in {tokens[2]}."
+    restored = protection.restore(protected, translated)
+    assert "3" in restored and "10%" in restored and "2026" in restored
+    with pytest.raises(ValueError):
+        protection.restore(protected, translated.replace(tokens[1], "20%"))
+    identifiers = protection.protect("v1.2 agent_9 model-3")
+    assert identifiers == "v1.2 agent_9 model-3"
+
+
+@pytest.mark.parametrize(
+    "extra", ["，另有99%的成功率。", " https://invented.example/evidence", " `invented(9)`"]
+)
+def test_report_translation_rejects_new_unprotected_atoms_without_losing_source(monkeypatch, extra):
+    scenario_id = _seed_report_scenario()
+    asyncio.run(builder.build_report_safe(scenario_id, "branch-a", overrides=None))
+    original = _persisted_report(scenario_id)
+
+    async def introduce_claim(prompt, **kwargs):
+        response = await _mock_report_translation(prompt, **kwargs)
+        response["translations"][0]["text"] += extra
+        return response
+
+    monkeypatch.setattr(builder, "llm_call_json", introduce_claim)
+    with pytest.raises(builder.ResultReportTranslationError) as raised:
+        asyncio.run(
+            builder.build_report(scenario_id, "branch-a", overrides=None, target_language="zh")
+        )
+    assert raised.value.code == "REPORT_TRANSLATION_INVALID"
+    assert _persisted_report(scenario_id) == original
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "**Evidence-limited hypothesis:**\n\nThe proposal passes.",
+            "Evidence-limited narrative hypothesis: The proposal passes.",
+        ),
+        (
+            "**Evidence-limited hypothesis:** The proposal passes.",
+            "Evidence-limited narrative hypothesis: The proposal passes.",
+        ),
+        ("**证据有限的假设：**\n\n方案通过。", "证据有限的叙事假设：方案通过。"),
+        ("**归因未经验证：**\n\n方案通过。", "证据有限的叙事假设（归因未经验证）：方案通过。"),
+    ],
+)
+def test_branch_narrative_plain_fields_accept_block_report_notices(source, expected):
+    from app.services.result_report.claims import _branch_narrative_display_text
+
+    assert _branch_narrative_display_text(source) == expected

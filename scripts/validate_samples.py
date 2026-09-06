@@ -1035,6 +1035,103 @@ def _validate_report_semantics(
             )
 
 
+def _validate_lineage_semantics(
+    branch_index: dict[str, dict[str, Any]],
+    messages: list[dict[str, Any]],
+    *,
+    bundle: Path,
+    errors: list[str],
+) -> None:
+    """Check materialized native cutoffs and verbatim self-contained replay prefixes."""
+    by_branch = {
+        branch_id: [
+            row for row in messages if isinstance(row, dict)
+            and row.get("branch_id") == branch_id
+            and isinstance(row.get("round_number"), int)
+            and not isinstance(row.get("round_number"), bool)
+            and row["round_number"] > 0
+        ]
+        for branch_id in branch_index
+    }
+
+    def error(branch_id: str, field: str, message: str) -> None:
+        _semantic_error(errors, bundle, "branches.jsonl", f"$[{branch_id!r}].{field}", message)
+
+    def effective(
+        branch_id: str, cutoff: int | None = None, seen: tuple[str, ...] = (),
+    ) -> list[dict]:
+        if branch_id in seen:
+            error(branch_id, "parent_branch_id", "lineage contains a cycle")
+            return []
+        branch = branch_index.get(branch_id)
+        if branch is None:
+            return []
+        boundary = branch.get("fork_round")
+        if not isinstance(boundary, int) or isinstance(boundary, bool) or boundary < 0:
+            error(branch_id, "fork_round", "must be a nonnegative integer")
+            return []
+        own = by_branch[branch_id]
+        parent_id = branch.get("parent_branch_id")
+        if branch.get("replay_kind"):
+            visible = own
+        elif parent_id in branch_index:
+            parent_boundary = branch_index[parent_id].get("fork_round")
+            if not isinstance(parent_boundary, int) or boundary <= parent_boundary:
+                error(branch_id, "fork_round", "must follow the parent fork boundary")
+            if not any(row["round_number"] == boundary for row in by_branch[parent_id]):
+                error(branch_id, "fork_round", "parent has no materialized round at this boundary")
+            if any(row["round_number"] <= boundary for row in own):
+                error(
+                    branch_id, "fork_round",
+                    "native child rounds must begin after the shared boundary",
+                )
+            visible = effective(parent_id, boundary, (*seen, branch_id)) + [
+                row for row in own if row["round_number"] > boundary
+            ]
+        else:
+            if boundary != 0:
+                error(branch_id, "fork_round", "a native root must have boundary zero")
+            visible = own
+        return [row for row in visible if cutoff is None or row["round_number"] <= cutoff]
+
+    def signatures(rows: list[dict]) -> list[str]:
+        return sorted(json.dumps({
+            key: row.get(key) for key in (
+                "round_number", "agent_id", "content", "emotion", "diverge", "tokens_used",
+            )
+        }, sort_keys=True, ensure_ascii=False) for row in rows)
+
+    for branch_id, branch in branch_index.items():
+        visible = effective(branch_id)
+        rounds = sorted({row["round_number"] for row in visible})
+        if any(round_number != index for index, round_number in enumerate(rounds, start=1)):
+            error(branch_id, "fork_round", "effective history must contain every round from one")
+        kind = branch.get("replay_kind")
+        if not kind:
+            continue
+        if kind not in {"resume", "counterfactual", "retrospective"}:
+            error(branch_id, "replay_kind", "must be a supported runtime replay kind")
+        source_id = branch.get("replay_source_branch_id")
+        if source_id not in branch_index:
+            continue
+        if branch.get("parent_branch_id") != source_id:
+            error(branch_id, "parent_branch_id", "must match the self-contained replay source")
+        boundary = branch.get("fork_round")
+        source_round = branch.get("replay_source_round")
+        if not isinstance(boundary, int) or not isinstance(source_round, int):
+            continue
+        source_rows = effective(source_id, source_round)
+        if not any(row["round_number"] == source_round for row in source_rows):
+            error(branch_id, "replay_source_round", "must reference a materialized source round")
+        prefix = effective(source_id, boundary)
+        copied = [row for row in by_branch[branch_id] if row["round_number"] <= boundary]
+        if signatures(prefix) != signatures(copied):
+            error(
+                branch_id, "replay_source_branch_id",
+                "shared replay prefix must be copied verbatim",
+            )
+
+
 def _validate_bundle_semantics(
     bundle: Path,
     structured: dict[str, Any],
@@ -1174,7 +1271,7 @@ def _validate_bundle_semantics(
                 "must be a positive integer",
             )
         source_agent = branch.get("replay_source_agent_id")
-        if source_agent is None:
+        if source_agent is None and branch.get("replay_kind") == "counterfactual":
             _semantic_error(
                 errors,
                 bundle,
@@ -1182,13 +1279,18 @@ def _validate_bundle_semantics(
                 f"$[{index}].replay_source_agent_id",
                 "is required for replay lineage",
             )
-        elif source_agent not in agent_ids:
+        elif source_agent is not None and source_agent not in agent_ids:
             _semantic_error(
                 errors,
                 bundle,
                 "branches.jsonl",
                 f"$[{index}].replay_source_agent_id",
                 "references an unknown agent",
+            )
+        if branch.get("replay_kind") == "resume" and source_agent is not None:
+            _semantic_error(
+                errors, bundle, "branches.jsonl", f"$[{index}].replay_source_agent_id",
+                "must be null for a whole-branch resume",
             )
     if lineage_count == 0:
         _semantic_error(
@@ -1435,6 +1537,7 @@ def _validate_bundle_semantics(
         terminal_probabilities=terminal_probabilities,
         errors=errors,
     )
+    _validate_lineage_semantics(branch_index, messages, bundle=bundle, errors=errors)
 
 
 def validate_bundle(bundle: Path) -> list[str]:

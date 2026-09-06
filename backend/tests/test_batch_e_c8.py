@@ -214,6 +214,54 @@ def test_multi_run_group_aggregation_counts_verdicts_and_outcomes(client, monkey
     assert "probability" not in data["histogram"]
 
 
+@pytest.mark.parametrize("topology", ["single", "fork", "nested", "unfinished", "resume"])
+def test_multi_run_outcome_uses_completed_terminal_leaves(client, monkeypatch, topology):
+    monkeypatch.setattr(settings, "FEATURE_MULTI_RUN", True, raising=False)
+    scenario_id = _seed_scenario(parsed_context={"result_quality": {"verdict": "yes"}})
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        scenario.run_group_id = "leaf-group"
+        session.add(scenario)
+        root = Branch(
+            id="root", scenario_id=scenario_id, title="Intermediate parent",
+            probability=1.0, status=BranchStatus.COMPLETED,
+        )
+        session.add(root)
+        session.flush()
+        if topology != "single":
+            child = Branch(
+                id="child", scenario_id=scenario_id, parent_branch_id=root.id,
+                title="Leaf outcome", probability=0.6,
+                status=BranchStatus.ACTIVE if topology == "unfinished" else BranchStatus.COMPLETED,
+            )
+            session.add(child)
+            session.flush()
+            if topology in {"nested", "resume"}:
+                session.add(Branch(
+                    id="descendant", scenario_id=scenario_id, parent_branch_id=child.id,
+                    title="Nested outcome", probability=0.4,
+                    status=BranchStatus.ACTIVE if topology == "resume" else BranchStatus.COMPLETED,
+                    replay_kind="resume" if topology == "resume" else None,
+                    replay_source_branch_id=child.id if topology == "resume" else None,
+                ))
+            if topology != "unfinished":
+                session.add(Branch(
+                    id="sibling", scenario_id=scenario_id, parent_branch_id=root.id,
+                    title="Sibling outcome", probability=0.3, status=BranchStatus.COMPLETED,
+                ))
+        session.commit()
+
+    response = client.get("/api/scenario/run-groups/leaf-group")
+    assert response.status_code == 200
+    data = response.json()
+    expected = {
+        "single": "Intermediate parent", "fork": "Leaf outcome", "nested": "Nested outcome",
+        "unfinished": None, "resume": "Sibling outcome",
+    }[topology]
+    assert data["runs"][0]["outcome"] == expected
+    assert data["terminal_count"] == (0 if expected is None else 1)
+
+
 @pytest.mark.asyncio
 async def test_verdict_only_run_skips_narrative_and_persists_fail_soft_verdict(monkeypatch):
     from app.services import simulator as simulator_module

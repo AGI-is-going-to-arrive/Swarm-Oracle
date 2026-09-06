@@ -74,7 +74,7 @@ describe('InterventionModal advanced modes', () => {
     getInterventionTemplatesMock.mockResolvedValue([]);
     interveneMock.mockReset();
     interveneMock.mockResolvedValue({
-      status: 'applied',
+      status: 'queued',
       intervention_id: 'int-standard',
       branch_id: 'branch-1',
       round: 3,
@@ -89,7 +89,7 @@ describe('InterventionModal advanced modes', () => {
     });
     interveneBatchMock.mockReset();
     interveneBatchMock.mockResolvedValue({
-      status: 'applied',
+      status: 'queued',
       count: 2,
       interventions: [],
     });

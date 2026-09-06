@@ -284,6 +284,56 @@ class TestFormatMessagesNoneGuard:
 class TestSQLitePathParsing:
     """Verify init_db handles absolute and relative SQLite paths."""
 
+    @pytest.mark.parametrize("use_uri", [False, True])
+    def test_alembic_startup_preserves_percent_unicode_spaces_and_uri(
+        self, tmp_path, monkeypatch, use_uri,
+    ):
+        import shutil
+        from pathlib import Path
+        from urllib.parse import quote
+
+        from app.config import settings
+        from app.models import database as database_module
+
+        runtime = database_module._load_alembic_runtime()
+        if runtime is None:
+            pytest.skip("Alembic runtime is unavailable")
+        _Config, command, _ScriptDirectory = runtime
+        source_root = Path(database_module.__file__).resolve().parents[2]
+        checkout = tmp_path / "checkout 100% 中文"
+        checkout.mkdir()
+        shutil.copy2(source_root / "alembic.ini", checkout / "alembic.ini")
+        shutil.copytree(source_root / "alembic", checkout / "alembic")
+        monkeypatch.setattr(database_module, "__file__", str(checkout / "app/models/database.py"))
+        db_path = tmp_path / "data 50% 中文.db"
+        db_url = (
+            f"sqlite:///file:{quote(str(db_path), safe='/')}?mode=rwc&uri=true"
+            if use_uri else f"sqlite:///{db_path}"
+        )
+        monkeypatch.setattr(settings, "DATABASE_URL", db_url)
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        seen = []
+        upgrade = command.upgrade
+
+        def checked_upgrade(config, revision):
+            seen.append((
+                config.get_main_option("script_location"), config.get_main_option("sqlalchemy.url"),
+            ))
+            return upgrade(config, revision)
+
+        monkeypatch.setattr(command, "upgrade", checked_upgrade)
+        database_module.dispose_engine()
+        try:
+            database_module.init_db()
+            assert seen == [(str(checkout / "alembic"), db_url)]
+            with database_module.get_engine().connect() as conn:
+                assert conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
+                assert conn.exec_driver_sql("SELECT count(*) FROM scenario").scalar_one() == 0
+                assert Path(conn.exec_driver_sql("PRAGMA database_list").first()[2]) == db_path
+            assert db_path.is_file()
+        finally:
+            database_module.dispose_engine()
+
     def test_init_db_with_relative_path(self, tmp_path):
         """init_db should work with typical relative SQLite paths."""
         from sqlmodel import SQLModel, create_engine
@@ -551,142 +601,25 @@ class TestEngineManagedSqlitePaths:
 
     @pytest.mark.asyncio
     async def test_pending_intervention_pop_reuses_engine_managed_connection(self, monkeypatch):
+        from sqlalchemy import event
+
+        from app.models import Branch, PendingIntervention
         from app.services import simulator as simulator_module
 
-        class _FakeResult:
-            def __init__(self, *, row=None, rowcount=0):
-                self._row = row
-                self.rowcount = rowcount
-
-            def first(self):
-                return self._row
-
-        class _FakeConnection:
-            def __init__(self):
-                self.commands: list[tuple[str, object]] = []
-                self.rows = [
-                    {
-                        "id": 1,
-                        "scenario_id": "scenario-1",
-                        "branch_id": "branch-1",
-                        "user_input": "第一条",
-                        "metadata_json": None,
-                        "display_text": "",
-                        "status": "pending",
-                    },
-                    {
-                        "id": 2,
-                        "scenario_id": "scenario-1",
-                        "branch_id": "branch-1",
-                        "user_input": "第二条",
-                        "metadata_json": None,
-                        "display_text": "",
-                        "status": "pending",
-                    },
-                ]
-                self.commits = 0
-                self.rollbacks = 0
-
-            def exec_driver_sql(self, statement: str, params=None):
-                normalized = " ".join(statement.split())
-                self.commands.append((normalized, params))
-                query_params = params or ()
-                if normalized == "BEGIN IMMEDIATE":
-                    return _FakeResult(rowcount=0)
-                if (
-                    normalized.startswith("UPDATE pending_intervention SET status = 'pending'")
-                    and "status = 'claimed'" in normalized
-                    and "lease_expires_at < ?" in normalized
-                ):
-                    return _FakeResult(rowcount=0)
-                pending_select = (
-                    "SELECT id, user_input, metadata_json, display_text "
-                    "FROM pending_intervention"
-                )
-                if normalized.startswith(pending_select):
-                    scenario_id, branch_id = query_params
-                    row = next(
-                        (
-                            row
-                            for row in self.rows
-                            if row["scenario_id"] == scenario_id
-                            and row["branch_id"] == branch_id
-                            and row["status"] == "pending"
-                        ),
-                        None,
-                    )
-                    if row is None:
-                        return _FakeResult(row=None, rowcount=0)
-                    return _FakeResult(
-                        row=(
-                            row["id"],
-                            row["user_input"],
-                            row["metadata_json"],
-                            row["display_text"],
-                        ),
-                        rowcount=1,
-                    )
-                if normalized.startswith("UPDATE pending_intervention SET status = 'claimed'"):
-                    target_id = query_params[3]
-                    for row in self.rows:
-                        if row["id"] == target_id and row["status"] == "pending":
-                            row["status"] = "claimed"
-                            return _FakeResult(rowcount=1)
-                    return _FakeResult(rowcount=0)
-                if normalized.startswith("UPDATE pending_intervention SET status = 'injected'"):
-                    target_id, scenario_id, branch_id = query_params
-                    for row in self.rows:
-                        if (
-                            row["id"] == target_id
-                            and row["scenario_id"] == scenario_id
-                            and row["branch_id"] == branch_id
-                        ):
-                            row["status"] = "injected"
-                            return _FakeResult(rowcount=1)
-                    return _FakeResult(rowcount=0)
-                if normalized.startswith("DELETE FROM pending_intervention WHERE id = ?"):
-                    target_id, scenario_id, branch_id = query_params
-                    before = len(self.rows)
-                    self.rows = [
-                        row
-                        for row in self.rows
-                        if not (
-                            row["id"] == target_id
-                            and row["scenario_id"] == scenario_id
-                            and row["branch_id"] == branch_id
-                        )
-                    ]
-                    return _FakeResult(rowcount=before - len(self.rows))
-                return _FakeResult()
-
-            def commit(self):
-                self.commits += 1
-
-            def rollback(self):
-                self.rollbacks += 1
-
-        class _FakeConnectContext:
-            def __init__(self, connection):
-                self.connection = connection
-
-            def __enter__(self):
-                return self.connection
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        class _FakeEngine:
-            def __init__(self, connection):
-                self.connection = connection
-
-            def connect(self):
-                return _FakeConnectContext(self.connection)
-
-        fake_connection = _FakeConnection()
-        fake_engine = _FakeEngine(fake_connection)
-
-        monkeypatch.setattr(simulator_module, "get_engine", lambda: fake_engine)
-        monkeypatch.setattr(simulator_module, "_pending_intervention_db_path", lambda: "/tmp/pending.db")  # noqa: E501
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = Scenario(question="Engine-managed queue", status=ScenarioStatus.SIMULATING)
+            session.add(scenario)
+            session.flush()
+            branch = Branch(scenario_id=scenario.id, title="Queue branch")
+            session.add(branch)
+            session.flush()
+            session.add_all([
+                PendingIntervention(scenario_id=scenario.id, branch_id=branch.id, user_input=text)
+                for text in ("第一条", "第二条")
+            ])
+            session.commit()
+            key = f"{scenario.id}:{branch.id}"
         monkeypatch.setattr(
             sqlite3,
             "connect",
@@ -694,21 +627,25 @@ class TestEngineManagedSqlitePaths:
                 AssertionError("pending intervention pop should reuse engine-managed connections")
             ),
         )
+        statements = []
 
-        key = "scenario-1:branch-1"
-        result = await simulator_module.pop_next_pending_intervention(key)
-        assert result is not None and result.text == "第一条"
-        result = await simulator_module.pop_next_pending_intervention(key)
-        assert result is not None and result.text == "第二条"
-        assert await simulator_module.pop_next_pending_intervention(key) is None
+        def capture(connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append((id(connection), " ".join(statement.split())))
 
-        assert fake_connection.commits == 3
-        assert fake_connection.rollbacks == 0
-        assert any(command == "BEGIN IMMEDIATE" for command, _ in fake_connection.commands)
-        assert any(
-            command.startswith("DELETE FROM pending_intervention WHERE id = ?")
-            for command, _ in fake_connection.commands
-        )
+        event.listen(engine, "before_cursor_execute", capture)
+        try:
+            for expected in ("第一条", "第二条"):
+                statements.clear()
+                result = await simulator_module.pop_next_pending_intervention(key)
+                assert result is not None and result.text == expected
+                assert len({connection_id for connection_id, _ in statements}) == 1
+                assert statements[0][1] == "BEGIN IMMEDIATE"
+                assert any(
+                    sql.startswith("DELETE FROM pending_intervention") for _, sql in statements
+                )
+            assert await simulator_module.pop_next_pending_intervention(key) is None
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
 
 
 # ─────────────────────────────────────────────────────────

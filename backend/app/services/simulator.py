@@ -52,6 +52,7 @@ from app.services.agent_message_metadata import (
 )
 from app.services.blackboard import Blackboard
 from app.services.branch_lineage import BranchLineageError, select_branch_rounds
+from app.services.campaign import normalize_scenario_gameplay_state
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     classify_llm_error_code,
@@ -79,6 +80,7 @@ from app.services.memory import (
     retrieve_relevant_memories,
     store_memory,
 )
+from app.services.model_profiles import ResolvedProviderPolicy
 from app.services.narrator import (
     _build_fallback_narration,
     _strip_round_markers,
@@ -88,6 +90,7 @@ from app.services.result_report.claims import compile_branch_narrative_claims
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
+    begin_serialized_write,
     release_runtime_lock,
     runtime_lock_is_active,
     simulation_lock_key,
@@ -154,6 +157,7 @@ class PendingInterventionItem:
     metadata: dict[str, Any] = field(default_factory=dict)
     id: int | None = None
     display_text: str = ""
+    claim_token: str | None = None
 
     def __str__(self) -> str:
         return self.text
@@ -1401,6 +1405,12 @@ def _reconcile_unfinished_branches_for_terminal_scenario_session(
         branch.status = BranchStatus.PRUNED
         session.add(branch)
         updated += 1
+    scenario = session.get(Scenario, scenario_id)
+    status = scenario.status.value if scenario is not None else "stopped"
+    _settle_pending_interventions_in_session(
+        session, scenario_id,
+        reason=f"Scenario is {status}; no remaining round can apply this intervention.",
+    )
     return updated
 
 
@@ -1410,6 +1420,7 @@ def reconcile_unfinished_branches_for_terminal_scenario(
 ) -> int:
     """Prune branches left unfinished under ERROR/CANCELLED scenarios."""
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = session.get(Scenario, scenario_id)
         if scenario is None or scenario.status not in _SCENARIO_BRANCH_RECONCILE_STATUSES:
             return 0
@@ -1417,8 +1428,7 @@ def reconcile_unfinished_branches_for_terminal_scenario(
             session,
             scenario_id,
         )
-        if updated:
-            session.commit()
+        session.commit()
         return updated
 
 
@@ -1429,17 +1439,17 @@ def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) ->
     preventing races where a late simulator stage transition clobbers a user cancel.
     """
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             return
         if scenario.status == status or scenario.status in _TERMINAL_SCENARIO_STATUSES:
             if scenario.status in _SCENARIO_BRANCH_RECONCILE_STATUSES:
-                updated = _reconcile_unfinished_branches_for_terminal_scenario_session(
+                _reconcile_unfinished_branches_for_terminal_scenario_session(
                     session,
                     scenario_id,
                 )
-                if updated:
-                    session.commit()
+                session.commit()
             return
         scenario.status = status
         if status in _SCENARIO_BRANCH_RECONCILE_STATUSES:
@@ -1447,6 +1457,8 @@ def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) ->
                 session,
                 scenario_id,
             )
+        elif status in {ScenarioStatus.NARRATING, ScenarioStatus.DONE}:
+            _settle_pending_interventions_in_session(session, scenario_id)
         session.add(scenario)
         session.commit()
 
@@ -1462,17 +1474,18 @@ async def handle_simulation_cancelled(
     engine = get_engine()
     should_broadcast = False
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             should_broadcast = False
         elif scenario.status in {ScenarioStatus.DONE, ScenarioStatus.ERROR}:
             should_broadcast = False
         elif scenario.status == ScenarioStatus.CANCELLED:
-            if _reconcile_unfinished_branches_for_terminal_scenario_session(
+            _reconcile_unfinished_branches_for_terminal_scenario_session(
                 session,
                 scenario_id,
-            ):
-                session.commit()
+            )
+            session.commit()
             should_broadcast = token is not None
         else:
             scenario.status = ScenarioStatus.CANCELLED
@@ -1603,7 +1616,12 @@ def reconcile_scenario_done_if_complete(
                 logger.warning(
                     "Verified memory promotion pre-terminal reconciliation unavailable"
                 )
+        begin_serialized_write(session)
+        session.refresh(scenario)
+        if scenario.status not in {ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING}:
+            return False
         scenario.status = ScenarioStatus.DONE
+        _settle_pending_interventions_in_session(session, scenario_id)
         session.add(scenario)
         session.commit()
         return True
@@ -1836,6 +1854,24 @@ def _round_number_from_effect_summary(raw: str | None, intervention_log_id: str)
     return round_number if round_number >= 1 else None
 
 
+def _intervention_receipt_status(log: InterventionLog, summary: dict[str, Any]) -> str | None:
+    status = summary.get("status")
+    if isinstance(status, str) and status in {"queued", "applied", "expired", "failed"}:
+        return status
+    if log.status in {"applied", "expired", "failed"}:
+        return log.status
+    if (
+        status is None
+        and _round_number_from_effect_summary(log.effect_summary_json, log.id) is not None
+        and any(
+            key in summary
+            for key in ("affected_agents", "response_excerpts", "no_response_detected")
+        )
+    ):
+        return "applied"
+    return None
+
+
 def _intervention_log_has_applied_round(
     engine,
     *,
@@ -1852,27 +1888,11 @@ def _intervention_log_has_applied_round(
         if log is None or log.scenario_id != scenario_id or log.branch_id != branch_id:
             return False
 
-        applied_round = _round_number_from_effect_summary(
-            log.effect_summary_json,
-            intervention_log_id,
-        )
-        if applied_round is None:
-            branch = session.get(Branch, branch_id)
-            if branch is not None and branch.replay_kind == "retrospective":
-                applied_round = log.round_number
-            else:
-                applied_round = log.round_number + 1
-        if applied_round < 1:
-            return False
-
-        return (
-            session.exec(
-                select(Round.id).where(
-                    Round.branch_id == branch_id,
-                    Round.round_number == applied_round,
-                )
-            ).first()
-            is not None
+        summary = _decode_intervention_metadata(log.effect_summary_json)
+        # A neighboring round is not evidence that this particular queue item
+        # ran. Only an explicit receipt or messages after its bound start count.
+        return _intervention_receipt_status(log, summary) == "applied" or bool(
+            _intervention_execution_messages(session, log, summary)
         )
 
 
@@ -2014,31 +2034,48 @@ def _claim_pending_intervention_on_connection(
         metadata=_decode_intervention_metadata(row[2]),
         id=int(row[0]),
         display_text=str(row[3] or ""),
+        claim_token=claim_token,
     )
 
 
-def _mark_intervention_injected_on_connection(conn, key: str, item_id: int | None) -> None:
+def _mark_intervention_outcome_on_connection(
+    conn, key: str, item_id: int | None, *, status: str, reason: str,
+    claim_token: str | None = None, summary: dict[str, Any] | None = None,
+) -> None:
     if item_id is None:
         return
     scenario_id, branch_id = _split_intervention_key(key)
-    conn.exec_driver_sql(
-        """
-        UPDATE pending_intervention
-        SET status = 'injected'
-        WHERE id = ?
-          AND scenario_id = ?
-          AND branch_id = ?
-        """,
-        (item_id, scenario_id, branch_id),
-    )
-    conn.exec_driver_sql(
-        """
-        DELETE FROM pending_intervention
-        WHERE id = ?
-          AND scenario_id = ?
-          AND branch_id = ?
-        """,
-        (item_id, scenario_id, branch_id),
+    with Session(bind=conn) as session:
+        item = session.get(PendingIntervention, item_id)
+        if (
+            item is None or item.scenario_id != scenario_id or item.branch_id != branch_id
+            or item.status not in {"pending", "claimed"}
+            or (claim_token is not None and item.claim_token != claim_token)
+        ):
+            return
+        metadata = _decode_intervention_metadata(item.metadata_json)
+        log_id = _intervention_log_id(metadata)
+        log = session.get(InterventionLog, log_id) if log_id else None
+        if log is not None and log.scenario_id == scenario_id and log.branch_id == branch_id:
+            _settle_intervention_log_in_session(
+                session, log, status=status, reason=reason, summary=summary,
+            )
+        if status == "applied":
+            session.delete(item)
+        else:
+            item.status = "failed"
+            item.failure_reason = _scrub_sensitive_text(reason)
+            session.add(item)
+        session.flush()
+
+
+def _mark_intervention_injected_on_connection(
+    conn, key: str, item_id: int | None, *, claim_token: str | None = None,
+    summary: dict[str, Any] | None = None,
+) -> None:
+    _mark_intervention_outcome_on_connection(
+        conn, key, item_id, status="applied", reason="Applied to the simulation round.",
+        claim_token=claim_token, summary=summary,
     )
 
 
@@ -2047,20 +2084,12 @@ def _mark_intervention_failed_on_connection(
     key: str,
     item_id: int | None,
     reason: str,
+    *,
+    claim_token: str | None = None,
 ) -> None:
-    if item_id is None:
-        return
-    scenario_id, branch_id = _split_intervention_key(key)
-    conn.exec_driver_sql(
-        """
-        UPDATE pending_intervention
-        SET status = 'failed',
-            failure_reason = ?
-        WHERE id = ?
-          AND scenario_id = ?
-          AND branch_id = ?
-        """,
-        (reason, item_id, scenario_id, branch_id),
+    _mark_intervention_outcome_on_connection(
+        conn, key, item_id, status="failed", reason=_scrub_sensitive_text(reason),
+        claim_token=claim_token,
     )
 
 
@@ -2273,6 +2302,7 @@ def _build_intervention_effect_summary(
 
     return {
         "intervention_log_id": intervention_log_id,
+        "status": "applied",
         "card_id": card_id,
         "round_number": int(round_number),
         "user_input": (user_input or "")[:500],
@@ -2283,6 +2313,150 @@ def _build_intervention_effect_summary(
     }
 
 
+def _intervention_execution_messages(
+    session: Session,
+    log: InterventionLog,
+    summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    round_id = summary.get("processing_round_id")
+    if not isinstance(round_id, str):
+        return []
+    round_row = session.get(Round, round_id)
+    if round_row is None or round_row.branch_id != log.branch_id:
+        return []
+    message_ids = {
+        value for value in summary.get("processing_message_ids", [])
+        if isinstance(value, str)
+    }
+    if not message_ids:
+        return []
+    return [
+        {"agent_id": message.agent_id, "agent_name": agent.name, "content": message.content}
+        for message, agent in session.exec(
+            select(AgentMessage, Agent)
+            .join(Agent, Agent.id == AgentMessage.agent_id)
+            .where(
+                AgentMessage.round_id == round_id, Agent.scenario_id == log.scenario_id,
+                AgentMessage.id.in_(message_ids),
+            )
+        ).all()
+    ]
+
+
+def _record_intervention_message_evidence_in_session(
+    session: Session,
+    rows: list[AgentMessage],
+    metadata: dict[str, Any] | None,
+) -> None:
+    log_id = _intervention_log_id(metadata)
+    log = session.get(InterventionLog, log_id) if log_id else None
+    if log is None:
+        return
+    receipt = _decode_intervention_metadata(log.effect_summary_json)
+    if (
+        receipt.get("status") != "queued"
+        or receipt.get("processing_claim_token") != (metadata or {}).get("intervention_claim_token")
+    ):
+        return
+    round_id = receipt.get("processing_round_id")
+    round_row = session.get(Round, round_id) if isinstance(round_id, str) else None
+    if round_row is None or round_row.branch_id != log.branch_id:
+        return
+    ids = list(receipt.get("processing_message_ids") or [])
+    ids.extend(row.id for row in rows if row.round_id == round_id and row.id not in ids)
+    receipt["processing_message_ids"] = ids
+    log.effect_summary_json = _encode_intervention_metadata(receipt)
+    session.add(log)
+
+
+def _settle_intervention_log_in_session(
+    session: Session,
+    log: InterventionLog,
+    *,
+    status: str,
+    reason: str,
+    summary: dict[str, Any] | None = None,
+) -> bool:
+    """Settle one receipt and its exact card reservation under the writer lock."""
+    previous = _decode_intervention_metadata(log.effect_summary_json)
+    if _intervention_receipt_status(log, previous) in {"applied", "expired", "failed"}:
+        return False
+    messages = _intervention_execution_messages(session, log, previous)
+    if messages and (summary is None or status != "applied"):
+        # A cancelled/crashed gather may have already committed some responses.
+        # Preserve that evidence and the spend instead of refunding a used card.
+        status = "applied"
+        reason = "Applied to persisted agent responses before processing stopped."
+        summary = _build_intervention_effect_summary(
+            intervention_log_id=log.id,
+            card_id=previous.get("card_id"),
+            round_number=int(previous.get("processing_round_number") or log.round_number),
+            user_input=log.user_input,
+            messages=messages,
+        )
+    receipt = {**previous, **(summary or {})}
+    receipt.update({
+        "intervention_log_id": log.id,
+        "status": status,
+        "reason": reason,
+        "settled_at": datetime.now(timezone.utc).isoformat(),
+        "round_number": receipt.get("round_number", log.round_number),
+        "refunded_points": 0,
+        "gameplay_usage_refunded": False,
+    })
+    usage = previous.get("gameplay_usage")
+    if status in {"expired", "failed"} and isinstance(usage, dict):
+        scenario = session.get(Scenario, log.scenario_id)
+        if scenario is not None and usage.get("branch_id") == log.branch_id:
+            state = normalize_scenario_gameplay_state(scenario.gameplay_state_json)
+            entries = state["cards"]["usage_log"]
+            # used_at is unique within this scenario's serialized reservations.
+            # Remove only this exact entry, restoring both points and cooldown.
+            match = next((index for index, entry in enumerate(entries) if entry == usage), None)
+            if match is not None:
+                refunded = entries.pop(match)
+                state["revision"] += 1
+                scenario.gameplay_state_json = state
+                session.add(scenario)
+                receipt["refunded_points"] = int(refunded["cost"])
+                receipt["gameplay_usage_refunded"] = True
+    log.status = status
+    log.effect_summary_json = _encode_intervention_metadata(receipt)
+    session.add(log)
+    session.flush()
+    return True
+
+
+def _settle_pending_interventions_in_session(
+    session: Session,
+    scenario_id: str,
+    *,
+    branch_id: str | None = None,
+    reason: str = "No remaining simulation round can apply this intervention.",
+) -> None:
+    query = select(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)
+    logs_query = select(InterventionLog).where(
+        InterventionLog.scenario_id == scenario_id, InterventionLog.status == "queued",
+    )
+    if branch_id is not None:
+        query = query.where(PendingIntervention.branch_id == branch_id)
+        logs_query = logs_query.where(InterventionLog.branch_id == branch_id)
+    for item in session.exec(query).all():
+        metadata = _decode_intervention_metadata(item.metadata_json)
+        log_id = _intervention_log_id(metadata)
+        log = session.get(InterventionLog, log_id) if log_id else None
+        if log is not None and log.scenario_id == scenario_id and log.branch_id == item.branch_id:
+            _settle_intervention_log_in_session(
+                session, log,
+                status="failed" if item.status == "failed" else "expired",
+                reason=("Intervention processing failed." if item.status == "failed" else reason),
+            )
+        session.delete(item)
+    # Also close memory-fallback or interrupted enqueue receipts without rows.
+    for log in session.exec(logs_query).all():
+        _settle_intervention_log_in_session(session, log, status="expired", reason=reason)
+
+
 def _persist_intervention_effect(
     engine,
     *,
@@ -2291,22 +2465,18 @@ def _persist_intervention_effect(
     scenario_id: str | None = None,
     branch_id: str | None = None,
 ) -> None:
-    """Write the effect receipt back to InterventionLog.effect_summary_json.
-
-    Safe to call from replay / read-only paths: when the row does not exist
-    or the JSON cannot be serialized we log and drop silently — the receipt
-    is a non-blocking enrichment, not part of the simulation contract.
-    """
+    """Persist execution evidence without overwriting an already settled outcome."""
 
     if not intervention_log_id:
         return
     try:
-        payload = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        json.dumps(summary)
     except (TypeError, ValueError):
         logger.debug("intervention effect summary serialization failed", exc_info=True)
         return
     try:
         with Session(engine) as session:
+            begin_serialized_write(session)
             log = session.get(InterventionLog, intervention_log_id)
             if log is None:
                 return
@@ -2328,8 +2498,10 @@ def _persist_intervention_effect(
                     },
                 )
                 return
-            log.effect_summary_json = payload
-            session.add(log)
+            _settle_intervention_log_in_session(
+                session, log, status="applied",
+                reason="Applied to the simulation round.", summary=summary,
+            )
             session.commit()
     except SQLAlchemyError:
         logger.debug("intervention effect summary persist failed", exc_info=True)
@@ -2527,39 +2699,27 @@ async def claim_next_pending_intervention(
         return next_item
 
 
-async def mark_intervention_injected(key: str, item_id: int | None, *, _conn=None) -> None:
+async def mark_intervention_injected(
+    key: str, item_id: int | None, *, _conn=None,
+    claim_token: str | None = None, summary: dict[str, Any] | None = None,
+) -> None:
     """Mark a claimed intervention as injected and delete the consumed queue row."""
     db_path = _pending_intervention_db_path()
     if db_path is not None:
         if item_id is None:
             return
         if _conn is not None:
-            _mark_intervention_injected_on_connection(_conn, key, item_id)
+            _mark_intervention_injected_on_connection(
+                _conn, key, item_id, claim_token=claim_token, summary=summary,
+            )
             return
 
-        scenario_id, branch_id = _split_intervention_key(key)
         engine = get_engine()
         with engine.connect() as conn:
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
-                conn.exec_driver_sql(
-                    """
-                    UPDATE pending_intervention
-                    SET status = 'injected'
-                    WHERE id = ?
-                      AND scenario_id = ?
-                      AND branch_id = ?
-                    """,
-                    (item_id, scenario_id, branch_id),
-                )
-                conn.exec_driver_sql(
-                    """
-                    DELETE FROM pending_intervention
-                    WHERE id = ?
-                      AND scenario_id = ?
-                      AND branch_id = ?
-                    """,
-                    (item_id, scenario_id, branch_id),
+                _mark_intervention_injected_on_connection(
+                    conn, key, item_id, claim_token=claim_token, summary=summary,
                 )
                 conn.commit()
             except Exception:
@@ -2579,31 +2739,25 @@ async def mark_intervention_failed(
     reason: str,
     *,
     _conn=None,
+    claim_token: str | None = None,
 ) -> None:
-    """Keep a failed queue row for debugging."""
+    """Settle the failed receipt/refund and retain its queue row for diagnostics."""
     db_path = _pending_intervention_db_path()
     if db_path is not None:
         if item_id is None:
             return
         if _conn is not None:
-            _mark_intervention_failed_on_connection(_conn, key, item_id, reason)
+            _mark_intervention_failed_on_connection(
+                _conn, key, item_id, reason, claim_token=claim_token,
+            )
             return
 
-        scenario_id, branch_id = _split_intervention_key(key)
         engine = get_engine()
         with engine.connect() as conn:
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
-                conn.exec_driver_sql(
-                    """
-                    UPDATE pending_intervention
-                    SET status = 'failed',
-                        failure_reason = ?
-                    WHERE id = ?
-                      AND scenario_id = ?
-                      AND branch_id = ?
-                    """,
-                    (reason, item_id, scenario_id, branch_id),
+                _mark_intervention_failed_on_connection(
+                    conn, key, item_id, reason, claim_token=claim_token,
                 )
                 conn.commit()
             except Exception:
@@ -2720,21 +2874,11 @@ async def get_pending_intervention_count(key: str) -> int:
 
 
 async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
-    """Remove any leftover queued interventions for a finished scenario."""
-    db_path = _pending_intervention_db_path()
-    if db_path is not None:
-        engine = get_engine()
-        with Session(engine) as session:
-            queued = list(
-                session.exec(
-                    select(PendingIntervention).where(
-                        PendingIntervention.scenario_id == scenario_id
-                    )  # noqa: E501
-                ).all()
-            )
-            for item in queued:
-                session.delete(item)
-            session.commit()
+    """Settle unused interventions before releasing their queue storage."""
+    with Session(get_engine()) as session:
+        begin_serialized_write(session)
+        _settle_pending_interventions_in_session(session, scenario_id)
+        session.commit()
 
     prefix = f"{scenario_id}:"
     async with _intervention_lock:
@@ -2744,22 +2888,11 @@ async def clear_pending_interventions_for_scenario(scenario_id: str) -> None:
 
 
 async def clear_pending_interventions_for_branch(scenario_id: str, branch_id: str) -> None:
-    """Remove leftover queued interventions for a single finished branch."""
-    db_path = _pending_intervention_db_path()
-    if db_path is not None:
-        engine = get_engine()
-        with Session(engine) as session:
-            queued = list(
-                session.exec(
-                    select(PendingIntervention).where(
-                        PendingIntervention.scenario_id == scenario_id,
-                        PendingIntervention.branch_id == branch_id,
-                    )
-                ).all()
-            )
-            for item in queued:
-                session.delete(item)
-            session.commit()
+    """Settle leftover interventions for one branch, preserving sibling queues."""
+    with Session(get_engine()) as session:
+        begin_serialized_write(session)
+        _settle_pending_interventions_in_session(session, scenario_id, branch_id=branch_id)
+        session.commit()
 
     key = f"{scenario_id}:{branch_id}"
     async with _intervention_lock:
@@ -3228,6 +3361,7 @@ async def run_simulation(
     branch_id: str | None = None,
     runtime_lease: RuntimeLockLease | None = None,
     current_runtime_lease: Callable[[], RuntimeLockLease | None] | None = None,
+    confirmed_profile_policy: ResolvedProviderPolicy | None = None,
 ):
     """Execute simulation with user-cancel handling.
 
@@ -3247,6 +3381,8 @@ async def run_simulation(
             branch_id=branch_id,
             runtime_lease=runtime_lease,
             current_runtime_lease=current_runtime_lease,
+            **({"confirmed_profile_policy": confirmed_profile_policy}
+               if confirmed_profile_policy is not None else {}),
         )
     except RuntimeLeaseLost:
         if is_cancelled(scenario_id):
@@ -3268,6 +3404,7 @@ async def _run_simulation_impl(
     branch_id: str | None = None,
     runtime_lease: RuntimeLockLease | None = None,
     current_runtime_lease: Callable[[], RuntimeLockLease | None] | None = None,
+    confirmed_profile_policy: ResolvedProviderPolicy | None = None,
 ):
     """Execute the full simulation pipeline (Stage 2 + Stage 3).
 
@@ -3335,8 +3472,11 @@ async def _run_simulation_impl(
         else:
             llm_overrides = dict(llm_overrides)
 
-        recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
-        if model_profile_provider_unresolved(
+        recovered_profile_overrides = (
+            recover_profile_provider_overrides(session, scenario)
+            if confirmed_profile_policy is None else None
+        )
+        if confirmed_profile_policy is None and model_profile_provider_unresolved(
             scenario,
             recovered_profile_overrides,
             explicit_api_key=llm_overrides.get("api_key"),
@@ -3385,6 +3525,25 @@ async def _run_simulation_impl(
             ctx.get("native_search_upstream"), str
         ):
             llm_overrides["native_search_upstream_override"] = ctx.get("native_search_upstream")
+
+        if confirmed_profile_policy is not None:
+            # Confirmed creates retain their captured provider and policy through
+            # every phase, including explicit unset values. Later profile edits
+            # apply only to a future launch or an explicitly resumed run.
+            llm_overrides.update({
+                "api_key": confirmed_profile_policy.api_key,
+                "base_url": confirmed_profile_policy.base_url,
+                "model": confirmed_profile_policy.model,
+                "model_profile_id": confirmed_profile_policy.model_profile_id,
+                "requests_per_minute": confirmed_profile_policy.requests_per_minute,
+                "tokens_per_minute": confirmed_profile_policy.tokens_per_minute,
+                "concurrency": confirmed_profile_policy.concurrency,
+                "supports_structured_outputs_override": (
+                    confirmed_profile_policy.supports_structured_outputs
+                ),
+                "supports_native_search_override": confirmed_profile_policy.supports_native_search,
+                "native_search_upstream_override": confirmed_profile_policy.native_search_upstream,
+            })
 
         # Load agents
         db_agents = list(
@@ -3676,7 +3835,10 @@ async def _run_simulation_impl(
             try:
                 if intervention_item is not None:
                     intervention_text = intervention_item.text
-                    intervention_metadata = intervention_item.metadata or {}
+                    intervention_metadata = dict(intervention_item.metadata or {})
+                    intervention_metadata["intervention_claim_token"] = (
+                        intervention_item.claim_token
+                    )
                     if _intervention_log_has_applied_round(
                         engine,
                         scenario_id=scenario_id,
@@ -3686,6 +3848,7 @@ async def _run_simulation_impl(
                         await mark_intervention_injected(
                             intervention_key,
                             intervention_item.id,
+                            claim_token=intervention_item.claim_token,
                         )
                         intervention_item = None
                         intervention_text = None
@@ -3702,21 +3865,6 @@ async def _run_simulation_impl(
                             intervention_id = str(intervention_log_id).strip()
                             if intervention_id:
                                 injected_payload["intervention_id"] = intervention_id
-                        await push(
-                            {
-                                "type": "intervention_injected",
-                                "data": injected_payload,
-                            }
-                        )
-
-                        # V2-P2: Broadcast viz:event_anim for butterfly effect
-                        if viz_mapper is not None:
-                            viz_interv = viz_mapper.map_intervention(
-                                ws_display_text,
-                                params={"round": round_num, "branch_id": current_branch_id},  # noqa: E501
-                            )
-                            await viz_push(viz_interv)
-
                 # 1) Gather agent messages — each pushed to frontend immediately
                 round_id = _create_round(
                     engine,
@@ -3730,6 +3878,7 @@ async def _run_simulation_impl(
                     runtime_lease=(
                         current_runtime_lease() if current_runtime_lease else runtime_lease
                     ),
+                    intervention_item=intervention_item,
                 )
                 if round_num == 1:
                     from app.services.initial_social_feed import (
@@ -3824,14 +3973,38 @@ async def _run_simulation_impl(
                     _check_cancelled(scenario_id)
 
                 if intervention_item is not None:
-                    await mark_intervention_injected(intervention_key, intervention_item.id)
+                    effect_log_id = _intervention_log_id(intervention_metadata)
+                    effect_summary = _build_intervention_effect_summary(
+                        intervention_log_id=effect_log_id or None,
+                        card_id=intervention_metadata.get("card_id"),
+                        round_number=round_num,
+                        user_input=_intervention_display_text(intervention_item),
+                        messages=messages,
+                    )
+                    await mark_intervention_injected(
+                        intervention_key, intervention_item.id,
+                        claim_token=intervention_item.claim_token, summary=effect_summary,
+                    )
+                    if intervention_item.id is None and effect_log_id:
+                        _persist_intervention_effect(
+                            engine, intervention_log_id=effect_log_id, summary=effect_summary,
+                            scenario_id=scenario_id, branch_id=current_branch_id,
+                        )
+                    await push({"type": "intervention_injected", "data": injected_payload})
+                    if viz_mapper is not None:
+                        await viz_push(viz_mapper.map_intervention(
+                            _intervention_display_text(intervention_item),
+                            params={"round": round_num, "branch_id": current_branch_id},
+                        ))
             except SimulationCancelled:
                 raise
-            except Exception as exc:
+            except Exception:
                 if intervention_item is not None:
                     try:
                         await mark_intervention_failed(
-                            intervention_key, intervention_item.id, str(exc)
+                            intervention_key, intervention_item.id,
+                            "Intervention processing failed before completion.",
+                            claim_token=intervention_item.claim_token,
                         )
                     except Exception:
                         logger.debug(
@@ -3939,40 +4112,6 @@ async def _run_simulation_impl(
                     },
                 }
             )
-
-            # Phase 4: Persist intervention effect receipt if an intervention ran this round.
-            if intervention_text is not None:
-                try:
-                    effect_log_id = (intervention_metadata or {}).get("intervention_log_id")
-                    raw_user_input = (intervention_metadata or {}).get("raw_user_input")
-                    if not raw_user_input:
-                        raw_user_input = (
-                            _intervention_display_text(intervention_item)
-                            if intervention_item is not None
-                            else intervention_text
-                        )
-                    effect_summary = _build_intervention_effect_summary(
-                        intervention_log_id=(str(effect_log_id) if effect_log_id else None),
-                        card_id=(intervention_metadata or {}).get("card_id"),
-                        round_number=round_num,
-                        user_input=str(raw_user_input),
-                        messages=messages,
-                    )
-                    if effect_log_id:
-                        _persist_intervention_effect(
-                            engine,
-                            intervention_log_id=str(effect_log_id),
-                            summary=effect_summary,
-                            scenario_id=scenario_id,
-                            branch_id=current_branch_id,
-                        )
-                except SimulationCancelled:
-                    raise
-                except Exception:
-                    logger.debug(
-                        "intervention effect summary hook failed (non-blocking)",
-                        exc_info=True,
-                    )
 
             # Phase 3 F2: Causal graph — record round nodes (non-blocking)
             if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
@@ -4462,6 +4601,7 @@ async def _run_simulation_impl(
                     persist_generating_report_placeholder_if_absent(
                         scenario_id,
                         report_branch_id,
+                        detail_level="brief",
                     )
                 except Exception as exc:
                     logger.warning(
@@ -4474,6 +4614,7 @@ async def _run_simulation_impl(
                         scenario_id,
                         report_branch_id,
                         overrides=report_overrides,
+                        detail_level="brief",
                     )
                 )
         except Exception as exc:
@@ -6403,6 +6544,7 @@ async def _gather_agent_messages(
                     opportunity_snapshots_by_actor=opportunity_snapshots_by_actor,
                     domain_world_context=domain_world_context,
                     compatibility_mode="live",
+                    intervention_metadata=intervention_metadata,
                     **({"runtime_lease": runtime_lease} if runtime_lease else {}),
                 )
                 or []
@@ -6928,6 +7070,7 @@ async def _gather_hierarchical_messages(
             opportunity_snapshots_by_actor=worker_opportunity_snapshots,
             domain_world_context=domain_world_context,
             compatibility_mode="live",
+            intervention_metadata=intervention_metadata,
             **({"runtime_lease": runtime_lease} if runtime_lease else {}),
         )
         or []
@@ -8403,6 +8546,7 @@ def _create_round(
     *,
     scenario_id: str | None = None,
     runtime_lease: RuntimeLockLease | None = None,
+    intervention_item: PendingInterventionItem | None = None,
 ) -> str:
     from app.services.runtime_lock import begin_serialized_write, runtime_lease_owned_in_session
 
@@ -8435,10 +8579,36 @@ def _create_round(
                 Round.round_number == round_number,
             )
         ).first()
-        if existing is not None:
-            return existing.id
-        r = Round(branch_id=branch_id, round_number=round_number)
-        session.add(r)
+        r = existing or Round(branch_id=branch_id, round_number=round_number)
+        if existing is None:
+            session.add(r)
+            session.flush()
+        if intervention_item is not None:
+            if intervention_item.id is not None:
+                queued = session.get(PendingIntervention, intervention_item.id)
+                if (
+                    queued is None or queued.scenario_id != owner_id
+                    or queued.branch_id != branch_id or queued.status != "claimed"
+                    or queued.claim_token != intervention_item.claim_token
+                ):
+                    raise RuntimeLeaseLost(owner_id)
+            log_id = _intervention_log_id(intervention_item.metadata)
+            log = session.get(InterventionLog, log_id) if log_id else None
+            if log is not None and log.scenario_id == owner_id and log.branch_id == branch_id:
+                receipt = _decode_intervention_metadata(log.effect_summary_json)
+                if _intervention_receipt_status(log, receipt) in {"applied", "expired", "failed"}:
+                    raise RuntimeLeaseLost(owner_id)
+                receipt.update({
+                    "intervention_log_id": log.id,
+                    "status": "queued",
+                    "processing_round_id": r.id,
+                    "processing_round_number": round_number,
+                    "processing_claim_token": intervention_item.claim_token,
+                    "processing_message_ids": [],
+                })
+                log.effect_summary_json = _encode_intervention_metadata(receipt)
+                log.status = "queued"
+                session.add(log)
         session.commit()
         return r.id
 
@@ -8586,6 +8756,7 @@ def _save_messages(
     domain_world_context: Mapping[str, object] | None = None,
     compatibility_mode: CompatibilityModeV1 = "legacy_import",
     runtime_lease: RuntimeLockLease | None = None,
+    intervention_metadata: dict[str, Any] | None = None,
 ) -> list[str]:
     if not messages:
         return []
@@ -8768,6 +8939,10 @@ def _save_messages(
             ).first()
             if fence is None:
                 raise RuntimeLeaseLost(messages[0].get("scenario_id", ""))
+        # Evidence and the responses it names commit together under the same
+        # lease fence; unrelated resumed-round messages cannot settle this item.
+        if intervention_metadata:
+            _record_intervention_message_evidence_in_session(session, rows, intervention_metadata)
         session.commit()
         return [row.id for row in rows]
 
@@ -9119,10 +9294,16 @@ def _format_message_for_compression(message: dict[str, Any]) -> str:
 
 def _update_branch_status(engine, branch_id, status: BranchStatus):
     with Session(engine) as session:
+        begin_serialized_write(session)
         branch = session.get(Branch, branch_id)
         if branch:
             branch.status = status
             session.add(branch)
+            if status in _TERMINAL_BRANCH_STATUSES:
+                _settle_pending_interventions_in_session(
+                    session, branch.scenario_id, branch_id=branch.id,
+                    reason=f"Branch is {status.value.lower()}; this intervention cannot run.",
+                )
             session.commit()
 
 

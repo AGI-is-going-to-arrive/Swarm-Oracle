@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDebateStore } from './debateStore';
+import type { DebateSnapshot } from '../types';
 
 const createDebateMock = vi.fn();
 const getDebateMock = vi.fn();
@@ -23,6 +24,81 @@ beforeEach(() => {
   useDebateStore.getState().reset();
   createDebateMock.mockReset();
   getDebateMock.mockReset();
+});
+
+function lifecycleSnapshot(id = 'lifecycle'): DebateSnapshot {
+  return {
+    id, question: 'Saved question', motion: 'Saved motion', language: 'en', profile_id: 'generic',
+    scene_theme: 'civic_chamber', status: 'live', current_phase: 'opening',
+    created_at: '2026-09-05T00:00:00Z', updated_at: '2026-09-05T00:00:00Z',
+    participants: [], score: { proposition: 0, opposition: 0, audience_meter: 0 },
+    turns: [{ id: 'saved-turn', sequence: 1, phase: 'opening', speaker_side: 'proposition', speaker_name: 'Speaker', content: 'Preserved turn', created_at: '2026-09-05T00:00:00Z' }],
+    available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+    result_ready: false,
+  };
+}
+
+describe('debate terminal authority', () => {
+  it('keeps cancellation sticky against late snapshots, turns, scores, errors and verdicts', () => {
+    const original = lifecycleSnapshot();
+    const store = useDebateStore.getState();
+    store.setDebate(original);
+    store.setTerminalStatus('cancelled', original.id);
+    store.appendTurn({ ...original.turns[0], id: 'late', sequence: 2, content: 'Late provider output' });
+    store.setPhase('verdict');
+    store.setScore({ proposition: 100, opposition: 0, audience_meter: 100 });
+    store.setError({ code: 'LLM_REQUEST_FAILED' });
+    store.setVerdict({ winner: 'proposition', verdict_tone: 'order', score: { proposition: 100, opposition: 0, audience_meter: 100 }, breakdown: {}, best_argument: 'Late', best_rebuttal: 'Late', judge_summary: 'Late', replay: [] });
+    store.setDebate({ ...original, status: 'done', result_ready: true });
+    const state = useDebateStore.getState();
+    expect(state.status).toBe('cancelled');
+    expect(state.debate?.turns).toEqual(original.turns);
+    expect(state.debate?.score).toEqual(original.score);
+    expect(state.debate?.result_ready).toBe(false);
+  });
+
+  it('can hydrate the canonical preserved turns after a cancellation notification', () => {
+    const original = lifecycleSnapshot();
+    useDebateStore.getState().setDebate({ ...original, turns: [] });
+    useDebateStore.getState().setTerminalStatus('cancelled', original.id);
+    useDebateStore.getState().setDebate({ ...original, status: 'cancelled' }, original.id);
+    expect(useDebateStore.getState().debate?.turns).toEqual(original.turns);
+  });
+
+  it('does not restore a deleted debate when an earlier load finishes', async () => {
+    let resolve: ((value: DebateSnapshot) => void) | undefined;
+    getDebateMock.mockImplementation(() => new Promise<DebateSnapshot>((done) => { resolve = done; }));
+    const pending = useDebateStore.getState().loadDebate('deleted');
+    useDebateStore.getState().setTerminalStatus('deleted', 'deleted');
+    resolve?.(lifecycleSnapshot('deleted'));
+    await pending;
+    useDebateStore.getState().setDebate(lifecycleSnapshot('deleted'));
+    expect(useDebateStore.getState().status).toBe('deleted');
+    expect(useDebateStore.getState().debate).toBeNull();
+  });
+
+  it('ignores an old load and scoped websocket snapshot after moving to a new run', async () => {
+    let resolveOld: ((value: DebateSnapshot) => void) | undefined;
+    getDebateMock.mockImplementationOnce(() => new Promise<DebateSnapshot>((done) => { resolveOld = done; }));
+    getDebateMock.mockResolvedValueOnce(lifecycleSnapshot('new'));
+    const old = useDebateStore.getState().loadDebate('old');
+    await useDebateStore.getState().loadDebate('new');
+    resolveOld?.(lifecycleSnapshot('old'));
+    await old;
+    useDebateStore.getState().setDebate(lifecycleSnapshot('old'), 'old');
+    expect(useDebateStore.getState().debate?.id).toBe('new');
+  });
+
+  it('retries an uncertain start with the same request id and allocates a new id after success', async () => {
+    createDebateMock.mockRejectedValueOnce(new Error('response lost'));
+    await expect(useDebateStore.getState().startDebate('Same intent')).rejects.toThrow('response lost');
+    const firstId = createDebateMock.mock.calls[0][2].clientRequestId;
+    createDebateMock.mockResolvedValue(lifecycleSnapshot('new'));
+    await useDebateStore.getState().startDebate('Same intent');
+    expect(createDebateMock.mock.calls[1][2].clientRequestId).toBe(firstId);
+    await useDebateStore.getState().startDebate('Same intent');
+    expect(createDebateMock.mock.calls[2][2].clientRequestId).not.toBe(firstId);
+  });
 });
 
 describe('debateStore', () => {

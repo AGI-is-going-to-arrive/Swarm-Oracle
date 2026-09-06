@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import delete as sa_delete
@@ -48,6 +48,7 @@ from app.services.replay import clone_until_round
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
+    begin_serialized_write,
     release_runtime_lock,
     simulation_lock_key,
 )
@@ -136,6 +137,7 @@ def _persist_gameplay_card_usage(
     current_round: int,
     req: InterveneRequest,
     language: str,
+    usage_receipt: dict | None = None,
 ) -> dict | None:
     if not req.card_id:
         return None
@@ -184,27 +186,36 @@ def _persist_gameplay_card_usage(
         req.directive,
         language,
     )
+    used_at = _now_iso()
+    used_timestamps = {
+        entry.get("used_at") for entry in current_state.get("cards", {}).get("usage_log", [])
+    }
+    while used_at in used_timestamps:
+        used_at = (datetime.fromisoformat(used_at) + timedelta(microseconds=1)).isoformat()
+    usage_entry = {
+        "card_id": req.card_id,
+        "profile_id": req.profile_id,
+        "branch_id": branch.id,
+        "branch_title": branch.title,
+        "round": effective_round,
+        "cost": card_cost,
+        "directive": directive,
+        "used_at": used_at,
+    }
     next_state = {
         "revision": current_state["revision"] + 1,
         "cards": {
             "usage_log": [
                 *current_state.get("cards", {}).get("usage_log", []),
-                {
-                    "card_id": req.card_id,
-                    "profile_id": req.profile_id,
-                    "branch_id": branch.id,
-                    "branch_title": branch.title,
-                    "round": effective_round,
-                    "cost": card_cost,
-                    "directive": directive,
-                    "used_at": _now_iso(),
-                },
+                usage_entry,
             ],
         },
         "betting": current_state.get("betting", {}),
         "archive": current_state.get("archive", {}),
     }
     next_state = normalize_scenario_gameplay_state(next_state)
+    if usage_receipt is not None:
+        usage_receipt.update(usage_entry)
 
     result = session.exec(
         update(Scenario)
@@ -304,6 +315,24 @@ def _encode_metadata(metadata: dict | None) -> str | None:
     if not metadata:
         return None
     return json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _record_queued_intervention(
+    log: InterventionLog,
+    *,
+    card_id: str | None = None,
+    gameplay_usage: dict | None = None,
+) -> None:
+    log.status = "queued"
+    log.effect_summary_json = _encode_metadata({
+        "intervention_log_id": log.id,
+        "card_id": card_id,
+        "round_number": log.round_number,
+        "status": "queued",
+        "reason": "Waiting for the next available simulation round.",
+        "refunded_points": 0,
+        "gameplay_usage": gameplay_usage or None,
+    })
 
 
 def _intervention_status_invalid_message(status: ScenarioStatus) -> str:
@@ -556,6 +585,7 @@ async def intervene(
     gameplay_state = None
     use_persisted_queue = _pending_intervention_db_path() is not None
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = require_owned_scenario(session, scenario_id, principal)
         scenario_language = _scenario_runtime_language(scenario)
         if scenario.status != ScenarioStatus.SIMULATING:
@@ -589,6 +619,7 @@ async def intervene(
         ).one_or_none()
         current_round = max_round if max_round is not None else 0
 
+        usage_receipt: dict = {}
         gameplay_state = _persist_gameplay_card_usage(
             session,
             scenario_id=scenario_id,
@@ -597,6 +628,7 @@ async def intervene(
             current_round=current_round,
             req=req,
             language=scenario_language,
+            usage_receipt=usage_receipt,
         )
 
         pending_text, pending_metadata = _build_pending_intervention_payload(
@@ -616,6 +648,8 @@ async def intervene(
         session.add(log)
         session.flush()
         log_id = log.id
+        _record_queued_intervention(log, card_id=req.card_id, gameplay_usage=usage_receipt)
+        session.add(log)
 
         # Attach intervention_log_id so the simulator can write back the effect receipt.
         effect_metadata: dict = dict(pending_metadata or {})
@@ -649,7 +683,7 @@ async def intervene(
     await ws_manager.broadcast(
         scenario_id,
         {
-            "type": "intervention_applied",
+            "type": "intervention_queued",
             "data": {
                 "branch_id": req.branch_id,
                 "text": visible_text,
@@ -662,7 +696,7 @@ async def intervene(
     )
 
     return {
-        "status": "applied",
+        "status": "queued",
         "intervention_id": log_id,
         "branch_id": req.branch_id,
         "round": current_round,
@@ -789,6 +823,8 @@ async def intervene_retrospective(
             session.add(log)
             session.flush()
             log_id = log.id
+            _record_queued_intervention(log)
+            session.add(log)
 
             # Queue intervention on the new branch in the same transaction as
             # the replay branch and log. In-memory fallback is queued after commit.
@@ -899,6 +935,7 @@ async def intervene_batch(
     use_persisted_queue = _pending_intervention_db_path() is not None
     memory_queue_entries: list[tuple[str, str, dict | None]] = []
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = require_owned_scenario(session, scenario_id, principal)
         scenario_language = _scenario_runtime_language(scenario)
         if scenario.status != ScenarioStatus.SIMULATING:
@@ -945,6 +982,7 @@ async def intervene_batch(
             ).one_or_none()
             current_round = max_round if max_round is not None else 0
 
+            usage_receipt: dict = {}
             next_gameplay_state = _persist_gameplay_card_usage(
                 session,
                 scenario_id=scenario_id,
@@ -953,6 +991,7 @@ async def intervene_batch(
                 current_round=current_round,
                 req=item,
                 language=scenario_language,
+                usage_receipt=usage_receipt,
             )
             if next_gameplay_state is not None:
                 scenario.gameplay_state_json = next_gameplay_state
@@ -972,6 +1011,8 @@ async def intervene_batch(
             )
             session.add(log)
             session.flush()  # get log.id
+            _record_queued_intervention(log, card_id=item.card_id, gameplay_usage=usage_receipt)
+            session.add(log)
 
             # Attach intervention_log_id so the simulator can persist effect receipts.
             effect_metadata: dict = dict(pending_metadata or {})
@@ -1010,11 +1051,11 @@ async def intervene_batch(
     from app.api.ws import ws_manager
 
     await ws_manager.broadcast(
-        scenario_id, {"type": "batch_intervention_applied", "data": {"interventions": results}}
+        scenario_id, {"type": "batch_intervention_queued", "data": {"interventions": results}}
     )
 
     return {
-        "status": "applied",
+        "status": "queued",
         "count": len(results),
         "interventions": results,
     }

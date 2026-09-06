@@ -15,6 +15,7 @@ import { domainVariableLabel, formatDomainUnitValue } from '../../lib/domainWorl
 import type { DomainAdjudicationChip } from '../../types';
 import { ACTION_LEDGER_POLL_INTERVAL_MS, isActionsUnavailableError } from './actionLedgerUtils';
 import './ActionLedgerPanel.css';
+import { formatUiDateTime } from '../../i18n/language';
 
 const ACTION_TYPES: SocialActionType[] = [
   'POST', 'COMMENT', 'REACTION', 'FOLLOW', 'MUTE', 'SEARCH', 'TREND', 'REFRESH', 'IDLE',
@@ -396,7 +397,7 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
                         </div>
                       )}
                       {item.created_at
-                        ? <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
+                        ? <time dateTime={item.created_at}>{formatUiDateTime(item.created_at, i18n?.language)}</time>
                         : <time dateTime="">{t('action_ledger.time_unknown')}</time>}
                       <span className="action-ledger__actions">
                         <button
@@ -423,7 +424,7 @@ export function ActionLedgerPanel({ scenarioId, branchId, onSelectAction }: Acti
                         <dl id={detailsId} className="action-ledger__details">
                           {item.parent_action_id && <><dt>{t('action_ledger.parent_action', 'Parent action')}</dt><dd>{item.parent_action_id}</dd></>}
                           {details.sourceName && <><dt>{t('action_ledger.source_name', 'Source')}</dt><dd>{details.sourceName}</dd></>}
-                          {details.publishedAt && <><dt>{t('action_ledger.published_at', 'Published at')}</dt><dd>{details.publishedAt}</dd></>}
+                          {details.publishedAt && <><dt>{t('action_ledger.published_at', 'Published at')}</dt><dd>{formatUiDateTime(details.publishedAt, i18n?.language)}</dd></>}
                           {details.credibilityHint && <><dt>{t('action_ledger.credibility_hint', 'Credibility')}</dt><dd>{details.credibilityHint}</dd></>}
                           {details.tags && <><dt>{t('action_ledger.tags', 'Tags')}</dt><dd>{details.tags.join(', ')}</dd></>}
                           {details.reaction && <><dt>{t('action_ledger.reaction', 'Reaction')}</dt><dd>{details.reaction}</dd></>}

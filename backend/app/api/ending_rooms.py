@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import case, func, update
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
@@ -20,8 +24,11 @@ from app.api.helpers import (
 )
 from app.api.ws import WSManager, run_websocket_session
 from app.models import (
+    Agent,
+    Branch,
     EndingRoom,
     EndingRoomInteractionMode,
+    EndingRoomParticipant,
     EndingRoomThread,
     EndingRoomType,
     Scenario,
@@ -40,12 +47,22 @@ from app.services.ending_room_service import (
     load_existing_ending_room_snapshot_for_scenario,
     run_ending_room_background,
 )
-from app.services.llm_client import (
-    is_local_provider_url,
-    safe_llm_error_payload,
-    validate_llm_base_url,
+from app.services.ending_room_service._utils import (
+    _resolve_ending_room_provider,
+    _validate_ending_room_llm_overrides,
 )
+from app.services.llm_client import safe_llm_error_payload
 from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
+from app.services.post_verdict_outputs import (
+    _MAX_SAVED_OUTPUT_BYTES,
+    _MAX_SAVED_OUTPUTS,
+    _SAVED_OUTPUTS_KEY,
+    SavePostVerdictOutputRequest,
+    _sanitize_saved_output,
+    _saved_outputs_from_context,
+)
+from app.services.resource_deletion import resource_is_deleted
+from app.services.runtime_lock import begin_serialized_write
 
 router = APIRouter(prefix="/api", tags=["ending-room"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["ending-room"])
@@ -266,15 +283,6 @@ def _ensure_owned_room_creation_sync(
         require_owned_scenario(session, scenario_id, principal)
 
 
-def _scenario_owner_user_id_sync(
-    scenario_id: str,
-    principal: SessionPrincipal | None,
-) -> str | None:
-    with Session(get_engine()) as session:
-        scenario = require_owned_scenario(session, scenario_id, principal)
-        return scenario.user_id or (principal.subject if principal else None)
-
-
 def _room_owner_user_id_sync(
     room_id: str,
     principal: SessionPrincipal | None,
@@ -418,20 +426,6 @@ async def create_ending_room_endpoint(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
-    room_llm_overrides: dict[str, Any] | None = None
-    if req.room_model_profile_id:
-        owner_user_id = await asyncio.to_thread(
-            _scenario_owner_user_id_sync,
-            scenario_id,
-            principal,
-        )
-        policy = await asyncio.to_thread(
-            _resolve_role_policy_sync,
-            user_id=owner_user_id,
-            model_profile_id=req.room_model_profile_id,
-        )
-        if policy is not None:
-            room_llm_overrides = _role_policy_to_overrides(policy)
     try:
         snapshot, created = await asyncio.to_thread(
             create_ending_room,
@@ -449,7 +443,10 @@ async def create_ending_room_endpoint(
             discussion_format=req.discussion_format,
             cast_mode=req.cast_mode,
             language=req.language,
+            room_model_profile_id=req.room_model_profile_id,
         )
+    except HTTPException:
+        raise
     except EndingRoomServiceError as exc:
         _raise_room_error(exc)
     except Exception:
@@ -467,7 +464,6 @@ async def create_ending_room_endpoint(
                 await run_ending_room_background(
                     snapshot["id"],
                     ws_callback=ending_room_ws_manager.broadcast,
-                    llm_overrides=room_llm_overrides,
                 )
             except Exception as exc:
                 payload = safe_llm_error_payload(exc)
@@ -798,24 +794,208 @@ def _validate_roundtable_llm_overrides(
     api_key: str | None,
     base_url: str | None,
 ) -> tuple[str | None, str | None]:
-    api_key = api_key.strip() if isinstance(api_key, str) else None
-    api_key = api_key or None
-    base_url = base_url.strip() if isinstance(base_url, str) else None
-    base_url = base_url or None
-    if base_url:
-        validated = validate_llm_base_url(base_url)
-        if validated is None:
-            raise api_error(
-                400, "LLM_BASE_URL_NOT_ALLOWED",
-                "Provided llm_base_url is not in the allowed provider list",
+    return _validate_ending_room_llm_overrides(api_key, base_url)
+
+
+def _roundtable_room_in_scenario(
+    session: Session,
+    scenario_id: str,
+    room_id: str | None,
+    participant_ids: list[str] | None = None,
+) -> EndingRoom | None:
+    stmt = select(EndingRoom).where(
+        EndingRoom.scenario_id == scenario_id,
+        EndingRoom.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE,
+    )
+    if room_id:
+        stmt = stmt.where(EndingRoom.id == room_id)
+    elif participant_ids:
+        stmt = stmt.join(
+            EndingRoomParticipant, EndingRoomParticipant.room_id == EndingRoom.id,
+        ).where(EndingRoomParticipant.id.in_(participant_ids)).distinct()
+    rooms = list(session.exec(stmt).all())
+    if len(rooms) > 1:
+        raise api_error(409, "ROUNDTABLE_ROOM_AMBIGUOUS", "Select one roundtable room")
+    if room_id and not rooms:
+        raise api_error(404, "ROUNDTABLE_ROOM_NOT_FOUND", "Roundtable room not found in scenario")
+    return rooms[0] if rooms else None
+
+
+def _resolve_roundtable_provider_sync(
+    scenario_id: str,
+    principal: SessionPrincipal | None,
+    *,
+    room_id: str | None = None,
+    participant_ids: list[str] | None = None,
+    role_model_profile_id: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Authorize a roundtable and use the same binding as its runtime."""
+    with Session(get_engine()) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        room = _roundtable_room_in_scenario(session, scenario_id, room_id, participant_ids)
+        return _resolve_ending_room_provider(
+            session, scenario, room,
+            user_id=principal.subject if principal else None,
+            role_model_profile_id=role_model_profile_id,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
+
+
+@router.get("/scenario/{scenario_id}/roundtable-provider")
+async def get_roundtable_provider_endpoint(
+    scenario_id: str,
+    room_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    _, provider = await asyncio.to_thread(
+        _resolve_roundtable_provider_sync, scenario_id, principal, room_id=room_id,
+    )
+    return provider
+
+
+
+def _save_post_verdict_output_sync(
+    scenario_id: str,
+    req: SavePostVerdictOutputRequest,
+    principal: SessionPrincipal | None,
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        begin_serialized_write(session)
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        if resource_is_deleted(session, "scenario", scenario_id):
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+        room = _roundtable_room_in_scenario(
+            session, scenario_id, req.room_id, req.participant_ids or None,
+        )
+        if room is None:
+            raise api_error(404, "ROUNDTABLE_ROOM_NOT_FOUND", "Roundtable room not found")
+        from app.services.roundtable_analyst import (
+            RoundtableAnalystServiceError,
+            _ensure_roundtable_ready,
+        )
+        try:
+            _ensure_roundtable_ready(room)
+        except RoundtableAnalystServiceError as exc:
+            _raise_roundtable_service_error(exc)
+        for response in req.responses:
+            participant = session.get(EndingRoomParticipant, response.participant_id)
+            if participant is None or participant.room_id != room.id:
+                raise api_error(404, "ROUNDTABLE_PARTICIPANT_NOT_FOUND", "Participant not found")
+            if (
+                response.source_branch_id != participant.source_branch_id
+                or response.source_agent_id != participant.source_agent_id
+            ):
+                raise api_error(422, "SAVED_OUTPUT_SOURCE_MISMATCH", "Response source does not match participant")  # noqa: E501
+            if response.source_branch_id:
+                branch = session.get(Branch, response.source_branch_id)
+                if branch is None or branch.scenario_id != scenario_id:
+                    raise api_error(422, "SAVED_OUTPUT_SOURCE_MISMATCH", "Response branch is not in scenario")  # noqa: E501
+            if response.source_agent_id:
+                agent = session.get(Agent, response.source_agent_id)
+                if (
+                    agent is None or agent.scenario_id != scenario_id
+                    or response.agent_identity_id != agent.agent_identity_id
+                ):
+                    raise api_error(422, "SAVED_OUTPUT_SOURCE_MISMATCH", "Response agent is not in scenario")  # noqa: E501
+            elif response.agent_identity_id:
+                raise api_error(422, "SAVED_OUTPUT_SOURCE_MISMATCH", "Response identity has no source agent")  # noqa: E501
+        payload = _sanitize_saved_output(req.model_dump(mode="json", exclude={"client_result_id"}))
+        payload["room_id"] = room.id
+        if payload["provider"] is not None:
+            # Preserve the generated display name/model as a user-saved
+            # descriptor, never a reusable credential/profile binding.
+            payload["provider"]["profile_id"] = None
+        serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False, sort_keys=True)
+        if len(serialized.encode("utf-8")) > _MAX_SAVED_OUTPUT_BYTES:
+            raise api_error(413, "SAVED_OUTPUT_TOO_LARGE", "Saved analysis exceeds 64 KiB")
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        context = dict(scenario.parsed_context or {})
+        outputs = _saved_outputs_from_context(context)
+        output_id = str(req.client_result_id)
+        existing = next((item for item in outputs if item.get("id") == output_id), None)
+        if existing is not None:
+            if existing.get("content_digest") != digest:
+                raise api_error(409, "SAVED_OUTPUT_ID_CONFLICT", "This result id already has different content")  # noqa: E501
+            return existing
+        if len(outputs) >= _MAX_SAVED_OUTPUTS:
+            raise api_error(409, "SAVED_OUTPUT_LIMIT_REACHED", "This scenario already has 20 saved analyses")  # noqa: E501
+        output = {
+            **payload,
+            "version": 1,
+            "id": output_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "origin": "simulation",
+            "verification": "user_saved",
+            "content_digest": digest,
+        }
+        if len(json.dumps(output, ensure_ascii=False, allow_nan=False).encode("utf-8")) > _MAX_SAVED_OUTPUT_BYTES:  # noqa: E501
+            raise api_error(413, "SAVED_OUTPUT_TOO_LARGE", "Saved analysis exceeds 64 KiB")
+        outputs.append(output)
+        if session.get_bind().dialect.name == "sqlite":
+            current_context = case(
+                (func.json_type(Scenario.parsed_context) == "object", Scenario.parsed_context),
+                else_="{}",
             )
-        if not api_key and not is_local_provider_url(validated):
-            raise api_error(
-                400, "BYOK_API_KEY_REQUIRED",
-                "An API key is required when using a custom LLM base URL",
+            session.exec(
+                update(Scenario).where(Scenario.id == scenario_id).values(
+                    parsed_context=func.json_set(
+                        current_context,
+                        f"$.{_SAVED_OUTPUTS_KEY}",
+                        func.json(json.dumps(outputs, ensure_ascii=False, allow_nan=False)),
+                    ),
+                ).execution_options(synchronize_session=False),
             )
-        return api_key, validated
-    return api_key, base_url
+        else:
+            updated = session.exec(
+                update(Scenario).where(
+                    Scenario.id == scenario_id,
+                    Scenario.parsed_context == scenario.parsed_context,
+                ).values(parsed_context={**context, _SAVED_OUTPUTS_KEY: outputs})
+                .execution_options(synchronize_session=False),
+            )
+            if updated.rowcount != 1:
+                raise api_error(409, "SAVED_OUTPUT_RETRY", "Scenario changed; retry saving")
+        session.commit()
+        return output
+
+
+@router.post("/scenario/{scenario_id}/post-verdict-outputs")
+async def save_post_verdict_output_endpoint(
+    scenario_id: str,
+    req: SavePostVerdictOutputRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    _require_roundtable_feature(
+        f"FEATURE_ROUNDTABLE_{req.kind.upper()}", f"roundtable_{req.kind}",
+    )
+    return await asyncio.to_thread(_save_post_verdict_output_sync, scenario_id, req, principal)
+
+
+@router.get("/scenario/{scenario_id}/post-verdict-outputs")
+async def list_post_verdict_outputs_endpoint(
+    scenario_id: str,
+    room_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    # Disabling new generation does not revoke access to already saved analyses.
+    def load() -> dict[str, Any]:
+        with Session(get_engine()) as session:
+            scenario = require_owned_scenario(session, scenario_id, principal)
+            if resource_is_deleted(session, "scenario", scenario_id):
+                raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+            if room_id:
+                _roundtable_room_in_scenario(session, scenario_id, room_id)
+            outputs = _saved_outputs_from_context(dict(scenario.parsed_context or {}))
+            return {"outputs": [
+                _sanitize_saved_output(item) for item in reversed(outputs)
+                if room_id is None or item.get("room_id") == room_id or item.get("archived") is True
+            ]}
+    return await asyncio.to_thread(load)
 
 
 def _raise_roundtable_service_error(exc: Exception) -> None:
@@ -836,11 +1016,14 @@ async def _stream_roundtable_events(
     *,
     fallback_event: str,
     fallback_payload: dict,
+    provider: dict[str, Any] | None = None,
 ):
     try:
         async for event in iterator:
             event_name = event.get("event", "message")
             payload = event.get("data", {})
+            if provider is not None and event_name in {"analyst_response", "survey_response"}:
+                payload = {**payload, "provider": provider}
             yield _encode_sse_frame(event_name, payload)
     except Exception:
         logger.exception("Roundtable SSE stream failed for event %s", fallback_event)
@@ -862,39 +1045,17 @@ async def create_roundtable_survey_endpoint(
 
     _require_roundtable_feature("FEATURE_ROUNDTABLE_SURVEY", "roundtable_survey")
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
-    survey_llm_overrides: dict[str, Any]
-    if req.survey_model_profile_id:
-        owner_user_id = await asyncio.to_thread(
-            _scenario_owner_user_id_sync,
-            scenario_id,
-            principal,
-        )
-        policy = await asyncio.to_thread(
-            _resolve_role_policy_sync,
-            user_id=owner_user_id,
-            model_profile_id=req.survey_model_profile_id,
-            explicit_api_key=req.llm_api_key,
-            explicit_base_url=req.llm_base_url,
-            explicit_model=req.llm_model,
-        )
-        survey_llm_overrides = (
-            _role_policy_to_overrides(policy)
-            if policy is not None
-            else {
-                "api_key": None,
-                "base_url": None,
-                "model": req.llm_model,
-            }
-        )
-    else:
-        validated_key, validated_url = _validate_roundtable_llm_overrides(
-            req.llm_api_key, req.llm_base_url,
-        )
-        survey_llm_overrides = {
-            "api_key": validated_key,
-            "base_url": validated_url,
-            "model": req.llm_model,
-        }
+    survey_llm_overrides, provider = await asyncio.to_thread(
+        _resolve_roundtable_provider_sync,
+        scenario_id,
+        principal,
+        room_id=req.room_id,
+        participant_ids=req.participant_ids,
+        role_model_profile_id=req.survey_model_profile_id,
+        api_key=req.llm_api_key,
+        base_url=req.llm_base_url,
+        model=req.llm_model,
+    )
     try:
         stream = await build_roundtable_survey_stream(
             scenario_id,
@@ -908,6 +1069,7 @@ async def create_roundtable_survey_endpoint(
     return StreamingResponse(
         _stream_roundtable_events(
             stream,
+            provider=provider,
             fallback_event="survey_response",
             fallback_payload={
                 "participant_id": "",
@@ -940,39 +1102,16 @@ async def create_roundtable_analyst_endpoint(
 
     _require_roundtable_feature("FEATURE_ROUNDTABLE_ANALYST", "roundtable_analyst")
     await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
-    analyst_llm_overrides: dict[str, Any]
-    if req.analyst_model_profile_id:
-        owner_user_id = await asyncio.to_thread(
-            _scenario_owner_user_id_sync,
-            scenario_id,
-            principal,
-        )
-        policy = await asyncio.to_thread(
-            _resolve_role_policy_sync,
-            user_id=owner_user_id,
-            model_profile_id=req.analyst_model_profile_id,
-            explicit_api_key=req.llm_api_key,
-            explicit_base_url=req.llm_base_url,
-            explicit_model=req.llm_model,
-        )
-        analyst_llm_overrides = (
-            _role_policy_to_overrides(policy)
-            if policy is not None
-            else {
-                "api_key": None,
-                "base_url": None,
-                "model": req.llm_model,
-            }
-        )
-    else:
-        validated_key, validated_url = _validate_roundtable_llm_overrides(
-            req.llm_api_key, req.llm_base_url,
-        )
-        analyst_llm_overrides = {
-            "api_key": validated_key,
-            "base_url": validated_url,
-            "model": req.llm_model,
-        }
+    analyst_llm_overrides, provider = await asyncio.to_thread(
+        _resolve_roundtable_provider_sync,
+        scenario_id,
+        principal,
+        room_id=req.room_id,
+        role_model_profile_id=req.analyst_model_profile_id,
+        api_key=req.llm_api_key,
+        base_url=req.llm_base_url,
+        model=req.llm_model,
+    )
     try:
         stream = await build_roundtable_analyst_stream(
             scenario_id,
@@ -985,6 +1124,7 @@ async def create_roundtable_analyst_endpoint(
     return StreamingResponse(
         _stream_roundtable_events(
             stream,
+            provider=provider,
             fallback_event="analyst_response",
             fallback_payload={
                 "answer": "",

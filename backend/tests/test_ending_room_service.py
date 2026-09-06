@@ -29,6 +29,7 @@ from app.models import (
     EndingRoomTurn,
     EndingRoomTurnSource,
     EndingRoomType,
+    ModelProfile,
     Round,
     Scenario,
     ScenarioStatus,
@@ -283,6 +284,53 @@ def test_create_ending_room_deduplicates_scope():
     assert snapshot["threads"]
     assert snapshot["threads"][0]["mode"] == "room"
     assert snapshot["memory_partition_id"]
+
+
+def test_concurrent_room_creation_commits_one_immutable_model_binding(monkeypatch):
+    scenario_id, branch_id, _other_branch_id = _seed_branch_world()
+    monkeypatch.setattr(ending_room_service_module.settings, "FEATURE_MODEL_PROFILES", True)
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        scenario.user_id = "room-owner"
+        session.add(scenario)
+        profiles = [
+            ModelProfile(
+                user_id="room-owner", name=f"Room model {index}",
+                model=f"room-model-{index}", base_url="http://localhost:1234/v1",
+                api_key=f"room-key-{index}",
+            )
+            for index in range(2)
+        ]
+        for profile in profiles:
+            session.add(profile)
+        session.commit()
+        profile_ids = [profile.id for profile in profiles]
+
+    def create_with_profile(profile_id):
+        try:
+            snapshot, created = create_ending_room(
+                scenario_id,
+                room_type=EndingRoomType.ENDING_CHAMBER,
+                anchor_branch_id=branch_id,
+                selected_branch_ids=[branch_id],
+                room_model_profile_id=profile_id,
+            )
+            return profile_id, snapshot["id"], created
+        except EndingRoomServiceError as exc:
+            assert exc.code == "ENDING_ROOM_MODEL_PROFILE_CONFLICT"
+            return profile_id, None, False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(create_with_profile, profile_ids))
+    successful = [item for item in outcomes if item[1]]
+    assert len(successful) == 1
+    expected_profile_id, expected_room_id, created = successful[0]
+    assert created
+    with Session(get_engine()) as session:
+        rooms = session.exec(select(EndingRoom).where(EndingRoom.scenario_id == scenario_id)).all()
+        assert len(rooms) == 1
+        assert rooms[0].id == expected_room_id
+        assert rooms[0].config_json["room_model_profile_id"] == expected_profile_id
 
 
 def test_single_branch_room_does_not_duplicate_the_same_agent_participant():
@@ -3466,6 +3514,97 @@ def test_branch_scope_context_keeps_foreign_fulltext_isolated():
     assert "秩序线全文：只允许会客厅读到这里。" in context["anchor_branch"]["transcript"]
     assert all(item["branch_id"] == branch_b_id for item in context["foreign_branch_summaries"])
     assert "裂变线全文：不该泄露给另一条线。" not in str(context["foreign_branch_summaries"])
+
+
+def test_native_fork_recaps_excerpts_and_followups_share_bounded_ancestor_rounds():
+    scenario_id, parent_id, sibling_id = _seed_branch_world()
+    with Session(get_engine()) as session:
+        original_agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).first()
+        local_agent = Agent(scenario_id=scenario_id, name="Local witness", role="observer")
+        child = Branch(scenario_id=scenario_id, parent_branch_id=parent_id, fork_round=1)
+        session.add(local_agent)
+        session.add(child)
+        session.flush()
+        leaf = Branch(scenario_id=scenario_id, parent_branch_id=child.id, fork_round=2)
+        session.add(leaf)
+        session.flush()
+        for branch_id, number, content in (
+            (parent_id, 2, "Parent future must stay hidden"),
+            (parent_id, 3, "Later parent future must stay hidden"),
+            (child.id, 2, "Shared child round before next fork"),
+            (child.id, 3, "Child future must stay hidden"),
+            (leaf.id, 3, "Leaf continuation"),
+        ):
+            round_ = Round(branch_id=branch_id, round_number=number)
+            session.add(round_)
+            session.flush()
+            session.add(AgentMessage(round_id=round_.id, agent_id=local_agent.id, content=content))
+        session.commit()
+        leaf_id = leaf.id
+        original_agent_id = original_agent.id
+
+    branch_context = build_branch_scope_context(
+        scenario_id, leaf_id, selected_branch_ids=[leaf_id, sibling_id],
+    )
+    roundtable_context = build_roundtable_scope_context(scenario_id, [leaf_id, sibling_id])
+    own = next(
+        item for item in roundtable_context["representatives"]
+        if item["branch"]["branch_id"] == leaf_id
+    )
+    excerpts = ending_room_service_module._load_branch_transcript_excerpts(
+        scenario_id, branch_ids=[leaf_id], max_quotes_per_branch=5,
+    )
+    for text in (
+        branch_context["anchor_branch"]["transcript"],
+        own["own_transcript"], str(excerpts[leaf_id]),
+    ):
+        assert "秩序线全文：只允许会客厅读到这里。" in text
+        assert "Shared child round before next fork" in text
+        assert "Leaf continuation" in text
+        assert "future must stay hidden" not in text
+        assert "裂变线全文" not in text
+    with Session(get_engine()) as session:
+        rows = ending_room_service_module._load_branch_rows(session, leaf_id, language="en")
+        evidence = ending_room_service_module._build_participant_followup_evidence(
+            EndingRoomParticipant(
+                room_id="not-persisted", source_agent_id=original_agent_id,
+                source_branch_id=leaf_id, role_slot=EndingRoomRoleSlot.REPRESENTATIVE,
+                display_name="Original witness",
+            ),
+            branch_rows=rows, evidence_hook="Shared ancestry",
+        )
+    assert [row["round_number"] for row in rows] == [1, 2, 3]
+    assert evidence["latest_round"] == 1
+    assert "秩序线全文" in evidence["latest_quote"]
+
+
+def test_replay_room_transcript_is_self_contained_despite_parent_pointer():
+    scenario_id, parent_id, _sibling_id = _seed_branch_world()
+    with Session(get_engine()) as session:
+        agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).first()
+        replay = Branch(
+            scenario_id=scenario_id, parent_branch_id=parent_id,
+            fork_round=1, replay_kind="counterfactual",
+        )
+        session.add(replay)
+        session.flush()
+        for number in (1, 2):
+            round_ = Round(branch_id=replay.id, round_number=number)
+            session.add(round_)
+            session.flush()
+            session.add(AgentMessage(
+                round_id=round_.id, agent_id=agent.id, content=f"Replay-local R{number}",
+            ))
+        session.commit()
+        replay_id = replay.id
+    context = build_branch_scope_context(scenario_id, replay_id)
+    excerpts = ending_room_service_module._load_branch_transcript_excerpts(
+        scenario_id, branch_ids=[replay_id],
+    )
+    assert "Replay-local R1" in context["anchor_branch"]["transcript"]
+    assert "Replay-local R2" in context["anchor_branch"]["transcript"]
+    assert "秩序线全文" not in context["anchor_branch"]["transcript"]
+    assert all("Replay-local" in item for item in excerpts[replay_id])
 
 
 def test_branch_scope_context_rejects_foreign_scenario_branch_ids():

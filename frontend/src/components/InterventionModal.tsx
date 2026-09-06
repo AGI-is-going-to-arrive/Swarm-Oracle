@@ -15,6 +15,7 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { InterventionTemplate } from '../api/client';
 import type { BranchInfo } from '../types';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useSimulationStore } from '../stores/simulationStore';
 import './InterventionModal.css';
 
 type InterventionMode = 'standard' | 'retrospective' | 'batch';
@@ -261,6 +262,7 @@ export default function InterventionModal({
           })),
         });
       }
+      useSimulationStore.getState().invalidateInterventionReceipts(scenarioId);
       setStatus('success');
       closeTimerRef.current = setTimeout(() => onClose(), 1800);
     } catch (error) {

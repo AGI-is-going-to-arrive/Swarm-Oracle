@@ -242,6 +242,23 @@ async def _collect_stream(iterator) -> list[dict]:
     return events
 
 
+def test_survey_unusable_answer_is_failure_instead_of_invented_success(client, monkeypatch):
+    fixture = _seed_roundtable_scenario(participant_count=1)
+
+    async def empty_answer(_prompt: str, **_kwargs) -> str:
+        return "   "
+
+    monkeypatch.setattr("app.services.roundtable_survey.llm_call", empty_answer)
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/survey",
+        json={"question": "What happened?", "participant_ids": fixture["participant_ids"]},
+    )
+    assert response.status_code == 200
+    payload = _parse_sse_payload(response.text)[0][1]
+    assert payload["answer"] == ""
+    assert payload["error"] == "The model returned no usable answer. Please retry."
+
+
 def test_survey_feature_gate_returns_404(client):
     fixture = _seed_roundtable_scenario()
     settings.FEATURE_ROUNDTABLE_SURVEY = False

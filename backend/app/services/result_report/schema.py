@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LanguageCode = Literal["zh", "en"]
+ReportDetailLevel = Literal["brief", "full"]
 GenerationMode = Literal["generation", "rewrite", "static"]
 ReportStatus = Literal[
     "generating",
@@ -546,10 +547,59 @@ class ToolTraceSummary(_StrictModel):
     elapsed_ms: int = Field(default=0, ge=0)
 
 
+class ReportSectionText(_StrictModel):
+    title: str = Field(min_length=1)
+    body_md: str
+
+
+class ReportAuthoredContent(_StrictModel):
+    """Translated report prose, with source excerpts and provenance kept intact."""
+
+    headline_answer: str = Field(min_length=1)
+    title: str | None = None
+    summary: str | None = None
+    section_texts: dict[str, ReportSectionText] | None = None
+    limitations: str = Field(min_length=1)
+    disclaimer: str | None = None
+    confidence_basis: str | None = None
+    follow_ups: list[str] = Field(default_factory=list)
+    indicators_to_watch: list[IndicatorToWatch] = Field(default_factory=list)
+    dissenting: DissentingView | None = None
+    interview_evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=15)
+    interview_status: InterviewStatus | None = None
+    premortem_analysis: PremortemAnalysis | None = None
+
+
+def _authored_content_provenance(content: ReportAuthoredContent) -> dict[str, Any]:
+    premortem = content.premortem_analysis
+    return {
+        "follow_up_count": len(content.follow_ups),
+        "indicators": [
+            (item.direction, item.evidence_refs) for item in content.indicators_to_watch
+        ],
+        "dissenting_branch": content.dissenting.runner_up_branch_id if content.dissenting else None,
+        "interview_evidence": content.interview_evidence,
+        "interview_status": content.interview_status.model_dump(exclude={"message"})
+        if content.interview_status
+        else None,
+        "premortem": {
+            "status": premortem.status,
+            "reason": premortem.reason,
+            "items": [
+                (item.id, [(link.evidence_ref, link.role) for link in item.evidence_chain])
+                for item in premortem.items
+            ],
+        }
+        if premortem
+        else None,
+    }
+
+
 class FullReport(_StrictModel):
     version: str = Field(min_length=1)
     generated_at: str = Field(min_length=1)
     generation_mode: GenerationMode
+    detail_level: ReportDetailLevel = "full"
     target_branch_id: str = Field(min_length=1)
     target_branch_sort: list[str]
     language: LanguageCode
@@ -575,6 +625,9 @@ class FullReport(_StrictModel):
     premortem_analysis: PremortemAnalysis | None = None
     language_status: LanguageStatus | None = None
     tool_trace: list[ToolTraceSummary] = Field(default_factory=list, max_length=64)
+    authored_content_i18n: dict[LanguageCode, ReportAuthoredContent] = Field(
+        default_factory=dict, max_length=2
+    )
 
     @model_validator(mode="after")
     def validate_report_contract(self) -> "FullReport":
@@ -584,6 +637,30 @@ class FullReport(_StrictModel):
             raise ValueError("available_languages cannot be empty")
         if len(set(self.available_languages)) != len(self.available_languages):
             raise ValueError("available_languages cannot contain duplicates")
+        if self.authored_content_i18n:
+            primary = ReportAuthoredContent(
+                headline_answer=self.verdict.headline_answer,
+                limitations=self.limitations,
+                disclaimer=self.verdict.disclaimer,
+                follow_ups=self.follow_ups,
+                indicators_to_watch=self.indicators_to_watch,
+                dissenting=self.dissenting,
+                interview_evidence=self.interview_evidence,
+                interview_status=self.interview_status,
+                premortem_analysis=self.premortem_analysis,
+            )
+            expected_provenance = _authored_content_provenance(primary)
+            if any(
+                _authored_content_provenance(content) != expected_provenance
+                for content in self.authored_content_i18n.values()
+            ):
+                raise ValueError("report translations cannot change source excerpts or provenance")
+            section_ids = {section.id for section in self.sections}
+            if any(
+                content.section_texts is not None and set(content.section_texts) != section_ids
+                for content in self.authored_content_i18n.values()
+            ):
+                raise ValueError("report translation section IDs must match the source report")
         evidence_ids = {item.id for item in self.evidence}
         claim_ids = [claim.claim_id for claim in self.claims]
         if len(claim_ids) != len(set(claim_ids)):
@@ -592,9 +669,7 @@ class FullReport(_StrictModel):
         for evidence in self.evidence:
             evidence_by_message_id.setdefault(evidence.message_id, []).append(evidence)
         allowed_claim_branch_ids = {self.target_branch_id}
-        allowed_claim_branch_ids.update(
-            evidence.branch_id for evidence in self.evidence
-        )
+        allowed_claim_branch_ids.update(evidence.branch_id for evidence in self.evidence)
         for claim in self.claims:
             if claim.branch_id not in allowed_claim_branch_ids:
                 raise ValueError("claim branch_id must belong to report evidence scope")
@@ -612,12 +687,9 @@ class FullReport(_StrictModel):
             ]
             referenced_rounds = {evidence.round_number for evidence in referenced_evidence}
             if not referenced_rounds.issubset(set(claim.round_numbers)):
-                raise ValueError(
-                    "claim round_numbers must include referenced message coordinates"
-                )
+                raise ValueError("claim round_numbers must include referenced message coordinates")
             if claim.exact_quote is not None and not any(
-                evidence.agent_id == claim.agent_id
-                and evidence.agent_name == claim.speaker
+                evidence.agent_id == claim.agent_id and evidence.agent_name == claim.speaker
                 for evidence in referenced_evidence
             ):
                 raise ValueError(
@@ -641,9 +713,7 @@ class FullReport(_StrictModel):
                 raise ValueError("indicator evidence_refs must reference report evidence ids")
         if self.premortem_analysis is not None:
             if len(evidence_ids) != len(self.evidence):
-                raise ValueError(
-                    "structured premortem requires unique report evidence ids"
-                )
+                raise ValueError("structured premortem requires unique report evidence ids")
             evidence_by_id = {item.id: item for item in self.evidence}
             for item in self.premortem_analysis.items:
                 referenced_ids = [link.evidence_ref for link in item.evidence_chain]
@@ -653,9 +723,7 @@ class FullReport(_StrictModel):
                     if evidence_id not in evidence_by_id
                 ]
                 if unknown_refs:
-                    raise ValueError(
-                        "premortem evidence_chain must reference report evidence ids"
-                    )
+                    raise ValueError("premortem evidence_chain must reference report evidence ids")
                 if self.premortem_analysis.status != "available":
                     continue
                 referenced = [evidence_by_id[evidence_id] for evidence_id in referenced_ids]
@@ -671,12 +739,8 @@ class FullReport(_StrictModel):
                 }
                 agent_ids = {evidence.agent_id for evidence in referenced}
                 branch_ids = {evidence.branch_id for evidence in referenced}
-                if len(source_coordinates) < 2 or (
-                    len(agent_ids) < 2 and len(branch_ids) < 2
-                ):
-                    raise ValueError(
-                        "available premortem items require source diversity"
-                    )
+                if len(source_coordinates) < 2 or (len(agent_ids) < 2 and len(branch_ids) < 2):
+                    raise ValueError("available premortem items require source diversity")
         _assert_no_sensitive_material(self.model_dump(mode="json"))
         return self
 

@@ -149,6 +149,13 @@ export interface ScenarioCheckpointSummary {
 }
 
 export interface Scenario {
+  snapshot_import?: {
+    source_status: 'parsing' | 'simulating' | 'narrating' | 'done' | 'error' | 'cancelled';
+    mode: 'read_only';
+    worker_resumed: false;
+    resume_action: 'start_new_simulation' | null;
+    reason_code: 'SOURCE_EXECUTION_NOT_RESUMED' | 'READ_ONLY_SNAPSHOT';
+  };
   id: string;
   question: string;
   language?: 'zh' | 'en';
@@ -173,6 +180,33 @@ export interface Scenario {
   faction_timeline_id?: string | null;
   /** Stage 1 DomainWorld projection (§8.1); null/missing → not_generated. */
   domain_world?: DomainWorldProjection | null;
+}
+
+export type ExperimentKind = 'scenario' | 'debate' | 'roundtable';
+export type ExperimentStatus = 'running' | 'done' | 'error' | 'cancelled';
+
+export interface ExperimentListItem {
+  id: string;
+  kind: ExperimentKind;
+  question: string;
+  title: string;
+  status: ExperimentStatus;
+  source_status: string;
+  created_at: string;
+  source_scenario_id: string | null;
+  source_question: string | null;
+  models: Array<{
+    role?: 'proposition' | 'opposition' | 'judge';
+    name: string;
+    model: string;
+    binding_status?: 'recorded' | 'current_profile';
+  }>;
+}
+
+export interface ExperimentListResponse {
+  items: ExperimentListItem[];
+  total: number;
+  next_cursor: string | null;
 }
 
 export interface AgentInfo {
@@ -603,6 +637,7 @@ export interface BatchInterventionPayload {
 }
 
 export interface InterventionResponse {
+  /** Current servers return queued; legacy response status is still readable. */
   status: string;
   intervention_id: string;
   branch_id: string;
@@ -628,6 +663,7 @@ export interface BatchInterventionEntry {
 }
 
 export interface BatchInterventionResponse {
+  /** Current servers return queued; application is confirmed by effect receipts. */
   status: string;
   count: number;
   interventions: BatchInterventionEntry[];
@@ -1208,6 +1244,9 @@ export interface InterviewStatus {
 
 export interface FullReport {
   version: string;
+  /** Missing on legacy full reports. */
+  detail_level?: 'brief' | 'full';
+  authored_content_i18n?: Partial<Record<'zh' | 'en', ReportAuthoredContent>>;
   generated_at: string;
   generation_mode: ReportTier;
   target_branch_id: string;
@@ -1243,6 +1282,18 @@ export interface FullReport {
   language_status: { zh: 'available' | 'missing'; en: 'available' | 'missing' } | null;
   tool_trace?: ToolTraceSummary[];
 }
+
+export type ReportAuthoredContent = Pick<FullReport,
+  'limitations' | 'follow_ups' | 'indicators_to_watch' | 'dissenting'
+  | 'interview_evidence' | 'interview_status' | 'premortem_analysis'
+> & {
+  headline_answer: string;
+  disclaimer?: string | null;
+  title?: string;
+  summary?: string;
+  confidence_basis?: string;
+  section_texts?: Record<string, { title: string; body_md: string }>;
+};
 
 export interface FullReportTruncatedMarker {
   status: 'partial';
@@ -1404,7 +1455,7 @@ export interface DebateCounterplayResult {
   confidence: number;
   phase: DebatePhase;
   variant: 'balanced' | 'reversal';
-  outcome: 'hit' | 'miss';
+  outcome: 'hit' | 'miss' | null;
   phase_score?: {
     proposition: number;
     opposition: number;
@@ -1416,12 +1467,13 @@ export interface DebateCounterplayResult {
 
 export interface DebateSnapshot {
   id: string;
+  source_debate_id?: string | null;
   question: string;
   motion: string;
   language: 'zh' | 'en';
   profile_id: string;
   scene_theme: string;
-  status: 'queued' | 'live' | 'done' | 'error';
+  status: 'queued' | 'live' | 'done' | 'error' | 'cancelled';
   current_phase: DebatePhase;
   created_at: string;
   updated_at: string;
@@ -1441,6 +1493,42 @@ export interface DebateResultPayload extends DebateSnapshot {
   result: DebateResultSummary;
   counterplay?: DebateCounterplayResult | null;
   predictions: DebatePrediction[];
+}
+
+export interface DebateRestartOptions {
+  debate_id: string;
+  question: string;
+  language: 'zh' | 'en';
+  status: DebateSnapshot['status'];
+  providers: Array<{
+    role: 'proposition' | 'opposition' | 'judge';
+    profile_id: string | null;
+    source: 'profile' | 'server' | 'explicit' | 'unknown';
+    name: string;
+    model: string;
+    available: boolean;
+    confirmation_token?: string | null;
+  }>;
+  can_reuse_original_profiles: boolean;
+  server_provider: { name: string; model: string; available: boolean; confirmation_token: string };
+  owned_profile_choices?: DebateProfileChoice[];
+}
+
+export interface DebateProfileChoice {
+  profile_id: string;
+  name: string;
+  model: string;
+  confirmation_token: string;
+}
+
+export interface RestartDebateRequest {
+  client_request_id: string;
+  proposition_model_profile_id?: string;
+  opposition_model_profile_id?: string;
+  judge_model_profile_id?: string;
+  use_current_server_provider?: boolean;
+  current_server_token?: string;
+  profile_confirmation_tokens?: Record<string, string>;
 }
 
 export interface DebatePredictionRequest {
@@ -1668,7 +1756,7 @@ export type DebateWSEvent =
     | {
       type: 'status';
       data: {
-        status: DebateSnapshot['status'];
+        status: DebateSnapshot['status'] | 'deleted';
         error?: string | StructuredWsError;
       };
       }
@@ -1717,10 +1805,17 @@ export type EndingRoomWSEvent =
 
 // ── Roundtable SSE Events ────────────────────────────────
 
+export interface RoundtableProviderSelection {
+  source: 'room_profile' | 'scenario_profile' | 'role_override' | 'explicit' | 'scenario' | 'server_default';
+  profile_id: string | null;
+  name: string;
+  model: string;
+}
+
 export type AnalystSSEEvent =
   | { type: 'analyst_thinking'; action: string; params: Record<string, unknown>; iteration: number }
   | { type: 'analyst_tool_result'; action: string; summary: string; iteration: number; elapsed_ms: number }
-  | { type: 'analyst_response'; answer: string; iterations: number; stopped_reason?: string; error?: string };
+  | { type: 'analyst_response'; answer: string; iterations: number; stopped_reason?: string; error?: string; provider?: RoundtableProviderSelection };
 
 export type SurveySSEEvent = {
   type: 'survey_response';
@@ -1733,9 +1828,43 @@ export type SurveySSEEvent = {
   answer: string;
   elapsed_ms: number;
   error?: string;
+  provider?: RoundtableProviderSelection;
 };
 
+export type SavedSurveyResponse = Omit<SurveySSEEvent, 'type' | 'error' | 'provider'>;
+
+export interface SavePostVerdictOutputRequest {
+  client_result_id: string;
+  kind: 'analyst' | 'survey';
+  room_id?: string | null;
+  question: string;
+  provider?: RoundtableProviderSelection | null;
+  answer?: string | null;
+  stopped_reason?: 'final_response' | null;
+  participant_ids?: string[];
+  responses?: SavedSurveyResponse[];
+}
+
+export interface SavedPostVerdictOutput extends Omit<SavePostVerdictOutputRequest, 'client_result_id'> {
+  version: 1;
+  id: string;
+  created_at: string;
+  origin: 'simulation';
+  verification: 'user_saved';
+  archived?: boolean;
+}
+
 // ── WebSocket Events ─────────────────────────────────────
+
+export interface InterventionQueuedEventData {
+  branch_id: string;
+  text: string;
+  round: number;
+  intervention_id: string;
+  status?: string;
+  pending_count?: number;
+  queued_ahead?: number;
+}
 
 export type WSEvent =
   (
@@ -1753,21 +1882,12 @@ export type WSEvent =
     | { type: 'branch_prune'; data: { branch_id: string; reason: string } }
     | { type: 'branch_update'; data: { branch_id: string; status: string } }
     | { type: 'narration'; data: { branch_id: string; title: string; story: string; insight: string } }
-    | {
-      type: 'intervention_applied';
-      data: {
-        branch_id: string;
-        text: string;
-        round: number;
-        intervention_id: string;
-        status?: string;
-        pending_count?: number;
-        queued_ahead?: number;
-      };
-    }
+    | { type: 'intervention_queued'; data: InterventionQueuedEventData }
+    | { type: 'intervention_applied'; data: InterventionQueuedEventData }
     | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string; intervention_id?: string; status?: string; card_id?: string; mode?: string } }
     | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
     | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
+    | { type: 'batch_intervention_queued'; data: { interventions: BatchInterventionEntry[] } }
     | {
       type: 'kg:delta';
       data: {
@@ -2183,6 +2303,7 @@ export interface ModelProfile {
   base_url?: string;
   model: string;
   has_api_key: boolean;
+  confirmation_token?: string;
   rpm?: number | null;
   tpm?: number | null;
   concurrency?: number | null;

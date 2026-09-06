@@ -17,7 +17,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -109,9 +109,13 @@ from app.services.model_profiles import (
 from app.services.result_report import builder as result_report_builder
 from app.services.result_report import full_report_for_story
 from app.services.result_report.reducer import resolve_report_lineage_scope
+from app.services.runtime_lock import begin_serialized_write
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
-from app.services.simulator import reconcile_unfinished_branches_for_terminal_scenario
+from app.services.simulator import (
+    _reconcile_unfinished_branches_for_terminal_scenario_session,
+    _terminal_branch_candidates,
+)
 from app.services.web_context import (
     resolve_web_search_intensity_config,
     validate_web_search_base_url,
@@ -413,6 +417,15 @@ class ResultReportGenerateRequest(BaseModel):
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
     temperature: float | None = None
+    detail_level: Literal["brief", "full"] = "full"
+    operation: Literal["generate", "translate"] = "generate"
+    target_language: Literal["zh", "en"] | None = None
+
+    @model_validator(mode="after")
+    def validate_report_operation(self) -> "ResultReportGenerateRequest":
+        if (self.operation == "translate") != (self.target_language is not None):
+            raise ValueError("target_language is required only for the translate operation")
+        return self
 
     @field_validator("llm_api_key", "llm_base_url", "llm_model")
     @classmethod
@@ -1383,6 +1396,7 @@ async def create_multi_run_scenarios(
                 session,
                 user_id=effective_user_id,
                 model_profile_id=req.model_profile_id,
+                expected_confirmation_token=req.model_profile_confirmation_token,
                 explicit_api_key=req.llm_api_key,
                 explicit_base_url=req.llm_base_url,
                 explicit_model=req.llm_model,
@@ -1505,6 +1519,8 @@ async def create_multi_run_scenarios(
                     llm_base_url=resolved_llm_base_url,
                     llm_model=resolved_llm_model,
                     model_profile_id=effective_model_profile_id,
+                    **({"confirmed_profile_policy": model_profile_policy}
+                       if req.model_profile_confirmation_token else {}),
                     llm_requests_per_minute=resolved_llm_requests_per_minute,
                     llm_tokens_per_minute=resolved_llm_tokens_per_minute,
                     concurrency=resolved_concurrency,
@@ -1617,15 +1633,25 @@ async def get_run_group_distribution(
 
             branch = None
             if scenario.status == ScenarioStatus.DONE:
-                branch = session.exec(
-                    select(Branch)
-                    .where(
-                        Branch.scenario_id == scenario.id,
-                        Branch.status == BranchStatus.COMPLETED,
-                    )
-                    .order_by(Branch.probability.desc(), Branch.id)
-                    .limit(1)
-                ).first()
+                branches = list(session.exec(
+                    select(Branch).where(Branch.scenario_id == scenario.id)
+                ).all())
+                # Derive leaves before filtering completion: an unfinished child
+                # must never turn its completed fork parent into a final outcome.
+                leaf_ids = {
+                    item["id"] for item in _terminal_branch_candidates([
+                        item.model_dump(mode="json") for item in branches
+                    ])
+                }
+                completed_leaves = [
+                    item for item in branches
+                    if item.id in leaf_ids and item.status == BranchStatus.COMPLETED
+                ]
+                branch = min(
+                    completed_leaves,
+                    key=lambda item: (-item.probability, item.id),
+                    default=None,
+                )
             outcome = str(branch.title if branch is not None else "").strip()
             is_terminal_distribution_row = (
                 scenario.status == ScenarioStatus.DONE and bool(verdict) and branch is not None
@@ -1745,6 +1771,7 @@ async def create_scenario(
                 session,
                 user_id=effective_user_id,
                 model_profile_id=req.model_profile_id,
+                expected_confirmation_token=req.model_profile_confirmation_token,
                 explicit_api_key=req.llm_api_key,
                 explicit_base_url=req.llm_base_url,
                 explicit_model=req.llm_model,
@@ -2021,6 +2048,8 @@ async def create_scenario(
         llm_base_url=resolved_llm_base_url,
         llm_model=resolved_llm_model,
         model_profile_id=effective_model_profile_id,
+        **({"confirmed_profile_policy": model_profile_policy}
+           if req.model_profile_confirmation_token else {}),
         llm_requests_per_minute=resolved_llm_requests_per_minute,
         llm_tokens_per_minute=resolved_llm_tokens_per_minute,
         concurrency=resolved_concurrency,
@@ -2520,6 +2549,7 @@ async def cancel_scenario(
     """Request cooperative cancellation for a currently running simulation."""
     engine = get_engine()
     with Session(engine) as session:
+        begin_serialized_write(session)
         scenario = require_owned_scenario(session, scenario_id, principal)
         if scenario.status in _TERMINAL_SCENARIO_STATUSES:
             raise api_error(
@@ -2536,8 +2566,8 @@ async def cancel_scenario(
         if scenario.status != ScenarioStatus.CANCELLED:
             scenario.status = ScenarioStatus.CANCELLED
             session.add(scenario)
-            session.commit()
-    reconcile_unfinished_branches_for_terminal_scenario(engine, scenario_id)
+        _reconcile_unfinished_branches_for_terminal_scenario_session(session, scenario_id)
+        session.commit()
 
     get_or_create_cancel_token(scenario_id)
     request_cancel(scenario_id)
@@ -2824,6 +2854,7 @@ async def generate_result_report(
 ):
     """Generate or retry a result report over HTTP SSE."""
     _require_result_report_feature()
+    request_body = req or ResultReportGenerateRequest()
 
     engine = get_engine()
     recovered_profile_overrides: dict[str, Any] | None = None
@@ -2853,8 +2884,40 @@ async def generate_result_report(
         )
         has_model_profile_pointer = bool(str(parsed_context.get("model_profile_id") or "").strip())
         recovered_profile_overrides = recover_profile_provider_overrides(session, scenario)
+        if request_body.operation == "translate":
+            try:
+                saved_report = result_report_builder.load_report_translation_source(
+                    session, scenario
+                )
+            except result_report_builder.ResultReportTranslationError as exc:
+                raise api_error(409, exc.code, str(exc)) from None
+            dominant_branch_id = saved_report.target_branch_id
 
-    request_body = req or ResultReportGenerateRequest()
+    if dominant_branch_id is None:
+        raise api_error(409, "REPORT_BRANCH_NOT_READY", "No branch is ready for report generation")
+    try:
+        report_scope = resolve_report_lineage_scope(
+            get_engine(),
+            scenario_id,
+            dominant_branch_id=dominant_branch_id,
+        )
+    except BranchLineageError as exc:
+        if exc.code == "BRANCH_LINEAGE_BRANCH_NOT_FOUND":
+            raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found") from None
+        raise api_error(409, exc.code, "Branch lineage is invalid") from None
+    if report_scope is None:
+        raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found")
+    if request_body.operation == "generate" and request_body.detail_level == "brief":
+        return StreamingResponse(
+            result_report_builder.build_report_sse_stream(
+                scenario_id,
+                dominant_branch_id,
+                overrides=None,
+                report_scope=report_scope,
+                detail_level="brief",
+            ),
+            media_type="text/event-stream",
+        )
     validated_base_url = validate_llm_base_url(request_body.llm_base_url)
     if request_body.llm_base_url and validated_base_url is None:
         raise api_error(
@@ -2871,13 +2934,6 @@ async def generate_result_report(
             400,
             "BYOK_API_KEY_REQUIRED",
             "An API key is required when using a custom LLM base URL",
-        )
-
-    if dominant_branch_id is None:
-        raise api_error(
-            409,
-            "REPORT_BRANCH_NOT_READY",
-            "No branch is ready for report generation",
         )
 
     overrides = merge_profile_provider_overrides(
@@ -2934,25 +2990,14 @@ async def generate_result_report(
         **({"quota_user_id": overrides["quota_user_id"]} if overrides.get("quota_user_id") else {}),
     }
 
-    try:
-        report_scope = resolve_report_lineage_scope(
-            get_engine(),
-            scenario_id,
-            dominant_branch_id=dominant_branch_id,
-        )
-    except BranchLineageError as exc:
-        if exc.code == "BRANCH_LINEAGE_BRANCH_NOT_FOUND":
-            raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found") from None
-        raise api_error(409, exc.code, "Branch lineage is invalid") from None
-    if report_scope is None:
-        raise api_error(404, "BRANCH_NOT_FOUND", "Branch not found")
-
     return StreamingResponse(
         result_report_builder.build_report_sse_stream(
             scenario_id,
             dominant_branch_id,
             overrides=overrides,
             report_scope=report_scope,
+            detail_level=request_body.detail_level,
+            target_language=request_body.target_language,
         ),
         media_type="text/event-stream",
     )

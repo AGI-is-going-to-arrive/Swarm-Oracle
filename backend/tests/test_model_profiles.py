@@ -6,6 +6,7 @@ import json
 import logging
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -206,6 +207,66 @@ def test_model_profile_crud_redacts_api_key_and_scopes_by_user(caplog):
     assert deleted.status_code == 204
 
     assert SECRET_KEY not in "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_model_profile_confirmation_rejects_changed_binding_and_preserves_legacy_resolution():
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    client = TestClient(app)
+    created = client.post("/api/model-profiles", json=_profile_payload())
+    assert created.status_code == 201
+    profile = created.json()
+    token = profile["confirmation_token"]
+    assert len(token) == 64
+    assert all(char in "0123456789abcdef" for char in token)
+    _assert_secret_absent(profile)
+    with Session(get_engine()) as session:
+        reviewed = resolve_model_profile_policy(
+            session, user_id="owner-a", model_profile_id=profile["id"],
+            expected_confirmation_token=token,
+        )
+        assert reviewed.model == "gpt-4o-mini"
+
+    changed = client.patch(
+        f"/api/model-profiles/{profile['id']}?user_id=owner-a",
+        json={"model": "changed-after-review"},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["confirmation_token"] != token
+    with Session(get_engine()) as session:
+        with pytest.raises(HTTPException) as error:
+            resolve_model_profile_policy(
+                session, user_id="owner-a", model_profile_id=profile["id"],
+                expected_confirmation_token=token,
+            )
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "MODEL_PROFILE_CHANGED"
+        legacy = resolve_model_profile_policy(
+            session, user_id="owner-a", model_profile_id=profile["id"],
+        )
+        assert legacy.model == "changed-after-review"
+    assert reviewed.model == "gpt-4o-mini"
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"rpm": 13}, {"tpm": 13000}, {"concurrency": 4},
+        {"supports_structured_outputs": False},
+        {"supports_native_search": True},
+        {"native_search_upstream": "off"},
+    ],
+)
+def test_confirmation_token_tracks_effective_policy_changes(updates):
+    client = TestClient(app)
+    created = client.post("/api/model-profiles", json=_profile_payload())
+    assert created.status_code == 201
+    changed = client.patch(
+        f"/api/model-profiles/{created.json()['id']}?user_id=owner-a", json=updates,
+    )
+    assert changed.status_code == 200
+    assert changed.json()["confirmation_token"] != created.json()["confirmation_token"]
+    _assert_secret_absent(changed.json())
 
 
 def test_model_profile_supports_fields_preserve_tristate_create_update_resolve():
@@ -1181,6 +1242,8 @@ def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     caplog,
 ):
     from app.config import settings
+    from app.models import EndingRoom
+    from app.services.ending_room_service._utils import _recover_ending_room_llm_overrides
 
     monkeypatch.setattr(settings, "FEATURE_ROUNDTABLE_SURVEY", True)
     monkeypatch.setattr(settings, "FEATURE_ROUNDTABLE_ANALYST", True)
@@ -1213,7 +1276,11 @@ def test_ending_room_model_profiles_resolve_per_role_and_do_not_leak(
     def _capture_room_schedule(coro):
         frame = getattr(coro, "cr_frame", None)
         if frame is not None:
-            captured["room"] = frame.f_locals.get("room_llm_overrides")
+            assert "room_llm_overrides" not in frame.f_locals
+            with Session(get_engine()) as session:
+                room = session.get(EndingRoom, frame.f_locals["snapshot"]["id"])
+                assert room.config_json["room_model_profile_id"] == profile_ids["room"]
+                captured["room"] = _recover_ending_room_llm_overrides(session, room)
         coro.close()
         return None
 

@@ -10,6 +10,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from sqlmodel import Session, select
@@ -26,8 +27,11 @@ from app.models import (
     EndingRoomThreadMode,
     EndingRoomTurn,
     EndingRoomTurnSource,
+    ModelProfile,
     Round,
+    Scenario,
 )
+from app.services.branch_lineage import BranchLineageError, select_branch_rounds
 from app.services.lang_detect import detect_language
 
 logger = logging.getLogger(__name__)
@@ -65,6 +69,165 @@ class EndingRoomServiceError(Exception):
 # Backward-compatible alias for in-progress callers.
 EndingRoomDomainError = EndingRoomServiceError
 EndingRoomInputError = EndingRoomServiceError
+
+
+def _provider_policy_overrides(policy: Any) -> dict[str, Any]:
+    return {
+        "api_key": policy.api_key,
+        "base_url": policy.base_url,
+        "model": policy.model,
+        "requests_per_minute": policy.requests_per_minute,
+        "tokens_per_minute": policy.tokens_per_minute,
+        "concurrency": policy.concurrency,
+        "supports_structured_outputs_override": policy.supports_structured_outputs,
+        "supports_native_search_override": policy.supports_native_search,
+        "native_search_upstream_override": policy.native_search_upstream,
+    }
+
+
+def _validate_ending_room_llm_overrides(
+    api_key: str | None,
+    base_url: str | None,
+) -> tuple[str | None, str | None]:
+    from app.api.errors import api_error
+    from app.services.llm_client import is_local_provider_url, validate_llm_base_url
+
+    api_key = (api_key.strip() or None) if isinstance(api_key, str) else None
+    base_url = (base_url.strip() or None) if isinstance(base_url, str) else None
+    if base_url:
+        validated = validate_llm_base_url(base_url)
+        if validated is None:
+            raise api_error(
+                400, "LLM_BASE_URL_NOT_ALLOWED",
+                "Provided llm_base_url is not in the allowed provider list",
+            )
+        if not api_key and not is_local_provider_url(validated):
+            raise api_error(
+                400, "BYOK_API_KEY_REQUIRED",
+                "An API key is required when using a custom LLM base URL",
+            )
+        return api_key, validated
+    return api_key, base_url
+
+
+def _resolve_ending_room_provider(
+    session: Session,
+    scenario: Scenario,
+    room: EndingRoom | None = None,
+    *,
+    user_id: str | None = None,
+    role_model_profile_id: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve the persisted room binding for generation, followups, and tools."""
+    from app.config import settings
+    from app.log_sanitize import _scrub_sensitive_text
+    from app.services.llm_client import is_local_provider_url
+    from app.services.llm_resolution import (
+        merge_profile_provider_overrides,
+        model_profile_provider_unresolved,
+        raise_unresolved_model_profile_provider,
+        recover_profile_provider_overrides,
+        resolve_post_completion_llm_call_config,
+    )
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    context = dict(scenario.parsed_context or {})
+    room_profile_id = (
+        str((room.config_json or {}).get("room_model_profile_id") or "").strip()
+        if room else ""
+    )
+    inherited_profile_id = room_profile_id or str(context.get("model_profile_id") or "").strip()
+    source = "room_profile" if room_profile_id else "scenario_profile"
+    explicit_provider = any(value is not None for value in (api_key, base_url, model))
+    if explicit_provider and not (
+        base_url and model and (api_key or is_local_provider_url(base_url))
+    ):
+        raise_unresolved_model_profile_provider()
+
+    profile_id = role_model_profile_id or inherited_profile_id or None
+    if role_model_profile_id:
+        policy = resolve_model_profile_policy(
+            session,
+            user_id=scenario.user_id or user_id,
+            model_profile_id=role_model_profile_id,
+            explicit_api_key=api_key,
+            explicit_base_url=base_url,
+            explicit_model=model,
+        )
+        if policy is None:
+            raise_unresolved_model_profile_provider()
+        overrides = _provider_policy_overrides(policy)
+        profile_id = policy.model_profile_id
+        source = "role_override" if profile_id else "explicit"
+    else:
+        inherited = SimpleNamespace(
+            id=scenario.id,
+            user_id=scenario.user_id or user_id,
+            parsed_context={**context, "model_profile_id": inherited_profile_id},
+        )
+        recovered = recover_profile_provider_overrides(session, inherited)
+        if model_profile_provider_unresolved(
+            inherited, recovered,
+            explicit_api_key=api_key,
+            explicit_base_url=base_url,
+            explicit_model=model,
+        ):
+            raise_unresolved_model_profile_provider()
+        merged = merge_profile_provider_overrides(
+            {"api_key": api_key, "base_url": base_url, "model": model}, recovered,
+        )
+        if not explicit_provider and not recovered and context.get("llm_base_url"):
+            saved_base = str(context["llm_base_url"]).strip()
+            # Legacy BYOK credentials are not persisted. Recovery must never
+            # silently substitute the server account for that binding.
+            if not is_local_provider_url(saved_base) or not context.get("llm_model"):
+                raise_unresolved_model_profile_provider()
+        resolved = resolve_post_completion_llm_call_config(
+            parsed_context=context,
+            **{f"request_{key}": value for key, value in merged.items()
+               if key not in {"model_profile_id", "quota_user_id"}},
+        )
+        overrides = {
+            key: getattr(resolved, key)
+            for key in (
+                "api_key", "base_url", "model", "requests_per_minute",
+                "tokens_per_minute", "concurrency",
+                "supports_structured_outputs_override",
+                "supports_native_search_override", "native_search_upstream_override",
+            )
+        }
+        if explicit_provider:
+            source, profile_id = "explicit", None
+        elif not inherited_profile_id:
+            source = (
+                "scenario" if context.get("llm_model") or context.get("llm_base_url")
+                else "server_default"
+            )
+    validated_key, validated_url = _validate_ending_room_llm_overrides(
+        overrides.get("api_key"), overrides.get("base_url"),
+    )
+    overrides.update(api_key=validated_key, base_url=validated_url)
+    profile = session.get(ModelProfile, profile_id) if profile_id else None
+    effective_model = overrides.get("model") or settings.LLM_MODEL_NAME
+    return overrides, {
+        "source": source,
+        "profile_id": profile_id,
+        "name": _scrub_sensitive_text(profile.name if profile else effective_model),
+        "model": _scrub_sensitive_text(effective_model),
+    }
+
+
+def _recover_ending_room_llm_overrides(
+    session: Session, room: EndingRoom,
+) -> dict[str, Any] | None:
+    scenario = session.get(Scenario, room.scenario_id)
+    if scenario is None:
+        raise EndingRoomServiceError(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+    overrides, _descriptor = _resolve_ending_room_provider(session, scenario, room)
+    return overrides if any(value is not None for value in overrides.values()) else None
 
 
 @dataclass(frozen=True)
@@ -409,11 +572,14 @@ def _load_branch_rows(
     language: str,
 ) -> list[dict[str, Any]]:
     unknown_speaker = "未知角色" if language == "zh" else "Unknown"
+    round_ids = _visible_branch_round_ids(session, branch_id)
+    if not round_ids:
+        return []
     rows = session.exec(
         select(Round.round_number, Agent.id, Agent.name, AgentMessage.content)
         .join(AgentMessage, AgentMessage.round_id == Round.id)
         .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
-        .where(Round.branch_id == branch_id)
+        .where(Round.id.in_(round_ids))
         .order_by(Round.round_number, AgentMessage.id)
     ).all()
     return [
@@ -426,6 +592,20 @@ def _load_branch_rows(
         for round_number, agent_id, agent_name, content in rows
         if str(content or "").strip()
     ]
+
+
+def _visible_branch_round_ids(session: Session, branch_id: str) -> list[str]:
+    """Use the same bounded ancestry for recaps, representatives, and follow-ups."""
+    branch = session.get(Branch, branch_id)
+    if branch is None:
+        raise EndingRoomServiceError(404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Branch not found")
+    try:
+        selection = select_branch_rounds(
+            session, scenario_id=branch.scenario_id, branch_id=branch.id,
+        )
+    except BranchLineageError as exc:
+        raise EndingRoomServiceError(409, exc.code, str(exc)) from exc
+    return [round_.id for round_ in selection.rounds]
 
 
 def _latest_row_for_agent(

@@ -186,6 +186,19 @@ _EVIDENCE_REF_LABEL_RE = re.compile(
     r"^(?:\*\*|__)?\s*(?:evidence\s*ref(?:erence)?|ev[_-]?\d+|证据引用)\b",
     re.IGNORECASE,
 )
+_REFERENCE_FRAGMENT_TOKEN_RE = re.compile(
+    r"\b(?:evidence\s*ref(?:erences?)?|references?|refs?)\b|证据引用|"
+    r"\bev(?:[-_][a-z0-9]+)+\b|\bE\d+\b",
+    re.IGNORECASE,
+)
+_NON_FACTUAL_BOILERPLATE_RE = re.compile(
+    r"^(?:Evidence-limited hypothesis|Unverified attribution|"
+    r"Further evidence is required|Available evidence does not establish causality|"
+    r"This is a hypothesis, not an observed event|"
+    r"证据有限的假设|归因未经验证|仍需进一步证据|现有证据不足以确定因果关系|"
+    r"这是一项假设，而非已观察到的事件)[\s:：。.!！]*$",
+    re.IGNORECASE,
+)
 _DISPLAY_HEADING_RE = re.compile(
     r"^(?:\*\*|__)?\s*(?:verbatim(?:\s+(?:evidence|anchor)|\s+锚定)?|"
     r"evidence(?:\s+references?)?|key\s+evidence|analysis|findings?|"
@@ -436,6 +449,14 @@ def _normalize_claim_statement(statement: str) -> str | None:
     ):
         return None
     if fully_emphasized and not re.search(r"[。！？.!?][\"'”’]?$", candidate):
+        return None
+    # A standalone reference identifier or an explicit methodological label is
+    # presentation metadata. Keep every proposition around it in the compiler;
+    # in particular, this does not skip text merely because it contains a ref.
+    reference_remainder, reference_count = _REFERENCE_FRAGMENT_TOKEN_RE.subn("", candidate)
+    if reference_count and not re.search(r"[\w\u3400-\u9fff]", reference_remainder):
+        return None
+    if _NON_FACTUAL_BOILERPLATE_RE.fullmatch(candidate):
         return None
     return candidate
 
@@ -1397,14 +1418,18 @@ def _safe_section(
     reasons = {claim.downgrade_reason for claim in claims if claim.downgrade_reason}
     if reasons:
         if "speaker_mismatch" in reasons:
-            zh_prefix, en_prefix = "**归因未经验证：** ", "**Unverified attribution:** "
+            zh_prefix, en_prefix = "**归因未经验证：**", "**Unverified attribution:**"
         else:
-            zh_prefix = "**证据有限的假设：** "
-            en_prefix = "**Evidence-limited hypothesis:** "
+            zh_prefix = "**证据有限的假设：**"
+            en_prefix = "**Evidence-limited hypothesis:**"
         if not zh.startswith(zh_prefix):
-            zh = f"{zh_prefix}{zh}"
+            zh = f"{zh_prefix}\n\n{zh}"
+        else:
+            zh = f"{zh_prefix}\n\n{zh[len(zh_prefix):].lstrip()}"
         if not en.startswith(en_prefix):
-            en = f"{en_prefix}{en}"
+            en = f"{en_prefix}\n\n{en}"
+        else:
+            en = f"{en_prefix}\n\n{en[len(en_prefix):].lstrip()}"
     return section.model_copy(
         update={"body_md_i18n": I18nText(zh=zh, en=en)},
         deep=True,
@@ -1519,6 +1544,8 @@ def _analytic_confidence(
     evidence_coverage: _EvidenceCoverage,
 ) -> AnalyticConfidence:
     strong = sum(claim.evidence_strength == "strong" for claim in claims)
+    moderate = sum(claim.evidence_strength == "moderate" for claim in claims)
+    unsupported = sum(claim.evidence_strength == "unsupported" for claim in claims)
     downgraded = sum(claim.confidence == "low" for claim in claims)
     if not claims or downgraded:
         level = "low"
@@ -1529,7 +1556,11 @@ def _analytic_confidence(
     basis = (
         "No compiled claims remain."
         if not claims
-        else f"{strong}/{len(claims)} claims have strong evidence support; {downgraded} downgraded."
+        else (
+            f"{len(claims)} factual claims: {strong} exact-quote supported, "
+            f"{moderate} supported paraphrases, {unsupported} unsupported; "
+            f"{downgraded} downgraded. Missing exact quotes alone do not establish hallucination."
+        )
     )
     confidence = AnalyticConfidence(
         level=level,
@@ -1539,8 +1570,9 @@ def _analytic_confidence(
                 "没有保留可编译结论。"
                 if not claims
                 else (
-                    f"{len(claims)} 条结论中 {strong} 条有强证据支持，"
-                    f"{downgraded} 条已降级。"
+                    f"{len(claims)} 条事实性结论中，{strong} 条有逐字引文支持，"
+                    f"{moderate} 条为有依据的转述，{unsupported} 条尚无支持；"
+                    f"{downgraded} 条已降级。缺少逐字引文本身不等于幻觉。"
                 )
             ),
             en=basis,
@@ -1901,8 +1933,11 @@ def _branch_narrative_display_text(text: str) -> str:
     )
     stripped = text.strip()
     for source, target in replacements:
-        if stripped.startswith(source):
-            return f"{target}{stripped[len(source):].lstrip()}"
+        # Report sections use a block notice, while Branch narrative fields are
+        # plain text. Accept both legacy spaces and the new paragraph boundary.
+        prefix = source.rstrip()
+        if stripped.startswith(prefix):
+            return f"{target}{stripped[len(prefix):].lstrip()}"
     return stripped
 
 

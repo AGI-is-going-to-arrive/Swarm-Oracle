@@ -915,6 +915,10 @@ async def test_reclaimed_applied_round_is_marked_injected_without_reprocessing(m
             round_number=0,
             user_input="Force an audit gate.",
         )
+        log.effect_summary_json = json.dumps({
+            "intervention_log_id": log.id, "round_number": 1,
+            "affected_agents": [], "no_response_detected": True,
+        })
         session.add(log)
         session.commit()
         session.refresh(log)
@@ -1852,3 +1856,369 @@ def test_032_migration_preserves_legacy_rows(tmp_path, monkeypatch):
             engine.dispose()
     finally:
         database_module.dispose_engine()
+
+
+def _queue_runtime_card(scenario_id: str, branch_id: str) -> dict:
+    response = TestClient(app).post(
+        f"/api/scenario/{scenario_id}/intervene",
+        json={
+            "branch_id": branch_id, "text": "Force a public audit.",
+            "card_id": "human_takeover", "profile_id": "governance",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+    return response.json()
+
+
+def _runtime_receipt(engine, log_id: str) -> dict:
+    with Session(engine) as session:
+        return json.loads(session.get(InterventionLog, log_id).effect_summary_json)
+
+
+@pytest.mark.parametrize("terminal", [
+    ScenarioStatus.NARRATING, ScenarioStatus.CANCELLED, ScenarioStatus.ERROR,
+])
+@pytest.mark.parametrize("replay_kind", [None, "resume"])
+def test_late_final_round_and_continuation_queue_settle_once(terminal, replay_kind):
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    _seed_round(engine, bid, 4)
+    with Session(engine) as session:
+        scenario = session.get(Scenario, sid)
+        scenario.parsed_context = {"simulation_rounds": 1}
+        branch = session.get(Branch, bid)
+        branch.replay_kind = replay_kind
+        session.add_all([scenario, branch])
+        session.commit()
+    accepted = _queue_runtime_card(sid, bid)
+    receipt_id = accepted["intervention_id"]
+    queued = TestClient(app).get(f"/api/scenario/{sid}/intervention-effects").json()["effects"][0]
+    assert queued["status"] == "queued"
+    assert queued["branch_id"] == bid
+
+    simulator_module._update_scenario_status(engine, sid, terminal)
+    simulator_module._update_scenario_status(engine, sid, terminal)
+    receipt = _runtime_receipt(engine, receipt_id)
+    assert receipt["status"] == "expired"
+    assert receipt["refunded_points"] == 1
+    assert receipt["gameplay_usage_refunded"] is True
+    assert receipt["reason"]
+    with Session(engine) as session:
+        state = session.get(Scenario, sid).gameplay_state_json
+        assert state["revision"] == 2
+        assert state["cards"]["usage_log"] == []
+        assert not session.exec(select(PendingIntervention)).all()
+    rejected = TestClient(app).post(
+        f"/api/scenario/{sid}/intervene", json={"branch_id": bid, "text": "Too late"},
+    )
+    assert rejected.status_code == 409
+
+
+def test_refund_preserves_prior_same_card_usage_and_cooldown(monkeypatch):
+    from app.api import interventions as interventions_module
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    timestamp = "2026-09-05T01:00:00+00:00"
+    monkeypatch.setattr(interventions_module, "_now_iso", lambda: timestamp)
+    prior = {
+        "card_id": "human_takeover", "profile_id": "governance", "branch_id": bid,
+        "branch_title": "算法登基", "round": 1, "cost": 1,
+        "directive": "Keep the original rule", "used_at": timestamp,
+    }
+    _set_gameplay_state(engine, sid, {"revision": 0, "cards": {"usage_log": [prior]}})
+    _seed_round(engine, bid, 4)
+    accepted = _queue_runtime_card(sid, bid)
+    usage_receipt = _runtime_receipt(engine, accepted["intervention_id"])["gameplay_usage"]
+    assert usage_receipt["used_at"] != timestamp
+    simulator_module._update_scenario_status(engine, sid, ScenarioStatus.ERROR)
+    with Session(engine) as session:
+        state = session.get(Scenario, sid).gameplay_state_json
+        assert state["cards"]["usage_log"] == [prior]
+        assert interventions_module._remaining_director_points(state) == 2
+        assert interventions_module._last_card_round(state, "human_takeover") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["none", "durable", "unrelated", "stale_token"])
+async def test_intervention_cleanup_uses_exact_transactional_message_evidence(delivery):
+    from app.models import AgentMessage
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    accepted = _queue_runtime_card(sid, bid)
+    key = f"{sid}:{bid}"
+    item = await simulator_module.claim_next_pending_intervention(key, "owner-claim")
+    rid = simulator_module._create_round(engine, bid, 1, intervention_item=item)
+    with Session(engine) as session:
+        agent = Agent(scenario_id=sid, name="Auditor", role="Reviewer")
+        session.add(agent)
+        session.commit()
+        agent_id = agent.id
+    if delivery != "none":
+        metadata = {
+            **item.metadata,
+            "intervention_claim_token": (
+                "old-claim" if delivery == "stale_token" else item.claim_token
+            ),
+        }
+        simulator_module._save_messages(
+            engine, [{
+                "round_id": rid, "agent_id": agent_id, "content": "The audit changes the ruling.",
+                "emotion": "neutral",
+            }],
+            intervention_metadata=None if delivery == "unrelated" else metadata,
+        )
+    simulator_module._update_scenario_status(engine, sid, ScenarioStatus.CANCELLED)
+    receipt = _runtime_receipt(engine, accepted["intervention_id"])
+    assert receipt["status"] == ("applied" if delivery == "durable" else "expired")
+    assert receipt["refunded_points"] == (0 if delivery == "durable" else 1)
+    with Session(engine) as session:
+        assert len(session.exec(select(AgentMessage)).all()) == (0 if delivery == "none" else 1)
+    public = TestClient(app).get(f"/api/scenario/{sid}/intervention-effects").json()["effects"][0]
+    assert not any(key.startswith("processing_") for key in public)
+    assert "gameplay_usage" not in public
+
+
+@pytest.mark.asyncio
+async def test_failed_intervention_refunds_once_and_old_claim_cannot_settle_reclaimed_item():
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    accepted = _queue_runtime_card(sid, bid)
+    key = f"{sid}:{bid}"
+    old = await simulator_module.claim_next_pending_intervention(key, "old", lease_seconds=-1)
+    new = await simulator_module.claim_next_pending_intervention(key, "new", lease_seconds=300)
+    assert old.id == new.id
+    await simulator_module.mark_intervention_failed(
+        key, old.id, "Old failure", claim_token=old.claim_token,
+    )
+    assert _runtime_receipt(engine, accepted["intervention_id"])["status"] == "queued"
+    await simulator_module.mark_intervention_failed(
+        key, new.id, "Processing failed", claim_token=new.claim_token,
+    )
+    failed = _runtime_receipt(engine, accepted["intervention_id"])
+    assert failed["status"] == "failed"
+    assert failed["refunded_points"] == 1
+    await simulator_module.mark_intervention_injected(key, new.id, claim_token=new.claim_token)
+    await simulator_module.clear_pending_interventions_for_scenario(sid)
+    assert _runtime_receipt(engine, accepted["intervention_id"]) == failed
+
+
+@pytest.mark.asyncio
+async def test_concurrent_card_accept_and_terminal_cleanup_never_double_spend_or_refund(
+    monkeypatch,
+):
+    from fastapi import HTTPException
+
+    from app.api import interventions as interventions_module
+    from app.api.schemas import InterveneRequest
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    branches = [_seed_branch(engine, sid, title=f"Branch {index}") for index in range(2)]
+    monkeypatch.setitem(interventions_module.GAMEPLAY_CARD_DEFS, "human_takeover", {
+        **interventions_module.GAMEPLAY_CARD_DEFS["human_takeover"],
+        "cost": 3, "cooldown_rounds": 0,
+    })
+    barrier = threading.Barrier(2)
+
+    def accept(bid):
+        barrier.wait(timeout=5)
+        try:
+            return asyncio.run(interventions_module.intervene(sid, InterveneRequest(
+                branch_id=bid, text="Concurrent card",
+                card_id="human_takeover", profile_id="governance",
+            ), principal=None))
+        except HTTPException as exc:
+            return exc.status_code
+
+    results = await asyncio.gather(*(asyncio.to_thread(accept, bid) for bid in branches))
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert 422 in results
+    with Session(engine) as session:
+        state = session.get(Scenario, sid).gameplay_state_json
+        assert sum(item["cost"] for item in state["cards"]["usage_log"]) == 3
+    await asyncio.gather(*(asyncio.to_thread(
+        simulator_module._update_scenario_status, engine, sid, ScenarioStatus.ERROR,
+    ) for _ in range(2)))
+    with Session(engine) as session:
+        state = session.get(Scenario, sid).gameplay_state_json
+        assert state["revision"] == 2
+        assert state["cards"]["usage_log"] == []
+        logs = session.exec(select(InterventionLog)).all()
+        assert len(logs) == 1
+        assert json.loads(logs[0].effect_summary_json)["refunded_points"] == 3
+
+
+@pytest.mark.asyncio
+async def test_startup_reconciles_orphaned_claim_receipt_and_preserves_live_claim():
+    from app.services import simulator as simulator_module
+    from app.services.runtime_lock import (
+        acquire_runtime_lock,
+        release_runtime_lock,
+        simulation_lock_key,
+    )
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    accepted = _queue_runtime_card(sid, bid)
+    await simulator_module.claim_next_pending_intervention(f"{sid}:{bid}", "crashed")
+    lease = acquire_runtime_lock(simulation_lock_key(sid), lease_seconds=60)
+    assert lease is not None
+    try:
+        assert simulator_module.reconcile_orphaned_running_scenarios(engine) == 0
+        assert _runtime_receipt(engine, accepted["intervention_id"])["status"] == "queued"
+    finally:
+        release_runtime_lock(lease)
+    assert simulator_module.reconcile_orphaned_running_scenarios(engine) == 1
+    receipt = _runtime_receipt(engine, accepted["intervention_id"])
+    assert receipt["status"] == "expired"
+    assert receipt["refunded_points"] == 1
+
+
+@pytest.mark.asyncio
+async def test_final_round_applies_claimed_item_and_expires_overflow_and_late_accept(monkeypatch):
+    from app.api.interventions import intervene
+    from app.api.schemas import InterveneRequest
+    from app.config import settings
+    from app.services import simulator as simulator_module
+
+    for feature in (
+        "FEATURE_AGENT_IDENTITY", "FEATURE_CAUSAL_GRAPH", "FEATURE_COUNTERFACTUAL_REPLAY",
+        "FEATURE_FACTIONS", "FEATURE_RESULT_VERDICT", "FEATURE_RESULT_REPORT",
+    ):
+        monkeypatch.setattr(settings, feature, False)
+    engine = get_engine()
+    sid = _seed_scenario(engine, language="English")
+    bid = _seed_branch(engine, sid, title="Audit route")
+    with Session(engine) as session:
+        scenario = session.get(Scenario, sid)
+        scenario.parsed_context = {
+            "_language": "English", "simulation_rounds": 1, "setting": {},
+            "branch_sensitivity": 1.0, "key_variable": "Audit decision", "mode": "raw",
+        }
+        agent = Agent(scenario_id=sid, name="Auditor", role="Reviewer")
+        session.add_all([scenario, agent])
+        session.commit()
+    first = _queue_runtime_card(sid, bid)
+    overflow = await intervene(
+        sid, InterveneRequest(branch_id=bid, text="Overflow"), principal=None,
+    )
+    late = []
+    events = []
+
+    async def gather(*args, **kwargs):
+        assert _runtime_receipt(engine, first["intervention_id"])["status"] == "queued"
+        late.append(await intervene(
+            sid, InterveneRequest(branch_id=bid, text="After final round claim"), principal=None,
+        ))
+        agent = args[5][0]
+        content = "The public audit changes this ruling."
+        simulator_module._save_messages(
+            engine, [{
+                "round_id": args[3], "agent_id": agent["id"], "content": content,
+                "emotion": "neutral",
+            }], intervention_metadata=kwargs["intervention_metadata"],
+        )
+        return [{
+            "agent_id": agent["id"], "agent_name": agent["name"], "content": content,
+            "emotion": "neutral", "diverge": None,
+        }]
+
+    async def narration(**_kwargs):
+        return {
+            "story": "The public audit was completed.", "insight": "An audit changed the ruling.",
+        }
+
+    async def broadcast(_sid, event):
+        events.append(event)
+
+    monkeypatch.setattr(simulator_module, "_gather_agent_messages", gather)
+    monkeypatch.setattr(simulator_module, "narrate_branch", narration)
+    await simulator_module._run_simulation_impl(sid, branch_id=bid, ws_callback=broadcast)
+    assert _runtime_receipt(engine, first["intervention_id"])["status"] == "applied"
+    assert _runtime_receipt(engine, first["intervention_id"])["refunded_points"] == 0
+    assert _runtime_receipt(engine, overflow["intervention_id"])["status"] == "expired"
+    assert _runtime_receipt(engine, late[0]["intervention_id"])["status"] == "expired"
+    injected = [
+        event["data"]["intervention_id"] for event in events
+        if event["type"] == "intervention_injected"
+    ]
+    assert injected == [first["intervention_id"]]
+    with Session(engine) as session:
+        assert session.get(Scenario, sid).gameplay_state_json["cards"]["usage_log"]
+        assert not session.exec(select(PendingIntervention)).all()
+
+
+def test_cancel_commits_terminal_status_receipt_and_refund_atomically():
+    from sqlalchemy import event
+
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    accepted = _queue_runtime_card(sid, bid)
+    committed_states = []
+
+    def observe_commit(_session):
+        # Every commit is a possible process-crash boundary. The first durable
+        # CANCELLED row must already include the matching receipt and refund.
+        with Session(engine) as observer:
+            scenario = observer.get(Scenario, sid)
+            if scenario.status != ScenarioStatus.CANCELLED:
+                return
+            log = observer.get(InterventionLog, accepted["intervention_id"])
+            receipt = json.loads(log.effect_summary_json)
+            committed_states.append((
+                receipt["status"], receipt.get("refunded_points", 0),
+                len(scenario.gameplay_state_json["cards"]["usage_log"]),
+                observer.get(Branch, bid).status,
+            ))
+
+    event.listen(Session, "after_commit", observe_commit)
+    try:
+        response = TestClient(app).post(f"/api/scenario/{sid}/cancel")
+    finally:
+        event.remove(Session, "after_commit", observe_commit)
+    assert response.status_code == 200
+    assert committed_states
+    assert all(state == ("expired", 1, 0, BranchStatus.PRUNED) for state in committed_states)
+
+
+@pytest.mark.parametrize("terminal", [ScenarioStatus.ERROR, ScenarioStatus.CANCELLED])
+def test_get_recovers_receipt_when_process_died_after_terminal_status_commit(terminal):
+    engine = get_engine()
+    sid = _seed_scenario(engine)
+    bid = _seed_branch(engine, sid)
+    accepted = _queue_runtime_card(sid, bid)
+    with Session(engine) as session:
+        # Simulate a historical/post-parse crash between terminal status and
+        # cleanup; a reconnect must recover the same accepted action once.
+        scenario = session.get(Scenario, sid)
+        scenario.status = terminal
+        session.add(scenario)
+        session.commit()
+    client = TestClient(app)
+    for _ in range(2):
+        response = client.get(f"/api/scenario/{sid}")
+        assert response.status_code == 200
+        assert response.json()["status"] == terminal.value
+    receipt = _runtime_receipt(engine, accepted["intervention_id"])
+    assert receipt["status"] == "expired"
+    assert receipt["refunded_points"] == 1
+    with Session(engine) as session:
+        state = session.get(Scenario, sid).gameplay_state_json
+        assert state["revision"] == 2
+        assert state["cards"]["usage_log"] == []

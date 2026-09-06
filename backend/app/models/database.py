@@ -797,8 +797,11 @@ def init_db():
     Config, command, _ScriptDirectory = alembic_runtime
     backend_root = Path(__file__).resolve().parents[2]
     config = Config(str(backend_root / "alembic.ini"))
-    config.set_main_option("script_location", str(backend_root / "alembic"))
-    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    # Alembic uses ConfigParser interpolation. Escape at this boundary only;
+    # the resolved URL must retain literal percent signs and SQLite URI escapes.
+    config.file_config.set("DEFAULT", "here", str(backend_root).replace("%", "%%"))
+    config.set_main_option("script_location", str(backend_root / "alembic").replace("%", "%%"))
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
     config.attributes["configure_logging"] = False
     dispose_engine()
     bootstrap_revision = _bootstrap_alembic_revision_for_sqlite(

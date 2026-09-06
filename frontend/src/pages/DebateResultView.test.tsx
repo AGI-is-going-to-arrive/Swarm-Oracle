@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../api/client';
 import { DebateResultView } from './DebateResultView';
@@ -295,6 +295,78 @@ describe('DebateResultView', () => {
     captureElementDataUrlMock.mockReset();
     argumentMapMock.mockClear();
     window.localStorage.clear();
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('opens preserved turns immediately instead of polling for a cancelled verdict', async () => {
+    getDebateResultMock.mockRejectedValue(new ApiError(409, 'DEBATE_CANCELLED', 'Cancelled'));
+    render(<MemoryRouter initialEntries={['/debate/debate-1/result']}><Routes><Route path="/debate/:id/result" element={<DebateResultView />} /></Routes></MemoryRouter>);
+    expect(await screen.findByRole('button', { name: 'debate.open_preserved_turns' })).toBeInTheDocument();
+    expect(getDebateResultMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not create local copies on repeated result visits and reuses an explicit share copy', async () => {
+    const user = userEvent.setup();
+    getDebateResultMock.mockResolvedValue(buildPayload());
+    const page = (
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes><Route path="/debate/:id/result" element={<DebateResultView />} /></Routes>
+      </MemoryRouter>
+    );
+    const first = render(page);
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(window.localStorage.getItem('swarmoracle:debate-replay:v1')).toBeNull();
+    first.unmount();
+    render(page);
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(window.localStorage.getItem('swarmoracle:debate-replay:v1')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'debate.open_share' }));
+    const original = window.localStorage.getItem('swarmoracle:debate-replay:v1');
+    expect(Object.keys(JSON.parse(original ?? '{}'))).toHaveLength(1);
+    await user.click(screen.getAllByRole('button', { name: 'common.close' })[0]);
+    await user.click(screen.getByRole('button', { name: 'debate.open_share' }));
+    expect(window.localStorage.getItem('swarmoracle:debate-replay:v1')).toBe(original);
+  });
+
+  it('keeps results and text sharing usable when local replay storage is corrupt', async () => {
+    const user = userEvent.setup();
+    getDebateResultMock.mockResolvedValue(buildPayload());
+    window.localStorage.setItem('swarmoracle:debate-replay:v1', '{broken');
+    window.localStorage.setItem('other-saved-content', 'keep');
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes><Route path="/debate/:id/result" element={<DebateResultView />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'debate.open_share' }));
+    expect(await screen.findByText('debate.local_copy_unavailable')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'share.copy_btn' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'debate.copy_local_copy_btn' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'share.copy_permalink_btn' })).not.toBeInTheDocument();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await user.click(screen.getByRole('button', { name: 'debate.local_copy_reset' }));
+    expect(window.localStorage.getItem('swarmoracle:debate-replay:v1')).toBe('{broken');
+    await user.click(screen.getByRole('button', { name: 'debate.local_copy_reset' }));
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('button', { name: 'debate.copy_local_copy_btn' })).toBeEnabled();
+    expect(window.localStorage.getItem('other-saved-content')).toBe('keep');
+  });
+
+  it('isolates storage quota failure from the verdict and omits unusable replay links', async () => {
+    const user = userEvent.setup();
+    getDebateResultMock.mockResolvedValue(buildPayload());
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { throw new DOMException('full', 'QuotaExceededError'); });
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes><Route path="/debate/:id/result" element={<DebateResultView />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'debate.open_share' }));
+    expect(await screen.findByText('debate.local_copy_unavailable')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'share.copy_btn' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'debate.copy_local_copy_btn' })).not.toBeInTheDocument();
   });
 
   it('renders verdict and exposes automation payload plus capture hooks', async () => {

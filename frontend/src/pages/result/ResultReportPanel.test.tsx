@@ -4,6 +4,7 @@ import i18n from '../../i18n/config';
 
 import type {
   FullReport,
+  ReportAuthoredContent,
   StoryData,
   ToolTraceSummary,
 } from '../../types';
@@ -60,7 +61,7 @@ import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { generateReport, getStory } from '../../api/client';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
-import { ResultReportPanel, resolveReportContentLanguage } from './ResultReportPanel';
+import { ResultReportPanel, resolveReportContentLanguage, projectReportContentLanguage } from './ResultReportPanel';
 
 const mockedCtx = vi.mocked(useResultContext);
 const mockedCap = vi.mocked(useCapabilityCheck);
@@ -619,7 +620,7 @@ describe('ResultReportPanel — SSE section progress', () => {
     });
 
     expect(mockedGetStory).toHaveBeenCalledOnce();
-    expect(screen.getByText(/section timeline completed/i)).toBeInTheDocument();
+    expect(screen.getByText(/section Turning points completed/i)).toBeInTheDocument();
     expect(screen.getByText('Generated')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Show tool activity/i })).toHaveTextContent('Tool activity (1)');
 
@@ -652,11 +653,11 @@ describe('ResultReportPanel — SSE section progress', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText(/section factions failed/i)).toBeInTheDocument();
-    expect(screen.getByText(/section timeline completed/i)).toBeInTheDocument();
+    expect(screen.getByText(/section Faction structure failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/section Turning points completed/i)).toBeInTheDocument();
     expect(screen.getByText('Rewritten')).toBeInTheDocument();
     expect(screen.getByText(/section generation timed out/i)).toBeInTheDocument();
-    expect(screen.getByText(/current section: timeline/i)).toBeInTheDocument();
+    expect(screen.getByText(/current section: Turning points/i)).toBeInTheDocument();
     expect(screen.getByText(/2 sections available/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Show tool activity/i })).toHaveTextContent('Tool activity (1)');
     expect(mockedGetStory).toHaveBeenCalledOnce();
@@ -2166,5 +2167,114 @@ describe('ResultReportPanel — interview evidence rendering', () => {
       expect(screen.queryByText(/Key takeaways/i)).toBeNull();
       expect(container.querySelector('.report-digest')).toBeNull();
     });
+  });
+});
+
+function translatedReportContent(source: FullReport): ReportAuthoredContent {
+  return {
+    title: '中文报告标题', summary: '中文报告摘要。', headline_answer: '中文结论。',
+    limitations: '中文局限说明。', disclaimer: '这是模拟权重。', confidence_basis: '中文证据支撑说明。',
+    section_texts: Object.fromEntries(source.sections.map((section) => [section.id, { title: `译文 ${section.id}`, body_md: '中文正文。' }])),
+    follow_ups: source.follow_ups.map(() => '中文后续问题。'),
+    indicators_to_watch: source.indicators_to_watch.map((indicator) => ({ ...indicator, signal: '中文信号', note: '中文说明' })),
+    dissenting: source.dissenting ? { ...source.dissenting, why_verdict_could_be_wrong: '中文反向解释。', what_almost_won: '中文候选结局。' } : null,
+    interview_evidence: source.interview_evidence,
+    interview_status: source.interview_status ? { ...source.interview_status, message: '中文访谈状态。' } : null,
+    premortem_analysis: source.premortem_analysis,
+  };
+}
+
+describe('report translation projection and explicit operations', () => {
+  it('projects the selected language for text and appendices without changing source evidence', () => {
+    const source = makeReport({
+      evidence: premortemEvidence,
+      follow_ups: ['Original follow-up'],
+      indicators_to_watch: [{ signal: 'Original signal', direction: 'up', note: 'Original note', evidence_refs: ['ev-1'] }],
+      interview_evidence: [{ branch_index: 0, round: 1, agent_name: 'Analyst One', excerpt: 'Inventories fell below the operating buffer.' }],
+    });
+    source.authored_content_i18n = { zh: translatedReportContent(source) };
+    const original = JSON.stringify(source);
+    const displayed = projectReportContentLanguage(source, 'zh');
+    expect(displayed.language).toBe('zh');
+    expect(displayed.title).toBe('中文报告标题');
+    expect(displayed.summary_i18n.zh).toBe('中文报告摘要。');
+    expect(displayed.verdict.headline_answer).toBe('中文结论。');
+    expect(displayed.verdict.analytic_confidence.basis_i18n?.zh).toBe('中文证据支撑说明。');
+    expect(displayed.indicators_to_watch[0].signal).toBe('中文信号');
+    expect(displayed.sections[0].body_md_i18n.zh).toBe('中文正文。');
+    expect(displayed.evidence).toBe(source.evidence);
+    expect(displayed.interview_evidence).toEqual(source.interview_evidence);
+    expect(displayed.sections.map((section) => section.id)).toEqual(source.sections.map((section) => section.id));
+    expect(JSON.stringify(source)).toBe(original);
+  });
+
+  it('keeps untranslated legacy appendices in the original view instead of mixing them into another language', () => {
+    const source = makeReport({
+      available_languages: ['en', 'zh'],
+      indicators_to_watch: [{ signal: 'English-only signal', direction: 'up', note: 'English-only note' }],
+      limitations: 'English-only limitation',
+    });
+    const translatedCore = projectReportContentLanguage(source, 'zh');
+    expect(translatedCore.indicators_to_watch).toEqual([]);
+    expect(translatedCore.limitations).toBe('');
+    expect(projectReportContentLanguage(source, 'en').indicators_to_watch).toHaveLength(1);
+    expect(source.limitations).toBe('English-only limitation');
+  });
+
+  it('never auto-generates full analysis from an intentional brief and retains it after a failed upgrade', async () => {
+    await i18n.changeLanguage('en');
+    const brief = makeReport({ detail_level: 'brief', generation_mode: 'static', tier: 'static' });
+    setCtx({ full_report: brief });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse(
+      'event: report_failed\ndata: {"status":"failed","error_code":"REPORT_FAILED","tool_trace":[]}\n\n'
+      + 'event: report_complete\ndata: {"status":"failed","tool_trace":[]}\n\n',
+    ));
+    mockedGetStory.mockResolvedValue({ full_report: brief } as StoryData);
+    render(<ResultReportPanel variant="standalone" onRefresh={vi.fn()} />);
+    expect(screen.getByText('Brief result')).toBeInTheDocument();
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByText('Full analysis and language repair'));
+      fireEvent.click(screen.getByRole('button', { name: 'Generate full analysis' }));
+    });
+    expect(mockedGenerateReport).toHaveBeenCalledWith('sc-1', expect.objectContaining({ operation: 'generate', detailLevel: 'full' }), expect.any(AbortSignal));
+    expect(screen.getByRole('alert')).toHaveTextContent(/Saved report content was not removed/);
+    expect(screen.getByTestId('report-section-s1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate full analysis' })).toBeEnabled();
+    expect(screen.queryByText('Report generation in progress')).toBeNull();
+  });
+
+  it('recognizes a translated variant even when original generation time and source sections do not change', async () => {
+    await i18n.changeLanguage('en');
+    const source = makeReport({ detail_level: 'brief' });
+    const translated = { ...source, authored_content_i18n: { zh: translatedReportContent(source) }, available_languages: ['en', 'zh'] as const, language_status: { en: 'available', zh: 'available' } as const };
+    setCtx({ full_report: source });
+    setCap({});
+    mockedGenerateReport.mockResolvedValue(responseFromSse('event: report_complete\ndata: {"status":"complete","tool_trace":[]}\n\n'));
+    mockedGetStory.mockResolvedValue({ full_report: translated } as unknown as StoryData);
+    render(<ResultReportPanel variant="standalone" onRefresh={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '中文' })); });
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByText('完整分析与语言修复'));
+      fireEvent.click(screen.getByRole('button', { name: '准备或修复 中文 版本' }));
+    });
+    expect(mockedGenerateReport).toHaveBeenCalledWith('sc-1', expect.objectContaining({ operation: 'translate', targetLanguage: 'zh' }), expect.any(AbortSignal));
+    expect(screen.getByText('中文报告标题')).toBeInTheDocument();
+    expect(screen.getByTestId('report-section-s1')).toHaveAttribute('data-language', 'zh');
+    expect(screen.queryByText('正在翻译已存报告')).toBeNull();
+    await i18n.changeLanguage('en');
+  });
+
+  it('disables translation of stale source reports and generation of cancelled simulations', async () => {
+    await i18n.changeLanguage('en');
+    setCtx({ full_report: makeReport(), full_report_stale: true });
+    setCap({});
+    render(<ResultReportPanel variant="standalone" scenarioStatus="cancelled" />);
+    fireEvent.click(screen.getByText('Full analysis and language repair'));
+    expect(screen.getByRole('button', { name: 'Prepare or repair English' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Regenerate full analysis' })).toBeDisabled();
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
   });
 });

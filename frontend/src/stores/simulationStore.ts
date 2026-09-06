@@ -155,6 +155,8 @@ export interface SimulationState {
   // Intervention
   interventionLog: Array<{ branch_id: string; text: string; round: number }>;
   interventionLifecycle: Map<string, InterventionLifecycleState>;
+  /** Invalidates persisted receipt reads after reconnects or missed events. */
+  interventionReceiptRevision: number;
   isSimulationComplete: boolean;
 
   /** Live action receipts from `action_committed` WS events (Action Ledger merge source). */
@@ -168,6 +170,7 @@ export interface SimulationState {
   setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => void;
   loadScenario: (id: string) => Promise<void>;
   handleWSEvent: (event: WSEvent, sourceScenarioId?: string) => void;
+  invalidateInterventionReceipts: (scenarioId: string) => void;
   toggleViewMode: () => void;
   setCancelled: (reason?: string, sourceScenarioId?: string) => void;
   reset: () => void;
@@ -211,6 +214,7 @@ const initialState = {
   } | null,
   interventionLog: [] as InterventionLogEntry[],
   interventionLifecycle: new Map<string, InterventionLifecycleState>(),
+  interventionReceiptRevision: 0,
   isSimulationComplete: false,
   actionReceipts: [] as ActionCommittedReceipt[],
   domainWorld: null as DomainWorldProjection | null,
@@ -346,11 +350,6 @@ function applyScenarioSnapshot(
   const nextLifecycle = sameScenario
     ? new Map(state.interventionLifecycle)
     : new Map<string, InterventionLifecycleState>();
-  if (mergedStatus === 'done') {
-    for (const key of nextLifecycle.keys()) {
-      nextLifecycle.set(key, 'receipt_ready');
-    }
-  }
 
   return {
     activeScenarioId: scenario.id,
@@ -387,6 +386,7 @@ function applyScenarioSnapshot(
     isSimulationComplete: mergedStatus === 'done',
     interventionLog: sameScenario ? state.interventionLog : [],
     interventionLifecycle: nextLifecycle,
+    interventionReceiptRevision: sameScenario ? state.interventionReceiptRevision : 0,
     actionReceipts: sameScenario ? state.actionReceipts : [],
     // Snapshot is authority for domain world; null/missing → honest not_generated envelope.
     domainWorld: normalizeDomainWorldProjection(scenario.domain_world),
@@ -411,6 +411,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
       errorCode: null,
       interventionLog: [],
       interventionLifecycle: new Map<string, InterventionLifecycleState>(),
+      interventionReceiptRevision: 0,
       thinkingAgents: [],
       currentRound: 0,
       simStartTime: null,
@@ -449,6 +450,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         activeRoundProgress: null,
         interventionLog: [],
         interventionLifecycle: new Map<string, InterventionLifecycleState>(),
+        interventionReceiptRevision: 0,
         isSimulationComplete: (normalizeActiveSimulationStatus(scenario.status) ?? scenario.status) === 'done',
         actionReceipts: [],
         domainWorld: normalizeDomainWorldProjection(scenario.domain_world),
@@ -784,10 +786,11 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         }));
         break;
 
-      case 'intervention_applied':
+      case 'intervention_queued':
+      case 'intervention_applied': // Historical servers used this name for queue acceptance.
         set((state) => {
           const nextLifecycle = new Map(state.interventionLifecycle);
-          if (event.data.intervention_id) {
+          if (event.data.intervention_id && !nextLifecycle.has(event.data.intervention_id)) {
             nextLifecycle.set(event.data.intervention_id, 'queued');
           }
           return {
@@ -857,11 +860,12 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         });
         break;
 
-      case 'batch_intervention_applied':
+      case 'batch_intervention_queued':
+      case 'batch_intervention_applied': // Legacy queue event.
         set((state) => {
           const nextLifecycle = new Map(state.interventionLifecycle);
           event.data.interventions.forEach((intervention) => {
-            if (intervention.intervention_id) {
+            if (intervention.intervention_id && !nextLifecycle.has(intervention.intervention_id)) {
               nextLifecycle.set(intervention.intervention_id, 'queued');
             }
           });
@@ -1006,10 +1010,6 @@ export const useSimulationStore = create<SimulationState>((set) => ({
               activeRoundProgress: null,
             };
           }
-          const nextLifecycle = new Map(state.interventionLifecycle);
-          for (const key of nextLifecycle.keys()) {
-            nextLifecycle.set(key, 'receipt_ready');
-          }
           return {
             status: 'done',
             scenario: withScenarioStatus(state.scenario, 'done'),
@@ -1017,7 +1017,6 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             thinkingAgents: [],
             turnProgress: null,
             activeRoundProgress: null,
-            interventionLifecycle: nextLifecycle,
           };
         });
         break;
@@ -1069,6 +1068,13 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         break;
       }
     }
+  },
+
+  invalidateInterventionReceipts: (scenarioId) => {
+    set((state) => {
+      if ((state.activeScenarioId ?? state.scenario?.id) !== scenarioId) return state;
+      return { interventionReceiptRevision: state.interventionReceiptRevision + 1 };
+    });
   },
 
   toggleViewMode: () =>

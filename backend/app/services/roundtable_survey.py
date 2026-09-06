@@ -28,7 +28,7 @@ from app.services.llm_client import (
     llm_request_scope,
     safe_llm_error_payload,
 )
-from app.services.simulator import _silent_turn_placeholder, validate_and_sanitize_turn
+from app.services.simulator import validate_and_sanitize_turn
 
 logger = logging.getLogger(__name__)
 
@@ -637,9 +637,11 @@ async def _run_single_survey_call(
                         participant.participant_id,
                         reject_reason,
                     )
-                    answer = _silent_turn_placeholder(
-                        participant.display_name,
-                        participant.language,
+                    answer = ""
+                    error_message = (
+                        "模型未返回可用回答，请重试。"
+                        if participant.language == "zh"
+                        else "The model returned no usable answer. Please retry."
                     )
                 else:
                     answer = clean_answer

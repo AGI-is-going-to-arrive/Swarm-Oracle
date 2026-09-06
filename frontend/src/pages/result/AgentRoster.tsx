@@ -123,7 +123,7 @@ export default function AgentRoster({
       {/* ── Phase 3 Live-Only Integration ────────────────── */}
       {isWorkbenchMode && id && !isReplayMode && (
         <section className="result-extension-section">
-          {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
+          {scenario?.status === 'done' && capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
             <>
               <CounterfactualBrand
                 branches={branches}
@@ -190,7 +190,7 @@ export default function AgentRoster({
       )}
 
       {/* Resume panel — always available when capability enabled */}
-      {!isWorkbenchMode && id && !isReplayMode && capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
+      {!isWorkbenchMode && id && !isReplayMode && scenario?.status === 'done' && capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
         <section className="result-extension-section">
           <ResumePanel
             scenarioId={id}

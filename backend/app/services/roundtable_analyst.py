@@ -575,13 +575,23 @@ async def build_roundtable_analyst_stream(
                 action = str(decision.get("action") or "").strip()
                 params = _normalize_params(decision.get("params"))
                 if action == "final_response":
-                    answer = str(decision.get("answer") or "").strip()
+                    raw_answer = decision.get("answer")
+                    answer = raw_answer.strip() if isinstance(raw_answer, str) else ""
                     if not answer:
-                        answer = (
-                            "我没有拿到可用结论；请换个更具体的问题再试。"
-                            if _is_probably_zh(normalized_question)
-                            else "I could not produce a usable conclusion; try a more specific question."  # noqa: E501
-                        )
+                        yield {
+                            "event": "analyst_response",
+                            "data": {
+                                "answer": "",
+                                "error": (
+                                    "模型未返回可用结论，请重试。"
+                                    if _is_probably_zh(normalized_question)
+                                    else "The model returned no usable conclusion. Please retry."
+                                ),
+                                "iterations": iteration,
+                                "stopped_reason": "llm_error",
+                            },
+                        }
+                        return
                     yield {
                         "event": "analyst_response",
                         "data": {

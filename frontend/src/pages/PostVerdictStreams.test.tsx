@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,6 +32,18 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../lib/llmProviderPolicy', () => ({
   loadLlmProviderPolicy: () => ({}),
+}));
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({ enabled: false }),
+}));
+
+vi.mock('../api/client', () => ({
+  getRoundtableProvider: vi.fn(async () => ({
+    source: 'scenario_profile', profile_id: 'scene-profile',
+    name: 'Inherited model', model: 'scene-model',
+  })),
+  listModelProfiles: vi.fn(async () => ({ profiles: [] })),
 }));
 
 vi.mock('../hooks/useRoundtableSseStream', () => ({
@@ -95,7 +107,10 @@ describe('post-verdict stream abort states', () => {
     render(<AnalystHarness />);
 
     await user.type(screen.getByRole('textbox'), 'What changes the outcome?');
-    await user.click(screen.getByRole('button', { name: 'roundtable.analyst_ask' }));
+    const ask = screen.getByRole('button', { name: 'roundtable.analyst_ask' });
+    await waitFor(() => expect(ask).toBeEnabled());
+    await user.click(ask);
+    expect(startMock).toHaveBeenCalledTimes(1);
     abortMock.mockClear();
     await user.click(screen.getByRole('button', { name: 'roundtable.analyst_stop' }));
 
@@ -109,7 +124,10 @@ describe('post-verdict stream abort states', () => {
     render(<SurveyHarness />);
 
     await user.type(screen.getByRole('textbox'), 'Where do agents disagree?');
-    await user.click(screen.getByRole('button', { name: 'roundtable.survey_ask' }));
+    const ask = screen.getByRole('button', { name: 'roundtable.survey_ask' });
+    await waitFor(() => expect(ask).toBeEnabled());
+    await user.click(ask);
+    expect(startMock).toHaveBeenCalledTimes(1);
     abortMock.mockClear();
     await user.click(screen.getByRole('button', { name: 'roundtable.survey_stop' }));
 

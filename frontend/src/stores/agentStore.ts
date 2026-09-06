@@ -5,21 +5,25 @@
 import { create } from 'zustand';
 import { getSessionBoundUserId, listAgentIdentities } from '../api/client';
 import type { AgentIdentityInfo } from '../types';
+import { captureApiError, type ApiErrorState } from '../lib/apiErrorMessage';
 
 interface AgentStoreState {
   identities: AgentIdentityInfo[];
   loading: boolean;
   error: string | null;
+  errorDetails: ApiErrorState | null;
   selectedIds: Set<string>;
   loadedUserId: string | null;
   loadingUserId: string | null;
   requestSeq: number;
+  cacheValid: boolean;
 
   fetchIdentities: (userId: string) => Promise<void>;
+  refreshIdentities: (userId: string) => Promise<void>;
   toggleSelection: (id: string, maxSelected?: number) => void;
   pruneSelectionToSize: (maxSize: number) => void;
   clearSelection: () => void;
-  setIdentities: (identities: AgentIdentityInfo[]) => void;
+  setIdentities: (identities: AgentIdentityInfo[], userId?: string) => void;
 }
 
 const pruneSelectedIds = (
@@ -35,41 +39,47 @@ const pruneSelectedIds = (
   return next;
 };
 
-export const useAgentStore = create<AgentStoreState>((set, get) => ({
-  identities: [],
-  loading: false,
-  error: null,
-  selectedIds: new Set(),
-  loadedUserId: null,
-  loadingUserId: null,
-  requestSeq: 0,
-
-  fetchIdentities: async (userId: string) => {
+export const useAgentStore = create<AgentStoreState>((set, get) => {
+  const loadIdentities = async (userId: string, force: boolean): Promise<void> => {
     const effectiveUserId = getSessionBoundUserId(userId);
+    const sessionUserId = getSessionBoundUserId();
     const state = get();
 
-    if (state.loading && state.loadingUserId === effectiveUserId) {
+    if (!force && state.loading && state.loadingUserId === effectiveUserId) {
       return;
     }
 
-    // Skip if already loaded for same user (cache hit)
-    if (state.loadedUserId === effectiveUserId && state.identities.length > 0 && !state.loading) {
+    // An authoritative empty library is also a cache hit.
+    if (!force && state.cacheValid && state.loadedUserId === effectiveUserId && !state.loading) {
       return;
     }
 
     // If userId changed, clear stale data immediately
-    if (state.loadedUserId !== null && state.loadedUserId !== effectiveUserId) {
-      set({ identities: [], selectedIds: new Set() });
+    const previousUserId = state.loadingUserId ?? state.loadedUserId;
+    if (previousUserId !== null && previousUserId !== effectiveUserId) {
+      set({ identities: [], selectedIds: new Set(), loadedUserId: null });
     }
 
     const reqId = state.requestSeq + 1;
-    set({ loading: true, loadingUserId: effectiveUserId, error: null, requestSeq: reqId });
+    set({ loading: true, loadingUserId: effectiveUserId, error: null, errorDetails: null, requestSeq: reqId, cacheValid: false });
+
+    const isCurrentRequest = (): boolean => {
+      if (get().requestSeq !== reqId) return false;
+      if (getSessionBoundUserId() === sessionUserId) return true;
+      // A session can change without mounting another library consumer.
+      set({
+        identities: [], selectedIds: new Set(), loadedUserId: null,
+        loading: false, loadingUserId: null, error: null, errorDetails: null, cacheValid: false,
+        requestSeq: reqId + 1,
+      });
+      return false;
+    };
 
     try {
       const data = await listAgentIdentities<AgentIdentityInfo[]>(effectiveUserId);
 
       // Ignore stale responses (newer request was issued)
-      if (get().requestSeq !== reqId) return;
+      if (!isCurrentRequest()) return;
 
       const prunedSelected = pruneSelectedIds(get().selectedIds, data);
       set({
@@ -78,49 +88,71 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         loadingUserId: null,
         loadedUserId: effectiveUserId,
         selectedIds: prunedSelected,
+        cacheValid: true,
       });
     } catch (err) {
       // Ignore stale errors
-      if (get().requestSeq !== reqId) return;
-      set({ error: (err as Error).message, loading: false, loadingUserId: null });
+      if (!isCurrentRequest()) return;
+      set({ error: err instanceof Error ? err.message : 'Failed to load agents', errorDetails: captureApiError(err), loading: false, loadingUserId: null });
+      // Import dialogs distinguish a committed write from a failed refresh.
+      if (force) throw err;
     }
-  },
+  };
 
-  toggleSelection: (id: string, maxSelected?: number) => {
-    const current = get().selectedIds;
-    const next = new Set(current);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      const cap =
-        typeof maxSelected === 'number' && maxSelected >= 0
-          ? maxSelected
-          : Number.POSITIVE_INFINITY;
-      if (next.size < cap) next.add(id);
-    }
-    set({ selectedIds: next });
-  },
+  return {
+    identities: [],
+    loading: false,
+    error: null,
+    errorDetails: null,
+    selectedIds: new Set(),
+    loadedUserId: null,
+    loadingUserId: null,
+    requestSeq: 0,
+    cacheValid: false,
 
-  pruneSelectionToSize: (maxSize: number) => {
-    const current = get().selectedIds;
-    const cap = Math.max(0, Math.trunc(maxSize));
-    if (current.size <= cap) return;
-    const kept = new Set(Array.from(current).slice(0, cap));
-    set({ selectedIds: kept });
-  },
+    fetchIdentities: (userId) => loadIdentities(userId, false),
+    refreshIdentities: (userId) => loadIdentities(userId, true),
 
-  clearSelection: () => set({ selectedIds: new Set() }),
+    toggleSelection: (id: string, maxSelected?: number) => {
+      const current = get().selectedIds;
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        const cap =
+          typeof maxSelected === 'number' && maxSelected >= 0
+            ? maxSelected
+            : Number.POSITIVE_INFINITY;
+        if (next.size < cap) next.add(id);
+      }
+      set({ selectedIds: next });
+    },
 
-  setIdentities: (identities) => {
-    const effectiveUserId = getSessionBoundUserId();
-    set((state) => ({
-      identities,
-      selectedIds: pruneSelectedIds(state.selectedIds, identities),
-      requestSeq: state.requestSeq + 1,
-      loading: false,
-      loadingUserId: null,
-      loadedUserId: effectiveUserId,
-      error: null,
-    }));
-  },
-}));
+    pruneSelectionToSize: (maxSize: number) => {
+      const current = get().selectedIds;
+      const cap = Math.max(0, Math.trunc(maxSize));
+      if (current.size <= cap) return;
+      const kept = new Set(Array.from(current).slice(0, cap));
+      set({ selectedIds: kept });
+    },
+
+    clearSelection: () => set({ selectedIds: new Set() }),
+
+    setIdentities: (identities, userId = getSessionBoundUserId()) => {
+      if (userId !== getSessionBoundUserId()) return;
+      set((state) => ({
+        identities,
+        selectedIds: state.loadedUserId !== null && state.loadedUserId !== userId
+          ? new Set<string>()
+          : pruneSelectedIds(state.selectedIds, identities),
+        requestSeq: state.requestSeq + 1,
+        loading: false,
+        loadingUserId: null,
+        loadedUserId: userId,
+        error: null,
+        errorDetails: null,
+        cacheValid: true,
+      }));
+    },
+  };
+});

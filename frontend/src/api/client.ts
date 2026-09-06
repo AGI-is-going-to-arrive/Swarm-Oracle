@@ -23,6 +23,9 @@ import type {
   ModelProfile, ModelProfileInput, ModelProfilePatchInput,
   KnowledgeDomain,
   DomainAdjudicationChip,
+  RoundtableProviderSelection, SavePostVerdictOutputRequest, SavedPostVerdictOutput,
+  ExperimentKind, ExperimentStatus, ExperimentListResponse,
+  DebateRestartOptions, RestartDebateRequest,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -127,6 +130,32 @@ const ENDING_ROOM_USER_TURN_TIMEOUT = 90000;
 
 export interface RequestOptions {
   signal?: AbortSignal;
+}
+
+export interface ListExperimentsOptions extends RequestOptions {
+  q?: string;
+  kind?: ExperimentKind | 'all';
+  status?: ExperimentStatus | 'all';
+  limit?: number;
+  cursor?: string | null;
+}
+
+export async function listExperiments(options: ListExperimentsOptions = {}): Promise<ExperimentListResponse> {
+  const params = new URLSearchParams();
+  if (options.q) params.set('q', options.q);
+  if (options.kind && options.kind !== 'all') params.set('kind', options.kind);
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+  params.set('limit', String(options.limit ?? 12));
+  if (options.cursor) params.set('cursor', options.cursor);
+  return safeGet(`/experiments?${params}`, { signal: options.signal });
+}
+
+export async function cancelDebate(debateId: string): Promise<DebateSnapshot> {
+  return request(`/debate/${encodeURIComponent(debateId)}/cancel`, { method: 'POST' });
+}
+
+export async function deleteDebate(debateId: string): Promise<{ status: 'deleted'; debate_id: string }> {
+  return request(`/debate/${encodeURIComponent(debateId)}`, { method: 'DELETE' });
 }
 
 interface RequestRetryOptions {
@@ -238,6 +267,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   worldContext?: WorldContext;
   initialSocialFeed?: InitialSocialFeedItem[];
   modelProfileId?: string;
+  modelProfileConfirmationToken?: string;
   language?: 'zh' | 'en';
 }
 
@@ -337,6 +367,7 @@ function buildScenarioRequestBody(
     worldContext,
     initialSocialFeed,
     modelProfileId,
+    modelProfileConfirmationToken,
     language,
   } = options;
 
@@ -390,6 +421,7 @@ function buildScenarioRequestBody(
       })),
     }),
     ...(modelProfileId && { model_profile_id: modelProfileId }),
+    ...(modelProfileId && modelProfileConfirmationToken && { model_profile_confirmation_token: modelProfileConfirmationToken }),
   };
 }
 
@@ -555,6 +587,7 @@ export interface CapabilitiesResponse {
   llm_configured?: boolean & { enabled?: never };
   llm_static_configured?: boolean;
   llm_profile_configured?: boolean;
+  llm_provider?: CapabilityEntry & { provider: string; model: string };
   web_search: CapabilityEntry & {
     scope: 'server';
     server_enabled: boolean;
@@ -913,13 +946,15 @@ export async function identityContinuityPreflight(
 export async function createDebate(
   question: string,
   profileHint?: string,
-  options?: LlmProviderRequestOptions & { language?: 'zh' | 'en' },
+  options?: LlmProviderRequestOptions & { language?: 'zh' | 'en'; clientRequestId?: string; profileConfirmationTokens?: Record<string, string> },
   customAgentIds?: { proposition?: string; opposition?: string },
 ): Promise<DebateSnapshot> {
   return request('/debate', {
     method: 'POST',
     body: JSON.stringify({
       question,
+      ...(options?.clientRequestId && { client_request_id: options.clientRequestId }),
+      ...(options?.profileConfirmationTokens && { profile_confirmation_tokens: options.profileConfirmationTokens }),
       ...(options?.language && { language: options.language }),
       ...(profileHint ? { profile_hint: profileHint } : {}),
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
@@ -942,6 +977,16 @@ export async function createDebate(
 /** GET /api/debate/:id — get debate live snapshot */
 export async function getDebate(id: string): Promise<DebateSnapshot> {
   return safeGet(`/debate/${encodeURIComponent(id)}`);
+}
+
+export async function getDebateRestartOptions(id: string): Promise<DebateRestartOptions> {
+  return safeGet(`/debate/${encodeURIComponent(id)}/restart-options`);
+}
+
+export async function restartDebate(id: string, payload: RestartDebateRequest): Promise<DebateSnapshot> {
+  return request(`/debate/${encodeURIComponent(id)}/restart`, {
+    method: 'POST', body: JSON.stringify(payload),
+  });
 }
 
 /** GET /api/debate/:id/result — get finalized debate result */
@@ -1021,6 +1066,32 @@ export async function getEndingRoom(roomId: string): Promise<EndingRoomSnapshot>
 /** GET /api/ending-room/:id/result — get finalized ending room payload */
 export async function getEndingRoomResult(roomId: string): Promise<EndingRoomResultPayload> {
   return safeGet(`/ending-room/${encodeURIComponent(roomId)}/result`);
+}
+
+export async function getRoundtableProvider(
+  scenarioId: string,
+  roomId?: string | null,
+): Promise<RoundtableProviderSelection> {
+  const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : '';
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/roundtable-provider${query}`);
+}
+
+export async function listPostVerdictOutputs(
+  scenarioId: string,
+  roomId?: string | null,
+): Promise<{ outputs: SavedPostVerdictOutput[] }> {
+  const query = roomId ? `?room_id=${encodeURIComponent(roomId)}` : '';
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/post-verdict-outputs${query}`);
+}
+
+export async function savePostVerdictOutput(
+  scenarioId: string,
+  payload: SavePostVerdictOutputRequest,
+): Promise<SavedPostVerdictOutput> {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/post-verdict-outputs`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 /** POST /api/ending-room/:id/thread — create a follow-up thread inside an ending room */
@@ -1165,10 +1236,16 @@ export async function resimulateCounterfactual(
   );
 }
 
-/** POST /api/scenario/:id/report:generate — generate a detailed report (HTTP SSE) */
+export interface ReportGenerationOptions extends LlmProviderRequestOptions {
+  detailLevel?: 'brief' | 'full';
+  operation?: 'generate' | 'translate';
+  targetLanguage?: 'zh' | 'en';
+}
+
+/** POST /api/scenario/:id/report:generate — generate or translate a report (HTTP SSE). */
 export async function generateReport(
   id: string,
-  options?: LlmProviderRequestOptions,
+  options?: ReportGenerationOptions,
   signal?: AbortSignal,
   timeoutMs = 35 * 60_000,
 ): Promise<Response> {
@@ -1178,6 +1255,9 @@ export async function generateReport(
       method: 'POST',
       headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
+        ...(options?.detailLevel && { detail_level: options.detailLevel }),
+        ...(options?.operation && { operation: options.operation }),
+        ...(options?.targetLanguage && { target_language: options.targetLanguage }),
         ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
         ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
         ...(options?.llmModel && { llm_model: options.llmModel }),
@@ -1299,8 +1379,9 @@ export async function cancelScenario(scenarioId: string): Promise<{ status: stri
 }
 
 /** GET /api/scenario/:id/export — export scenario as Markdown text (P5-C) */
-export async function exportScenario(id: string): Promise<string> {
-  return requestText(`/scenario/${encodeURIComponent(id)}/export`);
+export async function exportScenario(id: string, options?: { language?: 'zh' | 'en' }): Promise<string> {
+  const query = options?.language ? `?language=${encodeURIComponent(options.language)}` : '';
+  return requestText(`/scenario/${encodeURIComponent(id)}/export${query}`);
 }
 
 /** Social copy generation — send provider policy in request body to avoid leaking keys in URLs. */
@@ -2530,6 +2611,12 @@ export interface InterventionEffectExcerpt {
 
 export interface InterventionEffect {
   intervention_log_id: string;
+  /** Lifecycle fields are absent from archived receipts produced by older servers. */
+  branch_id?: string;
+  status?: 'queued' | 'applied' | 'expired' | 'failed';
+  reason?: string | null;
+  refunded_points?: number;
+  gameplay_usage_refunded?: boolean;
   card_id: string | null;
   card_label: string | null;
   round_number: number;

@@ -7,7 +7,7 @@ preflight: ## Run preflight checks
 	python backend/scripts/preflight.py
 
 dev-backend: ## Start backend dev server
-	cd backend && uvicorn app.main:app --host 0.0.0.0 --port 18927 --reload
+	cd backend && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 
 dev-frontend: ## Start frontend dev server
 	cd frontend && npm run dev

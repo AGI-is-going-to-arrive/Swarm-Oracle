@@ -17,9 +17,15 @@ interface DebateShareModalProps {
   context: DebateShareContext;
   onClose: () => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
+  permalinkUnavailable?: boolean;
+  onRetryPermalink?: () => void;
+  onResetLocalCopies?: () => void;
 }
 
-export function DebateShareModal({ context, onClose, onAutomationStateChange }: DebateShareModalProps) {
+export function DebateShareModal({
+  context, onClose, onAutomationStateChange, permalinkUnavailable,
+  onRetryPermalink, onResetLocalCopies,
+}: DebateShareModalProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -133,6 +139,14 @@ export function DebateShareModal({ context, onClose, onAutomationStateChange }: 
         </header>
 
         <div className="debate-modal__body">
+          {permalinkUnavailable && (
+            <div className="debate-modal__error" role="status">
+              <p>{t('debate.local_copy_unavailable')}</p>
+              {onRetryPermalink && <button type="button" className="btn btn-ghost" disabled={copying} onClick={onRetryPermalink}>{t('common.retry')}</button>}
+              {onResetLocalCopies && <button type="button" className="btn btn-ghost" disabled={copying} onClick={onResetLocalCopies}>{t('debate.local_copy_reset')}</button>}
+            </div>
+          )}
+          {isLocalReadonlyCopy && <p role="note">{t('debate.local_copy_retention')}</p>}
           <div className="debate-modal__options">
             {PLATFORMS.map((option) => (
               <button

@@ -24,6 +24,7 @@ secrets (api keys, base urls, tokens).
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
 import json
@@ -206,6 +207,7 @@ def _is_sensitive_key(key: Any) -> bool:
             "passwd",
             "authorization",
             "bearer",
+            "modelprofileid",
         )
     )
 
@@ -1161,14 +1163,31 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
     }
 
 
-def _serialize_intervention_receipt(row: InterventionLog) -> dict[str, Any]:
+def _serialize_intervention_receipt(row: InterventionLog, session: Session) -> dict[str, Any]:
+    from app.services.simulator import (
+        _build_intervention_effect_summary,
+        _decode_intervention_metadata,
+        _intervention_execution_messages,
+    )
+
+    summary = _decode_intervention_metadata(row.effect_summary_json)
+    if summary.get("status") == "queued":
+        messages = _intervention_execution_messages(session, row, summary)
+        if messages:
+            summary.update(_build_intervention_effect_summary(
+                intervention_log_id=row.id, card_id=summary.get("card_id"),
+                round_number=int(summary.get("processing_round_number") or row.round_number),
+                user_input=row.user_input, messages=messages,
+            ))
+            summary["reason"] = "Applied to persisted responses before this snapshot."
+    summary = {key: value for key, value in summary.items() if not key.startswith("processing_")}
     return {
         "id": row.id,
         "scenario_id": row.scenario_id,
         "branch_id": row.branch_id,
         "round_number": row.round_number,
         "user_input": _scrub_export_text(row.user_input),
-        "effect_summary_json": _redact_json_string(row.effect_summary_json),
+        "effect_summary_json": _redact_json_string(json.dumps(summary)) if summary else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -1218,7 +1237,7 @@ def _collect_intervention_receipts(
             )
         ).all()
     )
-    return [_serialize_intervention_receipt(row) for row in rows]
+    return [_serialize_intervention_receipt(row, session) for row in rows]
 
 
 def _collect_causal_graph(
@@ -1766,6 +1785,41 @@ def _coerce_datetime_field(value: Any, field_name: str) -> datetime:
     return parsed
 
 
+def _archive_saved_outputs_for_snapshot(value: Any) -> list[dict[str, Any]]:
+    """Preserve saved analysis text without importing live provider/identity authority."""
+    from fastapi import HTTPException
+
+    from app.services.post_verdict_outputs import (
+        _MAX_SAVED_OUTPUTS,
+        _validate_saved_output_record,
+    )
+
+    if not isinstance(value, list) or len(value) > _MAX_SAVED_OUTPUTS:
+        raise SnapshotImportError("Saved analyses must be a list of at most 20 records")
+    archived_outputs: list[dict[str, Any]] = []
+    for index, raw in enumerate(value):
+        try:
+            archived = _validate_saved_output_record(raw)
+            archived.update({"archived": True, "room_id": None})
+            archived.pop("content_digest", None)
+            if archived["provider"] is not None:
+                archived["provider"]["profile_id"] = None
+            participant_ids: list[str] = []
+            for participant_index, response in enumerate(archived["responses"], start=1):
+                participant_id = f"archived-{participant_index}"
+                response.update({
+                    "participant_id": participant_id, "source_agent_id": None,
+                    "source_branch_id": None, "agent_identity_id": None,
+                })
+                participant_ids.append(participant_id)
+            archived["participant_ids"] = participant_ids
+            archived = _validate_saved_output_record(archived)
+        except HTTPException as exc:
+            raise SnapshotImportError(f"Saved analysis {index + 1} is invalid") from exc
+        archived_outputs.append(archived)
+    return archived_outputs
+
+
 def _remap_intervention_effect_summary(
     value: Any,
     *,
@@ -1793,6 +1847,8 @@ def _remap_intervention_effect_summary(
         if isinstance(current, dict):
             remapped: dict[str, Any] = {}
             for key, sub in current.items():
+                if key.startswith("processing_"):
+                    continue
                 if key == "scenario_id" and isinstance(sub, str):
                     remapped[key] = new_scenario_id
                 elif key == "branch_id" and isinstance(sub, str):
@@ -2240,6 +2296,10 @@ def import_snapshot_zip(
         raw_parsed_context if isinstance(raw_parsed_context, dict) else {},
         materialize_missing_domain_config=True,
     )
+    if "_post_verdict_outputs" in parsed_context:
+        parsed_context["_post_verdict_outputs"] = _archive_saved_outputs_for_snapshot(
+            parsed_context["_post_verdict_outputs"],
+        )
     domain_config = parsed_context.get("domain_world_v1")
     if (
         isinstance(domain_config, dict)
@@ -2258,6 +2318,23 @@ def import_snapshot_zip(
     deferred_result_quality = parsed_context.pop("result_quality", None)
     deferred_agent_runtime = parsed_context.pop("agent_runtime_v1", None)
 
+    source_status = _scenario_status(scenario_payload.get("status"))
+    interrupted_snapshot = source_status in {
+        _ScenarioStatus.PARSING, _ScenarioStatus.SIMULATING, _ScenarioStatus.NARRATING,
+    }
+    parsed_context["snapshot_import"] = {
+        "source_status": source_status.value,
+        "mode": "read_only",
+        "worker_resumed": False,
+        "resume_action": "start_new_simulation" if interrupted_snapshot else None,
+        "reason": (
+            "Snapshot captured before completion. History was imported as a stopped "
+            "record; start a new simulation to continue."
+            if interrupted_snapshot
+            else "Imported historical snapshot; no simulation task was resumed."
+        ),
+    }
+
     scenario = Scenario(
         question=str(scenario_payload.get("question", "")).strip() or "Imported snapshot",
         parsed_context=parsed_context,
@@ -2267,7 +2344,7 @@ def import_snapshot_zip(
         gameplay_state_json=_redact_dict(scenario_payload.get("gameplay_state_json"))
         if isinstance(scenario_payload.get("gameplay_state_json"), dict)
         else None,
-        status=_scenario_status(scenario_payload.get("status")),
+        status=_ScenarioStatus.CANCELLED if interrupted_snapshot else source_status,
         user_id=user_id,
         visualization_enabled=bool(scenario_payload.get("visualization_enabled")),
         scene_theme=str(scenario_payload.get("scene_theme") or "").strip() or None,
@@ -2305,7 +2382,12 @@ def import_snapshot_zip(
                 min_value=0.0,
                 max_value=1.0,
             ),
-            status=_branch_status(raw.get("status")),
+            status=(
+                _BranchStatus.PRUNED
+                if interrupted_snapshot
+                and _branch_status(raw.get("status")) == _BranchStatus.ACTIVE
+                else _branch_status(raw.get("status"))
+            ),
             replay_kind=raw.get("replay_kind"),
             replay_source_branch_id=raw.get("replay_source_branch_id"),
             replay_source_round=_coerce_int_field(
@@ -2332,6 +2414,16 @@ def import_snapshot_zip(
             continue
         branch.parent_branch_id = mapped_parent
         session.add(branch)
+
+    if isinstance(scenario.gameplay_state_json, dict):
+        gameplay = copy.deepcopy(dict(scenario.gameplay_state_json))
+        cards = gameplay.get("cards")
+        if isinstance(cards, dict) and isinstance(cards.get("usage_log"), list):
+            for usage in cards["usage_log"]:
+                if isinstance(usage, dict) and usage.get("branch_id") in branch_id_map:
+                    usage["branch_id"] = branch_id_map[usage["branch_id"]]
+        scenario.gameplay_state_json = gameplay
+        session.add(scenario)
 
     # Remap replay_source_branch_id from original snapshot ids to the newly
     # generated branch ids so replay lineage queries stay consistent after
@@ -2611,7 +2703,18 @@ def import_snapshot_zip(
             branch_id_map=branch_id_map,
             agent_id_map=agent_id_map,
         )
+        receipt = json.loads(intervention_log.effect_summary_json or "{}")
+        if receipt.get("status") in {"queued", "applied", "expired", "failed"}:
+            intervention_log.status = receipt["status"]
         session.add(intervention_log)
+
+    from app.services.simulator import _settle_pending_interventions_in_session
+
+    session.flush()
+    _settle_pending_interventions_in_session(
+        session, new_scenario_id,
+        reason="Imported snapshots do not resume queued interventions.",
+    )
 
     _import_causal_graph(
         session,

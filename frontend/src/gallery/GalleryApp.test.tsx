@@ -4,6 +4,10 @@ import { GalleryApp } from './GalleryApp';
 import { parsePublicArtifact } from './parseArtifact';
 import { buildPublicArtifactLink } from './artifactLink';
 import type { PublicArtifact } from '../types';
+import galleryI18n from './galleryI18n';
+import { LANGUAGE_STORAGE_KEY, resolveInitialLanguage } from '../i18n/language';
+
+const realTranslations = vi.hoisted(() => ({ enabled: false }));
 
 const changeLanguageMock = vi.fn();
 
@@ -43,7 +47,9 @@ vi.mock('react-i18next', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-i18next')>();
   return {
     ...actual,
-    useTranslation: () => ({
+    useTranslation: () => {
+      const translation = actual.useTranslation();
+      return realTranslations.enabled ? translation : ({
       t: (key: string) => {
         const map: Record<string, string> = {
           'gallery.title': 'Public Artifact Gallery',
@@ -57,7 +63,8 @@ vi.mock('react-i18next', async (importOriginal) => {
         return map[key] ?? key;
       },
       i18n: { language: 'en', changeLanguage: changeLanguageMock },
-    }),
+      });
+    },
   };
 });
 
@@ -81,6 +88,7 @@ describe('GalleryApp shell', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(parsePublicArtifact).mockReset();
+    realTranslations.enabled = false;
     setWindowHash('');
   });
 
@@ -165,7 +173,7 @@ describe('GalleryApp shell', () => {
 
     expect(await screen.findByText('Unicode 世界线 🌏')).toBeInTheDocument();
     expect(parsePublicArtifact).toHaveBeenCalledWith(JSON.stringify(artifact));
-    expect(changeLanguageMock).toHaveBeenCalledWith('zh');
+    expect(changeLanguageMock).not.toHaveBeenCalled();
   });
 
   it('does not re-apply the artifact language after a manual language switch rerenders the viewer', async () => {
@@ -184,6 +192,40 @@ describe('GalleryApp shell', () => {
 
     expect(changeLanguageMock).toHaveBeenCalledTimes(1);
     expect(changeLanguageMock).toHaveBeenLastCalledWith('en');
+  });
+
+  it('keeps a persisted interface choice when loading opposite-language artifacts and reloading', async () => {
+    realTranslations.enabled = true;
+    await galleryI18n.changeLanguage('zh');
+    const source = { ...artifact, language: 'en', question: 'Original English question' };
+    setWindowHash(`#data=${encodeURIComponent(JSON.stringify(source))}`);
+    vi.mocked(parsePublicArtifact).mockReturnValue({ ok: true, artifact: source });
+    const first = render(<GalleryApp />);
+    expect(await screen.findByText('Original English question')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '中文' })).toHaveAttribute('aria-pressed', 'true');
+    expect(document.documentElement.lang).toBe('zh');
+    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe('zh');
+
+    fireEvent.click(screen.getByRole('button', { name: 'EN' }));
+    await waitFor(() => expect(document.documentElement.lang).toBe('en'));
+    expect(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe('en');
+    first.unmount();
+    await galleryI18n.changeLanguage(resolveInitialLanguage());
+    render(<GalleryApp />);
+    expect(screen.getByRole('button', { name: 'EN' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Original English question')).toBeInTheDocument();
+  });
+
+  it('translates an existing import error when the interface language changes', async () => {
+    realTranslations.enabled = true;
+    await galleryI18n.changeLanguage('en');
+    setWindowHash('#data=%%%');
+    render(<GalleryApp />);
+    const english = screen.getByRole('alert').textContent;
+    fireEvent.click(screen.getByRole('button', { name: '中文' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).not.toBe(english));
+    expect(document.documentElement.lang).toBe('zh');
+    expect(parsePublicArtifact).not.toHaveBeenCalled();
   });
 
   it.each([

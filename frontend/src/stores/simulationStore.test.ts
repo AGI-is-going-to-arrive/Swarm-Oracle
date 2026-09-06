@@ -946,10 +946,10 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().branches[0].status).toBe("COMPLETED");
   });
 
-  it("handles 'intervention_applied' → adds to interventionLog", () => {
+  it.each(["intervention_queued", "intervention_applied"] as const)("handles '%s' as queue acceptance", (type) => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({
-      type: "intervention_applied",
+      type,
       data: {
         branch_id: "b1",
         text: "突发地震",
@@ -960,6 +960,7 @@ describe("simulationStore — handleWSEvent", () => {
 
     expect(store.getState().interventionLog).toHaveLength(1);
     expect(store.getState().interventionLog[0].text).toBe("突发地震");
+    expect(store.getState().interventionLifecycle.get("int1")).toBe("queued");
   });
 
   it("handles 'retrospective_start' → adds placeholder branch and intervention log", () => {
@@ -1017,10 +1018,10 @@ describe("simulationStore — handleWSEvent", () => {
     });
   });
 
-  it("handles 'batch_intervention_applied' → appends all intervention entries", () => {
+  it.each(["batch_intervention_queued", "batch_intervention_applied"] as const)("handles '%s' as batch queue acceptance", (type) => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({
-      type: "batch_intervention_applied",
+      type,
       data: {
         interventions: [
           {
@@ -1047,12 +1048,12 @@ describe("simulationStore — handleWSEvent", () => {
     expect(store.getState().interventionLifecycle.get("int-b")).toBe("queued");
   });
 
-  it("transitions intervention lifecycle to receipt_ready when simulation completes", () => {
+  it("does not invent final receipts when the simulation completes", () => {
     const store = useSimulationStore;
 
     // Add queued and injected interventions
     store.getState().handleWSEvent({
-      type: "intervention_applied",
+      type: "intervention_queued",
       data: { branch_id: "b1", text: "Int 1", round: 1, intervention_id: "int-1" },
     } as WSEvent);
     store.getState().handleWSEvent({
@@ -1066,8 +1067,28 @@ describe("simulationStore — handleWSEvent", () => {
     // Complete simulation
     store.getState().handleWSEvent({ type: "simulation_done" } as WSEvent);
 
-    expect(store.getState().interventionLifecycle.get("int-1")).toBe("receipt_ready");
-    expect(store.getState().interventionLifecycle.get("int-2")).toBe("receipt_ready");
+    expect(store.getState().interventionLifecycle.get("int-1")).toBe("queued");
+    expect(store.getState().interventionLifecycle.get("int-2")).toBe("injected");
+  });
+
+  it('does not regress injected interventions when a late queue acknowledgment arrives', () => {
+    const data = { branch_id: 'b1', text: 'Directive', round: 2, intervention_id: 'int-1' };
+    useSimulationStore.getState().handleWSEvent({ type: 'intervention_injected', data });
+    useSimulationStore.getState().handleWSEvent({ type: 'intervention_queued', data });
+    expect(useSimulationStore.getState().interventionLifecycle.get('int-1')).toBe('injected');
+  });
+
+  it('keeps receipt outcomes unknown on a terminal snapshot and scopes refresh invalidation', () => {
+    useSimulationStore.getState().setScenario(makeScenario('s1'));
+    useSimulationStore.getState().handleWSEvent({ type: 'intervention_queued', data: { branch_id: 'b1', text: 'Directive', round: 2, intervention_id: 'int-1' } });
+    useSimulationStore.getState().setScenario(makeScenario('s1', { status: 'done' }));
+    expect(useSimulationStore.getState().interventionLifecycle.get('int-1')).toBe('queued');
+    useSimulationStore.getState().invalidateInterventionReceipts('s1');
+    expect(useSimulationStore.getState().interventionReceiptRevision).toBe(1);
+    useSimulationStore.getState().invalidateInterventionReceipts('other');
+    expect(useSimulationStore.getState().interventionReceiptRevision).toBe(1);
+    useSimulationStore.getState().setScenario(makeScenario('s2'));
+    expect(useSimulationStore.getState().interventionReceiptRevision).toBe(0);
   });
 
   it("clears intervention lifecycle when switching scenarios", () => {

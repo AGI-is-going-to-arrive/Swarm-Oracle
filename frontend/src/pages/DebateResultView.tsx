@@ -29,8 +29,10 @@ import {
 import {
   buildDebateReplayLocalUrl,
   buildDebateReplayUrl,
+  DebateReplayStorageError,
   readDebateReplayLocalCopy,
   readDebateReplayPayload,
+  resetDebateReplayLocalCopies,
   saveDebateReplayLocalCopy,
 } from '../lib/debateReplay';
 import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../lib/themeRegistry';
@@ -70,9 +72,12 @@ export function DebateResultView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [showShare, setShowShare] = useState(false);
+  const [shareSession, setShareSession] = useState<{
+    payload: DebateResultPayload;
+    permalink: string | null;
+    failure: DebateReplayStorageError['code'] | null;
+  } | null>(null);
   const [shareModalState, setShareModalState] = useState<Record<string, unknown> | null>(null);
-  const [sharePermalink, setSharePermalink] = useState<string | null>(null);
   const [importingReplay, setImportingReplay] = useState(false);
   const [showArgumentMap, setShowArgumentMap] = useState(false);
   const argumentMapPanelId = `debate-result-argument-map-${useId().replace(/:/g, '-')}`;
@@ -87,6 +92,8 @@ export function DebateResultView() {
     [replayLocalId, searchParams],
   );
   const isReplayMode = Boolean(replayPayload || replayToken || replayLocalId);
+  const showShare = payload !== null && shareSession?.payload === payload;
+  const sharePermalink = showShare ? shareSession?.permalink ?? null : null;
   const replayAutomationState = useMemo(
     () => (isReplayMode
       ? {
@@ -142,7 +149,7 @@ export function DebateResultView() {
         setLoading(false);
       } catch (nextError) {
         const message = nextError instanceof Error ? nextError.message : translationRef.current('debate.result_load_failed');
-        if (isApiError(nextError) && nextError.status === 409) {
+        if (isApiError(nextError) && nextError.status === 409 && nextError.code !== 'DEBATE_CANCELLED') {
           if (retryAttempts >= MAX_RESULT_RETRY_ATTEMPTS) {
             if (!cancelled) {
               setErrorCode(getApiErrorCode(nextError) ?? 'DEBATE_RESULT_NOT_READY');
@@ -170,26 +177,37 @@ export function DebateResultView() {
     };
   }, [id, replayLocalId, replayPayload, replayToken]);
 
-  useEffect(() => {
+  const handleOpenShare = (): void => {
+    if (!payload) return;
     const origin = window.location.origin.replace(/\/$/, '');
     if (isReplayMode) {
-      setSharePermalink(window.location.href);
+      setShareSession({ payload, permalink: window.location.href, failure: null });
       return;
     }
-    if (!payload) {
-      setSharePermalink(null);
-      return;
+    setShareModalState(null);
+    try {
+      const inlineReplayUrl = buildDebateReplayUrl(origin, payload);
+      const permalink = inlineReplayUrl.length <= MAX_INLINE_DEBATE_REPLAY_URL_CHARS
+        ? inlineReplayUrl
+        : buildDebateReplayLocalUrl(origin, saveDebateReplayLocalCopy(payload));
+      setShareSession({ payload, permalink, failure: null });
+    } catch (failure: unknown) {
+      setShareSession({
+        payload, permalink: null,
+        failure: failure instanceof DebateReplayStorageError ? failure.code : 'invalid',
+      });
     }
+  };
 
-    const inlineReplayUrl = buildDebateReplayUrl(origin, payload);
-    if (inlineReplayUrl.length <= MAX_INLINE_DEBATE_REPLAY_URL_CHARS) {
-      setSharePermalink(inlineReplayUrl);
-      return;
+  const handleResetLocalCopies = (): void => {
+    if (!window.confirm(t('debate.local_copy_reset_confirm'))) return;
+    try {
+      resetDebateReplayLocalCopies();
+      handleOpenShare();
+    } catch {
+      if (payload) setShareSession({ payload, permalink: null, failure: 'unavailable' });
     }
-
-    const replayId = saveDebateReplayLocalCopy(payload);
-    setSharePermalink(buildDebateReplayLocalUrl(origin, replayId));
-  }, [isReplayMode, payload]);
+  };
 
   const localCounterplayRecord = useMemo(
     () => (id ? loadDebateCounterplay(id) : null),
@@ -454,7 +472,7 @@ export function DebateResultView() {
               : (error || t('debate.result_missing'))}
           </p>
           <button type="button" className="btn btn-primary" onClick={() => navigate(id ? `/debate/${id}` : '/')}>
-            {t('debate.back_home')}
+            {t(errorCode === 'DEBATE_CANCELLED' ? 'debate.open_preserved_turns' : 'debate.back_home')}
           </button>
         </div>
       </div>
@@ -491,7 +509,7 @@ export function DebateResultView() {
               </p>
               <p className="debate-phase-chip">{t('debate.runtime_preset_not_applicable')}</p>
               <p className="debate-hero__motion">
-                <strong>{t('debate.motion_label')}:</strong> {payload.motion}
+                <strong>{t('debate.motion_label')}:</strong> {payload.motion.replace(/^(?:motion|议题|辩题|辯題)\s*[:：]\s*/i, '')}
               </p>
             </div>
             <div className="debate-hero__bottom">
@@ -515,7 +533,7 @@ export function DebateResultView() {
                     {importReplayLabel}
                   </button>
                 )}
-                <button type="button" className="btn btn-primary" onClick={() => setShowShare(true)}>
+                <button type="button" className="btn btn-primary" onClick={handleOpenShare}>
                   {t('debate.open_share')}
                 </button>
               </div>
@@ -871,8 +889,11 @@ export function DebateResultView() {
       {showShare && shareContext && (
         <DebateShareModal
           context={shareContext}
-          onClose={() => setShowShare(false)}
+          onClose={() => setShareSession(null)}
           onAutomationStateChange={setShareModalState}
+          permalinkUnavailable={Boolean(shareSession?.failure)}
+          onRetryPermalink={handleOpenShare}
+          onResetLocalCopies={shareSession?.failure === 'corrupt' ? handleResetLocalCopies : undefined}
         />
       )}
     </div>

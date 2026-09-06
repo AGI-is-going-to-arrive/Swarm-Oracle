@@ -206,6 +206,8 @@ export default function ResultReportView() {
   }
 
   const isReplayMode = typeof window !== 'undefined' && (new URLSearchParams(window.location.search).has('replay') || new URLSearchParams(window.location.search).has('local'));
+  const isBrief = storyData?.full_report && 'detail_level' in storyData.full_report
+    && storyData.full_report.detail_level === 'brief';
 
   // Minimal context for ResultReportPanel (it only reads storyData/activeScenarioId/isZh/isReplayMode).
   const contextValue = {
@@ -234,7 +236,7 @@ export default function ResultReportView() {
 
         <header className="result-header">
           <h1 className="result-title">
-            {t('result.report.fullReport')}
+            {t(isBrief ? 'result.report.briefTitle' : 'result.report.fullReport')}
           </h1>
           {storyData?.question && (
             <div className="result-question">

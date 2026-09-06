@@ -23,7 +23,7 @@ function makeT(): TFunction {
   }) as TFunction;
 }
 
-function renderGrid(branchQuestionAnswer: string | null) {
+function renderGrid(branchQuestionAnswer: string | null, narrative?: string) {
   const value = {
     t: makeT(),
     branches: [
@@ -31,14 +31,14 @@ function renderGrid(branchQuestionAnswer: string | null) {
         id: 'branch-a',
         title: 'Supply Chain Holds',
         probability: 0.72,
-        insight: 'Ports stabilized before credit broke.',
-        story: '',
+        insight: narrative ?? 'Ports stabilized before credit broke.',
+        story: narrative ?? '',
         fork_reason: null,
-        key_moments: [],
+        key_moments: narrative ? [narrative] : [],
         question_answer: branchQuestionAnswer,
       },
     ],
-    expandedBranch: null,
+    expandedBranch: narrative ? 'branch-a' : null,
     setExpandedBranch: vi.fn(),
     handleOpenEndingRoom: vi.fn(),
     isReplayMode: false,
@@ -53,6 +53,16 @@ function renderGrid(branchQuestionAnswer: string | null) {
 }
 
 describe('EndingCardsGrid', () => {
+  it.each([
+    ['**Evidence-limited hypothesis:**\nPreserved **wording**', 'Evidence-limited narrative hypothesis: Preserved **wording**'],
+    ['**Unverified attribution:** Original words', 'Evidence-limited narrative hypothesis (unverified attribution): Original words'],
+    ['**证据有限的假设：**\n保留原文', '证据有限的叙事假设：保留原文'],
+    ['**归因未经验证：** 原文', '证据有限的叙事假设（归因未经验证）：原文'],
+  ])('keeps a saved narrative notice readable in all plain-text fields: %s', (source, expected) => {
+    renderGrid(source, source);
+    expect(screen.getAllByText(expected)).toHaveLength(4);
+    expect(screen.queryByText(source)).not.toBeInTheDocument();
+  });
   it('renders the branch answer before the probability bar', () => {
     renderGrid('The ports carry the first visible pressure.');
 

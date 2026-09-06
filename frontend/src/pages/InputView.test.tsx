@@ -31,6 +31,7 @@ const {
   getSessionBoundUserIdMock,
   createMultiRunMock,
   listModelProfilesMock,
+  listEducationTemplatesMock,
   listModelsMock,
   setMockLanguage,
   getMockLanguage,
@@ -147,6 +148,9 @@ const {
     if (key === 'home.simulation_eta_hint') {
       return `${options?.agents} agents × ${options?.rounds} rounds · about ${options?.minutes} min for the main simulation`;
     }
+    if (key === 'home.launch_scale_value') {
+      return `${options?.agents} agents × ${options?.rounds} rounds × ${options?.runs} runs`;
+    }
     if (key === 'debate.entry_hint') {
       return 'Debate Arena usually resolves in 3-5 minutes.';
     }
@@ -175,6 +179,7 @@ const {
     }),
     listAgentIdentitiesMock: vi.fn(),
     listModelProfilesMock: vi.fn(),
+    listEducationTemplatesMock: vi.fn(),
     listModelsMock: vi.fn(),
     getSessionBoundUserIdMock: vi.fn(() => 'default_user'),
     setMockLanguage,
@@ -249,7 +254,14 @@ vi.mock('../api/client', () => ({
   getCampaignWeeklySummary: getCampaignWeeklySummaryMock,
   listAgentIdentities: listAgentIdentitiesMock,
   getSessionBoundUserId: getSessionBoundUserIdMock,
-  listModelProfiles: listModelProfilesMock,
+  listModelProfiles: async () => {
+    const response = await listModelProfilesMock() as { profiles?: Array<Record<string, unknown>>; count?: number };
+    return {
+      ...response,
+      profiles: response.profiles?.map((profile) => ({ confirmation_token: 'a'.repeat(64), ...profile })),
+    };
+  },
+  listEducationTemplates: listEducationTemplatesMock,
   listModels: listModelsMock,
 }));
 
@@ -317,7 +329,7 @@ vi.mock('../components/QuickStartCards', () => ({
       mode?: 'blackboard' | 'raw';
       visualizationEnabled?: boolean;
     }) => void;
-  }) => (
+  }) => (<>
     <button
       type="button"
       onClick={() => onSelect({
@@ -332,7 +344,10 @@ vi.mock('../components/QuickStartCards', () => ({
     >
       quick-start-cards
     </button>
-  ),
+    <button type="button" onClick={() => onSelect({ emoji: '?', question: 'Plain preset question', subtitle: 'No suggested settings' })}>
+      quick-start-default
+    </button>
+  </>),
 }));
 
 vi.mock('../components/LocalPackPicker', () => ({
@@ -352,6 +367,11 @@ vi.mock('../components/LocalPackPicker', () => ({
 function LocationPathProbe() {
   const location = useLocation();
   return <div data-testid="location-path-probe">{location.pathname}</div>;
+}
+
+function LocationStateProbe() {
+  const location = useLocation();
+  return <div data-testid="location-state-probe">{JSON.stringify(location.state)}</div>;
 }
 
 async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
@@ -471,6 +491,9 @@ describe('InputView campaign progress', () => {
     getCapabilitiesMock.mockReset();
     listModelProfilesMock.mockReset();
     listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
+    listEducationTemplatesMock.mockReset();
+    listEducationTemplatesMock.mockResolvedValue({ templates: [] });
+    createMultiRunMock.mockReset();
     listModelsMock.mockReset();
     listModelsMock.mockResolvedValue({ models: [], supported: false });
     // Default: server web search disabled (tests that need it override)
@@ -569,6 +592,179 @@ describe('InputView campaign progress', () => {
       },
     });
     getChallengeProgressMock.mockReturnValue(null);
+  });
+
+  it('reuses the debate creation intent after an uncertain failure and changes it for a new question', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, llm_static_configured: true });
+    createDebateMock.mockRejectedValueOnce(new Error('Response lost'))
+      .mockRejectedValueOnce(new Error('Response still unavailable'))
+      .mockResolvedValueOnce({ id: 'debate-created' });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    const questionInput = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(questionInput, { target: { value: 'First debate question' } });
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'debate.entry_cta' })).toBeEnabled());
+    const firstId = createDebateMock.mock.calls[0][2].clientRequestId;
+    expect(typeof firstId).toBe('string');
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'debate.entry_cta' })).toBeEnabled());
+    expect(createDebateMock.mock.calls[1][2].clientRequestId).toBe(firstId);
+    fireEvent.change(questionInput, { target: { value: 'A changed debate question' } });
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+    expect(createDebateMock.mock.calls[2][2].clientRequestId).not.toBe(firstId);
+  });
+
+  it('accepts bounded recovery settings as a preview and ignores provider or run-count fields', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, llm_static_configured: true });
+    render(<MemoryRouter initialEntries={[{ pathname: '/', state: {
+      prefillQuestion: 'Try the saved setup again',
+      prefillSettings: { rounds: 999, numAgents: 8, mode: 'raw', visualizationEnabled: true, runtimePreset: 'aggressive', runCount: 10, llmApiKey: 'must-not-import' },
+    } }]}><InputView /></MemoryRouter>);
+    expect(await screen.findByRole('textbox', { name: 'home.question_input_label' })).toHaveValue('Try the saved setup again');
+    expect(screen.getByRole('slider', { name: 'home.rounds_label' })).toHaveValue('40');
+    expect(screen.getByRole('slider', { name: 'home.agents_label' })).toHaveValue('8');
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-scale')).toHaveTextContent('8 agents × 40 rounds × 1 runs');
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({ rounds: 40, numAgents: 8, mode: 'raw', visualizationEnabled: true, forkDetectorActiveBranchLimit: 0 }));
+    expect(startSimulationMock).not.toHaveBeenCalledWith(expect.objectContaining({ llmApiKey: 'must-not-import' }));
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+  });
+
+  it('resets a plain Quick Start to 5×5 and one run before reviewing the request', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      llm_static_configured: true,
+      llm_provider: { enabled: true, provider: 'openai', model: 'server-effective-model' },
+      multi_run: { enabled: true, default_count: 5, max_count: 10 },
+    });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await screen.findByText('multi_run.input_label');
+    await openAdvancedSettings(user);
+    fireEvent.change(screen.getByRole('slider', { name: 'home.rounds_label' }), { target: { value: '40' } });
+    fireEvent.change(screen.getByRole('slider', { name: 'home.agents_label' }), { target: { value: '40' } });
+    await user.click(screen.getByRole('button', { name: /multi_run.input_section_title/ }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'multi_run.input_label' }), { target: { value: '10' } });
+    await user.click(screen.getByRole('button', { name: 'quick-start-default' }));
+    expect(screen.getByRole('slider', { name: 'home.rounds_label' })).toHaveValue('5');
+    expect(screen.getByRole('slider', { name: 'home.agents_label' })).toHaveValue('5');
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-scale')).toHaveTextContent('5 agents × 5 rounds × 1 runs');
+    expect(screen.getByTestId('launch-summary-model')).toHaveTextContent('server-effective-model');
+    expect(screen.getByTestId('launch-summary-cost')).toHaveTextContent('home.launch_cost_unknown');
+    expect(screen.getByText('home.launch_rate_not_cost')).toBeInTheDocument();
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'common.cancel' }));
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+      question: 'Plain preset question', rounds: 5, numAgents: 5, mode: 'blackboard', visualizationEnabled: false,
+    }));
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves teaching-template recommendations and resets an inherited multi-run', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      education_templates: { enabled: true },
+      multi_run: { enabled: true, default_count: 5, max_count: 10 },
+    });
+    listEducationTemplatesMock.mockResolvedValue({ templates: [{
+      id: 'classroom-1', category: 'society', title_en: 'Classroom decision', title_zh: '课堂决策',
+      description_en: 'Discuss a shared resource', description_zh: '讨论共同资源', difficulty: 'beginner',
+      suggested_agents: 6, suggested_rounds: 7, tags: [], default_config: {},
+    }] });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await screen.findByText('multi_run.input_label');
+    await openAdvancedSettings(user);
+    await user.click(screen.getByRole('button', { name: /multi_run.input_section_title/ }));
+    await user.click(screen.getByRole('tab', { name: 'home.materials_tab_education' }));
+    await user.click(screen.getByRole('button', { name: 'education.use_template' }));
+    await user.click(await screen.findByRole('button', { name: 'education.select_template' }));
+    expect(screen.getByRole('textbox', { name: 'home.question_input_label' })).toHaveValue('Classroom decision');
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-scale')).toHaveTextContent('6 agents × 7 rounds × 1 runs');
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({ rounds: 7, numAgents: 6 }));
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+  });
+
+  it('supports keyboard material navigation and distinguishes a disabled teaching capability', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ education_templates: { enabled: false } });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    const quickTab = screen.getByRole('tab', { name: 'home.materials_tab_quickstart' });
+    quickTab.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByRole('tab', { name: 'home.materials_tab_education' })).toHaveFocus();
+    expect(await screen.findByText('home.materials_disabled')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'quick-start-default' })).not.toBeInTheDocument();
+    await user.keyboard('{End}');
+    expect(screen.getByRole('tab', { name: 'home.materials_tab_local' })).toHaveFocus();
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'material-panel-local');
+    await user.keyboard('{Home}');
+    expect(quickTab).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'quick-start-default' })).toBeInTheDocument();
+  });
+
+  it('sends the reviewed model and scale even if form state changes behind the confirmation', async () => {
+    const user = userEvent.setup();
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({ apiKey: '', baseUrl: 'http://localhost:11434/v1', model: 'reviewed-local-model' }));
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await openAdvancedSettings(user);
+    const modelInput = screen.getByLabelText('home.byok_model_label');
+    const roundsInput = screen.getByRole('slider', { name: 'home.rounds_label' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Freeze the reviewed setup' } });
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-model')).toHaveTextContent('reviewed-local-model');
+    fireEvent.change(modelInput, { target: { value: 'changed-after-review' } });
+    fireEvent.change(roundsInput, { target: { value: '40' } });
+    expect(screen.getByTestId('launch-summary-model')).toHaveTextContent('reviewed-local-model');
+    expect(screen.getByTestId('launch-summary-scale')).toHaveTextContent('5 agents × 5 rounds × 1 runs');
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({ llmModel: 'reviewed-local-model', rounds: 5, numAgents: 5 }));
+  });
+
+  it('prepares a weekly track before the shared confirmation and preserves its campaign context', async () => {
+    const user = userEvent.setup();
+    const weeklyChallenge = {
+      id: 'weekly-choice', question: '每周选择', question_en: 'Weekly choice', subtitle_zh: '', subtitle_en: '',
+      profile_id: 'governance', rounds: 3, num_agents: 3, mode: 'blackboard', visualization_enabled: false,
+    };
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-03-17', week_key: '2026-03-16', iso_week_key: '2026-W12',
+      today_challenge: weeklyChallenge, weekly_challenges: [weeklyChallenge],
+      weekly_track: {
+        id: 'track-1', title_en: 'Weekly track choice', title_zh: '每周赛道', subtitle_en: 'Track preview', subtitle_zh: '',
+        profile_ids: ['governance'], recommended_params: { rounds: 4, num_agents: 6 },
+      },
+    });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await user.click(screen.getByText('home.practice_title'));
+    await user.click(await screen.findByRole('button', { name: /Weekly track choice/ }));
+    await user.click(screen.getByRole('button', { name: 'campaign.weekly_confirm_action' }));
+    expect(screen.getByRole('textbox', { name: 'home.question_input_label' })).toHaveValue('Weekly choice');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-scale')).toHaveTextContent('6 agents × 4 rounds × 1 runs');
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+      rounds: 4, numAgents: 6,
+      campaignContext: { week_key: '2026-W12', weekly_track_id: 'track-1', profile_id: 'governance', is_weekly_track: true },
+    }));
   });
 
   it('shows mastery and unlock progress on the homepage', async () => {
@@ -712,7 +908,7 @@ describe('InputView campaign progress', () => {
     );
   });
 
-  it('does not carry imported pack context into an immediate Quick Start launch', async () => {
+  it('clears imported pack context before a Quick Start request reaches the shared confirmation', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue({
       llm_configured: true,
@@ -757,6 +953,10 @@ describe('InputView campaign progress', () => {
     expect(await screen.findByText('This context must not reach Quick Start.')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'quick-start-cards' }));
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
       question: 'Mock quick start question',
@@ -903,7 +1103,7 @@ describe('InputView campaign progress', () => {
     });
   });
 
-  it('prefills the question field when the daily challenge card body is clicked', async () => {
+  it('chooses a daily challenge with its accessible action and waits for shared confirmation', async () => {
     const user = userEvent.setup();
     getCampaignChallengeRotationMock.mockResolvedValue({
       local_date: '2026-03-17',
@@ -929,11 +1129,23 @@ describe('InputView campaign progress', () => {
       </MemoryRouter>,
     );
 
-    await user.click(await screen.findByText('Remote daily question en'));
+    await user.click(screen.getByText('home.practice_title'));
+    await user.click(await screen.findByRole('button', { name: 'home.practice_choose_daily' }));
 
     expect(screen.getByRole('textbox', { name: 'home.question_input_label' }))
       .toHaveValue('Remote daily question en');
     expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-scale')).toHaveTextContent('5 agents × 4 rounds × 1 runs');
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+      question: 'Remote daily question en',
+      rounds: 4,
+      numAgents: 5,
+      mode: 'raw',
+      campaignContext: expect.objectContaining({ challenge_id: 'remote-daily-1', is_daily_challenge: true }),
+    }));
   });
 
   it('treats today challenge as completed when backend campaign data is the source of truth', async () => {
@@ -4042,6 +4254,51 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
     mockSimulationStoreState.errorCode = null;
   });
 
+  it('reopens the guide and imports a real multi-ending sample without any LLM call', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: false, snapshot_export: { enabled: true } });
+    importOfficialSampleMock.mockResolvedValue({ scenario_id: 'guided-real-sample', sample_id: officialSample.id });
+    startSimulationMock.mockClear();
+    createDebateMock.mockClear();
+    createMultiRunMock.mockClear();
+    testLlmConnectionMock.mockClear();
+    identityPreflightMock.mockClear();
+    render(<MemoryRouter><Routes>
+      <Route path="/" element={<InputView />} />
+      <Route path="/result/:id" element={<><LocationPathProbe /><LocationStateProbe /></>} />
+    </Routes></MemoryRouter>);
+    await screen.findByText('llm_banner.not_configured');
+    await user.click(screen.getByRole('button', { name: 'onboarding.reopen' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('onboarding.sample_no_llm');
+    await user.click(screen.getByTestId('onboarding-open-sample'));
+    expect(await screen.findByTestId('location-path-probe')).toHaveTextContent('/result/guided-real-sample');
+    expect(screen.getByTestId('location-state-probe')).toHaveTextContent('{"sampleOnboarding":true}');
+    expect(importOfficialSampleMock).toHaveBeenCalledWith(officialSample.id, { signal: expect.any(AbortSignal) });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(createDebateMock).not.toHaveBeenCalled();
+    expect(createMultiRunMock).not.toHaveBeenCalled();
+    expect(testLlmConnectionMock).not.toHaveBeenCalled();
+    expect(identityPreflightMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts guided sample loading when the guide is skipped and ignores a late result', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: false, snapshot_export: { enabled: true } });
+    let resolveCatalog!: (value: { catalog_version: string; count: number; samples: OfficialSampleSummary[] }) => void;
+    getOfficialSamplesMock.mockReturnValue(new Promise((resolve) => { resolveCatalog = resolve; }));
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await screen.findByText('llm_banner.not_configured');
+    await user.click(screen.getByRole('button', { name: 'onboarding.reopen' }));
+    await user.click(screen.getByTestId('onboarding-open-sample'));
+    const request = getOfficialSamplesMock.mock.calls[0][0] as { signal: AbortSignal };
+    await user.click(screen.getByTestId('onboarding-skip'));
+    expect(request.signal.aborted).toBe(true);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await act(async () => { resolveCatalog({ catalog_version: '1', count: 1, samples: [officialSample] }); });
+    expect(importOfficialSampleMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'home.question_input_label' })).toBeInTheDocument();
+  });
+
   it('renders LlmNotConfiguredBanner and disables simulation/debate buttons when llm_configured is false', async () => {
     getCapabilitiesMock.mockResolvedValue({
       llm_configured: false,
@@ -4536,6 +4793,92 @@ describe('InputView Model Profile Integration', () => {
         new_identity_count: 0,
       },
     });
+  });
+
+  it('freezes the selected profile token with the reviewed launch summary', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, model_profiles: { enabled: true } });
+    listModelProfilesMock.mockResolvedValue({ profiles: [
+      { ...mockProfiles[0], confirmation_token: 'a'.repeat(64) },
+      { ...mockProfiles[0], id: 'profile-2', name: 'Second profile', model: 'second-model', confirmation_token: 'b'.repeat(64) },
+    ] });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Freeze this saved profile' } });
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-model')).toHaveTextContent('gpt-4o');
+    fireEvent.change(selector, { target: { value: 'profile-2' } });
+    expect(screen.getByTestId('launch-summary-model')).toHaveTextContent('gpt-4o');
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelProfileId: 'profile-1', modelProfileConfirmationToken: 'a'.repeat(64),
+    }));
+  });
+
+  it('refreshes a changed profile and requires a new confirmation before retrying', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, model_profiles: { enabled: true } });
+    startSimulationMock.mockRejectedValueOnce(Object.assign(new Error('Profile changed'), { code: 'MODEL_PROFILE_CHANGED', status: 409 }));
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Reconfirm an updated profile' } });
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+    expect(await screen.findByText('home.launch_profile_changed')).toBeInTheDocument();
+    expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    listModelProfilesMock.mockResolvedValue({ profiles: [{ ...mockProfiles[0], model: 'review-again-model', confirmation_token: 'b'.repeat(64) }] });
+    await user.click(screen.getByRole('button', { name: 'home.launch_profile_refresh' }));
+    expect(await screen.findByText('home.launch_profile_refreshed')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByTestId('launch-summary-model')).toHaveTextContent('review-again-model');
+    expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    await confirmLaunchDialog(user);
+    expect(startSimulationMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelProfileId: 'profile-1', modelProfileConfirmationToken: 'b'.repeat(64),
+    }));
+  });
+
+  it('requires a fresh profile listing when confirmation details are unavailable', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({ llm_configured: true, model_profiles: { enabled: true } });
+    listModelProfilesMock.mockResolvedValue({ profiles: [{ ...mockProfiles[0], confirmation_token: undefined }] });
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Do not use an unreviewable profile' } });
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.getByText('home.launch_profile_unverified')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'home.launch_profile_refresh' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('stops before scenario creation when identity preflight rejects a changed profile', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true, model_profiles: { enabled: true }, agent_identity: { enabled: true },
+    });
+    identityPreflightMock.mockRejectedValueOnce(Object.assign(new Error('Profile changed'), { code: 'MODEL_PROFILE_CHANGED', status: 409 }));
+    render(<MemoryRouter><InputView /></MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'home.question_input_label' }), { target: { value: 'Check the profile before preflight' } });
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+    expect(await screen.findByText('home.launch_profile_changed')).toBeInTheDocument();
+    expect(identityPreflightMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelProfileId: 'profile-1', modelProfileConfirmationToken: 'a'.repeat(64),
+    }), expect.anything());
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'home.launch_profile_refresh' })).toBeInTheDocument();
   });
 
   it('keeps profile mirrors out of session policy and requires a complete remote model override', async () => {

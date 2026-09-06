@@ -281,7 +281,7 @@ describe('GameplayCardsModal Phase 2 redesign', () => {
   it('submits only the visible directive text to the intervention API', async () => {
     const user = userEvent.setup();
     interveneMock.mockResolvedValueOnce({
-      status: 'applied',
+      status: 'queued',
       intervention_id: 'i1',
       branch_id: 'b1',
       round: 2,
@@ -300,7 +300,8 @@ describe('GameplayCardsModal Phase 2 redesign', () => {
     await user.click(submit as HTMLButtonElement);
 
     await waitFor(() => expect(interveneMock).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText('gameplay.toast_applied')).toBeInTheDocument();
+    expect(await screen.findByText('gameplay.toast_queued')).toBeInTheDocument();
+    expect(screen.queryByText('gameplay.toast_applied')).not.toBeInTheDocument();
     expect(screen.getByText('intervention.queue_note_next')).toBeInTheDocument();
     const payload = interveneMock.mock.calls[0][1];
     expect(payload).toMatchObject({

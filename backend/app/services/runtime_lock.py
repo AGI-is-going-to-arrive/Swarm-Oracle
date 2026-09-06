@@ -546,6 +546,25 @@ def runtime_lock_is_active(lock_key: str) -> bool:
         raise
 
 
+def runtime_lock_is_active_in_session(session, lock_key: str) -> bool:
+    """Read active ownership on the caller's connection without schema writes."""
+    db_path = _sqlite_db_path_from_url(str(session.get_bind().url))
+    now = time.time()
+    if db_path is None:
+        with _INPROCESS_LOCKS_GUARD:
+            current = _INPROCESS_LOCKS.get(lock_key)
+            return current is not None and current[1] > now
+    from sqlalchemy import text
+
+    if session.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=:table_name",
+    ), {"table_name": _RUNTIME_LOCK_TABLE}).first() is None:
+        return False
+    return session.execute(text(
+        "SELECT 1 FROM runtime_lock WHERE lock_key=:lock_key AND expires_at>:now LIMIT 1",
+    ), {"lock_key": lock_key, "now": now}).first() is not None
+
+
 def release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
     """Release a previously acquired runtime lock lease."""
     if lease is None:

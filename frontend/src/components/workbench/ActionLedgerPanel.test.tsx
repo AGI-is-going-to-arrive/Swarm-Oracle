@@ -58,6 +58,25 @@ describe('ActionLedgerPanel', () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it('formats creation and publication times using the UI locale and keeps original uncertain dates', async () => {
+    mockI18n.language = 'zh-CN';
+    const first = response('Local dates');
+    first.items[0].payload = { bootstrap: true, published_at: '2026-05-10T00:00:00Z' };
+    first.items.push({ ...first.items[0], id: 'uncertain-date', sequence: 2, content: 'Uncertain date', created_at: 'last spring', payload: { bootstrap: true, published_at: 'early September' } });
+    mockedGetActions.mockResolvedValue(first);
+    const view = render(<ActionLedgerPanel scenarioId="scenario-1" />);
+    await expand();
+    expect(await screen.findByText(new Date(first.items[0].created_at!).toLocaleString('zh-CN'))).toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: 'action_ledger.details' })) await userEvent.click(button);
+    expect(screen.getByText(new Date('2026-05-10T00:00:00Z').toLocaleString('zh-CN'))).toBeInTheDocument();
+    expect(screen.getByText('last spring')).toBeInTheDocument();
+    expect(screen.getByText('early September')).toBeInTheDocument();
+    mockI18n.language = 'en';
+    view.rerender(<ActionLedgerPanel scenarioId="scenario-1" />);
+    expect(screen.getByText(new Date(first.items[0].created_at!).toLocaleString('en-US'))).toBeInTheDocument();
+    expect(screen.getByText(new Date('2026-05-10T00:00:00Z').toLocaleString('en-US'))).toBeInTheDocument();
+  });
+
   it('is collapsed by default and loads only durable actions after expansion', async () => {
     mockedGetActions.mockResolvedValue(response('Published update'));
     render(<ActionLedgerPanel scenarioId="scenario-1" branchId="branch-1" />);
@@ -244,7 +263,7 @@ describe('ActionLedgerPanel', () => {
     expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('parent-action-1')).toBeVisible();
     expect(screen.getByText('Flood Office')).toBeVisible();
-    expect(screen.getByText('2026-07-14T08:10:00+10:00')).toBeVisible();
+    expect(screen.getByText(new Date('2026-07-14T08:10:00+10:00').toLocaleString('en-US'))).toBeVisible();
     expect(screen.getByText('Official bulletin')).toBeVisible();
     expect(screen.getByText('storm, traffic')).toBeVisible();
     expect(screen.queryByText(/must not render/)).not.toBeInTheDocument();

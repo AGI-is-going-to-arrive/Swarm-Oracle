@@ -10,6 +10,7 @@ interface Props {
   onClose: () => void;
   scenarioId: string;
   evidence: ReportEvidence[];
+  canOpenReplay?: boolean;
 }
 
 export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
@@ -17,6 +18,7 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
   onClose,
   scenarioId,
   evidence,
+  canOpenReplay = true,
 }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -71,6 +73,7 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
   if (!shouldRender || typeof document === 'undefined') return null;
 
   const handleDeepLink = (ev: ReportEvidence) => {
+    if (!canOpenReplay || !scenarioId) return;
     const params = new URLSearchParams({
       branch: ev.branch_id,
       message: ev.message_id,
@@ -121,6 +124,9 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
           {t('result.report.evidenceDrawerDescription', 'Detailed list of cited evidence')}
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <p className="text-sm text-[color:var(--text-secondary)]">
+            {t('result.report.evidenceSourceNote')}
+          </p>
           {evidence.length === 0 ? (
             <p className="text-[color:var(--text-secondary)]">
               {t('result.report.noEvidence')}
@@ -143,14 +149,21 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
                   <button
                     type="button"
                     onClick={() => handleDeepLink(ev)}
+                    disabled={!canOpenReplay || !scenarioId}
+                    title={!canOpenReplay ? t('result.report.replayUnavailable') : undefined}
                     className="text-xs px-2 py-1 bg-[color:var(--color-primary)] text-white rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[color:var(--color-ring)]"
                     aria-label={t('result.report.viewInReplay', { name: ev.agent_name })}
                   >
                     {t('result.report.viewContext')}
                   </button>
                 </div>
+                <span className="text-xs text-[color:var(--text-secondary)]">
+                  {t(ev.kind === 'utterance'
+                    ? 'result.report.evidenceOriginUtterance'
+                    : ev.kind === 'interview' ? 'result.report.evidenceOriginInterview' : 'result.report.evidenceOriginDerived')}
+                </span>
                 <blockquote className="text-sm text-[color:var(--text-secondary)] italic border-l-2 border-[color:var(--color-primary)] pl-3 my-2 break-words [overflow-wrap:anywhere]">
-                  &ldquo;{ev.quote}&rdquo;
+                  {ev.quote}
                 </blockquote>
               </div>
             ))

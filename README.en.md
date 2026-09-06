@@ -88,52 +88,58 @@ When upgrading from an older root-run container, existing data volumes keep thei
 
 ### Local Development
 
-Backend (Python 3.11+), macOS / Linux:
+Backend dependencies are resolved by the committed universal `backend/uv.lock` (Python 3.11+). CI and Docker use the same lock. Bootstrap uv 0.12.7 in a dedicated tooling environment from the repository root; it stays separate from the application's `backend/.venv` and from any existing root `.venv`.
+
+macOS / Linux:
 
 ```bash
+if [ ! -d .swarm-tools/uv ]; then
+  python3 -m venv .swarm-tools/uv
+  .swarm-tools/uv/bin/python -m pip install 'uv==0.12.7'
+fi
+.swarm-tools/uv/bin/uv --version
+.swarm-tools/uv/bin/uv sync --directory backend --locked --extra dev --no-build
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
 test -f .env || cp ../.env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Windows PowerShell uses the virtual environment's interpreter directly; no execution-policy change is needed:
+Windows PowerShell (no execution-policy change or global package installation):
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+if (-not (Test-Path .swarm-tools/uv)) {
+  python -m venv .swarm-tools/uv
+  if ($LASTEXITCODE -ne 0) { throw 'Tooling environment creation failed' }
+  & .\.swarm-tools\uv\Scripts\python.exe -m pip install 'uv==0.12.7'
+  if ($LASTEXITCODE -ne 0) { throw 'uv installation failed' }
+}
+& .\.swarm-tools\uv\Scripts\uv.exe --version
+& .\.swarm-tools\uv\Scripts\uv.exe sync --directory backend --locked --extra dev --no-build
+if ($LASTEXITCODE -ne 0) { throw 'Locked dependency installation failed' }
+Set-Location backend
 if (-not (Test-Path .env)) { Copy-Item ..\.env.example .env }
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+& .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Start the frontend in another terminal (Node.js 20.19+ within 20.x, or ≥22.12; npm version in `frontend/package.json`). macOS / Linux:
+The project rejects a different uv version or a stale lock. An unavailable wheel fails explicitly rather than resolving unpinned build dependencies. See the [configured platform matrix and recovery procedure](deploy/README.md).
+
+Start the frontend in another terminal. Node 22.23.2 is the CI/image baseline; the declared compatibility range is Node 20.19+ within 20.x or ≥22.12. npm is pinned to 11.12.1 in `frontend/package.json`:
 
 ```bash
 cd frontend
-npm ci
-npm run dev
+npx --yes npm@11.12.1 ci
+npx --yes npm@11.12.1 run dev
 ```
 
-Windows PowerShell:
+PowerShell can use the same commands with `npx.cmd`. The npm executable is fetched into its local package cache, with no global npm upgrade.
 
-```powershell
-cd frontend
-npm.cmd ci
-npm.cmd run dev
-```
-
-Open http://127.0.0.1:18928 . The frontend proxies `/api` and `/ws` to http://127.0.0.1:18927 .
-
-Before starting services, run preflight from the repository root: `backend/.venv/bin/python backend/scripts/preflight.py` on macOS/Linux, or `.\backend\.venv\Scripts\python.exe backend/scripts/preflight.py` in PowerShell. Preflight probes the configured LLM connection. The `make` targets are conveniences for POSIX terminals.
+Open http://127.0.0.1:18928 . The frontend proxies `/api` and `/ws` to http://127.0.0.1:18927 . Before starting services, run `backend/.venv/bin/python backend/scripts/preflight.py` from the repository root (PowerShell: `.\backend\.venv\Scripts\python.exe backend/scripts/preflight.py`). Preflight probes the configured LLM endpoint. POSIX `make dev-backend` also binds loopback.
 
 ## Public Deployment
 
 Docker Compose is loopback-only by default. Before binding it to a LAN or public interface, set `ENV=production`, a unique `SESSION_SECRET`, and a unique `ADMIN_TOKEN`; production startup fails if either secret is empty. [SECURITY.md](SECURITY.md) is authoritative for BYOK, SSRF, and admin boundaries. See [Configuration](docs/CONFIGURATION.en.md) for deployment variables.
 
-Published backend/frontend images are built only from the exact commit that passed CI, first under immutable SHA tags and then promoted as a pair. If either promotion fails, rollback of both tags is triggered and verified; an incomplete rollback fails the job explicitly. Version tags additionally require an executed release signoff for that exact SHA. `--dry-run` records planned steps and is never reported as passed.
+Published backend/frontend images are built only from the exact commit that passed CI, first under SHA candidate tags, then exercised by the final-image smoke gate on Linux amd64 and arm64, and promoted as a pair using the exact tested manifest digests. If either promotion fails, rollback of both tags is triggered and verified; an incomplete rollback fails the job explicitly. Version tags additionally require an executed release signoff for that exact SHA. `--dry-run` records planned steps and is never reported as passed.
 
 ## Documentation
 

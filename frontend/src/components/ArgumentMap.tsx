@@ -668,6 +668,7 @@ interface Props {
   visible: boolean;
   refreshTrigger?: number;
   conversationScenarioId?: string | null;
+  autoTour?: boolean;
 }
 
 // FE-3-seq: NodeConversationSheet trigger state (append-only, not wired to layout).
@@ -678,7 +679,7 @@ interface ArgumentSheetState {
   origin: NodeConversationOrigin;
 }
 
-export function ArgumentMap({ debateId, visible, refreshTrigger, conversationScenarioId = null }: Props) {
+export function ArgumentMap({ debateId, visible, refreshTrigger, conversationScenarioId = null, autoTour = true }: Props) {
   const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
   const prefersReducedMotion = useReducedMotion();
@@ -1860,7 +1861,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
           />
         ) : null}
         {/* P3: First-visit guided tour — only when data is present and not in mobile list view */}
-        {data && data.units.length > 0 && !(isCompactViewport && mobileViewMode === 'list') && (
+        {autoTour && data && data.nodes.some((node) => node.type === 'verdict') && data.units.length > 0 && !(isCompactViewport && mobileViewMode === 'list') && (
           <ArgumentMapTour />
         )}
       </div>

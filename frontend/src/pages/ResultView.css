@@ -44,12 +44,106 @@
 /* ── Header ──────────────────────────────────────────── */
 
 .result-header {
-  margin-bottom: 48px;
+  margin-bottom: 24px;
   text-align: center;
 }
 
 .result-back {
-  margin-bottom: 24px;
+  margin-bottom: 12px;
+}
+
+.result-header-tools {
+  text-align: center;
+}
+
+.result-endings__header {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.result-endings__header > h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-heading);
+  font-size: var(--text-xl);
+  font-weight: 500;
+}
+
+.result-compare-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.result-compare-picker legend {
+  padding: 0 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.result-compare-picker label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.result-compare-picker select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.result-compare-picker__note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.result-optional-section {
+  margin-block: 24px;
+  padding-block: 16px;
+  border-top: 1px solid var(--border-default);
+}
+
+.result-optional-section > summary {
+  width: fit-content;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.result-optional-section[open] > summary {
+  margin-bottom: 20px;
+}
+
+.result-optional-section > summary:focus-visible,
+.result-compare-picker select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .result-compare-picker {
+    grid-template-columns: 1fr;
+  }
 }
 
 .result-title {

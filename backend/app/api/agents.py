@@ -713,6 +713,7 @@ async def preflight_identity_continuity(
                 session,
                 user_id=effective_user_id,
                 model_profile_id=req.model_profile_id,
+                expected_confirmation_token=req.model_profile_confirmation_token,
                 explicit_api_key=req.llm_api_key,
                 explicit_base_url=req.llm_base_url,
                 explicit_model=req.llm_model,

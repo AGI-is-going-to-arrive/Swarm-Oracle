@@ -30,6 +30,7 @@ import {
 import {
   cancelScenario,
   createReplayArtifact,
+  getScenario,
   getSessionBoundUserId,
   importReplayScenario,
 } from '../api/client';
@@ -43,7 +44,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { buildAutomationErrorState, captureApiError, getApiErrorDiagnostic, getLocalizedApiErrorMessage, type ApiErrorState } from '../lib/apiErrorMessage';
 import {
   ensureScenarioObjectives,
   getScenarioArchiveKeyMoments,
@@ -288,9 +289,11 @@ function SimulationViewContent({
   const storeViewMode = useSimulationStore((s) => s.viewMode);
   const storeCurrentRound = useSimulationStore((s) => s.currentRound);
   const storeInterventionLifecycle = useSimulationStore((s) => s.interventionLifecycle);
+  const interventionReceiptRevision = useSimulationStore((s) => s.interventionReceiptRevision);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
   const setScenario = useSimulationStore((s) => s.setScenario);
   const { enabled: youVsOracleEnabled } = useCapabilityCheck('you_vs_oracle');
+  const { enabled: checkpointRecoveryEnabled, loading: checkpointRecoveryLoading, error: checkpointRecoveryError } = useCapabilityCheck('counterfactual_replay');
   const storeLastContentEventAt = useSimulationStore((s) => s.lastContentEventAt);
   const storeDomainWorld = useSimulationStore((s) => s.domainWorld);
   const routeStateMatches = !shouldIsolateReplayIntent && (
@@ -472,7 +475,11 @@ function SimulationViewContent({
   // S1-1: cancellation UI state
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelInFlight, setCancelInFlight] = useState(false);
-  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<ApiErrorState | null>(null);
+  const [recoveryAction, setRecoveryAction] = useState<'refresh' | 'reuse' | null>(null);
+  const [recoveryError, setRecoveryError] = useState<ApiErrorState | null>(null);
+  const recoveryInFlightRef = useRef(false);
+  const savedContentRef = useRef<HTMLDivElement>(null);
   const lastCommitmentAction = useRef<'commit' | 'clear' | null>(null);
   const commitmentFeedbackTimer = useRef<number | null>(null);
   const theaterGameWrapperRef = useRef<HTMLDivElement>(null);
@@ -612,8 +619,7 @@ function SimulationViewContent({
       await cancelScenario(id);
       setShowCancelConfirm(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'cancel_failed';
-      setCancelError(message);
+      setCancelError(captureApiError(err));
     } finally {
       setCancelInFlight(false);
     }
@@ -661,19 +667,22 @@ function SimulationViewContent({
     () => (scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta) : []),
     [scenarioMeta],
   );
-  const liveInterventionCount = useMemo(
-    () => Array.from(interventionLifecycle.values()).filter((state) => (
-      state === 'queued' || state === 'injected'
-    )).length,
-    [interventionLifecycle],
-  );
   const interventionReceiptRefreshKey = useMemo(
-    () => Array.from(interventionLifecycle.entries())
+    () => `${status}:${interventionReceiptRevision}:` + Array.from(interventionLifecycle.entries())
       .map(([id, state]) => `${id}:${state}`)
       .sort()
       .join('|'),
-    [interventionLifecycle],
+    [interventionLifecycle, interventionReceiptRevision, status],
   );
+  const handleReceiptRefundConfirmed = useCallback(() => {
+    if (!id || isReplayMode) return;
+    void loadScenario(id).then(() => {
+      const latest = useSimulationStore.getState();
+      if (latest.activeScenarioId === id && latest.scenario?.id === id) {
+        setBackendGameplayState(latest.scenario.gameplay_state ?? null);
+      }
+    });
+  }, [id, isReplayMode, loadScenario, setBackendGameplayState]);
   const signatureArcState = useMemo(
     () => (
       scenarioMeta && gameplayProfile
@@ -1049,9 +1058,54 @@ function SimulationViewContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLiveActivePhase, id, loadScenario]);
 
-  const handleStuckRetry = useCallback(() => {
-    navigate('/', { state: { prefillQuestion: scenario?.question ?? '' } });
-  }, [navigate, scenario?.question]);
+  const handleRecoveryAction = useCallback(async (action: 'refresh' | 'reuse') => {
+    if (!id || isReplayMode || recoveryInFlightRef.current) return;
+    const requestOwner = getSessionBoundUserId();
+    recoveryInFlightRef.current = true;
+    setRecoveryAction(action);
+    setRecoveryError(null);
+    try {
+      const latest = await getScenario(id);
+      const current = useSimulationStore.getState();
+      if (latest.id !== id || current.activeScenarioId !== id || getSessionBoundUserId() !== requestOwner) return;
+      // The store keeps terminal states sticky and preserves saved messages.
+      setScenario(latest);
+      if (action === 'reuse') {
+        navigate('/', {
+          state: {
+            prefillQuestion: latest.question,
+            prefillSettings: {
+              ...(latest.total_rounds != null ? { rounds: latest.total_rounds } : {}),
+              ...(latest.agents.length > 0 ? { numAgents: latest.agents.length } : {}),
+              ...(latest.mode ? { mode: latest.mode } : {}),
+              ...(typeof latest.visualization_enabled === 'boolean' ? { visualizationEnabled: latest.visualization_enabled } : {}),
+            },
+          },
+        });
+      }
+    } catch (nextError) {
+      if (useSimulationStore.getState().activeScenarioId === id) setRecoveryError(captureApiError(nextError));
+    } finally {
+      recoveryInFlightRef.current = false;
+      setRecoveryAction(null);
+    }
+  }, [id, isReplayMode, navigate, setScenario]);
+
+  const handleViewSavedContent = useCallback(() => {
+    setPanelCollapsed(false);
+    window.requestAnimationFrame(() => {
+      savedContentRef.current?.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+      savedContentRef.current?.focus({ preventScroll: true });
+    });
+  }, [setPanelCollapsed]);
+
+  const snapshotImport = scenario?.snapshot_import;
+  const showRecovery = !isReplayMode && Boolean(error || status === 'error' || cancelledStatus || simulationStuck
+    || (snapshotImport && !isLiveActivePhase && !isSimulatingOrNarrating));
+  const latestSavedRound = messages.reduce((latest, message) => Math.max(latest, message.round), 0);
+  const canOpenCheckpointRecovery = status === 'done' && checkpointRecoveryEnabled
+    && !checkpointRecoveryLoading && !checkpointRecoveryError && (scenario?.checkpoints?.length ?? 0) > 0;
+  const recoveryDiagnostic = getApiErrorDiagnostic(recoveryError ?? { code: errorCode });
 
   const handleIntervene = useCallback((branchId: string, branchTitle: string) => {
     const branch = branches.find((candidate) => candidate.id === branchId);
@@ -1469,7 +1523,7 @@ function SimulationViewContent({
         const cardLabel = isZh ? cardDef.labelZh : cardDef.labelEn;
         setGameplayActiveMarker({ cardLabel, round: latestUsage.round });
       }
-      setGameplayToast(t('gameplay.toast_applied'));
+      setGameplayToast(t('gameplay.toast_queued'));
       if (gameplayToastTimerRef.current) {
         window.clearTimeout(gameplayToastTimerRef.current);
       }
@@ -1880,62 +1934,54 @@ function SimulationViewContent({
         readOnly={false}
       />
 
-      {/* Error state. The generic runtime fallback (errorCode RUNTIME_ERROR, set by the
-          snapshot reducer when a failed run carries no specific message) is rendered via
-          i18n so it follows live language switches; concrete API errors keep their
-          already-localized message. */}
-      {error && (
-        <div className="sim-error">
-          <p>⚠️ {errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, error || t('simulation.runtime_failed')) : error}</p>
-          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
-            {t('sim.status.back')}
-          </button>
-        </div>
-      )}
-
-      {/* Interrupted / stuck state — an orphaned run reconciled to ERROR by the backend
-          surfaces as status='error' with no error string on a polled snapshot; the
-          client-side watchdog also flips this on when progress stalls past the hard cap.
-          Gated on !error so it never double-renders with the error-string panel above. */}
-      {!error && !isReplayMode && status === 'error' && !isSimulatingOrNarrating && (
-        <div className="sim-error" role="alert" data-testid="simulation-stuck-banner-error">
-          <p>⚠️ {t('simulation.stuck_title')} {t('simulation.stuck_desc')}</p>
-          <button className="btn" onClick={handleStuckRetry}>
-            {t('simulation.stuck_retry')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
-            {t('simulation.stuck_back')}
-          </button>
-        </div>
-      )}
-
-      {!error && !isReplayMode && simulationStuck && status !== 'error' && (
-        <div className="sim-error sim-error--soft" role="status" aria-live="polite" data-testid="simulation-stuck-banner-soft">
-          <p>⚠️ {t('simulation.stuck_title_soft')} {t('simulation.stuck_desc_soft')}</p>
-          <button className="btn" onClick={handleStuckRetry}>
-            {t('simulation.stuck_retry')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
-            {t('simulation.stuck_back')}
-          </button>
-        </div>
+      {showRecovery && (
+        <section
+          className={cancelledStatus ? 'sim-cancelled' : 'sim-error sim-error--soft'}
+          role={status === 'error' || error ? 'alert' : 'status'}
+          aria-live="polite"
+          data-testid={cancelledStatus ? 'simulation-cancelled-banner' : status === 'error' || error ? 'simulation-stuck-banner-error' : snapshotImport ? 'simulation-snapshot-banner' : 'simulation-stuck-banner-soft'}
+        >
+          <div className="sim-cancelled__copy">
+            <strong>{t(snapshotImport ? 'simulation.snapshot_import_title'
+              : cancelledStatus ? 'simulation.cancelled_title'
+                : status === 'error' || error ? 'simulation.recovery_error_title' : 'simulation.stuck_title_soft')}</strong>
+            <p>{snapshotImport
+              ? t(snapshotImport.reason_code === 'SOURCE_EXECUTION_NOT_RESUMED' ? 'simulation.snapshot_not_resumed' : 'simulation.snapshot_read_only', {
+                  status: t(`simulation.source_status_${snapshotImport.source_status}`),
+                })
+              : cancelledStatus ? t('simulation.cancelled_desc')
+                : status === 'error' || error
+                  ? getLocalizedApiErrorMessage({ code: errorCode }, t, t('simulation.runtime_failed'))
+                  : t('simulation.stuck_desc_soft')}</p>
+            <p>{messages.length > 0
+              ? t('simulation.saved_progress', { messages: messages.length, round: latestSavedRound })
+              : t('simulation.saved_empty')}</p>
+            <p>{t('simulation.reuse_settings_hint')}</p>
+            {recoveryError && <p role="alert">{getLocalizedApiErrorMessage(recoveryError, t, t('simulation.recovery_refresh_failed'))}</p>}
+            {recoveryDiagnostic && <details><summary>{t('common.error_details')}</summary><code>{recoveryDiagnostic}</code></details>}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <button className="btn" type="button" onClick={() => void handleRecoveryAction('refresh')} disabled={recoveryAction !== null}>
+                {t(recoveryAction === 'refresh' ? 'common.loading' : 'simulation.refresh_status')}
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={handleViewSavedContent} disabled={messages.length === 0}>
+                {t('simulation.view_saved_content')}
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={() => void handleRecoveryAction('reuse')} disabled={recoveryAction !== null || !scenario?.question}>
+                {t(recoveryAction === 'reuse' ? 'common.loading' : 'simulation.reuse_settings')}
+              </button>
+              {canOpenCheckpointRecovery && (
+                <button className="btn btn-ghost" type="button" onClick={() => navigate(`/result/${encodeURIComponent(id ?? '')}#resume-branch`)}>
+                  {t('simulation.open_checkpoint_recovery')}
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
       )}
 
       {isReplayMode && (
         <div className="sim-error">
           <p>🔒 {t('sim.replay.read_only')}</p>
-        </div>
-      )}
-
-      {cancelledStatus && (
-        <div className="sim-cancelled" role="status" aria-live="polite" data-testid="simulation-cancelled-banner">
-          <div className="sim-cancelled__copy">
-            <strong>{t('simulation.cancelled_title')}</strong>
-            <span>{t('simulation.cancelled_desc')}</span>
-          </div>
-          <button className="btn btn-ghost" onClick={() => navigate(backTo)}>
-            {t('sim.status.back')}
-          </button>
         </div>
       )}
 
@@ -1962,7 +2008,7 @@ function SimulationViewContent({
           </AlertDialogHeader>
           {cancelError && (
             <p className="sim-cancel-error" role="alert">
-              {cancelError}
+              {getLocalizedApiErrorMessage(cancelError, t, t('simulation.cancel_failed'))}
             </p>
           )}
           {cancelInFlight && (
@@ -2177,9 +2223,9 @@ function SimulationViewContent({
         </button>
 
         {/* Agent Panel */}
-        <div className={`sim-content__panel ${panelCollapsed ? 'sim-content__panel--collapsed' : ''}`}>
+        <div ref={savedContentRef} tabIndex={-1} aria-label={t('simulation.saved_content_region')} className={`sim-content__panel ${panelCollapsed ? 'sim-content__panel--collapsed' : ''}`}>
           <Suspense fallback={<SimulationSlotFallback label={t('sim.panel.waiting')} />}>
-            <LazyAgentPanel onBranchDetail={handleDetail} onViewProfile={setProfileTargetId} />
+            <LazyAgentPanel onBranchDetail={handleDetail} onViewProfile={setProfileTargetId} live={isLiveActivePhase && !isReplayMode} />
           </Suspense>
         </div>
       </div>
@@ -2200,13 +2246,15 @@ function SimulationViewContent({
       {/* Phase 4: Intervention Effect Receipts — only when simulation has produced receipts.
          Component returns null when there are no persisted effects, so legacy scenarios
          that never used interventions stay visually unchanged. */}
-      {id && (isSimulationComplete || liveInterventionCount > 0) && (
+      {id && scenario && routeStateMatches && (
         <Suspense fallback={null}>
           <LazyInterventionReceiptCard
             scenarioId={id}
-            enabled={isSimulationComplete}
+            enabled={!isReplayMode || isSimulationComplete}
+            terminal={isSimulationComplete || status === 'error' || status === 'cancelled'}
             refreshKey={interventionReceiptRefreshKey}
             interventionLifecycle={interventionLifecycle}
+            onRefundConfirmed={handleReceiptRefundConfirmed}
           />
         </Suspense>
       )}
@@ -2289,7 +2337,7 @@ function SimulationViewContent({
           role="status"
           aria-label={t('gameplay.active_marker_aria')}
         >
-          {t('gameplay.active_marker', { label: gameplayActiveMarker.cardLabel })}
+          {t('gameplay.queued_marker', { label: gameplayActiveMarker.cardLabel })}
         </div>
       )}
 

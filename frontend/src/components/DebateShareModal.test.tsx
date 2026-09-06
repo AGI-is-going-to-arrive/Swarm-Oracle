@@ -31,6 +31,19 @@ describe('DebateShareModal automation callback', () => {
     copyTextMock.mockReset().mockResolvedValue(undefined);
   });
 
+  it('keeps text copying available when creating a replay link fails', async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    render(<DebateShareModal context={shareContext} onClose={vi.fn()}
+      permalinkUnavailable onRetryPermalink={retry} />);
+    expect(screen.getByText('debate.local_copy_unavailable')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'share.copy_permalink_btn' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'common.retry' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'share.copy_btn' }));
+    expect(copyTextMock).toHaveBeenCalledTimes(1);
+  });
+
   it('reports platform and copy metadata and tracks copy state', async () => {
     const user = userEvent.setup();
     const onAutomationStateChange = vi.fn();

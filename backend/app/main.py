@@ -26,6 +26,7 @@ from app.api.ending_rooms import (
 from app.api.ending_rooms import (
     ws_router as ending_rooms_ws_router,
 )
+from app.api.experiments import router as experiments_router
 from app.api.graphs import (
     pending_replay_branch_memory_cleanup_count,
     reconcile_pending_replay_branch_memory_cleanups,
@@ -292,6 +293,7 @@ app.include_router(social_router)
 app.include_router(campaign_router)
 app.include_router(scenario_intervention_effects_router)
 app.include_router(debate_router)
+app.include_router(experiments_router)
 app.include_router(debate_ws_router)
 app.include_router(ending_rooms_router)
 app.include_router(ending_rooms_ws_router)

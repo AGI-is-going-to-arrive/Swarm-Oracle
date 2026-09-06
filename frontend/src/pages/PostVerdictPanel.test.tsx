@@ -1,12 +1,23 @@
-import { cleanup, render, fireEvent } from '@testing-library/react';
+import { cleanup, render, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PostVerdictPanel, { type PostVerdictTab } from './PostVerdictPanel';
 import {
   createInitialAnalystCache,
   createInitialSurveyCache,
+  type AnalystCacheState,
 } from './postVerdictCaches';
-import type { EndingRoomResult } from '../types';
+import type { EndingRoomResult, SavedPostVerdictOutput, SavePostVerdictOutputRequest } from '../types';
+
+const { listOutputs, saveOutput } = vi.hoisted(() => ({
+  listOutputs: vi.fn<() => Promise<{ outputs: SavedPostVerdictOutput[] }>>(async () => ({ outputs: [] })),
+  saveOutput: vi.fn<(scenarioId: string, request: SavePostVerdictOutputRequest) => Promise<SavedPostVerdictOutput>>(),
+}));
+vi.mock('../api/client', () => ({
+  listPostVerdictOutputs: listOutputs,
+  savePostVerdictOutput: saveOutput,
+  isApiError: () => false,
+}));
 
 const { capabilityValues } = vi.hoisted(() => ({
   capabilityValues: new Map<string, boolean>(),
@@ -37,7 +48,7 @@ vi.mock('./RoundtableAgentChat', () => ({
 }));
 
 vi.mock('./AnalystStreamView', () => ({
-  default: () => <div data-testid="analyst-stream" />,
+  default: ({ cache }: { cache: AnalystCacheState }) => <div data-testid="analyst-stream">{cache.finalAnswer}</div>,
 }));
 
 vi.mock('./SurveyStreamView', () => ({
@@ -70,6 +81,8 @@ describe('PostVerdictPanel defensive capability gates', () => {
     capabilityValues.set('agent_conversation', true);
     capabilityValues.set('roundtable_analyst', false);
     capabilityValues.set('roundtable_survey', false);
+    listOutputs.mockReset().mockResolvedValue({ outputs: [] });
+    saveOutput.mockReset();
   });
 
   afterEach(() => {
@@ -191,5 +204,95 @@ describe('PostVerdictPanel defensive capability gates', () => {
     tabChat.focus();
     fireEvent.keyDown(tabChat, { key: 'ArrowRight' });
     expect(onTabChangeMock).toHaveBeenCalledWith('analyst');
+  });
+});
+
+describe('PostVerdictPanel saved analyses', () => {
+  const completed: AnalystCacheState = {
+    ...createInitialAnalystCache(),
+    question: 'Completed question',
+    resultId: '12345678-1234-4234-8234-123456789012',
+    finalAnswer: 'The original completed analysis.',
+    stoppedReason: 'final_response',
+    provider: { source: 'room_profile', profile_id: 'profile-id', name: 'Original model', model: 'model-a' },
+  };
+  const saved: SavedPostVerdictOutput = {
+    version: 1, id: completed.resultId ?? '', kind: 'analyst', room_id: 'room-1',
+    question: 'Completed question', answer: completed.finalAnswer, stopped_reason: 'final_response',
+    provider: completed.provider, origin: 'simulation', verification: 'user_saved',
+    created_at: '2026-09-05T00:00:00Z',
+  };
+  const renderCompleted = (cache: AnalystCacheState = completed): ReturnType<typeof render> => render(
+    <PostVerdictPanel scenarioId="scenario-1" roomId="room-1" participants={[]}
+      effectiveResult={{ summary: 'ready' } as EndingRoomResult} activeTab="analyst" onTabChange={vi.fn()}
+      analystCache={cache} setAnalystCache={vi.fn()} surveyCache={createInitialSurveyCache()}
+      setSurveyCache={vi.fn()} contextVersion={1} />,
+  );
+
+  beforeEach(() => {
+    capabilityValues.clear();
+    capabilityErrors.clear();
+    capabilityValues.set('roundtable_analyst', true);
+    listOutputs.mockReset().mockResolvedValue({ outputs: [] });
+    saveOutput.mockReset().mockResolvedValue(saved);
+  });
+  afterEach(cleanup);
+
+  it('saves the original completed question and model once', async () => {
+    renderCompleted();
+    const button = await screen.findByRole('button', { name: 'roundtable.output_save' });
+    fireEvent.click(button);
+    await waitFor(() => expect(saveOutput).toHaveBeenCalledTimes(1));
+    expect(saveOutput.mock.calls[0]).toEqual(['scenario-1', {
+      client_result_id: completed.resultId, kind: 'analyst', room_id: 'room-1',
+      question: 'Completed question', provider: completed.provider,
+      answer: 'The original completed analysis.', stopped_reason: 'final_response',
+    }]);
+    expect(await screen.findByRole('button', { name: 'roundtable.output_saved' })).toBeDisabled();
+  });
+
+  it('keeps the completed content and offers retry when saving fails', async () => {
+    saveOutput.mockRejectedValueOnce(new Error('offline'));
+    renderCompleted();
+    fireEvent.click(await screen.findByRole('button', { name: 'roundtable.output_save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('roundtable.output_save_failed');
+    expect(await screen.findByTestId('analyst-stream')).toHaveTextContent('The original completed analysis.');
+    fireEvent.click(screen.getByRole('button', { name: 'roundtable.output_save' }));
+    expect(await screen.findByRole('button', { name: 'roundtable.output_saved' })).toBeDisabled();
+  });
+
+  it('reloads and reopens saved analysis even after generation is disabled', async () => {
+    capabilityValues.set('roundtable_analyst', false);
+    listOutputs.mockResolvedValue({ outputs: [saved] });
+    renderCompleted(createInitialAnalystCache());
+    fireEvent.click(screen.getByText(/roundtable.saved_outputs/));
+    const open = await screen.findByRole('button', { name: 'roundtable.explore_analyst: Completed question' });
+    fireEvent.click(open);
+    const article = screen.getByRole('article', { name: 'roundtable.saved_analysis' });
+    expect(article).toHaveTextContent('The original completed analysis.');
+    expect(article).toHaveTextContent('Original model (model-a)');
+    expect(article).toHaveTextContent('roundtable.output_origin_notice');
+  });
+
+  it.each([
+    { error: 'Provider failed' },
+    { stoppedReason: 'llm_error' as const },
+    { stoppedReason: 'max_iterations' as const },
+    { aborted: true },
+    { finalAnswer: '' },
+  ])('does not offer Save for incomplete or failed output: %j', async (patch) => {
+    renderCompleted({ ...completed, ...patch });
+    await waitFor(() => expect(listOutputs).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'roundtable.output_save' })).not.toBeInTheDocument();
+  });
+
+  it('shows a retry action for archive read failures', async () => {
+    listOutputs.mockRejectedValueOnce(new Error('offline'));
+    renderCompleted();
+    fireEvent.click(screen.getByText(/roundtable.saved_outputs/));
+    expect(await screen.findByText('roundtable.output_list_failed')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'common.retry' }));
+    await waitFor(() => expect(listOutputs).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('roundtable.output_empty')).toBeVisible();
   });
 });

@@ -44,6 +44,7 @@ from ._utils import (
     _normalize_branch_ids,
     _now,
     _OracleFollowupPlan,
+    _recover_ending_room_llm_overrides,
     _room_memory_partition,
     _room_memory_partition_id,
     _room_user_participant_id,
@@ -822,6 +823,8 @@ async def _append_followup_turns_with_retry(
                 room, participants = _resolve_room_and_participants(session, thread.room_id)
                 _ensure_followup_write_allowed(room)
                 _ensure_interaction_mode_allowed(room, interaction_mode)
+                if llm_overrides is None:
+                    llm_overrides = _recover_ending_room_llm_overrides(session, room)
                 user_participant = _ensure_user_participant(session, room)
                 thread_recent_lines = _load_recent_thread_lines(session, thread.id)
                 addressed_participants = _resolve_addressed_participants(

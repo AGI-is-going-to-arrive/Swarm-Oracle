@@ -15,7 +15,6 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = ROOT / "samples" / "catalog.v1.json"
 DEFAULT_OUTPUT_DIR = ROOT / "samples" / "snapshots"
@@ -137,13 +136,12 @@ def _validate_catalog_bundle(bundle: dict[str, Any]) -> None:
     replay = bundle.get("replay")
     if not isinstance(replay, dict):
         raise ValueError(f"{prefix}.replay must be an object")
-    if (
-        replay.get("outcome") not in outcome_keys
-        or replay.get("source") not in outcome_keys
-    ):
-        raise ValueError(f"{prefix}.replay outcome/source must reference outcomes")
-    if replay.get("agent") not in agent_keys:
-        raise ValueError(f"{prefix}.replay.agent must reference an agent")
+    if replay.get("outcome") not in outcome_keys:
+        raise ValueError(f"{prefix}.replay.outcome must reference an outcome")
+    if replay.get("kind") != "resume" or replay.get("source") != "root" or replay.get("round") != 1:
+        raise ValueError(f"{prefix}.replay must resume the shared root after round one")
+    if replay.get("agent") is not None:
+        raise ValueError(f"{prefix}.replay must not attribute a whole-branch resume to an agent")
 
     report = bundle.get("report")
     sections = report.get("sections") if isinstance(report, dict) else None
@@ -315,7 +313,9 @@ def _build_full_report(
                 "basis": report_spec["confidence_basis"],
                 "basis_i18n": None,
             },
-            "disclaimer": "Synthetic public sample for product exploration, not a historical forecast.",
+            "disclaimer": (
+                "Synthetic public sample for product exploration, not a historical forecast."
+            ),
         },
         "sections": sections,
         "evidence": evidence,
@@ -430,8 +430,13 @@ def _build_bundle_members(bundle: dict[str, Any]) -> dict[str, bytes]:
                 "id": _branch_id(prefix, str(outcome["key"])),
                 "scenario_id": scenario_id,
                 "parent_branch_id": root_branch_id,
-                "fork_round": 2,
-                "fork_reason": outcome["description"],
+                "fork_round": 1,
+                "fork_reason": (
+                    "合成续跑示例：复用共同第1轮。 / "
+                    "Synthetic resume fixture using shared round one. "
+                    + outcome["description"]
+                    if is_replay else outcome["description"]
+                ),
                 "title": outcome["title"],
                 "description": outcome["description"],
                 "summary": outcome["summary"],
@@ -449,9 +454,7 @@ def _build_bundle_members(bundle: dict[str, Any]) -> dict[str, bytes]:
                     else None
                 ),
                 "replay_source_round": int(replay_spec["round"]) if is_replay else None,
-                "replay_source_agent_id": (
-                    _agent_id(prefix, str(replay_spec["agent"])) if is_replay else None
-                ),
+                "replay_source_agent_id": None,
             }
         )
 
@@ -464,6 +467,13 @@ def _build_bundle_members(bundle: dict[str, Any]) -> dict[str, bytes]:
     for outcome in outcomes:
         branch_key = str(outcome["key"])
         branch_id = _branch_id(prefix, branch_key)
+        if outcome["key"] == replay_spec["outcome"]:
+            # Replay branches own a self-contained prefix, exactly as the real
+            # clone helper does. Copy existing authored speech, never invent it.
+            for row in bundle["round1"]:
+                messages.append(_build_message(
+                    prefix, branch_key, branch_id, 1, str(row["agent"]), row,
+                ))
         for round_number in (2, 3):
             for row in outcome[f"round{round_number}"]:
                 agent_key = str(row["agent"])
@@ -493,6 +503,11 @@ def _build_bundle_members(bundle: dict[str, Any]) -> dict[str, bytes]:
             "demo_summary_zh": bundle["summary"]["zh"],
             "demo_summary_en": bundle["summary"]["en"],
             "sample_schema": "explorable-snapshot-v1",
+            "sample_provenance": {
+                "origin": "authored_fixture",
+                "replay_prefix": "verbatim_shared_opening_copy",
+                "real_user_resume": False,
+            },
             "simulation_rounds": 3,
             "result_quality": result_quality,
             "full_report": report,

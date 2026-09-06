@@ -1,17 +1,20 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { InterventionReceiptCard } from './InterventionReceiptCard';
+import type { InterventionEffect } from '../api/client';
+import i18n from '../i18n/config';
 
 const { getInterventionEffectsMock, languageState } = vi.hoisted(() => ({
   getInterventionEffectsMock: vi.fn(),
-  languageState: { current: 'zh-CN' },
+  languageState: { current: 'zh-CN', realTranslations: false },
 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: languageState.current },
     t: (key: string, options?: Record<string, unknown>) => {
+      if (languageState.realTranslations) return i18n.t(key, options ?? {});
       if (!options) return key;
       // Compose the rendered tail so substitutions like {{card}}, {{round}},
       // {{names}}, {{count}} surface in DOM text content for assertions.
@@ -39,10 +42,141 @@ async function flushReceiptStateReset(): Promise<void> {
   });
 }
 
+function receipt(status: NonNullable<InterventionEffect['status']>): InterventionEffect {
+  return {
+    intervention_log_id: 'receipt-1', branch_id: 'branch-1', status, reason: null,
+    refunded_points: 0, gameplay_usage_refunded: false, card_id: null, card_label: null,
+    round_number: 2, affected_agents: [], response_excerpts: [], confidence: 0,
+    no_response_detected: true, created_at: '2026-09-05T00:00:00Z',
+  };
+}
+
 describe('InterventionReceiptCard', () => {
   beforeEach(() => {
     getInterventionEffectsMock.mockReset();
     languageState.current = 'zh-CN';
+    languageState.realTranslations = false;
+  });
+
+  it('shows queued status without claiming execution or an absent response', async () => {
+    getInterventionEffectsMock.mockResolvedValue({ effects: [receipt('queued')] });
+    render(<InterventionReceiptCard scenarioId="scenario-1" enabled />);
+    const card = await screen.findByTestId('intervention-receipt-card');
+    expect(card).toHaveTextContent('intervention_receipt.status_queued');
+    expect(card).not.toHaveTextContent('intervention_receipt.no_response');
+    expect(screen.queryByTestId('intervention-receipt-card-confidence')).not.toBeInTheDocument();
+  });
+
+  it('localizes all lifecycle and refund states with the real Chinese and English resources', async () => {
+    languageState.realTranslations = true;
+    await i18n.changeLanguage('zh');
+    getInterventionEffectsMock.mockResolvedValue({ effects: [
+      { ...receipt('queued'), intervention_log_id: 'queued', reason: 'Waiting for the next available simulation round.' },
+      { ...receipt('applied'), intervention_log_id: 'applied', reason: 'Applied to persisted agent responses before processing stopped.' },
+      { ...receipt('expired'), intervention_log_id: 'expired', refunded_points: 3, gameplay_usage_refunded: true, reason: 'Scenario is cancelled; no remaining round can apply this intervention.' },
+      { ...receipt('failed'), intervention_log_id: 'failed', reason: 'Intervention processing failed before completion.' },
+    ] });
+    const view = render(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal />);
+    const card = await screen.findByTestId('intervention-receipt-card');
+    expect(card).toHaveTextContent('已排队');
+    expect(card).toHaveTextContent('已执行');
+    expect(card).toHaveTextContent('未执行，已过期');
+    expect(card).toHaveTextContent('执行失败');
+    expect(card).toHaveTextContent('已退还 3 点数');
+    expect(card).toHaveTextContent('卡牌使用额度已退还');
+    expect(card).toHaveTextContent('推演已取消，此干预尚未执行');
+    expect(card).not.toHaveTextContent(/Waiting for|Scenario is|processing stopped|Intervention processing/);
+
+    await i18n.changeLanguage('en');
+    languageState.current = 'en';
+    view.rerender(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal />);
+    expect(card).toHaveTextContent('Queued');
+    expect(card).toHaveTextContent('Executed');
+    expect(card).toHaveTextContent('Expired before execution');
+    expect(card).toHaveTextContent('Execution failed');
+    expect(card).toHaveTextContent('Points refunded: 3');
+    expect(card).not.toHaveTextContent('推演已取消');
+  });
+
+  it('uses an expired receipt to replace stale live pending state and show its refund', async () => {
+    const onRefundConfirmed = vi.fn();
+    getInterventionEffectsMock.mockResolvedValue({ effects: [{
+      ...receipt('expired'), refunded_points: 3, gameplay_usage_refunded: true,
+      reason: 'Scenario is cancelled; no remaining round can apply this intervention.',
+    }] });
+    render(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal interventionLifecycle={new Map([['receipt-1', 'queued']])} onRefundConfirmed={onRefundConfirmed} />);
+    await waitFor(() => expect(screen.getByTestId('intervention-receipt-card')).toHaveTextContent('intervention_receipt.status_expired'));
+    const card = screen.getByTestId('intervention-receipt-card');
+    expect(card).toHaveTextContent('intervention_receipt.refunded_points_other<count=3>');
+    expect(card).toHaveTextContent('intervention_receipt.usage_refunded');
+    expect(card).toHaveTextContent('intervention_receipt.reason_scenario_cancelled');
+    expect(card.querySelector('.receipt-pending')).toBeNull();
+    expect(card).not.toHaveTextContent('intervention_receipt.no_response');
+    expect(onRefundConfirmed).toHaveBeenCalledOnce();
+  });
+
+  it('renders failures separately from applied receipts and preserves recorded detail safely', async () => {
+    getInterventionEffectsMock.mockResolvedValue({ effects: [{ ...receipt('failed'), reason: '<script>untrusted reason</script>' }] });
+    render(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal />);
+    const card = await screen.findByTestId('intervention-receipt-card');
+    expect(card).toHaveTextContent('intervention_receipt.status_failed');
+    expect(card).toHaveTextContent('<script>untrusted reason</script>');
+    expect(card.querySelector('script')).toBeNull();
+    expect(card).not.toHaveTextContent('intervention_receipt.status_applied');
+  });
+
+  it('rechecks a queued terminal receipt until its persisted expiration arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      getInterventionEffectsMock.mockResolvedValueOnce({ effects: [receipt('queued')] }).mockResolvedValueOnce({ effects: [receipt('expired')] });
+      render(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal />);
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByText('intervention_receipt.final_pending')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(screen.getByText('intervention_receipt.status_expired')).toBeInTheDocument();
+      expect(screen.queryByText('intervention_receipt.final_pending')).not.toBeInTheDocument();
+      expect(getInterventionEffectsMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds settlement polling and keeps retry available without inventing an applied outcome', async () => {
+    vi.useFakeTimers();
+    try {
+      getInterventionEffectsMock.mockResolvedValue({ effects: [receipt('queued')] });
+      render(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal />);
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+      expect(getInterventionEffectsMock).toHaveBeenCalledTimes(4);
+      expect(screen.getByText('intervention_receipt.status_queued')).toBeInTheDocument();
+      expect(screen.queryByText('intervention_receipt.status_applied')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'common.retry' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(getInterventionEffectsMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not refetch for a same-content lifecycle map after a refund snapshot updates', async () => {
+    getInterventionEffectsMock.mockResolvedValue({ effects: [{ ...receipt('expired'), refunded_points: 3 }] });
+    const onRefundConfirmed = vi.fn();
+    const view = render(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal interventionLifecycle={new Map([['receipt-1', 'queued']])} onRefundConfirmed={onRefundConfirmed} />);
+    await waitFor(() => expect(onRefundConfirmed).toHaveBeenCalledOnce());
+    view.rerender(<InterventionReceiptCard scenarioId="scenario-1" enabled terminal interventionLifecycle={new Map([['receipt-1', 'queued']])} onRefundConfirmed={onRefundConfirmed} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(getInterventionEffectsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose a previous scenario receipt if the next scenario read fails', async () => {
+    getInterventionEffectsMock.mockResolvedValueOnce({ effects: [{ ...receipt('applied'), card_label: 'Old scenario card' }] }).mockRejectedValueOnce(new Error('new scenario unavailable'));
+    const view = render(<InterventionReceiptCard scenarioId="scenario-1" enabled />);
+    expect(await screen.findByTestId('intervention-receipt-card')).toHaveTextContent('Old scenario card');
+    view.rerender(<InterventionReceiptCard scenarioId="scenario-2" enabled />);
+    expect(await screen.findByTestId('intervention-receipt-card-error')).toBeInTheDocument();
+    expect(screen.queryByText(/Old scenario card/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'common.retry' })).toBeEnabled();
   });
 
   it('returns null when disabled (e.g. simulation not finished)', async () => {

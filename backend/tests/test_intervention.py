@@ -580,7 +580,7 @@ class TestBatchIntervention:
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "applied"
+        assert data["status"] == "queued"
         assert data["count"] == 2
         assert len(data["interventions"]) == 2
 

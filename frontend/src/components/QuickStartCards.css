@@ -2,13 +2,28 @@
    SwarmOracle — QuickStartCards Styles
    ═══════════════════════════════════════════════════════════ */
 
+.quickstart-browser {
+  width: 100%;
+}
+
 .quickstart-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 16px;
   max-width: 1040px;
   width: 100%;
-  margin-top: 48px;
+  margin-top: 16px;
+}
+
+.quickstart-browser__more { margin-top: 12px; }
+.quickstart-card:disabled { cursor: not-allowed; opacity: 0.55; }
+.quickstart-card:focus-visible {
+  outline: 2px solid var(--accent-primary, #8a5a3c);
+  outline-offset: 3px;
+}
+
+@media (max-width: 540px) {
+  .quickstart-cards { grid-template-columns: minmax(0, 1fr); }
 }
 
 .quickstart-card {

@@ -1,32 +1,33 @@
-FROM python:3.13-slim AS python-base
+FROM python:3.13.12-slim@sha256:f1927c75e81efd1e091dbd64b6c0ecaa5630b38635a3d1c04034ac636e1f94c8 AS python-base
 
 # Share patched tooling so copying builder packages cannot leave the runtime
 # base's older pip metadata alongside the upgraded distribution.
 RUN python -m pip install --no-cache-dir --only-binary=:all: --upgrade \
     pip==26.2.1 setuptools==83.0.0
 
-FROM python-base AS builder
+FROM python-base AS dependencies
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.7@sha256:95f2aa1fe59274951cfe9b0cbc7972e879ff1004bc8945d130a32eb0dbd85945 /uv /usr/local/bin/uv
 
 WORKDIR /app/backend
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy
 
-# Build native wheels/dependencies outside the runtime image.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+COPY backend/pyproject.toml backend/uv.lock /app/backend/
+# Wheel-only, hash-checked universal lock: no unpinned compiler/build dependency
+# resolution. The pinned slim base already contains libstdc++.so.6.
+RUN uv sync --locked --no-dev --no-install-project --no-build --compile-bytecode
 
-COPY backend/pyproject.toml /app/backend/pyproject.toml
+FROM dependencies AS builder
+
 COPY backend/app/ /app/backend/app/
 COPY backend/alembic/ /app/backend/alembic/
 COPY backend/alembic.ini /app/backend/alembic.ini
 COPY shared/ /app/shared/
-
-RUN pip install --no-cache-dir .
 
 FROM python-base AS runtime
 
@@ -36,20 +37,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DATABASE_URL=sqlite:////data/swarmoracle.db \
     CHROMA_PERSIST_DIR=/data/chroma_data \
+    PATH="/opt/venv/bin:$PATH" \
     HOST=0.0.0.0 \
     PORT=18927
 
-# Keep only shared runtime libraries required by native Python wheels.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libstdc++6 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app/backend/app/ /app/backend/app/
 COPY --from=builder /app/backend/alembic/ /app/backend/alembic/
 COPY --from=builder /app/backend/alembic.ini /app/backend/alembic.ini
 COPY --from=builder /app/backend/pyproject.toml /app/backend/pyproject.toml
+COPY --from=builder /app/backend/uv.lock /app/backend/uv.lock
 COPY --from=builder /app/shared/ /app/shared/
 COPY packs/ /app/packs/
 COPY samples/ /app/samples/

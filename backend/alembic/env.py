@@ -5,6 +5,7 @@ for autogenerate support.
 """
 
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import engine_from_config, event, pool
 from sqlmodel import SQLModel
@@ -31,8 +32,15 @@ def _enable_sqlite_fk_pragma(engine) -> None:
 # Alembic Config object
 config = context.config
 
+# Alembic injects the INI directory as a raw ConfigParser default. Escape the
+# literal path too, including when this environment is invoked by the CLI.
+here = (
+    Path(config.config_file_name).absolute().parent.as_posix() if config.config_file_name else "."
+)
+config.file_config.set("DEFAULT", "here", here.replace("%", "%%"))
+
 # Override sqlalchemy.url with the app's configured database URL
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 # Set up Python logging from alembic.ini
 if config.config_file_name is not None and config.attributes.get("configure_logging", True):

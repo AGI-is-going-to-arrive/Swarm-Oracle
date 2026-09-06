@@ -16,11 +16,11 @@ from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.config import settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentMessage,
@@ -54,6 +54,7 @@ from app.services.llm_client import (  # noqa: F401 — needed for monkeypatch c
 from app.services.runtime_lock import (
     RuntimeLockLease,
     acquire_runtime_lock,
+    begin_serialized_write,
     ending_room_lock_key,
     refresh_runtime_lock,
     release_runtime_lock,
@@ -165,7 +166,9 @@ from ._utils import (  # noqa: F401 — re-exported
     _OracleFollowupPlan,
     _parse_key_moments,
     _phase_insight,
+    _recover_ending_room_llm_overrides,
     _release_room,
+    _resolve_ending_room_provider,
     _room_memory_partition,
     _room_memory_partition_id,
     _room_phase_field,
@@ -181,6 +184,7 @@ from ._utils import (  # noqa: F401 — re-exported
     _stable_oracle_choice,
     _thread_memory_partition_id,
     _tier_rank,
+    _visible_branch_round_ids,
     sanitize_untrusted_text,
 )
 
@@ -368,6 +372,25 @@ def _reset_room_for_retry(session: Session, room: EndingRoom) -> None:
     session.commit()
 
 
+def _ensure_room_model_binding_unchanged(
+    room: EndingRoom,
+    scenario: Scenario,
+    requested_profile_id: str | None,
+) -> None:
+    if requested_profile_id is None:
+        return
+    room_profile_id = str((room.config_json or {}).get("room_model_profile_id") or "").strip()
+    existing_profile_id = room_profile_id or str(
+        (scenario.parsed_context or {}).get("model_profile_id") or ""
+    ).strip()
+    if requested_profile_id != existing_profile_id:
+        raise EndingRoomServiceError(
+            409,
+            "ENDING_ROOM_MODEL_PROFILE_CONFLICT",
+            "This room already uses a different model profile; reopen it with its original choice",
+        )
+
+
 def create_ending_room(
     scenario_id: str,
     *,
@@ -381,6 +404,7 @@ def create_ending_room(
     discussion_format: str | None = None,
     cast_mode: str | None = None,
     language: str | None = None,
+    room_model_profile_id: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     try:
         normalized_room_type = room_type if isinstance(room_type, EndingRoomType) else EndingRoomType(str(room_type))  # noqa: E501
@@ -392,6 +416,7 @@ def create_ending_room(
     normalized_agent_ids = _normalize_branch_ids(selected_agent_ids or [])
     normalized_representatives = _normalize_selected_representatives(selected_representatives)
     normalized_witness = _normalize_selected_witness(selected_witness)
+    normalized_room_profile_id = str(room_model_profile_id or "").strip() or None
     (
         normalized_selection_recipe,
         normalized_discussion_format,
@@ -409,6 +434,7 @@ def create_ending_room(
         raise EndingRoomServiceError(422, "ENDING_ROOM_SELECTED_BRANCHES_EMPTY", "selected_branch_ids cannot be empty")  # noqa: E501
 
     with Session(get_engine()) as session:
+        begin_serialized_write(session)
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
             raise EndingRoomServiceError(404, "SCENARIO_NOT_FOUND", "Scenario not found")
@@ -555,6 +581,9 @@ def create_ending_room(
             language=resolved_language,
         )
         if existing_room is not None:
+            _ensure_room_model_binding_unchanged(
+                existing_room, scenario, normalized_room_profile_id,
+            )
             if existing_room.status == EndingRoomStatus.ERROR:
                 _reset_room_for_retry(session, existing_room)
                 return load_ending_room_snapshot(existing_room.id), True
@@ -570,6 +599,17 @@ def create_ending_room(
                 session.add(existing_room)
                 session.commit()
             return load_ending_room_snapshot(existing_room.id), False
+
+        if normalized_room_profile_id:
+            from app.services.model_profiles import resolve_model_profile_policy
+
+            # Validate ownership and the complete credential binding under the
+            # same writer transaction that persists the room's profile pointer.
+            resolve_model_profile_policy(
+                session,
+                user_id=scenario.user_id,
+                model_profile_id=normalized_room_profile_id,
+            )
 
         title_map = {
             EndingRoomType.ENDING_CHAMBER: "结局会客厅" if resolved_language == "zh" else "Ending Chamber",  # noqa: E501
@@ -625,6 +665,7 @@ def create_ending_room(
                 "selected_branch_ids": normalized_branch_ids,
                 "streaming_enabled": normalized_room_type != EndingRoomType.CROSSLINE_GALLERY,
                 "generation_version": _ENDING_ROOM_GENERATION_VERSION,
+                "room_model_profile_id": normalized_room_profile_id,
             },
             result_json=initial_result,
         )
@@ -679,6 +720,9 @@ def create_ending_room(
             )
             if existing_room is None:
                 raise
+            _ensure_room_model_binding_unchanged(
+                existing_room, scenario, normalized_room_profile_id,
+            )
             return load_ending_room_snapshot(existing_room.id), False
 
     return load_ending_room_snapshot(room_id), True
@@ -1059,30 +1103,30 @@ def _load_branch_transcript_excerpts(
         if not selected_branch_ids:
             return result
 
-        row_rank = func.row_number().over(
-            partition_by=Round.branch_id,
-            order_by=(Round.round_number.desc(), AgentMessage.id.desc()),
-        ).label("row_rank")
-        ranked = (
-            select(
-                Round.branch_id.label("branch_id"),
-                Agent.name.label("agent_name"),
-                AgentMessage.content.label("content"),
-                row_rank,
-            )
-            .select_from(Round)
-            .join(AgentMessage, AgentMessage.round_id == Round.id)
-            .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
-            .where(Round.branch_id.in_(selected_branch_ids))
-            .subquery()
-        )
-        rows = session.exec(
-            select(ranked.c.branch_id, ranked.c.agent_name, ranked.c.content)
-            .where(ranked.c.row_rank <= max_quotes_per_branch)
-            .order_by(ranked.c.branch_id, ranked.c.row_rank.desc())
-        ).all()
-        for branch_id, name, content in rows:
-            result.setdefault(branch_id, []).append(f"{name or '?'}: {content}")
+        if max_quotes_per_branch <= 0:
+            return result
+        for branch_id in selected_branch_ids:
+            branch = session.get(Branch, branch_id)
+            if branch is None or branch.scenario_id != scenario_id:
+                raise EndingRoomServiceError(
+                    404, "ENDING_ROOM_BRANCH_NOT_FOUND", "Branch not found",
+                )
+            round_ids = _visible_branch_round_ids(session, branch_id)
+            if not round_ids:
+                continue
+            rows = session.exec(
+                select(Agent.name, AgentMessage.content)
+                .select_from(Round)
+                .join(AgentMessage, AgentMessage.round_id == Round.id)
+                .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
+                .where(Round.id.in_(round_ids))
+                .order_by(Round.round_number.desc(), AgentMessage.id.desc())
+                .limit(max_quotes_per_branch)
+            ).all()
+            if rows:
+                result[branch_id] = [
+                    f"{name or '?'}: {content}" for name, content in reversed(rows)
+                ]
     return result
 
 
@@ -1105,7 +1149,7 @@ def build_branch_scope_context(
             select(Round.round_number, Agent.name, AgentMessage.content)
             .join(AgentMessage, AgentMessage.round_id == Round.id)
             .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
-            .where(Round.branch_id == branch.id)
+            .where(Round.id.in_(_visible_branch_round_ids(session, branch.id)))
             .order_by(Round.round_number, AgentMessage.id)
         ).all()
         transcript = "\n".join(
@@ -1176,7 +1220,7 @@ def build_roundtable_scope_context(
                 select(Round.round_number, Agent.name, AgentMessage.content)
                 .join(AgentMessage, AgentMessage.round_id == Round.id)
                 .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
-                .where(Round.branch_id == branch.id)
+                .where(Round.id.in_(_visible_branch_round_ids(session, branch.id)))
                 .order_by(Round.round_number, AgentMessage.id)
             ).all()
             representatives.append(
@@ -2279,12 +2323,45 @@ async def run_ending_room_background(
     heartbeat_thread: threading.Thread | None = None
 
     async def _run_room_generation() -> None:
+        room_llm_overrides = llm_overrides
         with Session(get_engine()) as session:
+            begin_serialized_write(session)
             room = session.get(EndingRoom, room_id)
             if room is None:
                 return
             if room.status == EndingRoomStatus.DONE and room.result_json is not None:
                 return
+            if room_llm_overrides is None:
+                scenario = session.get(Scenario, room.scenario_id)
+                if scenario is None:
+                    raise EndingRoomServiceError(404, "SCENARIO_NOT_FOUND", "Scenario not found")
+                overrides, generation_provider = _resolve_ending_room_provider(
+                    session, scenario, room,
+                )
+                room_llm_overrides = (
+                    overrides if any(value is not None for value in overrides.values()) else None
+                )
+            else:
+                effective_model = room_llm_overrides.get("model") or settings.LLM_MODEL_NAME
+                generation_provider = {
+                    "source": "explicit",
+                    "profile_id": None,
+                    "name": _scrub_sensitive_text(effective_model),
+                    "model": _scrub_sensitive_text(effective_model),
+                }
+            if settings.ORACLE_CHAMBERS_USE_LLM or (
+                room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE
+                and settings.FEATURE_ROUNDTABLE_INSIGHT_LLM
+            ):
+                room.config_json = {
+                    **(room.config_json or {}),
+                    "generation_provider": {
+                        "source": generation_provider["source"],
+                        "model_profile_id": generation_provider["profile_id"],
+                        "name": generation_provider["name"],
+                        "model": generation_provider["model"],
+                    },
+                }
             room.status = EndingRoomStatus.LIVE
             _set_room_phase(room, EndingRoomPhase.OPENING)
             room.updated_at = _now()
@@ -2346,8 +2423,8 @@ async def run_ending_room_background(
                     },
                 )
             enhance_kwargs = (
-                {"llm_overrides": llm_overrides}
-                if llm_overrides is not None
+                {"llm_overrides": room_llm_overrides}
+                if room_llm_overrides is not None
                 else {}
             )
             planned_turns, result = await _enhance_room_plan_with_llm(
@@ -2394,7 +2471,7 @@ async def run_ending_room_background(
                 planned_turns=planned_turns,
                 language=room_language,
                 scenario_question=_load_scenario_question(room_scenario_id),
-                llm_overrides=llm_overrides,
+                llm_overrides=room_llm_overrides,
             )
 
         for committed_turn in existing_auto_turn_refs:

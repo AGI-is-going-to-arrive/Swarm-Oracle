@@ -51,35 +51,52 @@ export default function WorkbenchView() {
 
   const capLoading = causalLoading || kgLoading;
   const capError = causalError || kgError;
+  const availableModes: Record<LayoutMode, boolean> = {
+    graph: causalEnabled && !causalLoading && !causalError,
+    kg: kgEnabled && !kgLoading && !kgError,
+    split: causalEnabled && kgEnabled && !capLoading && !capError && !isCompact,
+  };
+  const defaultMode: LayoutMode = availableModes.graph ? 'graph' : availableModes.kg ? 'kg' : 'graph';
+  const disabledReason = (loading: boolean, error: Error | null | undefined): string => (
+    loading ? t('workbench.loading', 'Loading workbench...')
+      : error ? t('common.capability_error', 'Unable to verify feature availability. Please try again.')
+        : t('workbench.unavailable', 'Workbench feature is not enabled')
+  );
+  const disabledReasons: Record<LayoutMode, string> = {
+    graph: disabledReason(causalLoading, causalError),
+    kg: disabledReason(kgLoading, kgError),
+    split: disabledReason(capLoading, capError),
+  };
   const encodedScenarioId = encodeURIComponent(id);
   const resultHref = id ? `/result/${encodedScenarioId}` : '/';
 
   useEffect(() => {
     if (capLoading) return;
     if (rawView && !VALID_MODES.has(rawView as LayoutMode)) {
-      setSearchParams((prev) => { prev.set('view', 'graph'); return prev; }, { replace: true });
+      setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('view', defaultMode); return next; }, { replace: true });
       return;
     }
     if (isCompact && rawView === 'split') {
-      setSearchParams((prev) => { prev.set('view', 'graph'); return prev; }, { replace: true });
+      setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('view', defaultMode); return next; }, { replace: true });
     }
-  }, [rawView, isCompact, capLoading, setSearchParams]);
+  }, [rawView, isCompact, capLoading, defaultMode, setSearchParams]);
 
   const mode: LayoutMode = rawView && VALID_MODES.has(rawView as LayoutMode)
     ? (rawView as LayoutMode)
-    : 'graph';
+    : defaultMode;
 
-  const effectiveMode: LayoutMode = isCompact && mode === 'split' ? 'graph' : mode;
+  const effectiveMode: LayoutMode = isCompact && mode === 'split' ? defaultMode : mode;
 
-  const modeAllowed =
-    effectiveMode === 'graph' ? causalEnabled :
-    effectiveMode === 'kg' ? kgEnabled :
-    causalEnabled && kgEnabled;
+  const modeAllowed = availableModes[effectiveMode];
+  const modeLoading = effectiveMode === 'graph' ? causalLoading : effectiveMode === 'kg' ? kgLoading : capLoading;
+  const modeError = effectiveMode === 'graph' ? causalError : effectiveMode === 'kg' ? kgError : capError;
 
   const handleModeChange = (next: LayoutMode) => {
+    if (!availableModes[next]) return;
     setSearchParams((prev) => {
-      prev.set('view', next);
-      return prev;
+      const updated = new URLSearchParams(prev);
+      updated.set('view', next);
+      return updated;
     });
   };
 
@@ -87,51 +104,6 @@ export default function WorkbenchView() {
     void reloadCausal?.();
     void reloadKg?.();
   };
-
-  if (capLoading) {
-    return (
-      <div data-testid="workbench-root" style={{ padding: '3rem', textAlign: 'center' }}>
-        <p>{t('workbench.loading', 'Loading workbench...')}</p>
-      </div>
-    );
-  }
-
-  if (capError) {
-    return (
-      <div data-testid="workbench-root" role="alert" style={{ padding: '3rem', textAlign: 'center' }}>
-        <h1 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '0.5rem' }}>
-          {t('workbench.error', 'Failed to load workbench')}
-        </h1>
-        <button
-          type="button"
-          onClick={handleReload}
-          style={{
-            padding: '6px 14px',
-            borderRadius: 6,
-            border: '1px solid #555',
-            background: 'transparent',
-            color: '#8ab4f8',
-            cursor: 'pointer',
-          }}
-        >
-          {t('common.retry', 'Retry')}
-        </button>
-      </div>
-    );
-  }
-
-  if (!modeAllowed) {
-    return (
-      <div data-testid="workbench-root" role="alert" style={{ maxWidth: 600, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
-        <p style={{ color: '#9aa4b2', marginBottom: '1rem' }}>
-          {t('workbench.unavailable', 'Workbench feature is not enabled')}
-        </p>
-        <Link to="/" style={{ color: '#8ab4f8' }}>
-          {t('common.back_home', 'Back to home')}
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -173,26 +145,51 @@ export default function WorkbenchView() {
           mode={effectiveMode}
           onChange={handleModeChange}
           isCompact={isCompact}
+          availableModes={availableModes}
+          disabledReasons={disabledReasons}
         />
       </header>
 
-      <main style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <AppErrorBoundary>
-          <Suspense
-            fallback={
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                <p style={{ color: '#9aa4b2' }}>{t('workbench.loading', 'Loading workbench...')}</p>
-              </div>
-            }
-          >
-            <GraphWorkbenchShell
-              scenarioId={id}
-              branchId={branchId}
-              mode={effectiveMode}
-              isCompact={isCompact}
-            />
-          </Suspense>
-        </AppErrorBoundary>
+      <main style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {capError && (
+          <div role="alert" style={{ padding: '1rem', textAlign: 'center' }}>
+            <p>{t('workbench.error', 'Failed to load workbench')}</p>
+            <button type="button" onClick={handleReload} style={{ color: 'var(--text-link, #8ab4f8)' }}>
+              {t('common.retry', 'Retry')}
+            </button>
+          </div>
+        )}
+        {modeLoading ? (
+          <p role="status" style={{ padding: '3rem', textAlign: 'center' }}>
+            {t('workbench.loading', 'Loading workbench...')}
+          </p>
+        ) : modeAllowed ? (
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <AppErrorBoundary>
+              <Suspense
+                fallback={
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                    <p style={{ color: '#9aa4b2' }}>{t('workbench.loading', 'Loading workbench...')}</p>
+                  </div>
+                }
+              >
+                <GraphWorkbenchShell
+                  scenarioId={id}
+                  branchId={branchId}
+                  mode={effectiveMode}
+                  isCompact={isCompact}
+                />
+              </Suspense>
+            </AppErrorBoundary>
+          </div>
+        ) : !modeError && (
+          <div role="alert" style={{ padding: '3rem', textAlign: 'center' }}>
+            <p>{t('workbench.unavailable', 'Workbench feature is not enabled')}</p>
+            <button type="button" onClick={handleReload} style={{ color: 'var(--text-link, #8ab4f8)' }}>
+              {t('common.retry', 'Retry')}
+            </button>
+          </div>
+        )}
       </main>
     </div>
   );

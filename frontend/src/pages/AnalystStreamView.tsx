@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { AnalystSSEEvent, ModelProfile } from '../types';
+import type { AnalystSSEEvent } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
-import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import ReACTReasoningPanel from '../components/ReACTReasoningPanel';
 import {
   createInitialAnalystCache,
   type AnalystCacheState,
   type AnalystStoppedReason,
 } from './postVerdictCaches';
-import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
-import { listModelProfiles } from '../api/client';
+import RoundtableProviderPicker from './RoundtableProviderPicker';
 
 interface AnalystStreamViewProps {
   scenarioId: string;
@@ -32,7 +30,7 @@ const ANALYST_STOPPED_REASONS = new Set<AnalystStoppedReason>([
 function normalizeStoppedReason(reason: unknown): AnalystStoppedReason {
   return typeof reason === 'string' && ANALYST_STOPPED_REASONS.has(reason as AnalystStoppedReason)
     ? reason as AnalystStoppedReason
-    : 'final_response';
+    : 'stream_failure';
 }
 
 export default function AnalystStreamView({
@@ -46,17 +44,8 @@ export default function AnalystStreamView({
   const [question, setQuestion] = useState('');
   const userAbortedRef = useRef(false);
 
-  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
-  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
-
-  useEffect(() => {
-    if (modelProfilesEnabled) {
-      listModelProfiles()
-        .then((res) => setProfiles(res.profiles || []))
-        .catch(() => {});
-    }
-  }, [modelProfilesEnabled]);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
+  const [providerReady, setProviderReady] = useState(false);
 
   const onEvent = useCallback((event: AnalystSSEEvent) => {
     setCache((current) => {
@@ -95,6 +84,7 @@ export default function AnalystStreamView({
         return {
           ...current,
           finalAnswer: event.answer,
+          provider: event.provider ?? null,
           stoppedReason: normalizeStoppedReason(event.stopped_reason),
           streaming: false,
           error: event.error ?? current.error,
@@ -119,9 +109,11 @@ export default function AnalystStreamView({
     setCache((current) => ({
       ...current,
       streaming: false,
+      error: current.error || (!current.finalAnswer && !current.aborted && !userAbortedRef.current
+        ? t('roundtable.analyst_stream_failed') : null),
       aborted: current.aborted || userAbortedRef.current,
     }));
-  }, [setCache]);
+  }, [setCache, t]);
 
   const { start, abort } = useRoundtableSseStream<AnalystSSEEvent>({
     scenarioId,
@@ -144,32 +136,27 @@ export default function AnalystStreamView({
 
   useEffect(() => {
     abort();
-  }, [abort, contextVersion]);
+  }, [abort, contextVersion, scenarioId, roomId]);
 
   const handleSubmit = useCallback(() => {
     const normalizedQuestion = question.trim();
-    if (!normalizedQuestion) return;
+    if (!normalizedQuestion || !providerReady) return;
     userAbortedRef.current = false;
     setCache({
       ...createInitialAnalystCache(),
+      question: normalizedQuestion,
+      resultId: crypto.randomUUID(),
+      provider: null,
       streaming: true,
       aborted: false,
     });
 
-    const policy = loadLlmProviderPolicy();
-    const useProfile = Boolean(selectedProfileId);
     void start({
       question: normalizedQuestion,
       ...(roomId ? { room_id: roomId } : {}),
-      ...(useProfile
-        ? { analyst_model_profile_id: selectedProfileId }
-        : {
-            ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
-            ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
-            ...(policy.model ? { llm_model: policy.model } : {}),
-          }),
+      ...(selectedProfileId ? { analyst_model_profile_id: selectedProfileId } : {}),
     });
-  }, [question, roomId, setCache, start, selectedProfileId]);
+  }, [question, roomId, setCache, start, selectedProfileId, providerReady]);
 
   const handleRetry = useCallback(() => {
     handleSubmit();
@@ -177,26 +164,11 @@ export default function AnalystStreamView({
 
   return (
     <div className="analyst-stream" data-testid="analyst-stream-view">
-      {modelProfilesEnabled && (
-        <div className="analyst-profile-selector" style={{ marginBottom: '0.75rem' }}>
-          <label htmlFor="analyst-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, display: 'block', marginBottom: '0.25rem' }}>
-            {t('model_profiles.placeholder_select')}
-          </label>
-          <select
-            id="analyst-profile-select"
-            className="form-control"
-            value={selectedProfileId}
-            onChange={(e) => setSelectedProfileId(e.target.value)}
-            disabled={cache.streaming}
-            style={{ width: '100%', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
-          >
-            <option value="">{t('model_profiles.byok_custom_option')}</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
-            ))}
-          </select>
-        </div>
-      )}
+      <RoundtableProviderPicker
+        scenarioId={scenarioId} roomId={roomId} role="analyst"
+        value={selectedProfileId} onChange={setSelectedProfileId}
+        onReadyChange={setProviderReady} disabled={cache.streaming}
+      />
       <div className="analyst-stream__input">
         <textarea
           className="analyst-stream__textarea"
@@ -211,7 +183,7 @@ export default function AnalystStreamView({
           type="button"
           className={`analyst-stream__submit btn btn--sm${cache.streaming ? ' is-streaming' : ''}`}
           onClick={cache.streaming ? handleAbort : handleSubmit}
-          disabled={!cache.streaming && !question.trim()}
+          disabled={!cache.streaming && (!question.trim() || !providerReady)}
         >
           {cache.streaming ? t('roundtable.analyst_stop') : t('roundtable.analyst_ask')}
         </button>
@@ -225,6 +197,9 @@ export default function AnalystStreamView({
         error={cache.error}
         aborted={cache.aborted}
       />
+      {!cache.streaming && cache.provider && (
+        <p>{t('roundtable.output_model')}: {cache.provider.name}{cache.provider.name !== cache.provider.model ? ` (${cache.provider.model})` : ''}</p>
+      )}
 
       {cache.error && !cache.stoppedReason && (
         <div className="analyst-stream__error">

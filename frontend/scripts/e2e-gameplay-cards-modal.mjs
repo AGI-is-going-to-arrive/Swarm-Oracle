@@ -212,7 +212,7 @@ async function installFixtures(page) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        status: "applied",
+        status: "queued",
         intervention_id: "e2e-intervention",
         branch_id: "branch-1",
         round: 2,

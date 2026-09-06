@@ -29,6 +29,7 @@ import {
   getScenarioConversations,
 } from '../api/client';
 import './ConversationHistoryPicker.css';
+import { formatUiDateTime } from '../i18n/language';
 
 const PAGE_LIMIT = 20;
 const SKELETON_ROWS = 4;
@@ -73,7 +74,6 @@ export function ConversationHistoryPicker({
   alwaysOpen = false,
 }: ConversationHistoryPickerProps) {
   const { t, i18n } = useTranslation();
-  const locale = i18n?.language === 'zh' ? 'zh-CN' : 'en';
   const [open, setOpen] = useState<boolean>(alwaysOpen);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState<ListPageState | null>(null);
@@ -286,7 +286,7 @@ export function ConversationHistoryPicker({
                           {labelFor(item, t)}
                         </span>
                         <span className="conversation-history-picker__row-meta">
-                          <span>{formatDate(item.created_at, locale)}</span>
+                          <span>{formatUiDateTime(item.created_at, i18n?.language)}</span>
                           <span>
                             {t('conversation.history.thread_count', {
                               count: item.last_turn_sequence,
@@ -357,17 +357,6 @@ function labelFor(
   if (nodeType) return nodeType;
   if (nodeId) return nodeId;
   return t('conversation.history.untitled_thread');
-}
-
-function formatDate(iso: string, locale: string): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  try {
-    return date.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en');
-  } catch {
-    return iso;
-  }
 }
 
 export default ConversationHistoryPicker;

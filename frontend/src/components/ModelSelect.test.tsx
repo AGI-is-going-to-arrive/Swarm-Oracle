@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ModelSelect } from './ModelSelect';
 import { listModels } from '../api/client';
+import i18n from '../i18n/config';
+
+const realTranslations = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string) => realTranslations.enabled ? i18n.t(key) : key,
     i18n: { changeLanguage: vi.fn(), language: 'en' },
   }),
 }));
@@ -21,6 +24,31 @@ describe('ModelSelect', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    realTranslations.enabled = false;
+  });
+
+  it('localizes an allowlist error after switching language and preserves a manually entered model', async () => {
+    realTranslations.enabled = true;
+    vi.mocked(listModels).mockRejectedValueOnce({ status: 400, code: 'LLM_BASE_URL_NOT_ALLOWED', message: 'private endpoint credentials' });
+    const props = { baseUrl: 'https://provider.invalid/v1', value: 'My original model', onChange: vi.fn() };
+    const view = render(<ModelSelect {...props} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('This model service URL is not allowed');
+    expect(screen.getByRole('textbox')).toHaveValue('My original model');
+    await act(async () => { await i18n.changeLanguage('zh'); });
+    view.rerender(<ModelSelect {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('此模型服务地址不在服务器允许列表中');
+    expect(screen.queryByText(/private endpoint credentials/)).not.toBeInTheDocument();
+    expect(listModels).toHaveBeenCalledOnce();
+  });
+
+  it('uses a localized generic fallback without exposing unknown provider errors', async () => {
+    realTranslations.enabled = true;
+    vi.mocked(listModels).mockRejectedValueOnce(new Error('upstream secret sk-private'));
+    render(<ModelSelect baseUrl="https://provider.invalid/v1" value="custom-model" onChange={vi.fn()} />);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(i18n.t('model_select.list_failed'));
+    expect(alert).not.toHaveTextContent('sk-private');
+    expect(screen.getByRole('textbox')).toHaveValue('custom-model');
   });
 
   it('renders select dropdown when supported is true and models are not empty', async () => {

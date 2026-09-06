@@ -222,6 +222,8 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
 
     assert isinstance(report, FullReport)
     assert set(FullReport.model_fields) == {
+        "detail_level",
+        "authored_content_i18n",
         "version",
         "generated_at",
         "generation_mode",
@@ -868,6 +870,8 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
     assert report.dissenting is None
     assert "dissenting" in FullReport.model_fields
     assert set(FullReport.model_fields) == {
+        "detail_level",
+        "authored_content_i18n",
         "version",
         "generated_at",
         "generation_mode",
@@ -1102,10 +1106,12 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
         FullReport.model_validate(payload).model_dump(mode="json"),
     )
     assert raw_size == 1395
-    assert response_size == 1597
+    assert response_size > raw_size
 
     with pytest.raises(ValueError, match="byte budget"):
-        validate_full_report_payload(payload, max_bytes=raw_size)
+        validate_full_report_payload(payload, max_bytes=response_size - 1)
+    accepted = validate_full_report_payload(payload, max_bytes=response_size)
+    assert utf8_json_size_bytes(accepted.model_dump(mode="json")) == response_size
 
 
 def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
@@ -1473,6 +1479,8 @@ def test_report_generate_sse_endpoint_contract(monkeypatch):
         *,
         overrides: dict,
         report_scope,
+        detail_level: str,
+        target_language: str | None,
     ):
         nonlocal stream_called, streamed_scope
         stream_called = True
@@ -1480,6 +1488,8 @@ def test_report_generate_sse_endpoint_contract(monkeypatch):
         assert scenario_id == sid
         assert dominant_branch_id
         assert overrides["api_key"] is None
+        assert detail_level == "full"
+        assert target_language is None
         yield encode_sse_event(
             ResultReportSSEEvent(
                 event="report_started",

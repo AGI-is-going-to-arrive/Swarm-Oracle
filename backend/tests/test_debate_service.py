@@ -339,13 +339,9 @@ async def test_run_debate_background_uses_shorter_runtime_lock_lease(monkeypatch
 async def test_run_debate_background_refreshes_runtime_lock_while_running(monkeypatch):
     debate = create_debate_record("如果一场辩论运行得足够久，运行时锁也应继续续租吗？")
     pushed_events: list[dict] = []
-    lease_seconds = 0.02
-    initial_lease = RuntimeLockLease(
-        lock_key=debate_lock_key(debate.id),
-        owner_id="debate-owner",
-        db_path=None,
-        expires_at=time.time() + lease_seconds,
-    )
+    lease_seconds = 0.1
+    initial_lease = acquire_runtime_lock(debate_lock_key(debate.id), lease_seconds=lease_seconds)
+    assert initial_lease is not None
     refreshed_leases: list[RuntimeLockLease] = []
     released_leases: list[RuntimeLockLease | None] = []
     original_generate_turn_content = debate_module._generate_turn_content
@@ -354,7 +350,7 @@ async def test_run_debate_background_refreshes_runtime_lock_while_running(monkey
 
     def _fake_acquire_runtime_lock(lock_key: str, *, lease_seconds: float):
         assert lock_key == debate_lock_key(debate.id)
-        assert lease_seconds == pytest.approx(0.02)
+        assert lease_seconds == pytest.approx(0.1)
         return initial_lease
 
     def _fake_refresh_runtime_lock(
@@ -363,18 +359,14 @@ async def test_run_debate_background_refreshes_runtime_lock_while_running(monkey
         lease_seconds: float,
     ) -> RuntimeLockLease | None:
         assert lease is not None
-        refreshed = RuntimeLockLease(
-            lock_key=lease.lock_key,
-            owner_id=lease.owner_id,
-            db_path=lease.db_path,
-            expires_at=time.time() + lease_seconds,
-        )
+        refreshed = runtime_lock_module.refresh_runtime_lock(lease, lease_seconds=lease_seconds)
+        assert refreshed is not None
         refreshed_leases.append(refreshed)
         return refreshed
 
     def _fake_release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
         released_leases.append(lease)
-        return True
+        return release_runtime_lock(lease)
 
     async def _slow_generate_turn_content(*args, **kwargs):
         await asyncio.sleep(lease_seconds * 3)
@@ -407,12 +399,8 @@ async def test_run_debate_background_fails_closed_when_runtime_lock_refresh_is_l
     debate = create_debate_record("如果运行时锁在长辩论中途失效，后台任务应立即停下吗？")
     pushed_events: list[dict] = []
     lease_seconds = 0.02
-    initial_lease = RuntimeLockLease(
-        lock_key=debate_lock_key(debate.id),
-        owner_id="debate-owner",
-        db_path=None,
-        expires_at=time.time() + lease_seconds,
-    )
+    initial_lease = acquire_runtime_lock(debate_lock_key(debate.id), lease_seconds=lease_seconds)
+    assert initial_lease is not None
     refresh_attempts: list[float] = []
     original_generate_turn_content = debate_module._generate_turn_content
 
@@ -471,12 +459,8 @@ async def test_run_debate_background_fails_closed_when_runtime_lock_refresh_rais
     debate = create_debate_record("如果运行时锁续租线程直接抛异常，后台任务也应立即停下吗？")
     pushed_events: list[dict] = []
     lease_seconds = 0.02
-    initial_lease = RuntimeLockLease(
-        lock_key=debate_lock_key(debate.id),
-        owner_id="debate-owner",
-        db_path=None,
-        expires_at=time.time() + lease_seconds,
-    )
+    initial_lease = acquire_runtime_lock(debate_lock_key(debate.id), lease_seconds=lease_seconds)
+    assert initial_lease is not None
     refresh_attempts: list[float] = []
     original_generate_turn_content = debate_module._generate_turn_content
 
@@ -535,16 +519,12 @@ async def test_run_debate_background_fails_closed_when_sqlite_runtime_lock_refre
     debate = create_debate_record("如果真实 SQLite 续租线程跨线程抛异常，后台任务也应立即停下吗？")
     pushed_events: list[dict] = []
     lease_seconds = 0.02
-    db_path = tmp_path / "debate-runtime-lock.db"
     heartbeat_attempted = threading.Event()
     heartbeat_failed = threading.Event()
     original_get_sqlite_connection = runtime_lock_module._get_sqlite_connection
     original_generate_turn_content = debate_module._generate_turn_content
 
-    monkeypatch.setattr(
-        "app.services.runtime_lock.settings.DATABASE_URL",
-        f"sqlite:///{db_path}",
-    )
+    # The runtime lease must belong to the same SQLite file as the Debate row.
     monkeypatch.setattr(debate_module, "_DEBATE_RUNTIME_LOCK_LEASE_SECONDS", lease_seconds)
 
     runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()

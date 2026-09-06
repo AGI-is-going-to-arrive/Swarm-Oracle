@@ -26,6 +26,28 @@ import type { ResultViewMode } from '../../stores/uiPreferencesStore';
 import type { CapabilitiesResponse } from '../../api/client';
 import type { GameplayProfileId } from '../../lib/themeRegistry';
 
+export type SampleGuideStep = 'endings' | 'divergence' | 'evidence';
+export interface SampleGuideRouteState {
+  sampleOnboarding: true;
+  sampleOnboardingStep: SampleGuideStep;
+  sampleInspectedEndingIds: string[];
+}
+
+export function readSampleGuideRouteState(value: unknown): SampleGuideRouteState | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const state = value as Record<string, unknown>;
+  if (state.sampleOnboarding !== true) return null;
+  const step = state.sampleOnboardingStep;
+  const inspected = Array.isArray(state.sampleInspectedEndingIds)
+    ? state.sampleInspectedEndingIds.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 256)
+    : [];
+  return {
+    sampleOnboarding: true,
+    sampleOnboardingStep: step === 'divergence' || step === 'evidence' ? step : 'endings',
+    sampleInspectedEndingIds: [...new Set(inspected)].slice(0, 20),
+  };
+}
+
 /**
  * Shared values consumed by ResultView sub-components. Hook orchestration and
  * setters remain inside `ResultView.tsx`; this object only exposes the
@@ -72,6 +94,13 @@ export interface ResultViewContextValue {
   // expand state for ending cards
   expandedBranch: string | null;
   setExpandedBranch: (next: string | null) => void;
+  comparisonBranchA: string | null;
+  comparisonBranchB: string | null;
+  setComparisonBranch: (side: 'a' | 'b', branchId: string) => void;
+  comparisonHref: string | null;
+  handleOpenComparison: () => void;
+  hasSavedEvidence: boolean;
+  handleOpenEvidence: (evidenceIds?: string[]) => void;
 
   // export controls
   exporting: boolean;

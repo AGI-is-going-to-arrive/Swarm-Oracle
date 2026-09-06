@@ -24,7 +24,8 @@ services:
       - PORT=18927
       - CORS_ORIGINS=["http://localhost","http://127.0.0.1","http://localhost:18928","http://127.0.0.1:18928"]
     extra_hosts:
-      # Docker Desktop resolves host.docker.internal; Linux needs host-gateway support or an explicit host IP.
+      # DNS mapping only: a Linux host service bound solely to 127.0.0.1 is
+      # still unreachable through this gateway. See deploy/README.md.
       - "host.docker.internal:host-gateway"
     volumes:
       - backend-data:/data
@@ -34,7 +35,7 @@ services:
       # and configure ENV=production, SESSION_SECRET, and ADMIN_TOKEN.
       - "127.0.0.1:18927:18927"
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:18927/'); r.raise_for_status()"]
+      test: ["CMD", "python", "-c", "import http.client; c = http.client.HTTPConnection('localhost', 18927, timeout=5); c.request('GET', '/'); assert c.getresponse().status < 400"]
       interval: 30s
       timeout: 10s
       retries: 3

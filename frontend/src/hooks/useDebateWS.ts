@@ -48,7 +48,7 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
         if (!socketStillCurrent || !requestStillCurrent || !noStateMessagesArrived) {
           return;
         }
-        useDebateStore.getState().setDebate(debate);
+        useDebateStore.getState().setDebate(debate, currentDebateId);
       })
       .catch((error) => console.warn('[DebateWS] Debate poll failed:', error));
   }, []);
@@ -181,22 +181,33 @@ export function useDebateWS(debateId: string | undefined, ready = true) {
           }
         }
 
+        const store = useDebateStore.getState();
+        if (store.activeDebateId && store.activeDebateId !== debateId) return;
+        if (store.debate && store.debate.id !== debateId) return;
+        if (store.status === 'deleted') return;
+        if ((store.status === 'cancelled' || store.debate?.status === 'cancelled') && !(
+          payload.type === 'status' && ['cancelled', 'deleted'].includes(payload.data.status)
+        )) return;
         if (payload.type !== 'heartbeat') {
           stateMessageVersionRef.current += 1;
         }
-        const store = useDebateStore.getState();
         switch (payload.type) {
           case 'heartbeat':
             break;
           case 'status':
-            if (payload.data.status === 'error') {
+            if (payload.data.status === 'cancelled' || payload.data.status === 'deleted') {
+              store.setTerminalStatus(payload.data.status, debateId);
+              if (payload.data.status === 'cancelled') {
+                requestDebateResync(debateId, ws, stateMessageVersionRef.current);
+              }
+            } else if (payload.data.status === 'error') {
               store.setError(payload.data.error ?? { code: 'UNSTRUCTURED_ERROR' });
             } else if (payload.data.status === 'done' && store.debate) {
               store.setDebate({
                 ...store.debate,
                 status: 'done',
                 result_ready: true,
-              });
+              }, debateId);
             }
             break;
           case 'debate_phase_change':

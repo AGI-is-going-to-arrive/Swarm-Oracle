@@ -1,8 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { getSessionBoundUserId, predictDebate } from '../api/client';
+import { cancelDebate, getDebateRestartOptions, getSessionBoundUserId, isApiError, predictDebate, restartDebate } from '../api/client';
+import { createCompatUuid } from '../lib/compatUuid';
 import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { DebateBetModal } from '../components/DebateBetModal';
 import { DebateMomentumBar } from '../components/DebateMomentumBar';
@@ -37,7 +38,7 @@ import {
 import { useDebateWS } from '../hooks/useDebateWS';
 import { useDebateStore } from '../stores/debateStore';
 import { getDirectorIdentity } from '../lib/directorIdentity';
-import type { DebatePhase } from '../types';
+import type { DebatePhase, DebateProfileChoice, DebateRestartOptions, DebateSnapshot, RestartDebateRequest } from '../types';
 import { ArgumentMap } from '../components/ArgumentMap';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import './DebateArena.css';
@@ -84,6 +85,202 @@ function getLeaderLabel(
   return getDebateSideLabel(t, leader);
 }
 
+const DEBATE_ROLES = ['proposition', 'opposition', 'judge'] as const;
+type DebateRole = (typeof DEBATE_ROLES)[number];
+
+function pendingRestartKey(debateId: string): string {
+  return `swarmoracle:debate-restart:pending:${debateId}`;
+}
+
+function readPendingRestart(debateId: string): RestartDebateRequest | null {
+  try {
+    const raw = sessionStorage.getItem(pendingRestartKey(debateId));
+    if (!raw || raw.length > 2048) return null;
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (typeof record.client_request_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(record.client_request_id)) return null;
+    const fields = ['proposition_model_profile_id', 'opposition_model_profile_id', 'judge_model_profile_id', 'current_server_token'];
+    if (fields.some((field) => record[field] !== undefined && (typeof record[field] !== 'string' || String(record[field]).length > 128))) return null;
+    if (record.use_current_server_provider !== undefined && typeof record.use_current_server_provider !== 'boolean') return null;
+    const tokens = record.profile_confirmation_tokens;
+    if (tokens !== undefined) {
+      if (typeof tokens !== 'object' || tokens === null || Array.isArray(tokens)) return null;
+      const entries = Object.entries(tokens);
+      if (entries.length > 3 || entries.some(([key, token]) => key.length > 128 || typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token))) return null;
+    }
+    if (Object.keys(record).some((key) => !['client_request_id', 'use_current_server_provider', 'profile_confirmation_tokens', ...fields].includes(key))) return null;
+    return record as unknown as RestartDebateRequest;
+  } catch {
+    return null;
+  }
+}
+
+function DebateLifecycleControls({ debate, onReveal }: { debate: DebateSnapshot; onReveal: () => void }): React.JSX.Element {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [cachedRequest] = useState(() => readPendingRestart(debate.id));
+  const pendingRequest = useRef<RestartDebateRequest | null>(cachedRequest);
+  const [open, setOpen] = useState(Boolean(cachedRequest));
+  const [working, setWorking] = useState<'cancel' | 'restart' | null>(null);
+  const workingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const requestEpochRef = useRef(0);
+  const [options, setOptions] = useState<DebateRestartOptions | null>(null);
+  const [profiles, setProfiles] = useState<DebateProfileChoice[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [choiceError, setChoiceError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [uncertain, setUncertain] = useState(Boolean(cachedRequest));
+  const [selected, setSelected] = useState<Partial<Record<DebateRole, string>>>(() => cachedRequest ? {
+    proposition: cachedRequest.proposition_model_profile_id ?? '',
+    opposition: cachedRequest.opposition_model_profile_id ?? '',
+    judge: cachedRequest.judge_model_profile_id ?? '',
+  } : {});
+  const [useServer, setUseServer] = useState(cachedRequest?.use_current_server_provider ?? false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const terminal = ['done', 'error', 'cancelled'].includes(debate.status);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; requestEpochRef.current += 1; };
+  }, []);
+  const loadChoices = useCallback(async (): Promise<void> => {
+    const epoch = ++requestEpochRef.current;
+    setLoading(true);
+    setChoiceError(false);
+    try {
+      const choice = await getDebateRestartOptions(debate.id);
+      if (!mountedRef.current || requestEpochRef.current !== epoch) return;
+      setOptions(choice);
+      setProfiles(choice.owned_profile_choices ?? []);
+      setActionError((current) => current === 'changed' ? null : current);
+      setSelected((current) => Object.keys(current).length > 0 ? current : Object.fromEntries(
+        choice.providers.map((provider) => [provider.role, provider.available ? provider.profile_id ?? '' : '']),
+      ));
+    } catch {
+      if (mountedRef.current && requestEpochRef.current === epoch) setChoiceError(true);
+    } finally {
+      if (mountedRef.current && requestEpochRef.current === epoch) setLoading(false);
+    }
+  }, [debate.id]);
+  useEffect(() => { if (cachedRequest) void loadChoices(); }, [cachedRequest, loadChoices]);
+
+  const cancel = async (): Promise<void> => {
+    if (workingRef.current) return;
+    workingRef.current = true;
+    setWorking('cancel');
+    setActionError(null);
+    try {
+      const snapshot = await cancelDebate(debate.id);
+      if (mountedRef.current) useDebateStore.getState().setDebate(snapshot, debate.id);
+    } catch {
+      if (mountedRef.current) setActionError('cancel');
+    } finally {
+      workingRef.current = false;
+      if (mountedRef.current) setWorking(null);
+    }
+  };
+
+  const restart = async (): Promise<void> => {
+    if (workingRef.current) return;
+    const request: RestartDebateRequest = pendingRequest.current ?? {
+      client_request_id: createCompatUuid(),
+      ...(selected.proposition ? { proposition_model_profile_id: selected.proposition } : {}),
+      ...(selected.opposition ? { opposition_model_profile_id: selected.opposition } : {}),
+      ...(selected.judge ? { judge_model_profile_id: selected.judge } : {}),
+      profile_confirmation_tokens: Object.fromEntries(
+        profiles.filter((profile) => Object.values(selected).includes(profile.profile_id))
+          .map((profile) => [profile.profile_id, profile.confirmation_token]),
+      ),
+      ...(useServer ? { use_current_server_provider: true, current_server_token: options?.server_provider.confirmation_token } : {}),
+    };
+    pendingRequest.current = request;
+    try { sessionStorage.setItem(pendingRestartKey(debate.id), JSON.stringify(request)); } catch { /* Retry remains stable in memory. */ }
+    workingRef.current = true;
+    setWorking('restart');
+    setActionError(null);
+    try {
+      const snapshot = await restartDebate(debate.id, request);
+      pendingRequest.current = null;
+      try { sessionStorage.removeItem(pendingRestartKey(debate.id)); } catch { /* Readback is still available in history. */ }
+      if (!mountedRef.current) return;
+      useDebateStore.getState().setDebate(snapshot);
+      navigate(`/debate/${snapshot.id}`);
+    } catch (error: unknown) {
+      if (!mountedRef.current) return;
+      if (isApiError(error) && error.status >= 400 && error.status < 500) {
+        pendingRequest.current = null;
+        try { sessionStorage.removeItem(pendingRestartKey(debate.id)); } catch { /* No provider credentials are stored here. */ }
+        setUncertain(false);
+        setActionError(error.code === 'DEBATE_RESTART_PROVIDER_CHANGED' ? 'changed' : 'restart');
+      } else {
+        setUncertain(true);
+        setActionError('uncertain');
+      }
+    } finally {
+      workingRef.current = false;
+      if (mountedRef.current) setWorking(null);
+    }
+  };
+  const canRestart = Boolean(uncertain || (options && !loading && !choiceError && actionError !== 'changed' && DEBATE_ROLES.every(
+    (role) => selected[role]
+      ? profiles.some((profile) => profile.profile_id === selected[role] && profile.confirmation_token)
+      : useServer && options.server_provider.available,
+  )));
+
+  return (
+    <section className="debate-recovery-panel" aria-label={t('debate.recovery_controls')}>
+      {debate.status === 'cancelled' && <p role="status">{t('debate.cancelled_notice')}</p>}
+      {debate.status === 'error' && <p role="status">{t('debate.failed_preserved_notice')}</p>}
+      <div className="debate-controls">
+        {!terminal && <button type="button" className="btn btn-ghost" disabled={Boolean(working)} onClick={() => void cancel()}>{working === 'cancel' ? t('debate.cancelling') : t('debate.cancel_run')}</button>}
+        {terminal && <button type="button" className="btn btn-ghost" onClick={onReveal}>{t('debate.open_preserved_turns')}</button>}
+        <button type="button" className="btn btn-ghost" onClick={() => void useDebateStore.getState().loadDebate(debate.id)}>{t('common.refresh')}</button>
+        <button type="button" className="btn btn-ghost" onClick={() => navigate('/history')}>{t('debate.open_experiments')}</button>
+        {debate.source_debate_id && <button type="button" className="btn btn-ghost" onClick={() => navigate(`/debate/${debate.source_debate_id}`)}>{t('debate.previous_run')}</button>}
+        {terminal && <button type="button" className="btn btn-primary" aria-expanded={open} onClick={() => {
+          setOpen((current) => !current);
+          if (!open) { void loadChoices(); requestAnimationFrame(() => headingRef.current?.focus()); }
+        }}>{t('debate.restart_open')}</button>}
+      </div>
+      {uncertain && <p role="status">{t('debate.restart_uncertain')}</p>}
+      {actionError && actionError !== 'uncertain' && <p role="alert">{t(actionError === 'changed' ? 'debate.restart_provider_changed' : actionError === 'cancel' ? 'debate.cancel_failed' : 'debate.restart_failed')}</p>}
+      {open && terminal && (
+        <div>
+          <h2 ref={headingRef} tabIndex={-1}>{t('debate.restart_open')}</h2>
+          <p>{t('debate.restart_preserves_source')}</p>
+          {loading && <p role="status">{t('common.loading')}</p>}
+          {choiceError && <p role="status">{t('roundtable.profile_list_failed')}</p>}
+          <button type="button" className="btn btn-ghost" disabled={Boolean(working) || loading || uncertain} onClick={() => void loadChoices()}>{t('debate.reload_models')}</button>
+          <fieldset disabled={Boolean(working) || uncertain || loading} className="debate-restart-models">
+            <legend>{t('debate.restart_model_choices')}</legend>
+            {DEBATE_ROLES.map((role) => {
+              const original = options?.providers.find((provider) => provider.role === role);
+              return <label key={role}>
+                {getDebateSideLabel(t, role)}
+                <select value={selected[role] ?? ''} onChange={(event) => setSelected((current) => ({ ...current, [role]: event.target.value }))}>
+                  <option value="">{t('model_profiles.placeholder_select')}</option>
+                  {selected[role] && !profiles.some((profile) => profile.profile_id === selected[role]) && <option value={selected[role]}>{t('roundtable.provider_unavailable')}</option>}
+                  {profiles.map((profile) => <option key={profile.profile_id} value={profile.profile_id}>{profile.name} ({profile.model})</option>)}
+                </select>
+                {original?.source === 'unknown' && <span>{t('debate.original_model_unknown')}</span>}
+                {original?.source === 'profile' && !original.available && <span>{t('debate.original_model_unavailable')}</span>}
+              </label>;
+            })}
+            <label className="debate-restart-server">
+              <input type="checkbox" checked={useServer} disabled={!options?.server_provider.available}
+                onChange={(event) => setUseServer(event.target.checked)} />
+              {t('debate.restart_use_server')}: {options?.server_provider.name ?? t('roundtable.provider_unavailable')}
+            </label>
+          </fieldset>
+          <button type="button" className="btn btn-primary" disabled={Boolean(working) || !canRestart} onClick={() => void restart()}>{working === 'restart' ? t('debate.restarting') : uncertain ? t('debate.restart_retry_same') : t('debate.restart_confirm')}</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function DebateArenaView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -97,6 +294,7 @@ export function DebateArenaView() {
   const error = useDebateStore((state) => state.error);
   const errorCode = useDebateStore((state) => state.errorCode);
   const loadDebate = useDebateStore((state) => state.loadDebate);
+  const isInterrupted = debate?.status === 'cancelled' || debate?.status === 'error';
 
   const { enabled: argMapEnabled } = useCapabilityCheck('argument_map');
   const [argMapOpen, setArgMapOpen] = useState(true);
@@ -169,7 +367,7 @@ export function DebateArenaView() {
     }));
   }, [debate?.counterplay, debate?.id, id]);
 
-  useDebateWS(id, Boolean(id));
+  useDebateWS(id, Boolean(id) && status !== 'deleted');
 
   useEffect(() => {
     if (!debate?.turns.length) return;
@@ -187,13 +385,13 @@ export function DebateArenaView() {
   }, [debate?.id, id]);
 
   useEffect(() => {
-    if (!debate?.turns.length || !autoReveal) return undefined;
+    if (!debate?.turns.length || !autoReveal || isInterrupted) return undefined;
     if (revealCount >= debate.turns.length) return undefined;
     const timer = window.setTimeout(() => {
       setRevealCount((current) => Math.min((debate?.turns.length ?? current), current + 1));
     }, REVEAL_INTERVAL_MS);
     return () => window.clearTimeout(timer);
-  }, [autoReveal, debate?.turns.length, revealCount]);
+  }, [autoReveal, debate?.turns.length, isInterrupted, revealCount]);
 
   // P1-5: Refresh argument map when new turns are revealed
   useEffect(() => {
@@ -203,8 +401,8 @@ export function DebateArenaView() {
   }, [revealCount, argMapOpen, argMapEnabled]);
 
   const visibleTurns = useMemo(
-    () => debate?.turns.slice(0, revealCount) ?? [],
-    [debate?.turns, revealCount],
+    () => isInterrupted ? debate?.turns ?? [] : debate?.turns.slice(0, revealCount) ?? [],
+    [debate?.turns, isInterrupted, revealCount],
   );
   const latestVisibleTurn = visibleTurns[visibleTurns.length - 1] ?? null;
   const activeSpeakerSide = latestVisibleTurn?.speaker_side ?? null;
@@ -281,7 +479,7 @@ export function DebateArenaView() {
     const next = DEBATE_PHASE_ORDER[currentPhaseIndex + 1];
     return next ?? null;
   }, [currentPhaseIndex]);
-  const canBetNow = Boolean(debate && !debate.result_ready && currentPhaseIndex < 3);
+  const canBetNow = Boolean(debate?.status === 'live' && !debate.result_ready && currentPhaseIndex < 3);
 
   const phaseScoreDelta = useMemo(
     () => stageTurns.reduce(
@@ -387,9 +585,9 @@ export function DebateArenaView() {
     return [
       latestVisibleTurn.speaker_name,
       getDebateSideLabel(t, latestVisibleTurn.speaker_side),
-      t('debate.room_state_floor'),
+      t(isInterrupted || debate?.status === 'done' ? 'debate.room_state_saved' : 'debate.room_state_floor'),
     ].join(' · ');
-  }, [latestVisibleTurn, t]);
+  }, [debate?.status, isInterrupted, latestVisibleTurn, t]);
   const phaseCueCopy = useMemo(() => {
     if (!phaseCue) return null;
     return [
@@ -405,8 +603,9 @@ export function DebateArenaView() {
     });
   }, [phaseUnlockCount, t]);
   const stageStateLabel = useMemo(() => {
+    if (debate && ['done', 'error', 'cancelled'].includes(debate.status)) return t(`debate.status_${debate.status}`);
     return phaseLocked ? t('debate.stage_status_locked') : t('debate.stage_status_live');
-  }, [phaseLocked, t]);
+  }, [debate, phaseLocked, t]);
   const overallLeaderLabel = useMemo(
     () => getLeaderLabel(t, overallPressure.leader),
     [overallPressure.leader, t],
@@ -485,11 +684,15 @@ export function DebateArenaView() {
         ? t('debate.room_quote_judge')
         : t('debate.room_quote_waiting');
 
-      if (participant.side === 'judge' && debate?.result_ready) {
+      if (isInterrupted) {
+        statusLabel = latestTurn ? t('debate.room_state_saved') : t('debate.room_state_stopped');
+        note = latestTurn?.content ?? t(participant.side === 'judge' ? 'debate.no_verdict_notice' : 'debate.no_saved_turn');
+      } else if (participant.side === 'judge' && debate?.result_ready) {
         statusLabel = t('debate.room_state_verdict_ready');
-        if (latestTurn) {
-          note = latestTurn.content;
-        }
+        note = latestTurn?.content ?? t('debate.open_result_for_verdict');
+      } else if (debate?.status === 'done') {
+        statusLabel = latestTurn ? t('debate.room_state_saved') : t('debate.room_state_stopped');
+        note = latestTurn?.content ?? t('debate.no_saved_turn');
       } else if (latestTurn) {
         statusLabel = latestTurn.id === latestVisibleTurn?.id
           ? t('debate.room_state_floor')
@@ -506,10 +709,10 @@ export function DebateArenaView() {
         statusLabel,
         note,
         sourceLabel: latestTurn ? getDebatePhaseLabel(t, latestTurn.phase) : null,
-        active: latestTurn?.id === latestVisibleTurn?.id,
+        active: debate?.status === 'live' && latestTurn?.id === latestVisibleTurn?.id,
       };
     });
-  }, [debate?.participants, debate?.result_ready, latestVisibleTurn?.id, stageTurns, t, visibleTurns]);
+  }, [debate?.participants, debate?.result_ready, debate?.status, isInterrupted, latestVisibleTurn?.id, stageTurns, t, visibleTurns]);
 
   const themeLabel = getTheaterThemeLabel(debate?.scene_theme, isZh);
   const themeAsset = debate?.scene_theme ? getThemeAssetPath(debate.scene_theme as never) : null;
@@ -592,7 +795,7 @@ export function DebateArenaView() {
           show_bet_modal: showBetModal,
           bet_submitting: betSubmitting,
           available_prediction_options: availablePredictionOptions,
-          auto_reveal: autoReveal,
+          auto_reveal: autoReveal && !isInterrupted,
           cue_phase: phaseCue?.phase ?? null,
           cue_speaker: phaseCue?.speakerName ?? null,
           modal_state: betModalState,
@@ -642,6 +845,7 @@ export function DebateArenaView() {
     debate,
     error,
     errorCode,
+    isInterrupted,
     feedFocusLabel,
     phaseLocked,
     phaseScoreDelta,
@@ -786,6 +990,15 @@ export function DebateArenaView() {
   };
 
   const debateStatusLabel = debate?.status ? t(`debate.status_${debate.status}`) : t('common.loading');
+  const displayedMotion = (debate?.motion ?? t('debate.loading')).replace(/^(?:motion|议题|辩题|辯題)\s*[:：]\s*/i, '');
+
+  if (status === 'deleted') {
+    return <div className="debate-shell"><section className="debate-recovery-panel" role="status">
+      <h1>{t('debate.deleted_title')}</h1>
+      <p>{t('debate.deleted_notice')}</p>
+      <button type="button" className="btn btn-primary" onClick={() => navigate('/history')}>{t('debate.open_experiments')}</button>
+    </section></div>;
+  }
 
   return (
     <div className="debate-shell">
@@ -815,10 +1028,10 @@ export function DebateArenaView() {
             </div>
 
             <div className="debate-hero__copy">
-              <h1 className="debate-hero__title">{t('debate.live_title')}</h1>
-              <p className="debate-hero__subtitle">{t('debate.live_subtitle')}</p>
+              <h1 className="debate-hero__title">{t(debate?.status === 'cancelled' ? 'debate.cancelled_title' : debate?.status === 'error' ? 'debate.failed_title' : debate?.status === 'done' ? 'debate.saved_debate_title' : 'debate.live_title')}</h1>
+              <p className="debate-hero__subtitle">{t(debate && ['cancelled', 'error', 'done'].includes(debate.status) ? 'debate.preserved_subtitle' : 'debate.live_subtitle')}</p>
               <p className="debate-hero__motion">
-                <strong>{t('debate.motion_label')}:</strong> {debate?.motion ?? t('debate.loading')}
+                <strong>{t('debate.motion_label')}:</strong> {displayedMotion}
               </p>
             </div>
 
@@ -829,6 +1042,7 @@ export function DebateArenaView() {
                 audienceMeter={debate?.score.audience_meter ?? 0}
                 frameSrc={DEBATE_UI_ASSETS.scoreMeter}
               />
+              {isInterrupted && <p role="note">{t('debate.provisional_score_notice')}</p>}
               <div className="debate-controls">
                 <button type="button" className="btn debate-btn-back" onClick={() => navigate('/')}>
                   {t('debate.back_home')}
@@ -860,6 +1074,14 @@ export function DebateArenaView() {
           </div>
         </section>
 
+        {debate && <DebateLifecycleControls key={debate.id} debate={debate} onReveal={() => {
+          setRevealCount(debate.turns.length);
+          setAutoReveal(false);
+          setPhaseLocked(false);
+          setSelectedPhase(debate.turns.at(-1)?.phase ?? debate.current_phase);
+          requestAnimationFrame(() => document.getElementById('debate-stage-panel')?.focus());
+        }} />}
+
         {betNotice && <p className="debate-phase-chip">{betNotice}</p>}
         {captureNotice && <p className="debate-phase-chip">{captureNotice}</p>}
         <p className="debate-phase-chip">{t('debate.runtime_preset_not_applicable')}</p>
@@ -868,7 +1090,7 @@ export function DebateArenaView() {
             {errorCode ? getLocalizedApiErrorMessage({ code: errorCode }, t, error) : error}
           </p>
         )}
-        {phaseCueCopy && !debate?.result_ready && (
+        {phaseCueCopy && debate?.status === 'live' && (
           <section
             key={phaseCue?.token}
             className="debate-live-cue"
@@ -916,10 +1138,11 @@ export function DebateArenaView() {
               className="debate-panel"
               id="debate-stage-panel"
               role="tabpanel"
+              tabIndex={-1}
               aria-labelledby={`debate-stage-tab-${selectedPhase}`}
             >
               <div className="debate-panel__header">
-                <h2>{t('debate.feed_title')}</h2>
+                <h2>{t(debate?.status === 'live' ? 'debate.feed_title' : 'debate.saved_turns_title')}</h2>
                 <div className="debate-feed-header-meta">
                   <span className="debate-phase-chip debate-phase-chip--accent">
                     {unlockProgressLabel}
@@ -927,9 +1150,9 @@ export function DebateArenaView() {
                   <span className="debate-phase-chip">{stageStateLabel}</span>
                 </div>
                 <div className="debate-controls">
-                  <button type="button" className="btn btn-ghost" onClick={() => setAutoReveal((current) => !current)}>
+                  {!isInterrupted && <button type="button" className="btn btn-ghost" onClick={() => setAutoReveal((current) => !current)}>
                     {t('debate.auto_reveal')}: {t(autoReveal ? 'debate.state_on' : 'debate.state_off')}
-                  </button>
+                  </button>}
                   {phaseLocked && (
                     <button
                       type="button"
@@ -939,20 +1162,21 @@ export function DebateArenaView() {
                         setSelectedPhase(currentPhase);
                       }}
                     >
-                      {t('debate.return_to_live')}
+                      {t(debate?.status === 'live' ? 'debate.return_to_live' : 'debate.return_to_latest')}
                     </button>
                   )}
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    disabled={!debate?.turns.length}
                     onClick={() => {
                       setAutoReveal(false);
                       setPhaseLocked(false);
                       setRevealCount(debate?.turns.length ?? 0);
-                      setSelectedPhase('verdict');
+                      setSelectedPhase(debate?.result_ready ? 'verdict' : debate?.turns.at(-1)?.phase ?? debate?.current_phase ?? 'opening');
                     }}
                   >
-                    {t('debate.skip_to_verdict')}
+                    {t(debate?.result_ready ? 'debate.skip_to_verdict' : 'debate.open_preserved_turns')}
                   </button>
                 </div>
               </div>
@@ -1302,7 +1526,8 @@ export function DebateArenaView() {
                 <div className="debate-stage-summary-list">
                   {phaseSummaries.map((summary) => {
                     const statusLabel = !summary.unlocked
-                      ? t('debate.stage_status_waiting')
+                      ? t(isInterrupted ? 'debate.stage_not_run' : 'debate.stage_status_waiting')
+                      : isInterrupted ? t('debate.room_state_saved')
                       : summary.phase === currentPhase && !phaseLocked
                         ? t('debate.stage_status_live')
                         : summary.phase === selectedPhase && phaseLocked
@@ -1366,6 +1591,7 @@ export function DebateArenaView() {
               <div id={liveArgumentMapPanelId} className="debate-panel__body">
                 <ArgumentMap
                   debateId={id}
+                  autoTour={!isInterrupted && Boolean(debate?.result_ready)}
                   visible={argMapOpen}
                   refreshTrigger={argMapRefreshKey}
                   conversationScenarioId={null}

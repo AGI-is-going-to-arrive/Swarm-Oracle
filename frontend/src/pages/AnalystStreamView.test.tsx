@@ -22,16 +22,6 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-const mockPolicy = {
-  apiKey: 'session-key',
-  baseUrl: 'session-base',
-  model: 'session-model',
-};
-
-vi.mock('../lib/llmProviderPolicy', () => ({
-  loadLlmProviderPolicy: vi.fn(() => mockPolicy),
-}));
-
 vi.mock('../hooks/useRoundtableSseStream', () => ({
   useRoundtableSseStream: () => ({
     start: startMock,
@@ -61,6 +51,7 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
 
 vi.mock('../api/client', () => ({
   listModelProfiles: vi.fn(async () => ({ profiles: mockProfiles })),
+  getRoundtableProvider: vi.fn(async () => ({ source: 'scenario_profile', profile_id: 'scene-profile', name: 'Inherited model', model: 'scene-model' })),
 }));
 
 function TestHarness() {
@@ -86,6 +77,7 @@ describe('AnalystStreamView profile integration', () => {
     render(<TestHarness />);
 
     // Wait for the select dropdown to load profiles
+    await user.click(screen.getByText('roundtable.provider_change'));
     const select = await screen.findByLabelText('model_profiles.placeholder_select');
     expect(select).toBeInTheDocument();
 
@@ -109,12 +101,13 @@ describe('AnalystStreamView profile integration', () => {
     expect(startPayload).not.toHaveProperty('llm_model');
   });
 
-  it('sends llm_* fields and excludes analyst_model_profile_id when no profile is selected', async () => {
+  it('inherits the scenario model without session credentials when no override is selected', async () => {
     const user = userEvent.setup();
     render(<TestHarness />);
 
+    await user.click(screen.getByText('roundtable.provider_change'));
     const select = await screen.findByLabelText('model_profiles.placeholder_select');
-    // Keep it on custom option (value = "")
+    // Keep the inherited provider selection.
     await user.selectOptions(select, '');
 
     const textarea = screen.getByRole('textbox');
@@ -126,10 +119,10 @@ describe('AnalystStreamView profile integration', () => {
     expect(startMock).toHaveBeenCalledTimes(1);
     const startPayload = startMock.mock.calls[0][0];
 
-    // Assert llm_* fields are sent and analyst_model_profile_id is excluded
+    // Inheritance is resolved by the server, without stale session credentials.
     expect(startPayload).not.toHaveProperty('analyst_model_profile_id');
-    expect(startPayload).toHaveProperty('llm_api_key', 'session-key');
-    expect(startPayload).toHaveProperty('llm_base_url', 'session-base');
-    expect(startPayload).toHaveProperty('llm_model', 'session-model');
+    expect(startPayload).not.toHaveProperty('llm_api_key');
+    expect(startPayload).not.toHaveProperty('llm_base_url');
+    expect(startPayload).not.toHaveProperty('llm_model');
   });
 });

@@ -15,20 +15,10 @@ function advanceLoadEpoch(epochRef: { current: number }): number {
 export function GalleryApp() {
   const { t, i18n } = useTranslation();
   const [artifact, setArtifact] = useState<PublicArtifact | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [errorKey, setErrorKey] = useState<'gallery.error_too_large' | 'gallery.error_malformed' | 'gallery.error_unknown_version' | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const loadEpochRef = useRef(0);
-  const translationRef = useRef(t);
-  const i18nRef = useRef(i18n);
-
-  useEffect(() => {
-    translationRef.current = t;
-  }, [t]);
-
-  useEffect(() => {
-    i18nRef.current = i18n;
-  }, [i18n]);
 
   // Load artifact from Hash on mount and on hash changes
   useEffect(() => {
@@ -37,16 +27,16 @@ export function GalleryApp() {
       const hash = window.location.hash;
       if (!hash.startsWith('#data=')) {
         setArtifact(null);
-        setError(null);
+        setErrorKey(null);
         return;
       }
 
       const decoded = decodePublicArtifactHash(hash);
       if (!decoded.ok) {
         if (decoded.reason === 'too_large') {
-          setError(translationRef.current('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
+          setErrorKey('gallery.error_too_large');
         } else {
-          setError(translationRef.current('gallery.error_malformed'));
+          setErrorKey('gallery.error_malformed');
         }
         setArtifact(null);
         return;
@@ -56,15 +46,12 @@ export function GalleryApp() {
       if (loadEpoch !== loadEpochRef.current) return;
       if (parsed.ok) {
         setArtifact(parsed.artifact);
-        setError(null);
-        if (parsed.artifact.language) {
-          i18nRef.current.changeLanguage(parsed.artifact.language);
-        }
+        setErrorKey(null);
       } else if (parsed.reason === 'unknown_version') {
-        setError(translationRef.current('gallery.error_unknown_version'));
+        setErrorKey('gallery.error_unknown_version');
         setArtifact(null);
       } else {
-        setError(translationRef.current('gallery.error_malformed'));
+        setErrorKey('gallery.error_malformed');
         setArtifact(null);
       }
     };
@@ -80,7 +67,7 @@ export function GalleryApp() {
   const handleFile = (file: File) => {
     const loadEpoch = advanceLoadEpoch(loadEpochRef);
     if (file.size > MAX_ARTIFACT_BYTES) {
-      setError(t('gallery.error_too_large', 'Artifact size exceeds the maximum limit of {{max}} MB.', { max: 2 }));
+      setErrorKey('gallery.error_too_large');
       setArtifact(null);
       return;
     }
@@ -89,7 +76,7 @@ export function GalleryApp() {
       if (loadEpoch !== loadEpochRef.current) return;
       const text = e.target?.result;
       if (typeof text !== 'string') {
-        setError(translationRef.current('gallery.error_malformed'));
+        setErrorKey('gallery.error_malformed');
         setArtifact(null);
         return;
       }
@@ -97,22 +84,19 @@ export function GalleryApp() {
       if (loadEpoch !== loadEpochRef.current) return;
       if (parsed.ok) {
         setArtifact(parsed.artifact);
-        setError(null);
-        if (parsed.artifact.language) {
-          i18nRef.current.changeLanguage(parsed.artifact.language);
-        }
+        setErrorKey(null);
       } else {
         if (parsed.reason === 'unknown_version') {
-          setError(translationRef.current('gallery.error_unknown_version'));
+          setErrorKey('gallery.error_unknown_version');
         } else {
-          setError(translationRef.current('gallery.error_malformed'));
+          setErrorKey('gallery.error_malformed');
         }
         setArtifact(null);
       }
     };
     reader.onerror = () => {
       if (loadEpoch !== loadEpochRef.current) return;
-      setError(translationRef.current('gallery.error_malformed'));
+      setErrorKey('gallery.error_malformed');
       setArtifact(null);
     };
     reader.readAsText(file);
@@ -216,9 +200,9 @@ export function GalleryApp() {
         />
       </div>
 
-      {error && (
+      {errorKey && (
         <div className="error-banner" role="alert">
-          {error}
+          {t(errorKey, { max: MAX_ARTIFACT_BYTES / (1024 * 1024) })}
         </div>
       )}
 

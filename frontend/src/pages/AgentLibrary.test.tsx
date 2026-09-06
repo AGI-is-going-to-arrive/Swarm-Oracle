@@ -17,10 +17,14 @@ import {
 } from '../lib/agentPackImportUtils';
 import { KNOWLEDGE_DOMAINS } from '../contracts/agentIdentity';
 import { AgentLibrary } from './AgentLibrary';
+import i18n from '../i18n/config';
+
+const realTranslations = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string | { defaultValue?: string; name?: string }) => {
+      if (realTranslations.enabled) return i18n.t(key, typeof fallback === 'object' ? fallback : { defaultValue: fallback });
       if (fallback && typeof fallback === 'object') {
         return (fallback.defaultValue ?? key).replace('{{name}}', String(fallback.name ?? ''));
       }
@@ -127,6 +131,9 @@ const mockAgentStore = vi.hoisted(() => ({
     updated_at: string;
   }>,
   fetchIdentities: vi.fn(),
+  refreshIdentities: vi.fn(),
+  error: null as string | null,
+  errorDetails: null as { status: number | null; code: string | null } | null,
   setIdentities: vi.fn(),
 }));
 
@@ -134,8 +141,10 @@ vi.mock('../stores/agentStore', () => ({
   useAgentStore: Object.assign(() => ({
     identities: mockAgentStore.identities,
     loading: false,
-    error: null,
+    error: mockAgentStore.error,
+    errorDetails: mockAgentStore.errorDetails,
     fetchIdentities: mockAgentStore.fetchIdentities,
+    refreshIdentities: mockAgentStore.refreshIdentities,
     setIdentities: mockAgentStore.setIdentities,
   }), { getState: () => mockAgentStore }),
 }));
@@ -363,8 +372,12 @@ describe('AgentLibrary', () => {
     mockPersonaCapability.error = null;
     mockPersonaCapability.reload.mockClear();
     mockAgentStore.identities = [];
+    mockAgentStore.error = null;
+    mockAgentStore.errorDetails = null;
+    realTranslations.enabled = false;
     mockAgentStore.fetchIdentities.mockClear();
     mockAgentStore.fetchIdentities.mockResolvedValue(undefined);
+    mockAgentStore.refreshIdentities.mockReset().mockResolvedValue(undefined);
     mockAgentStore.setIdentities.mockReset();
     mockAgentStore.setIdentities.mockImplementation((identities: typeof mockAgentStore.identities) => {
       mockAgentStore.identities = identities;
@@ -380,6 +393,7 @@ describe('AgentLibrary', () => {
     mockApi.getIdentityMemory.mockResolvedValue({ memories: [] });
     mockApi.getSessionBoundUserId.mockClear();
     mockApi.importAgentPack.mockReset();
+    mockApi.importPersona.mockReset();
     mockApi.listAgentIdentities.mockReset();
     mockApi.listAgentIdentities.mockResolvedValue([]);
     mockApi.isApiError.mockClear();
@@ -409,6 +423,36 @@ describe('AgentLibrary', () => {
     expect(screen.getByRole('link', { name: /\+ 创建 Agent/ })).toBeInTheDocument();
     expect(screen.getByText('还没有自定义 Agent。')).toBeInTheDocument();
     expect(screen.getByText('创建你的第一个自定义 Agent 并在推演中使用。')).toBeInTheDocument();
+  });
+
+  it('translates a cached load error on language change without exposing its raw message', async () => {
+    realTranslations.enabled = true;
+    mockAgentStore.error = 'private upstream English response';
+    mockAgentStore.errorDetails = { status: 503, code: 'UNSTRUCTURED_ERROR' };
+    const view = renderAgentLibrary();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load agents.');
+    await act(async () => { await i18n.changeLanguage('zh'); });
+    view.rerender(<MemoryRouter initialEntries={['/agents']}><AgentLibrary /></MemoryRouter>);
+    expect(screen.getByRole('alert')).toHaveTextContent(i18n.t('agents.load_error'));
+    expect(screen.queryByText('private upstream English response')).not.toBeInTheDocument();
+  });
+
+  it('refreshes the shared cache after importing a persona backup into a populated library', async () => {
+    mockAgentStore.identities = [libraryAgent('existing', 'Existing Agent')];
+    mockApi.importPersona.mockResolvedValueOnce({ success: true, identity_id: 'imported' });
+    renderAgentLibrary();
+    mockAgentStore.fetchIdentities.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: '从备份创建 Agent' }));
+    const dialog = screen.getByRole('dialog', { name: 'Create Agent from Backup' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Advanced: paste JSON content' }));
+    fireEvent.change(within(dialog).getByLabelText('JSON backup content'), { target: { value: JSON.stringify({
+      schema_version: 1, exported_at: '2026-09-05T00:00:00Z',
+      persona: { name: 'Imported Agent', role: 'Analyst', persona_text: 'Careful reasoning.', decision_bias: { caution: 0.5 }, tags: [] },
+    }) } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create as New Agent' }));
+    await waitFor(() => expect(mockAgentStore.refreshIdentities).toHaveBeenCalledWith('test_user'));
+    expect(mockAgentStore.fetchIdentities).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: 'Create Agent from Backup' })).not.toBeInTheDocument();
   });
 
   it('does not fetch identities when capability is disabled', () => {
@@ -499,7 +543,7 @@ describe('AgentLibrary', () => {
     mockAgentStore.identities = [ada, grace];
     await act(async () => { resolveDelete(response); });
 
-    expect(mockAgentStore.setIdentities).toHaveBeenCalledWith([grace]);
+    expect(mockAgentStore.setIdentities).toHaveBeenCalledWith([grace], 'test_user');
     expect(screen.queryByRole('button', { name: 'Delete Ada' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete Grace' })).toBeEnabled();
     expect(screen.getByRole('status')).toHaveTextContent('agent_library.delete_cleanup_pending');
@@ -930,10 +974,8 @@ describe('AgentLibrary', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Review Agent Pack' })).not.toBeInTheDocument();
     });
-    expect(mockApi.listAgentIdentities).toHaveBeenCalledTimes(1);
-    expect(mockApi.listAgentIdentities).toHaveBeenCalledWith('test_user');
-    expect(mockAgentStore.setIdentities).toHaveBeenCalledTimes(1);
-    expect(mockAgentStore.setIdentities).toHaveBeenCalledWith([]);
+    expect(mockAgentStore.refreshIdentities).toHaveBeenCalledTimes(1);
+    expect(mockAgentStore.refreshIdentities).toHaveBeenCalledWith('test_user');
     expect(mockAgentStore.fetchIdentities).not.toHaveBeenCalled();
   });
 
@@ -997,7 +1039,7 @@ describe('AgentLibrary', () => {
       imported_count: 2,
       identities: [],
     });
-    mockApi.listAgentIdentities.mockRejectedValueOnce(new Error('raw refresh failure'));
+    mockAgentStore.refreshIdentities.mockRejectedValueOnce(new Error('raw refresh failure'));
     renderAgentLibrary();
     const dialog = openAgentPackPastePreview();
 

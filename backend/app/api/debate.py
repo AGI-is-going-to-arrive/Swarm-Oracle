@@ -6,7 +6,9 @@ import asyncio
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -15,13 +17,15 @@ from sqlmodel import Session, select
 from app.api.errors import api_error
 from app.api.helpers import (
     SessionPrincipal,
+    get_running_task,
     require_session_principal,
     resolve_authenticated_user_id,
     schedule_background_task,
     verify_session,
 )
 from app.api.ws import WSManager, run_websocket_session
-from app.config import settings
+from app.config import is_static_llm_configured, settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Debate,
     DebateCounterplay,
@@ -31,23 +35,35 @@ from app.models import (
     DebateSide,
     DebateStatus,
     DebateTurn,
+    ModelProfile,
 )
 from app.models.database import get_engine
 from app.services.debate import (
-    create_debate_record,
+    create_debate_record_with_receipt,
+    find_existing_debate_request,
     get_debate_prediction_options,
     load_debate_result_payload,
     load_debate_snapshot,
     run_debate_background,
 )
-from app.services.debate_argument_map import extract_argument_units
+from app.services.debate_argument_map import (
+    cancel_argument_enrichment_for_debate,
+    extract_argument_units,
+)
+from app.services.debate_lifecycle import cancel_debate_record, delete_debate_record
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
 from app.services.llm_client import (
     is_local_provider_url,
     safe_llm_error_payload,
     validate_llm_base_url,
 )
-from app.services.model_profiles import ResolvedProviderPolicy, resolve_model_profile_policy
+from app.services.model_profiles import (
+    ResolvedProviderPolicy,
+    model_profile_confirmation_token,
+    resolve_model_profile_policy,
+)
+from app.services.resource_deletion import resource_is_deleted
+from app.services.runtime_lock import begin_serialized_write
 
 router = APIRouter(tags=["debate"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["debate"])
@@ -74,6 +90,8 @@ def _load_owned_debate(
     debate_id: str,
     principal: SessionPrincipal | None,
 ) -> Debate:
+    if resource_is_deleted(session, "debate", debate_id):
+        raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
     if principal is None:
         debate = session.get(Debate, debate_id)
         if debate is None:
@@ -152,6 +170,8 @@ class CreateDebateRequest(BaseModel):
     judge_model_profile_id: str | None = None
     reasoning_effort: str | None = None
     custom_agent_ids: list[str] | None = None
+    client_request_id: UUID | None = None
+    profile_confirmation_tokens: dict[str, str] = Field(default_factory=dict, max_length=3)
 
     @field_validator("question")
     @classmethod
@@ -740,11 +760,191 @@ def _debate_policy_to_overrides(
     }
 
 
-@router.post("/api/debate")
-async def create_debate(
+def _server_debate_provider() -> tuple[dict[str, Any], dict[str, Any]]:
+    binding = {
+        "api_key": settings.LLM_API_KEY or None,
+        "base_url": settings.LLM_RESPONSES_URL,
+        "model": settings.LLM_MODEL_NAME,
+    }
+    token = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
+    return {
+        "name": _scrub_sensitive_text(settings.LLM_MODEL_NAME),
+        "model": _scrub_sensitive_text(settings.LLM_MODEL_NAME),
+        "available": is_static_llm_configured(
+            base_url=settings.LLM_RESPONSES_URL, api_key=settings.LLM_API_KEY,
+        ),
+        "confirmation_token": token,
+    }, binding
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedDebateProfile:
+    profile_id: str
+    user_id: str
+    name: str
+    policy: ResolvedProviderPolicy
+    confirmation_token: str
+
+    def choice(self) -> dict[str, str]:
+        return {
+            "profile_id": self.profile_id, "name": self.name,
+            "model": _scrub_sensitive_text(self.policy.model),
+            "confirmation_token": self.confirmation_token,
+        }
+
+
+def _capture_debate_profile(
+    session: Session,
+    *, user_id: str, profile_id: str,
+    requests_per_minute: int | None = None,
+    tokens_per_minute: int | None = None,
+    expected_confirmation_token: str | None = None,
+) -> _CapturedDebateProfile:
+    # Keep a strong reference before resolution: the Session identity map is
+    # weak, and a second lookup after resolution could observe a concurrent
+    # edit and give the captured provider somebody else's display metadata.
+    profile = session.get(ModelProfile, profile_id)
+    if profile is None or profile.user_id != user_id:
+        raise api_error(404, "MODEL_PROFILE_NOT_FOUND", "Model profile not found")
+    policy = resolve_model_profile_policy(
+        session, user_id=user_id, model_profile_id=profile_id,
+        explicit_requests_per_minute=requests_per_minute,
+        explicit_tokens_per_minute=tokens_per_minute,
+        expected_confirmation_token=expected_confirmation_token,
+    )
+    if policy is None:
+        raise api_error(400, "BYOK_API_KEY_REQUIRED", "Model profile is unavailable")
+    token = model_profile_confirmation_token(profile)
+    return _CapturedDebateProfile(
+        profile_id=profile.id, user_id=profile.user_id, name=_scrub_sensitive_text(profile.name),
+        policy=policy, confirmation_token=token,
+    )
+
+
+def _build_debate_run_config(
     req: CreateDebateRequest,
-    principal: SessionPrincipal | None = Depends(require_session_principal),
+    overrides_by_side: dict[str, dict[str, Any]] | None,
+    server_binding: dict[str, Any],
+    captured_profiles: dict[str, _CapturedDebateProfile],
 ) -> dict[str, Any]:
+    explicit = any((req.llm_api_key, req.llm_base_url, req.llm_model))
+    providers = {}
+    for role in ("proposition", "opposition", "judge"):
+        captured = captured_profiles.get(role)
+        model = (overrides_by_side or {}).get(role, {}).get("model") or req.llm_model or server_binding["model"]  # noqa: E501
+        providers[role] = {
+            "source": "profile" if captured else "explicit" if explicit else "server",
+            "profile_id": captured.profile_id if captured else None,
+            "name": captured.name if captured else _scrub_sensitive_text(model),
+            "model": _scrub_sensitive_text(model),
+        }
+    return {
+        "version": 1, "providers": providers,
+        "reasoning_effort": req.reasoning_effort,
+        "custom_agent_ids": req.custom_agent_ids or [],
+    }
+
+
+class RestartDebateRequest(BaseModel):
+    client_request_id: UUID
+    proposition_model_profile_id: str | None = Field(default=None, max_length=128)
+    opposition_model_profile_id: str | None = Field(default=None, max_length=128)
+    judge_model_profile_id: str | None = Field(default=None, max_length=128)
+    use_current_server_provider: bool = False
+    current_server_token: str | None = Field(default=None, max_length=128)
+    profile_confirmation_tokens: dict[str, str] = Field(default_factory=dict, max_length=3)
+
+    @field_validator("profile_confirmation_tokens")
+    @classmethod
+    def validate_profile_tokens(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(
+            not 1 <= len(profile_id) <= 128 or len(token) != 64
+            or any(char not in "0123456789abcdef" for char in token)
+            for profile_id, token in value.items()
+        ):
+            raise ValueError("Invalid model profile confirmation token")
+        return value
+
+    @field_validator(
+        "proposition_model_profile_id", "opposition_model_profile_id", "judge_model_profile_id",
+    )
+    @classmethod
+    def clean_profile_id(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
+def _debate_restart_options_sync(
+    debate_id: str, principal: SessionPrincipal | None,
+) -> dict[str, Any]:
+    server_provider, _binding = _server_debate_provider()
+    with Session(get_engine()) as session:
+        debate = _load_owned_debate(session, debate_id, principal)
+        metadata = (debate.breakdown_json or {}).get("metadata", {})
+        config = metadata.get("run_config", {}) if isinstance(metadata, dict) else {}
+        if not isinstance(config, dict) or config.get("version") != 1:
+            config = {}
+        raw_providers = config.get("providers", {}) if isinstance(config, dict) else {}
+        choices: dict[str, _CapturedDebateProfile] = {}
+        if settings.FEATURE_MODEL_PROFILES:
+            for profile in session.exec(select(ModelProfile).where(
+                ModelProfile.user_id == debate.user_id,
+            ).order_by(ModelProfile.name, ModelProfile.id)).all():
+                try:
+                    choices[profile.id] = _capture_debate_profile(
+                        session, user_id=debate.user_id, profile_id=profile.id,
+                    )
+                except HTTPException:
+                    continue
+        providers = []
+        for role in ("proposition", "opposition", "judge"):
+            stored = raw_providers.get(role, {}) if isinstance(raw_providers, dict) else {}
+            stored = stored if isinstance(stored, dict) else {}
+            profile_id = stored.get("profile_id") if stored.get("source") == "profile" else None
+            captured = choices.get(profile_id) if isinstance(profile_id, str) else None
+            available = captured is not None
+            providers.append({
+                "role": role, "profile_id": profile_id if isinstance(profile_id, str) else None,
+                "source": stored.get("source") if stored.get("source") in {"profile", "explicit", "server"} else "unknown",  # noqa: E501
+                "name": _scrub_sensitive_text(stored.get("name"))[:200],
+                "model": _scrub_sensitive_text(stored.get("model"))[:200],
+                "available": available,
+                "confirmation_token": captured.confirmation_token if captured else None,
+            })
+        return {
+            "debate_id": debate.id, "question": debate.question, "language": debate.language,
+            "status": debate.status.value, "providers": providers,
+            "can_reuse_original_profiles": all(item["available"] for item in providers),
+            "server_provider": server_provider,
+            "owned_profile_choices": [choice.choice() for choice in choices.values()],
+        }
+
+
+async def _create_debate_from_request(
+    req: CreateDebateRequest,
+    principal: SessionPrincipal | None,
+    *, source_debate_id: str | None = None,
+    request_fingerprint_override: str | None = None,
+    server_binding_override: dict[str, Any] | None = None,
+    captured_profiles_override: dict[str, _CapturedDebateProfile] | None = None,
+) -> dict[str, Any]:
+    effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
+    request_payload = req.model_dump(mode="json")
+    if not req.profile_confirmation_tokens:
+        request_payload.pop("profile_confirmation_tokens", None)
+    request_fingerprint = request_fingerprint_override or hashlib.sha256(json.dumps(
+        {"request": request_payload, "source_debate_id": source_debate_id},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    if req.client_request_id is not None:
+        existing = await asyncio.to_thread(
+            find_existing_debate_request, user_id=effective_user_id,
+            request_id=str(req.client_request_id), request_fingerprint=request_fingerprint,
+        )
+        if existing is not None:
+            payload = await asyncio.to_thread(load_debate_snapshot, existing.id)
+            if payload is None:
+                raise api_error(409, "DEBATE_REQUEST_DELETED", "This requested run was deleted")
+            return payload
     # SSRF protection: validate BYOK base_url against allowlist
     if req.llm_base_url:
         validated_url = validate_llm_base_url(req.llm_base_url)
@@ -753,7 +953,6 @@ async def create_debate(
         if not req.llm_api_key and not is_local_provider_url(validated_url):
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
-    effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
     profile_ids = {
         DebateSide.PROPOSITION.value: req.proposition_model_profile_id,
         DebateSide.OPPOSITION.value: req.opposition_model_profile_id,
@@ -763,45 +962,42 @@ async def create_debate(
         (req.llm_api_key, req.llm_base_url, req.llm_model)
     )
     llm_overrides_by_side: dict[str, dict[str, Any]] | None = None
+    captured_profiles: dict[str, _CapturedDebateProfile] = {}
     if any(profile_ids.values()):
         llm_overrides_by_side = {}
+        capture_by_id: dict[str, _CapturedDebateProfile] = {}
         with Session(get_engine()) as profile_session:
             for side, profile_id in profile_ids.items():
                 if not profile_id:
                     continue
-                policy = resolve_model_profile_policy(
-                    profile_session,
-                    user_id=effective_user_id,
-                    model_profile_id=profile_id,
-                    # A global BYOK binding is fallback for roles without a
-                    # profile; it must never replace a selected role profile.
-                    # Rate-only request policy remains a deliberate all-role
-                    # override when no competing global provider is present.
-                    explicit_api_key=(
-                        None if has_global_provider_binding else req.llm_api_key
-                    ),
-                    explicit_base_url=(
-                        None if has_global_provider_binding else req.llm_base_url
-                    ),
-                    explicit_model=(
-                        None if has_global_provider_binding else req.llm_model
-                    ),
-                    explicit_requests_per_minute=(
-                        None
-                        if has_global_provider_binding
-                        else req.llm_requests_per_minute
-                    ),
-                    explicit_tokens_per_minute=(
-                        None
-                        if has_global_provider_binding
-                        else req.llm_tokens_per_minute
-                    ),
+                if captured_profiles_override is not None:
+                    captured = captured_profiles_override.get(side)
+                    if (
+                        captured is None or captured.profile_id != profile_id
+                        or captured.user_id != effective_user_id
+                    ):
+                        raise api_error(
+                            409, "DEBATE_RESTART_PROVIDER_CHANGED",
+                            "Model choice no longer matches the reviewed provider",
+                        )
+                else:
+                    captured = capture_by_id.get(profile_id)
+                    if captured is None:
+                        captured = _capture_debate_profile(
+                            profile_session, user_id=effective_user_id, profile_id=profile_id,
+                            requests_per_minute=(
+                                None if has_global_provider_binding else req.llm_requests_per_minute
+                            ),
+                            tokens_per_minute=(
+                                None if has_global_provider_binding else req.llm_tokens_per_minute
+                            ),
+                            expected_confirmation_token=req.profile_confirmation_tokens.get(profile_id),
+                        )
+                        capture_by_id[profile_id] = captured
+                captured_profiles[side] = captured
+                llm_overrides_by_side[side] = _debate_policy_to_overrides(
+                    captured.policy, reasoning_effort=req.reasoning_effort,
                 )
-                if policy is not None:
-                    llm_overrides_by_side[side] = _debate_policy_to_overrides(
-                        policy,
-                        reasoning_effort=req.reasoning_effort,
-                    )
 
     if req.custom_agent_ids and not settings.FEATURE_CUSTOM_AGENTS:
         raise HTTPException(status_code=400, detail="Custom agents feature is not enabled")
@@ -840,30 +1036,40 @@ async def create_debate(
                     "knowledge_domains": knowledge_domains,
                     "decision_bias": decision_bias,
                 }
-    debate = create_debate_record(
+    _server_descriptor, server_binding = _server_debate_provider()
+    server_binding = server_binding_override or server_binding
+    run_config = _build_debate_run_config(
+        req, llm_overrides_by_side, server_binding, captured_profiles,
+    )
+    debate, created = await asyncio.to_thread(
+        create_debate_record_with_receipt,
         req.question,
         profile_hint=req.profile_hint,
         user_id=effective_user_id,
         custom_agent_overrides=custom_agent_overrides,
         language=req.language,
+        request_id=str(req.client_request_id) if req.client_request_id else None,
+        request_fingerprint=request_fingerprint,
+        source_debate_id=source_debate_id,
+        run_config=run_config,
     )
-    llm_overrides = None
-    if (
-        req.llm_api_key
-        or req.llm_base_url
-        or req.llm_model
-        or req.reasoning_effort
-        or req.llm_requests_per_minute is not None
-        or req.llm_tokens_per_minute is not None
-    ):
-        llm_overrides = {
-            "api_key": req.llm_api_key,
-            "base_url": req.llm_base_url,
-            "model": req.llm_model,
-            "reasoning_effort": req.reasoning_effort,
-            "requests_per_minute": req.llm_requests_per_minute,
-            "tokens_per_minute": req.llm_tokens_per_minute,
-        }
+    if not created:
+        payload = await asyncio.to_thread(load_debate_snapshot, debate.id)
+        if payload is None:
+            raise api_error(409, "DEBATE_REQUEST_DELETED", "This requested run was deleted")
+        return payload
+    # Capture server credentials only in this task's memory. A later settings
+    # change must not redirect a confirmed run to a different provider/account.
+    llm_overrides = {
+        "api_key": (
+            req.llm_api_key if req.llm_base_url else req.llm_api_key or server_binding["api_key"]
+        ),
+        "base_url": req.llm_base_url or server_binding["base_url"],
+        "model": req.llm_model or server_binding["model"],
+        "reasoning_effort": req.reasoning_effort,
+        "requests_per_minute": req.llm_requests_per_minute,
+        "tokens_per_minute": req.llm_tokens_per_minute,
+    }
 
     async def _delayed_run() -> None:
         await asyncio.sleep(DEBATE_START_DELAY_SECONDS)
@@ -877,7 +1083,10 @@ async def create_debate(
             )
         except Exception as exc:
             payload = safe_llm_error_payload(exc)
-            if payload is not None:
+            with Session(get_engine()) as error_session:
+                current = error_session.get(Debate, debate.id)
+                still_failed = current is not None and current.status == DebateStatus.ERROR
+            if payload is not None and still_failed:
                 await debate_ws_manager.broadcast(
                     debate.id,
                     {
@@ -897,6 +1106,187 @@ async def create_debate(
     if payload is None:
         raise api_error(500, "DEBATE_CREATE_RESPONSE_MISSING", "Failed to load newly created debate")  # noqa: E501
     return payload
+
+
+@router.post("/api/debate")
+async def create_debate(
+    req: CreateDebateRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    return await _create_debate_from_request(req, principal)
+
+
+def _stop_local_debate_tasks(debate_id: str) -> None:
+    task = get_running_task(debate_id)
+    if task is not None and task is not asyncio.current_task() and not task.done():
+        loop = task.get_loop()
+        if not loop.is_closed():
+            loop.call_soon_threadsafe(task.cancel)
+    cancel_argument_enrichment_for_debate(debate_id)
+
+
+async def _broadcast_debate_terminal_status(debate_id: str, status: str) -> None:
+    try:
+        await debate_ws_manager.broadcast(debate_id, {"type": "status", "data": {"status": status}})
+    except Exception:
+        logger.warning("Debate terminal notification failed for %s", debate_id, exc_info=True)
+
+
+@router.post("/api/debate/{debate_id}/cancel")
+async def cancel_debate_endpoint(
+    debate_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    status = await asyncio.to_thread(
+        cancel_debate_record, debate_id,
+        owner_user_id=principal.subject if principal else None,
+    )
+    if status == DebateStatus.CANCELLED:
+        _stop_local_debate_tasks(debate_id)
+        await _broadcast_debate_terminal_status(debate_id, "cancelled")
+    payload = await asyncio.to_thread(load_debate_snapshot, debate_id)
+    if payload is None:
+        raise api_error(404, "DEBATE_NOT_FOUND", "Debate not found")
+    # DONE/ERROR may have won the race. Return actual state, never a fabricated
+    # cancellation acknowledgement for an already-terminal run.
+    return payload
+
+
+@router.delete("/api/debate/{debate_id}")
+async def delete_debate_endpoint(
+    debate_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    owner = principal.subject if principal else None
+    try:
+        await asyncio.to_thread(cancel_debate_record, debate_id, owner_user_id=owner)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        # Idempotence is allowed only by an owned permanent deletion receipt.
+        await asyncio.to_thread(delete_debate_record, debate_id, owner_user_id=owner)
+        return {"status": "deleted", "debate_id": debate_id}
+    _stop_local_debate_tasks(debate_id)
+    await asyncio.to_thread(delete_debate_record, debate_id, owner_user_id=owner)
+    await _broadcast_debate_terminal_status(debate_id, "deleted")
+    return {"status": "deleted", "debate_id": debate_id}
+
+
+@router.get("/api/debate/{debate_id}/restart-options")
+async def get_debate_restart_options_endpoint(
+    debate_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    return await asyncio.to_thread(_debate_restart_options_sync, debate_id, principal)
+
+
+@router.post("/api/debate/{debate_id}/restart")
+async def restart_debate_endpoint(
+    debate_id: str,
+    req: RestartDebateRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        source = _load_owned_debate(session, debate_id, principal)
+        owner = source.user_id
+        question, language, profile_hint = source.question, source.language, source.profile_id
+        metadata = (source.breakdown_json or {}).get("metadata", {})
+        run_config = metadata.get("run_config", {}) if isinstance(metadata, dict) else {}
+        run_config = run_config if isinstance(run_config, dict) else {}
+        if run_config.get("version") != 1:
+            run_config = {}
+        source_status = source.status
+    request_payload = req.model_dump(mode="json")
+    if not req.profile_confirmation_tokens:
+        request_payload.pop("profile_confirmation_tokens", None)
+    fingerprint = hashlib.sha256(json.dumps(
+        {"source_debate_id": debate_id, "request": request_payload},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    existing = await asyncio.to_thread(
+        find_existing_debate_request, user_id=owner,
+        request_id=str(req.client_request_id), request_fingerprint=fingerprint,
+    )
+    if existing is not None:
+        payload = await asyncio.to_thread(load_debate_snapshot, existing.id)
+        if payload is None:
+            raise api_error(409, "DEBATE_REQUEST_DELETED", "This requested run was deleted")
+        return payload
+    if source_status not in {DebateStatus.DONE, DebateStatus.ERROR, DebateStatus.CANCELLED}:
+        raise api_error(
+            409, "DEBATE_RESTART_ACTIVE", "Stop the active debate before starting a new run",
+        )
+    raw_providers = run_config.get("providers", {})
+    raw_providers = raw_providers if isinstance(raw_providers, dict) else {}
+    profiles: dict[str, str | None] = {}
+    captured_profiles: dict[str, _CapturedDebateProfile] = {}
+    capture_by_id: dict[str, _CapturedDebateProfile] = {}
+    with Session(get_engine()) as profile_session:
+        for role in ("proposition", "opposition", "judge"):
+            selected = getattr(req, f"{role}_model_profile_id")
+            original = raw_providers.get(role, {})
+            original = original if isinstance(original, dict) else {}
+            if (
+                selected is None and not req.use_current_server_provider
+                and original.get("source") == "profile"
+            ):
+                selected = original.get("profile_id")
+            if selected:
+                captured = capture_by_id.get(selected)
+                if captured is None:
+                    try:
+                        captured = _capture_debate_profile(
+                            profile_session, user_id=owner, profile_id=selected,
+                            expected_confirmation_token=req.profile_confirmation_tokens.get(selected),
+                        )
+                    except HTTPException as exc:
+                        if isinstance(exc.detail, dict) and exc.detail.get("code") == "MODEL_PROFILE_CHANGED":  # noqa: E501
+                            raise api_error(
+                                409, "DEBATE_RESTART_PROVIDER_CHANGED",
+                                "Model profile changed; review model choices again",
+                            ) from exc
+                        if getattr(req, f"{role}_model_profile_id") is None:
+                            selected = None
+                        else:
+                            raise
+                    if captured is not None:
+                        capture_by_id[selected] = captured
+                if selected and captured is not None:
+                    if req.profile_confirmation_tokens.get(selected) != captured.confirmation_token:
+                        raise api_error(
+                            409, "DEBATE_RESTART_PROVIDER_CHANGED",
+                            "Review the selected model profile before restarting",
+                        )
+                    captured_profiles[role] = captured
+            profiles[f"{role}_model_profile_id"] = selected
+    server_choice, server_binding = _server_debate_provider()
+    if any(profile_id is None for profile_id in profiles.values()):
+        if not req.use_current_server_provider:
+            raise api_error(
+                409, "DEBATE_RESTART_PROVIDER_REQUIRED",
+                "Choose models before starting a new debate",
+            )
+        if req.current_server_token != server_choice["confirmation_token"]:
+            raise api_error(
+                409, "DEBATE_RESTART_PROVIDER_CHANGED",
+                "Server model changed; review the model choice again",
+            )
+        if not server_choice["available"]:
+            raise api_error(
+                400, "BYOK_API_KEY_REQUIRED", "Configure a model provider before restarting",
+            )
+    new_request = CreateDebateRequest(
+        question=question, language=language, profile_hint=profile_hint, user_id=owner,
+        client_request_id=req.client_request_id,
+        reasoning_effort=run_config.get("reasoning_effort"),
+        custom_agent_ids=run_config.get("custom_agent_ids") or None,
+        **profiles,
+    )
+    return await _create_debate_from_request(
+        new_request, principal, source_debate_id=debate_id,
+        request_fingerprint_override=fingerprint, server_binding_override=server_binding,
+        captured_profiles_override=captured_profiles,
+    )
 
 
 @router.post("/api/debate/import-replay")
@@ -1133,6 +1523,10 @@ async def get_debate_result(
         debate = _load_owned_debate(session, debate_id, principal)
         if debate.status == DebateStatus.ERROR:
             raise api_error(500, "DEBATE_RESULT_ERROR_STATE", "Debate ended with an error")
+        if debate.status == DebateStatus.CANCELLED:
+            raise api_error(
+                409, "DEBATE_CANCELLED", "Debate was cancelled; preserved turns remain available",
+            )
         if debate.status != DebateStatus.DONE:
             raise api_error(409, "DEBATE_RESULT_NOT_READY", "Debate result is not ready yet")
     payload = load_debate_result_payload(debate_id)
@@ -1180,6 +1574,7 @@ async def predict_debate(
 
     engine = get_engine()
     with Session(engine) as session:
+        begin_serialized_write(session)
         debate = _load_owned_debate(session, debate_id, principal)
         if debate.status != DebateStatus.LIVE:
             raise api_error(400, "DEBATE_PREDICTIONS_CLOSED", "Debate is not accepting predictions")

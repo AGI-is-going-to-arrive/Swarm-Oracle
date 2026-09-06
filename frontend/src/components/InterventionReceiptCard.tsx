@@ -20,15 +20,34 @@ import './InterventionReceiptCard.css';
 
 export interface InterventionReceiptCardProps {
   scenarioId: string;
-  /** Hide the card while the simulation is mid-flight; only show after completion. */
+  /** Whether persisted receipts may be loaded for this scenario. */
   enabled: boolean;
+  /** Terminal runs may briefly return queued receipts while settlement finishes. */
+  terminal?: boolean;
   /** Refresh token: bump/change to trigger a re-fetch. */
   refreshKey?: number | string;
   /** Live intervention state map to display pending interventions. */
   interventionLifecycle?: Map<string, InterventionLifecycleState>;
+  onRefundConfirmed?: () => void;
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
+const SETTLEMENT_RETRY_DELAYS = [500, 1500, 3000] as const;
+
+const RECEIPT_REASON_KEYS: Record<string, string | null> = {
+  'Waiting for the next available simulation round.': null,
+  'Applied to the simulation round.': null,
+  'No remaining simulation round can apply this intervention.': null,
+  'Intervention processing failed before completion.': null,
+  'Intervention processing failed.': null,
+  'Applied to persisted agent responses before processing stopped.': 'intervention_receipt.reason_applied_partial',
+  'Applied to persisted responses before this snapshot.': 'intervention_receipt.reason_snapshot_applied',
+  'Imported snapshots do not resume queued interventions.': 'intervention_receipt.reason_snapshot_no_resume',
+  'Scenario is cancelled; no remaining round can apply this intervention.': 'intervention_receipt.reason_scenario_cancelled',
+  'Scenario is error; no remaining round can apply this intervention.': 'intervention_receipt.reason_scenario_error',
+  'Branch is completed; this intervention cannot run.': 'intervention_receipt.reason_branch_completed',
+  'Branch is pruned; this intervention cannot run.': 'intervention_receipt.reason_branch_pruned',
+};
 
 function formatConfidenceLabel(t: ReturnType<typeof useTranslation>['t'], value: number): string {
   const clamped = Math.max(0, Math.min(1, value));
@@ -47,32 +66,40 @@ function formatConfidenceLabel(t: ReturnType<typeof useTranslation>['t'], value:
 export function InterventionReceiptCard({
   scenarioId,
   enabled,
+  terminal = false,
   refreshKey = 0,
   interventionLifecycle,
+  onRefundConfirmed,
 }: InterventionReceiptCardProps): ReactElement | null {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const [effects, setEffects] = useState<InterventionEffect[]>([]);
+  const [effectsScenarioId, setEffectsScenarioId] = useState<string | null>(null);
   const [state, setState] = useState<LoadState>('idle');
   const [stateScenarioId, setStateScenarioId] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const lifecycleKey = JSON.stringify(Array.from(interventionLifecycle ?? []).sort(([left], [right]) => left.localeCompare(right)));
 
   const pendingInterventions = useMemo(() => {
     const pending: { id: string; state: string }[] = [];
+    const persistedIds = new Set(effectsScenarioId === scenarioId ? effects.map((effect) => effect.intervention_log_id) : []);
     if (interventionLifecycle) {
       Array.from(interventionLifecycle.entries()).forEach(([id, state]) => {
-        if (state === 'queued' || state === 'injected') {
+        if ((state === 'queued' || state === 'injected') && !persistedIds.has(id)) {
           pending.push({ id, state });
         }
       });
     }
     return pending;
-  }, [interventionLifecycle]);
+  }, [interventionLifecycle, effects, effectsScenarioId, scenarioId]);
 
   useEffect(() => {
     if (!enabled || !scenarioId) {
       return;
     }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const lifecycleEntries = JSON.parse(lifecycleKey) as Array<[string, InterventionLifecycleState]>;
     // Mark as loading via microtask so this stays out of the synchronous
     // useEffect body (react-hooks/set-state-in-effect).
     void Promise.resolve().then(() => {
@@ -80,55 +107,59 @@ export function InterventionReceiptCard({
       setStateScenarioId(scenarioId);
       setState('loading');
     });
-    getInterventionEffects(scenarioId)
-      .then((payload) => {
+    const loadReceipts = async (attempt = 0): Promise<void> => {
+      try {
+        const payload = await getInterventionEffects(scenarioId);
         if (cancelled) return;
         const list = Array.isArray(payload?.effects) ? payload.effects : [];
         setEffects(list);
+        setEffectsScenarioId(scenarioId);
         setStateScenarioId(scenarioId);
         setState('ready');
-      })
-      .catch(() => {
+        if (list.some((effect) => (effect.refunded_points ?? 0) > 0 || effect.gameplay_usage_refunded)) {
+          onRefundConfirmed?.();
+        }
+        const persistedIds = new Set(list.map((effect) => effect.intervention_log_id));
+        const missingLiveReceipt = lifecycleEntries.some(([id, lifecycle]) => (
+          (lifecycle === 'queued' || lifecycle === 'injected') && !persistedIds.has(id)
+        ));
+        if (terminal && (missingLiveReceipt || list.some((effect) => effect.status === 'queued')) && attempt < SETTLEMENT_RETRY_DELAYS.length) {
+          retryTimer = setTimeout(() => void loadReceipts(attempt + 1), SETTLEMENT_RETRY_DELAYS[attempt]);
+        }
+      } catch {
         if (cancelled) return;
-        setEffects([]);
         setStateScenarioId(scenarioId);
         setState('error');
-      });
+      }
+    };
+    void loadReceipts();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, scenarioId, refreshKey]);
-
-  // Reset visible receipts when the card is disabled (e.g. scenario swap).
-  useEffect(() => {
-    if (enabled && scenarioId) return;
-    void Promise.resolve().then(() => {
-      setEffects([]);
-      setStateScenarioId(null);
-      setState('idle');
-    });
-  }, [enabled, scenarioId]);
+  }, [enabled, scenarioId, refreshKey, terminal, retryNonce, lifecycleKey, onRefundConfirmed]);
 
   const sortedEffects = useMemo(() => {
     // Server already returns newest-first; defensively re-sort by created_at just in case.
-    return [...effects].sort((a, b) => {
+    return (effectsScenarioId === scenarioId ? [...effects] : []).sort((a, b) => {
       if (!a.created_at && !b.created_at) return 0;
       if (!a.created_at) return 1;
       if (!b.created_at) return -1;
       return b.created_at.localeCompare(a.created_at);
     });
-  }, [effects]);
+  }, [effects, effectsScenarioId, scenarioId]);
 
-  const hasPending = pendingInterventions.length > 0;
+  const pendingCount = pendingInterventions.length + sortedEffects.filter((effect) => effect.status === 'queued').length;
+  const hasPending = pendingCount > 0;
   const subtitle = hasPending
-    ? t('intervention_receipt.subtitle_pending', { count: pendingInterventions.length })
+    ? t('intervention_receipt.subtitle_pending', { count: pendingCount })
     : t('intervention_receipt.subtitle', { count: sortedEffects.length });
 
   if ((!enabled && !hasPending) || !scenarioId) {
     return null;
   }
   const hasCurrentScenarioState = stateScenarioId === scenarioId || hasPending;
-  if (state === 'loading' && hasCurrentScenarioState && !hasPending) {
+  if (state === 'loading' && hasCurrentScenarioState && !hasPending && sortedEffects.length === 0) {
     return (
       <section
         className="intervention-receipt-card intervention-receipt-card--loading"
@@ -147,7 +178,7 @@ export function InterventionReceiptCard({
       </section>
     );
   }
-  if (state === 'error' && hasCurrentScenarioState && !hasPending) {
+  if (state === 'error' && hasCurrentScenarioState && !hasPending && sortedEffects.length === 0) {
     return (
       <section
         className="intervention-receipt-card intervention-receipt-card--error"
@@ -163,11 +194,14 @@ export function InterventionReceiptCard({
         <p className="intervention-receipt-card__hint">
           {t('intervention_receipt.error')}
         </p>
+        <button type="button" className="btn btn-ghost" onClick={() => setRetryNonce((current) => current + 1)}>
+          {t('common.retry')}
+        </button>
       </section>
     );
   }
   if (
-    (state !== 'ready' && !hasPending) ||
+    (state !== 'ready' && !hasPending && sortedEffects.length === 0) ||
     !hasCurrentScenarioState ||
     (sortedEffects.length === 0 && !hasPending)
   ) {
@@ -188,12 +222,24 @@ export function InterventionReceiptCard({
           {subtitle}
         </p>
       </header>
+      {state === 'error' && (
+        <p role="alert" className="intervention-receipt-card__hint">{t('intervention_receipt.error')}</p>
+      )}
+      {terminal && hasPending && (
+        <p role="status" className="intervention-receipt-card__hint">{t('intervention_receipt.final_pending')}</p>
+      )}
+      {(state === 'error' || (terminal && hasPending)) && (
+        <button type="button" className="btn btn-ghost" disabled={state === 'loading'} onClick={() => setRetryNonce((current) => current + 1)}>
+          {t('common.retry')}
+        </button>
+      )}
       <ol className="intervention-receipt-card__list">
         {pendingInterventions.map((pi) => (
           <li key={pi.id} className="intervention-receipt-card__entry receipt-pending">
             <h4 className="intervention-receipt-card__entry-heading">
-              <span className="spinner-inline" aria-hidden="true" />
-              {t('intervention_receipt.loading')}
+              {!terminal && <span className="spinner-inline" aria-hidden="true" />}
+              {t(terminal ? 'intervention_receipt.awaiting_final'
+                : pi.state === 'queued' ? 'intervention_receipt.status_queued' : 'intervention_receipt.loading')}
             </h4>
           </li>
         ))}
@@ -212,14 +258,19 @@ export function InterventionReceiptCard({
                 });
 
           const confidenceLabel = formatConfidenceLabel(t, effect.confidence);
+          const receiptStatus = effect.status ?? 'applied';
+          const applied = receiptStatus === 'applied';
+          const reasonKey = effect.reason ? RECEIPT_REASON_KEYS[effect.reason] : null;
           return (
             <li
               className="intervention-receipt-card__entry"
+              data-status={receiptStatus}
               key={effect.intervention_log_id || `${effect.round_number}-${index}`}
             >
               <div className="intervention-receipt-card__entry-header">
                 <h4 className="intervention-receipt-card__entry-heading">{heading}</h4>
-                <span
+                <span className="intervention-receipt-card__hint">{t(`intervention_receipt.status_${receiptStatus}`)}</span>
+                {applied && <span
                   className={
                     'intervention-receipt-card__confidence ' +
                     (effect.no_response_detected
@@ -229,9 +280,27 @@ export function InterventionReceiptCard({
                   data-testid="intervention-receipt-card-confidence"
                 >
                   {confidenceLabel}
-                </span>
+                </span>}
               </div>
-              {effect.no_response_detected ? (
+              {!applied && (
+                <p className="intervention-receipt-card__hint">
+                  {t(`intervention_receipt.${receiptStatus}_hint`)}
+                </p>
+              )}
+              {reasonKey && <p className="intervention-receipt-card__hint">{t(reasonKey)}</p>}
+              {reasonKey === undefined && effect.reason && (
+                <details>
+                  <summary>{t('intervention_receipt.server_reason')}</summary>
+                  <p>{effect.reason}</p>
+                </details>
+              )}
+              {(effect.refunded_points ?? 0) > 0 && (
+                <p className="intervention-receipt-card__hint">{t('intervention_receipt.refunded_points', { count: effect.refunded_points })}</p>
+              )}
+              {effect.gameplay_usage_refunded && (
+                <p className="intervention-receipt-card__hint">{t('intervention_receipt.usage_refunded')}</p>
+              )}
+              {applied && (effect.no_response_detected ? (
                 <p className="intervention-receipt-card__no-response">
                   {t('intervention_receipt.no_response')}
                 </p>
@@ -270,7 +339,7 @@ export function InterventionReceiptCard({
                     })}
                   </ul>
                 </>
-              )}
+              ))}
             </li>
           );
         })}
