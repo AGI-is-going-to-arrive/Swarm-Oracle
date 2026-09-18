@@ -139,6 +139,9 @@ def _check_port_with_socket(port: int) -> tuple[bool, str]:
     for family, address in attempts:
         try:
             with socket.socket(family, socket.SOCK_STREAM) as sock:
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                    # Windows otherwise allows wildcard binds over a specific listener.
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
                 sock.bind(address)
                 attempted = True
         except OSError as exc:

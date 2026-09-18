@@ -57,10 +57,11 @@ def test_ss_parser_detects_bound_port(monkeypatch):
     assert "uvicorn" in detail
 
 
-def test_socket_fallback_detects_bound_port():
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+def test_socket_fallback_detects_bound_port(host):
     cli = _load_preflight_cli()
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
+        listener.bind((host, 0))
         listener.listen(1)
         port = listener.getsockname()[1]
 

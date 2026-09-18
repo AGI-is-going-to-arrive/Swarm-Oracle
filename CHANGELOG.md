@@ -25,6 +25,12 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
   Public docs now pair Chinese and English text with separate illustrations for each language. Updated locked setup, configuration, security, backup, and contribution guidance, distinguishing sample browsing, live calls, and release evidence.
 
+### 2026-09-19：跨平台检查 / Cross-platform checks
+
+- 修正 Windows 端口占用探测，避免把已有监听的端口报成可用；脚本测试改为识别实际清理作用域，并用明确的本地可执行文件验证离线 npx。
+
+  Corrected Windows port probing so an existing listener is not reported as available. Script tests now inspect the owning cleanup block and use an explicit local executable to verify offline npx.
+
 ### 2026-09-18：推演与交互 / Simulation and interaction
 
 - 公共承诺只在本轮参与者明确同意同一目标后采纳；竞争提案保持分开，采纳状态不表示执行完成。

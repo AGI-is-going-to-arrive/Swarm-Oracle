@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 
 import {
   closePlaywrightBrowser,
@@ -155,6 +156,52 @@ test("release signoff scripts delegate final Playwright ownership to the teardow
   );
 });
 
+function assertBrowserFinalizer(runner, ownershipStart, label) {
+  const syntax = ts.createSourceFile("runner.mjs", runner, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const findOwnership = (node) => {
+    if (ts.isTryStatement(node) && node.getStart(syntax) === ownershipStart) return node;
+    return ts.forEachChild(node, findOwnership);
+  };
+  // A nested cleanup finally may follow the browser close inside its owning finalizer.
+  const finalizer = findOwnership(syntax)?.finallyBlock;
+  assert.ok(finalizer, `${label} must retain an outer finalizer`);
+  const finalOwner = runner.lastIndexOf("closePlaywrightBrowser(");
+  assert.ok(
+    finalOwner > finalizer.getStart(syntax) && finalOwner < finalizer.end,
+    `${label} must finalize its browser`,
+  );
+  return finalOwner;
+}
+
+test("browser ownership allows a nested restoration finalizer after browser cleanup", () => {
+  const runner = `async function runSurface() {
+    try {
+      await browser.newContext();
+    } finally {
+      try {
+        await closePlaywrightBrowser(browser, "nested-cleanup");
+      } finally {
+        nodeGuard.restore();
+      }
+    }
+  }`;
+  assert.doesNotThrow(() => assertBrowserFinalizer(runner, runner.indexOf("try {"), "nested-cleanup"));
+});
+
+test("browser ownership rejects cleanup outside its owning finalizer", () => {
+  const invalidRunners = [
+    'try { await closePlaywrightBrowser(browser, "body"); } finally { nodeGuard.restore(); }',
+    'try { await browser.newContext(); } finally { nodeGuard.restore(); } await closePlaywrightBrowser(browser, "after");',
+    'try { try { await browser.newContext(); } finally { await closePlaywrightBrowser(browser, "inner"); } } catch (error) { throw error; }',
+  ];
+  for (const runner of invalidRunners) {
+    assert.throws(
+      () => assertBrowserFinalizer(runner, 0, "invalid-owner"),
+      /invalid-owner must (?:finalize its browser|retain an outer finalizer)/u,
+    );
+  }
+});
+
 test("release signoff runners acquire Playwright resources inside browser ownership", () => {
   const runnerContracts = new Map([
     ["e2e-node-conversation-live.mjs", ["runSurface"]],
@@ -198,10 +245,7 @@ test("release signoff runners acquire Playwright resources inside browser owners
       );
 
       const ownershipStart = (launch.index ?? 0) + launch[0].length + afterLaunch.indexOf("try");
-      const finalizerStart = runner.lastIndexOf("finally {");
-      const finalOwner = runner.lastIndexOf("closePlaywrightBrowser(");
-      assert.ok(finalizerStart > ownershipStart, `${script}:${runnerName} must retain an outer finalizer`);
-      assert.ok(finalOwner > finalizerStart, `${script}:${runnerName} must finalize its browser`);
+      const finalOwner = assertBrowserFinalizer(runner, ownershipStart, `${script}:${runnerName}`);
       assert.equal(
         runner.match(/closePlaywrightBrowser\(/gu)?.length,
         1,

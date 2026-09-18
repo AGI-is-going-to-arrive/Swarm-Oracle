@@ -129,10 +129,16 @@ test("real npm and npx run offline with literal arguments and spaced artifact pa
     "const fs = require('node:fs');",
     "fs.writeFileSync(process.argv[2], JSON.stringify(process.argv.slice(3)));",
   ].join("\n"));
-  assertSucceeded(signoff.captureCommand("npx", ["--offline", "--no-install", "--", "node", scriptPath, outputPath, ...LITERAL_ARGS], {
+  // npx resolves package bins by exact filename, including .exe on Windows.
+  const bin = path.join(cwd, "node_modules", ".bin");
+  const nodeCommand = process.platform === "win32" ? "release-runtime-node.exe" : "release-runtime-node";
+  fs.mkdirSync(bin, { recursive: true });
+  fs.copyFileSync(process.execPath, path.join(bin, nodeCommand));
+  assertSucceeded(signoff.captureCommand("npx", ["--offline", "--no-install", "--", nodeCommand, scriptPath, outputPath, ...LITERAL_ARGS], {
     cwd, env, timeoutMs: 30_000,
   }));
   assert.deepEqual(JSON.parse(fs.readFileSync(outputPath, "utf8")), LITERAL_ARGS);
+  assert.equal(fs.existsSync(path.join(env.npm_config_cache, "_npx")), false);
 });
 
 test("a missing npm JavaScript entrypoint fails without a shell fallback", () => {
