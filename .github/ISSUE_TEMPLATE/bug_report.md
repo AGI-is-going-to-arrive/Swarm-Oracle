@@ -1,50 +1,64 @@
 ---
-name: Bug report / 缺陷报告
-about: Report a reproducible problem / 报告可复现问题
+name: 缺陷报告 / Bug report
+about: 报告可复现问题 / Report a reproducible problem
 title: "[Bug] "
 labels: bug
 assignees: ""
 ---
 
-## Summary / 摘要
+![描述问题、复现与预期结果](https://raw.githubusercontent.com/AGI-is-going-to-arrive/Swarm-Oracle/main/docs/illustrations/contributing.zh.webp)
 
-<!-- What broke? / 出了什么问题？ -->
+*可复现步骤帮助维护者定位同一个问题。*
 
-## Environment / 环境
+<details>
+<summary>English illustration / 英文配图</summary>
 
-- OS / 操作系统:
-- Browser / 浏览器:
-- Backend command or Docker image / 后端命令或 Docker 镜像:
-- Frontend command / 前端命令:
-- Commit or version / 提交或版本:
+![Describe the problem, reproduction, and expected result](https://raw.githubusercontent.com/AGI-is-going-to-arrive/Swarm-Oracle/main/docs/illustrations/contributing.en.webp)
 
-## Steps to Reproduce / 复现步骤
+*Reproduction steps help maintainers locate the same problem.*
 
-1.
-2.
-3.
+</details>
 
-## Expected Behavior / 预期行为
+## 问题摘要 / Summary
 
-<!-- What should have happened? / 预期应该发生什么？ -->
+<!-- 哪个操作出现了什么问题？ / Which action produced the problem? -->
 
-## Actual Behavior / 实际行为
+## 环境 / Environment
 
-<!-- What happened instead? / 实际发生了什么？ -->
+- 操作系统与版本 / OS and version:
+- 浏览器与版本 / Browser and version:
+- 提交或版本 / Commit or version:
+- 后端启动命令或精确镜像 digest / Backend command or exact image digest:
+- 前端 dev、preview 或容器 / Frontend dev, preview, or container:
+- 官方样例、导入运行或新建推演 / Official sample, imported run, or new run:
+- 模型/provider（仅公开名称，不填 key 或私有地址） / Model/provider (public names only; no keys or private URLs):
 
-## Logs or Screenshots / 日志或截图
+## 复现步骤 / Steps to reproduce
+
+1. 起始页面和数据 / Starting page and data:
+2. 执行的操作 / Action taken:
+3. 观察到的问题 / Observed problem:
+
+## 预期结果 / Expected result
+
+<!-- 预期应该发生什么？ / What should have happened? -->
+
+## 实际结果 / Actual result
+
+<!-- 写出界面状态或安全错误码；如涉及分支，说明当时选择的分支与轮次。 / Include the UI state or safe error code; for branch issues, name the selected branch and round. -->
+
+## 日志与截图 / Logs and screenshots
+
+只提供相关片段。移除 API key、Authorization header、session token、用户标识和个人数据。安全漏洞请按 [SECURITY.md](https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/blob/main/SECURITY.md) 私密报告。
+
+Include only relevant excerpts. Remove API keys, Authorization headers, session tokens, user identifiers, and personal data. Report security vulnerabilities privately using [SECURITY.md](https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/blob/main/SECURITY.md).
 
 ```text
-Paste relevant logs here. Do not include API keys, Authorization headers, user identifiers, or personal data.
-请粘贴相关日志。不要包含 API key、Authorization header、用户标识符或个人数据。
+在此填写已脱敏日志 / Paste redacted logs here
 ```
 
-## Scope Check / 范围确认
+## 提交前确认 / Before submitting
 
-- [ ] I removed secrets and personal data from this report.
-- [ ] I can reproduce the issue on the current branch or a named commit.
-- [ ] This report does not ask the project to defame, impersonate, or target a real person.
-
-- [ ] 我已移除报告中的密钥和个人数据。
-- [ ] 我可以在当前分支或指定提交上复现问题。
-- [ ] 该报告不要求项目诽谤、冒充或定向攻击真实个人。
+- [ ] 我已移除密钥和个人数据。 / I removed secrets and personal data.
+- [ ] 我能在上面注明的提交或版本复现。 / I can reproduce this on the named commit or version.
+- [ ] 我使用虚构或已脱敏内容，未要求诽谤、冒充或攻击真实个人。 / I used fictional or redacted content and did not request defamation, impersonation, or targeting of a real person.

@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "title": {
+    "zh": "文档配图来源与提示词",
+    "en": "Documentation illustration provenance and prompts"
+  },
+  "created_on": "2026-09-19",
+  "generation": {
+    "mode": "Codex subscription built-in imagegen",
+    "model_id": null,
+    "model_note": {
+      "zh": "内置工具没有返回可核验的具体模型编号。",
+      "en": "The built-in tool did not expose a verifiable model ID."
+    },
+    "prompt_note": {
+      "zh": "prompt 字段保留实际发送的生成或编辑指令，属于原始技术记录。中文与英文图分别生成。",
+      "en": "The prompt field preserves the actual generation or edit instruction as a raw technical record. Chinese and English illustrations were generated separately."
+    },
+    "originals": {
+      "zh": "生成的 PNG 原件保留在本机 Codex 输出目录；仓库内发布逐像素一致的无损 WebP。",
+      "en": "Original PNGs remain in the local Codex output directory. The repository publishes pixel-identical lossless WebP copies."
+    },
+    "illustration_note": {
+      "zh": "这些是概念图，不是实际应用截图。",
+      "en": "These are conceptual illustrations, not screenshots of the application."
+    }
+  },
+  "assets": [
+    {
+      "id": "architecture.en",
+      "title": {
+        "zh": "从问题到结果",
+        "en": "From question to result"
+      },
+      "language": "en",
+      "file": "docs/illustrations/architecture.en.webp",
+      "site_copy": "site/assets/guide/architecture.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1334782,
+      "sha256": "7d4e8f414604a48b95729a1e1b28963bf06a1533c292cad94991b6f47d0aacbb",
+      "original_png_sha256": "a1fe7fa5064e311ccc0a050f4d1daee9ed65bc61d7f749ee84454c2270e8db3b",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization.\nMake the English edition of this app-workflow concept illustration. Change only the printed text. Preserve the input paper and pencil, the three paper characters at a table, local record archive, open report and empty speech bubble, three right-facing arrows, object positions, warm ivory paper texture, purple/ochre palette, even bright lighting, and 3:2 landscape composition.\n\nRemove all Chinese characters and use exactly:\nTop heading: “From question to result”\nStage labels from left to right: “Input” “Simulation” “Storage” “Read and ask”\n\nUse large bold dark graphite English lettering, readable at mobile width. Keep each label centered below its own station, with no overlap, cropping, or tiny text. Add no other words, version numbers, dates, technical system boxes, cloud icons, logos, or fake UI. No vignette or dark gradient."
+    },
+    {
+      "id": "architecture.zh",
+      "title": {
+        "zh": "从问题到结果",
+        "en": "From question to result"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/architecture.zh.webp",
+      "site_copy": "site/assets/guide/architecture.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1510052,
+      "sha256": "e3bc6adad43c2813dbcee2088d5e9a454e2c44cab2cd6ce7a7706760252bbd9d",
+      "original_png_sha256": "2eb2f7a7b1bb5ca735204888463c262beeb9c46760543d4ea6cb21a8541f61c8",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: infographic-diagram.\nCreate a finished Chinese conceptual illustration explaining a simple app workflow. 3:2 landscape, 1536 by 1024. Warm ivory textured paper, tactile layered paper sculpture, dark graphite bold typography, muted dusty purple and ochre accents, clean generous negative space. Background is uniformly bright ivory at every edge; no vignette or dark gradient. Soft tiny shadows only beneath objects.\n\nFour large stations across the middle, connected by three clear right-pointing graphite arrows:\n1) a paper input sheet with a pencil and a few abstract text lines;\n2) three simple paper characters around a small round table, representing a simulation discussion;\n3) a local archive box holding paper records, representing saving;\n4) an open paper report with a simple empty speech bubble, representing reading and asking follow-up questions.\nKeep it human-readable and conceptual. Do not draw microservices, servers, networks, clouds, provider logos, real UI controls, code, or a fake screenshot.\n\nOnly these exact Simplified Chinese words may appear:\nLarge heading at top: “从问题到结果”\nFour stage labels in order: “输入” “推演” “保存” “阅读与追问”\nAll Chinese characters must be correct, large, bold, and readable at phone width. No English, numbers, dates, extra words, logos, or watermarks. Do not crop or overlap any label."
+    },
+    {
+      "id": "contributing.en",
+      "title": {
+        "zh": "修改、验证和提交",
+        "en": "Change, validate, and commit"
+      },
+      "language": "en",
+      "file": "docs/illustrations/contributing.en.webp",
+      "site_copy": "site/assets/guide/contributing.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1320768,
+      "sha256": "121208b347dfe30e99ec8e10eceda1612b1156250e24435f1b79721acfdb00e2",
+      "original_png_sha256": "2b0a500ed55c02476b89d720f10ad7d55fece436727176d97918f0276c79e9b3",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization.\nMake an English edition of this contribution-workflow illustration by replacing only its text. Preserve the four paper objects, their order and exact meaning (small edit, tests, review, local commit), the three right-facing graphite arrows, the uniform warm ivory background, muted purple and ochre, paper texture, soft object shadows, generous spacing, and 3:2 landscape composition.\n\nRemove every Chinese character. Use exactly:\nHeading: “Make a change, check it, then commit”\nFour labels: “Change” “Test” “Review” “Commit”\n\nThe heading may wrap to two balanced lines in the existing top area to keep it large and readable. Use bold dark graphite lettering; do not crop or overlap text. No additional words, numbers, dates, logos, code, cloud or upload icon. Keep all four stage labels large. No vignette or dark gradient. This is an explanatory concept illustration, not a screenshot."
+    },
+    {
+      "id": "contributing.zh",
+      "title": {
+        "zh": "修改、验证和提交",
+        "en": "Change, validate, and commit"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/contributing.zh.webp",
+      "site_copy": "site/assets/guide/contributing.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1513050,
+      "sha256": "0421889a55058210d51086b91b800734f7eb8ca4eb0cfea0befd63b0cb7f6085",
+      "original_png_sha256": "8ff6bb1977a6f4a730d0c3813a80ac319049d54bbf634b9e760ee046f4fa5ff8",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: infographic-diagram.\nCreate one finished Chinese contribution-workflow illustration, 3:2 landscape, 1536 by 1024. Warm ivory paper-cut sculpture editorial style, dark graphite bold type, muted dusty purple and ochre accents. ENTIRE background must be uniformly bright ivory textured paper from edge to edge. No vignette, no dark gradient, no black overlay. Tiny soft shadows only directly under paper objects.\n\nA simple four-stage left-to-right sequence, with three clear graphite right arrows and generous spacing:\n1) a pencil making a small change on one paper sheet;\n2) a paper checklist with a few large check marks representing tests;\n3) a magnifying glass over the changed sheet representing review;\n4) the checked sheet placed into a neat saved stack with a simple check-mark tab, representing a local commit.\nUse tactile layered paper forms, not app screenshots or code interfaces. No cloud, no upload/publish symbolism, no decorative microtext, no invented code.\n\nOnly these exact Simplified Chinese words may be visible:\nLarge heading at top: “小步修改，验证后提交”\nLabels beneath the four stages: “修改” “测试” “审查” “提交”\nUse large, crisp dark graphite Chinese type, correctly spelled, with generous margins and no text collisions. Four labels must remain readable at mobile width. No English, no other text, numbers, dates, logos, or watermarks."
+    },
+    {
+      "id": "decisions.en",
+      "title": {
+        "zh": "建议、采纳和执行",
+        "en": "Proposal, adoption, and execution"
+      },
+      "language": "en",
+      "file": "docs/illustrations/decisions.en.webp",
+      "site_copy": "site/assets/guide/decisions.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1269080,
+      "sha256": "d86bad7d33e3dd01698c3063d8ea66187dabc7a57b3ef2f1ac094f76b2f29b63",
+      "original_png_sha256": "e2ecec467fbd3ab6df75164b2272cfe29e62ad8c971d5f3055aa0324e20bff7e",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Preserve this three-station warm ivory paper-cut illustration and replace EVERY Chinese phrase with English. Exact headline: “Three different kinds of record”. Exact column labels: “Proposal”, “Adoption”, “Execution record”. Exact captions respectively: “A character suggests an idea”, “Everyone agrees on the same plan”, “Check actions and results”. Exact bottom note: “All records describe the simulation”. Use large readable charcoal sans-serif English text; captions may wrap neatly into two lines within their column. Keep the three stations separate with no automatic arrows, leave execution checkboxes empty, preserve people, paper notes, notebook, palette and natural shadows. No Chinese characters remaining, no extra wording, no real-world guarantees or success badges, no watermark. Keep all labels and objects uncropped."
+    },
+    {
+      "id": "decisions.zh",
+      "title": {
+        "zh": "建议、采纳和执行",
+        "en": "Proposal, adoption, and execution"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/decisions.zh.webp",
+      "site_copy": "site/assets/guide/decisions.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1453548,
+      "sha256": "dcf427a0059f596a59e03620a2094534c11e4bd0d05242febc0788945d5eba1f",
+      "original_png_sha256": "3fb95f91dada9ba8afd08c7cf0b994ae1191f3fba65a27bd1b124af153ad03ec",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: scientific-educational. Create a horizontal 3:2 beginner guide illustration in a warm ivory paper-cut editorial style: charcoal, muted amethyst and restrained ochre, soft natural shadows, clear large Simplified Chinese sans-serif text. Arrange THREE SEPARATE STATIONS with generous blank space, not an automatic arrow pipeline. Left: three paper speech bubbles with different small proposal notes near one person. Center: three distinct paper people openly agreeing around one selected note. Right: a clipboard beside a modest tabletop action scene, with empty checkboxes and an observation notebook, representing records that must be checked separately. Exact headline: “分清建议、采纳和执行”. Exact large column labels: “建议”, “采纳”, “执行记录”. Exact short captions under them respectively: “角色提出想法”, “各方明确同意同一方案”, “另看动作和结果”. Bottom note exactly: “以上都是模拟中的记录”. Do not imply that agreement automatically proves execution; no arrows between stations, no green success badges on execution, no real-world guarantee. All written text must be these Chinese phrases only. No English, logos, fake UI or watermark. Use the reference only for paper material, palette, and typographic legibility; do not copy its branching scenes."
+    },
+    {
+      "id": "deployment-backup.en",
+      "title": {
+        "zh": "备份与升级",
+        "en": "Backup and upgrade"
+      },
+      "language": "en",
+      "file": "docs/illustrations/deployment-backup.en.webp",
+      "site_copy": "site/assets/guide/deployment-backup.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1337826,
+      "sha256": "9285371e6defa9757de710585d07091441e2a98302a24d28f0146f7a922a37de",
+      "original_png_sha256": "f14030d64b3ae110a0454cc7e5a42e7bc0eb3d31f87686ebff10c8aa69c278a1",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Edit the provided Chinese deployment-backup workflow into its ENGLISH-only companion. Preserve the 1536 x 1024 3:2 canvas, evenly lit warm ivory background, four paper-sculpture stations, exact positions and sequence, graphite arrows, pause/check/play symbols, paper textures, soft local shadows, and muted purple/ochre colors. Change only printed text; adjust title size and label line breaks minimally to fit. EXACT English text: main title 'Back up before upgrading'; stage labels left to right 'Stop services', 'Back up all data', 'Check the new environment', 'Start services'. The long third label may wrap onto two or three balanced lines INSIDE an expanded label card beneath the same third station; keep clear separation from its neighbors. Use large crisp heavy sans-serif graphite lettering. Remove every Chinese character, including title and stage labels. These five strings are the only text. Do not add numbers, subtitles, commands, logos, secrets, or new objects. Maintain the clearly separate NEW-environment validation tray and safe workflow order. No clipped letters, no dark vignette, no cropped stations."
+    },
+    {
+      "id": "deployment-backup.zh",
+      "title": {
+        "zh": "备份与升级",
+        "en": "Backup and upgrade"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/deployment-backup.zh.webp",
+      "site_copy": "site/assets/guide/deployment-backup.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1505424,
+      "sha256": "29ac4780c39256e7ded278b3cd122128cbc65fdd8b4f3260c065a63b32acd445",
+      "original_png_sha256": "ace92b53eced046dd60f129243f8b62957867f01b39c08dad8622762d60c7783",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: infographic-diagram. Create ONE finished Chinese editorial workflow illustration for SwarmOracle deployment and backup documentation, NOT a UI screenshot. Canvas exactly 1536 x 1024, landscape 3:2. Warm ivory textured paper sculpture, graphite charcoal text and hand-drawn directional arrows, muted dusty purple and ochre accents, soft studio shadows, elegant minimal objects, generous negative space, clear large Chinese lettering. EXACT printed strings only: title '先备份，再升级'; four stage labels left to right '停止服务', '完整备份', '新环境验证', '恢复服务'. No other text, no numbers, no English, no secrets, no command snippets, no performance or prediction claims. Composition: title across upper area, then four evenly spaced simple paper-sculpture stations across the middle/lower area, linked left-to-right by three short clear arrows. Station one: a powered-down simple server stack with a small pause symbol. Station two: a protective backup archive box containing a database cylinder AND paper documents, showing complete saved state, not just one exported report. Station three: a separate fresh shallow paper tray with a new small server and a clear checkmark, indicating validation in a NEW environment before switching back on. Station four: a running paper server with subtle ochre indicator and a simple play symbol. The validation station must remain visually separate from the original stopped server; never show deleting original data or overwriting the backup. Put each exact stage label below its object, no overlap with arrows. Use at least 70 px margins; no clipped text or objects. Consistent premium handmade cut-paper editorial style, no fake dashboards, excessive decorations, glossy neon, or dense technical schematics."
+    },
+    {
+      "id": "local-development.en",
+      "title": {
+        "zh": "本地运行",
+        "en": "Run locally"
+      },
+      "language": "en",
+      "file": "docs/illustrations/local-development.en.webp",
+      "site_copy": "site/assets/guide/local-development.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1423284,
+      "sha256": "a7c3120c1b0930cc45743ea25acfc42f977e9cd543abb1dd246c2cfe9a956991",
+      "original_png_sha256": "7d082350de304f9ec07683c1799e43c2afd868ee6fbd8e9535f25e4c0be2e6f7",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Edit the provided local-development illustration into an ENGLISH-only companion. Preserve the exact 1536 x 1024 3:2 canvas, local-machine tray boundary, every paper object, positions, arrows and their directions, ivory texture, shadows, muted purple and ochre palette. Change only printed text with minimal size adjustment so all English fits. The EXACT replacements are: main title 'Run locally'; browser label 'Browser'; frontend label 'Frontend'; backend label 'Backend'; database label 'Local data'; separate model-service pedestal label 'Model service'. Use large crisp dark heavy sans-serif English text. Remove every Chinese character. These six strings are the only printed text. Keep browser, frontend, backend, and database inside the tray; preserve the separately connected model service outside the tray. Do not add labels, numbers, explanations, secrets, ports, code, logos, UI controls, or offline claims. No clipped text or objects."
+    },
+    {
+      "id": "local-development.zh",
+      "title": {
+        "zh": "本地运行",
+        "en": "Run locally"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/local-development.zh.webp",
+      "site_copy": "site/assets/guide/local-development.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1633370,
+      "sha256": "4455f99867210b5e3eb2ce398227605a1632f47c40c8c9bba70e7b5da912b951",
+      "original_png_sha256": "e625696d88fdde289245c259119702f0ec6a4897fb198748b25e8d12320a19e5",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: infographic-diagram. Create ONE finished Chinese editorial diagram for SwarmOracle local-development documentation, not a UI screenshot. Canvas exactly 1536 x 1024, landscape 3:2. Warm ivory textured paper-sculpture aesthetic matching a premium cut-paper editorial series: simple dimensional paper objects, soft studio shadows, graphite charcoal text and drawn arrows, muted dusty purple and ochre accents. Very legible large Chinese typography. EXACT printed text only: main title '在本机运行'; component labels '浏览器', '前端', '后端', '本地数据', '模型服务'. No other printed text, numbers, English, logos, ports, secrets, or code. Layout: main title top with generous margins. A broad shallow ivory paper tray encloses the local computer components in the left two-thirds: browser symbol at left, frontend paper panel at center, backend small paper server at right. Label each below. Simple arrows show Browser to Frontend to Backend horizontally. Under Backend, show a paper database cylinder labelled 本地数据 connected directly to Backend. On a separate small pedestal OUTSIDE the tray at the far right, show a muted purple paper cloud/server symbol labelled 模型服务, with one separate connection from Backend across the tray boundary to it. The tray visually means browser, frontend, backend, and data run on the same local machine, whereas model service may be separately connected or reached over a network; do not imply everything is offline. Keep nodes and labels separate, arrows unambiguous and not crossing any labels. Use symbolic hardware only, no fake application screenshots or form fields. Content within 70 px margins, no cropped shapes or text, no embellishments that resemble extra nodes."
+    },
+    {
+      "id": "model-setup.en",
+      "title": {
+        "zh": "连接模型",
+        "en": "Connect a model"
+      },
+      "language": "en",
+      "file": "docs/illustrations/model-setup.en.webp",
+      "site_copy": "site/assets/guide/model-setup.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1507060,
+      "sha256": "38f1b431c3affa9381f80502951271041bf67b907e3be01720fdf40d0bfaaef3",
+      "original_png_sha256": "2b5399040114262fb7d94411821b034fdd992478b960a3302ba28e93e116aecd",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Edit the provided model-connection illustration into its ENGLISH-only companion. Preserve the 1536 x 1024 canvas, 3:2 composition, all paper-sculpture objects, graphite arrows, warm ivory texture, muted purple and ochre colors, lighting, and three-alternative-source flow. Change ONLY printed text and minimally adjust typography sizes/line breaks inside existing areas to fit. Replace the title with exactly 'Connect a model before starting'. Replace the three source-card labels, top to bottom, with exactly 'Server default', 'Saved profile', 'This run’s connection'. The last label may wrap over two lines without changing words. These are the only four text strings; remove all Chinese completely. Set large clear heavy sans-serif English typography with generous spacing and no clipping. Do not add numbers, subtitles, technical labels, logos, keys, predictions, UI widgets, or new objects. Keep all original objects and arrow directions intact."
+    },
+    {
+      "id": "model-setup.zh",
+      "title": {
+        "zh": "连接模型",
+        "en": "Connect a model"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/model-setup.zh.webp",
+      "site_copy": "site/assets/guide/model-setup.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1734226,
+      "sha256": "3f3edfc5781a6950dcdac294b3f94002fd325eaf0b35295fd16ba6c0fb172d62",
+      "original_png_sha256": "9006c8f4a0c1ba8995451efb5ff2d5dcb45d95f8a94c9aa7128b2417041bcd1c",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: infographic-diagram. Create ONE finished editorial illustration for SwarmOracle documentation, not a UI screenshot. Canvas 1536 x 1024, landscape 3:2. Match a warm ivory textured paper-sculpture aesthetic: dimensional cut-paper objects with soft studio shadows, graphite charcoal text and hand-drawn charcoal arrows, muted dusty purple and ochre accents, generous quiet space. Large crisp Chinese typography with safe margins, legible at document size. Concept: three ALTERNATIVE model-connection sources converge into one model connector, then enable a small paper-sculpture scene of characters discussing around a table. The sources are alternatives, not three required steps. Composition: large single title across top; below, three vertically arranged paper source cards on the left flow by distinct arrows into one simple central connector device, which flows toward the small character-discussion scene on the right. Only four pieces of printed text, exactly: title '先连好模型，再开始推演'; source labels '服务器默认', '保存的配置', '本次连接'. Do not print any other labels, numbers, English, logo, watermark, secret, key, API, code, benchmark, or prediction promise. Connector and character scene stay unlabelled. Keep all characters correct, all labels distinct, ample spacing between arrows and words, and all content within a 70 px safe margin. Avoid decorative dashboards, fake form fields, gradients, glossy futuristic hardware, dense connectors, and mandatory sequential interpretation of the three alternatives."
+    },
+    {
+      "id": "privacy-sharing.en",
+      "title": {
+        "zh": "脱敏后分享",
+        "en": "Share a redacted copy"
+      },
+      "language": "en",
+      "file": "docs/illustrations/privacy-sharing.en.webp",
+      "site_copy": "site/assets/guide/privacy-sharing.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1262194,
+      "sha256": "51dcce03bdd5c1f8316fadb2d0ce1b8e5ca64a5ce8f3df855382dba52879f8c8",
+      "original_png_sha256": "61dbaee27b8e5a082f5a05b86ffc00c60b1c69ed5967003c59e761d039deab16",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization.\nCreate the English edition of this exact conceptual illustration. Change only the printed text. Preserve all paper-sculpture objects, their positions, both left-to-right arrows, the key INSIDE the local lockbox on the left, redaction marks, the recipient on the right, warm ivory paper texture, uniform bright lighting, muted purple/ochre palette, and 3:2 landscape composition.\n\nReplace ALL Chinese text with exactly these English phrases, with no Chinese characters remaining:\nTop heading: “Share a redacted copy”\nLeft label: “Local records”\nCenter label: “Redacted copy”\nRight label: “Shared result”\n\nUse large, bold, readable dark graphite English lettering. Fit each label within its own station without overlap or cropping. Keep generous margins and a uniformly light background with no vignette or dark overlay. Add no other text, logo, cloud icon, upload icon, date, or number. This is conceptual art, not a product screenshot."
+    },
+    {
+      "id": "privacy-sharing.zh",
+      "title": {
+        "zh": "脱敏后分享",
+        "en": "Share a redacted copy"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/privacy-sharing.zh.webp",
+      "site_copy": "site/assets/guide/privacy-sharing.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1473926,
+      "sha256": "06e37eefcad0d8b2c2c99909eda7ecb87d5d2a371d921d462416833d4b439fb7",
+      "original_png_sha256": "6441d51f9e9450ebcdda630fd62d831bcb6dae3029353bc0515ea6fe05f95301",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: precise-object-edit.\nCorrect this Chinese conceptual illustration. Preserve the three paper-sculpture stations, key staying inside the LOCAL lockbox on the left, redacted copy in the center, recipient holding ONLY the redacted result on the right, and the two left-to-right arrows.\n\nCRITICAL FIX: Completely remove the huge black gradients / dark vignette covering the top and bottom. The ENTIRE canvas must have a uniformly bright warm ivory paper background, including all four edges and corners. Only tiny natural shadows immediately behind individual paper objects. No cinematic lighting, no vignette, no black overlay anywhere.\n\nMake every character of the heading and three labels fully readable in dark graphite black, with generous margin above/below. Use exactly:\nHeading: “分享结果，先去掉私密信息”\nLabels: “本地资料” “脱敏副本” “分享结果”\nAll visible text must be Simplified Chinese only. No extra text.\nKeep 3:2 landscape and the same muted purple/ochre paper palette. The private key and original records remain left in the local area; never send the key to the recipient. This is conceptual art, not a UI screenshot."
+    },
+    {
+      "id": "read-ask-change.en",
+      "title": {
+        "zh": "核对、追问和改变",
+        "en": "Check, ask, and change"
+      },
+      "language": "en",
+      "file": "docs/illustrations/read-ask-change.en.webp",
+      "site_copy": "site/assets/guide/read-ask-change.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1250692,
+      "sha256": "16568b290fc5682ab8a3c92ce6dbe960128068f960e32585377b0133167d7c4e",
+      "original_png_sha256": "45e9fd233da496b5debe5cd7171c13c70f46110e8829f1320402179e39e9d60c",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Preserve this existing three-part warm ivory paper-cut illustration. Add only clear English guide text. Top-center headline exactly: “What would you like to do next?”. One aligned label under each matching vignette: LEFT magnifier and notes “Check the evidence”; CENTER talking people “Ask the characters”; RIGHT pencil and branching path “Try a different decision”. The three labels can each use two lines if needed, never tiny letters or overlaps. Charcoal sans-serif type, generous spacing. Keep all artwork, figures and paths unchanged and fully visible. No Chinese, no extra words, logos or watermark. This is a conceptual guide to the three result-page choices, not an interface screenshot. Make it readable at 768 pixels wide."
+    },
+    {
+      "id": "read-ask-change.zh",
+      "title": {
+        "zh": "核对、追问和改变",
+        "en": "Check, ask, and change"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/read-ask-change.zh.webp",
+      "site_copy": "site/assets/guide/read-ask-change.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1211538,
+      "sha256": "60d99d7cfb747c81ba4ecb1e1f63c191e0516d2e97266c151e5d49b39f970ef2",
+      "original_png_sha256": "aa6391ad6a9611b08121b245f24c562e0b5fe414b6393b73247e04423964561c",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Preserve this existing three-part warm ivory paper-cut illustration. Add only large, clear Simplified Chinese guide text. Top-center headline exactly: “接下来，你想做什么？”. Place one label underneath each corresponding vignette: under the magnifier and notes on the LEFT “核对依据”; under the two talking people in the CENTER “追问角色”; under the pencil and branching path on the RIGHT “尝试改变”. Use dark charcoal sans-serif Chinese type, ample spacing, aligned labels, no small-print captions. Keep all artwork, paths and figures visible and unchanged. No English, no extra words, no logos or watermark. The illustration explains the three result-page choices and must be legible when reduced to 768 pixels wide."
+    },
+    {
+      "id": "release-history.en",
+      "title": {
+        "zh": "版本记录",
+        "en": "Release notes"
+      },
+      "language": "en",
+      "file": "docs/illustrations/release-history.en.webp",
+      "site_copy": "site/assets/guide/release-history.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1348222,
+      "sha256": "62ce97bf149b519e65599b76676564c067ee74a4ecc01ebffeac41d3aff892db",
+      "original_png_sha256": "20f3fe88d6eb199827657f3a19f84ffb04dfd07fdba4444ca9018234357a908a",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization.\nCreate the English version of this release-history concept illustration. Change only the words; keep the three paper-page groups, all object positions, the earlier stack, ochre bookmark and change stripe, saved validation checklist, magnifying glass, both right-facing graphite arrows, warm ivory texture, uniform light background, and muted purple/ochre palette.\n\nReplace every Chinese character with exactly:\nTop heading: “Read the release notes”\nLeft label: “Earlier”\nCenter label: “This update”\nRight label: “Validation notes”\n\nUse large, bold, dark graphite English text with enough space for the longer right label. All lettering must be sharp, readable, and uncropped. No additional text, invented dates, version numbers, logos, or UI frames. Keep 3:2 landscape. No dark vignette or gradient overlay."
+    },
+    {
+      "id": "release-history.zh",
+      "title": {
+        "zh": "版本记录",
+        "en": "Release notes"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/release-history.zh.webp",
+      "site_copy": "site/assets/guide/release-history.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1590130,
+      "sha256": "57099f926f5583807a03c2ad932c7ec1406a2099bc81cc9ba10035b064ba1a27",
+      "original_png_sha256": "297a31f9e806a8773618aef054ebbb2e7d20373806cb8586c4b48e5782524bf5",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: infographic-diagram.\nCreate one finished Chinese release-history illustration. Landscape 3:2, 1536 by 1024. Tactile paper-cut sculptures on a uniformly bright warm ivory textured paper background, dark graphite bold type, muted dusty purple and ochre details. Very soft local object shadows only. No dark vignette, no gradient overlay, no dark corners.\n\nDepict a simple left-to-right sequence of three large groups of paper pages connected by two clear right-facing graphite arrows:\nLeft: a modest stack of earlier paper notes.\nMiddle: one prominent new page with a small ochre bookmark and one highlighted change stripe.\nRight: saved validation notes represented by a page with a few large check marks and a small magnifying glass.\nThis is about reading change history and its recorded checks, not proof of any actual release having passed. Keep pages abstract with a few blank gray strips, no fake code, version numbers, dates, or readable tiny text. All paper remains tangible, with generous empty space and clean separation.\n\nOnly these exact Simplified Chinese texts:\nHeading at top: “查看版本记录”\nLabels beneath the groups, in order: “之前” “这次更新” “验证记录”\nLarge bold readable Chinese lettering, exact correct characters, no English words and no other text. No logos or app screenshot frame."
+    },
+    {
+      "id": "rewrite-compare.en",
+      "title": {
+        "zh": "保留原分支，尝试改写",
+        "en": "Keep the original and try a rewrite"
+      },
+      "language": "en",
+      "file": "docs/illustrations/rewrite-compare.en.webp",
+      "site_copy": "site/assets/guide/rewrite-compare.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1285982,
+      "sha256": "f469bfe5b196bb0ec5828013b74d98b71055b3a5d1c463ae0b71b8d684bc1da2",
+      "original_png_sha256": "80d170cd28c016ada2de9310b09f45b8e24ecee1b0270670b67b595fdfb270cf",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Translate ONLY the Chinese text in this illustration into English, preserving the warm ivory paper, pencil, shared sequence, two separate arrows, towns and all colors. Replace the headline with exactly “Keep the original. Try another decision.”, using two lines if needed in the top-left empty margin. Replace “共同的开始” with “Shared beginning”; “改写这一轮” with “Rewrite one round”; “原分支” with “Original branch”; “新分支” with “New branch”. Remove every Chinese character. Dark charcoal sans-serif English type, large readable labels, no overlaps with pencil or arrows, ample margins. Do not introduce new objects or change the Y-shaped topology. No other wording, no watermark. Both paths must remain equally plausible alternate simulation outcomes."
+    },
+    {
+      "id": "rewrite-compare.zh",
+      "title": {
+        "zh": "保留原分支，尝试改写",
+        "en": "Keep the original and try a rewrite"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/rewrite-compare.zh.webp",
+      "site_copy": "site/assets/guide/rewrite-compare.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1508778,
+      "sha256": "e9eaca36ee18f5492fc1c078ce11581f80afbfa2996094f9dc7f3debf58d057e",
+      "original_png_sha256": "420a11c08e70f981ba5b732acad285ecca66765b9949dd5c5b5e46224f26e3e3",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: precise-object-edit and text-localization. Image 1 is the edit target: a Y-shaped simulation path with a shared beginning and two alternate towns. Image 2 is only a reference for the warm ivory paper material, gentle natural shadows, charcoal and muted amethyst palette. In Image 1, replace the dark/glowing background with clean warm ivory paper and remove all glow. Keep the exact clear Y-shaped topology: one shared left-hand sequence reaching a central ochre decision, two separate arrows leaving to the upper-right and lower-right towns, never reconnecting. Add large legible Simplified Chinese labels only: top headline “保留原路径，再试另一种决定”; below the shared left sequence “共同的开始”; near the ochre decision “改写这一轮”; beside the upper-right town “原分支”; beside the lower-right town “新分支”. Labels must not cover arrows or towns. Paper-cut editorial diagram, no extra objects, no English, no letters/numbers, no fake UI, no watermark. Preserve the pencil at the changed decision. Make it calm, uncluttered, readable at half-size."
+    },
+    {
+      "id": "start-sample.en",
+      "title": {
+        "zh": "先打开样例",
+        "en": "Start with a sample"
+      },
+      "language": "en",
+      "file": "docs/illustrations/start-sample.en.webp",
+      "site_copy": "site/assets/guide/start-sample.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1376422,
+      "sha256": "8d9a59e9b1c8c1cae268dbc1ee285a61d53c16b01dda1f69fcc1934030d97dfe",
+      "original_png_sha256": "8a08482b91981f14ffcc6f1c7cf255f399bc2aecc372dd31b1e5f96a5e50f7bc",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Add exact English guide labels to this warm paper miniature illustration. Keep the hand choosing a book, three sample books, opened branching storybook and quiet laptop unchanged. Large charcoal sans-serif headline in the open top-center area: “Start with a sample”. Label the three-book tray “Choose a sample”. Label the opened book “Read the saved result”. At the bottom in clear type: “Browsing samples makes no model calls”. Use only these four English phrases, no Chinese, no extra text, logos or watermark. Place text in empty margins and never over the artwork. Keep warm ivory paper, charcoal, muted amethyst and restrained ochre. Text must remain easy to read at half-size; give the longer bottom note sufficient width rather than tiny type."
+    },
+    {
+      "id": "start-sample.zh",
+      "title": {
+        "zh": "先打开样例",
+        "en": "Start with a sample"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/start-sample.zh.webp",
+      "site_copy": "site/assets/guide/start-sample.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1374498,
+      "sha256": "e57f2fb11e854744f84e3593f7d0d7abc8082de27ca5759792cce079e54af645",
+      "original_png_sha256": "63b0ee116534eb8fa63b778b8cbd57bd4cf2e0835966fa80941be435e119adc7",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Add exact Simplified Chinese guide labels to this warm paper miniature illustration. Keep the hand choosing a book, three sample books, opened branching storybook and quiet laptop unchanged. Put a large charcoal sans-serif headline in the open top-center area: “先打开一个样例”. Label the three-book tray “选一个样例”. Label the opened book “查看已保存结果”. Add a short standalone note at the bottom, in clear type: “浏览样例不调用模型”. Use only those four Chinese phrases, no English, no new objects, no tiny writing on screens. Place labels in existing empty margins, not over artwork. Maintain the ivory, charcoal, amethyst and ochre palette and softly lit tactile paper style. Make text comfortably readable when displayed at 768 pixels wide."
+    },
+    {
+      "id": "worldlines.en",
+      "title": {
+        "zh": "一个问题，多条路径",
+        "en": "One question, several paths"
+      },
+      "language": "en",
+      "file": "docs/illustrations/worldlines.en.webp",
+      "site_copy": "site/assets/guide/worldlines.en.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1368548,
+      "sha256": "2aefda2557ed1265f3464a664b743b7a046cda91681f57d4c0b4bc9bc4fc8e3d",
+      "original_png_sha256": "1418b0c6e10fd2476d898e9ff30038d3ab3b8cf94b70eaa98c5fb229a41ec0b1",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Edit this existing SwarmOracle concept illustration. Preserve the entire warm ivory paper-cut artwork, the three people, ink paths, and three alternate landscape scenes. Add large, clean, highly readable English typography only in empty areas. Top-left headline exactly: “One question, many paths”. On the blank card at left exactly: “What if…?”. Under the roundtable exactly: “Character discussion”. Above the three scenes at right exactly: “Possible outcomes”. The headline must fit the left two-thirds and never collide with the right label. Use dark charcoal sans-serif type, balanced spacing, no tiny captions. Do not cover people or paths. No Chinese characters, no additional words, logos or watermark. The artwork is an explanatory concept, not a UI screenshot. Keep the drawing unchanged except for these exact labels."
+    },
+    {
+      "id": "worldlines.zh",
+      "title": {
+        "zh": "一个问题，多条路径",
+        "en": "One question, several paths"
+      },
+      "language": "zh",
+      "file": "docs/illustrations/worldlines.zh.webp",
+      "site_copy": "site/assets/guide/worldlines.zh.webp",
+      "width": 1536,
+      "height": 1024,
+      "format": "WebP",
+      "encoding": "lossless",
+      "bytes": 1451922,
+      "sha256": "8eee122937015395d89cde9130602f40ba35fdbc255a2bb9dacbee0648b5d40e",
+      "original_png_sha256": "a011aec0a520d5d54bc039393ffc8257c049dd4b0b6f0f4469723727bfa976ab",
+      "lossless_pixel_match": true,
+      "generator": "Codex built-in imagegen",
+      "model_id": null,
+      "prompt": "Use case: text-localization. Edit this existing SwarmOracle concept illustration. Preserve the entire paper-cut artwork, three people, all paths, the three alternate landscape scenes, colors and warm ivory background. Add clear large Simplified Chinese typography only. Top margin headline exactly: “一个问题，多条可能路径”. On the blank card at left, two lines exactly: “如果……” and “会怎样？”. Under the roundtable exactly: “角色讨论”. Above the right-hand group of three scenes exactly: “不同的可能结局”. Use readable dark charcoal sans-serif Chinese type, generous spacing, high contrast, not handwriting. Integrate text into existing empty areas without covering people or paths. No English words, no new objects, no tiny extra captions, no watermark. This is a Chinese guide illustration; prioritize exact Chinese spelling and readability at half-size."
+    }
+  ]
+}

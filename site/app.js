@@ -1,232 +1,139 @@
-/* SwarmOracle · Oracle Noir — interactions
-   Bilingual (zh default), reveal-on-scroll, quickstart tabs,
-   copy, mobile drawer, cursor-aware oracle glow. No frameworks. */
+/* SwarmOracle introduction: both languages are present in the HTML. */
 (function () {
   "use strict";
-  var S = "assets/screenshots/";
 
-  /* ---- feature copy ---- */
-  var FEATURES = [
-    { id: "F01", img: "01-home.png", hero: false, zt: "首页提问框与开始推演", et: "Home Question Box and Start Simulation",
-      zd: "在首页输入一个「如果……会怎样？」问题，确认设置后开始多 Agent 推演；开始按钮不可用时会直接说明原因（缺问题、未配置 LLM 或预算受限）。", ed: "Type a “what if?” question on the home page, confirm the settings, and start the multi-agent simulation; when the start button is unavailable, it says why (missing question, no LLM, or a budget limit)." },
-    { id: "F49", img: "01-home.png", hero: false, zt: "官方样例一键体验", et: "One-Click Official Samples",
-      zd: "未配置模型也能在首页一键打开推荐的完整官方样例：无需 API Key、无需选择文件，也不会调用模型；导入面板还可选择另外两套样例或本地 Snapshot。", ed: "Even without a configured model, open the recommended complete official sample from the home page with one click—no API key, file selection, or model call. The import panel also offers two more samples or a local snapshot." },
-    { id: "F50", img: "21-simulation.png", hero: false, zt: "导演玩法与因果档案", et: "Director Play and Causal Archive",
-      zd: "在 live 推演里使用玩法卡、锁定一次预测押注或承诺一条世界线；结局后，因果档案把出牌、判断、关键时刻与最终落点放进同一份复盘。", ed: "During a live run, play gameplay cards, lock one prediction bet, or commit to a worldline. After the ending, the Causal Archive brings cards, calls, key moments, and the final landing point into one debrief." },
-    { id: "F51", img: "21-simulation.png", hero: false, zt: "Agent 决策、领域状态与跨轮反馈", et: "Agent Decisions, Domain State, and Round Feedback",
-      zd: "每个 Agent 先形成只含可审计事实依据的结构化决策，发言与动作共同消费同一决策；代码校验并冻结的有界领域 schema 把 verified durable action 裁决为分支状态、阈值与跨轮反馈。状态按场景、分支和轮次截点隔离；verified memory promotion 仍是默认关闭、无 UI 的后端 core，不承诺现成的跨场景长期人格连续性。", ed: "Each Agent first forms a structured decision containing auditable factual bases only, and both speech and action consume that decision. A code-validated, frozen bounded-domain schema adjudicates verified durable actions into branch state, thresholds, and round feedback. State remains scoped by scenario, branch, and round cutoff. Verified memory promotion is still a default-off backend core with no UI and does not promise ready-made long-term personality continuity across scenarios." },
-    { id: "F37", img: "02-result.png", hero: true, zt: "分享与预测卡片", et: "Sharing and Prediction Card",
-      zd: "结果页可生成分享文案、复制固定链接，也可导出 1200×630 预测卡片，卡片包含问题、主导结局、可见来源和前几位 Agent 名字。", ed: "The result page can generate share copy, copy a permalink, and export a 1200×630 prediction card with the question, dominant ending, visible sources and top agents." },
-    { id: "F41", img: "23-full-report.png", hero: false, zt: "结果完整报告", et: "Result Full Report",
-      zd: "complete/partial 最终报告的重要结论会编译为结构化 Claim，并绑定可用的分支、轮次、Agent、消息与动作坐标；逐字引语只有命中同一 speaker 的同一条发言才会保留，证据不足时会移除引号、降低置信度或改写为证据受限假设，其它报告状态不宣称已完成 Claim 校验。likelihood 与分析置信度只使用已完成终局叶分支和证据数；结构化失败预演会列出失败模式、机制、早期信号、不确定性与独立证据链。Claim 坐标只审查推演内部证据，不构成现实证明；章节工具轨迹会有界保存并在刷新/重开后恢复，实时当前位置仍是瞬时状态。", ed: "Material conclusions in a complete or partial final report are compiled into structured Claims with available branch, round, Agent, message, and action coordinates. A verbatim quote is retained only when it matches the same speaker's utterance; insufficient evidence removes quote marks, lowers confidence, or rewrites the statement as an evidence-limited hypothesis, while other report states do not claim completed Claim validation. Likelihood and analytic confidence use completed terminal leaves and evidence counts only. A structured premortem lists failure modes, mechanisms, early warnings, uncertainty, and an independent evidence chain. Claim coordinates audit evidence inside the simulation and do not establish real-world proof; bounded section tool traces survive refresh/reopen, while the live current-position cursor remains transient." },
-    { id: "F02", img: "20-debate-arena.png", hero: false, zt: "辩论竞技场", et: "Debate Arena",
-      zd: "从首页直接进入辩论竞技场，创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；无可用 LLM 或启动失败时，页面会显示原因。启用 LLM 后，必需发言或裁决生成失败会让本局明确报错，不会静默改用模板。", ed: "Jump straight into the Debate Arena, create affirmative, opposing and judge roles, and run a shorter staged adversarial debate; if no LLM is usable or launch fails, the page shows the reason. With LLM generation enabled, a failed required turn or judge output ends the run with an explicit error instead of silently switching to template copy." },
-    { id: "F13", img: "14-roundtable.png", hero: false, zt: "世界线圆桌", et: "Worldline Roundtable",
-      zd: "多条结局可用时，世界线圆桌让不同世界线的代表坐在同一张桌上讨论，已完成的圆桌会恢复保存的讨论和 Deep Dive。", ed: "When multiple endings exist, the Worldline Roundtable seats representatives of different worldlines at one table; finished tables restore the saved discussion and Deep Dive." },
-    { id: "F10", img: "17-ending-chamber.png", hero: false, zt: "结局会客厅 / 神谕密室", et: "Ending Chamber / Oracle Chamber",
-      zd: "从某条世界线进入会客厅追问当前结局的参与者；模型配置开启时，可展开高级设置为本次会客厅选择 profile。启用会客厅 LLM 后，初始核心计划生成失败会让会客厅明确报错，不会静默改用模板；后续追问仍按 best-effort 处理。", ed: "Enter the chamber from a worldline to question that ending’s participants; when model profiles are enabled, open Advanced settings to choose a profile for this chamber. With chamber LLM generation enabled, a failed initial core plan makes the chamber report an explicit error instead of silently switching to template copy; follow-up questions remain best-effort." },
-    { id: "F21", img: "06-causal-map.png", hero: false, zt: "因果审查与行动账本", et: "Causal Review and Action Ledger",
-      zd: "因果审查把事件、分叉和结局连成有向图，并可对照 Action Ledger 检查每轮动作、目标、领域裁决与回执；所选分支会拼接分叉前祖先轮次并保留 rule、before/after 与可用来源坐标。这是对推演内部因果链的复盘，不是对现实世界因果关系的证明。", ed: "Causal Review connects events, forks, and endings in a directed graph and pairs with the Action Ledger to inspect each round's action, target, domain adjudication, and receipt. The selected branch stitches pre-fork ancestor rounds and keeps rules, before/after values, and available source coordinates. This reviews causality inside the simulation; it does not prove real-world causal relationships." },
-    { id: "F23", img: "08-kg-explorer.png", hero: false, zt: "知识图谱浏览器", et: "Knowledge Graph Explorer",
-      zd: "知识图谱浏览器用实体、事件和主张组织结果数据，可筛选节点、打开详情，也可从节点继续追问。", ed: "The knowledge graph explorer organizes result data by entities, events and claims; filter nodes, open details, or keep asking from a node." },
-    { id: "F25", img: "13-compare.png", hero: false, zt: "反事实对比", et: "Counterfactual Compare",
-      zd: "反事实对比横向展示原分支和改写后的分支，也会还原源分支继承的祖先轮次、原始发言与领域变量差异；可验证时标出首次领域分歧的轮次、规则和动作来源，Agent 与轮次选择器在窄屏仍能换行操作。", ed: "Counterfactual Compare shows original and rewritten branches side by side, including inherited ancestor rounds, the original source message, and domain-variable differences. When verifiable, it identifies the first domain divergence's round, rules, and action sources; Agent and round selectors remain usable on narrow screens." },
-    { id: "F29", img: "04-agent-workshop.png", hero: false, zt: "自定义 Agent 工坊", et: "Custom Agent Workshop",
-      zd: "工坊可手动创建、编辑或从 PDF 生成 Agent；Agent Library 还能按选择顺序导出、预览并原子导入 Agent Pack。便携文件排除 owner、记忆、对话及单独存储的凭据，并脱敏常见凭据模式；分享前仍需检查自填文本。", ed: "The workshop creates, edits, or generates Agents from PDF. Agent Library can also export, preview, and atomically import an Agent Pack in selection order. The portable file excludes owner data, memory, conversations, and separately stored credentials, and scrubs common credential patterns; review custom text before sharing." },
-    { id: "F33", img: "05-journal.png", hero: false, zt: "预测日志", et: "Prediction Journal",
-      zd: "预测日志记录你对结果的概率判断，之后可标记是否发生并查看校准情况，绑定场景时按当前用户校验可见性。", ed: "The prediction journal records your probability calls, lets you later mark whether they happened and review calibration, checking visibility per user when bound to a scenario." },
-    { id: "F35", img: "10-leaderboard.png", hero: false, zt: "排行榜", et: "Leaderboard",
-      zd: "排行榜展示预测分数，支持按场景类型、日期和 Agent 数筛选，筛选条件同步到 URL 方便分享当前视图。", ed: "The leaderboard shows prediction scores, filterable by scenario type, date and agent count, with filters synced to the URL for sharing the current view." },
-    { id: "F38", img: "01-home.png", hero: false, config: true, zt: "搜索增强推演", et: "Search-Augmented Simulation",
-      zd: "打开后，系统在推演前先做外部搜索，把相关片段注入角色提示词；默认用服务器已配置的搜索，也可以本轮换成自己的搜索服务。", ed: "When enabled, the system searches the web before simulating and injects relevant snippets into role prompts; it uses the server-configured search by default, or your own search provider for the round." },
-    { id: "F48", img: "22-local-packs.png", hero: false, zt: "本地主题包", et: "Local Packs",
-      zd: "主题包原子替换问题、设置与有界世界背景；demo_snapshots 可点击、校验并直接导入完整本地推演。切换会清除旧内容并隔离迟到响应，连接结果不明时会提示先查历史记录。", ed: "Local Packs atomically replace the question, settings, and bounded world context. demo_snapshots are clickable, validated, and directly import complete local runs. Switching clears stale content and isolates late responses; an unknown transport outcome tells you to check History first." },
-    { id: "F44", img: "23-multi-run.png", hero: false, zt: "多次推演分布", et: "Multi-Run Distribution",
-      zd: "同一个问题可运行多次；等待面板显示进度，结果页汇总各次终局分布。", ed: "Run the same question several times; the waiting panel shows progress and the result page summarizes terminal outcomes." },
-    { id: "F47", img: "24-document-seed.png", hero: false, zt: "文档种子", et: "Document Seed",
-      zd: "首页可上传 PDF、TXT 或 Markdown，系统把内容提炼成推演背景，让 Agent 基于你的资料展开，而不只凭一句问题。", ed: "Upload a PDF, TXT or Markdown on the home page and the system distills it into the run’s backdrop, so agents build on your material rather than a single question." },
-    { id: "F42", img: "25-model-profiles.png", hero: false, zt: "模型配置", et: "Model Profiles",
-      zd: "保存并切换多套模型配置；未改动的 profile 由场景安全恢复。切换端点或模型会解绑旧 profile 并清除旧限速/能力策略；精确本地服务仍可免 key。", ed: "Save and switch model setups. Unchanged profiles are recovered safely; a new endpoint or model detaches the old profile and clears its rate/capability policy. Exact local services can still be keyless." },
-    { id: "F45", img: "28-you-vs-oracle.png", hero: false, zt: "你的预测 vs 预言机", et: "Your Prediction vs the Oracle",
-      zd: "提交自己的预测，与 AI 终局对比；无法判定时显示不可评分原因。", ed: "Submit your own prediction and compare it with the AI outcome; unresolvable cases explain why they are not scorable." },
-    { id: "F46", img: "27-social.png", hero: false, zt: "结果社交头条卡", et: "Result Social Headline Cards",
-      zd: "结果页把推演结果改写成几条社交平台风格的头条卡片，可一键复制文字或下载图片；这是结果展示与分享能力，不是推演中的原生社交 Feed。", ed: "The result page rewrites the outcome into platform-styled headline cards you can copy as text or download as images. This is a result and sharing view, distinct from the simulation's native social Feed." },
-    { id: "F52", img: "01-home.png", hero: false, zt: "初始世界事件 Feed", et: "Initial World-Event Feed",
-      zd: "开始前可配置最多二十条初始事件，填写来源、正文、发布时间、可信度提示与标签；不同来源会作为独立来源账户进入第一轮。它们是用户提供的推演种子，不会被冒充为经过核验的现实事实。", ed: "Before a run, configure up to twenty initial events with source, content, publication time, credibility hint, and tags. Distinct sources enter round one as separate source accounts. They are user-provided simulation seeds, not verified real-world facts." },
-    { id: "F53", img: "21-simulation.png", hero: false, zt: "原生社交行动世界", et: "Native Social Action World",
-      zd: "Agent 可执行 POST、COMMENT、REACTION、FOLLOW、MUTE、SEARCH、TREND、REFRESH 与 IDLE；除 POST/IDLE 外，动作只在上一轮真实社交机会允许时开放，带领域规则的动作还要满足对应阈值。关注和静音会改变后续可见 Feed，动作、目标与结果写入 Action Ledger，供 Replay 与因果审查复核。", ed: "Agents can POST, COMMENT, REACTION, FOLLOW, MUTE, SEARCH, TREND, REFRESH, or IDLE. Except for POST and IDLE, an action opens only when the prior round provides a real social opportunity; domain-bound actions must also satisfy their thresholds. Following and muting change the Feed they see next, while actions, targets, and outcomes enter the Action Ledger for Replay and causal review." },
-    { id: "F43", img: "26-gallery.png", hero: false, zt: "公开分享与画廊", et: "Public Sharing & Gallery",
-      zd: "分享弹窗可导出脱敏 JSON 或单文件 HTML；离线 Gallery 可从本地文件或 hash 打开 artifact。它不是在线发布或社区索引，问题和结局仍属于公开内容。", ed: "The share dialog exports redacted JSON or a single-file HTML artifact. Offline Gallery can open it from a local file or hash. It is not hosted publishing or a community index, and the question and endings remain public content." }
-  ];
-
-  var MODES = [
-    { n: "01", img: ["21-simulation.png", "02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
-      zd: "一个问题展开多条世界线：实时看轮次与发言，完成后查看结论、概率和故事摘要。", ed: "Expand one question into several worldlines, watch rounds and messages live, then inspect the verdict, probabilities, and story summaries." },
-    { n: "02", img: ["20-debate-arena.png", "15-debate.png"], zt: "辩论竞技场", et: "Debate Arena",
-      zd: "正方、反方和评委分阶段讨论；结果页展示结论并可加载论点地图。", ed: "Proposition, opposition, and judge debate in phases; the result shows the verdict and can load an argument map." },
-    { n: "03", img: ["17-ending-chamber.png"], zt: "神谕密室 / 结局会客厅", et: "Oracle Chambers / Ending Chamber",
-      zd: "从某条世界线进入结局会客厅追问当前结局的参与者；需要指定模型时，展开高级设置选择 profile，不选则走全局默认。", ed: "Enter the Ending Chamber from a worldline to question that ending’s participants; when you need a specific model, open Advanced settings and choose a profile, or leave it blank for the global default." },
-    { n: "04", img: ["14-roundtable.png"], zt: "世界线圆桌", et: "Worldline Roundtable",
-      zd: "不同世界线的代表同桌讨论；完成后可恢复结果并继续 Deep Dive。", ed: "Representatives from different worldlines share one table; completed results can be restored for Deep Dive." },
-    { n: "05", img: ["13-compare.png"], zt: "反事实对比", et: "Counterfactual compare",
-      zd: "并排查看原分支和改写分支，定位它们从哪里开始分歧。", ed: "Compare the original and rewritten branches side by side and find where they diverge." },
-    { n: "06", img: ["06-causal-map.png", "08-kg-explorer.png"], zt: "因果图谱 + 知识图谱", et: "Causal graph + knowledge graph",
-      zd: "用因果图、知识图谱和时间线查看事件、实体、主张与世界线关系。", ed: "Use causal, knowledge, and timeline views to inspect events, entities, claims, and worldline relationships." }
-  ];
-
-  function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
-
-  /* ---- build feature grid ---- */
-  var grid = document.getElementById("fgrid");
-  FEATURES.forEach(function (f, i) {
-    var card = el("article", "fcard reveal" + (f.hero ? " fcard--hero" : ""));
-    card.style.setProperty("--d", (i % 3) * 70 + "ms");
-    var badge = f.config ? ' <span class="badge-config" data-zh="需配置" data-en="Requires config">需配置</span>' : "";
-    card.innerHTML =
-      '<div class="fcard__shot"><span class="fcard__tag">' + f.id + '</span>' +
-      '<img loading="lazy" decoding="async" width="' + (f.hero ? 760 : 380) + '" height="' + (f.hero ? 300 : 190) + '" src="' + S + f.img + '" data-alt-zh="' + f.zt + '" data-alt-en="' + f.et + '" alt="' + f.zt + '"></div>' +
-      '<div class="fcard__body"><h3><span data-zh="' + f.zt + '" data-en="' + f.et + '">' + f.zt + '</span>' + badge + '</h3>' +
-      '<p data-zh="' + f.zd + '" data-en="' + f.ed + '">' + f.zd + '</p></div>';
-    grid.appendChild(card);
-  });
-
-  /* ---- build modes ---- */
-  var modesList = document.getElementById("modes-list");
-  MODES.forEach(function (m) {
-    var sec = el("article", "mode reveal");
-    var two = m.img.length > 1;
-    var figs = m.img.map(function (src) {
-      return '<figure class="mode__fig"><img loading="lazy" decoding="async" width="560" height="' + (two ? 220 : 300) + '" src="' + S + src + '" data-alt-zh="' + m.zt + '" data-alt-en="' + m.et + '" alt="' + m.zt + '"></figure>';
-    }).join("");
-    sec.innerHTML =
-      '<div class="mode__text"><div class="mode__num">' + m.n + '</div>' +
-      '<h3><span data-zh="' + m.zt + '" data-en="' + m.et + '">' + m.zt + '</span><small data-zh="模式 ' + m.n + '" data-en="Mode ' + m.n + '">模式 ' + m.n + '</small></h3>' +
-      '<p data-zh="' + m.zd + '" data-en="' + m.ed + '">' + m.zd + '</p></div>' +
-      '<div class="mode__figs ' + (two ? "two" : "") + '">' + figs + '</div>';
-    modesList.appendChild(sec);
-  });
-
-  /* ---- language ---- */
-  var lang = localStorage.getItem("so-lang") || "zh";
-  function applyLang(l) {
-    lang = l;
-    document.documentElement.lang = l;
-    localStorage.setItem("so-lang", l);
-    document.querySelectorAll("[data-zh]").forEach(function (n) {
-      var v = n.getAttribute("data-" + l);
-      if (v != null) n.innerHTML = v;
-    });
-    document.querySelectorAll("[data-alt-zh]").forEach(function (n) {
-      var v = n.getAttribute("data-alt-" + l);
-      if (v != null) n.setAttribute("alt", v);
-    });
-    document.querySelectorAll("[data-aria-zh]").forEach(function (n) {
-      var v = n.getAttribute("data-aria-" + l);
-      if (v != null) n.setAttribute("aria-label", v);
-    });
-    document.querySelectorAll("[data-src-zh]").forEach(function (n) {
-      if (n.tagName === "VIDEO") return; // video handled below (needs poster + load())
-      var v = n.getAttribute("data-src-" + l);
-      if (v != null && n.getAttribute("src") !== v) n.setAttribute("src", v);
-    });
-    // Intro video: swap poster + <source> per language, then reload
-    var vid = document.getElementById("introVideo");
-    if (vid) {
-      var poster = vid.getAttribute("data-poster-" + l);
-      if (poster != null) vid.setAttribute("poster", poster);
-      var aria = vid.getAttribute("data-aria-" + l);
-      if (aria != null) vid.setAttribute("aria-label", aria);
-      var vsrc = vid.getAttribute("data-src-" + l);
-      var source = vid.querySelector("source");
-      if (vsrc != null && source && source.getAttribute("src") !== vsrc) {
-        source.setAttribute("src", vsrc);
-        vid.load();
-      }
-      // 字幕已烧录进视频，移除了 <track> VTT 软字幕轨，无需再切换 textTrack mode。
-    }
-    document.querySelectorAll(".lang button").forEach(function (b) {
-      b.classList.toggle("on", b.getAttribute("data-lang") === l);
-    });
-  }
-  document.querySelectorAll(".lang button").forEach(function (b) {
-    b.addEventListener("click", function () {
-      var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (reduce) { applyLang(b.getAttribute("data-lang")); return; }
-      document.body.style.transition = "opacity 80ms ease"; document.body.style.opacity = "0.85";
-      setTimeout(function () { applyLang(b.getAttribute("data-lang")); document.body.style.opacity = "1"; }, 80);
+  document.querySelectorAll("[data-illustration]").forEach(function (figure) {
+    figure.querySelectorAll("[data-art-lang]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var language = button.getAttribute("data-art-lang");
+        figure.querySelectorAll("[data-art-lang]").forEach(function (control) {
+          control.setAttribute("aria-pressed", String(control === button));
+        });
+        figure.querySelectorAll("[data-art-image]").forEach(function (image) {
+          image.hidden = image.getAttribute("data-art-image") !== language;
+        });
+        figure.querySelectorAll("[data-art-caption]").forEach(function (caption) {
+          caption.hidden = caption.getAttribute("data-art-caption") !== language;
+        });
+      });
     });
   });
-  applyLang(lang);
 
-  /* ---- reveal on scroll ---- */
-  var io = new IntersectionObserver(function (entries) {
-    entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
-  }, { threshold: 0.12, rootMargin: "0px 0px -8% 0px" });
-  document.querySelectorAll(".reveal").forEach(function (n) { io.observe(n); });
-
-  /* ---- nav scrolled ---- */
-  var nav = document.getElementById("nav");
-  function onScroll() { nav.classList.toggle("scrolled", window.scrollY > 24); }
-  onScroll(); window.addEventListener("scroll", onScroll, { passive: true });
-
-  /* ---- drawer ---- */
   var drawer = document.getElementById("drawer");
   var burger = document.getElementById("burger");
-  function setDrawer(open) {
-    drawer.classList.toggle("open", open);
-    drawer.setAttribute("aria-hidden", open ? "false" : "true");
-    drawer.inert = !open;
-    burger.setAttribute("aria-expanded", open ? "true" : "false");
+  var closeMenu = document.getElementById("drawerClose");
+  var background = [document.getElementById("nav"), document.querySelector("main"), document.querySelector("footer")];
+  var lightbox = document.getElementById("lightbox");
+  var lastScreenshot = null;
+
+  function syncScrollLock() {
+    document.body.classList.toggle("has-overlay", drawer.classList.contains("open") || Boolean(lightbox && lightbox.open));
   }
-  burger.addEventListener("click", function () { setDrawer(true); });
-  document.getElementById("drawerClose").addEventListener("click", function () { setDrawer(false); burger.focus(); });
-  drawer.querySelectorAll("a").forEach(function (a) { a.addEventListener("click", function () { setDrawer(false); }); });
-  document.addEventListener("keydown", function (ev) {
-    if (ev.key === "Escape" && drawer.classList.contains("open")) {
-      setDrawer(false);
-      burger.focus();
+
+  function setDrawer(open, restoreFocus) {
+    drawer.classList.toggle("open", open);
+    drawer.setAttribute("aria-hidden", String(!open));
+    drawer.inert = !open;
+    burger.setAttribute("aria-expanded", String(open));
+    background.forEach(function (node) { if (node) node.inert = open; });
+    syncScrollLock();
+    if (open) closeMenu.focus();
+    else if (restoreFocus) burger.focus();
+  }
+
+  burger.addEventListener("click", function () { setDrawer(true, false); });
+  closeMenu.addEventListener("click", function () { setDrawer(false, true); });
+  drawer.querySelectorAll("a").forEach(function (link) {
+    link.addEventListener("click", function () {
+      setDrawer(false, false);
+      var target = document.querySelector(link.getAttribute("href"));
+      if (target) {
+        target.setAttribute("tabindex", "-1");
+        target.focus({ preventScroll: true });
+      }
+    });
+  });
+  drawer.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setDrawer(false, true);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    var items = drawer.querySelectorAll("button, a[href]");
+    var first = items[0];
+    var last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   });
+  var desktop = window.matchMedia("(min-width: 1040px)");
+  function onDesktop(event) {
+    if (event.matches && drawer.classList.contains("open")) {
+      setDrawer(false, false);
+      document.querySelector(".nav__brand").focus();
+    }
+  }
+  if (desktop.addEventListener) desktop.addEventListener("change", onDesktop);
+  else desktop.addListener(onDesktop);
 
-  /* ---- quickstart tabs ---- */
-  document.querySelectorAll(".qs__tab").forEach(function (t) {
-    t.addEventListener("click", function () {
-      document.querySelectorAll(".qs__tab").forEach(function (x) { x.classList.remove("on"); });
-      document.querySelectorAll(".qs__tab").forEach(function (x) { x.setAttribute("aria-selected", x === t ? "true" : "false"); });
-      t.classList.add("on");
-      var key = t.getAttribute("data-tab");
-      document.querySelectorAll(".qs__panel").forEach(function (p) {
-        var on = p.getAttribute("data-panel") === key;
-        p.classList.toggle("on", on);
-        p.hidden = !on;
-      });
+  var copyStatus = document.getElementById("copy-status");
+  document.querySelectorAll(".copy").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var code = document.getElementById(button.getAttribute("data-copy-target"));
+      if (!code) return;
+      button.disabled = true;
+      copyStatus.textContent = "";
+      var pending = navigator.clipboard && navigator.clipboard.writeText
+        ? navigator.clipboard.writeText(code.textContent)
+        : Promise.reject(new Error("Clipboard unavailable"));
+      pending.then(function () {
+        copyStatus.textContent = "已复制命令。 / Commands copied.";
+      }).catch(function () {
+        var selection = window.getSelection();
+        if (selection) {
+          var range = document.createRange();
+          range.selectNodeContents(code);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        copyStatus.textContent = "未能自动复制。请复制已选中的命令。 / Automatic copy failed. Copy the selected commands.";
+      }).finally(function () { button.disabled = false; });
     });
   });
 
-  /* ---- copy ---- */
-  document.querySelectorAll(".copy").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var text = btn.getAttribute("data-copy").replace(/&quot;/g, '"');
-      navigator.clipboard && navigator.clipboard.writeText(text);
-      var lbl = btn.querySelector("span"); var prev = lbl.innerHTML;
-      btn.classList.add("done"); lbl.innerHTML = lang === "zh" ? "已复制 ✓" : "Copied ✓";
-      setTimeout(function () { btn.classList.remove("done"); lbl.innerHTML = prev; }, 1400);
-    });
-  });
-
-  /* ---- cursor glow (desktop, motion ok) ---- */
-  var glow = document.querySelector(".cursor-glow");
-  if (glow && matchMedia("(hover: hover)").matches && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    var hero = document.querySelector(".hero"); var raf;
-    document.addEventListener("mousemove", function (ev) {
-      if (raf) return;
-      raf = requestAnimationFrame(function () {
-        raf = null;
-        var r = hero.getBoundingClientRect();
-        var inHero = ev.clientY < r.bottom + 120;
-        glow.style.opacity = inHero ? "1" : "0";
-        glow.style.left = ev.clientX + "px"; glow.style.top = ev.clientY + "px";
+  if (lightbox && typeof lightbox.showModal === "function") {
+    var image = document.getElementById("lightbox-image");
+    var caption = document.getElementById("lightbox-caption");
+    document.querySelectorAll("[data-lightbox]").forEach(function (link) {
+      link.addEventListener("click", function (event) {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        var thumbnail = link.querySelector("img");
+        lastScreenshot = link;
+        image.src = link.href;
+        image.alt = link.getAttribute("data-caption");
+        image.width = Number(thumbnail.getAttribute("width"));
+        image.height = Number(thumbnail.getAttribute("height"));
+        caption.textContent = link.getAttribute("data-caption");
+        lightbox.showModal();
+        lightbox.querySelector(".lightbox__body").scrollTop = 0;
+        syncScrollLock();
       });
+    });
+    document.getElementById("lightbox-close").addEventListener("click", function () { lightbox.close(); });
+    lightbox.addEventListener("click", function (event) {
+      if (event.target !== lightbox) return;
+      var bounds = lightbox.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) lightbox.close();
+    });
+    lightbox.addEventListener("close", function () {
+      syncScrollLock();
+      if (lastScreenshot) lastScreenshot.focus();
     });
   }
 })();

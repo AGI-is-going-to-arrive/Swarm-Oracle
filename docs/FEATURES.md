@@ -1,91 +1,176 @@
-[English](FEATURES.en.md) | 中文
+[中文在前 / Chinese first](FEATURES.md) · [English first / 英文在前](FEATURES.en.md)
 
-# SwarmOracle 功能索引
+# 功能指南 / Feature guide
 
-本页按能力类别列出主要入口，不再维护逐项发布核对表。操作步骤见 [USAGE.md](USAGE.md)，默认值与开关见 [CONFIGURATION.md](CONFIGURATION.md)。实际可用能力以运行中的 `/api/capabilities` 为准。
+按你想完成的任务找入口。具体操作见[使用指南](USAGE.md)，模型与功能开关见[配置说明](CONFIGURATION.md)。服务器设置、现有数据和只读回放模式会影响按钮是否可用。
 
-![推演与结果](screenshots/21-simulation.png)
+Find an entry by the task you want to complete. Follow the [usage guide](USAGE.en.md) for the steps and [configuration](CONFIGURATION.en.md) for models and feature flags. Server settings, available data, and read-only replay mode affect which actions you can use.
 
-## 核心推演
+![中文配图：阅读、核对、追问与改写的概念图 / Chinese illustration: Conceptual illustration of reading, checking, asking, and rewriting](illustrations/read-ask-change.zh.webp)
 
-- **问题入口**：快速开始、教学模板、本地主题包和每日/每周挑战会把问题与建议设置带入首页。本地主题包会原子替换问题、语言、建议设置和有界世界背景；作者 prompt 只作为不可信参考证据。角色预览不会创建或选择持久化的权威 Agent 身份，但有界的姓名、角色和视角会作为不可信世界背景实体进入本局，因此可能影响推演。
-- **文档种子**：上传资料，为本轮添加世界背景与 Agent 预览；它不会替用户填写问题。
-- **初始世界事件 Feed**：可在首页为本轮配置最多 20 条事件；每条包含来源与正文，可选发布时间、可信度提示和标签。所有字段都按不可信数据处理，不会成为系统指令，凭据样式内容会被拒绝。
-- **多 Agent 世界线**：支持 Agent 数、轮数、谨慎/均衡/探索模式、多次推演和分支概率。
-- **原生社交动作**：每个实时回合先从上一轮可重放状态派生同一份真实机会快照，再生成并校验有界的 Decision Envelope，由同一决策约束 Agent 发言与 `POST`、`COMMENT`、`REACTION`、`FOLLOW`、`MUTE`、`SEARCH`、`TREND`、`REFRESH` 或 `IDLE` 动作。目标、搜索、趋势与刷新只有在对应机会存在时才开放；`IDLE` 必须给出明确原因。系统不会用动作配额、随机动作或强制轮换制造活跃。初始事件的来源账户可被关注或静音；静音来源会从后续 Feed、搜索和趋势投影中排除。Decision Envelope 只保留目标、可核验观察、候选与选中动作、约束和简短事实依据等可审计字段，不保存隐藏思维链。
-- **跨轮状态推进**：动作持久化后，每个 Agent 会获得带状态的 State Transition，区分 proposed、verified、failed action 与模拟内 world consequence，并在可验证时记录上一轮行动结果、目标进度变化、新信息、障碍、关系变化、承诺、未解决问题、世界状态变化和下一轮压力。下一轮决策读取这些记录；连续高相似发言触发重新规划，而不是强制产生动作。不可验证的 transition 会明确降级，不会补造进展、关系或反馈。
-- **有界领域世界**：parser 可让模型提议变量与规则，但固定代码合同只冻结通过类型、单位、精度、上下界、动作绑定和凭据校验的 `domain_world_v1` schema。完整轮次只从 durable verified action 确定性裁决领域变化；运行页状态条显示当前值、最新变化、阈值 tooltip 和 domain-gated IDLE 归因。没有合法 schema、旧数据或无法重放的分支明确显示 `unavailable`。
-- **两种视图**：Classic 分支树用于查看结构，Pixel Theater 用舞台、气泡和工具栏展示 live 运行。
-- **Live 玩法**：干预、玩法卡、预测押注和世界线承诺只在 live 推演中可写；终局只读已有记录，replay 不提供写入口。
-- **辩论竞技场**：正方、反方和评委按阶段推进，结果可按需加载论点地图。
+*AI 生成概念插画：围绕一个结果选择下一步，并非产品截图。*
 
-主要路由：`/`、`/sim/:id`、`/debate/:id`、`/debate/:id/result`。
+*AI-generated conceptual illustration: choose the next step around a result. This is not a product screenshot.*
 
-## 结果与报告
+<details>
+<summary>English illustration / 英文配图</summary>
 
-- **终局世界线**：显示结论、置信度、每条叶分支的回答、概率与故事。likelihood 与分析置信度只把已完成的终局叶分支当作分支样本，并结合证据数；分叉父节点不计数，带符号的情绪收敛代理值不会抬高分析置信度。有领域 schema 时，结果页另列各分支 verified 状态变化及有界 action/rule/claim 来源坐标；无变化、partial 与 unavailable 不会混为一谈。
-- **完整报告**：`/result/:id/report` 展示章节、证据、不确定性、观察指标和可用图表；生成中、partial、failed、cancelled、skipped、stalled 和 truncated 都有明确外层状态，已保存章节不会被终态抹掉。
-- **Claim–Evidence 编译**：只有 complete/partial 报告会在保存前把结论编译为结构化 Claim，绑定 Agent、消息、动作、分支与轮次坐标，并检查同一 speaker/utterance 的逐字引语、立场归属、角色覆盖和早/中/晚时间覆盖。证据不足时会移除不安全引号、降低置信度或改为“证据有限的假设”；unsupported Claim 不能成为高置信结论。可用的编译报告还会让结果页顶部结论与报告分析置信度使用同一权威，但并不意味着其它报告状态已经完成 Claim 校验，也不意味着全部 Claim 字段都有独立 UI。
-- **报告过程透明度**：已保存章节标明生成稿、重写稿或静态回退，降级时显示原因，证据可回到 replay 坐标。每个章节实际执行的有界工具轨迹会随成功或静态回退结果持久化，刷新、轮询或重开后仍可恢复；当前手动生成流的章节进度与“当前位置”仍是瞬时事件，不会在刷新后重放。所谓“访谈”是模型依据模拟历史合成并附上分支/轮次坐标的摘录，不是逐字原始证据，也不是新发生的实时采访。
-- **结构化 premortem**：完整报告按 available / partial / missing 展示失败模式、失败机制、早期信号和不确定性；每个失败模式使用独立 evidence chain 指向报告证据坐标，不以普通章节正文替代证据链，也不把推演证据宣称为现实证明。
-- **因果档案与复盘**：把玩法卡、预测押注、世界线承诺和终局结算放在同一条可追踪记录中；另有导演复盘、用户预测对比、run-group 分布和阵营时间线。
-- **导出**：Markdown、Snapshot、固定链接、预测卡片和脱敏公开 artifact。Public Artifact 可下载 JSON、单文件 HTML 或复制离线 Gallery hash 链接，`gallery.html` 也可打开本地 JSON；它不是 hosted registry 或在线社区。公开 replay 不携带本地身份、persona、凭据或仅供 live 使用的连接信息。
+![English illustration: Conceptual illustration of reading, checking, asking, and rewriting / 英文配图：阅读、核对、追问与改写的概念图](illustrations/read-ask-change.en.webp)
 
-主要路由：`/result/:id`、`/result/:id/report`。
+</details>
 
-## 会客厅与圆桌
+<a id="snapshot-demo-and-live-generation"></a>
+<a id="snapshot-演示与实时生成"></a>
 
-- **结局会客厅**：从一条世界线追问参与者，支持只改一步、锚定线程、证据投牌和三回合后续。
-- **世界线圆桌**：多结局代表共同讨论，支持讨论形式和选角。
-- **Deep Dive**：圆桌完成后提供 1 对 1 访谈、研究分析师和交叉质询。
-- **模型选择**：会客厅可在自己的高级设置中选择 model profile；不选则使用全局默认。
+## 先浏览，再决定要不要生成 / Explore before generating
 
-主要路由：`/roundtable/:id`；会客厅从 `/result/:id` 打开。
+| 中文 / Chinese | English / 英文 |
+| --- | --- |
+| **浏览官方样例。** 首页有 3 个完整样例，打开时无需 API Key、无需选文件、不会调用模型。你也可导入 `.swarm` 快照。 | **Browse an official sample.** The home page offers three complete samples. Opening one needs no API key or file selection and makes no model calls. You can also import a `.swarm` snapshot. |
+| **读已有结果。** 查看结局、简报、已保存报告、证据和回放。新推演、追问、重演和完整分析需要主动启动；预测评分恢复有例外，见使用指南。 | **Read saved results.** Inspect endings, the brief result, saved reports, evidence, and replay. New simulations, follow-ups, reruns, and full analyses start explicitly; prediction-scoring recovery has an exception described in the usage guide. |
+| **连接模型。** `/admin/setup` 用于测试和保存连接，`/model-profiles` 用于管理配置，首页 **BYOK** 用于本次覆盖。 | **Connect a model.** Use `/admin/setup` to test and save a connection, `/model-profiles` to manage profiles, and home-page **BYOK** for a per-run override. |
+| **选推理力度。** 首页提供服务端默认、轻量、均衡和深入。应用会保存本次选择，后续操作按继承规则使用；模型是否支持该参数取决于提供方。 | **Choose reasoning effort.** The home page offers Server default, Light, Balanced, and Deep. The app saves the choice for later operations to inherit; parameter support depends on the provider. |
 
-## 反事实、Replay 与图谱
+<a id="core-simulation"></a>
+<a id="核心推演"></a>
 
-- **反事实与续跑**：改写一条真实发言，或从 checkpoint 创建带来源关系的新分支。
-- **分支对比**：并排查看原分支与新分支的发言、transition 和领域变量差异，并在可验证时标出第一次领域分歧的轮次、规则与动作来源；任一侧无效时明确显示不可用。
-- **窄屏操作**：反事实的 Agent 与轮次控件会在手机宽度换行收缩，长 Agent 名不会把面板撑出视口。
-- **Replay Trace**：追踪反事实和续跑分支的来源；消息、Agent 状态和记忆按所选有效谱系与轮次截点隔离，包含截点内的分叉前祖先轮次，不混入兄弟分支、父分支分叉后的未来或 cutoff 之后的信息。自包含 replay 在自身边界停止。
-- **图谱工作台**：Causal、Split、Knowledge Graph 三种视图；另有知识图谱浏览器和时间线星系。
-- **Action Ledger**：Causal Review 面板按当前场景与有效分支谱系展示持久化的原生动作、目标、状态与领域裁决；同一确定性领域历史还供状态条、阈值 tooltip、IDLE 归因和 world outcomes 使用。独立证据回执接口投影 Agent 发言、上下文观察和派生后果。记忆只显示哈希引用与来源场景坐标，不公开正文；旧数据缺少对应证据时显示 `unavailable`，不会推测补齐。
-- **因果与阵营语义**：旧 `stance` / `trust` / `opposition` 字段只是由模型生成的 `emotion` / `diverge` 推导出的情绪代理值，不是已验证的立场、信任、关系或因果证据；带 `branch_id` 的 causal、faction、report、Replay 和 compare 使用同一有效 root-to-leaf 谱系与 branch cutoff，包含符合范围的分叉前祖先轮次并排除兄弟分支和分叉后的父分支未来。
-- **节点追问**：从可用图节点继续发起上下文对话。
+## 把问题变成多条世界线 / Turn a question into worldlines
 
-主要路由：`/result/:id/compare`、`/replay/:id`、`/workbench/:id`、`/kg-explorer/:id`、`/timeline-galaxy/:id`。
+- **准备问题。** 自己输入，或用快速开始、教学模板、挑战和本地主题包填入问题与建议设置。主题包的角色预览只是本次背景，不会创建资料库身份。<br>
+  **Prepare a question.** Write one or use a Quick Start, education template, challenge, or Local Pack to fill the form. A pack’s cast preview provides context for the run without creating library identities.
 
-## Agent 与个人数据
+- **补充背景。** 上传文档可添加背景与角色预览，你仍需填写问题。初始世界事件 Feed 最多接受 20 条事件，可填来源、正文、时间和标签。<br>
+  **Add context.** A document upload can add background and a cast preview; you still enter the question. The initial world-event Feed accepts up to 20 events with sources, text, times, and tags.
 
-- **Agent Library / Workshop**：创建、编辑、收藏自定义 Agent，也可从 PDF 生成。
-- **推演内档案**：从 Agent 列表打开档案，分开展示配置立场与已观察情绪。成长事件显示场景、分支、轮次与 `event_type`；只有同时匹配当前路由场景和明确所选分支时才标为“当前 · 所选分支片段”，其它可判定事件标为“历史”。
-- **元数据失败不造假**：Agent 发言与结构化情绪/立场解析分成两步。第二步失败时保留真实发言，把观测明确标为不可用并携带有界错误码；live、Replay、Snapshot、导入导出和 Pixel Theater 都不会回填虚假的 `neutral`。
-- **身份、记忆与成长**：持久身份档案展示 persona、知识领域、决策风格、记忆和成长事件；推演记忆按 Agent、分支谱系和轮次范围隔离。另有默认关闭的后端 verified-memory core，只有 `FEATURE_AGENT_IDENTITY=true` 与 `FEATURE_MEMORY_PROMOTION=true` 同时满足时，才会晋升与 verified action、领域裁决和实际 delta 精确绑定的结果，并用版本化 namespace 与稳定哈希 ref 支持后续召回；当前没有 capability、REST 或 UI 入口，不能从界面启用或查看。
-- **观察与关系边界**：结果页只从所选有效谱系寻找 Agent 观察，replay 还会应用所选轮次截点；阵营时间线使用当前指定谱系的已物化轮次，包括符合 cutoff 的分叉前祖先轮次。注入下一轮 Agent 上下文的关系信号仅来自同场景、同分支的上一轮，并受条数、长度和证据摘要限制。
-- **人物备份与 Agent Pack**：单个人物备份导入会创建新身份，不覆盖已有 Agent。Agent Pack v1 按资料库选择顺序导出并原子导入一组 Agent；不导出身份 ID、owner、记忆、成长历史、对话或单独存储的凭据，并脱敏常见凭据模式，分享前仍应检查自填人设文本。
-- **预测日志**：记录概率、resolve 结果并查看校准。
-- **历史与排行榜**：按状态查看本地推演，按条件筛选预测榜单。
+- **选规模和视图。** 调整 Agent 数、轮数与谨慎／均衡／探索模式；可做多次推演。Classic 看分支结构，Pixel Theater 看角色舞台、发言气泡和时间进度。<br>
+  **Choose size and view.** Set Agent count, rounds, and conservative, balanced, or exploratory mode; you can also run a batch. Classic shows branch structure. Pixel Theater shows a character stage, speech bubbles, and progress.
 
-主要路由：`/agents`、`/agents/new`、`/me/journal`、`/history`、`/leaderboard`。
+- **在运行中参与。** 支持的实时推演可使用干预、玩法卡、预测押注和世界线承诺。完成后的结果保留记录，只读回放不提供这些写入操作。<br>
+  **Take part during a run.** Supported live runs offer interventions, gameplay cards, prediction bets, and worldline commitments. Finished results retain the records; read-only replays do not offer these writes.
 
-## Snapshot 演示与实时生成
+入口：`/` 和 `/sim/:id`。主题包、上传资料和 Feed 都属于推演材料；不要在其中放入密钥或个人敏感信息。
 
-- **官方样例**：无真实 LLM 时也能一键导入 3 个内置完整推演，直接查看结果、因果档案和 replay。
-- **本地 Snapshot**：也可从首页导入自己的 `.swarm` 文件；仓库样例位于 `samples/snapshots/`。导入会在首次写库前拒绝重复的 Agent、Message、Graph Node 源 ID，以及映射到不同坐标的同一 Round 源 ID。
-- **Feed、动作、领域状态与运行时可重放性**：初始 Feed、来源账户、原生动作、冻结领域 schema、Decision Envelope 和 State Transition 随 Snapshot 保存；导入时会重映射并复核分支、Agent、消息和动作坐标，再从 durable action 重建领域状态与 transition。Replay 按有效谱系和 cutoff 恢复同一动作与运行时历史，分支 Compare 在存在结构化 transition 时把它纳入差异；反事实替换不会伪造新决策，而是把被替换坐标标为不可用并要求后续重新规划。旧数据缺少 runtime 或领域 schema 时保持 `unavailable`，不会从发言猜测动作、决策或状态变化。Snapshot/import/clone 携带的 memory-promotion ref 只作 opaque history，不会解析为可召回来源。
-- **实时生成**：新推演、辩论、会客厅和报告需要服务端默认模型、可用 model profile 或本轮 BYOK。精确本地 host 可无 key，远端仍必须提供 key。启用 LLM 时，Debate 的必需发言与裁判结果在重试耗尽或无可用内容后显式失败，不会用确定性文案冒充成功；Ending Room 初始核心计划采用相同的 fail-closed 边界，但 follow-up 仍可 best-effort 使用 anchor。显式关闭对应 LLM 模式时允许确定性内容。
-- **模型管理**：`/admin/setup` 用于连接测试和建档；当前组合只有验证成功或明确接受未验证风险后，向导才能完成。`/model-profiles` 用于管理 profile。未改动的 profile 不会复制成缺 key 的 session 覆盖；修改远端端点或模型必须同时提供完整连接，并解绑旧 profile、清除其限速与能力策略。
-- **主题包刷新与演示引用**：刷新会重新读取当前同 ID 包详情；切换包时先清除旧详情、模板和操作，迟到响应不能覆盖新选择。随附主题包只列出真实存在的 Snapshot；`demo_snapshots` 可点击、按目录白名单和 Snapshot 合同校验并直接导入。明确失败可以重试；无法确认结果时会提示先检查历史记录，避免重复导入。
-- **界面边界**：首页高级设置与 BYOK 是两个独立折叠区。
+Entries: `/` and `/sim/:id`. Packs, uploaded documents, and Feed events are simulation material. Keep keys and sensitive personal information out of them.
 
-## 可选搜索
+<a id="results-and-reports"></a>
+<a id="结果与报告"></a>
 
-搜索增强、来源家族筛选和来源查询优化默认关闭，需要外部 provider。app-layer 搜索与模型原生搜索是两条路径；统一来源信息流只显示实际返回的网页片段和 citations。配置见 [CONFIGURATION.md](CONFIGURATION.md)。
+## 读结论，也查它的依据 / Read the conclusion and check its basis
 
-## 发布完整性
+- **结果页。** 先看原问题与完成的结局，再按“核对依据”“追问角色”“尝试改变”继续；图谱、回放等额外工具收在扩展入口中。<br>
+  **Result page.** Read the question and completed endings, then choose **Check the evidence**, **Ask the characters**, or **Try a different decision**. Expand the additional tools for graphs, replay, and other views.
 
-GHCR 的 backend/frontend 镜像从通过 CI 的精确 commit 构建，先写入同一 SHA 的不可变标签，两张都成功后才成对晋升；任一晋升失败会触发并验证两张旧标签的恢复，恢复不完整会显式阻断作业。版本标签还要求同一 SHA 的实际 release signoff。过期的 edge 构建不会覆盖更新的 `main`，release dry-run 只标记为 planned，浏览器关闭失败会让 E2E 失败而不是被吞掉。
+- **简报与完整报告。** 简报复用保存的结果，不额外调用模型。完整分析和正文翻译需要你主动发起；旧报告会标为历史内容，不覆盖当前简报。<br>
+  **Brief result and full report.** The brief result reuses saved data without another model call. You request full analysis and body translation explicitly. An older report is labeled historical and does not replace the current brief result.
 
-## 能力边界
+- **证据与状态。** 报告提供发言、分支、轮次及可用动作的来源。你可看到部分完成、失败、取消、截断等状态，以及各章的生成稿、重写稿或静态回退标签。<br>
+  **Evidence and status.** Reports provide sources for statements, branches, rounds, and available actions. They distinguish partial, failed, cancelled, and truncated output, and label each section as generated, rewritten, or static fallback.
 
-功能入口会随 feature flags、数据状态和 replay/live 模式变化。能力检查会明确区分 loading、error、disabled 和 enabled；失败态提供重试，不会把探测失败误报为禁用。旧 Snapshot 若缺少观察来源、结构化 runtime 或领域 schema，会明确显示快照、无匹配观察或 `unavailable`，不会伪造世界线、轮次、决策或状态变化。Local Pack 上下文切换到快速开始等其它入口时会被清除，不会泄漏到下一次启动。Gallery 与 Agent Pack 都是本地、离线文件工作流，不提供 hosted registry、在线发布或社区索引。其它缺失字段会降级为只读、partial 或 unavailable。Decision Envelope、State Transition、DomainWorld 与 Claim 都是模拟内可审计记录，不是现实测量或因果证明；`memory_write_candidates` 仍只是候选，默认关闭的 promotion core 也不构成已交付 UI。所有概率、关系和发言都来自模拟，只供娱乐和探索。
+- **复盘。** 因果档案对照玩法卡、押注、承诺与结算。完整报告还可显示失败情景、预警信号、不确定性和各自的证据；缺失项保留缺失状态。<br>
+  **Review the run.** The causal archive puts cards, bets, commitments, and settlement together. Full reports may include failure scenarios, warning signs, uncertainty, and their evidence. Missing items remain marked as missing.
+
+入口：`/result/:id` 和 `/result/:id/report`。报告里的分析置信度与分支权重都来自本次模拟。它们不是现实概率；`complete` 也不表示每一章都由模型成功生成，或全部叙述已获语义验证。
+
+Entries: `/result/:id` and `/result/:id/report`. Report confidence and branch weights come from this simulation. They are not real-world probabilities. A `complete` report does not mean every section came from a successful model call or every statement passed semantic verification.
+
+<a id="counterfactual-replay-and-graphs"></a>
+<a id="反事实replay-与图谱"></a>
+
+## 从图谱追问，或试一次不同选择 / Ask from a graph or try a different choice
+
+| 中文 / Chinese | English / 英文 |
+| --- | --- |
+| **图谱详情 → 追问。** 在图谱工作台或知识图谱点节点，先检查人物、轮次和来源，再点“询问这个节点”。可连续追问、加载历史和停止当前回答。 | **Graph detail → Ask.** Select a node in Graph Workbench or Knowledge Graph, check its character, round, and sources, then choose **Ask about this node**. Continue with follow-ups, load history, or stop the current reply. |
+| **比较已有分支。** 选两条已存在的分支，查看发言、状态和领域变量的差异。这一步不生成新分支。只有来源关系可核实时，才标注“原始／反事实”。 | **Compare existing branches.** Pick two saved branches to inspect statements, state, and domain-variable differences. This creates no new branch. Original/counterfactual labels appear only when provenance supports them. |
+| **改写一轮并重演。** 在完成的推演中选择一条已保存的真实发言，改写后创建新分支并继续生成。也可从可用 checkpoint 续跑。需要模型和对应功能。 | **Rewrite a turn and replay.** In a completed run, choose an actual saved statement, replace it, and create a branch that continues generating. You can also resume from an available checkpoint. These operations need a model and the matching feature. |
+| **回放与时间线。** 按轮查看过程和分支来源。分支分析会包含分叉前的共同历史，并排除兄弟分支及截点之后的内容。 | **Replay and timeline.** Review rounds and branch origins. Branch analysis includes shared history before the fork and excludes sibling branches and content after the selected cutoff. |
+
+入口：`/workbench/:id`、`/kg-explorer/:id`、`/timeline-galaxy/:id`、`/replay/:id` 和 `/result/:id/compare`。只读 replay 不提供新的对话、重演或报告生成。
+
+Entries: `/workbench/:id`, `/kg-explorer/:id`, `/timeline-galaxy/:id`, `/replay/:id`, and `/result/:id/compare`. Read-only replay does not offer new conversations, reruns, or report generation.
+
+## 分清提议、采纳和执行 / Separate proposal, adoption, and execution
+
+![中文配图：提议、共同采纳与执行记录的概念图 / Chinese illustration: Conceptual illustration of proposals, shared adoption, and execution records](illustrations/decisions.zh.webp)
+
+*AI 生成概念插画：提议需要符合本局规则才会改变模拟状态；采纳本身不证明执行。并非产品截图。*
+
+*AI-generated conceptual illustration: proposals must meet the run’s rules before changing simulation state; adoption alone does not prove execution. This is not a product screenshot.*
+
+<details>
+<summary>English illustration / 英文配图</summary>
+
+![English illustration: Conceptual illustration of proposals, shared adoption, and execution records / 英文配图：提议、共同采纳与执行记录的概念图](illustrations/decisions.en.webp)
+
+</details>
+
+角色每轮可以发帖、评论、回应、关注、静音、搜索、查看趋势、刷新，或说明为何暂不行动。它只能使用当前模拟提供的机会；这些社交动作不会发到真实社交平台。
+
+In each round, a character can post, comment, react, follow, mute, search, inspect trends, refresh, or explain why it takes no action. It can use only the opportunities present in the simulation. These social actions do not post to real social platforms.
+
+若本局有预算、容量或承诺等规则，状态条与动作账本可显示规则、变更前后数值和失败原因。对于采用全轮一致规则的共同承诺，参与者必须在完整轮次中明确同意同一目标才会采纳。不同提议不会相加成共同承诺，采纳也不等于已执行。
+
+When a run includes rules for budgets, capacity, or commitments, its state strip and Action Ledger can show rules, before/after values, and failure reasons. A shared commitment under the unanimous-round rule requires every participant to choose the same target in a complete round. Competing proposals do not add up to an adopted commitment, and adoption does not mean execution.
+
+这些记录只证明模拟内按规则处理了什么。缺少旧数据、合法规则或可重放记录时，你会看到 `unavailable`；图上的情绪或关系提示也不构成现实中的立场、关系或因果证明。
+
+These records show what the simulation processed under its rules. Missing historical data, valid rules, or replayable records produce `unavailable`. Emotion and relationship hints in graphs do not establish real-world views, relationships, or causation.
+
+<a id="chambers-and-roundtable"></a>
+<a id="会客厅与圆桌"></a>
+
+## 辩论、会客厅与圆桌 / Debate, chambers, and roundtables
+
+- **辩论竞技场。** 固定正反两方和一名裁决者，依次开场、交锋、反驳、结辩，再裁决。启动前核对各角色的模型与推理力度；首页的 Agent 数和轮数不改变辩论规模。<br>
+  **Debate Arena.** Two sides and one judge follow opening, crossfire, rebuttal, closing, and a verdict. Review each role’s model and reasoning effort before launch. Home-page Agent and round sliders do not change this format.
+
+- **结局会客厅。** 从一条结局继续追问，可用“只改一步”、证据投牌和后续讨论。会客厅的高级设置有自己的模型配置选择。<br>
+  **Ending Chamber.** Continue from an ending with questions, One Move Only, evidence cards, and follow-up discussion. The chamber has its own model-profile selector in Advanced settings.
+
+- **世界线圆桌。** 有多个结局时，选择讨论形式和代表，让不同世界线的角色一起讨论。完成后可进行一对一访谈、研究分析或交叉质询，并保存支持的分析笔记。<br>
+  **Worldline Roundtable.** With multiple endings, choose a format and representatives to discuss across worldlines. After completion, use a one-to-one interview, research analysis, or cross-examination, and save supported analysis notes.
+
+入口：`/debate/:id`、`/debate/:id/result`、结果页会客厅和 `/roundtable/:id`。模型准备、总结、可选分析与重试可能增加请求和费用，固定辩论规模不等于固定调用次数。
+
+Entries: `/debate/:id`, `/debate/:id/result`, chambers on the result page, and `/roundtable/:id`. Role preparation, summaries, optional analysis, and retries can add requests and costs. A fixed debate format does not imply a fixed request count.
+
+<a id="agents-and-personal-data"></a>
+<a id="agent-与个人数据"></a>
+
+## 管理角色、保存与分享 / Manage characters, save, and share
+
+| 中文 / Chinese | English / 英文 |
+| --- | --- |
+| **角色资料库。** 在 `/agents` 创建、收藏和查看 Agent，自定义 Agent 卡片有“编辑”入口；也可在 `/agents/new` 从 PDF 生成。 | **Agent Library.** Create, favorite, and inspect Agents at `/agents`. Custom Agent cards offer **Edit**; `/agents/new` also supports generation from PDF. |
+| **备份与 Agent Pack。** 导入单人备份会新建身份；Agent Pack 按选择顺序导出整组人设。分享包不携带身份 ID、归属信息、记忆、成长记录、对话或凭据，仍需检查自填文本。 | **Backups and Agent Packs.** A single-persona backup import creates a new identity. Agent Packs export selected personas in order. Shared packs omit identity IDs, ownership data, memories, growth records, conversations, and credentials; review your own text before sharing. |
+| **快照与分享。** 导出 Markdown、`.swarm` 快照、回放链接或预测卡片。脱敏 Public Artifact 可用 JSON、单文件 HTML 或 Gallery hash 链接分享。 | **Snapshots and sharing.** Export Markdown, a `.swarm` snapshot, a replay link, or a prediction card. Share a redacted Public Artifact as JSON, a single HTML file, or a Gallery hash link. |
+| **历史与预测日志。** `/history` 查推演，`/me/journal` 记预测、更新结果并看校准，`/leaderboard` 看预测榜。保存分析是用户笔记，不会自动变成已验证事实或角色记忆。 | **History and prediction journal.** Use `/history` for runs, `/me/journal` to record predictions, resolve outcomes, and inspect calibration, and `/leaderboard` for scores. Saved analysis is a user note; it does not become a verified fact or Agent memory. |
+
+`/gallery.html` 可打开本地 Public Artifact JSON 或 hash 链接，不会上传内容，也没有在线社区或交易市场。分享前仍要检查问题、角色文本和结局。
+
+`/gallery.html` opens a local Public Artifact JSON file or hash link without uploading it. It is not an online community or marketplace. Review the question, character text, and endings before sharing.
+
+<a id="optional-search"></a>
+<a id="可选搜索"></a>
+<a id="release-integrity"></a>
+<a id="发布完整性"></a>
+<a id="capability-boundaries"></a>
+<a id="能力边界"></a>
+
+## 可选能力与边界 / Optional features and boundaries
+
+- **搜索。** 应用层搜索默认关闭，需要配置提供方；模型原生搜索是另一项能力。只有提供方返回真实来源时才显示引用。<br>
+  **Search.** App-layer search is off by default and needs a provider. Model-native search is a separate capability. Citations appear only when a provider returns sources.
+
+- **功能检查。** 页面区分“检查中”“检查失败”“已禁用”和“可用”。检查失败可重试；禁用项需由部署者配置后重启后端。<br>
+  **Feature checks.** The app distinguishes checking, check failure, disabled, and available. Retry a failed check; an administrator must configure disabled features and restart the backend.
+
+- **记忆能力。** 已有身份与记忆界面不表示所有记忆功能都已开放。Verified-memory promotion 仍是默认关闭的后端能力，没有可操作的界面或 REST 入口。<br>
+  **Memory features.** Existing identity and memory views do not mean every memory feature is available. Verified-memory promotion remains a default-off backend capability with no user-facing UI or REST entry.
+
+- **本地与发布。** 默认按本地／自托管使用设计。公开访问、数据备份、镜像验证和旧版恢复按[部署说明](../deploy/README.md)操作。<br>
+  **Local use and releases.** The default setup targets local and self-hosted use. Follow the [deployment guide](../deploy/README.md) for public access, backups, image verification, and rollback.
+
+推演界面截图参考：[中文](screenshots/21-simulation.png) · [英文](screenshots-en/21-simulation.png)。这是产品截图，控件与可用能力以当前应用为准。
+
+Simulation screenshot references: [Chinese](screenshots/21-simulation.png) · [English](screenshots-en/21-simulation.png). These are product screenshots; consult the current app for controls and available features.

@@ -1,114 +1,160 @@
-[English](CONFIGURATION.en.md) | 中文
+中文优先 / Chinese first | [English first / 英文优先](CONFIGURATION.en.md)
 
-# SwarmOracle 配置说明
+# 配置说明 / Configuration
 
-## 1. 配置来源与优先级
+![选择模型连接并测试](illustrations/model-setup.zh.webp)
 
-- 本地开发：复制 `.env.example` 到 `backend/.env`，编辑 `backend/.env`。
-- Docker：复制 `.env.docker.example` 到 `.env.docker`，Compose 自动读取。
-- `.env.example` 是公开默认值的权威；开发机上的 `backend/.env` 不是公开默认。
-- 未列出的运行时和报告调优项，以模板注释和 `backend/app/config.py` 为准。
+*先浏览样例，再为需要生成的操作连接模型。*
 
-环境变量修改后需要重启后端。前端通过 `/api/capabilities` 读取实际能力。
+<details>
+<summary>English illustration / 英文配图</summary>
 
-## 2. 运行路径
+![Choose and test a model connection](illustrations/model-setup.en.webp)
 
-| 路径 | 需要真实 LLM | 用途 |
-|---|---:|---|
-| Snapshot 演示 | 否 | 导入 `samples/snapshots/*.swarm`，查看已保存结果与 replay |
-| 实时生成 | 是 | 新建推演、辩论、会客厅、报告和其它 LLM 功能 |
-| Docker 本机部署 | 视用途 | 默认只发布到 `127.0.0.1:18927` / `127.0.0.1:18928` |
-| 生产或公网部署 | 是 | 还必须配置生产安全门禁 |
+*Browse a sample first, then connect a model for actions that generate new content.*
 
-占位 endpoint 和占位 key 能启动 Snapshot 演示，但会让 `llm_static_configured=false`。实时生成还可以由可用 model profile 或本轮 BYOK 解锁；可用 profile 包括“带 key”或“精确本地 Base URL + 模型 ID”两种，不能再按旧的 key-only 条件判断。
+</details>
 
-## 3. LLM 配置
+## 先选你的使用方式 / Choose how you will use the app
 
-公开模板当前值：
+启用预测评分时，如果同一推演里有些预测已评分、有些还未评分，重新打开结果页可能继续调用模型评分。只想阅读时，可以使用只读回放。
 
-| 变量 | `.env.example` 默认 | 含义 |
-|---|---|---|
-| `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | OpenAI-compatible Base URL |
-| `LLM_API_KEY` | `your-api-key-here` | 占位 key；精确本地 endpoint 可清空，非本地 endpoint 必须换成真实 key |
-| `LLM_MODEL_NAME` | `gpt-5.4-mini` | provider 的实际模型 ID |
-| `LLM_REASONING_EFFORT` | `none` | `none/low/medium/high` |
-| `LLM_REQUESTS_PER_MINUTE` | `0` | `0` 表示不设置 RPM 限制 |
-| `LLM_TOKENS_PER_MINUTE` | `0` | `0` 表示不设置 TPM 限制 |
-| `LLM_CONCURRENCY` | `5` | 全局并发上限；`0` 关闭该上限 |
-| `LLM_MAX_PENDING` | `24` | 全局等待队列上限；`0` 关闭该保护 |
-| `LLM_USER_MAX_PENDING` | `4` | 单用户等待上限；`0` 关闭该保护 |
+With prediction scoring enabled, reopening a result may call the model to finish scoring when some predictions are scored and others remain unscored. Use read-only replay when you only want to view the run.
 
-服务端默认模型由以上变量决定。不要把某台机器的临时模型名、地址或 key 写成项目默认。模型 ID 必须由你的 provider 实际支持。
+只读官方样例、导入 `.swarm` 并查看已保存的结果与 Replay，不需要 API key。新建推演、追问角色、生成或翻译报告会调用模型；从样例发起这些新操作也需要可用连接。
 
-免 key 只匹配 host 恰好为 `localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal` 或 `::1` 的 `http/https` URL（IPv6 URL 写成 `[::1]`）。使用这些地址并将 key 留空时，请求不会发送 `Authorization`；相似子域名、带 userinfo 的 URL、数字/十六进制/八进制 loopback 写法和其它远端 host 都不会被视为本地，仍必须提供真实 key。为避免把模板误报成可用模型，随附的 `127.0.0.1:8317` / `localhost:8317` / `host.docker.internal:8317` 与空值或占位 key 组合仍判为未配置；请改成实际服务地址，或通过 Setup/profile 明确保存该连接。
+You do not need an API key to read official samples, import `.swarm` files, or view saved results and Replay. New runs, character questions, and report generation or translation call a model. Starting these new actions from a sample also needs a working connection.
 
-## 4. Model Profile 与 BYOK
+| 目标 / Goal | 准备 / What you need |
+| --- | --- |
+| 浏览样例 / Browse samples | 启动前后端，打开首页样例 / Start both services and open a homepage sample |
+| 使用自己的模型 / Use your model | 在 Setup 保存连接，或为当前请求填写 BYOK / Save a connection in Setup, or supply BYOK for the current request |
+| 配置本机默认模型 / Set a local default | 编辑 `backend/.env` 并重启后端 / Edit `backend/.env` and restart the backend |
+| Docker / 公网部署 / Docker / public deployment | 使用 `.env.docker`；公网还需生产鉴权与访问控制 / Use `.env.docker`; public exposure also requires production authentication and access controls |
 
-`/admin/setup` 可测试连接并保存 model profile；`/model-profiles` 可管理 provider、Base URL、模型、key、限速、并发和能力覆盖。带 key 的 profile 与“精确本地 Base URL + 模型 ID”的免 key profile 都会参与 `llm_configured` 判断。Setup 只有在当前端点/key/模型组合验证成功，或用户明确接受未验证风险后才能完成；修改连接字段会清除旧验证。
+## 配置放在哪里 / Where settings live
 
-首页的 **高级设置** 与 **BYOK** 是两个独立折叠区。BYOK 只覆盖当前请求；高级设置负责推演、显示、主题包和搜索选项。请求级远端 Base URL 必须与 API key 一起提交；上述精确本地 Base URL 是唯一免 key 例外。凭据、端点和模型属于同一个 provider 绑定：profile-backed 场景的报告、对话、评分、社交文案和续跑要么不提交 provider 字段并恢复原 profile，要么提交完整的远端 `key + Base URL + model`；partial override 会 fail-closed。精确本地覆盖仍只需 `Base URL + model`。任何新端点或新模型都会解绑旧 profile，并清除旧 RPM/TPM、并发、结构化输出和原生搜索策略，必须为新绑定显式重新设置。切换 Debate 角色 profile 同样会清除旧 provider 的显式模型、凭据和速率覆盖。不能把凭据放进 URL。
+本地开发仅在目标不存在时把根目录 `.env.example` 复制到 `backend/.env`；Docker 对应 `.env.docker.example` → `.env.docker`。不要覆盖已有配置。完整安装命令见[后端开发](../backend/README.md)和[部署说明](../deploy/README.md)。
 
-首页手动测试连接会在提供真实 key 或精确本地 Base URL 时显式请求有界 provider probe；精确本地连接可免 key 手动测试。probe 最大并行宽度为 4，完整递增最多产生 10 个附加 provider 请求。启动前的自动检查只覆盖提供了 key 且没有新鲜结果的路径，并固定不执行 fanout。health 成功不等于 probe 成功；probe 失败会清除旧推荐，不能显示为成功。
+For native development, copy the root `.env.example` to `backend/.env` only if the destination does not exist. For Docker, use `.env.docker.example` → `.env.docker`. Preserve existing settings. See [Backend development](../backend/README.md) and [Deployment](../deploy/README.md) for setup commands.
 
-请求级 BYOK 的 host 控制：
+公开默认值以模板为准，字段校验以 [`backend/app/config.py`](../backend/app/config.py) 为准。进程环境变量可覆盖 `.env`。修改后重启后端；前端从 `/api/capabilities` 读取启用的功能。个人 `.env` 不是项目默认，也不应提交。
 
-- `LLM_EXTRA_ALLOWED_HOSTS`：额外 host 白名单，只接受 host，不接受完整 URL。
-- `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`：默认拒绝通过额外白名单加入的 private/LAN host；它不控制内置本地别名。
-- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true`：控制上述精确本地 host；多用户、LAN 或公网部署应改为 `false`。
+The templates define public defaults; [`backend/app/config.py`](../backend/app/config.py) defines field validation. Process environment variables can override `.env`. Restart the backend after changes; the frontend reads enabled features from `/api/capabilities`. A personal `.env` is not a project default and should not be committed.
 
-完整 SSRF 与凭据边界见 [SECURITY.md](../SECURITY.md)。
+## 连接模型 / Connect a model
 
-## 5. 搜索增强
+在 `/admin/setup` 测试并保存连接，在 `/model-profiles` 管理已有配置。Base URL、key 与模型 ID 必须属于同一个 provider；模型 ID 填服务实际支持的值。Setup 要求当前组合测试成功，或由你明确接受未验证保存。修改连接字段后需要重新核对。
 
-app-layer 搜索默认关闭：
+Test and save a connection at `/admin/setup`, and manage profiles at `/model-profiles`. The Base URL, key, and model ID must belong to one provider. Use a model ID that the service supports. Setup requires a successful test of the current combination or your explicit acceptance of saving it unverified. Recheck the connection after editing its fields.
 
-| 变量 | 默认 | 说明 |
-|---|---:|---|
-| `ENABLE_WEB_SEARCH` | `false` | 外部搜索总开关 |
-| `WEB_SEARCH_PROVIDER` | `tavily` | `tavily/exa/firecrawl/xai/searxng` |
-| `WEB_SEARCH_API_KEY` | 空 | 托管 provider 的 key |
-| `SEARXNG_URL` | `http://localhost:8888` | 自建 SearXNG 地址 |
-| `FEATURE_NEW_SOURCES` | `false` | 来源家族筛选 |
-| `FEATURE_FAMILY_QUERY_OPTIMIZATION` | `false` | 来源查询词优化 |
+| 变量 / Variable | 公开模板值 / Public template value | 用途 / Purpose |
+| --- | --- | --- |
+| `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | 本机未配置哨兵；替换成实际 Base URL / Local unconfigured sentinel; replace with the real Base URL |
+| `LLM_API_KEY` | `your-api-key-here` | 占位值；远端服务必须换成真实 key / Placeholder; remote services need a real key |
+| `LLM_MODEL_NAME` | `gpt-5.4-mini` | 服务实际支持的模型 ID / Model ID supported by your service |
+| `LLM_REASONING_EFFORT` | `none` | `none / low / medium / high`，需与模型能力匹配 / `none / low / medium / high`, subject to model support |
+| `LLM_REQUESTS_PER_MINUTE` / `LLM_TOKENS_PER_MINUTE` | `0` / `0` | RPM / TPM；0 关闭各自这一层限制 / RPM / TPM; 0 disables the corresponding limit |
+| `LLM_CONCURRENCY` | `5` | 全局并发；0 关闭此上限及其派生 purpose lane / Global concurrency; 0 disables this cap and its derived purpose lanes |
+| `LLM_MAX_PENDING` / `LLM_USER_MAX_PENDING` | `24` / `4` | 全局 / 单用户等待上限；0 关闭对应保护 / Global / per-user pending caps; 0 disables the corresponding guard |
 
-模型原生搜索属于 model profile / Responses adapter 路径，不通过 `WEB_SEARCH_PROVIDER=native` 开启。结果页只展示真实返回的 citations。
+Docker 模板使用 `http://host.docker.internal:8317/v1` 和空 key。随附的 `127.0.0.1:8317`、`localhost:8317` 或 `host.docker.internal:8317` 与空值/占位 key 的组合，都仍表示未配置。请填实际服务地址，或通过 Setup 明确保存连接。
 
-## 6. 功能开关
+The Docker template uses `http://host.docker.internal:8317/v1` and an empty key. The shipped `127.0.0.1:8317`, `localhost:8317`, and `host.docker.internal:8317` endpoints with an empty or placeholder key still mean unconfigured. Supply the actual service address or save the connection explicitly through Setup.
 
-`.env.example` 默认开启主要用户功能，包括：
+精确本地 host 仅包括 `localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal` 和 `::1`，IPv6 URL 使用 `[::1]`。这些地址的免 key 请求不发送 `Authorization`，也不借用服务器默认 key。相似子域名、数字或十六进制 loopback 写法不享有这个例外。
 
-- Agent 与身份：`FEATURE_CUSTOM_AGENTS`、`FEATURE_AGENT_IDENTITY`、`FEATURE_PERSONA_EXPORT`
-- 图谱与 replay：`FEATURE_CAUSAL_GRAPH`、`FEATURE_GRAPH_ANALYSIS`、`FEATURE_COUNTERFACTUAL_REPLAY`、`FEATURE_KG_EXPLORER`、`FEATURE_REPLAY_TRACE`
-- 结果与协作：`FEATURE_RESULT_VERDICT`、`FEATURE_RESULT_REPORT`、`FEATURE_AGENT_CONVERSATION`、`FEATURE_ROUNDTABLE_SURVEY`、`FEATURE_ROUNDTABLE_ANALYST`
-- 其它入口：`FEATURE_SNAPSHOT_EXPORT`、`FEATURE_PREDICTION_JOURNAL`、`FEATURE_EDUCATION_TEMPLATES`、`FEATURE_LOCAL_PACKS`、`FEATURE_MODEL_PROFILES`、`FEATURE_MULTI_RUN`
+Exact-local hosts are `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, and `::1`; write IPv6 URLs with `[::1]`. Keyless calls to these hosts omit `Authorization` and do not borrow the server's default key. Similar subdomains and numeric or hexadecimal loopback spellings do not qualify.
 
-类别与路由见 [FEATURES.md](FEATURES.md)。默认值变化时，以 `.env.example` 与运行中的 `/api/capabilities` 为准。
+reasoning effort 会随运行保存，并传给同一运行中的后续子调用；已绑定的运行策略优先于子调用的默认值。例如选择 `low` 后，子调用不会自行改回其它 effort。后续操作可按入口合同显式覆盖，否则继承已保存值，再回退服务器默认。`none` 表示不发送原生 effort 参数，不保证 provider 自身关闭推理。
 
-## 7. 服务与数据
+Reasoning effort is saved with a run and carried into its child calls. The bound run policy takes priority over a child call's default, so a run set to `low` does not silently switch effort in a child call. Later operations may override it where their API permits; otherwise they inherit the saved value, then the server default. `none` omits the native effort parameter; it does not guarantee that the provider disables reasoning.
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `ENV` | `development` | `production/prod` 启用生产 fail-fast |
-| `HOST` | `127.0.0.1` | 后端监听地址 |
-| `PORT` | `18927` | 后端端口 |
-| `DATABASE_URL` | `sqlite:///./swarmoracle.db` | SQLite |
-| `CHROMA_PERSIST_DIR` | `./chroma_data` | 向量数据 |
-| `CORS_ORIGINS` | 模板列表 | 允许的前端来源 |
+## 区分已配置、连接测试和真实结果 / Distinguish configuration, connection tests, and real results
 
-前端开发服务器使用 `18928`，默认把 `/api` 与 `/ws` 代理到 `http://127.0.0.1:18927`；可用 `SWARM_BACKEND_URL` 覆盖。Docker 把数据库和 ChromaDB 放进 `/data` volume。
+`llm_static_configured` 只描述服务器默认配置；`llm_configured` 还考虑当前用户可用的 profile。带 key 的 profile 和“精确本地 Base URL + 模型 ID”的免 key profile 都可计入。这些零费用状态不验证网络、额度或输出质量。
 
-## 8. 生产部署
+`llm_static_configured` describes the server default; `llm_configured` also considers profiles available to the current user. Profiles with a key and keyless profiles with an exact-local Base URL plus model ID can both qualify. These zero-cost hints do not test the network, quota, or output quality.
 
-Docker Compose 默认只绑定 loopback。改成 LAN 或公网绑定前：
+`GET /` 只检查后端响应。连接测试会调用 provider；它成功仍不代表完整推演或并行探测通过。首页手动测试在提供真实 key 或精确本地地址时可请求并行 probe，宽度上限 4，完整递增最多产生 10 个附加请求。启动前的自动检查不做 fanout；probe 失败会清除旧推荐。
+
+`GET /` checks only backend response. A connection test calls the provider; success does not establish a complete run or parallelism probe. Homepage manual tests with a real key or exact-local URL can request a parallel probe, capped at width 4 and up to 10 additional requests across the ramp. Automatic launch checks do not fan out. Failed probes clear old recommendations.
+
+## Profile 与当前请求 BYOK / Profiles and request-level BYOK
+
+首页的高级设置管理推演、显示、主题包和搜索；BYOK 只覆盖当前请求。Profile-backed 运行的报告、追问、评分和续跑可恢复原 profile，或使用完整的新绑定。远端覆盖需同时提供 `key + Base URL + model`；精确本地覆盖需 `Base URL + model`。部分覆盖会被拒绝，以免混用新地址和旧凭据。
+
+Homepage advanced settings control the run, display, packs, and search. BYOK applies to the current request. Reports, questions, scoring, and continuation of a profile-backed run can restore the original profile or use a complete new binding. Remote overrides require `key + Base URL + model`; exact-local overrides require `Base URL + model`. Partial overrides are rejected to avoid mixing a new address with old credentials.
+
+更换端点或模型会解除旧 profile 绑定，并清除旧 RPM/TPM、并发、结构化输出和原生搜索策略。切换 Debate 角色 profile 同样清除旧显式覆盖。后续操作会重新读取当前保存的 profile；历史模型标签不证明今天仍可恢复该连接。
+
+Changing the endpoint or model detaches the old profile and clears its RPM/TPM, concurrency, structured-output, and native-search policies. Switching a Debate role profile also clears old explicit overrides. Later operations resolve the currently saved profile again; a historical model label does not prove that the connection remains recoverable.
+
+| 变量 / Variable | 默认 / Default | 边界 / Boundary |
+| --- | --- | --- |
+| `LLM_EXTRA_ALLOWED_HOSTS` | 空 / Empty | 额外精确 host 白名单，不填完整 URL / Additional exact-host allowlist, not full URLs |
+| `LLM_ALLOW_PRIVATE_BYOK_HOSTS` | `false` | 是否允许白名单中的 private/LAN host；不控制内置本地别名 / Whether allowlisted private/LAN hosts are allowed; does not control built-in local aliases |
+| `LLM_ALLOW_LOCAL_BYOK_HOSTS` | `true` | 控制精确本地 host；LAN、公网或多用户部署设为 false / Controls exact-local hosts; set false for LAN, public, or multi-user deployments |
+
+URL 不得包含凭据、userinfo、query、fragment 或 path params；托管服务使用 HTTPS。完整 URL、SSRF 和探测鉴权边界见[安全说明](../SECURITY.md)。
+
+URLs must not contain credentials, userinfo, queries, fragments, or path parameters. Use HTTPS for hosted services. See [Security](../SECURITY.md) for URL, SSRF, and probe-authorization boundaries.
+
+## 搜索与功能开关 / Search and feature switches
+
+| 变量 / Variable | 默认 / Default | 用途 / Purpose |
+| --- | --- | --- |
+| `ENABLE_WEB_SEARCH` | `false` | 应用层搜索总开关 / Application-layer search switch |
+| `WEB_SEARCH_PROVIDER` | `tavily` | `tavily / exa / firecrawl / xai / searxng` |
+| `WEB_SEARCH_API_KEY` | 空 / Empty | 托管搜索服务的 key / Hosted search-service key |
+| `SEARXNG_URL` | `http://localhost:8888` | 自建 SearXNG 地址 / Self-hosted SearXNG URL |
+| `FEATURE_NEW_SOURCES` / `FEATURE_FAMILY_QUERY_OPTIMIZATION` | `false` / `false` | 来源家族筛选 / 查询词优化 / Source-family filters / query optimization |
+
+模型原生搜索通过 profile 与 Responses adapter 配置，不能用 `WEB_SEARCH_PROVIDER=native` 开启。页面只展示 provider 实际返回的 citations。应用层搜索失败会降级，不应阻断推演。
+
+Configure model-native search through the profile and Responses adapter; `WEB_SEARCH_PROVIDER=native` does not enable it. Pages show citations actually returned by the provider. Application-layer search failures degrade without blocking the run.
+
+主要用户功能在公开模板中默认开启，包括 Agent、图谱、Replay、报告、圆桌、Snapshot、Journal、Local Packs 和 model profiles。入口详见[功能索引](FEATURES.md)。关闭功能后，相应接口通常返回 404，前端按 capabilities 隐藏或禁用入口。
+
+The public templates enable the main user features, including Agents, graphs, Replay, reports, roundtables, Snapshots, Journal, Local Packs, and model profiles. See the [feature index](FEATURES.en.md). Disabled features generally return 404, and the frontend hides or disables their entry points using capabilities.
+
+`FEATURE_MEMORY_PROMOTION` 是默认关闭的后端能力，还依赖 `FEATURE_AGENT_IDENTITY=true`。它没有公开 capability、REST 或 UI 激活入口，公开 env 模板也未列出；不要把现有身份记忆入口当作该能力已经开放。
+
+`FEATURE_MEMORY_PROMOTION` is a default-off backend capability that also requires `FEATURE_AGENT_IDENTITY=true`. It has no public capability, REST, or UI activation surface and is absent from public env templates. Existing identity-memory screens do not mean this capability is enabled.
+
+## 服务、数据和生产鉴权 / Services, data, and production authentication
+
+| 变量 / Variable | 原生模板默认 / Native template default | 用途 / Purpose |
+| --- | --- | --- |
+| `ENV` | `development` | 生产部署使用 `production` / Use `production` for production deployments |
+| `HOST` / `PORT` | `127.0.0.1` / `18927` | 后端监听地址 / Backend bind address |
+| `DATABASE_URL` | `sqlite:///./swarmoracle.db` | SQLite 位置 / SQLite location |
+| `CHROMA_PERSIST_DIR` | `./chroma_data` | 向量数据目录 / Vector-data directory |
+| `CORS_ORIGINS` | 模板中的来源列表 / Origin list in the template | 允许访问的网页来源 / Allowed web origins |
+| `SESSION_SECRET` / `ADMIN_TOKEN` | 空 / 空 / Empty / empty | 本地开发可留空；公网前分别生成 / May be empty for local development; generate separately before public exposure |
+
+前端 dev 默认使用 `18928`，经 `/api`、`/ws` 代理到后端；`SWARM_BACKEND_URL` 可覆盖目标。Docker 在容器内监听所有接口，但默认只向宿主 `127.0.0.1` 发布端口，并把 SQLite 与 Chroma 放入 `/data` volume。
+
+Frontend dev uses port `18928` and proxies `/api` and `/ws` to the backend; `SWARM_BACKEND_URL` overrides that target. Docker listens on container interfaces but publishes ports only to host `127.0.0.1` by default, with SQLite and Chroma in the `/data` volume.
+
+在 LAN 或公网开放前，使用 `ENV=production`，为 `SESSION_SECRET` 和 `ADMIN_TOKEN` 分别生成唯一值，并配置 TLS、访问控制和正确 CORS。`production/prod` 缺少任一密钥会拒绝启动；部署建议使用精确值 `production`。鉴权边界和 `/metrics` 规则见[安全说明](../SECURITY.md)。
+
+Before LAN or public exposure, use `ENV=production`, generate distinct unique values for `SESSION_SECRET` and `ADMIN_TOKEN`, and configure TLS, access controls, and correct CORS. Startup rejects `production/prod` without either secret; use the exact value `production` for deployment. See [Security](../SECURITY.md) for authentication and `/metrics` rules.
+
+分别执行下列命令生成两个值，只存入私有配置，不粘贴到文档、URL、日志或公开工件。
+
+Run this separately for each secret and keep the values in private configuration, out of documentation, URLs, logs, and public artifacts.
 
 ```bash
 openssl rand -hex 32
 ```
 
-分别生成并设置唯一的 `SESSION_SECRET` 和 `ADMIN_TOKEN`，同时设置 `ENV=production`。生产模式缺少任一密钥会拒绝启动。不要复用示例值；不要在日志、文档、URL 或分享 artifact 中放入密钥。
+## 高级调优与预检 / Advanced tuning and preflight
 
-`SESSION_SECRET`、`ADMIN_TOKEN`、管理端点、`/metrics` 与多用户限制的权威说明见 [SECURITY.md](../SECURITY.md)。
+推演上限、记忆、锁租期、stall timeout、角色发言与元数据超时、报告预算等参数见模板和 `config.py`，不要复制某台机器的临时值。修改前先明确要解决的超时、限流或资源问题。
 
-## 9. 高级调优
+See the templates and `config.py` for run limits, memory, lock leases, stall timeouts, speech and metadata timeouts, and report budgets. Do not copy temporary settings from another machine. Identify the timeout, rate-limit, or resource problem before tuning.
 
-推演上限、memory、runtime lock、stall timeout、报告预算和 `REPORT_*` 参数不在这里复制。需要调优时直接阅读 `.env.example` 的注释，改动后先运行 `make preflight`。对于 LLM，精确本地 URL 即使 key 为空或为占位值也会在不发送 `Authorization` 的情况下实测；远端空值或占位 key 只产生 `warn` 并跳过网络请求；本地请求失败或正文为空则为 `fail`。
+`make preflight` 或后端预检脚本会实测精确本地 LLM URL，空 key 不发送 `Authorization`；远端空值或占位 key 只给出 `warn` 并跳过网络。请求失败或没有可见正文会得到 `fail`，进程返回非零。运行前确认允许真实调用。安装与预检命令见[后端说明](../backend/README.md)。
+
+`make preflight` or the backend preflight script probes exact-local LLM URLs, omitting `Authorization` for an empty key. Remote empty or placeholder keys produce `warn` without a network request. Failed requests or missing visible text produce `fail` and a nonzero exit. Confirm live calls are allowed before running it. See the [backend guide](../backend/README.md) for setup and preflight commands.

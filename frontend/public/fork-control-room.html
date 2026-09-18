@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fork Detector Control Room</title>
+    <title>分叉实验档案 / Fork Experiment Archive</title>
+    <meta name="description" content="查看 SwarmOracle 早期分叉实验的记录与设置。此页不运行模型，数据不代表当前性能。 / Explore an archive of early SwarmOracle branching experiments. This page does not run a model or measure current performance." />
     <style>
       :root {
         --bg: #0d1115;
@@ -738,316 +739,147 @@
           justify-content: flex-start;
         }
       }
+
+      [lang="en"] { display: block; color: var(--text-dim); font-weight: 400; letter-spacing: 0; text-transform: none; }
+      h1 [lang="en"] { font-size: 0.48em; line-height: 1.35; margin-top: 0.7rem; }
+      h2 [lang="en"], h3 [lang="en"], h4 [lang="en"] { font-size: 0.8em; line-height: 1.5; margin-top: 0.3rem; }
+      p[lang="en"], p > [lang="en"], .stat-card__caption > [lang="en"], .footer-note > [lang="en"] { margin-top: 0.45rem; }
+      .topbar__title [lang="en"] { font-size: 0.8em; }
+      .topbar__nav { align-items: stretch; }
+      .pill { display: block; border-radius: 10px; line-height: 1.5; }
+      .pill [lang="en"] { font-size: 0.75rem; }
+      .archive-notice { padding-top: 1rem; border-top: 1px solid var(--line-strong); font-size: 0.9rem !important; }
+      .stat-card__value [lang="en"], .result-box__value [lang="en"] { font-size: 0.6em; }
+      .variable-card p, .evidence-card p { line-height: 1.7; }
+      .field__label { align-items: start; gap: 1rem; }
+      .field__value { max-width: 55%; overflow-wrap: anywhere; text-align: right; }
+      .field__value [lang="en"] { font-size: 0.7rem; }
+      .chip { display: block; border-radius: 8px; line-height: 1.55; }
+      .quote__body { font-size: 1rem; }
+      .quote__body [lang="en"] { margin-top: 0.6rem; }
+      .chart-note { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 1.2rem; }
+      .table-scroll { overflow-x: auto; }
+      .matrix-table { min-width: 430px; }
+      .principle-item { display: block; }
+      .principle-item > div > span { display: block; margin-top: 0.4rem; }
+      .result-stack, .panel, .field, .chart-card { min-width: 0; }
+      code { overflow-wrap: anywhere; }
+      :focus-visible { outline: 2px solid var(--gold); outline-offset: 4px; }
+      :target { scroll-margin-top: 7rem; }
+      @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { transition: none !important; } }
     </style>
   </head>
   <body>
     <main class="shell">
       <div class="topbar">
         <div class="topbar__brand">
-          <div class="seal">⟁</div>
-          <div>
-            <div class="topbar__eyebrow">Fork Detector Lab</div>
-            <div class="topbar__title">控制变量说明页 / 实验控制室</div>
-          </div>
+          <div><div class="topbar__title">分叉实验档案 <span lang="en">Fork Experiment Archive</span></div></div>
         </div>
-        <nav class="topbar__nav">
-          <a class="pill" href="#map">变量地图</a>
-          <a class="pill" href="#lab">交互沙盘</a>
-          <a class="pill" href="#charts">证据图表</a>
-          <a class="pill" href="#notes">结论摘要</a>
+        <nav class="topbar__nav" aria-label="页面导航 / Page navigation">
+          <a class="pill" href="#map">变量说明 <span lang="en">Variables</span></a>
+          <a class="pill" href="#lab">查看记录 <span lang="en">Explore records</span></a>
+          <a class="pill" href="#charts">历史图表 <span lang="en">Archived charts</span></a>
+          <a class="pill" href="#notes">如何理解 <span lang="en">Interpretation</span></a>
         </nav>
       </div>
 
       <section class="hero">
         <div class="hero__grid">
           <div>
-            <div class="hero__kicker">Speculative Control Room</div>
-            <h1>Fork Detector 变量总览</h1>
-            <p>
-              这页把本轮实验里真正影响 <code>branch</code>、<code>fork</code>、
-              <code>多结局</code> 的控制变量全部收拢成一个可交互的网页。它区分了三类东西：
-              实验旋钮、系统硬门槛、以及已经用真实 E2E 样本测到的结果。
-            </p>
+            <h1>以前的实验里，故事为什么分叉？<span lang="en">Why did stories branch in these earlier experiments?</span></h1>
+            <p>这里保存了一组早期实验的数值和解释。你可以切换设置，查看对应的旧记录或参考估计。页面不会调用模型，也不会测量当前版本的表现。</p>
+            <p lang="en">This page preserves values and explanations from an earlier experiment set. Change the controls to view an archived record or a reference estimate. The page makes no model calls and does not measure the current version.</p>
+            <p class="archive-notice">没有精确记录的组合会标为“未实测”或“历史参考”。这些数值不能用来预测下一次运行。<span lang="en">Combinations without an exact record are marked “Unmeasured” or “Archived reference.” These values do not predict your next run.</span></p>
           </div>
           <div class="hero__stats">
             <div class="stat-card">
-              <div class="stat-card__label">本轮最强因子</div>
-              <div class="stat-card__value">Detector Prompt</div>
-              <div class="stat-card__caption">在同参条件下，prompt A 与 B 可以把 fork 命中率从 0 拉到 1。</div>
+              <div class="stat-card__label">历史观察 <span lang="en">Archived observation</span></div>
+              <div class="stat-card__value">提示词 <span lang="en">Prompt</span></div>
+              <div class="stat-card__caption">在保存的 A/B 对照样本中，更换提示词改变了分叉结果。<span lang="en">Changing the prompt changed branching in the saved A/B samples.</span></div>
             </div>
             <div class="stat-card">
-              <div class="stat-card__label">最有效抑爆炸结构手段</div>
+              <div class="stat-card__label">分支数量限制 <span lang="en">Branch limit</span></div>
               <div class="stat-card__value">k = 1</div>
-              <div class="stat-card__caption">`fork_detector_active_branch_limit=1` 跨题都能明显压低 branch 数，同时保留多结局。</div>
+              <div class="stat-card__caption">旧样本里，只让一条活跃分支继续接受分叉检查时，总分支数有所减少。<span lang="en">In the archived samples, allowing one active branch to receive further fork checks reduced the total branch count.</span></div>
             </div>
             <div class="stat-card">
-              <div class="stat-card__label">一个重要反例</div>
-              <div class="stat-card__value">F 失败</div>
-              <div class="stat-card__caption">提示词里口头要求“压缩成 2 条主路径”并没有抑制 branch 爆炸，反而更猛。</div>
+              <div class="stat-card__label">未达到预期的设置 <span lang="en">An unsuccessful setting</span></div>
+              <div class="stat-card__value">提示词 F <span lang="en">Prompt F</span></div>
+              <div class="stat-card__caption">只在提示词中要求压缩路线，没有在这些样本里减少分支数。<span lang="en">Asking for fewer paths in the prompt did not reduce branches in these samples.</span></div>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="section">
-        <div class="section__head">
-          <div>
-            <div class="section__eyebrow">Design Lens</div>
-            <h2 class="section__title">按 teach-impeccable 对齐后的页面视角</h2>
-          </div>
-          <p class="section__copy">
-            这页不是普通实验报告，而是给策略型用户快速读懂 detector 行为的浏览器控制台。设计上下文来自项目现有的
-            <code>.impeccable.md</code>：用户是浏览器里的策略型探索者，品牌气质是
-            <strong>cinematic / tactical / legible</strong>。
-          </p>
-        </div>
+      <section class="section" aria-labelledby="reading-title">
+        <div class="section__head"><h2 class="section__title" id="reading-title">先看记录类型，再看数字<span lang="en">Read the record type before the numbers</span></h2></div>
         <div class="lens-grid">
-          <article class="lens-card">
-            <h3>为什么它长这样</h3>
-            <p>
-              页面保留了“可玩的指挥室”气质，但刻意避免做成发光赛博面板或装饰性 AI
-              海报。顶部是命令条，正文是实验地图、交互沙盘和证据区块，目标是让第一次打开的人在几十秒内就能回答三个问题：
-              <strong>哪个变量最强、为什么会 fork、怎样压住 branch 爆炸</strong>。
-            </p>
-          </article>
+          <article class="lens-card"><h3>这页能回答什么？<span lang="en">What can this page tell you?</span></h3><p>它帮助你理解早期实验比较过哪些设置、样本出现过什么差异。它保留了当时的解释，也包含未经测量的估计，不能替代当前版本的对照测试。</p><p lang="en">It shows which settings earlier experiments compared and how their samples differed. It preserves the explanations from that work and includes unmeasured estimates. It does not replace a controlled test of the current version.</p></article>
           <div class="principle-grid">
-            <div class="principle-item">
-              <div class="principle-item__index">01</div>
-              <div>
-                <strong>战略可读性优先</strong>
-                <span>先给结论，再给交互，再给证据；避免读者被实验细节淹没。</span>
-              </div>
-            </div>
-            <div class="principle-item">
-              <div class="principle-item__index">02</div>
-              <div>
-                <strong>浏览器优先而非花哨优先</strong>
-                <span>保留沉浸感，但所有控件、标签、表格和色彩都以可扫描为先。</span>
-              </div>
-            </div>
-            <div class="principle-item">
-              <div class="principle-item__index">03</div>
-              <div>
-                <strong>变量与硬门槛分离</strong>
-                <span>实验旋钮、结构开关、系统前提必须明确分层，不让因果关系混在一起。</span>
-              </div>
-            </div>
+            <div class="principle-item"><div><strong>历史记录 <span lang="en">Archived record</span></strong><span>保存的数据与所选设置相符。<span lang="en">The saved data matches the selected settings.</span></span></div></div>
+            <div class="principle-item"><div><strong>历史参考 <span lang="en">Archived reference</span></strong><span>数据来自另一组固定设置。<span lang="en">The values come from another fixed configuration.</span></span></div></div>
+            <div class="principle-item"><div><strong>未实测 <span lang="en">Unmeasured</span></strong><span>这里只能给出旧页面中的示意估计。<span lang="en">Only an illustrative estimate from the old page is available.</span></span></div></div>
           </div>
         </div>
       </section>
 
       <section id="map" class="section">
-        <div class="section__head">
-          <div>
-            <div class="section__eyebrow">Variable Map</div>
-            <h2 class="section__title">这一轮到底控制了什么</h2>
-          </div>
-          <p class="section__copy">
-            页面里的变量分成两类：真正被拿来做实验的旋钮，以及系统先天存在、必须同时满足的硬门槛。
-          </p>
-        </div>
+        <div class="section__head"><h2 class="section__title">这些变量分别控制什么？<span lang="en">What do these variables control?</span></h2><p class="section__copy">以下解释对应这组历史实验。具体配置请核对当前版本文档。<span lang="en">These explanations describe the archived experiment. Check the current documentation before configuring a new run.</span></p></div>
         <div class="variable-grid">
-          <article class="variable-card">
-            <div class="variable-card__tag">实验旋钮</div>
-            <h3>temperature</h3>
-            <p>影响模型在既定 detector rubric 下如何解释同一批 <code>diverge</code> 信号。它会改 fork 命中率，但不是单调线性旋钮。</p>
-            <ul class="impact-list">
-              <li><span class="impact-bullet"></span><span>在保守 detector 下，会改变“这是互斥未来还是同一路线细节争论”的判断。</span></li>
-              <li><span class="impact-bullet"></span><span>在激进 detector 下，更像调节 fork 强度，而不是命中率开关。</span></li>
-            </ul>
-          </article>
-          <article class="variable-card">
-            <div class="variable-card__tag">实验旋钮</div>
-            <h3>branch_sensitivity</h3>
-            <p>直接进入 detector prompt 的灵敏度值。它确实有影响，但这题上不是“越高越容易 fork”的简单开关。</p>
-            <ul class="impact-list">
-              <li><span class="impact-bullet"></span><span>更像是 detector 的边界提示量，而不是硬阈值。</span></li>
-              <li><span class="impact-bullet"></span><span>和 prompt、temperature 强耦合，单独读它容易误判。</span></li>
-            </ul>
-          </article>
-          <article class="variable-card">
-            <div class="variable-card__tag">实验旋钮</div>
-            <h3>fork_prompt_variant</h3>
-            <p>决定 detector 认为什么叫“足够 fork”。这是本轮最强的影响项。</p>
-            <ul class="impact-list">
-              <li><span class="impact-bullet"></span><span>A：基线保守。</span></li>
-              <li><span class="impact-bullet"></span><span>B：把互斥未来、制度分流、积极先验一起叠满。</span></li>
-              <li><span class="impact-bullet"></span><span>C / D：分别测“互斥未来即足够”和“制度分流即足够”。</span></li>
-            </ul>
-          </article>
-          <article class="variable-card">
-            <div class="variable-card__tag">结构开关</div>
-            <h3>k / detector budget</h3>
-            <p><code>fork_detector_active_branch_limit</code>。不是限制谁说话，而是限制每轮还有多少条 active branch 能继续跑 detector。</p>
-            <ul class="impact-list">
-              <li><span class="impact-bullet"></span><span><code>k=0</code>：默认行为，所有 active branch 都可继续分叉。</span></li>
-              <li><span class="impact-bullet"></span><span><code>k=1</code>：只保留最高优先级那一条继续分叉，跨题都能压住爆炸。</span></li>
-            </ul>
-          </article>
-          <article class="variable-card">
-            <div class="variable-card__tag">上下文变量</div>
-            <h3>rounds</h3>
-            <p>不是 detector 的显式评分项，但它会改变可分叉窗口数量，也会改变同一 prompt 的行为模式。</p>
-            <ul class="impact-list">
-              <li><span class="impact-bullet"></span><span>轮数越长，越容易进入 branch fan-out 和长尾 narration。</span></li>
-              <li><span class="impact-bullet"></span><span>对照实验必须固定 rounds，否则会把 prompt/temperature 效应掺脏。</span></li>
-            </ul>
-          </article>
-          <article class="variable-card">
-            <div class="variable-card__tag">系统硬门槛</div>
-            <h3>必须先满足的条件</h3>
-            <p>这些不是本轮旋钮，而是 fork 前置条件。</p>
-            <ul class="impact-list">
-              <li><span class="impact-bullet"></span><span><code>diverge_signals</code> 非空</span></li>
-              <li><span class="impact-bullet"></span><span>不是最后一轮</span></li>
-              <li><span class="impact-bullet"></span><span>当前 active branch 数未到系统上限</span></li>
-            </ul>
-          </article>
+          <article class="variable-card"><h3>模型温度 <span lang="en">Temperature</span></h3><p><code>temperature</code> 影响模型如何解释相同的分歧线索。旧样本没有显示简单的“越高越会分叉”关系。</p><p lang="en"><code>temperature</code> affects how the model interprets the same disagreement signals. The samples did not show a simple rule that higher values produce more forks.</p></article>
+          <article class="variable-card"><h3>分叉灵敏度 <span lang="en">Branch sensitivity</span></h3><p><code>branch_sensitivity</code> 是提示词中的判断提示，需要结合提示词和温度一起看。</p><p lang="en"><code>branch_sensitivity</code> is a cue in the prompt. Read it together with the prompt wording and temperature.</p></article>
+          <article class="variable-card"><h3>提示词版本 <span lang="en">Prompt variant</span></h3><p><code>fork_prompt_variant</code> 决定模型把哪些分歧视为分叉理由。A 是基线；B 组合了多个条件；C 和 D 分别强调互斥走向与制度分歧。</p><p lang="en"><code>fork_prompt_variant</code> defines which disagreements justify a fork. A is the baseline, B combines several conditions, and C and D emphasize mutually exclusive paths and institutional disagreement.</p></article>
+          <article class="variable-card"><h3>分叉检查名额 <span lang="en">Fork-check limit</span></h3><p><code>fork_detector_active_branch_limit</code> 限制每轮接受分叉检查的活跃分支数。旧实验中，<code>k=0</code> 不加这个限制，<code>k=1</code> 只检查优先级最高的一条。</p><p lang="en"><code>fork_detector_active_branch_limit</code> limits how many active branches receive fork checks each round. In this experiment, <code>k=0</code> adds no limit and <code>k=1</code> checks only the highest-priority branch.</p></article>
+          <article class="variable-card"><h3>轮数 <span lang="en">Rounds</span></h3><p>轮数决定有多少次机会继续分叉。比较两个设置时，需要先固定轮数。</p><p lang="en">The number of rounds determines how many opportunities remain to branch. Hold it fixed when comparing two settings.</p></article>
+          <article class="variable-card"><h3>分叉前提 <span lang="en">Fork prerequisites</span></h3><p>这组实验要求存在分歧信号、尚未到最后一轮，并且活跃分支数没有达到系统上限。</p><p lang="en">These experiments required disagreement signals, at least one remaining round, and room below the system’s active-branch limit.</p></article>
         </div>
       </section>
 
       <section id="lab" class="section">
-        <div class="section__head">
-          <div>
-            <div class="section__eyebrow">Control Lab</div>
-            <h2 class="section__title">交互沙盘</h2>
-          </div>
-          <p class="section__copy">
-            这里不是重新跑模型，而是把已经测出来的结果压成一个可读的交互式解释器。优先展示“已实测证据”；没有精确命中的组合时，再给经验判断。
-          </p>
-        </div>
+        <div class="section__head"><h2 class="section__title">切换设置，查看旧记录<span lang="en">Change settings to explore the archive</span></h2><p class="section__copy">这些控件只改变当前查看的记录，不会开始推演。请留意结果旁边的记录类型。<span lang="en">These controls only change the record shown. They do not start a simulation. Check the record type beside the result.</span></p></div>
+        <noscript><p>请启用 JavaScript 来操作历史记录控件。<span lang="en">Enable JavaScript to use the archive controls.</span></p></noscript>
         <div class="lab">
           <div class="panel controls">
-            <div class="field">
-              <div class="field__label"><span>题目类型</span><span class="field__value" id="question-value">马斯克登月</span></div>
-              <select id="question-select">
-                <option value="musk">如果我是马斯克 能登上月球吗？</option>
-                <option value="jury">轮值外部评审团重裁</option>
-                <option value="internet">互联网从未被发明</option>
-              </select>
-            </div>
-            <div class="field">
-              <div class="field__label"><span>Detector Prompt</span><span class="field__value" id="prompt-value">A</span></div>
-              <div class="segmented" id="prompt-segment"></div>
-            </div>
-            <div class="field">
-              <div class="field__label"><span>temperature</span><span class="field__value" id="temperature-value">0.4</span></div>
-              <input id="temperature-range" type="range" min="0" max="3" step="1" value="1" />
-            </div>
-            <div class="field">
-              <div class="field__label"><span>branch_sensitivity</span><span class="field__value" id="sensitivity-value">0.7</span></div>
-              <input id="sensitivity-range" type="range" min="0" max="2" step="1" value="1" />
-            </div>
-            <div class="field">
-              <div class="field__label"><span>Detector Budget k</span><span class="field__value" id="budget-value">0</span></div>
-              <div class="segmented" id="budget-segment"></div>
-            </div>
-            <div class="field">
-              <div class="field__label"><span>rounds</span><span class="field__value" id="rounds-value">5</span></div>
-              <div class="segmented" id="rounds-segment"></div>
-            </div>
+            <div class="field"><div class="field__label"><label for="question-select">问题 <span lang="en">Question</span></label><span class="field__value" id="question-value"></span></div><select id="question-select"><option value="musk">马斯克登月 / Musk on the Moon</option><option value="jury">外部评审团重裁 / External jury review</option><option value="internet">互联网从未出现 / A world without the internet</option></select></div>
+            <div class="field"><div class="field__label"><span id="prompt-label">提示词 <span lang="en">Prompt</span></span><span class="field__value" id="prompt-value">A</span></div><div class="segmented" id="prompt-segment" role="group" aria-labelledby="prompt-label"></div></div>
+            <div class="field"><div class="field__label"><label for="temperature-range">温度 <span lang="en">Temperature</span></label><span class="field__value" id="temperature-value">0.4</span></div><input id="temperature-range" type="range" min="0" max="3" step="1" value="1" /></div>
+            <div class="field"><div class="field__label"><label for="sensitivity-range">灵敏度 <span lang="en">Sensitivity</span></label><span class="field__value" id="sensitivity-value">0.7</span></div><input id="sensitivity-range" type="range" min="0" max="2" step="1" value="1" /></div>
+            <div class="field"><div class="field__label"><span id="budget-label">分叉检查名额 <span lang="en">Fork-check limit</span></span><span class="field__value" id="budget-value">0</span></div><div class="segmented" id="budget-segment" role="group" aria-labelledby="budget-label"></div></div>
+            <div class="field"><div class="field__label"><span id="rounds-label">轮数 <span lang="en">Rounds</span></span><span class="field__value" id="rounds-value">5</span></div><div class="segmented" id="rounds-segment" role="group" aria-labelledby="rounds-label"></div></div>
           </div>
-
           <div class="result-stack">
             <div class="result-hero">
-              <div class="result-box">
-                <div class="result-box__label">Fork 命中率</div>
-                <div class="result-box__value" id="fork-rate">--</div>
-                <div class="meter"><span id="fork-rate-meter" style="width: 0%"></span></div>
-              </div>
-              <div class="result-box">
-                <div class="result-box__label">平均 Branch 数</div>
-                <div class="result-box__value" id="branch-count">--</div>
-                <div class="meter"><span id="branch-count-meter" style="width: 0%"></span></div>
-              </div>
-              <div class="result-box">
-                <div class="result-box__label">解释等级</div>
-                <div class="result-box__value" id="explain-grade">--</div>
-                <div class="stat-card__caption" id="evidence-mode">--</div>
-              </div>
+              <div class="result-box"><div class="result-box__label">参考分叉率 <span lang="en">Reference fork rate</span></div><div class="result-box__value" id="fork-rate">--</div><div class="meter" aria-hidden="true"><span id="fork-rate-meter" style="width: 0%"></span></div></div>
+              <div class="result-box"><div class="result-box__label">参考平均分支数 <span lang="en">Reference mean branches</span></div><div class="result-box__value" id="branch-count">--</div><div class="meter" aria-hidden="true"><span id="branch-count-meter" style="width: 0%"></span></div></div>
+              <div class="result-box"><div class="result-box__label">分支数量与记录类型 <span lang="en">Branch scale and record type</span></div><div class="result-box__value" id="explain-grade">--</div><div class="stat-card__caption" id="evidence-mode" role="status"></div></div>
             </div>
-
-            <div class="callout-grid">
-              <div class="quote">
-                <div class="quote__label">这一组更可能发生什么</div>
-                <div id="scenario-summary" class="quote__body"></div>
-              </div>
-              <div class="panel">
-                <div class="quote__label">因果解释</div>
-                <ul id="why-list" class="impact-list"></ul>
-              </div>
-            </div>
-
+            <div class="callout-grid"><div class="quote"><div class="quote__label">这组设置的历史解释 <span lang="en">Archived interpretation</span></div><div id="scenario-summary" class="quote__body"></div></div><div class="panel"><div class="quote__label">逐项理解设置 <span lang="en">Read the settings</span></div><ul id="why-list" class="impact-list"></ul></div></div>
             <div class="evidence-grid">
-              <article class="evidence-card">
-                <h4>首轮 detector 理由</h4>
-                <p id="first-reason">--</p>
-              </article>
-              <article class="evidence-card">
-                <h4>首轮可能压出的主路径</h4>
-                <div id="first-titles" class="evidence-chip-row"></div>
-              </article>
-              <article class="evidence-card">
-                <h4>关键观察</h4>
-                <div id="observation-chips" class="evidence-chip-row"></div>
-              </article>
+              <article class="evidence-card"><h4>记录说明 <span lang="en">Record notes</span></h4><p id="first-reason"></p></article>
+              <article class="evidence-card"><h4>记录中的路线标签 <span lang="en">Path labels in the record</span></h4><div id="first-titles" class="evidence-chip-row"></div></article>
+              <article class="evidence-card"><h4>观察标签 <span lang="en">Observation labels</span></h4><div id="observation-chips" class="evidence-chip-row"></div></article>
             </div>
           </div>
         </div>
       </section>
 
       <section id="charts" class="section">
-        <div class="section__head">
-          <div>
-            <div class="section__eyebrow">Evidence</div>
-            <h2 class="section__title">实验图表</h2>
-          </div>
-          <p class="section__copy">
-            这里展示的是已经跑过的真实矩阵，不是拍脑袋的推断。
-          </p>
-        </div>
+        <div class="section__head"><h2 class="section__title">这份档案保存的图表<span lang="en">Charts preserved in this archive</span></h2><p class="section__copy">图表使用页面内保存的历史数值。这里没有重新验证模型、样本量或运行环境，因此只能作为旧实验记录阅读。<span lang="en">These charts use values saved in this page. The model, sample sizes, and runtime have not been revalidated here. Read them as an archive of earlier experiments.</span></p></div>
         <div class="chart-grid">
-          <div class="chart-card">
-            <h4>Prompt A/B 在马斯克题上的命中率差异（5 rounds）</h4>
-            <div class="bar-list" id="ab-chart"></div>
-          </div>
-          <div class="chart-card">
-            <h4>Prompt 消融强度排序（马斯克题，3 rounds）</h4>
-            <div class="bar-list" id="ablation-chart"></div>
-          </div>
-          <div class="chart-card">
-            <h4>Budget 开关的跨题效果（prompt B，3 rounds）</h4>
-            <table class="matrix-table" id="budget-table"></table>
-          </div>
+          <div class="chart-card"><h4>提示词 A / B：分叉率<span lang="en">Prompts A / B: fork rate</span></h4><p class="chart-note">马斯克问题，5 轮。<span lang="en">Musk question, 5 rounds.</span></p><div class="bar-list" id="ab-chart"></div></div>
+          <div class="chart-card"><h4>各提示词的平均分支数<span lang="en">Mean branches by prompt</span></h4><p class="chart-note">马斯克问题，3 轮。<span lang="en">Musk question, 3 rounds.</span></p><div class="bar-list" id="ablation-chart"></div></div>
+          <div class="chart-card"><h4>不同问题下的检查名额<span lang="en">Fork-check limits across questions</span></h4><p class="chart-note">提示词 B，3 轮；每格为“分支数 / 结局数”。<span lang="en">Prompt B, 3 rounds; each cell shows “branches / endings.”</span></p><div class="table-scroll"><table class="matrix-table" id="budget-table"></table></div></div>
         </div>
       </section>
 
       <section id="notes" class="section">
-        <div class="section__head">
-          <div>
-            <div class="section__eyebrow">Takeaways</div>
-            <h2 class="section__title">读完这页后该记住什么</h2>
-          </div>
-        </div>
+        <div class="section__head"><h2 class="section__title">用这些记录提出下一次实验的问题<span lang="en">Use these records to plan the next experiment</span></h2></div>
         <div class="evidence-grid">
-          <article class="evidence-card">
-            <h4>Prompt 是主导项</h4>
-            <p>同一题、同一温度、同一 sensitivity，仅仅更换 detector prompt，就能把 fork 命中率从 0 拉到 1。</p>
-          </article>
-          <article class="evidence-card">
-            <h4>结构预算比提示词压缩有效</h4>
-            <p><code>k=1</code> 跨题都能明显压低 branch 数；而“在 prompt 里要求少分几条”并没有成功抑爆炸。</p>
-          </article>
-          <article class="evidence-card">
-            <h4>C 与 D 是强因子</h4>
-            <p><code>C</code> 把“互斥未来”视为充分条件；<code>D</code> 把“制度/审批/责任链分流”视为充分条件。它们都不是题目特异幻觉。</p>
-          </article>
+          <article class="evidence-card"><h4>先固定比较条件<span lang="en">Hold the conditions fixed</span></h4><p>对照提示词时，保持同一问题、模型、温度、灵敏度和轮数。否则无法把差异归到一个变量上。</p><p lang="en">To compare prompts, keep the question, model, temperature, sensitivity, and round count fixed. Otherwise the difference cannot be attributed to one variable.</p></article>
+          <article class="evidence-card"><h4>另外测试数量限制<span lang="en">Test branch limits separately</span></h4><p>这份档案中的数量限制减少了分支，但新模型和新问题仍需要重新测试。</p><p lang="en">The limits reduced branch counts in these records. New models and questions still need a fresh test.</p></article>
+          <article class="evidence-card"><h4>同时读故事质量<span lang="en">Read the story quality too</span></h4><p>分支更多，不代表理由更可信。还要检查每条走向是否有实质差异，是否有发言和行动支持。</p><p lang="en">More branches do not make the reasoning more credible. Check whether the paths differ in substance and whether messages and actions support them.</p></article>
         </div>
-        <p class="footer-note">
-          页面依据本轮真实产物整理，包括 `musk-factor-matrix`、`musk-sensitivity-temperature-matrix`、
-          `musk-prompt-ab-matrix`、`musk-prompt-ablation-matrix-r3`、
-          `budget-generalization-matrix` 与其它对照实验。结论用于解释 fork 行为，不直接等价于产品默认配置建议。
-        </p>
+        <p class="footer-note">这份页面沿用的实验记录名称包括 <code>musk-factor-matrix</code>、<code>musk-sensitivity-temperature-matrix</code>、<code>musk-prompt-ab-matrix</code>、<code>musk-prompt-ablation-matrix-r3</code> 和 <code>budget-generalization-matrix</code>。它们不构成当前默认配置建议。<span lang="en">The original record names include <code>musk-factor-matrix</code>, <code>musk-sensitivity-temperature-matrix</code>, <code>musk-prompt-ab-matrix</code>, <code>musk-prompt-ablation-matrix-r3</code>, and <code>budget-generalization-matrix</code>. They are not recommendations for the current default configuration.</span></p>
       </section>
     </main>
 
@@ -1060,18 +892,18 @@
 
       const evidence = {
         musk: {
-          title: "如果我是马斯克 能登上月球吗？",
+          title: "如果我是马斯克，能登上月球吗？ | Could I reach the Moon if I were Musk?",
           promptAB5: [
             { label: "A", forkRate: 0, branchCount: 1 },
             { label: "B", forkRate: 1, branchCount: 13 },
           ],
           ablation3: {
-            a: { forkRate: 1, branchCount: 4.5, reason: "基线 detector 也会 fork，但强度偏中。", titles: ["创始人亲自上船", "企业负责人退居幕后"] },
-            b: { forkRate: 1, branchCount: 12.5, reason: "把互斥未来、制度分流、积极先验一起叠满。", titles: ["标准优先不例外", "合规放行登月", "政治背书加码"] },
-            c: { forkRate: 1, branchCount: 8.5, reason: "只要互斥未来已经出现，就足够 fork。", titles: ["地面统筹登月", "创始人亲赴月面"] },
-            d: { forkRate: 1, branchCount: 6.5, reason: "审批/责任链分流本身就是有效 fork 信号。", titles: ["特批登月乘员线", "标准审查留地面"] },
-            e: { forkRate: 1, branchCount: 4.0, reason: "把 no_fork 门槛变严，但单独作用不如 C/D。", titles: ["固定价快登月", "成本加成稳推进"] },
-            f: { forkRate: 1, branchCount: 17, reason: "提示词压缩失败，反而更容易先过度分叉。", titles: ["激进压缩失败", "先分叉再失控"] },
+            a: { forkRate: 1, branchCount: 4.5, reason: "旧样本中的基线提示词也产生了分叉，但分支较少。 | The baseline prompt also forked in these samples, with fewer branches.", titles: ["创始人亲自上船 | Founder boards the craft", "企业负责人退居幕后 | Company leader stays behind"] },
+            b: { forkRate: 1, branchCount: 12.5, reason: "该提示词同时强调互斥走向、制度分歧和鼓励分叉的条件。 | This prompt combines mutually exclusive paths, institutional disagreement, and cues favoring a fork.", titles: ["标准优先，不设例外 | Standards first, no exceptions", "合规放行登月 | Lunar trip cleared after review", "增加政治支持 | More political support"] },
+            c: { forkRate: 1, branchCount: 8.5, reason: "该提示词把互斥走向视为足够的分叉理由。 | This prompt treats mutually exclusive paths as sufficient grounds for a fork.", titles: ["在地面统筹登月 | Coordinate the lunar trip from Earth", "创始人亲赴月面 | Founder travels to the Moon"] },
+            d: { forkRate: 1, branchCount: 6.5, reason: "该提示词把审批或责任分歧视为分叉线索。 | This prompt treats disagreements over approval or responsibility as fork signals.", titles: ["特批登月乘员路线 | Special approval for lunar crew", "标准审查后留在地面 | Stay on Earth after standard review"] },
+            e: { forkRate: 1, branchCount: 4.0, reason: "旧样本中，提高不分叉的门槛，影响小于 C 和 D。 | In these samples, tightening the no-fork rule had less effect than C or D.", titles: ["固定价格，尽快登月 | Fixed-price rapid lunar trip", "成本加成，逐步推进 | Gradual progress with cost-plus funding"] },
+            f: { forkRate: 1, branchCount: 17, reason: "旧样本中，要求压缩路线并没有减少分支。 | Asking for compressed paths did not reduce branches in these samples.", titles: ["压缩路线未成功 | Path compression failed", "分叉后数量增加 | Branch count grows after forking"] },
           },
           factor5: [
             { temp: 0, sensitivity: 0.3, forkRate: 0.5, branchCount: 2 },
@@ -1111,14 +943,14 @@
           ],
         },
         jury: {
-          title: "如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？",
+          title: "如果重大决策都交给外部评审团重裁？ | What if an external jury reviewed every major decision?",
           ablation3: {
-            a: { forkRate: 1, branchCount: 7, reason: "基线 detector 已经能在制度题上抓住结构性分歧。", titles: ["外审强权定局", "限权复核成型", "制度反噬回撤"] },
-            b: { forkRate: 1, branchCount: 13, reason: "激进 detector 会把制度分流放大成高强度多结局。", titles: ["外审强权定局", "限权复核成型", "制度反噬回撤"] },
-            c: { forkRate: 1, branchCount: 7, reason: "互斥未来规则生效，但不如 B 激进。", titles: ["复核夺权", "例外保留"] },
-            d: { forkRate: 1, branchCount: 7, reason: "制度/审批/责任链分流在这题上非常匹配。", titles: ["评审夺权", "行政守权"] },
-            e: { forkRate: 0.7, branchCount: 5, reason: "这里只能给经验判断，本轮没专门重跑 E。", titles: ["不确定"] },
-            f: { forkRate: 0.7, branchCount: 5, reason: "未专门测 F，但从马斯克题经验看不值得期待。", titles: ["未实测"] },
+            a: { forkRate: 1, branchCount: 7, reason: "这个制度问题的旧样本中，基线提示词产生了分叉。 | The baseline prompt produced forks for this institutional question in the saved samples.", titles: ["外部评审掌握决策权 | External reviewers gain authority", "限定评审权限 | Review powers are limited", "撤回评审制度 | The review system is withdrawn"] },
+            b: { forkRate: 1, branchCount: 13, reason: "这个制度问题的旧样本中，提示词 B 产生了更多分支。 | Prompt B produced more branches for this institutional question in the saved samples.", titles: ["外部评审掌握决策权 | External reviewers gain authority", "限定评审权限 | Review powers are limited", "撤回评审制度 | The review system is withdrawn"] },
+            c: { forkRate: 1, branchCount: 7, reason: "旧样本中，互斥走向规则产生的分支少于 B。 | The mutually exclusive path rule produced fewer branches than B in these samples.", titles: ["复核方取得决策权 | Reviewers gain decision power", "保留例外 | Exceptions retained"] },
+            d: { forkRate: 1, branchCount: 7, reason: "这个问题包含制度、审批和责任上的分歧。 | This question contains disagreements over institutions, approvals, and responsibility.", titles: ["评审方取得决策权 | Reviewers gain decision power", "行政方保留决策权 | Administration retains authority"] },
+            e: { forkRate: 0.7, branchCount: 5, reason: "这里保留的是示意估计，原实验没有专门测试 E。 | This is an illustrative estimate. The original experiment did not specifically test E.", titles: ["不确定 | Uncertain"] },
+            f: { forkRate: 0.7, branchCount: 5, reason: "这里保留的是示意估计，原实验没有在这个问题上测试 F。 | This is an illustrative estimate. The original experiment did not test F on this question.", titles: ["未实测 | Unmeasured"] },
           },
           budget3: [
             { k: 0, forkRate: 1, branchCount: 13, storyCount: 13 },
@@ -1132,7 +964,7 @@
           ],
         },
         internet: {
-          title: "如果互联网从未被发明？",
+          title: "如果互联网从未被发明？ | What if the internet had never been invented?",
           promptB3: temperatures.flatMap((temp) =>
             sensitivities.map((sensitivity) => ({
               temp,
@@ -1154,9 +986,9 @@
       };
 
       const budgetGeneralization = [
-        { question: "马斯克登月", k0: "10 / 9", k1: "7 / 7", k2: "10 / 10" },
-        { question: "评审团重裁", k0: "13 / 13", k1: "7 / 7", k2: "10 / 10" },
-        { question: "无互联网世界", k0: "13 / 13", k1: "9 / 9", k2: "11 / 11" },
+        { question: "马斯克登月 | Musk on the Moon", k0: "10 / 9", k1: "7 / 7", k2: "10 / 10" },
+        { question: "评审团重裁 | Jury review", k0: "13 / 13", k1: "7 / 7", k2: "10 / 10" },
+        { question: "无互联网世界 | A world without the internet", k0: "13 / 13", k1: "9 / 9", k2: "11 / 11" },
       ];
 
       const promptVariants = {
@@ -1181,13 +1013,43 @@
       const budgetSegment = document.getElementById("budget-segment");
       const roundsSegment = document.getElementById("rounds-segment");
 
+
+      function setBilingual(element, value) {
+        element.replaceChildren();
+        String(value).split(" | ").forEach((part, index) => {
+          const text = document.createElement("span");
+          text.lang = index === 0 ? "zh-CN" : "en";
+          text.textContent = part;
+          element.appendChild(text);
+        });
+      }
+
+      function bilingualMarkup(value) {
+        const wrapper = document.createElement("span");
+        setBilingual(wrapper, value);
+        return wrapper.innerHTML;
+      }
+
+      function joinBilingual(values) {
+        const pairs = values.map((value) => value.split(" | "));
+        return pairs.map((pair) => pair[0]).join(" ") + " | " + pairs.map((pair) => pair[1]).join(" ");
+      }
+
+      function updateSegment(container, selected) {
+        [...container.children].forEach((button) => {
+          const active = button.dataset.value === String(selected);
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-pressed", String(active));
+        });
+      }
+
       function makeSegment(container, values, getLabel, onSelect) {
         container.innerHTML = "";
         values.forEach((value) => {
           const button = document.createElement("button");
           button.type = "button";
           button.dataset.value = value;
-          button.textContent = getLabel(value);
+          setBilingual(button, getLabel(value));
           button.addEventListener("click", () => onSelect(value));
           container.appendChild(button);
         });
@@ -1201,7 +1063,7 @@
         state.budget = value;
         render();
       });
-      makeSegment(roundsSegment, roundsOptions, (value) => `${value} rounds`, (value) => {
+      makeSegment(roundsSegment, roundsOptions, (value) => `${value} 轮 | ${value} rounds`, (value) => {
         state.rounds = value;
         render();
       });
@@ -1231,64 +1093,67 @@
         const exactBudget = questionData.budget3?.find((item) => item.k === budget);
         const ablation = questionData.ablation3?.[prompt] ?? null;
 
-        let evidenceMode = "经验判断";
+        let evidenceMode = "未实测：示意估计 | Unmeasured: illustrative estimate";
         let forkRate = 0.5;
         let branchCount = 4;
-        let reason = "这个组合没有完全一一对应的实测点，因此这里只能给结构化经验判断。";
-        let titles = ["等待更多样本"];
+        let reason = "这个组合没有对应的记录。数字是旧页面保留的示意估计。 | No matching record exists for this combination. The numbers are illustrative estimates preserved from the old page.";
+        let titles = ["没有对应样本 | No matching sample"];
 
         if (budget > 0 && exactBudget) {
-          evidenceMode = "已实测 / Budget 泛化";
+          evidenceMode = "历史参考：B，3 轮 | Archived reference: B, 3 rounds";
           forkRate = exactBudget.forkRate;
           branchCount = exactBudget.branchCount;
-          reason = "这里优先采用跨题 budget 泛化实验，因为 budget 的作用最直接。";
-          titles = [`story=${exactBudget.storyCount}`];
+          reason = "这里引用提示词 B、3 轮的名额限制实验。它不一定匹配当前选择的其他设置。 | This uses the prompt B, 3-round branch-limit experiment. It may not match the other selected settings.";
+          titles = [`结局数：${exactBudget.storyCount} | Endings: ${exactBudget.storyCount}`];
         } else if (rounds === 5 && prompt === "a" && exact5) {
-          evidenceMode = "已实测 / 5 rounds";
+          evidenceMode = "历史记录：5 轮 | Archived record: 5 rounds";
           forkRate = exact5.forkRate;
           branchCount = exact5.branchCount;
-          reason = "这里命中的是 5 rounds 的温度 x sensitivity 实验。";
-          titles = ["基线 detector A"];
+          reason = "这条记录来自 5 轮的温度与灵敏度对照。 | This record comes from the 5-round temperature and sensitivity comparison.";
+          titles = ["基线提示词 A | Baseline prompt A"];
         } else if (rounds === 3 && prompt === "b" && questionData.promptB3) {
           const exact = questionData.promptB3.find((item) => item.temp === temp && item.sensitivity === sensitivity);
           if (exact) {
-            evidenceMode = "已实测 / Prompt B 3 rounds";
+            evidenceMode = "历史记录：B，3 轮 | Archived record: B, 3 rounds";
             forkRate = exact.forkRate;
             branchCount = exact.branchCount;
-            reason = "这里命中的是激进 detector B 的 3 rounds 矩阵。";
-            titles = ["B 下几乎全参数稳定 fork"];
+            reason = "这条记录来自提示词 B 的 3 轮矩阵。 | This record comes from the prompt B, 3-round matrix.";
+            titles = ["B 的保存样本出现分叉 | Saved B samples produced forks"];
           }
         } else if (rounds === 3 && temp === 0.4 && sensitivity === 0.7 && ablation) {
-          evidenceMode = "已实测 / Prompt 消融";
+          evidenceMode = "历史记录：提示词对照 | Archived record: prompt comparison";
+          if (state.question === "jury" && (prompt === "e" || prompt === "f")) {
+            evidenceMode = "未实测：示意估计 | Unmeasured: illustrative estimate";
+          }
           forkRate = ablation.forkRate;
           branchCount = ablation.branchCount;
           reason = ablation.reason;
           titles = ablation.titles;
         } else if (rounds === 5 && temp === 0.4 && sensitivity === 0.7 && state.question === "musk") {
           if (prompt === "b") {
-            evidenceMode = "已实测 / B 基线";
+            evidenceMode = "历史记录：B 基线 | Archived record: B baseline";
             forkRate = 1;
             branchCount = 13;
-            reason = "马斯克题在 5 rounds 下，B 是已知稳定高爆炸 detector。";
-            titles = ["标准优先不例外", "合规放行登月", "政治背书加码"];
+            reason = "马斯克问题的 5 轮旧记录中，B 产生了较多分支。 | B produced many branches in the saved 5-round Musk record.";
+            titles = ["标准优先，不设例外 | Standards first, no exceptions", "合规放行登月 | Lunar trip cleared after review", "增加政治支持 | More political support"];
           } else if (prompt === "c") {
-            evidenceMode = "已实测 / C 5 rounds";
+            evidenceMode = "历史记录：C，5 轮 | Archived record: C, 5 rounds";
             forkRate = 1;
             branchCount = 14;
-            reason = "C 在 5 rounds 下已经强到和 B 同级，说明‘互斥未来即足够’是长期主因。";
-            titles = ["地面统筹登月", "创始人亲赴月面"];
+            reason = "C 的 5 轮旧记录与 B 的分支数量接近。 | The saved 5-round C record had a branch count close to B.";
+            titles = ["在地面统筹登月 | Coordinate the lunar trip from Earth", "创始人亲赴月面 | Founder travels to the Moon"];
           } else if (prompt === "d") {
-            evidenceMode = "已实测 / D 5 rounds";
+            evidenceMode = "历史记录：D，5 轮 | Archived record: D, 5 rounds";
             forkRate = 1;
             branchCount = 14;
-            reason = "D 在 5 rounds 下同样达到高强度，说明制度/审批/责任链分流也是长期主因。";
-            titles = ["特批登月乘员线", "标准审查留地面"];
+            reason = "D 的 5 轮旧记录也产生了较多分支。 | The saved 5-round D record also produced many branches.";
+            titles = ["特批登月乘员路线 | Special approval for lunar crew", "标准审查后留在地面 | Stay on Earth after standard review"];
           } else if (prompt === "f") {
-            evidenceMode = "已实测 / F 失败";
+            evidenceMode = "历史记录：F 未减少分支 | Archived record: F did not reduce branches";
             forkRate = 1;
             branchCount = 17;
-            reason = "F 没有压住分支，反而比 B 更猛，说明口头要求压缩主路径并不可靠。";
-            titles = ["压缩失败", "过度分叉"];
+            reason = "这条旧记录中，F 的分支数高于 B。要求压缩路线没有达到预期。 | F had more branches than B in this record. The request to compress paths did not achieve its aim.";
+            titles = ["压缩路线未成功 | Path compression failed", "分支较多 | Many branches"];
           }
         }
 
@@ -1309,80 +1174,88 @@
 
       function renderSummary(model) {
         const { questionData, prompt, budget, rounds, temp, sensitivity, evidenceMode, forkRate, branchCount, reason, titles } = model;
-        document.getElementById("question-value").textContent = questionData.title.replace("如果", "").replace("？", "");
+        setBilingual(document.getElementById("question-value"), {
+          musk: "马斯克登月 | Musk on the Moon",
+          jury: "外部评审 | External review",
+          internet: "无互联网 | No internet",
+        }[state.question]);
         document.getElementById("prompt-value").textContent = prompt.toUpperCase();
         document.getElementById("temperature-value").textContent = temp.toFixed(1).replace(".0", "");
         document.getElementById("sensitivity-value").textContent = sensitivity.toFixed(1);
         document.getElementById("budget-value").textContent = String(budget);
         document.getElementById("rounds-value").textContent = String(rounds);
 
-        [...promptSegment.children].forEach((button) => button.classList.toggle("is-active", button.dataset.value === prompt));
-        [...budgetSegment.children].forEach((button) => button.classList.toggle("is-active", Number(button.dataset.value) === budget));
-        [...roundsSegment.children].forEach((button) => button.classList.toggle("is-active", Number(button.dataset.value) === rounds));
+        updateSegment(promptSegment, prompt);
+        updateSegment(budgetSegment, budget);
+        updateSegment(roundsSegment, rounds);
+        document.getElementById("temperature-range").setAttribute("aria-valuetext", String(temp));
+        document.getElementById("sensitivity-range").setAttribute("aria-valuetext", String(sensitivity));
 
         const forkPercent = Math.round(model.forkRate * 100);
         document.getElementById("fork-rate").textContent = `${forkPercent}%`;
         document.getElementById("fork-rate-meter").style.width = `${forkPercent}%`;
         document.getElementById("branch-count").textContent = branchCount.toFixed(1).replace(".0", "");
         document.getElementById("branch-count-meter").style.width = `${Math.min(100, branchCount / 17 * 100)}%`;
-        document.getElementById("explain-grade").textContent = branchCount >= 12 ? "高爆炸" : branchCount >= 7 ? "中等分叉" : "克制分叉";
-        document.getElementById("evidence-mode").textContent = evidenceMode;
+        setBilingual(document.getElementById("explain-grade"), branchCount >= 12 ? "分支较多 | Many branches" : branchCount >= 7 ? "中等分支数 | Moderate branch count" : "分支较少 | Fewer branches");
+        setBilingual(document.getElementById("evidence-mode"), evidenceMode);
 
         const summaryText = [];
         if (budget === 1) {
-          summaryText.push("这组会优先保留最高优先级世界线继续分叉，结构上能明显压住 branch 爆炸。");
+          summaryText.push("这组设置只让优先级最高的分支继续接受分叉检查。 | This setting lets only the highest-priority branch receive further fork checks.");
         } else if (prompt === "b") {
-          summaryText.push("这组 detector 会把互斥未来和制度分流一起放大，天然更容易出现多结局。");
+          summaryText.push("提示词 B 同时强调互斥走向和制度分歧。 | Prompt B emphasizes both mutually exclusive paths and institutional disagreement.");
         } else if (prompt === "c" || prompt === "d") {
-          summaryText.push("这组 detector 会把某一类分歧单独提升到足以 fork 的程度。");
+          summaryText.push("这组提示词把一种特定分歧视为足够的分叉理由。 | This prompt treats one particular kind of disagreement as enough to justify a fork.");
         } else if (prompt === "f") {
-          summaryText.push("这组 detector 看起来像压缩版，但实测并没有把 branch 数压下来。");
+          summaryText.push("提示词 F 要求压缩路线，但保存的样本没有显示分支数减少。 | Prompt F asks for compressed paths, but the saved samples did not show fewer branches.");
         } else {
-          summaryText.push("这组更接近基线 detector；是否 fork 仍然高度依赖问题本身和运行时波动。");
+          summaryText.push("这组设置接近基线。不同问题和不同运行仍可能产生不同结果。 | These settings are close to the baseline. Different questions and runs can still produce different results.");
         }
-        summaryText.push(`当前已知平均 branch 数约为 ${branchCount.toFixed(1)}，fork 命中率约为 ${forkPercent}%。`);
-        document.getElementById("scenario-summary").textContent = summaryText.join(" ");
+        summaryText.push(evidenceMode.startsWith("未实测")
+          ? `旧页面的示意估计为 ${branchCount.toFixed(1)} 条分支、${forkPercent}% 分叉率；没有对应实测记录。 | The old page's illustrative estimate is ${branchCount.toFixed(1)} branches and a ${forkPercent}% fork rate; no matching measurement exists.`
+          : `这份参考记录约为 ${branchCount.toFixed(1)} 条分支、${forkPercent}% 分叉率。 | This reference record shows about ${branchCount.toFixed(1)} branches and a ${forkPercent}% fork rate.`);
+        setBilingual(document.getElementById("scenario-summary"), joinBilingual(summaryText));
 
         const whyList = document.getElementById("why-list");
         whyList.innerHTML = "";
         [
-          `prompt ${prompt.toUpperCase()} 决定 detector 认为什么叫“足够 fork”。`,
-          `temperature=${temp} 会影响模型如何解释同一批 diverge 信号。`,
-          `branch_sensitivity=${sensitivity} 会调整 detector 边界，但不是线性开关。`,
+          `提示词 ${prompt.toUpperCase()} 定义哪些分歧可以触发分叉。 | Prompt ${prompt.toUpperCase()} defines which disagreements can justify a fork.`,
+          `温度 ${temp} 影响模型对同一组分歧线索的解释。 | Temperature ${temp} affects how the model interprets the same disagreement signals.`,
+          `灵敏度 ${sensitivity} 是提示词中的判断提示，不是固定阈值。 | Sensitivity ${sensitivity} is a cue in the prompt, not a fixed threshold.`,
           budget > 0
-            ? `k=${budget} 会限制每轮还能继续分叉的 active branch 名额。`
-            : "当前没有结构预算，所有 active branch 都能继续争取下一轮 fork。",
+            ? `k=${budget} 限制每轮接受检查的活跃分支数。 | k=${budget} limits the active branches checked each round.`
+            : "当前没有额外的检查名额限制，活跃分支仍需满足其他分叉条件。 | No extra check limit applies; active branches still need to meet the other fork conditions.",
         ].forEach((line) => {
           const li = document.createElement("li");
-          li.innerHTML = `<span class="impact-bullet"></span><span>${line}</span>`;
+          li.innerHTML = `<span class="impact-bullet"></span><span>${bilingualMarkup(line)}</span>`;
           whyList.appendChild(li);
         });
 
-        document.getElementById("first-reason").textContent = reason;
+        setBilingual(document.getElementById("first-reason"), reason);
         const titlesHost = document.getElementById("first-titles");
         titlesHost.innerHTML = "";
         titles.forEach((title) => {
           const chip = document.createElement("span");
           chip.className = "chip";
-          chip.textContent = title;
+          setBilingual(chip, title);
           titlesHost.appendChild(chip);
         });
 
         const observations = [];
-        if (prompt === "b") observations.push("Prompt 主导");
-        if (prompt === "c" || prompt === "d") observations.push("单因子偏置");
-        if (budget === 1) observations.push("结构抑爆炸");
-        if (branchCount >= 12) observations.push("高 branch fan-out");
-        if (branchCount <= 7) observations.push("可控强度");
-        if (rounds === 3) observations.push("短窗口");
-        if (rounds === 5) observations.push("长尾风险");
+        if (prompt === "b") observations.push("提示词影响 | Prompt influence");
+        if (prompt === "c" || prompt === "d") observations.push("单一条件 | Single condition");
+        if (budget === 1) observations.push("限制检查名额 | Limited fork checks");
+        if (branchCount >= 12) observations.push("分支数量较多 | Many branches");
+        if (branchCount <= 7) observations.push("分支数量较少 | Fewer branches");
+        if (rounds === 3) observations.push("3 轮记录 | 3-round record");
+        if (rounds === 5) observations.push("5 轮记录 | 5-round record");
 
         const obsHost = document.getElementById("observation-chips");
         obsHost.innerHTML = "";
         observations.forEach((item) => {
           const chip = document.createElement("span");
           chip.className = "chip";
-          chip.textContent = item;
+          setBilingual(chip, item);
           obsHost.appendChild(chip);
         });
       }
@@ -1394,7 +1267,7 @@
           const item = document.createElement("div");
           item.className = "bar-row";
           item.innerHTML = `
-            <div class="bar-label">${row.label}</div>
+            <div class="bar-label">${bilingualMarkup(row.label)}</div>
             <div class="bar-track"><div class="bar-fill" style="width:${row.width}%"></div></div>
             <div class="bar-value">${formatter(row.value)}</div>
           `;
@@ -1407,10 +1280,10 @@
         table.innerHTML = `
           <thead>
             <tr>
-              <th>题目</th>
-              <th>k = 0</th>
-              <th>k = 1</th>
-              <th>k = 2</th>
+              <th scope="col">问题 <span lang="en">Question</span></th>
+              <th scope="col">k = 0</th>
+              <th scope="col">k = 1</th>
+              <th scope="col">k = 2</th>
             </tr>
           </thead>
           <tbody>
@@ -1418,7 +1291,7 @@
               .map(
                 (row) => `
                   <tr>
-                    <td>${row.question}</td>
+                    <th scope="row">${bilingualMarkup(row.question)}</th>
                     <td><span class="status-hot">${row.k0}</span></td>
                     <td><span class="status-good">${row.k1}</span></td>
                     <td><span class="status-mid">${row.k2}</span></td>
@@ -1434,7 +1307,7 @@
         renderBarChart(
           "ab-chart",
           evidence.musk.promptAB5.map((row) => ({
-            label: `Prompt ${row.label}`,
+            label: `提示词 ${row.label} | Prompt ${row.label}`,
             value: row.forkRate,
             width: row.forkRate * 100,
           })),
@@ -1444,7 +1317,7 @@
         renderBarChart(
           "ablation-chart",
           ["a", "b", "c", "d", "e", "f"].map((variant) => ({
-            label: `Prompt ${variant.toUpperCase()}`,
+            label: `提示词 ${variant.toUpperCase()} | Prompt ${variant.toUpperCase()}`,
             value: evidence.musk.ablation3[variant]?.branchCount ?? 0,
             width: Math.min(100, ((evidence.musk.ablation3[variant]?.branchCount ?? 0) / 17) * 100),
           })),
