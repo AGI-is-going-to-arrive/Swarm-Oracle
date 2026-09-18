@@ -82,6 +82,10 @@ Windows 发布脚本若需要向 npx 传递带换行的参数，会仅为该次�
 
 On Windows, release scripts use the installed Git for Windows Bash only for an npx call that carries newline-containing arguments. Ordinary calls are unchanged. Missing Git Bash or a custom script-shell causes an explicit failure; use Node directly for a multiline program. Global shell and npm settings remain unchanged.
 
+为了保留 CRLF，带回车字符的调用会临时使用该 npm 的参数转义入口；入口不兼容时会报错，可改用 Node 直接运行。已安装的 npm 文件不会被修改。
+
+To preserve CRLF, calls containing carriage returns temporarily use that npm installation's quoting helper. An incompatible helper causes an explicit failure; use Node directly in that case. Installed npm files are not modified.
+
 `release:signoff` 包含真实模型调用路径，运行前确认凭据、预算与目标实例。`--dry-run` 只记录计划。签收与容器验证见[贡献指南](../CONTRIBUTING.md)和[部署说明](../deploy/README.md)。
 
 `release:signoff` includes live model paths. Confirm credentials, budget, and the target instance before running it. `--dry-run` records a plan only. See [Contributing](../CONTRIBUTING.md) and [Deployment](../deploy/README.md) for signoff and container validation.

@@ -35,6 +35,10 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
   Preserved newline, path, and empty arguments in Windows npx by using existing Git Bash for that call when needed. The stream-deletion test now keeps the app lifespan under the parent test until both requests finish.
 
+- 补充 Windows npx 的回车转义，防止 Git Bash 把 CRLF 改成 LF；转义只作用于该子进程，不改写已安装的 npm。
+
+  Added carriage-return escaping for Windows npx so Git Bash preserves CRLF. The escaping is limited to that child process and does not modify the installed npm files.
+
 - 运行锁续期测试改用受控时钟和事件同步，避免 CI 调度延迟使短租约意外过期；仍验证真实 SQLite 续租和最终释放。
 
   Runtime-lock renewal tests now use a controlled clock and event synchronization so CI scheduling delays cannot expire the short test lease. They still verify real SQLite renewal and final release.

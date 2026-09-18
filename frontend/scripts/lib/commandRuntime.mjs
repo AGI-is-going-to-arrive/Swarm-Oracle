@@ -86,7 +86,21 @@ function multilineNpxInvocation(cli, args, { env, nodePath, cwd }) {
   const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:MSYS2_ARG_CONV_EXCL|MSYS_NO_PATHCONV)$/iu.test(key)));
   childEnv.MSYS2_ARG_CONV_EXCL = "*";
   childEnv.MSYS_NO_PATHCONV = "1";
-  return { command: nodePath, args: [cli, `--script-shell=${bash}`, ...args], env: childEnv };
+  const invocationArgs = [cli, `--script-shell=${bash}`, ...args];
+  if (args.some((arg) => arg.includes("\r"))) {
+    // MSYS Bash discards raw CR while parsing. Expand it only after parsing.
+    const preload = [
+      "import { createRequire } from 'node:module';",
+      `const require = createRequire(${JSON.stringify(cli)});`,
+      "let escape;",
+      "try { escape = require('@npmcli/promise-spawn/lib/escape.js'); } catch (cause) { throw new Error('Cannot preserve carriage returns: unsupported npm shell quoting entrypoint.', { cause }); }",
+      "if (typeof escape?.sh !== 'function') throw new Error('Cannot preserve carriage returns: unsupported npm shell quoting entrypoint.');",
+      "const quote = escape.sh;",
+      "escape.sh = (value) => value.split('\\r').map((part) => quote(part)).join(\"$'\\\\r'\");",
+    ].join("\n");
+    invocationArgs.unshift("--import", `data:text/javascript,${encodeURIComponent(preload)}`);
+  }
+  return { command: nodePath, args: invocationArgs, env: childEnv };
 }
 
 /**

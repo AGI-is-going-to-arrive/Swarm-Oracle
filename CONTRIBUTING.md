@@ -83,6 +83,10 @@ Windows 上涉及多行 npx 参数的发布检查需要 Git for Windows 自带�
 
 Windows release checks that pass multiline npx arguments need the Bash bundled with Git for Windows. A custom script-shell stops the check instead of being silently replaced.
 
+检查会逐字核对 LF、CRLF、路径和空参数；当前 npm 的转义入口不兼容时会明确报错。
+
+The check compares LF, CRLF, paths, and empty arguments exactly. An incompatible quoting helper in the current npm installation causes an explicit error.
+
 `--dry-run` 只生成计划。源码测试、浏览器签收、最终容器和模型质量各有证明范围。发布前核对相同提交的真实 CI 结论与镜像 digest，见[部署说明](deploy/README.md)。
 
 `--dry-run` produces a plan only. Source tests, browser signoff, final containers, and model quality have different evidence boundaries. Check actual CI conclusions and image digests for the same commit before release; see [Deployment](deploy/README.md).

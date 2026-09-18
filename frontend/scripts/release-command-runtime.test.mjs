@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -26,6 +28,15 @@ function assertSucceeded(result) {
   assert.equal(result.status, 0, result.stderr);
 }
 
+function copyNpmShellEscaping(bin) {
+  const npmCli = resolveSpawnCommand("npm", []).args[0];
+  const source = createRequire(npmCli).resolve("@npmcli/promise-spawn/lib/escape.js");
+  const destination = path.join(bin, "node_modules", "@npmcli", "promise-spawn", "lib", "escape.js");
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination);
+  return destination;
+}
+
 function windowsNpxFixture(context, { bash = true, config = "null", configStatus = 0 } = {}) {
   const cwd = workspace(context);
   const npmBin = path.join(cwd, "npm installation & bin");
@@ -34,6 +45,7 @@ function windowsNpxFixture(context, { bash = true, config = "null", configStatus
   const configEnvPath = path.join(cwd, "config query env.json");
   fs.mkdirSync(npmBin, { recursive: true });
   fs.mkdirSync(gitBin, { recursive: true });
+  const escapePath = copyNpmShellEscaping(npmBin);
   fs.writeFileSync(path.join(npmBin, "npm-cli.js"), [
     "const settings = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^npm_config_(?:offline|update_notifier)$/iu.test(key)));",
     `require('node:fs').writeFileSync(${JSON.stringify(configEnvPath)}, JSON.stringify(settings));`,
@@ -45,7 +57,7 @@ function windowsNpxFixture(context, { bash = true, config = "null", configStatus
     fs.mkdirSync(path.dirname(bashPath), { recursive: true });
     fs.writeFileSync(bashPath, "");
   }
-  return { cwd, bashPath, configEnvPath, env: { Path: gitBin, npm_execpath: path.join(npmBin, "npm-cli.js") } };
+  return { cwd, bashPath, configEnvPath, escapePath, env: { Path: gitBin, npm_execpath: path.join(npmBin, "npm-cli.js") } };
 }
 
 test("capture preserves a multiline Node program, literal argv, and a spaced working directory", (context) => {
@@ -117,6 +129,7 @@ test("npm CLI lookup and execution preserve argv when its installed path contain
   const cwd = workspace(context);
   const bin = path.join(cwd, "npm installation & bin");
   fs.mkdirSync(bin);
+  copyNpmShellEscaping(bin);
   const program = [
     "const argv = process.argv.slice(2);",
     "if (argv.join(' ') === 'config get script-shell') process.stdout.write('null');",
@@ -159,7 +172,8 @@ test("Windows multiline npx selects Git Bash and isolates query and MSYS setting
   const invocation = resolveSpawnCommand("npx.cmd", args, { ...fixture, platform: "win32" });
 
   assert.equal(invocation.command, process.execPath);
-  assert.deepEqual(invocation.args.slice(1), [`--script-shell=${fixture.bashPath}`, ...args]);
+  assert.equal(invocation.args[0], "--import");
+  assert.deepEqual(invocation.args.slice(-args.length - 1), [`--script-shell=${fixture.bashPath}`, ...args]);
   assert.equal(invocation.env.MSYS2_ARG_CONV_EXCL, "*");
   assert.equal(invocation.env.MSYS_NO_PATHCONV, "1");
   assert.equal(invocation.env.msys2_arg_conv_excl, undefined);
@@ -171,6 +185,59 @@ test("Windows multiline npx selects Git Bash and isolates query and MSYS setting
   for (const [key, value] of Object.entries(callerQuerySettings)) {
     assert.equal(fixture.env[key], value);
     assert.equal(invocation.env[key], value);
+  }
+});
+
+test("npm quoting preserves CR and CRLF when a shell parser strips raw carriage returns", (context) => {
+  const fixture = windowsNpxFixture(context);
+  const literalArgs = [...LITERAL_ARGS, "\r", "ends\r", "\r\n", "before'\r'after", "&\r$(echo unexpected)"];
+  const invocation = resolveSpawnCommand("npx", literalArgs, { ...fixture, platform: "win32" });
+  const shell = process.platform === "win32"
+    ? resolveSpawnCommand("npx", LITERAL_ARGS, { cwd: fixture.cwd }).args
+      .find((arg) => arg.startsWith("--script-shell=")).slice("--script-shell=".length)
+    : "/bin/bash";
+  const program = [
+    "const { spawnSync } = require('node:child_process');",
+    `const { sh } = require(${JSON.stringify(fixture.escapePath)});`,
+    `const argv = ${JSON.stringify(literalArgs)};`,
+    `const node = ${JSON.stringify(process.execPath.replace(/\\/gu, "/"))};`,
+    "const command = [node, '-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)));', ...argv].map(sh).join(' ');",
+    `const result = spawnSync(${JSON.stringify(shell)}, ['-c', command.replace(/\\r/g, '')], { encoding: 'utf8', shell: false, timeout: 15000 });`,
+    "if (result.error) throw result.error;",
+    "if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(result.status ?? 1); }",
+    "process.stdout.write(JSON.stringify({ rawCR: command.includes('\\r'), argv: JSON.parse(result.stdout) }));",
+  ].join("\n");
+  const fixtureKeys = new Set(Object.keys(invocation.env).map((key) => key.toLowerCase()));
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !fixtureKeys.has(key.toLowerCase()))),
+    ...invocation.env,
+  };
+  const observe = (preload) => {
+    const args = [...(preload ? invocation.args.slice(0, 2) : []), "-e", program];
+    const result = spawnSync(process.execPath, args, { cwd: fixture.cwd, env, encoding: "utf8", shell: false, timeout: 20_000 });
+    assertSucceeded(result);
+    return JSON.parse(result.stdout);
+  };
+
+  const before = observe(false);
+  assert.equal(before.rawCR, true);
+  assert.equal(before.argv[3], "line one\nline two\n中文内容");
+  const after = observe(true);
+  assert.equal(after.rawCR, false);
+  assert.deepEqual(after.argv, literalArgs);
+});
+
+test("CR preservation fails closed when npm's shell quoting entrypoint is unavailable", (context) => {
+  for (const missing of [false, true]) {
+    const fixture = windowsNpxFixture(context);
+    if (missing) fs.rmSync(fixture.escapePath);
+    else fs.writeFileSync(fixture.escapePath, "module.exports = {};\n");
+    const invocation = resolveSpawnCommand("npx", LITERAL_ARGS, { ...fixture, platform: "win32" });
+    const result = spawnSync(invocation.command, invocation.args, { cwd: fixture.cwd, env: invocation.env, encoding: "utf8", shell: false, timeout: 15_000 });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /unsupported npm shell quoting entrypoint/u);
+    const lfOnly = resolveSpawnCommand("npx", ["probe", "line one\nline two"], { ...fixture, platform: "win32" });
+    assert.notEqual(lfOnly.args[0], "--import");
   }
 });
 
