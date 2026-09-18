@@ -1,42 +1,42 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "1dd330a9c30807da70c36e4a68980ae31af51097",
-    "verifiedAt": "2026-09-06T01:06:45.847Z"
+    "revision": "3141631c17ea3b56d4b00e92227d26af2781a88a",
+    "verifiedAt": "2026-09-18T14:51:12.981Z"
   },
   "documents": {
     "architecture.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "backend/architecture.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "config/runtime.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "development/local-workflow.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "frontend/architecture.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "http-api/contracts.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "providers/confirmation.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "results/report-authority.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "oracle/saved-analysis.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "development/release-integrity.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     },
     "debate/lifecycle.mdx": {
-      "validatedRevision": "1dd330a9c30807da70c36e4a68980ae31af51097"
+      "validatedRevision": "3141631c17ea3b56d4b00e92227d26af2781a88a"
     }
   },
   "convergence": {
