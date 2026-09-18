@@ -698,30 +698,34 @@ class TestSSEStream:
         monkeypatch.setattr(
             "app.services.vector_store.delete_scenario_data", lambda *_args: False,
         )
-        engine = get_engine()
-        sid = _seed_scenario(engine)
-        start = client.post(
-            "/api/conversation/start", json=_default_start_body(sid, content="watch delete"),
-        ).json()
-        thread_id = start["thread_id"]
-        assistant_turn_id = start["assistant_turn_id"]
+        # The parent owns the app lifespan until both requests finish. Closing
+        # it in the stream worker can fence DELETE's pending cleanup commit.
+        with client:
+            engine = get_engine()
+            sid = _seed_scenario(engine)
+            start = client.post(
+                "/api/conversation/start", json=_default_start_body(sid, content="watch delete"),
+            ).json()
+            thread_id = start["thread_id"]
+            assistant_turn_id = start["assistant_turn_id"]
+            first_delta_emitted = threading.Event()
 
-        async def _stalled_stream(*_args, **_kwargs):
-            yield "alpha"
-            while True:
-                await asyncio.sleep(3600)
+            async def _stalled_stream(*_args, **_kwargs):
+                yield "alpha"
+                first_delta_emitted.set()
+                while True:
+                    await asyncio.sleep(3600)
 
-        monkeypatch.setattr(conversation_service, "llm_call_stream", _stalled_stream)
+            monkeypatch.setattr(conversation_service, "llm_call_stream", _stalled_stream)
 
-        raw_chunks: list[str] = []
-        stream_status: dict[str, int] = {}
-        stream_error: dict[str, BaseException] = {}
-        stream_done = threading.Event()
+            raw_chunks: list[str] = []
+            stream_status: dict[str, int] = {}
+            stream_error: dict[str, BaseException] = {}
+            stream_done = threading.Event()
 
-        def _consume_stream():
-            try:
-                with TestClient(app) as stream_client:
-                    with stream_client.stream(
+            def _consume_stream():
+                try:
+                    with client.stream(
                         "POST",
                         f"/api/conversation/{thread_id}/turn",
                         json={"user_content": "watch delete"},
@@ -729,43 +733,58 @@ class TestSSEStream:
                         stream_status["status_code"] = response.status_code
                         for chunk in response.iter_text():
                             raw_chunks.append(chunk)
-            except BaseException as exc:  # noqa: BLE001 - assert below
-                stream_error["error"] = exc
+                except BaseException as exc:  # noqa: BLE001 - assert below
+                    stream_error["error"] = exc
+                finally:
+                    stream_done.set()
+
+            worker = threading.Thread(target=_consume_stream, daemon=True)
+            worker.start()
+            try:
+                assert first_delta_emitted.wait(timeout=5.0), (
+                    "stream never emitted its partial text"
+                )
+                with Session(engine) as session:
+                    turn = session.get(AgentConversationTurn, assistant_turn_id)
+                    assert turn is not None and turn.status == "streaming"
+
+                delete_resp = client.delete(f"/api/scenario/{sid}")
+                assert delete_resp.status_code == 202
+                assert delete_resp.json() == {
+                    "status": "deleted", "scenario_id": sid, "cleanup_pending": True,
+                }
+                with Session(engine) as session:
+                    receipt = session.get(ResourceDeletion, ("scenario", sid))
+                    assert receipt is not None and receipt.status == "pending"
+                assert stream_done.wait(timeout=1.0), (
+                    "HTTP SSE stream did not terminate after delete"
+                )
+                assert "error" not in stream_error
+
+                frames = _assert_sse_frames("".join(raw_chunks))
+                events = [name for name, _payload in frames]
+                assert stream_status["status_code"] == 200
+                assert events[0] == "turn_started"
+                assert "turn_token_delta" in events
+                assert events[-1] == "turn_error"
+                assert frames[-1][1]["code"] == "SCENARIO_DELETED"
+                assert frames[-1][1]["status"] == "scenario_deleted"
+                assert [data["delta"] for name, data in frames if name == "turn_token_delta"] == [
+                    "alpha",
+                ]
+                assert sum(
+                    name in {"turn_completed", "turn_error", "turn_aborted"}
+                    for name in events
+                ) == 1
+                with Session(engine) as session:
+                    assert session.get(Scenario, sid) is None
+                    assert session.get(AgentConversationThread, thread_id) is None
+                    assert session.get(AgentConversationTurn, assistant_turn_id) is None
             finally:
-                stream_done.set()
-
-        worker = threading.Thread(target=_consume_stream, daemon=True)
-        worker.start()
-
-        deadline = time.perf_counter() + 1.0
-        while time.perf_counter() < deadline:
-            with Session(engine) as session:
-                turn = session.get(AgentConversationTurn, assistant_turn_id)
-                if turn is not None and turn.status == "streaming":
-                    break
-            time.sleep(0.01)
-        else:
-            pytest.fail("conversation stream never entered streaming state")
-
-        delete_resp = client.delete(f"/api/scenario/{sid}")
-        assert delete_resp.status_code == 202
-        assert delete_resp.json() == {
-            "status": "deleted", "scenario_id": sid, "cleanup_pending": True,
-        }
-        with Session(engine) as session:
-            receipt = session.get(ResourceDeletion, ("scenario", sid))
-            assert receipt is not None and receipt.status == "pending"
-        assert stream_done.wait(timeout=1.0), "HTTP SSE stream did not terminate after delete"
-        assert "error" not in stream_error
-
-        frames = _assert_sse_frames("".join(raw_chunks))
-        events = [name for name, _payload in frames]
-        assert stream_status["status_code"] == 200
-        assert events[0] == "turn_started"
-        assert "turn_token_delta" in events
-        assert events[-1] == "turn_error"
-        assert frames[-1][1]["code"] == "SCENARIO_DELETED"
-        assert frames[-1][1]["status"] == "scenario_deleted"
+                if worker.is_alive():
+                    conversation_service._signal_turn_cancel_event(assistant_turn_id)
+                worker.join(timeout=5.0)
+                assert not worker.is_alive(), "HTTP SSE worker outlived the app lifespan"
 
     @pytest.mark.asyncio
     async def test_scenario_deleted_mid_stream_emits_terminal_error(self, client):

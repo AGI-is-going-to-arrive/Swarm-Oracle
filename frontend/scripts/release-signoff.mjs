@@ -313,8 +313,8 @@ function runCommand(command, args, options) {
   if (options.dryRun) return;
 
   const spawnOptions = buildSpawnSyncOptions(options, false);
-  const invocation = resolveSpawnCommand(command, args, { env: spawnOptions.env });
-  const result = spawnSync(invocation.command, invocation.args, spawnOptions);
+  const invocation = resolveSpawnCommand(command, args, { env: spawnOptions.env, cwd: spawnOptions.cwd });
+  const result = spawnSync(invocation.command, invocation.args, { ...spawnOptions, env: invocation.env ?? spawnOptions.env });
   throwSpawnSyncError(result, rendered, spawnOptions.timeout);
 
   if (result.status !== 0) {
@@ -334,8 +334,8 @@ function serializeError(error) {
 function captureCommand(command, args, options = {}) {
   const rendered = formatCommand(command, args);
   const spawnOptions = buildSpawnSyncOptions(options, true);
-  const invocation = resolveSpawnCommand(command, args, { env: spawnOptions.env });
-  const result = spawnSync(invocation.command, invocation.args, spawnOptions);
+  const invocation = resolveSpawnCommand(command, args, { env: spawnOptions.env, cwd: spawnOptions.cwd });
+  const result = spawnSync(invocation.command, invocation.args, { ...spawnOptions, env: invocation.env ?? spawnOptions.env });
   throwSpawnSyncError(result, rendered, spawnOptions.timeout);
 
   return {

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 function isFile(filePath) {
@@ -37,14 +38,65 @@ function npmCliCandidates(tool, env, nodePath) {
   return candidates;
 }
 
+function multilineNpxInvocation(cli, args, { env, nodePath, cwd }) {
+  const separator = args.indexOf("--");
+  const options = separator < 0 ? args : args.slice(0, separator);
+  const explicitShell = options.some((arg) => /^--(?:script-shell|shell)(?:=|$)/iu.test(arg))
+    || Object.entries(env).some(([key, value]) => /^npm_config_script_shell$/iu.test(key) && value);
+  const shellError = "Multiline npx arguments require Git Bash without an explicit script-shell override. "
+    + "Remove the override or execute the multiline program directly with Node.js.";
+  if (explicitShell) throw new Error(shellError);
+
+  const configOptions = [];
+  for (let index = 0; index < options.length; index += 1) {
+    const arg = options[index];
+    if (/^--(?:userconfig|globalconfig|prefix|location)(?:=|$)/u.test(arg)) {
+      configOptions.push(arg);
+      if (!arg.includes("=") && options[index + 1] !== undefined) configOptions.push(options[++index]);
+    }
+  }
+  const configEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !/^npm_config_(?:offline|update_notifier)$/iu.test(key)));
+  configEnv.npm_config_offline = "true";
+  configEnv.npm_config_update_notifier = "false";
+  const config = spawnSync(nodePath, [path.join(path.dirname(cli), "npm-cli.js"), "config", "get", "script-shell", ...configOptions], {
+    cwd, env: configEnv, encoding: "utf8", shell: false, timeout: 15_000,
+  });
+  if (config.error || config.status !== 0) {
+    throw new Error("Cannot verify npm script-shell for multiline npx arguments. Execute the program directly with Node.js.");
+  }
+  if (config.stdout.trim() && config.stdout.trim() !== "null") throw new Error(shellError);
+
+  const pathKey = Object.keys(env).sort().find((key) => key.toLowerCase() === "path");
+  let bash;
+  for (const entry of (env[pathKey] ?? "").split(path.delimiter).filter(Boolean)) {
+    const git = path.join(entry.replace(/^"(.*)"$/u, "$1"), "git.exe");
+    if (!isFile(git)) continue;
+    const directory = path.dirname(fs.realpathSync(git));
+    bash = [
+      path.resolve(directory, "..", "bin", "bash.exe"),
+      path.resolve(directory, "..", "usr", "bin", "bash.exe"),
+      path.join(directory, "bash.exe"),
+      path.resolve(directory, "..", "..", "bin", "bash.exe"),
+    ].find(isFile);
+    if (bash) break;
+  }
+  if (!bash) {
+    throw new Error("Multiline npx arguments on Windows require Git for Windows with Git Bash on PATH. Execute the program directly with Node.js if Git Bash is unavailable.");
+  }
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:MSYS2_ARG_CONV_EXCL|MSYS_NO_PATHCONV)$/iu.test(key)));
+  childEnv.MSYS2_ARG_CONV_EXCL = "*";
+  childEnv.MSYS_NO_PATHCONV = "1";
+  return { command: nodePath, args: [cli, `--script-shell=${bash}`, ...args], env: childEnv };
+}
+
 /**
- * Resolve npm's batch-file launchers to JavaScript so no shell re-parses argv.
+ * Resolve npm's batch launchers to JavaScript and preserve multiline npx argv.
  * @param {string} command
  * @param {string[]} args
- * @param {{env?: NodeJS.ProcessEnv, nodePath?: string}} options
- * @returns {{command: string, args: string[]}}
+ * @param {{env?: NodeJS.ProcessEnv, nodePath?: string, cwd?: string, platform?: NodeJS.Platform}} options
+ * @returns {{command: string, args: string[], env?: NodeJS.ProcessEnv}}
  */
-export function resolveSpawnCommand(command, args, { env = process.env, nodePath = process.execPath } = {}) {
+export function resolveSpawnCommand(command, args, { env = process.env, nodePath = process.execPath, cwd = process.cwd(), platform = process.platform } = {}) {
   const match = /^(npm|npx)(?:\.cmd)?$/iu.exec(command);
   if (!match) return { command, args };
 
@@ -52,6 +104,10 @@ export function resolveSpawnCommand(command, args, { env = process.env, nodePath
   const cli = npmCliCandidates(tool, env, nodePath).find(isFile);
   if (!cli) {
     throw new Error(`Cannot locate ${tool}-cli.js. Run via npm run release:signoff or install npm alongside Node.js.`);
+  }
+  if (platform === "win32" && tool === "npx" && args.some((arg) => /[\r\n]/u.test(arg))) {
+    // cmd.exe truncates multiline arguments inside npm's nested script execution.
+    return multilineNpxInvocation(cli, args, { env, nodePath, cwd });
   }
   return { command: nodePath, args: [cli, ...args] };
 }

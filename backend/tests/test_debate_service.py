@@ -8,6 +8,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlmodel import Session
@@ -340,11 +341,28 @@ async def test_run_debate_background_refreshes_runtime_lock_while_running(monkey
     debate = create_debate_record("如果一场辩论运行得足够久，运行时锁也应继续续租吗？")
     pushed_events: list[dict] = []
     lease_seconds = 0.1
+    lease_clock_now = time.time()
+    lease_clock_guard = threading.Lock()
+
+    def _lease_time() -> float:
+        with lease_clock_guard:
+            return lease_clock_now
+
+    # Keep real SQLite operations and heartbeat scheduling, but don't turn a
+    # CI scheduling pause into expiration of this deliberately tiny test lease.
+    lease_clock = SimpleNamespace(
+        time=_lease_time, monotonic=time.monotonic, sleep=time.sleep,
+    )
+    monkeypatch.setattr(runtime_lock_module, "time", lease_clock)
+    monkeypatch.setattr(debate_module, "time", lease_clock)
     initial_lease = acquire_runtime_lock(debate_lock_key(debate.id), lease_seconds=lease_seconds)
     assert initial_lease is not None
     refreshed_leases: list[RuntimeLockLease] = []
     released_leases: list[RuntimeLockLease | None] = []
     original_generate_turn_content = debate_module._generate_turn_content
+    generation_started = threading.Event()
+    renewed_past_initial_expiry = asyncio.Event()
+    event_loop = asyncio.get_running_loop()
 
     monkeypatch.setattr(debate_module, "_DEBATE_RUNTIME_LOCK_LEASE_SECONDS", lease_seconds)
 
@@ -358,18 +376,26 @@ async def test_run_debate_background_refreshes_runtime_lock_while_running(monkey
         *,
         lease_seconds: float,
     ) -> RuntimeLockLease | None:
+        nonlocal lease_clock_now
         assert lease is not None
+        with lease_clock_guard:
+            # Retry the same lease at the same logical time if SQLite was busy.
+            lease_clock_now = max(lease_clock_now, lease.expires_at - lease_seconds / 2)
         refreshed = runtime_lock_module.refresh_runtime_lock(lease, lease_seconds=lease_seconds)
         assert refreshed is not None
+        assert refreshed.expires_at > lease.expires_at
         refreshed_leases.append(refreshed)
+        if generation_started.is_set() and _lease_time() > initial_lease.expires_at:
+            event_loop.call_soon_threadsafe(renewed_past_initial_expiry.set)
         return refreshed
 
     def _fake_release_runtime_lock(lease: RuntimeLockLease | None) -> bool:
         released_leases.append(lease)
         return release_runtime_lock(lease)
 
-    async def _slow_generate_turn_content(*args, **kwargs):
-        await asyncio.sleep(lease_seconds * 3)
+    async def _wait_for_renewal_then_generate(*args, **kwargs):
+        generation_started.set()
+        await asyncio.wait_for(renewed_past_initial_expiry.wait(), timeout=5.0)
         return await original_generate_turn_content(*args, **kwargs)
 
     async def _push(_debate_id: str, event: dict) -> None:
@@ -383,11 +409,13 @@ async def test_run_debate_background_refreshes_runtime_lock_while_running(monkey
         raising=False,
     )
     monkeypatch.setattr(debate_module, "release_runtime_lock", _fake_release_runtime_lock)
-    monkeypatch.setattr(debate_module, "_generate_turn_content", _slow_generate_turn_content)
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _wait_for_renewal_then_generate)
 
     await run_debate_background(debate.id, ws_callback=_push)
 
     assert refreshed_leases
+    assert renewed_past_initial_expiry.is_set()
+    assert _lease_time() > initial_lease.expires_at
     assert released_leases[-1] == refreshed_leases[-1]
     assert any(event["type"] == "debate_verdict" for event in pushed_events)
 

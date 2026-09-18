@@ -31,6 +31,14 @@ Notable public changes are recorded here. The format follows [Keep a Changelog](
 
   Corrected Windows port probing so an existing listener is not reported as available. Script tests now inspect the owning cleanup block and use an explicit local executable to verify offline npx.
 
+- 保留 Windows npx 的换行、路径和空参数：需要时仅为该次调用使用已有 Git Bash；同时让删除流测试由父测试持有完整应用生命周期，避免测试提前关闭运行时。
+
+  Preserved newline, path, and empty arguments in Windows npx by using existing Git Bash for that call when needed. The stream-deletion test now keeps the app lifespan under the parent test until both requests finish.
+
+- 运行锁续期测试改用受控时钟和事件同步，避免 CI 调度延迟使短租约意外过期；仍验证真实 SQLite 续租和最终释放。
+
+  Runtime-lock renewal tests now use a controlled clock and event synchronization so CI scheduling delays cannot expire the short test lease. They still verify real SQLite renewal and final release.
+
 ### 2026-09-18：推演与交互 / Simulation and interaction
 
 - 公共承诺只在本轮参与者明确同意同一目标后采纳；竞争提案保持分开，采纳状态不表示执行完成。
